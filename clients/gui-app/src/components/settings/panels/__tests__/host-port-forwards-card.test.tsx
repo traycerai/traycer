@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -461,12 +462,6 @@ describe("<HostPortForwardsCard />", () => {
             forwardId: "owned-1",
             description: "api server",
             state: "active",
-            counters: {
-              openConnections: 1,
-              totalConnections: 1,
-              bytesIn: 0,
-              bytesOut: 0,
-            },
           }),
         ],
         held: [],
@@ -479,11 +474,17 @@ describe("<HostPortForwardsCard />", () => {
         ).toBeTruthy();
       });
       const row = screen.getByTestId("host-port-forward-owned-owned-1");
-      expect(row.textContent).toContain("api server");
+      expect(within(row).getByText("api server")).toBeTruthy();
+      expect(within(row).getByRole("button", { name: "Stop" })).toBeTruthy();
       expect(row.textContent).toContain(":8080");
       expect(row.textContent).toContain("Forwarding");
-      expect(row.textContent).toContain("1 open connection");
-      expect(row.textContent).not.toContain("1 open connections");
+      expect(row.textContent).toContain("To another host · 1 connection");
+      expect(row.textContent).not.toContain("open connection");
+      const telemetry = within(row).getByText(
+        "My machine:8080 → another host:3000 · 100 B in · 200 B out",
+      );
+      expect(telemetry.closest("details")).toBeNull();
+      expect(within(row).queryByText("Details")).toBeNull();
     });
 
     it("pluralizes the open-connections count", async () => {
@@ -507,8 +508,98 @@ describe("<HostPortForwardsCard />", () => {
       await waitFor(() => {
         expect(
           screen.getByTestId("host-port-forward-owned-owned-1").textContent,
-        ).toContain("3 open connections");
+        ).toContain("To another host · 3 connections");
       });
+      expect(
+        screen.getByTestId("host-port-forward-owned-owned-1").textContent,
+      ).not.toContain("open connection");
+    });
+
+    it("words the direction from which end is this host", async () => {
+      scopeHosts.current = [
+        hostScopeOptionFixture({ hostId: "host-listen", name: "Listen box" }),
+        hostScopeOptionFixture({ hostId: "host-target", name: "Target box" }),
+      ];
+      const fixture = createCardFixture();
+      fixture.setListResponse({
+        owned: [
+          ownedForward({
+            forwardId: "to-target",
+            description: "to target",
+            target: { hostId: "host-target", port: 3000 },
+            counters: {
+              openConnections: 1,
+              totalConnections: 1,
+              bytesIn: 0,
+              bytesOut: 0,
+            },
+          }),
+          ownedForward({
+            forwardId: "from-listen",
+            description: "from listen",
+            listen: {
+              hostId: "host-listen",
+              requestedPort: 7000,
+              boundPort: 7000,
+            },
+            target: { hostId: HOST_ID, port: 3000 },
+            counters: {
+              openConnections: 3,
+              totalConnections: 3,
+              bytesIn: 0,
+              bytesOut: 0,
+            },
+          }),
+          ownedForward({
+            forwardId: "on-host",
+            description: "on host",
+            listen: { hostId: HOST_ID, requestedPort: 8080, boundPort: 8080 },
+            target: { hostId: HOST_ID, port: 8080 },
+            counters: {
+              openConnections: 1,
+              totalConnections: 1,
+              bytesIn: 0,
+              bytesOut: 0,
+            },
+          }),
+          ownedForward({
+            forwardId: "between",
+            description: "between",
+            listen: {
+              hostId: "host-listen",
+              requestedPort: 7000,
+              boundPort: 7000,
+            },
+            target: { hostId: "host-target", port: 3000 },
+            counters: {
+              openConnections: 4,
+              totalConnections: 4,
+              bytesIn: 0,
+              bytesOut: 0,
+            },
+          }),
+        ],
+        held: [],
+      });
+      renderCard(fixture, {});
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-port-forward-owned-between"),
+        ).toBeTruthy();
+      });
+      expect(
+        screen.getByTestId("host-port-forward-owned-to-target").textContent,
+      ).toContain("To Target box · 1 connection");
+      expect(
+        screen.getByTestId("host-port-forward-owned-from-listen").textContent,
+      ).toContain("From Listen box · 3 connections");
+      expect(
+        screen.getByTestId("host-port-forward-owned-on-host").textContent,
+      ).toContain("On this host · 1 connection");
+      expect(
+        screen.getByTestId("host-port-forward-owned-between").textContent,
+      ).toContain("From Listen box to Target box · 4 connections");
     });
 
     it("shows Interrupted with its stateReason instead of connection counters", async () => {
@@ -533,7 +624,12 @@ describe("<HostPortForwardsCard />", () => {
       const row = screen.getByTestId("host-port-forward-owned-owned-1");
       expect(row.textContent).toContain("Interrupted");
       expect(row.textContent).toContain("the target refused the connection");
-      expect(row.textContent).not.toContain("open connection");
+      expect(row.textContent).not.toMatch(/\d+ connection/);
+      expect(
+        within(row).getByText("My machine:8080 → another host:3000"),
+      ).toBeTruthy();
+      expect(row.textContent).not.toContain(" B in");
+      expect(row.textContent).not.toContain(" B out");
     });
 
     it("labels the button Stop while active and Clear while interrupted", async () => {
@@ -620,12 +716,11 @@ describe("<HostPortForwardsCard />", () => {
       expect(row.textContent).toContain("Nothing is listening yet");
       expect(row.textContent).not.toContain("open connection");
       expect(row.textContent).not.toContain(" in · ");
-      // The only occurrence of `:9090` anywhere in the row's text must be the
-      // one inside "requested :9090" - stripping that phrase out must leave no
-      // bare `:9090` badge behind.
-      expect(row.textContent.replace("requested :9090", "")).not.toContain(
-        ":9090",
-      );
+      expect(
+        within(row).getByText("My machine:9090 → another host:3000"),
+      ).toBeTruthy();
+      expect(within(row).getByText("requested :9090")).toBeTruthy();
+      expect(within(row).queryByText(":9090", { exact: true })).toBeNull();
       expect(
         screen.getByTestId("host-port-forward-stop-owned-1").textContent,
       ).toBe("Stop");
@@ -653,7 +748,10 @@ describe("<HostPortForwardsCard />", () => {
       const row = screen.getByTestId("host-port-forward-owned-owned-1");
       expect(row.textContent).toContain("Stopped");
       expect(row.textContent).toContain("the user stopped it");
-      expect(row.textContent).not.toContain("open connection");
+      expect(row.textContent).not.toMatch(/\d+ connection/);
+      expect(
+        within(row).getByText("My machine:8080 → another host:3000"),
+      ).toBeTruthy();
       expect(
         screen.getByTestId("host-port-forward-stop-owned-1").textContent,
       ).toBe("Clear");
@@ -701,7 +799,7 @@ describe("<HostPortForwardsCard />", () => {
   });
 
   describe("held lease rows", () => {
-    it("renders the description, port, and a Listening for role badge naming the owner machine", async () => {
+    it("renders the description, port, and a listen line naming the owner machine", async () => {
       scopeHosts.current = [
         hostScopeOptionFixture({ hostId: "host-owner", name: "Owner box" }),
       ];
@@ -715,6 +813,7 @@ describe("<HostPortForwardsCard />", () => {
             port: 9090,
             role: "listen",
             ownerHostId: "host-owner",
+            openConnections: 2,
           }),
         ],
       });
@@ -726,12 +825,15 @@ describe("<HostPortForwardsCard />", () => {
         ).toBeTruthy();
       });
       const row = screen.getByTestId("host-port-forward-held-lease-1");
-      expect(row.textContent).toContain("reverse tunnel");
+      expect(within(row).getByText("reverse tunnel")).toBeTruthy();
       expect(row.textContent).toContain(":9090");
-      expect(row.textContent).toContain("Listening for Owner box");
+      expect(row.textContent).toContain("To Owner box · 2 connections");
+      expect(row.textContent).not.toContain("Listening");
+      expect(row.querySelector("details")).toBeNull();
+      expect(within(row).getByRole("button", { name: "Cut" })).toBeTruthy();
     });
 
-    it("labels a target-role lease Reached by the owner machine", async () => {
+    it("labels a target-role lease as coming from the owner machine", async () => {
       scopeHosts.current = [
         hostScopeOptionFixture({ hostId: "host-owner", name: "Owner box" }),
       ];
@@ -743,6 +845,7 @@ describe("<HostPortForwardsCard />", () => {
             leaseId: "lease-1",
             role: "target",
             ownerHostId: "host-owner",
+            openConnections: 1,
           }),
         ],
       });
@@ -751,8 +854,11 @@ describe("<HostPortForwardsCard />", () => {
       await waitFor(() => {
         expect(
           screen.getByTestId("host-port-forward-held-lease-1").textContent,
-        ).toContain("Reached by Owner box");
+        ).toContain("From Owner box · 1 connection");
       });
+      expect(
+        screen.getByTestId("host-port-forward-held-lease-1").textContent,
+      ).not.toContain("Reached");
     });
 
     it("opens a confirm dialog naming the port and owner machine on Cut, and sends nothing on cancel", async () => {
@@ -782,6 +888,7 @@ describe("<HostPortForwardsCard />", () => {
       const dialog = screen.getByTestId("confirm-destructive-dialog");
       expect(dialog.textContent).toContain("9090");
       expect(dialog.textContent).toContain("Owner box");
+      expect(dialog.textContent).toContain("open connections");
 
       fireEvent.click(screen.getByTestId("confirm-cancel"));
 

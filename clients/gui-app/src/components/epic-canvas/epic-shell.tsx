@@ -15,6 +15,7 @@ import { EpicDurabilityRemedies } from "@/components/epic-canvas/panels/epic-dur
 import { EpicWriteCommandsEntryPoint } from "@/components/epic-canvas/panels/epic-write-commands-entry-point";
 import { EpicUsageEntryPoint } from "@/components/epic-canvas/panels/epic-usage-entry-point";
 import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";
+import { EpicStatusRow } from "@/components/epic-canvas/panels/epic-status-row";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
 import { CanvasSkeleton } from "@/components/epic-canvas/skeletons/canvas-skeleton";
 import {
@@ -30,6 +31,15 @@ import {
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
 import { Button } from "@/components/ui/button";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { useOpenHostUpdate } from "@/components/epic-canvas/renderers/use-chat-tile-host-update";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import { useIsDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { sideTabStripEdge } from "@/lib/layout/layout-arrangement";
 import {
   useArrangementValue,
@@ -228,12 +238,7 @@ interface EpicShellStatusRowProps {
  */
 function EpicShellStatusRow(props: EpicShellStatusRowProps) {
   return (
-    <output
-      data-testid="epic-shell-status-row"
-      // The phone single-tile design has no status row; the global mobile
-      // header carries app-wide status instead. Desktop (>=768px) is unchanged.
-      className="flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground max-md:hidden"
-    >
+    <EpicStatusRow>
       {props.sessionReady ? (
         <EpicShellSessionStatus
           epicId={props.epicId}
@@ -249,7 +254,7 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
           <EpicSweepAction epicId={props.epicId} tabId={props.tabId} />
         </>
       ) : null}
-    </output>
+    </EpicStatusRow>
   );
 }
 
@@ -303,7 +308,29 @@ function EpicRepointFailure(props: {
 function EpicRepointFailureCard(props: {
   readonly presentation: EpicSessionPresentation;
 }) {
-  const hostLabel = props.presentation.targetHostId ?? "the selected host";
+  const targetHostId = props.presentation.targetHostId;
+  const targetEntry = useHostDirectoryEntry(targetHostId);
+  const windowHostId = useSelectionAuthorityStore(
+    (state) => state.effectiveHostId ?? state.targetHostId,
+  );
+  const windowCoverDrawn = useIsDoorCoverDrawn(
+    targetHostId === windowHostId ? targetHostId : null,
+  );
+  if (
+    targetHostId !== null &&
+    targetEntry !== null &&
+    hostDirectoryEntryNeedsUpdate(targetEntry, MINIMUM_HOST_VERSION)
+  ) {
+    // The window's own older-host cover already says this for its host.
+    if (windowCoverDrawn) return null;
+    return (
+      <EpicOlderHostCard
+        hostId={targetHostId}
+        presentation={props.presentation}
+      />
+    );
+  }
+  const hostLabel = targetHostId ?? "the selected host";
   const originalHostId = props.presentation.originalHostId;
   return (
     <div
@@ -318,6 +345,37 @@ function EpicRepointFailureCard(props: {
           Retry
         </Button>
         {originalHostId !== null ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={props.presentation.openOnOriginalHost}
+          >
+            Open on original host
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** No Retry: rising above the floor rebuilds the session by itself. */
+function EpicOlderHostCard(props: {
+  readonly hostId: string;
+  readonly presentation: EpicSessionPresentation;
+}) {
+  const openHostUpdate = useOpenHostUpdate(props.hostId);
+  const originalHostId = props.presentation.originalHostId;
+  return (
+    <div
+      data-testid="epic-repoint-failure"
+      className="flex max-w-md flex-col gap-3 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-sm"
+    >
+      <p className="text-ui-sm font-medium">{HOST_UPDATE_SKEW_COPY.title}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" onClick={openHostUpdate}>
+          {HOST_UPDATE_SKEW_COPY.action}
+        </Button>
+        {originalHostId !== null && originalHostId !== props.hostId ? (
           <Button
             size="sm"
             variant="outline"

@@ -1,3 +1,4 @@
+import type { SandboxRateLimit } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxSettingsSteps } from "@traycer/protocol/host/sandbox-settings";
 import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -110,6 +111,13 @@ export type StagedSandboxFailure =
   | { readonly kind: "not-sent" };
 
 export interface StagedSandbox {
+  /** The original create bound and this driver's post-preflight clock; absent on legacy stages. */
+  readonly createAttempt?: {
+    readonly budgetMs: number;
+    readonly startedAt: number;
+  } | null;
+  /** The create's latest quota wait, refreshed by accepted and polled rows. */
+  readonly rateLimit?: SandboxRateLimit | null;
   /** A same-account window asks the exclusive owner to retry this stage. */
   readonly retryRequest?: PendingStageRetryRequest;
   /** Only the owner acknowledges a mailbox request after executing its retry. */
@@ -282,10 +290,12 @@ interface StagedSandboxStoreState {
         | "step"
         | "stepAt"
         | "failure"
+        | "rateLimit"
         | "terminalLaunch"
         | "openTerminal"
         | "sendTaken"
         | "retryHandledId"
+        | "createAttempt"
       >
     >,
   ) => void;
@@ -317,6 +327,7 @@ function withStage(
 function freshStage(target: StagedSandboxTarget): StagedSandbox {
   return {
     target,
+    createAttempt: null,
     phase: "staged",
     clientRequestId: null,
     ownerId: null,
@@ -394,6 +405,8 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             clientRequestId,
             createdSandboxId: fresh ? null : current.createdSandboxId,
             createdHostId: fresh ? null : current.createdHostId,
+            createAttempt: fresh ? null : current.createAttempt,
+            rateLimit: fresh ? null : current.rateLimit,
             startedAt: resumed ? current.startedAt : now,
             step: resumed ? current.step : "creating",
             stepAt: resumed ? current.stepAt : now,
@@ -429,6 +442,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
               ...stage,
               phase: "staged",
               clientRequestId: null,
+              createAttempt: null,
               startedAt: null,
               stepAt: null,
               failure: null,

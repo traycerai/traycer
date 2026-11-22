@@ -55,6 +55,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
     hostId: DEAD_PICKED_HOST_ID,
     hostLabel: "Old laptop",
     vanishedHostId: DEAD_PICKED_HOST_ID,
+    vanishedSelection: null,
     activeHostId: ACTIVE_HOST_ID,
     activeHost: { hostId: ACTIVE_HOST_ID, name: "This machine" },
     isViewingActive: false,
@@ -193,7 +194,7 @@ describe("<UsageSettingsPanel /> account-group scoping", () => {
     // This section moved from the Host group to Account, but it kept
     // resolving transport and gating through the Host-group picker's REMEMBERED
     // scope. Picking a host that had gone away therefore hid an account-level
-    // dashboard whose own default is "All hosts", behind a notice about a host
+    // dashboard whose own default is "All computers", behind a notice about a host
     // it never needed.
     recordNegotiatedHostMethods(ACTIVE_HOST_ID, ["host.usage.summary"]);
     renderPanel();

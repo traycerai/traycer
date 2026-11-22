@@ -347,7 +347,6 @@ function HistoryMessageHitsBody(props: {
         renderExpansion={renderExpansion}
         taskTitles={taskTitles}
         variant="full"
-        showIndexingNotice={false}
       />
     </ChatSearchNavProvider>
   );

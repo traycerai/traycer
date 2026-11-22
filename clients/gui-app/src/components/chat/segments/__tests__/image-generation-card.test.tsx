@@ -381,6 +381,7 @@ describe("<ToolSegment /> image_generation promotion routing", () => {
           imageResults={[]}
           artifact={null}
           mcpApp={null}
+          feedbackDraft={null}
           variant="card"
         />
       </ChatExpansionTestProviders>,
@@ -422,6 +423,7 @@ describe("<ToolSegment /> image_generation promotion routing", () => {
           imageResults={[]}
           artifact={null}
           mcpApp={null}
+          feedbackDraft={null}
           variant="card"
         />
       </ChatExpansionTestProviders>,

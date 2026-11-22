@@ -280,7 +280,7 @@ const UNAVAILABLE_TESTID = "picker-team-sandbox-unavailable";
 function harnessOption(
   id: HarnessOption["id"],
   label: string,
-  mode: "placeholder" | "process-scoped",
+  mode: "placeholder" | null,
 ): HarnessOption {
   return {
     id,
@@ -325,7 +325,7 @@ function installCatalog(): void {
       models: [model("codex", "codex-main")],
     },
     {
-      option: harnessOption("claude", "Claude", "process-scoped"),
+      option: harnessOption("claude", "Claude", null),
       models: [model("claude", "claude-main")],
     },
     {
@@ -446,7 +446,7 @@ describe("harness picker rail on a team sandbox", () => {
     expect(screen.queryByTestId(UNAVAILABLE_TESTID)).toBeNull();
   });
 
-  it("commits the same process-scoped rail entry off a team sandbox", async () => {
+  it("commits the same no-mode rail entry off a team sandbox", async () => {
     mocks.onTeamSandbox.current = false;
     const { store } = renderPicker();
     await openPicker();

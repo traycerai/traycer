@@ -33,6 +33,7 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import * as idb from "idb-keyval";
 
 import {
+  NO_FILE_ROUTE,
   makeHandle,
   NO_MENTION_ROOTS,
   NOOP_FILE_DROPS,
@@ -217,6 +218,11 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -243,6 +249,8 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -307,6 +315,8 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -354,6 +364,11 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -371,6 +386,8 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -419,6 +436,8 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -465,6 +484,8 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -511,6 +532,11 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -534,6 +560,8 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 

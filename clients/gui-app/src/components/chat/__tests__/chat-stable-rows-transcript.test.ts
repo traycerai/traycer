@@ -220,18 +220,24 @@ describe("transcript list key sequence", () => {
     hydrated("b", 1, model("b", "same")),
   ];
 
-  it("returns keys in list order", () => {
-    expect(transcriptListKeySequence(rows)).toEqual(["a", "b"]);
+  it("returns each row's key and kind in list order", () => {
+    expect(transcriptListKeySequence(rows)).toEqual([
+      "a:hydrated",
+      "b:hydrated",
+    ]);
   });
 
   it("detects reorder but not in-place content changes", () => {
-    expect(didTranscriptListKeySequenceChange(["a", "b"], rows)).toBe(false);
-    expect(didTranscriptListKeySequenceChange(["b", "a"], rows)).toBe(true);
+    const committed = ["a:hydrated", "b:hydrated"];
+    expect(didTranscriptListKeySequenceChange(committed, rows)).toBe(false);
     expect(
-      didTranscriptListKeySequenceChange(
-        ["a", "b"],
-        [hydrated("a", 0, model("a", "new")), rows[1]],
-      ),
+      didTranscriptListKeySequenceChange(["b:hydrated", "a:hydrated"], rows),
+    ).toBe(true);
+    expect(
+      didTranscriptListKeySequenceChange(committed, [
+        hydrated("a", 0, model("a", "new")),
+        rows[1],
+      ]),
     ).toBe(false);
   });
 
@@ -307,7 +313,7 @@ describe("stable rows across a send's void", () => {
     );
     expect(transcriptListKeySequence(throughVoid.result)).toEqual([
       ...committed,
-      unplacedRowKey(3),
+      `${unplacedRowKey(3)}:placeholder`,
     ]);
     // The same descriptor under the same key, now marked as the carry's.
     throughVoid.result.slice(0, 3).forEach((row, ordinal) => {
@@ -328,7 +334,7 @@ describe("stable rows across a send's void", () => {
     );
     expect(transcriptListKeySequence(replaced.result)).toEqual([
       ...committed,
-      "d",
+      "d:placeholder",
     ]);
     // Authority replaced the carried entry under the same key and position,
     // so the row re-renders in place rather than remounting elsewhere.

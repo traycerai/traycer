@@ -4,9 +4,11 @@ import type {
   RotationProducer,
 } from "@traycer/protocol/host/environment-schemas";
 import type { SandboxGrantRotation } from "@traycer/protocol/host/sandbox-secrets";
+import { SANDBOX_SECRET_KINDS } from "@traycer/protocol/host/secret-intake-catalogue";
 import {
   grantRotationLine,
   rotationProofPhrase,
+  rotatesToSandboxes,
   rotationProven,
   secretRotationSettled,
   secretRotationStatus,
@@ -16,12 +18,6 @@ type Rotation = NonNullable<EnvironmentSecretsRotationResponse["rotation"]>;
 type GrantClass = SandboxGrantRotation["classes"][number];
 
 const ACCEPTED_TEXT = "New value accepted, closing old sessions.";
-const HOST_ID = "host-1";
-
-function hostName(hostId: string): string {
-  return hostId === HOST_ID ? "dev-sandbox" : hostId;
-}
-
 function grantRotation(
   state: string,
   classes: readonly GrantClass[],
@@ -44,19 +40,6 @@ function worker(
     producer: "worker",
     workerClass: "postgres",
     incarnation: "inc-1",
-    status: "acknowledged",
-    evidence: [{ kind: "session_closed", count: 3 }],
-    ...overrides,
-  };
-}
-
-function host(
-  overrides: Partial<Extract<RotationProducer, { producer: "host" }>>,
-): RotationProducer {
-  return {
-    producer: "host",
-    hostId: HOST_ID,
-    incarnation: "proc-1",
     status: "acknowledged",
     evidence: [{ kind: "session_closed", count: 3 }],
     ...overrides,
@@ -317,13 +300,12 @@ describe("grantRotationLine", () => {
 
 describe("secretRotationStatus", () => {
   it("is null for a secret with no rotation", () => {
-    expect(secretRotationStatus(null, hostName)).toBeNull();
+    expect(secretRotationStatus(null)).toBeNull();
   });
 
   it("warns on a failed rotation, with the producers it has", () => {
     const status = secretRotationStatus(
       rotationOf("failed", [worker({ status: "missing", evidence: null })]),
-      hostName,
     );
     expect(status?.headline).toEqual({
       tone: "warning",
@@ -334,12 +316,10 @@ describe("secretRotationStatus", () => {
     ]);
   });
 
-  it("says a stalled rotation was not confirmed after a minute, and how to end every old session", () => {
-    expect(
-      secretRotationStatus(rotationOf("stalled", []), hostName)?.headline,
-    ).toEqual({
+  it("says a stalled rotation was not confirmed after a minute, and running work must finish first", () => {
+    expect(secretRotationStatus(rotationOf("stalled", []))?.headline).toEqual({
       tone: "warning",
-      text: "Not confirmed after a minute. Stopping the sandbox ends every old session.",
+      text: "Not confirmed after a minute. Finish or stop running agent turns and shells before stopping the sandbox to end old sessions.",
     });
   });
 
@@ -349,20 +329,13 @@ describe("secretRotationStatus", () => {
       expect(
         secretRotationStatus(
           rotationOf(state, [worker({ status: "missing", evidence: null })]),
-          hostName,
         )?.headline,
       ).toEqual({ tone: "muted", text: ACCEPTED_TEXT });
     },
   );
 
-  it("reads enforced once every producer has proved the old value out of use", () => {
-    const status = secretRotationStatus(
-      rotationOf("enforced", [
-        worker({}),
-        host({ evidence: [{ kind: "cache_cleared", count: 1 }] }),
-      ]),
-      hostName,
-    );
+  it("reads enforced once every worker class has proved the old value out of use", () => {
+    const status = secretRotationStatus(rotationOf("enforced", [worker({})]));
     expect(status?.headline).toEqual({
       tone: "success",
       text: "New value enforced.",
@@ -370,23 +343,27 @@ describe("secretRotationStatus", () => {
   });
 
   it("reads enforced with no producer at all", () => {
-    expect(
-      secretRotationStatus(rotationOf("enforced", []), hostName)?.headline,
-    ).toEqual({ tone: "success", text: "New value enforced." });
+    expect(secretRotationStatus(rotationOf("enforced", []))?.headline).toEqual({
+      tone: "success",
+      text: "New value enforced.",
+    });
   });
 
   it("does not read enforced when one producer is still missing", () => {
     const status = secretRotationStatus(
       rotationOf("enforced", [
         worker({}),
-        host({ status: "missing", evidence: null }),
+        worker({
+          workerClass: "https",
+          status: "missing",
+          evidence: null,
+        }),
       ]),
-      hostName,
     );
     expect(status?.headline).toEqual({ tone: "muted", text: ACCEPTED_TEXT });
     expect(status?.producers.map((line) => line.text)).toEqual([
       "postgres: 3 sessions closed",
-      "not confirmed yet on dev-sandbox",
+      "https: not confirmed yet",
     ]);
   });
 
@@ -396,7 +373,6 @@ describe("secretRotationStatus", () => {
         rotationOf("enforced", [
           worker({ evidence: [{ kind: "session_closed", count: 0 }] }),
         ]),
-        hostName,
       )?.headline,
     ).toEqual({ tone: "muted", text: ACCEPTED_TEXT });
   });
@@ -426,7 +402,6 @@ describe("secretRotationStatus", () => {
           ],
         }),
       ]),
-      hostName,
     );
     expect(status?.producers.map((line) => line.text)).toEqual([
       "postgres: 3 sessions closed",
@@ -436,42 +411,25 @@ describe("secretRotationStatus", () => {
     ]);
   });
 
-  it("words a host's line with its name", () => {
-    const status = secretRotationStatus(
-      rotationOf("enforcing", [
-        host({}),
-        host({
-          incarnation: null,
-          status: "applies_on_resume",
-          evidence: null,
-        }),
-        host({ status: "missing", evidence: null }),
-      ]),
-      hostName,
-    );
-    expect(status?.producers.map((line) => line.text)).toEqual([
-      "3 sessions closed on dev-sandbox",
-      "applies when dev-sandbox wakes",
-      "not confirmed yet on dev-sandbox",
-    ]);
-  });
-
-  it("gives each worker class and each host producer its own key", () => {
+  it("ignores host producers an older answer may still carry", () => {
     const status = secretRotationStatus(
       rotationOf("enforcing", [
         worker({ incarnation: "inc-1" }),
         worker({ incarnation: "inc-2" }),
         worker({ workerClass: "https", incarnation: "inc-1" }),
-        host({ incarnation: "proc-1" }),
-        host({ incarnation: "proc-2" }),
-        host({ incarnation: null }),
-        host({ hostId: "host-2", incarnation: "proc-1" }),
+        {
+          producer: "host",
+          hostId: "host-1",
+          incarnation: "proc-1",
+          status: "missing",
+          evidence: null,
+        },
       ]),
-      hostName,
     );
-    const keys = status?.producers.map((line) => line.key) ?? [];
-    expect(keys).toHaveLength(6);
-    expect(new Set(keys).size).toBe(6);
+    expect(status?.producers.map((line) => line.text)).toEqual([
+      "postgres: 6 sessions closed",
+      "https: 3 sessions closed",
+    ]);
   });
 });
 
@@ -492,7 +450,6 @@ describe("secretRotationStatus, one line per worker class", () => {
           evidence: null,
         }),
       ]),
-      hostName,
     );
     expect(status?.producers).toEqual([
       { key: "worker:https", text: "https: not confirmed yet" },
@@ -518,7 +475,6 @@ describe("secretRotationStatus, one line per worker class", () => {
           ],
         }),
       ]),
-      hostName,
     );
     expect(status?.producers).toEqual([
       {
@@ -544,7 +500,6 @@ describe("secretRotationStatus, one line per worker class", () => {
           evidence: null,
         }),
       ]),
-      hostName,
     );
     expect(status?.producers).toEqual([
       { key: "worker:https", text: "https: not confirmed yet" },
@@ -558,15 +513,10 @@ describe("secretRotationSettled", () => {
     expect(secretRotationSettled(rotationOf("failed", []))).toBe(true);
   });
 
-  it("is settled once enforced with every producer proved", () => {
-    expect(
-      secretRotationSettled(
-        rotationOf("enforced", [
-          worker({}),
-          host({ status: "applies_on_resume", evidence: null }),
-        ]),
-      ),
-    ).toBe(true);
+  it("is settled once enforced with every worker class proved", () => {
+    expect(secretRotationSettled(rotationOf("enforced", [worker({})]))).toBe(
+      true,
+    );
   });
 
   it("is still moving when enforced but a producer has proved nothing", () => {
@@ -592,4 +542,28 @@ describe("secretRotationSettled", () => {
       );
     },
   );
+});
+
+describe("rotatesToSandboxes", () => {
+  // Refused a value rotation ("managed by its own flow"), or a model
+  // provider's key, which the Providers page sends to computers.
+  const WITHOUT_SANDBOX_ROTATION: readonly string[] = [
+    "github",
+    "harness",
+    "mcp_credential",
+    "provider",
+  ];
+
+  it.each(SANDBOX_SECRET_KINDS)(
+    "answers for the %s kind as the catalogue says it rotates",
+    (kind) => {
+      expect(rotatesToSandboxes(kind)).toBe(
+        !WITHOUT_SANDBOX_ROTATION.includes(kind),
+      );
+    },
+  );
+
+  it("answers no for a kind this build does not list", () => {
+    expect(rotatesToSandboxes("newer_kind")).toBe(false);
+  });
 });

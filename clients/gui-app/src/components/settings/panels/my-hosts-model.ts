@@ -494,9 +494,8 @@ export function formatLastSeen(
 }
 
 /**
- * The elapsed half of {@link formatLastSeen} ("2h ago"), for a surface that
- * labels the fact itself - Installation ▸ About this host's "Last seen" - and
- * must still word it the way the header's health line does beside it.
+ * The elapsed half of {@link formatLastSeen} ("2h ago"), shared by the header
+ * and the freshness qualifiers on Installation's account facts.
  */
 export function formatElapsed(deltaSeconds: number): string {
   if (deltaSeconds < 45) {

@@ -39,7 +39,10 @@ export function useSwitcherActivate(
 
   return useCallback(
     (buildRef) => {
-      openTile(tileIntent(buildRef(), { tabId }, "single", "direct_ui"));
+      openTile(
+        tileIntent(buildRef(), { tabId }, "single", "direct_ui"),
+        "user",
+      );
       onClose();
     },
     [onClose, openTile, tabId],

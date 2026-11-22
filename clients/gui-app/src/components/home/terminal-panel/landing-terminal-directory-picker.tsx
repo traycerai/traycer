@@ -92,7 +92,7 @@ export function LandingTerminalDirectoryPicker(
               selectedPath: nextPath,
             });
           }}
-          label="Create terminal in workspace"
+          label="Create terminal in folder"
           aria-busy={props.isPending}
           loop
           onKeyDown={handleKeyDown}
@@ -101,8 +101,8 @@ export function LandingTerminalDirectoryPicker(
         >
           <CommandInput
             ref={inputRef}
-            aria-label="Create terminal in workspace"
-            placeholder="Create terminal in workspace"
+            aria-label="Create terminal in folder"
+            placeholder="Create terminal in folder"
             leading={
               <InputGroupButton
                 size="icon-xs"
@@ -131,7 +131,7 @@ export function LandingTerminalDirectoryPicker(
           ) : null}
           <CommandList className="max-h-none min-h-0 flex-1 p-1">
             <CommandEmpty>No matching directories.</CommandEmpty>
-            <CommandGroup heading="Create terminal in workspace">
+            <CommandGroup heading="Create terminal in folder">
               {props.workspacePaths.map((workspacePath) => (
                 <CommandItem
                   key={workspacePath}

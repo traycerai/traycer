@@ -181,7 +181,6 @@ describe("<ChatDeadTileBanner />", () => {
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned={false}
-        cloneAllowed
         showsPublishedCopy={false}
         continueTargetLabel={null}
         cloning={false}
@@ -208,61 +207,27 @@ describe("<ChatDeadTileBanner />", () => {
     );
   });
 
-  it("states the viewer variant without a Clone button or the clone sentence (host-offline)", () => {
+  it("says the host unquoted when no label has resolved, never a raw id (host-offline)", () => {
     render(
       <ChatDeadTileBanner
-        hostLabel="mac-mini"
+        hostLabel={null}
         reason="host-offline"
         ownedByViewer
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned={false}
-        cloneAllowed={false}
         showsPublishedCopy={false}
         continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
-        testId="chat-dead-viewer"
+        testId="chat-dead-null"
         className={undefined}
       />,
     );
 
-    const text = screen.getByTestId("chat-dead-viewer").textContent;
-    expect(text).toContain(
-      `This agent can't continue here while "mac-mini" is offline. You have view-only access to this task, so it can't be cloned.`,
-    );
-    expect(text).not.toContain("Clone this agent");
-    expect(text).not.toContain("on this device");
-    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
-  });
-
-  it("says the host unquoted when no label has resolved, never a raw id (host-offline)", () => {
-    for (const cloneAllowed of [true, false]) {
-      const { unmount } = render(
-        <ChatDeadTileBanner
-          hostLabel={null}
-          reason="host-offline"
-          ownedByViewer
-          ownerName={null}
-          cloneTargetLabel={null}
-          environmentOwned={false}
-          cloneAllowed={cloneAllowed}
-          showsPublishedCopy={false}
-          continueTargetLabel={null}
-          cloning={false}
-          onClone={() => undefined}
-          testId={`chat-dead-null-${cloneAllowed}`}
-          className={undefined}
-        />,
-      );
-
-      const text = screen.getByTestId(
-        `chat-dead-null-${cloneAllowed}`,
-      ).textContent;
-      expect(text).toContain("the host");
-      expect(text).not.toContain('"');
-      unmount();
-    }
+    const text = screen.getByTestId("chat-dead-null").textContent;
+    expect(text).toContain("the host");
+    expect(text).not.toContain('"');
   });
 
   // A reachable host can still have nothing to serve for this
@@ -278,7 +243,6 @@ describe("<ChatDeadTileBanner />", () => {
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned={false}
-        cloneAllowed
         showsPublishedCopy={false}
         continueTargetLabel={null}
         cloning={false}
@@ -314,7 +278,6 @@ describe("<ChatDeadTileBanner />", () => {
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned={false}
-        cloneAllowed
         showsPublishedCopy={false}
         continueTargetLabel={null}
         cloning={false}
@@ -354,7 +317,6 @@ describe("<ChatDeadTileBanner />", () => {
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned={false}
-        cloneAllowed={false}
         showsPublishedCopy={false}
         continueTargetLabel={null}
         cloning={false}
@@ -395,7 +357,6 @@ describe("<ChatDeadTileBanner />", () => {
           ownerName={null}
           cloneTargetLabel={null}
           environmentOwned={false}
-          cloneAllowed
           showsPublishedCopy={false}
           continueTargetLabel={null}
           cloning={false}
@@ -425,7 +386,6 @@ describe("<ChatDeadTileBanner />", () => {
           ownerName={null}
           cloneTargetLabel={null}
           environmentOwned={false}
-          cloneAllowed
           showsPublishedCopy
           continueTargetLabel={null}
           cloning={false}
@@ -483,7 +443,6 @@ describe("<ChatDeadTileBanner />", () => {
             ownerName={ownerName}
             cloneTargetLabel={cloneTargetLabel}
             environmentOwned={false}
-            cloneAllowed
             showsPublishedCopy
             continueTargetLabel={null}
             cloning={false}
@@ -499,34 +458,6 @@ describe("<ChatDeadTileBanner />", () => {
       },
     );
 
-    it("withholds Clone and says why for a view-only collaborator", () => {
-      render(
-        <ChatDeadTileBanner
-          hostLabel="085b919a-f0a6-42e5-b05e-241738d3dd6a"
-          reason="host-offline"
-          ownedByViewer={false}
-          ownerName={null}
-          cloneTargetLabel={null}
-          environmentOwned={false}
-          cloneAllowed={false}
-          showsPublishedCopy
-          continueTargetLabel={null}
-          cloning={false}
-          onClone={() => undefined}
-          testId="chat-dead-foreign-viewer"
-          className={undefined}
-        />,
-      );
-
-      const text = screen.getByTestId("chat-dead-foreign-viewer").textContent;
-      expect(text).toContain("belongs to another collaborator");
-      // The reason the button is absent, in the sentence - the alternative
-      // was a button whose click died on a bare "You don't have permission"
-      // toast, which is the defect this gate exists to remove.
-      expect(text).toContain("view-only access");
-      expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
-    });
-
     // The first cut claimed "showing the last published
     // copy" unconditionally, but the live tile mounts this banner above a
     // load state or a cached live session - the claim must follow the
@@ -540,7 +471,6 @@ describe("<ChatDeadTileBanner />", () => {
           ownerName={null}
           cloneTargetLabel={null}
           environmentOwned={false}
-          cloneAllowed
           showsPublishedCopy={false}
           continueTargetLabel={null}
           cloning={false}
@@ -573,7 +503,6 @@ describe("<ChatDeadTileBanner />", () => {
             ownerName={null}
             cloneTargetLabel={null}
             environmentOwned={false}
-            cloneAllowed
             showsPublishedCopy
             continueTargetLabel={null}
             cloning={false}
@@ -603,7 +532,6 @@ describe("<ChatDeadTileBanner />", () => {
           ownerName={null}
           cloneTargetLabel={null}
           environmentOwned={false}
-          cloneAllowed={false}
           showsPublishedCopy={false}
           continueTargetLabel={null}
           cloning={false}
@@ -617,73 +545,6 @@ describe("<ChatDeadTileBanner />", () => {
       expect(text).toContain("no longer shared with you");
       expect(text).not.toContain("belongs to another collaborator");
     });
-  });
-
-  // The own-chat viewer edge: a chat the viewer created before their role was
-  // downgraded. The reason copy still ends in "clone it and carry on", so the
-  // button's absence must be explained rather than silent.
-  it("withholds Clone on the viewer's own chat when the role can't create agents, and says why", () => {
-    render(
-      <ChatDeadTileBanner
-        hostLabel="mac-mini"
-        reason="host-offline"
-        ownedByViewer
-        ownerName={null}
-        cloneTargetLabel={null}
-        environmentOwned={false}
-        cloneAllowed={false}
-        showsPublishedCopy={false}
-        continueTargetLabel={null}
-        cloning={false}
-        onClone={() => undefined}
-        testId="chat-dead-own-viewer"
-        className={undefined}
-      />,
-    );
-
-    const text = screen.getByTestId("chat-dead-own-viewer").textContent;
-    expect(text).toContain('while "mac-mini" is offline');
-    expect(text).toContain("view-only access");
-    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
-  });
-
-  // Every clone-offering sentence ENDS in the promise ("continuing here creates
-  // a new agent", "cloning creates a new agent from it"). Appending the denial
-  // to one of those produced a banner that offered and refused the same action
-  // in consecutive sentences, so the no-clone variant must not carry it at all.
-  it("never promises cloning in the same breath as refusing it", () => {
-    for (const reason of [
-      "host-offline",
-      "chat-not-visible",
-      "chat-not-on-this-host",
-    ] as const) {
-      const { unmount } = render(
-        <ChatDeadTileBanner
-          hostLabel="mac-mini"
-          reason={reason}
-          ownedByViewer
-          ownerName={null}
-          cloneTargetLabel={null}
-          environmentOwned={false}
-          cloneAllowed={false}
-          showsPublishedCopy={false}
-          continueTargetLabel={null}
-          cloning={false}
-          onClone={() => undefined}
-          testId={`chat-dead-no-clone-${reason}`}
-          className={undefined}
-        />,
-      );
-
-      const text = screen.getByTestId(
-        `chat-dead-no-clone-${reason}`,
-      ).textContent;
-      expect(text).toContain("view-only access");
-      expect(text).not.toContain("creates a new agent");
-      expect(text).not.toContain("cloning creates");
-      expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
-      unmount();
-    }
   });
 
   // The report rides along invisibly, so it can drift from the sentence
@@ -702,7 +563,6 @@ describe("<ChatDeadTileBanner />", () => {
           ownerName={null}
           cloneTargetLabel={null}
           environmentOwned={false}
-          cloneAllowed
           showsPublishedCopy
           continueTargetLabel={null}
           cloning={false}
@@ -729,7 +589,6 @@ describe("<ChatDeadTileBanner />", () => {
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned={false}
-        cloneAllowed
         showsPublishedCopy
         continueTargetLabel={null}
         cloning={false}
@@ -745,23 +604,23 @@ describe("<ChatDeadTileBanner />", () => {
 });
 
 describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned)", () => {
-  const SANDBOX_FACT = "This chat's sandbox isn't available.";
+  const HOST_FACT = "This chat's host isn't available.";
 
-  it("says the sandbox is out and the copy shown, with no clone clause and no collaborator", () => {
-    for (const [reason, cloneAllowed] of [
-      ["host-offline", true],
-      ["chat-not-visible", false],
+  it("distinguishes an unavailable host from missing history, with the copy shown", () => {
+    for (const reason of [
+      "host-offline",
+      "chat-not-visible",
+      "chat-not-on-this-host",
     ] as const) {
       const testId = `chat-dead-env-${reason}`;
       const { unmount } = render(
         <ChatDeadTileBanner
-          hostLabel="team-sandbox"
+          hostLabel="team-computer"
           reason={reason}
           ownedByViewer={false}
           ownerName={null}
           cloneTargetLabel={null}
           environmentOwned
-          cloneAllowed={cloneAllowed}
           showsPublishedCopy
           continueTargetLabel={null}
           cloning={false}
@@ -772,13 +631,23 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
       );
 
       const text = screen.getByTestId(testId).textContent;
-      expect(text).toContain(
-        `${SANDBOX_FACT} Showing the last published copy.`,
-      );
+      const fact =
+        reason === "host-offline"
+          ? HOST_FACT
+          : "This agent's history isn't available here.";
+      expect(text).toContain(`${fact} Showing the last published copy.`);
       expect(text).not.toContain("collaborator");
       expect(text).not.toContain("Cloning creates");
-      expect(text).not.toContain("view-only access");
-      expect(text).not.toContain("team-sandbox");
+      expect(text).not.toContain("team-computer");
+      if (reason !== "host-offline") {
+        expect(
+          screen.getByTestId("report-context").getAttribute("data-message"),
+        ).toBe(
+          reason === "chat-not-visible"
+            ? "The agent's history could not be found on its bound host."
+            : "The connected host answered that it no longer has this agent's history.",
+        );
+      }
       unmount();
     }
   });
@@ -792,7 +661,6 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned
-        cloneAllowed
         showsPublishedCopy={false}
         continueTargetLabel={null}
         cloning={false}
@@ -803,21 +671,20 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     );
 
     const text = screen.getByTestId("chat-dead-env-live").textContent;
-    expect(text).toContain(SANDBOX_FACT);
+    expect(text).toContain(HOST_FACT);
     expect(text).not.toContain("published copy");
     expect(text).not.toContain("mac-mini");
   });
 
-  it("files a report that names the sandbox, not a collaborator's machine", () => {
+  it("files a report that names the host without assuming its kind", () => {
     render(
       <ChatDeadTileBanner
-        hostLabel="team-sandbox"
+        hostLabel="team-computer"
         reason="host-offline"
         ownedByViewer={false}
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned
-        cloneAllowed
         showsPublishedCopy
         continueTargetLabel={null}
         cloning={false}
@@ -828,11 +695,9 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     );
 
     const report = screen.getByTestId("report-context");
-    expect(report.getAttribute("data-title")).toBe(
-      "Chat sandbox isn't available",
-    );
+    expect(report.getAttribute("data-title")).toBe("Chat host isn't available");
     expect(report.getAttribute("data-message")).toBe(
-      "The chat's team sandbox isn't available.",
+      "The chat's host isn't available.",
     );
   });
 
@@ -845,7 +710,6 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
         ownerName={null}
         cloneTargetLabel={null}
         environmentOwned
-        cloneAllowed
         showsPublishedCopy
         continueTargetLabel={null}
         cloning={false}
@@ -857,7 +721,7 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
 
     const text = screen.getByTestId("chat-dead-env-revoked").textContent;
     expect(text).toContain("no longer shared with you");
-    expect(text).not.toContain("sandbox isn't available");
+    expect(text).not.toContain(HOST_FACT);
   });
 
   describe("removed sandbox continue target", () => {
@@ -870,7 +734,6 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
           ownerName={null}
           cloneTargetLabel={null}
           environmentOwned
-          cloneAllowed
           showsPublishedCopy
           cloning={false}
           onClone={() => undefined}
@@ -895,40 +758,30 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     });
 
     it("opens with the agent's sandbox, not 'the host', while the host label is unresolved", () => {
-      for (const [cloneAllowed, sentence] of [
-        [
-          true,
-          "This agent's sandbox was removed. Continue this agent on l-e2e-team-e7, with its history.",
-        ],
-        [
-          false,
-          "This agent's sandbox was removed. You have view-only access to this task, so this agent can't be continued.",
-        ],
-      ] as const) {
-        const testId = `chat-dead-sandbox-removed-unlabelled-${String(cloneAllowed)}`;
-        const { unmount } = render(
-          <ChatDeadTileBanner
-            hostLabel={null}
-            reason="sandbox-removed"
-            ownedByViewer
-            ownerName={null}
-            cloneTargetLabel={null}
-            environmentOwned
-            cloneAllowed={cloneAllowed}
-            showsPublishedCopy
-            cloning={false}
-            onClone={() => undefined}
-            continueTargetLabel="l-e2e-team-e7"
-            testId={testId}
-            className={undefined}
-          />,
-        );
+      render(
+        <ChatDeadTileBanner
+          hostLabel={null}
+          reason="sandbox-removed"
+          ownedByViewer
+          ownerName={null}
+          cloneTargetLabel={null}
+          environmentOwned
+          showsPublishedCopy
+          cloning={false}
+          onClone={() => undefined}
+          continueTargetLabel="l-e2e-team-e7"
+          testId="chat-dead-sandbox-removed-unlabelled"
+          className={undefined}
+        />,
+      );
 
-        const text = screen.getByTestId(testId).textContent;
-        expect(text).toContain(sentence);
-        expect(text).not.toContain("the host");
-        unmount();
-      }
+      const text = screen.getByTestId(
+        "chat-dead-sandbox-removed-unlabelled",
+      ).textContent;
+      expect(text).toContain(
+        "This agent's sandbox was removed. Continue this agent on l-e2e-team-e7, with its history.",
+      );
+      expect(text).not.toContain("the host");
     });
   });
 });

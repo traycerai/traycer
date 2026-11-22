@@ -5,6 +5,7 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   DesktopPublishedHostSnapshot,
+  DesktopSystemWake,
   LocalHostUnresponsive,
   LocalHostUnresponsiveOffer,
   RegisteredHostsPush,
@@ -172,7 +173,7 @@ export interface HostBridgeSurface {
   onLocalHostUnresponsive(
     handler: Listener<LocalHostUnresponsive | null>,
   ): Disposable;
-  onSystemResumed(handler: () => void): Disposable;
+  onSystemResumed(handler: Listener<DesktopSystemWake>): Disposable;
   onSystemSuspended(handler: () => void): Disposable;
   onVoiceTrayAction(handler: Listener<VoiceTrayAction>): Disposable;
   requestHostRespawn(): Promise<HostRestartRequestResult>;
@@ -205,7 +206,7 @@ export function buildHostBridge(): HostBridgeSurface {
     // through the generic per-event subscription (unlike the cached
     // local-host snapshot above).
     onSystemResumed: (handler) =>
-      subscribe<void>(RunnerHostEvent.systemResumed, handler),
+      subscribe<DesktopSystemWake>(RunnerHostEvent.systemResumed, handler),
 
     // The matching "the person is leaving" pulse: sleep or screen lock.
     onSystemSuspended: (handler) =>

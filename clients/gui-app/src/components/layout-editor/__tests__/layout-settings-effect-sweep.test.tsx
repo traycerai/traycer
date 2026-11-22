@@ -34,15 +34,16 @@ import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions
 import {
   asBarRegionId,
   DEFAULT_ARRANGEMENT,
-  railPanelToStackBelow,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
+import { BROWSERS_SIMULATORS_STACK_ID } from "@/lib/layout/rail";
 import { isMobileApp } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import {
   getLayoutSnapshot,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * EVERY LAYOUT SETTING CHANGES THE APP COLUMN, in jsdom.
@@ -85,6 +86,10 @@ const AVAILABILITY: SettingsAvailabilityContext = {
   // Both windows are composed at a desktop width: the phone layout is not
   // drawn, so the rows only it draws (the small-screen footer) have no control.
   phoneLayout: false,
+  soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
+  soundtrackOn: false,
 };
 
 const WINDOWS: ReadonlyArray<SweepWindow> = ["sample", "epic"];
@@ -114,21 +119,15 @@ const CONFIGURED_PREFIXES = SWEEP_CONFIGURED_PROVIDERS.map(
 );
 
 /**
- * The "Stack … with the panel below" entries whose pair joins Mobile
- * simulators: the verb on its own row, and the one on the panel directly above
- * it. Read off the shipped rail through the product's own neighbour rule, so
- * the pair follows the canonical order rather than being named here.
+ * The shipped Browsers and Simulators stack and the two members' unstack
+ * verbs: Mobile simulators draws in neither window, so the stack is left with
+ * one shown member and taking it apart changes nothing on screen.
  */
-const STACKS_JOINING_SIMULATORS: ReadonlySet<string> = new Set(
-  DEFAULT_ARRANGEMENT.rail.flatMap((entry) => {
-    if (entry.kind !== "panel") return [];
-    const joins =
-      entry.id === "railSimulators" ||
-      railPanelToStackBelow(DEFAULT_ARRANGEMENT.rail, entry.id) ===
-        "railSimulators";
-    return joins ? [`rail-structure:stack-below:${entry.id}`] : [];
-  }),
-);
+const SIMULATORS_STACK_ENTRIES: ReadonlySet<string> = new Set([
+  `rail-structure:remove-stack:${BROWSERS_SIMULATORS_STACK_ID}`,
+  "rail-structure:unstack:railBrowsers",
+  "rail-structure:unstack:railSimulators",
+]);
 
 const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
   {
@@ -162,8 +161,13 @@ const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
   },
   {
     id: "simulators-stack",
-    matches: (entry) => STACKS_JOINING_SIMULATORS.has(entry.id),
-    why: "each of these joins Mobile simulators, which draws in neither window, so the stack is left with one shown member and the rail draws that member standing alone (T3)",
+    matches: (entry) => SIMULATORS_STACK_ENTRIES.has(entry.id),
+    why: "the stack holds Mobile simulators, which draws in neither window, so it is left with one shown member and the rail draws that member standing alone with or without the link (T3)",
+  },
+  {
+    id: "file-tree-stack",
+    matches: (entry) => entry.id === "rail-structure:stack-below:railFileTree",
+    why: "File Tree is off in the shipped layout, so joining it to the panel below leaves the stack with one shown member, which the rail draws standing alone",
   },
 ];
 
@@ -303,6 +307,7 @@ async function sweepWindow(windowKind: SweepWindow): Promise<WindowRun> {
 }
 
 let releaseClocks: (() => void) | null = null;
+let priorVoiceInputEnabled: boolean | null = null;
 const runs = new Map<SweepWindow, WindowRun>();
 
 function runOf(windowKind: SweepWindow): WindowRun {
@@ -313,6 +318,8 @@ function runOf(windowKind: SweepWindow): WindowRun {
 
 beforeAll(async () => {
   releaseClocks = holdClocksStill();
+  priorVoiceInputEnabled = useSettingsStore.getState().voiceInputEnabled;
+  useSettingsStore.getState().setVoiceInputEnabled(true);
   for (const windowKind of WINDOWS) {
     runs.set(windowKind, await sweepWindow(windowKind));
   }
@@ -320,6 +327,9 @@ beforeAll(async () => {
 
 afterAll(() => {
   releaseClocks?.();
+  if (priorVoiceInputEnabled !== null) {
+    useSettingsStore.getState().setVoiceInputEnabled(priorVoiceInputEnabled);
+  }
 });
 
 /** One entry across both windows: what it changed anywhere. */

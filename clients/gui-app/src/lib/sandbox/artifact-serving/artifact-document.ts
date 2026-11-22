@@ -23,6 +23,7 @@ export function artifactBasePolicy(policySource: string | null): string {
 export interface ArtifactDocumentOptions {
   readonly artifactRootPath?: string;
   readonly canvas?: boolean;
+  /** With `canvas`: an html page a reader can comment on, not a board. */
   readonly canvasLinks?: "native";
   readonly policySource: string | null;
   readonly csp: string | null;
@@ -70,27 +71,52 @@ export function buildUnreachablePageDocument(
   return composeArtifactDocument("", options, "unreachable");
 }
 
+/**
+ * What each kind of document carries besides its own markup. A page a reader
+ * can comment on is a plain page (zoom, pinch, scrollbars, reveals kept in
+ * the frame) plus the position stamps and the selection script, so turning
+ * the comment tool on or off is a message to the loaded page, never another
+ * document. `canvas` is the ordinary bootstrap's board flag, which only a
+ * canvas board sets.
+ */
+function documentParts(
+  html: string,
+  options: ArtifactDocumentOptions,
+): {
+  readonly html: string;
+  readonly extraScript: string;
+  readonly canvas: boolean;
+} {
+  if (options.canvas !== true)
+    return { html, extraScript: buildHtmlViewerPrelude(), canvas: false };
+  const stamped = stampPositions(html, {
+    attributeName: "data-traycer-pos",
+  }).text;
+  if (options.canvasLinks === "native")
+    return {
+      html: stamped,
+      // The zoom script first: its touch listeners must precede the
+      // selection script's, which keeps touches from the page while the
+      // reader comments.
+      extraScript:
+        buildHtmlViewerPrelude() + buildHtmlSelectionPrelude(options.nonce),
+      canvas: false,
+    };
+  return {
+    html: stamped,
+    extraScript: buildCanvasPrelude(options.nonce),
+    canvas: true,
+  };
+}
+
 function composeArtifactDocument(
   html: string,
   options: ArtifactDocumentOptions,
   artifactPage: ArtifactPageRole,
 ): string {
-  let extraScript: string | undefined;
-  if (options.canvas === true) {
-    extraScript =
-      options.canvasLinks === "native"
-        ? buildHtmlSelectionPrelude(options.nonce)
-        : buildCanvasPrelude(options.nonce);
-  } else {
-    extraScript = buildHtmlViewerPrelude();
-  }
   const document = buildDocument({
-    html:
-      options.canvas === true
-        ? stampPositions(html, { attributeName: "data-traycer-pos" }).text
-        : html,
     ...options,
-    extraScript,
+    ...documentParts(html, options),
     artifactPage,
     theme: {
       ...options.theme,

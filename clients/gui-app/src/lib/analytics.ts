@@ -7,6 +7,7 @@ import {
 import { LAYOUT_VALUE_ENUM_MEMBERS } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
 import { isMobileApp } from "@/lib/mobile-app";
+import { ownValue } from "@/lib/own-value";
 
 export type AnalyticsSource =
   | "direct_ui"
@@ -90,6 +91,7 @@ export type AnalyticsCommand =
   | "history_back"
   | "history_forward"
   | "open_artifact"
+  | "open_bot"
   | "open_chat"
   | "open_diff"
   | "open_file"
@@ -118,6 +120,7 @@ export type AnalyticsSettingsSection =
   | "getting-started"
   | "browser"
   | "browser-agent-access"
+  | "agent-memories"
   | "credits"
   | "mcp-servers"
   | "members"
@@ -135,6 +138,7 @@ export type AnalyticsSettingsSection =
   | "sandboxes"
   | "secrets"
   | "shell"
+  | "storage"
   | "usage"
   | "worktrees";
 
@@ -153,6 +157,52 @@ export type AnalyticsArtifactKind =
  * captured - an export is always a direct button press, so the gesture axis
  * carries no signal here. */
 export type AnalyticsUsageImageExportSource = "epic_dialog" | "settings";
+
+/** The images the "share on X" dialog offers. */
+export type AnalyticsShareImage = "setup" | "screen" | "usage" | "team";
+
+/** The fixed phrase family a thank-you matched (`gratitude-match.ts`). */
+export type AnalyticsShareMatchKey =
+  | "thank_you"
+  | "appreciate"
+  | "great_job"
+  | "amazing"
+  | "nailed_it"
+  | "perfect"
+  | "love_it"
+  | "legend"
+  | "hype"
+  | "emoji";
+
+/** The ready-made post lines' ids (`share-on-x-lines.ts`). */
+export type AnalyticsShareLineId =
+  | "line_01"
+  | "line_02"
+  | "line_03"
+  | "line_04"
+  | "line_05"
+  | "line_06"
+  | "line_07"
+  | "line_08"
+  | "line_09"
+  | "line_10"
+  | "line_11"
+  | "line_12"
+  | "line_13"
+  | "line_14"
+  | "line_15"
+  | "line_16"
+  | "line_17"
+  | "line_18"
+  | "line_19"
+  | "line_20";
+
+const ANALYTICS_SHARE_LINE_IDS = new Set<string>(
+  Array.from(
+    { length: 20 },
+    (_, index) => `line_${String(index + 1).padStart(2, "0")}`,
+  ),
+);
 
 /**
  * Mirrors the protocol's `EditorId` registry. Spelled out rather than derived
@@ -279,6 +329,7 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
  * allowed-values pinning below. */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
+  | "agent-memories"
   | "command-theme"
   | "login-import"
   | "mobile-switcher"
@@ -328,12 +379,17 @@ export type AnalyticsProvider =
   | "reasonix"
   | "traycer";
 
-export type AnalyticsRole = "editor" | "owner" | "viewer";
+/**
+ * A role a share event reports. The retired view-only role is absent: no
+ * share can name it, so no event can carry it.
+ */
+export type AnalyticsRole = "editor" | "owner";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "agentBrowserAccess"
   | "agentOfficeDefaultView"
+  | "useTraycerMemories"
   | "agentTabSurfacing"
   | "agentWorktreeCreate"
   | "artifactIconColorMode"
@@ -369,6 +425,10 @@ export type AnalyticsSetting =
   | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
+  | "storageArchivedChats"
+  | "storageChats"
+  | "storageFileEditSnapshots"
+  | "storageIdleTasks"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"
   | "terminalCursorBlink"
@@ -527,6 +587,14 @@ export enum AnalyticsEvent {
   ArtifactDeleted = "artifact_deleted",
   ArtifactExported = "artifact_exported",
   UsageImageExported = "usage_image_exported",
+  SharePromptShown = "share_prompt_shown",
+  SharePromptDismissed = "share_prompt_dismissed",
+  ShareOptedOut = "share_opted_out",
+  ShareDialogOpened = "share_dialog_opened",
+  ShareLineSelected = "share_line_selected",
+  ShareTextCopied = "share_text_copied",
+  ShareImageCopied = "share_image_copied",
+  ShareXOpened = "share_x_opened",
   CommentCreated = "comment_created",
   CommentReplied = "comment_replied",
   CommentEdited = "comment_edited",
@@ -915,10 +983,43 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ArtifactExported]: {
     readonly format: "markdown" | "pdf";
     readonly artifact_count: number;
+    readonly include_nested: boolean;
   };
   readonly [AnalyticsEvent.UsageImageExported]: {
     readonly action: "copy" | "download" | "share";
     readonly source: AnalyticsUsageImageExportSource;
+  };
+  readonly [AnalyticsEvent.SharePromptShown]: {
+    readonly trigger: "gratitude";
+    readonly match_key: AnalyticsShareMatchKey;
+    readonly showing: number;
+  };
+  readonly [AnalyticsEvent.SharePromptDismissed]: {
+    readonly via: "timeout" | "remind_later" | "close";
+  };
+  readonly [AnalyticsEvent.ShareOptedOut]: {
+    readonly from: "toast" | "dialog";
+  };
+  readonly [AnalyticsEvent.ShareDialogOpened]: {
+    readonly source: "toast";
+    readonly screen_captured: boolean;
+  };
+  readonly [AnalyticsEvent.ShareLineSelected]: {
+    readonly line_id: AnalyticsShareLineId;
+    readonly position: number;
+  };
+  readonly [AnalyticsEvent.ShareTextCopied]: {
+    readonly line_id: AnalyticsShareLineId;
+    readonly edited: boolean;
+  };
+  readonly [AnalyticsEvent.ShareImageCopied]: {
+    readonly image: AnalyticsShareImage;
+  };
+  readonly [AnalyticsEvent.ShareXOpened]: {
+    readonly line_id: AnalyticsShareLineId;
+    readonly edited: boolean;
+    readonly image: AnalyticsShareImage | "none";
+    readonly char_count: number;
   };
   readonly [AnalyticsEvent.CommentCreated]: { readonly has_mention: boolean };
   readonly [AnalyticsEvent.CommentReplied]: { readonly has_mention: boolean };
@@ -1285,6 +1386,7 @@ const ANALYTICS_COMMANDS = new Set<string>([
   "history_forward",
   "install_host_update",
   "open_artifact",
+  "open_bot",
   "open_chat",
   "open_diff",
   "open_file",
@@ -1412,6 +1514,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "getting-started": true,
     browser: true,
     "browser-agent-access": true,
+    "agent-memories": true,
     "mcp-servers": true,
     skills: true,
     "agent-definitions": true,
@@ -1428,6 +1531,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     members: true,
     secrets: true,
     shell: true,
+    storage: true,
     usage: true,
     credits: true,
     worktrees: true,
@@ -1450,6 +1554,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     agentTabSurfacing: true,
     agentWorktreeCreate: true,
     allowPrereleaseUpdates: true,
+    useTraycerMemories: true,
     artifactIconColorMode: true,
     artifactIconColors: true,
     catalogProbeTimeout: true,
@@ -1480,6 +1585,10 @@ const ANALYTICS_SETTINGS = new Set<string>(
     startPageWallpaperCurated: true,
     startPageWallpaperTint: true,
     steerOnModEnterEnabled: true,
+    storageArchivedChats: true,
+    storageChats: true,
+    storageFileEditSnapshots: true,
+    storageIdleTasks: true,
     summonHotkeyChord: true,
     summonHotkeyEnabled: true,
     terminalCursorBlink: true,
@@ -1521,6 +1630,7 @@ const ANALYTICS_THEMES = new Set<string>([
 
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
+  "agent-memories",
   "command-theme",
   "mobile-switcher",
   "mobile-tasks",
@@ -1837,9 +1947,29 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
   ),
   ...eventKeyEntries(
     [AnalyticsEvent.ArtifactExported],
-    ["format", "artifact_count"],
+    ["format", "artifact_count", "include_nested"],
   ),
   ...eventKeyEntries([AnalyticsEvent.UsageImageExported], ["action", "source"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.SharePromptShown],
+    ["trigger", "match_key", "showing"],
+  ),
+  ...eventKeyEntries([AnalyticsEvent.SharePromptDismissed], ["via"]),
+  ...eventKeyEntries([AnalyticsEvent.ShareOptedOut], ["from"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.ShareDialogOpened],
+    ["source", "screen_captured"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.ShareLineSelected],
+    ["line_id", "position"],
+  ),
+  ...eventKeyEntries([AnalyticsEvent.ShareTextCopied], ["line_id", "edited"]),
+  ...eventKeyEntries([AnalyticsEvent.ShareImageCopied], ["image"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.ShareXOpened],
+    ["line_id", "edited", "image", "char_count"],
+  ),
   ...eventKeyEntries(
     [AnalyticsEvent.CommentCreated, AnalyticsEvent.CommentReplied],
     ["has_mention"],
@@ -2103,7 +2233,7 @@ const EXACT_PROPERTY_VALUES: {
   provider: ANALYTICS_PROVIDERS,
   source_kind: new Set(["managed", "ambient"]),
   region: ANALYTICS_LAYOUT_REGIONS,
-  role: new Set(["editor", "owner", "viewer"]),
+  role: new Set(["editor", "owner"]),
   session_duration_bucket: ANALYTICS_LAYOUT_DURATION_BUCKETS,
   section: ANALYTICS_SETTINGS_SECTIONS,
   session_age_bucket: ANALYTICS_SESSION_AGE_BUCKETS,
@@ -2301,6 +2431,62 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["epic_dialog", "settings"]),
   ),
   ...eventValueEntries(
+    [AnalyticsEvent.SharePromptShown],
+    "trigger",
+    new Set(["gratitude"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.SharePromptShown],
+    "match_key",
+    new Set([
+      "thank_you",
+      "appreciate",
+      "great_job",
+      "amazing",
+      "nailed_it",
+      "perfect",
+      "love_it",
+      "legend",
+      "hype",
+      "emoji",
+    ]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.SharePromptDismissed],
+    "via",
+    new Set(["timeout", "remind_later", "close"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ShareOptedOut],
+    "from",
+    new Set(["toast", "dialog"]),
+  ),
+  // Event-scoped, like the usage export's `source` above.
+  ...eventValueEntries(
+    [AnalyticsEvent.ShareDialogOpened],
+    "source",
+    new Set(["toast"]),
+  ),
+  ...eventValueEntries(
+    [
+      AnalyticsEvent.ShareLineSelected,
+      AnalyticsEvent.ShareTextCopied,
+      AnalyticsEvent.ShareXOpened,
+    ],
+    "line_id",
+    ANALYTICS_SHARE_LINE_IDS,
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ShareImageCopied],
+    "image",
+    new Set(["setup", "screen", "usage", "team"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ShareXOpened],
+    "image",
+    new Set(["setup", "screen", "usage", "team", "none"]),
+  ),
+  ...eventValueEntries(
     [
       AnalyticsEvent.TabCreated,
       AnalyticsEvent.TabDuplicated,
@@ -2392,6 +2578,8 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
 ]);
 
 const BOOLEAN_PROPERTY_KEYS = new Set<string>([
+  "edited",
+  "screen_captured",
   "already_open",
   "other_tasks",
   "start_pages",
@@ -2405,6 +2593,7 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
   "had_text",
   "has_mention",
   "include_history",
+  "include_nested",
   "layout_dock_reordered",
   "layout_toolbar_left_reordered",
   "layout_toolbar_right_reordered",
@@ -2419,6 +2608,9 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
 ]);
 
 const COUNT_PROPERTY_KEYS = new Set<string>([
+  "char_count",
+  "position",
+  "showing",
   "answer_count",
   "artifact_count",
   "attachment_count",
@@ -2999,7 +3191,9 @@ function typedAnalyticsBlocker(error: unknown): AnalyticsBlocker | null {
     return null;
   }
   const code = error.code;
-  return typeof code === "string" ? (RPC_ERROR_BLOCKERS[code] ?? null) : null;
+  return typeof code === "string"
+    ? (ownValue(RPC_ERROR_BLOCKERS, code) ?? null)
+    : null;
 }
 
 export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {

@@ -33,6 +33,23 @@ export const RPC_ERROR_CODES = [
   "WORKSPACE_BINDING_REQUIRED",
   "WORKTREE_REMOVE_LAST_ENTRY",
   "PROVIDER_DISABLED",
+  "DELEGATE_REQUIRED",
+  "PROFILE_BINDING_CHANGED",
+  "lane-retired",
+  "binding-changed",
+  "binding-version-unknown",
+  "custody-pending",
+  "host-left-environment",
+  "profile-account-changed",
+  "signed-out-by-person",
+  // Additive: an old peer narrows it to RPC_ERROR, keeping status and message.
+  "removed-by-person",
+  // An Add or re-sign-in named an account the environment holds. Additive and
+  // degrade-safe: old peers narrow the unknown code to RPC_ERROR, keeping
+  // status and message.
+  "environment-managed",
+  // A served legacy key mutation requires the client's direct-to-broker flow.
+  "update-required",
   "SENDER_TUI_UNSUPPORTED",
   // Caller-supplied input is structurally valid but semantically rejected
   // (e.g. minting the reserved `traycer:system` agent id). Additive and
@@ -52,6 +69,14 @@ export const RPC_ERROR_CODES = [
   // nothing about the target, so it must not read as E_AGENT_NOT_FOUND. Same
   // additive degrade story as E_INVALID_ARGUMENT.
   "E_CLOUD_UNREACHABLE",
+  // The host's own egress budget refused a cloud request the call needed
+  // before it left the host: the route family's breaker is open, or the
+  // host's in-flight or rate budget is spent. RETRYABLE (503), and says
+  // nothing about the target. Its own code rather than E_CLOUD_UNREACHABLE
+  // because the host's idempotency cache discards a key on that code, and a
+  // refusal of a write's LATER call does not prove its earlier calls did not
+  // land. Same additive degrade story as E_INVALID_ARGUMENT.
+  "E_CLOUD_REQUEST_REFUSED",
   // A HOME-partitioned request (`clearAll@1.1`'s `home: "local"`) arrived
   // while this host could not read local-home membership. RETRYABLE (503) and
   // deliberately NOT collapsed into a generic failure: the alternative to
@@ -85,6 +110,16 @@ export const RPC_ERROR_CODES = [
   // environment is bound to it, and a host belongs to exactly one
   // environment. Same additive degrade story as E_INVALID_ARGUMENT.
   "E_HOST_HAS_BOTS_OF_ANOTHER_ENVIRONMENT",
+  // Team-target bind refusals, carried through the ordinary error envelope.
+  // Older clients narrow unknown codes to RPC_ERROR and retain the message.
+  "E_ENVIRONMENT_NOT_A_MEMBER",
+  "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
+  "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
+  "E_HOST_IS_SANDBOX",
+  "E_HOST_IN_ANOTHER_TEAM",
+  // No move waiting, or the request names another target. The app draws its own
+  // line, so no message text is contract. Same additive degrade as E_INVALID_ARGUMENT.
+  "E_MOVE_NOT_AWAITING",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may
   // retry with the SAME key once capacity returns. This meaning is part of the
@@ -244,10 +279,11 @@ export const RPC_ERROR_CODES = [
   // shortly, and NOT a missing grant - nothing is to be asked of the user.
   "authorization_stale",
   // The destination's protocol has no worker class, so a secret bound to it
-  // cannot be brokered; the alternative is an exposed binding.
+  // cannot be brokered, and brokering is the only way a sandbox holds one: no
+  // secret can be stored for that protocol.
   "protocol_not_brokered",
   // A request signed in a shape no signing worker reproduces (a presigned URL,
-  // a credential set handed to a third party); the alternative is an export.
+  // a credential set handed to a third party). Such a shape is unsupported.
   "signing_shape_unsupported",
   // The route's pre-issued leaf certificate is missing or expired, so its
   // TLS-terminated endpoint cannot answer.
@@ -263,9 +299,6 @@ export const RPC_ERROR_CODES = [
   "endpoint_unavailable",
   // The destination answers HTTP/3 only, which the bound class cannot carry.
   "h3_only_destination",
-  // A team's secrets are brokered only: a tool that needs a plain value needs
-  // a personal sandbox.
-  "team_secrets_are_brokered",
   // Undo named a version whose value was destroyed.
   "version_destroyed",
   // Destroy named the current version: replace or revoke the secret first.
@@ -277,14 +310,6 @@ export const RPC_ERROR_CODES = [
   // `staleWrite` says who and the current revision; the page re-reads and
   // says "changed on <host> just now". Additive, as above.
   "ENVIRONMENT_WRITE_STALE",
-  // `providers.link`: the harness has no sign-in the
-  // environment can hold, so the profile stays on this host; the Link dialog
-  // says "On <host> only." and nothing more. Additive, as above.
-  "PROVIDER_LINK_NOT_OFFERED",
-  // `providers.link`: Traycer is not reachable (or the host is not set up
-  // yet), so nothing can be linked now; the dialog says "Connect to Traycer
-  // to link this profile." Additive, as above.
-  "PROVIDER_LINK_UNAVAILABLE",
   // ─── Same principal ─────────────────────────────────────────────────────
   //
   // The two hosts belong to different owners (a person and a team, or two
@@ -301,6 +326,37 @@ export const RPC_ERROR_CODES = [
   // deleted since. Nothing was created; the bot the key made, if live, is in
   // the person's list. Additive, as above.
   "E_BOT_REQUEST_KEY_REUSED",
+  // `bot.conversation.send` carried a card's `answers` for a bot whose bound
+  // host has not said it takes them (`BOT_HOST_TAKES_ANSWER_SETS`): a host
+  // that predates them would take the set as an ordinary post. Nothing was
+  // written or queued; each question is answered on its own instead.
+  // Additive, as above.
+  "E_BOT_ANSWER_SETS_UNSUPPORTED",
+  // `bot.conversation.send` carried a member's answer, or a card's answers,
+  // to a question someone else had already settled. Nothing was written. The
+  // settlement that beat it reaches the client on the chat's stream, which
+  // nothing orders against this reply, so the card waits for it rather than
+  // say the send failed: sending again would be refused again. Additive, as
+  // above: a host that predates it refuses with RPC_ERROR.
+  "E_BOT_QUESTION_ALREADY_SETTLED",
+  // `bot.conversation.send` named the message it replies to (`replyTo`) for a
+  // bot whose bound host has not said it takes it (`BOT_HOST_TAKES_REPLIES`):
+  // a host that predates it would take the message as an ordinary post and
+  // drop what it replies to. Nothing was written or queued. Additive, as
+  // above.
+  "E_BOT_REPLIES_UNSUPPORTED",
+  // ─── Evicted chats ──────────────────────────────────────────────────────
+  //
+  // A host dropped a chat's records once the cloud held them, and could not
+  // bring them back for a write (`epic.hydrateChat`, or a send that reached
+  // the host first). The chat stays as it was and nothing was written.
+  // Additive, as above.
+  //
+  // The host could not reach the cloud copy. Retryable once it can.
+  "CHAT_EVICTED_UNREACHABLE",
+  // The cloud copy is no longer the one the host dropped: the chat was
+  // continued on another host, whose copy is the latest.
+  "CHAT_EVICTED_HEAD_MOVED",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

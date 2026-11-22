@@ -93,6 +93,33 @@ function isDisabled(testId: string): boolean {
   return element instanceof HTMLButtonElement && element.disabled;
 }
 
+const APPROVAL_BUTTON_CLASS_TOKENS = [
+  "h-auto",
+  "max-w-full",
+  "min-w-0",
+  "shrink",
+  "justify-start",
+  "text-start",
+  "whitespace-normal",
+  "break-words",
+] as const;
+
+function classTokens(element: HTMLElement): readonly string[] {
+  return element.className.split(/\s+/).filter((token) => token.length > 0);
+}
+
+function expectApprovalButtonClass(testId: string): void {
+  const element = screen.getByTestId(testId);
+  if (!(element instanceof HTMLElement)) {
+    throw new Error(`${testId} is not an element`);
+  }
+  const tokens = classTokens(element);
+  for (const token of APPROVAL_BUTTON_CLASS_TOKENS) {
+    expect(tokens).toContain(token);
+  }
+  expect(tokens).not.toContain("whitespace-nowrap");
+}
+
 beforeEach(() => {
   mocks.state.data = undefined;
   mocks.state.isPending = false;
@@ -152,6 +179,13 @@ describe("<SecretGrantRequestCard />", () => {
       "Approve for all sandboxes",
     );
     expect(textOf("secret-grant-request-decline")).toBe("Decline");
+    const card = screen.getByTestId("secret-grant-request-card");
+    expect(classTokens(card)).toEqual(
+      expect.arrayContaining(["w-full", "min-w-0"]),
+    );
+    for (const testId of ANSWER_IDS) {
+      expectApprovalButtonClass(testId);
+    }
   });
 
   it.each<SecretRequestDecision>(["approve", "approve_default", "decline"])(
@@ -293,6 +327,8 @@ describe("<SecretGrantRequestCard /> on a team request", () => {
     expect(textOf("secret-grant-request-confirm-default-cancel")).toBe(
       "Cancel",
     );
+    expectApprovalButtonClass("secret-grant-request-confirm-default-yes");
+    expectApprovalButtonClass("secret-grant-request-confirm-default-cancel");
     for (const testId of ANSWER_IDS) {
       expect(isAbsent(testId)).toBe(true);
     }
@@ -350,6 +386,37 @@ describe("<SecretGrantRequestCard /> on a team request", () => {
       expect(mocks.mutate).toHaveBeenCalledWith(decision);
     },
   );
+
+  it("wraps a long team name on the wide approval", () => {
+    const teamName =
+      "Acme Robotics · Research Infrastructure and Platform Engineering";
+    renderCard({ ...TEAM_DETAIL, teamName }, false);
+    const card = screen.getByTestId("secret-grant-request-card");
+    expect(classTokens(card)).toEqual(
+      expect.arrayContaining(["w-full", "min-w-0"]),
+    );
+    expect(textOf("secret-grant-request-approve_default")).toBe(
+      `Approve for all ${teamName} sandboxes`,
+    );
+    expect(textOf("secret-grant-request-decline")).toBe("Decline");
+    const wide = screen.getByTestId("secret-grant-request-approve_default");
+    const tokens = classTokens(wide);
+    for (const token of [
+      "h-auto",
+      "max-w-full",
+      "min-w-0",
+      "shrink",
+      "justify-start",
+      "whitespace-normal",
+      "break-words",
+    ]) {
+      expect(tokens).toContain(token);
+    }
+    expect(tokens).not.toContain("whitespace-nowrap");
+    for (const testId of ANSWER_IDS) {
+      expectApprovalButtonClass(testId);
+    }
+  });
 
   it("says this secret in the confirmation when the request names none", () => {
     renderCard({ ...TEAM_DETAIL, secretName: null }, false);

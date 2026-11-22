@@ -1,6 +1,7 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
+import { unnamedTeamCreditsRanOut } from "@/components/hosts/sandbox-card-model";
 import {
   useComposerSurfaceHostKey,
   useComposerSurfaceHostPin,
@@ -61,6 +62,7 @@ import {
 } from "@/components/composer/use-sandbox-staging";
 import {
   stagedSandboxFallbackName,
+  terminalOpenButtonAction,
   useNewHostActions,
   useSetupLineFacts,
   useStagedSandboxRunner,
@@ -101,7 +103,8 @@ import {
   useSandboxVerb,
   type SandboxVerbOutcome,
 } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
-import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useBillingUrlOf } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import {
   sandboxConfigurationOf,
   useSandboxConfigurations,
@@ -136,10 +139,17 @@ import {
 } from "@/lib/composer/attachments-by-hash";
 import { inlineHashOnlyImageBytes } from "@/lib/composer/image-atoms";
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
+import {
+  removedProfilesForProvider,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type {
+  NestedFocusProvenance,
+  NavigateNestedFocus,
+} from "@/lib/epic-nested-focus-navigation";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
@@ -166,11 +176,14 @@ import {
   RETRY,
   STOP,
   DETAILS,
+  teamCreditsRanOutLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-copy";
 import {
   holdPendingSandboxSendOwnership,
   ownsPendingSandboxSend,
@@ -619,6 +632,7 @@ function PendingSendDelivery(
       requested: {
         readiness: requested.readiness,
         profiles: requested.profiles,
+        removedProfiles: requested.removedProfiles,
       },
       model: { model: model.model, refetch: refetchModel },
     });
@@ -631,6 +645,7 @@ function PendingSendDelivery(
     runner,
     requested.profiles,
     requested.readiness,
+    requested.removedProfiles,
     rowState,
     send,
     stage,
@@ -756,7 +771,10 @@ function executePendingReadiness(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly requested: Pick<PendingAgentReadiness, "readiness" | "profiles">;
+  readonly requested: Pick<
+    PendingAgentReadiness,
+    "readiness" | "profiles" | "removedProfiles"
+  >;
   readonly model: Pick<PendingDefaultModel, "model" | "refetch">;
 }): void {
   const { decision, send, stage: current, client, requested, model } = input;
@@ -787,6 +805,7 @@ function executePendingReadiness(input: {
     client,
     model: model.model,
     profiles: requested.profiles,
+    removedProfiles: requested.removedProfiles,
     opencodeLine: requested.readiness.opencodeLine,
   });
 }
@@ -798,6 +817,7 @@ function preparePendingReadySend(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly model: string | null;
   readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
   readonly opencodeLine: OpencodeLine | null;
 }): void {
   const { send, stage, client } = input;
@@ -807,6 +827,7 @@ function preparePendingReadySend(input: {
     profileId: resolveSeededProfileId(
       send.settings.profileId,
       input.profiles,
+      input.removedProfiles,
       true,
     ),
   };
@@ -834,6 +855,7 @@ function preparePendingReadySend(input: {
 interface PendingAgentReadiness {
   readonly readiness: RequestedAgentReadiness | null;
   readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
   readonly refetch: () => void;
 }
 
@@ -919,20 +941,26 @@ function useRequestedAgentOnHost(
         opencodeLine,
       )
     : null;
-  const profiles = useMemo(() => {
-    const providerId = guiHarnessIdToProviderId(harnessId);
-    return providerId === null
-      ? undefined
-      : providerRows?.find((provider) => provider.providerId === providerId)
-          ?.profiles;
-  }, [harnessId, providerRows]);
+  const providerId = guiHarnessIdToProviderId(harnessId);
+  const profiles = useMemo(
+    () =>
+      providerId === null
+        ? undefined
+        : providerRows?.find((provider) => provider.providerId === providerId)
+            ?.profiles,
+    [providerId, providerRows],
+  );
+  const removedProfiles = useMemo(
+    () => removedProfilesForProvider(providers.data, providerId),
+    [providers.data, providerId],
+  );
   const refetchHarnesses = harnesses.refetch;
   const refetchProviders = providers.refetch;
   const refetch = useCallback((): void => {
     void refetchHarnesses();
     void refetchProviders();
   }, [refetchHarnesses, refetchProviders]);
-  return { readiness, profiles, refetch };
+  return { readiness, profiles, removedProfiles, refetch };
 }
 
 /**
@@ -948,6 +976,7 @@ function useDefaultModelOnHost(
 ): PendingDefaultModel {
   const opencodeLine = useChatOpencodeLine();
   const models = useGuiHarnessModelsQueryForClient(client, harnessId, null, {
+    profileId: null,
     // Observe the shared cache; only the kernel's fetch-model effect reads it.
     enabled: false,
     subscribed: client !== null,
@@ -2216,6 +2245,13 @@ async function runPendingDispatch(
       error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED"
     ) {
       refusePendingDispatch(send, dispatch);
+    } else if (
+      error instanceof HostRpcError &&
+      error.code === "removed-by-person"
+    ) {
+      // A retry cannot succeed, so it is refused and says why.
+      refusePendingDispatch(send, dispatch);
+      toastFromHostError(error, REMOVED_PROFILE_PIN_TEXT);
     } else {
       usePendingSandboxSendStore
         .getState()
@@ -2322,8 +2358,14 @@ function finishDispatchUi(
       hostId: dispatch.input.hostId,
       placement: null,
       source: "direct_ui",
+      // NOT the person, though the source is a direct gesture: this queue is
+      // persisted and rehydrates, so a fork whose sandbox woke after a reload
+      // lands here with nobody at the keyboard. A `"user"` claim would retire
+      // an artifact request the route is waiting on in that load.
+      provenance: "automatic",
     },
     navigateNestedFocus,
+    mobileTarget: null,
   });
 }
 
@@ -2396,9 +2438,15 @@ function PendingDispatchItem(props: {
           />
         )}
         <span>
-          {view.line === "settings"
-            ? pendingSettingsTitle(row.row, settings.data)
-            : pendingDispatchLineCopy(send.request.kind, view.line)}
+          {view.line === "settings" ? (
+            pendingSettingsTitle(row.row, settings.data)
+          ) : (
+            <PendingDispatchLine
+              kind={send.request.kind}
+              line={view.line}
+              row={row.row}
+            />
+          )}
         </span>
         {view.line === "settings" ? (
           <PendingDispatchSettingsDetail row={row.row} status={settings.data} />
@@ -2497,6 +2545,42 @@ function pendingDispatchLineCopy(
   return copy[line];
 }
 
+/**
+ * Anyone who cannot buy a team's credits is told whose ran out, not to add them.
+ * Nothing while ownership is unknown.
+ */
+function PendingDispatchLine(props: {
+  readonly kind: PendingSandboxSendRequest["kind"];
+  readonly line: Exclude<PendingSendView["line"], "settings">;
+  readonly row: SandboxSummary | null;
+}): ReactNode {
+  if (props.line === "credits")
+    return <PendingDispatchCreditsLine kind={props.kind} row={props.row} />;
+  return pendingDispatchLineCopy(props.kind, props.line);
+}
+
+function PendingDispatchCreditsLine(props: {
+  readonly kind: PendingSandboxSendRequest["kind"];
+  readonly row: SandboxSummary | null;
+}): ReactNode {
+  const configurations = useSandboxConfigurations();
+  const configuration =
+    props.row === null
+      ? null
+      : sandboxConfigurationOf(props.row, configurations);
+  const offersAddCredits = useOffersAddCredits(configuration);
+  // Not known whose: a team's row (only a team agent sandbox names a creator)
+  // reads as the sandbox page's header does for a team it cannot name; a row
+  // not in hand, or one that may be the person's own, has no line.
+  if (configuration === null)
+    return props.row !== null && props.row.createdBy !== null
+      ? unnamedTeamCreditsRanOut(configurations.complete)
+      : null;
+  if (configuration.kind === "team" && !offersAddCredits)
+    return teamCreditsRanOutLine(configuration.teamName);
+  return pendingDispatchLineCopy(props.kind, "credits");
+}
+
 /** Repairs a live sandbox without releasing a possibly accepted request. */
 function PendingDispatchRemedy(props: {
   readonly id: string;
@@ -2504,15 +2588,15 @@ function PendingDispatchRemedy(props: {
   readonly row: SandboxSummary | null;
   readonly failure: "credits" | "settings";
 }): ReactNode {
-  const { configurations } = useSandboxConfigurations();
+  const configurations = useSandboxConfigurations();
   const configuration =
     props.row === null
       ? null
       : sandboxConfigurationOf(props.row, configurations);
-  const billingUrl = useConfigurationBillingUrl(
-    configuration ?? { kind: "personal" },
-  );
+  const billingUrlOf = useBillingUrlOf();
   const openLink = useOpenLink();
+  const addCredits =
+    useOffersAddCredits(configuration) && props.failure === "credits";
   if (props.failure === "settings" && props.row !== null)
     return (
       <SandboxRetryApplyingButton
@@ -2528,12 +2612,12 @@ function PendingDispatchRemedy(props: {
       onClick={() => {
         if ((useAuthStore.getState().profile?.userId ?? null) !== props.userId)
           return;
-        if (props.failure === "credits" && configuration !== null)
-          void openLink(billingUrl, "account", null);
+        if (addCredits && configuration !== null)
+          void openLink(billingUrlOf(configuration), "account", null);
         else openSandboxDetails(props.id);
       }}
     >
-      {props.failure === "credits" ? "Add credits" : "Details"}
+      {addCredits ? "Add credits" : "Details"}
     </Button>
   );
 }
@@ -3159,7 +3243,10 @@ function PendingStagedSendItem(props: {
   const terminal = useMemo(
     () => ({
       epicId,
-      open: (target: TerminalLaunchTarget) => {
+      open: (
+        target: TerminalLaunchTarget,
+        provenance: NestedFocusProvenance,
+      ) => {
         openTile(
           tileIntent(
             mintPendingSandboxTerminalTile({ ...target, epicId }, send.id),
@@ -3167,6 +3254,7 @@ function PendingStagedSendItem(props: {
             "explicit",
             "direct_ui",
           ),
+          provenance,
         );
       },
     }),
@@ -3287,7 +3375,7 @@ function PendingStagedSendItem(props: {
             applyingPending: newHost.applyingPending,
             applyingError: newHost.applyingError,
             onStop: stop,
-            onOpenTerminal: newHost.onOpenTerminal,
+            onOpenTerminal: terminalOpenButtonAction(newHost.onOpenTerminal),
             onChooseModel: lineRemedies.onChooseModel,
           }}
         />
@@ -3407,7 +3495,7 @@ function usePendingTerminalSandbox(
 function useOpenTerminalWhenUp(
   send: PendingSandboxSend | null,
   stage: StagedSandbox | null,
-  openTerminal: (() => void) | null,
+  openTerminal: ((provenance: NestedFocusProvenance) => void) | null,
 ): void {
   const sendId = send?.request.kind === "terminal" ? send.id : null;
   const userId = send?.userId ?? null;
@@ -3435,7 +3523,8 @@ function useOpenTerminalWhenUp(
       }),
     );
     if (!decision.effects.includes("open-terminal")) return;
-    openTerminal();
+    // Readiness may resume a persisted ask; it is not a new button click.
+    openTerminal("automatic");
     completePendingSandboxTerminal(sendId);
   }, [
     hostId,

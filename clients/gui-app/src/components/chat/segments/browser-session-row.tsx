@@ -159,6 +159,7 @@ export function BrowserSessionRow({
                 "explicit",
                 "direct_ui",
               ),
+              "user",
             );
           }}
         >

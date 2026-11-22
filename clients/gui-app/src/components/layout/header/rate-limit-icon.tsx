@@ -24,7 +24,6 @@ import {
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 import {
   rateLimitWindowFillPercent,
@@ -137,7 +136,6 @@ function ScopedRateLimitIconButton({
       }),
     [],
   );
-  useTitleBarDragSuppression("rate-limits", open);
   // One subscription bridge owns the checked-account + per-harness profile
   // state for both the always-mounted glyph and the lazily-mounted popover,
   // keyed by the host this surface is watching - the accounts it names are

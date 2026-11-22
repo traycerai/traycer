@@ -39,6 +39,15 @@ export interface DesktopPublishedHostSnapshot extends DesktopLocalHostSnapshot {
   readonly availability: LiveHostAvailability;
 }
 
+/**
+ * The OS wake pulse (`RunnerHostEvent.systemResumed`). `screenLocked` is true
+ * when the machine woke behind its lock screen: the person is not back until
+ * the unlock, which sends a pulse of its own.
+ */
+export interface DesktopSystemWake {
+  readonly screenLocked: boolean;
+}
+
 export interface DesktopTrayEpic {
   readonly epicId: string;
   readonly title: string;
@@ -117,8 +126,9 @@ export type {
   VoiceSessionMintRequest,
   VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-export type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 export type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -131,8 +141,10 @@ export type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-export type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
-export type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
+export type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
 export type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,

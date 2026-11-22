@@ -1,12 +1,20 @@
 import type { Element, Root, Text } from "hast";
 import { visit } from "unist-util-visit";
-import { BOT_MENTION_TOKEN } from "@/lib/bots/bot-mentions";
+import { BOT_MENTION_TOKEN, mentionOfToken } from "@/lib/bots/bot-mentions";
 import { TRAYCER_MENTION_TAG } from "./const";
 
+/** The attribute each kind's mention element carries its id in. */
+const ID_ATTRIBUTE = {
+  person: "data-user-id",
+  bot: "data-bot-id",
+  task: "data-task-id",
+} as const;
+
 /**
- * Turns each `<@userId>` of a message's text into a mention element that
- * keeps the token as its text, for a bot channel to draw as the member's
- * chip. Code and links keep the token as written.
+ * Turns each `<@userId>`, `<#botId>` and `<~epicId>` of a message's text into
+ * a mention element that keeps the token as its text, for a bot channel to
+ * draw as the member's, the bot's or the task's chip. Code and links keep
+ * the token as written.
  */
 export function rehypeBotMentions() {
   return (tree: Root) => {
@@ -30,7 +38,7 @@ export function rehypeBotMentions() {
 }
 
 function splitMentions(value: string): Array<Text | Element> | null {
-  if (!value.includes("<@")) return null;
+  if (!/<[@#~]/.test(value)) return null;
   const nodes: Array<Text | Element> = [];
   let cursor = 0;
   for (const match of value.matchAll(BOT_MENTION_TOKEN)) {
@@ -38,10 +46,11 @@ function splitMentions(value: string): Array<Text | Element> | null {
     if (start > cursor) {
       nodes.push({ type: "text", value: value.slice(cursor, start) });
     }
+    const { kind, id } = mentionOfToken(match[0]);
     nodes.push({
       type: "element",
       tagName: TRAYCER_MENTION_TAG,
-      properties: { "data-user-id": match[1] },
+      properties: { [ID_ATTRIBUTE[kind]]: id },
       children: [{ type: "text", value: match[0] }],
     });
     cursor = start + match[0].length;

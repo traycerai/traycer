@@ -25,6 +25,8 @@
  * runtime is what sequences planes against each other, which is exactly the
  * split the shared contract asks for.
  */
+import { grantedRole } from "@traycer/protocol/common/permission-role";
+import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicCloudFreshness,
@@ -143,18 +145,6 @@ export interface EpicControlEffects {
    * reattach offer goes with it.
    */
   clearLocalWritePathsAndCoverage(): void;
-  /**
-   * Downgraded from a writable role to viewer: fail the local write paths
-   * closed, but KEEP coverage - the host still holds what it acknowledged, and
-   * under-reporting that would claim unsynced edits are safe.
-   */
-  clearLocalWritePaths(): void;
-  /**
-   * Re-seed after a viewer downgrade. The doc this client holds may contain
-   * writes the host will now refuse, so the authoritative state has to be
-   * re-fetched rather than reconciled against.
-   */
-  requestFreshSnapshot(): void;
   /**
    * A cloud-status frame landed: drain both write paths and re-emit root
    * awareness, but only once the transport is open AND this cycle has its root
@@ -316,6 +306,7 @@ export function createEpicControlReplica(
   let durabilityPromotionState: EpicPromotionState | null = null;
   let localProtection: EpicLocalProtection | null = null;
   let cloudFreshness: EpicCloudFreshness | null = null;
+  let artifactSync: EpicArtifactSync | null = null;
   let durabilityLegsNegotiated = false;
   let durabilityStatusNegotiated = false;
   /**
@@ -375,6 +366,7 @@ export function createEpicControlReplica(
     | "durabilityPromotionState"
     | "localProtection"
     | "cloudFreshness"
+    | "artifactSync"
     | "durabilityLegsNegotiated"
     | "durabilityStatusNegotiated"
     | "retainedDurabilityStatus"
@@ -392,6 +384,7 @@ export function createEpicControlReplica(
       durabilityPromotionState,
       localProtection,
       cloudFreshness,
+      artifactSync,
       durabilityLegsNegotiated,
       durabilityStatusNegotiated,
       retainedDurabilityStatus,
@@ -524,6 +517,7 @@ export function createEpicControlReplica(
     // cycle's document is up to date on the strength of the previous one's
     // reconciliation.
     cloudFreshness = null;
+    artifactSync = null;
     // A re-subscribe can renegotiate onto a different host incarnation, so
     // the previous cycle's answer is not evidence about this one's peer.
     durabilityLegsNegotiated = false;
@@ -664,6 +658,7 @@ export function createEpicControlReplica(
     durabilityPromotionState = durable.promotionState ?? null;
     localProtection = durable.localProtection ?? null;
     cloudFreshness = durable.freshness ?? null;
+    artifactSync = durable.artifactSync ?? null;
     // Recorded from the SAME frame the legs came on, so the reading "this
     // peer omitted a leg it speaks" is made against the peer that actually
     // omitted it rather than against whatever the handshake looks like by the
@@ -719,14 +714,9 @@ export function createEpicControlReplica(
       publish({ permissionRole: null, accessLost: true });
       return;
     }
-    const previous = sink.read().permissionRole;
-    if (previous !== null && previous !== "viewer" && role === "viewer") {
-      effects.clearLocalWritePaths();
-      currentRole = role;
-      publish({ permissionRole: role });
-      effects.requestFreshSnapshot();
-      return;
-    }
+    // Every role that remains may write, so a role MOVE (owner to editor)
+    // keeps every local write path valid. Losing the role entirely is the only
+    // downgrade left, and it returned above.
     currentRole = role;
     publish({ permissionRole: role });
   }
@@ -793,7 +783,7 @@ export function createEpicControlReplica(
       if (isDisposed()) return { kind: "ignored", reason: "disposed" };
       observedAtMs = environment.clock.now();
       switch (event.kind) {
-        case "early-meta":
+        case "early-meta": {
           // Legacy @1 metadata-only frame; lanes never apply this event.
           // The caller populates snapshot metadata on the records plane.
           // Here it moves only the DISPLAY role and mirrors the
@@ -810,14 +800,13 @@ export function createEpicControlReplica(
           // fail closed for a team-derived owner (writes silently dropped for
           // ~8s) or fail open for a stale-cached editor. Snapshot is
           // authoritative.
+          const role = grantedRole(event.meta.permissionRole);
           publish({
-            permissionRole: event.meta.permissionRole,
-            accessLost:
-              event.meta.permissionRole === null
-                ? sink.read().accessLost
-                : false,
+            permissionRole: role,
+            accessLost: role === null ? sink.read().accessLost : false,
           });
           break;
+        }
         case "permission-changed":
           applyPermissionChanged(event.role);
           break;
@@ -901,6 +890,7 @@ export function createEpicControlReplica(
       durabilityPromotionState = null;
       localProtection = null;
       cloudFreshness = null;
+      artifactSync = null;
       durabilityLegsNegotiated = false;
       durabilityStatusNegotiated = false;
       retainedDurabilityStatus = null;
@@ -955,6 +945,7 @@ export function createEpicControlReplica(
       durabilityPromotionState = null;
       localProtection = null;
       cloudFreshness = null;
+      artifactSync = null;
       durabilityLegsNegotiated = false;
       durabilityStatusNegotiated = false;
       // Cleared HERE and not on an ordinary cycle reset: a re-subscribe is
@@ -1102,8 +1093,8 @@ export function createEpicControlReplica(
         publish({ migration: ERROR_MIGRATION_SLICE });
         return;
       case "not-allowed":
-        // The epic needs a major migration this caller may not perform (viewer
-        // / sub-editor). The host did not start one and there is nothing to
+        // The epic needs a major migration this caller may not perform (a
+        // sub-editor role). The host did not start one and there is nothing to
         // retry, so this is a distinct terminal state from `error`: the modal
         // shows a fixed "ask an owner/editor" message.
         publish({ migration: NOT_ALLOWED_MIGRATION_SLICE });

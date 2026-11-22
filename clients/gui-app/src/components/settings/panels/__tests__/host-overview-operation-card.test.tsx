@@ -115,19 +115,20 @@ const ALL_OVERVIEW_METHODS = [
   "diagnostics.logs.tail",
 ] as const;
 
-/**
- * The header's health line, which is the page's ONE statement of the running
- * version (`version` in `HostIdentityCard`). Anchoring on it proves a render
- * derived from the `host.status` reply is on screen, on every tab: the
- * registry copy this suite's fixtures carry is `1.4.2`, so a `v1.5.0` here
- * can only have come from the RPC.
- */
-function healthLineText(): string {
-  const line = screen.getByTestId("host-identity-health").closest("div");
-  if (line === null) {
-    throw new Error("expected the health word inside the health line");
-  }
-  return line.textContent;
+/** Reads the settled version directly from the host.status query this panel uses. */
+function statusHostVersion(
+  queryClient: QueryClient,
+  hostId: string,
+): string | null {
+  return (
+    queryClient.getQueryData<ResponseOfMethod<HostRpcRegistry, "host.status">>(
+      hostQueryKeys.method<HostRpcRegistry, "host.status">(
+        hostId,
+        "host.status",
+        {},
+      ),
+    )?.hostVersion ?? null
+  );
 }
 
 function scopeFrom(
@@ -623,9 +624,9 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
       isLocalMachine: true,
       overrideHandlers: {
         // The live version differs from the registry copy (`1.5.0`) on
-        // purpose: the header renders the process's own answer once
-        // `host.status` has settled, so its appearance is the proof that
-        // the SAME reply carrying `{kind:"none"}` + no marker is on screen.
+        // purpose. Reading this query's full cache key below proves the
+        // `host.status` reply carrying `{kind:"none"}` + no marker is on
+        // screen.
         "host.status": () => ({
           ...statusWithCoarseProgress({ kind: "none" }, null),
           hostVersion: "1.5.0-live",
@@ -635,16 +636,12 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    const queryClient = renderPanel();
 
     // The card is also absent while the status query is still loading, so
-    // the absence is asserted only after a render derived from the status
-    // reply is on screen. (The fixture's own call counter is bypassed by an
-    // overridden handler, and a counted call proves the request, not the
-    // render.) The header's health line is the page's one statement of the
-    // running version, and it shows on every tab, so it is read there.
+    // wait for that reply in the same query cache before asserting its absence.
     await waitFor(() => {
-      expect(healthLineText()).toContain("v1.5.0-live");
+      expect(statusHostVersion(queryClient, "host-a")).toBe("1.5.0-live");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByText(/Host is up to date/i)).toBeNull();
@@ -1397,15 +1394,15 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    const queryClient = renderPanel();
 
     // Wait for a render derived from the status/installation reply before
     // asserting absence, exactly as the sibling "no coarse marker" test above
     // does - otherwise the assertion would pass vacuously during the loading
-    // frame. The header's health line carries the running version the status
-    // reply reported (the registry copy is `1.4.2`), on every tab.
+    // frame. Read the same status query the panel uses to establish that its
+    // reply has arrived.
     await waitFor(() => {
-      expect(healthLineText()).toContain("v1.5.0");
+      expect(statusHostVersion(queryClient, "host-a")).toBe("1.5.0");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
   });
@@ -1687,21 +1684,21 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    const queryClient = renderPanel();
 
-    // Baseline: install matches the running rc.2 - no debt. The header's
-    // health line states the running version.
+    // Baseline: install matches the running rc.2 - no debt. Wait for the
+    // status reply that supplies the version used to key the installation read.
     await waitFor(() => {
-      expect(healthLineText()).toContain("v1.3.0-rc.2");
+      expect(statusHostVersion(queryClient, "host-a")).toBe("1.3.0-rc.2");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     // Advance past the 10s `host.status` poll: the host reports rc.3, and the
     // installation query re-keys onto a fresh, still-pending read. Anchor on
-    // the header's health line, which moves with the status reply.
+    // the status cache, which moves with the same reply.
     await vi.advanceTimersByTimeAsync(11_000);
     await waitFor(() => {
-      expect(healthLineText()).toContain("v1.3.0-rc.3");
+      expect(statusHostVersion(queryClient, "host-a")).toBe("1.3.0-rc.3");
     });
     // AT LEAST two, not exactly two: the installation query's own 10 s poll
     // and the status poll that re-keys it fire from the same tick, and their
@@ -2839,12 +2836,11 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
     cleanup();
     hostBindingMock.current = null;
     bindComplete("attempt-old-settings");
-    renderPanel();
-    // Wait for a render derived from the status reply before asserting
-    // absence, same as the sibling "no coarse marker" test above: the
-    // header's health line carries the running version the reply reported.
+    const queryClient2 = renderPanel();
+    // Wait for the status reply before asserting absence; the card is also
+    // absent during the initial loading frame.
     await waitFor(() => {
-      expect(healthLineText()).toContain("v1.5.0");
+      expect(statusHostVersion(queryClient2, "host-a")).toBe("1.5.0");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
@@ -2929,7 +2925,7 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
     bindFailed("attempt-failed-shared");
     const queryClient = renderPanel();
     await waitFor(() => {
-      expect(healthLineText()).toContain("v1.5.0");
+      expect(statusHostVersion(queryClient, HOST_ID)).toBe("1.5.0");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     await waitFor(() => {

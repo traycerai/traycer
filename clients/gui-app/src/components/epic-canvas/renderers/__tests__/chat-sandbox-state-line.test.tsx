@@ -58,6 +58,10 @@ vi.mock(
       configurations: mocks.configurations,
       teamEnvironmentIds: new Set<string>(),
       complete: false,
+      personalEnvironmentId:
+        mocks.environments?.environments.find(
+          (environment) => environment.ownerKind === "user",
+        )?.environmentId ?? null,
     }),
   }),
 );
@@ -96,7 +100,6 @@ function FailedChatLine(props: { readonly summary: SandboxSummary }) {
     { kind: "failed", sandbox: props.summary },
     {
       reachable: false,
-      canEdit: true,
       ownedByViewer: true,
       environmentOwned: true,
     },
@@ -118,11 +121,15 @@ function mount(summary: SandboxSummary) {
   );
 }
 
-async function openMenu(): Promise<HTMLElement> {
+async function openDestroyDialog(
+  summary: SandboxSummary,
+): Promise<HTMLElement> {
   await userEvent.click(
-    screen.getByRole("button", { name: /^More actions for/ }),
+    screen.getByRole("button", { name: `Destroy ${summary.displayName}` }),
   );
-  return screen.findByRole("menu");
+  return screen.findByRole("dialog", {
+    name: `Destroy ${summary.displayName}?`,
+  });
 }
 
 describe("a failed sandbox's chat actions", () => {
@@ -211,12 +218,13 @@ describe("a failed sandbox's chat actions", () => {
       await userEvent.click(screen.getByRole("button", { name: "Retry" }));
       expect(binding.auth.createSandbox).not.toHaveBeenCalled();
 
-      const menu = await openMenu();
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+      const dialog = await openDestroyDialog(summary);
+      expect(binding.auth.destroySandbox).not.toHaveBeenCalled();
       expect(
-        within(menu)
-          .getAllByRole("menuitem")
-          .map((item) => item.textContent),
-      ).toEqual(["Details", "Destroy"]);
+        within(dialog).getByTestId("confirm-action").hasAttribute("disabled"),
+      ).toBe(true);
       await userEvent.keyboard("{Escape}");
       mocks.configurations = [{ kind: "personal" }, TEAM];
       mounted.rerender(
@@ -253,20 +261,11 @@ describe("a failed sandbox's chat actions", () => {
     if (binding === null) throw new Error("expected the signed-in binding");
     mount(summary);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-
-    let menu = await openMenu();
-    await userEvent.click(
-      within(menu).getByRole("menuitem", { name: "Details" }),
-    );
+    expect(screen.queryByRole("menu")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(useSandboxDetailsStore.getState().sandboxId).toBe(summary.id);
 
-    menu = await openMenu();
-    await userEvent.click(
-      within(menu).getByRole("menuitem", { name: "Destroy" }),
-    );
-    const dialog = await screen.findByRole("dialog", {
-      name: "Destroy build-box?",
-    });
+    const dialog = await openDestroyDialog(summary);
     expect(binding.auth.destroySandbox).not.toHaveBeenCalled();
     await userEvent.type(
       within(dialog).getByRole("textbox", { name: "Type the name to confirm" }),

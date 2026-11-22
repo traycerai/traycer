@@ -18,7 +18,6 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { useOptionalHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { chatContinueMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import {
@@ -154,10 +153,7 @@ export function useChatContinueHere(args: {
     authorizesCloudCapability(state.status),
   );
   const listApplies = authorized && readProcessHostRpcTierPlan().pool !== null;
-  const environments = useEnvironmentListQuery(
-    useOptionalHostClient(),
-    listApplies,
-  ).data;
+  const environments = useEnvironmentListQuery(listApplies).data;
   const teamId = environmentTeamId(environments, args.ownerUserId);
   const directory = useHostDirectoryList().data ?? NO_ENTRIES;
   const readTarget = useCallback(
@@ -228,23 +224,26 @@ export function useChatContinueHere(args: {
           const ownerHostId = answer.ownerHostId;
           if (ownerHostId === null) return;
           invalidateTaskLists(queryClient, epicId);
-          openTile({
-            node: {
-              id: chatId,
-              instanceId: crypto.randomUUID(),
-              type: "chat",
-              name,
-              hostId: ownerHostId,
+          openTile(
+            {
+              node: {
+                id: chatId,
+                instanceId: crypto.randomUUID(),
+                type: "chat",
+                name,
+                hostId: ownerHostId,
+              },
+              target: { epicId },
+              gesture: "explicit",
+              modifiers: null,
+              placement: null,
+              // Dedupe is per host: the dead tab on the old host never matches,
+              // and a second press focuses the tab the first one opened.
+              dedupe: true,
+              source: "direct_ui",
             },
-            target: { epicId },
-            gesture: "explicit",
-            modifiers: null,
-            placement: null,
-            // Dedupe is per host: the dead tab on the old host never matches,
-            // and a second press focuses the tab the first one opened.
-            dedupe: true,
-            source: "direct_ui",
-          });
+            "user",
+          );
         },
       },
     );

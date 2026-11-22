@@ -106,21 +106,24 @@ function ChildIndexRow(props: {
   const open = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       if (type === null || !isOpenableEpicNodeKind(type)) return;
-      openTile({
-        node: makeOpenableNodeRef({
-          id: childId,
-          instanceId: uuidv4(),
-          type,
-          name: title,
-          hostId,
-        }),
-        target: { tabId: viewTabId },
-        gesture: "single",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: makeOpenableNodeRef({
+            id: childId,
+            instanceId: uuidv4(),
+            type,
+            name: title,
+            hostId,
+          }),
+          target: { tabId: viewTabId },
+          gesture: "single",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [type, title, childId, viewTabId, hostId, openTile],
   );

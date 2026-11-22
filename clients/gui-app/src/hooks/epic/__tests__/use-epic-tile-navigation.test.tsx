@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 /**
  * `openTile` is the wiring, not the policy: the resolver owns placement
  * (`resolve-tile-open.test.ts`) and the executor owns dispatch
@@ -59,7 +60,10 @@ function canvasFor(tabId: string): EpicCanvasState {
   return canvas;
 }
 
-function openTile(): (intent: TileOpenIntent) => NestedFocusTarget | null {
+function openTile(): (
+  intent: TileOpenIntent,
+  provenance: NestedFocusProvenance,
+) => NestedFocusTarget | null {
   const { result } = renderHook(() => useEpicTileNavigation());
   return result.current.openTile;
 }
@@ -81,7 +85,7 @@ describe("useEpicTileNavigation openTile", () => {
       .openEpicTab(EPIC_ID, "Open Tile");
     useEpicCanvasStore.getState().openTileInTab(tabId, SPEC_B);
 
-    const target = openTile()(intentFor({ target: { tabId } }));
+    const target = openTile()(intentFor({ target: { tabId } }), "user");
 
     const canvas = canvasFor(tabId);
     if (target === null) throw new Error("expected a focus target");
@@ -97,6 +101,7 @@ describe("useEpicTileNavigation openTile", () => {
       EPIC_ID,
       tabId,
       expect.any(Function),
+      "user",
     );
   });
 
@@ -105,12 +110,16 @@ describe("useEpicTileNavigation openTile", () => {
       .getState()
       .openEpicTab(EPIC_ID, "Open Tile");
 
-    const target = openTile()(intentFor({ target: { epicId: EPIC_ID } }));
+    const target = openTile()(
+      intentFor({ target: { epicId: EPIC_ID } }),
+      "user",
+    );
 
     expect(navigateNested).toHaveBeenCalledWith(
       EPIC_ID,
       tabId,
       expect.any(Function),
+      "user",
     );
     const instanceId = target?.tileInstanceId;
     if (instanceId === undefined) throw new Error("expected a focused tile");

@@ -82,6 +82,8 @@ describe("WorktreeFolderList path on touch", () => {
     const onSelect = vi.fn();
     renderList(onSelect, DISABLED_BADGE);
 
+    expect(screen.getByRole("region", { name: "Folders" })).toBeTruthy();
+
     const line = screen.getByText(RUNNING_DIR);
     fireEvent.pointerDown(line, {
       clientX: 10,

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { LivePulse } from "@/components/ui/live-pulse";
 import {
+  useEpicArtifactSyncReading,
   useEpicHasFreshCloudSyncStatus,
   useEpicHostTransportStatus,
   useEpicSyncPillState,
@@ -9,6 +10,10 @@ import {
 } from "@/lib/epic-selectors";
 import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
 import { useCloudLinkGrace } from "@/components/epic-canvas/panels/use-cloud-link-grace";
+import {
+  useArtifactSyncStatus,
+  type ArtifactSyncStatus,
+} from "@/components/epic-canvas/panels/use-artifact-sync-status";
 import type { EpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
 import type {
   EpicSyncPillState,
@@ -54,6 +59,12 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
  * synced": (i) the GUI↔host transport, (ii) the control lane's cloud-sync
  * status and its per-cycle freshness, (iii) the control lane's aggregate dirty
  * bit, (iv) runtime-local divergence, and (v) refused or superseded writes.
+ * Whether artifact rooms are behind is a sixth input that gates `synced`.
+ * Past its own grace the plane speaks for itself
+ * (`use-artifact-sync-status.ts`): still retrying, it is the same quiet
+ * saving dot as ordinary saving and takes that light only so the hover can
+ * say what is waiting; it never outranks a warning or a danger. When the
+ * host has stopped retrying, the dot is amber and still has no label.
  *
  * (i)-(iv) arrive as {@link EpicSyncPillState}; (v) arrives BESIDE it as
  * {@link EpicWriteCommandAlert} and is weighed as its own plane here. Folding
@@ -125,10 +136,12 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // entirely: the settle hold exists to stop routine save churn from strobing,
   // and a terminal write outcome is neither routine nor transient.
   const writeCommandAlert = useEpicWriteCommandAlert();
+  const artifactSync = useArtifactSyncStatus(useEpicArtifactSyncReading());
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
   const secondarySignals = {
     writeCommandAlert,
+    artifactSync,
     durability: props.durability,
     chatBackupStatus,
     terminalCatalogUnavailable,
@@ -168,14 +181,18 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
           data-testid="epic-connection-pill"
           data-status={state}
           data-source={selected.source}
-          aria-label={accessibleNameFor(rawSelected)}
+          aria-label={buttonNameFor(indicator.label, rawSelected)}
           className={cn(
-            "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            "inline-flex min-w-0 items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             indicator.containerClassName,
           )}
         >
           <ConnectionPillDot indicator={indicator} />
-          {indicator.label}
+          {/* What gives way in a short row, every other item being a control.
+              The tooltip and the button's name keep the whole of it. */}
+          {indicator.label === null ? null : (
+            <span className="truncate">{indicator.label}</span>
+          )}
         </button>
       </TooltipWrapper>
       <span className="sr-only" role="status" aria-live="polite">
@@ -288,6 +305,7 @@ interface PillIndicator {
 type PillSource =
   | "artifact"
   | "write-command"
+  | "artifact-sync"
   | "durability"
   | "chat-backup"
   | "terminal-catalog"
@@ -345,6 +363,21 @@ function accessibleNameFor(selected: SelectedIndicator): string {
   ].join(" ");
 }
 
+/**
+ * The button's name starts with the label it shows, so a person can say the
+ * label they see to click the pill (WCAG 2.5.3, label in name).
+ */
+function buttonNameFor(
+  visibleLabel: string | null,
+  selected: SelectedIndicator,
+): string {
+  const name = accessibleNameFor(selected);
+  if (visibleLabel === null || name.startsWith(visibleLabel)) return name;
+  // "Syncing…" already ends its sentence; "Offline" does not.
+  const separator = visibleLabel.endsWith("…") ? " " : ". ";
+  return `${visibleLabel}${separator}${name}`;
+}
+
 function ConnectionPillDot(props: { indicator: PillIndicator }) {
   const { indicator } = props;
   if (indicator.showAgentSpinner) {
@@ -352,7 +385,7 @@ function ConnectionPillDot(props: { indicator: PillIndicator }) {
       <AgentSpinningDots
         testId="epic-connection-pill-dot"
         variant="dots"
-        className={indicator.dotClassName}
+        className={cn("shrink-0", indicator.dotClassName)}
       />
     );
   }
@@ -369,7 +402,7 @@ function ConnectionPillDot(props: { indicator: PillIndicator }) {
   return (
     <span
       data-testid="epic-connection-pill-dot"
-      className={cn("size-1.5 rounded-full", indicator.dotClassName)}
+      className={cn("size-1.5 shrink-0 rounded-full", indicator.dotClassName)}
       aria-hidden
     />
   );
@@ -449,6 +482,7 @@ const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
 interface PillSignals {
   readonly artifactIndicator: PillIndicator;
   readonly writeCommandAlert: EpicWriteCommandAlert | null;
+  readonly artifactSync: ArtifactSyncStatus;
   readonly durability: EpicDurabilityPlane | null;
   readonly chatBackupStatus: EpicChatBackupStatus | null;
   readonly terminalCatalogUnavailable: boolean;
@@ -483,7 +517,13 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
       indicator: indicatorForWriteCommandAlert(signals.writeCommandAlert),
     });
   }
-  // Second: it is about the user's DATA (where the epic lives, whether this
+  if (signals.artifactSync.kind !== "calm") {
+    secondary.push({
+      source: "artifact-sync",
+      indicator: indicatorForArtifactSync(signals.artifactSync),
+    });
+  }
+  // Next: it is about the user's DATA (where the epic lives, whether this
   // session's edits are held anywhere) where every plane below is about a
   // feed that heals by itself.
   if (signals.durability !== null) {
@@ -518,10 +558,18 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
   }
   let selected = artifact;
   for (const candidate of secondary) {
-    if (
-      SEVERITY_RANK[candidate.indicator.severity] >
-      SEVERITY_RANK[selected.indicator.severity]
-    ) {
+    const candidateRank = SEVERITY_RANK[candidate.indicator.severity];
+    const selectedRank = SEVERITY_RANK[selected.indicator.severity];
+    // Rooms still retrying share ordinary saving's activity rank. They take
+    // that unlabeled light so the hover says what is waiting. A warning or
+    // danger artifact leg keeps the row, and so does every real warning.
+    const retryingTakesSavingLight =
+      candidate.source === "artifact-sync" &&
+      candidate.indicator.severity === "activity" &&
+      selected.source === "artifact" &&
+      selected.indicator.severity === "activity" &&
+      selected.indicator.label === null;
+    if (candidateRank > selectedRank || retryingTakesSavingLight) {
       selected = candidate;
     }
   }
@@ -596,6 +644,41 @@ function indicatorForWriteCommandAlert(
     pulse: null,
     tooltip: copy.message,
     ariaLabel: copy.message,
+  };
+}
+
+/**
+ * Dot only. Rooms still catching up render as ordinary saving: the quiet
+ * container, the neutral dot, the idle pulse, severity `activity`. The
+ * sentence is the hover and the accessible name. There is no label, so text
+ * in the status row cannot read as a lasting fault. When the host has
+ * stopped retrying, the dot is amber and the severity is `warning`, still
+ * with no label. A real warning or danger keeps the row either way.
+ */
+function indicatorForArtifactSync(
+  status: Exclude<ArtifactSyncStatus, { readonly kind: "calm" }>,
+): PillIndicator {
+  if (status.kind === "retrying") {
+    return {
+      severity: "activity",
+      containerClassName: QUIET_CONTAINER_CLASS,
+      dotClassName: "",
+      label: null,
+      showAgentSpinner: false,
+      pulse: "idle",
+      tooltip: status.sentence,
+      ariaLabel: status.sentence,
+    };
+  }
+  return {
+    severity: "warning",
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: "bg-warning",
+    label: null,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: status.sentence,
+    ariaLabel: status.sentence,
   };
 }
 

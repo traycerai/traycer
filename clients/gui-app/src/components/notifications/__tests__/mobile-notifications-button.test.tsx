@@ -52,7 +52,6 @@ describe("MobileNotificationsButton", () => {
 
   it("badges the attention count", async () => {
     testState.bellState = { kind: "attention", count: 3 };
-    testState.unread = 3;
     render(<MobileNotificationsButton />);
 
     expect(
@@ -61,27 +60,17 @@ describe("MobileNotificationsButton", () => {
     ).toBe("3");
   });
 
-  // The desktop bell shows a bare dot here; on phones this is the only
-  // notifications surface, so the count is worth the pixels.
-  it("shows the unread count where the desktop bell shows a quiet dot", async () => {
+  it("shows the desktop bell's quiet dot for unread activity without attention", async () => {
     testState.bellState = { kind: "quietDot" };
-    testState.unread = 2;
-    render(<MobileNotificationsButton />);
-
-    expect(
-      (await screen.findByTestId("mobile-notifications-unread-badge"))
-        .textContent,
-    ).toBe("2");
-    expect(screen.queryByTestId("mobile-notifications-quiet-dot")).toBeNull();
-  });
-
-  it("falls back to the dot when no count has resolved", async () => {
-    testState.bellState = { kind: "quietDot" };
+    testState.unread = 26;
     render(<MobileNotificationsButton />);
 
     expect(
       await screen.findByTestId("mobile-notifications-quiet-dot"),
     ).not.toBeNull();
+    expect(
+      screen.queryByTestId("mobile-notifications-unread-badge"),
+    ).toBeNull();
   });
 
   // `99+` is not a number: parsing it back would print `99` and rolling it

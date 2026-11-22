@@ -10,7 +10,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV16,
+  HostNotificationsCloudFeedRowV17,
 } from "@traycer/protocol/host/notifications/contracts";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
@@ -122,7 +122,7 @@ const CLOUD_MUTATION_KEYS = [
   notificationsMutationKeys.cloudClearAll(),
 ];
 
-function otherChatRow(entryId: string): HostNotificationsCloudFeedRowV16 {
+function otherChatRow(entryId: string): HostNotificationsCloudFeedRowV17 {
   return {
     entryId,
     originHostId: "host-cloud",

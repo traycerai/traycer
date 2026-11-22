@@ -751,6 +751,17 @@ export const createAgentRequestSchemaV31 = lazySchema(() =>
 );
 export type CreateAgentRequestV31 = z.infer<typeof createAgentRequestSchemaV31>;
 
+/**
+ * `agent.create@3.2`: a named tier wins over `fastMode`. Null/omitted
+ * tier uses the boolean: true selects the first upgrade, false/null the default.
+ */
+export const createAgentRequestSchemaV32 = lazySchema(() =>
+  createAgentRequestSchemaV31.extend({
+    serviceTier: z.string().nullable().optional(),
+  }),
+);
+export type CreateAgentRequestV32 = z.infer<typeof createAgentRequestSchemaV32>;
+
 export const agentSelectionGuideRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
@@ -896,23 +907,54 @@ export const listHarnessModelsRequestSchemaV20 = lazySchema(() =>
     harnessId: agentFacingHarnessIdSchema,
   }),
 );
-export const listHarnessModelsRequestSchema = listHarnessModelsRequestSchemaV20;
+/** `agent.listHarnessModels@2.1`: null selects the ambient login. */
+export const listHarnessModelsRequestSchema = lazySchema(() =>
+  listHarnessModelsRequestSchemaV20.extend({
+    profileId: z.string().nullable().optional(),
+  }),
+);
 export type ListHarnessModelsRequest = z.infer<
-  typeof listHarnessModelsRequestSchemaV20
+  typeof listHarnessModelsRequestSchema
 >;
 
-export const harnessModelSummarySchema = lazySchema(() =>
+export const harnessModelSummarySchemaV20 = lazySchema(() =>
   z.object({
     id: z.string(),
     reasoningEfforts: z.array(z.string()),
     fastModeAvailable: z.boolean(),
   }),
 );
+export const harnessModelSummarySchemaV21 = lazySchema(() =>
+  harnessModelSummarySchemaV20.extend({
+    serviceTiers: z.array(z.string()),
+  }),
+);
+export const harnessModelSummarySchema = lazySchema(() =>
+  harnessModelSummarySchemaV21.extend({
+    // Provider-reported targets can float or be duplicated; display only,
+    // never a replacement for the caller's stored model selection.
+    resolvedModel: z.string().nullable(),
+  }),
+);
 export type HarnessModelSummary = z.infer<typeof harnessModelSummarySchema>;
 
-export const listHarnessModelsResponseSchema = lazySchema(() =>
+/** Frozen response for `agent.listHarnessModels@1.0` and `@2.0`. */
+export const listHarnessModelsResponseSchemaV20 = lazySchema(() =>
   z.object({
     harnessId: agentFacingHarnessIdSchema,
+    models: z.array(harnessModelSummarySchemaV20),
+  }),
+);
+
+export const listHarnessModelsResponseSchemaV21 = lazySchema(() =>
+  z.object({
+    harnessId: agentFacingHarnessIdSchema,
+    profileId: z.string().nullable(),
+    models: z.array(harnessModelSummarySchemaV21),
+  }),
+);
+export const listHarnessModelsResponseSchema = lazySchema(() =>
+  listHarnessModelsResponseSchemaV21.extend({
     models: z.array(harnessModelSummarySchema),
   }),
 );
@@ -978,7 +1020,7 @@ const releasedAgentSummarySchema = lazySchema(() =>
   }),
 );
 
-export const agentRunConfigSchema = lazySchema(() =>
+export const agentRunConfigSchemaV102 = lazySchema(() =>
   z.object({
     model: z.union([
       z.object({ kind: z.literal("concrete"), slug: z.string() }),
@@ -986,6 +1028,12 @@ export const agentRunConfigSchema = lazySchema(() =>
     ]),
     reasoningEffort: z.string().nullable(),
     fastMode: z.boolean().nullable(),
+  }),
+);
+/** `agent.list@10.3`: the concrete tier, or null when none is reported. */
+export const agentRunConfigSchema = lazySchema(() =>
+  agentRunConfigSchemaV102.extend({
+    serviceTier: z.string().nullable(),
   }),
 );
 export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
@@ -1004,7 +1052,7 @@ export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
 export const agentSummarySchemaV90 = lazySchema(() =>
   releasedAgentSummarySchema.extend({
     harnessId: guiHarnessIdSchemaV90.nullable(),
-    runConfig: agentRunConfigSchema.nullable().default(null),
+    runConfig: agentRunConfigSchemaV102.nullable().default(null),
   }),
 );
 export type AgentSummaryV90 = z.infer<typeof agentSummarySchemaV90>;
@@ -1085,7 +1133,7 @@ export type AgentSummaryV92 = z.infer<typeof agentSummarySchemaV92>;
  */
 export const agentSummarySchemaV100 = lazySchema(() =>
   releasedAgentSummarySchema.extend({
-    runConfig: agentRunConfigSchema.nullable().default(null),
+    runConfig: agentRunConfigSchemaV102.nullable().default(null),
     sessionState: agentSessionStateSchema.nullable(),
     lastExit: agentSessionLastExitSchema.nullable(),
     archived: z.boolean().nullable(),
@@ -1124,6 +1172,14 @@ export const agentReachSchema = lazySchema(() =>
 );
 export type AgentReach = z.infer<typeof agentReachSchema>;
 
+/** Frozen `agent.list@10.2` row, before service tiers. */
+export const agentSummarySchemaV102 = lazySchema(() =>
+  agentSummarySchemaV101.extend({
+    reach: agentReachSchema.nullable(),
+    hostConnectivity: lastKnownConnectivitySchema,
+  }),
+);
+
 // THE CANONICAL NAME STAYS ON THE HEAD, which is the rule
 // `head-names-canonical-alias.test.ts` enforces: writing the new row under a
 // suffix would leave `agentSummarySchema` exported, structurally plausible and
@@ -1132,8 +1188,8 @@ export type AgentReach = z.infer<typeof agentReachSchema>;
 // Built off the live base rather than `agentSummarySchemaV90`, which pins the
 // harness id major 9 shipped: this row is the head (major 10) and tracks the
 // live enum. It carries every key the frozen major-9 minors carry
-// (`runConfig`, the session facet, `archived`), so a 10.2 answer downgrades to
-// 9.2 by dropping rows, the run tuple and the reach pair alone.
+// (`runConfig`, the session facet, `archived`), so a 10.3 answer downgrades to
+// 9.2 by dropping rows, the run tuple, the reach pair and the service tier.
 export const agentSummarySchema = lazySchema(() =>
   releasedAgentSummarySchema.extend({
     runConfig: agentRunConfigSchema.nullable().default(null),
@@ -1164,8 +1220,9 @@ export const agentSummarySchema = lazySchema(() =>
      * else the managed profile id.
      *
      * `null` when this answer cannot say, never "ambient": a terminal agent
-     * (its record names no profile), a chat with no run settings, a chat on
-     * another host, a row owned by another user, or an answering host that
+     * (its record names no profile), a chat with no run settings, a remote
+     * row without an authorized owning-host answer, a row owned by another
+     * user, or an answering host that
      * predates the field.
      */
     profile: z.string().nullable(),
@@ -1348,7 +1405,7 @@ export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
 export const agentSummarySchemaV70 = lazySchema(() =>
   releasedAgentSummarySchema.extend({
     harnessId: guiHarnessIdSchemaV70.nullable(),
-    runConfig: agentRunConfigSchema.nullable().default(null),
+    runConfig: agentRunConfigSchemaV102.nullable().default(null),
   }),
 );
 export const listAgentsResponseSchemaV70 = lazySchema(() =>
@@ -1369,7 +1426,7 @@ export type ListAgentsResponseV70 = z.infer<typeof listAgentsResponseSchemaV70>;
 export const agentSummarySchemaV80 = lazySchema(() =>
   releasedAgentSummarySchema.extend({
     harnessId: guiHarnessIdSchemaV80.nullable(),
-    runConfig: agentRunConfigSchema.nullable().default(null),
+    runConfig: agentRunConfigSchemaV102.nullable().default(null),
   }),
 );
 export const listAgentsResponseSchemaV80 = lazySchema(() =>
@@ -1439,6 +1496,12 @@ export type ListAgentsResponseV101 = z.infer<
   typeof listAgentsResponseSchemaV101
 >;
 
+export const listAgentsResponseSchemaV102 = lazySchema(() =>
+  listAgentsResponseSchemaV101.extend({
+    agents: z.array(agentSummarySchemaV102),
+  }),
+);
+
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to
  * another. Distinct from `chat.subscribe`'s `send` action: that surface
@@ -1489,6 +1552,28 @@ export const sendAgentMessageRequestSchemaV11 = lazySchema(() =>
 );
 export type SendAgentMessageRequestV11 = z.infer<
   typeof sendAgentMessageRequestSchemaV11
+>;
+
+/**
+ * `agent.sendMessage@1.2` - adds `attachments`: images in the SENDER's own
+ * transcript, sent with the message as images. An entry is a file name, or the
+ * 64-hex sha256 of an image the sender's transcript carries. A 64-hex entry is
+ * first looked up as a hash across the sender chat's whole history, among two
+ * kinds of record only: the images its resume triggers record as delivered,
+ * and the `imageAttachment` nodes in its user messages' content. A hash found
+ * there wins over any image whose file name is that same string, however
+ * recent. Failing that, an entry is matched by file name against the sender
+ * chat's image attachments, the newest message first and the first such image
+ * within it. The receiver gets the image itself, not a description of it.
+ * Empty sends text only.
+ */
+export const sendAgentMessageRequestSchemaV12 = lazySchema(() =>
+  sendAgentMessageRequestSchemaV11.extend({
+    attachments: z.array(z.string()).default([]),
+  }),
+);
+export type SendAgentMessageRequestV12 = z.infer<
+  typeof sendAgentMessageRequestSchemaV12
 >;
 
 /**
@@ -1638,7 +1723,7 @@ export type ForkAgentProfileSelection = z.infer<
  * `forkSource` feature). Terminal forks stay Claude-only; other harnesses
  * are refused for lacking a native session fork.
  */
-export const forkAgentRequestSchema = lazySchema(() =>
+export const forkAgentRequestSchemaV10 = lazySchema(() =>
   z.object({
     epicId: z.string(),
     senderAgentId: z.string(),
@@ -1647,6 +1732,17 @@ export const forkAgentRequestSchema = lazySchema(() =>
     permissionMode: permissionModeSchema,
     workspace: createAgentWorkspaceSchema,
     profileSelection: forkAgentProfileSelectionSchema,
+  }),
+);
+/**
+ * `agent.fork@1.1`: null/omitted speed fields inherit the source. A named
+ * `serviceTier` wins; otherwise `fastMode: true` selects the first upgrade
+ * and false clears it.
+ */
+export const forkAgentRequestSchema = lazySchema(() =>
+  forkAgentRequestSchemaV10.extend({
+    serviceTier: z.string().nullable().optional(),
+    fastMode: z.boolean().nullable().optional(),
   }),
 );
 export type ForkAgentRequest = z.infer<typeof forkAgentRequestSchema>;

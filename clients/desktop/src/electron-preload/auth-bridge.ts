@@ -1,7 +1,33 @@
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import { ipcRenderer } from "electron";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
+  RunnerHostSync,
 } from "../ipc-contracts/ipc-channels";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type {
@@ -15,10 +41,10 @@ import type {
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
   SandboxAutomationFetchResult,
-  ExecutableWriteGrantFetchResult,
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
+  SlackAppDmsRequest,
   SlackAppRegisterRequest,
   SlackAppWriteResult,
   SandboxAutomationOpenFetchResult,
@@ -29,6 +55,8 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxPatchRequest,
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -42,7 +70,6 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
   VoiceAvailabilityFetchResult,
-  VoiceRouteFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionIndicator,
   VoiceSessionMintFetchResult,
@@ -55,6 +82,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
 } from "../ipc-contracts/auth-types";
 import type {
   DesktopAuthSessionSetResult,
@@ -62,7 +90,17 @@ import type {
   DesktopAuthVerificationRevoked,
   DesktopLocalAuthSessionRestoreResult,
 } from "../ipc-contracts/window-types";
+import type { SoundtrackSetReadResult } from "../ipc-contracts/soundtrack-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
+import {
+  NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenBridgeChange,
+  type HostTokenEraReply,
+  type HostTokenObtainReply,
+  type HostTokenRenewReply,
+  type HostTokensBridgeSurface,
+} from "../ipc-contracts/host-token-types";
+import { readSyncNumberFor } from "./sync-bootstrap";
 
 /**
  * Eagerly subscribe at module load so a cold-start browser-return deep link
@@ -133,14 +171,44 @@ export interface AuthBridgeSurface {
     hostId: string,
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult>;
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult>;
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult>;
+
   deregisterHostFromAccount(
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+  readSoundtrackSet(): Promise<SoundtrackSetReadResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   getVoiceAvailability(
@@ -154,11 +222,6 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
-  // The voice router's model call, opaque JSON in and out.
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult>;
   setVoiceSessionLive(live: boolean): Promise<void>;
   setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
@@ -211,6 +274,22 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -224,6 +303,10 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult>;
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult>;
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -234,12 +317,19 @@ export interface AuthBridgeSurface {
     requestId: string,
     decision: SecretRequestDecision,
   ): Promise<SecretRequestDecideFetchResult>;
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 export function buildAuthBridge(): AuthBridgeSurface {
@@ -304,6 +394,32 @@ export function buildAuthBridge(): AuthBridgeSurface {
         input,
       ) as Promise<UpdateHostVersionPolicyFetchResult>,
 
+    readHostOwnership: (bearer, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readHostOwnership,
+        bearer,
+        hostId,
+      ) as Promise<HostOwnershipResult>,
+    listTeamComputers: (bearer, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listTeamComputers,
+        bearer,
+        environmentId,
+      ) as Promise<TeamComputersResult>,
+    mintTeamComputerInstallToken: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintTeamComputerInstallToken,
+        bearerToken,
+        environmentId,
+      ) as Promise<TeamComputerInstallTokenResult>,
+    releaseTeamComputer: (bearer, hostId, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.releaseTeamComputer,
+        bearer,
+        hostId,
+        environmentId,
+      ) as Promise<TeamComputerReleaseResult>,
+
     deregisterHostFromAccount: (bearerToken, hostId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.deregisterHostFromAccount,
@@ -311,11 +427,36 @@ export function buildAuthBridge(): AuthBridgeSurface {
         hostId,
       ) as Promise<DeregisterHostFetchResult>,
 
+    readSoundtrackSet: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readSoundtrackSet,
+      ) as Promise<SoundtrackSetReadResult>,
+
     listSandboxes: (bearerToken) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.listSandboxes,
         bearerToken,
       ) as Promise<SandboxListFetchResult>,
+
+    listEnvironments: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listEnvironments,
+        bearerToken,
+      ) as Promise<EnvironmentDirectoryResult>,
+
+    saveAutoPolicy: (bearerToken, body) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.saveAutoPolicy,
+        bearerToken,
+        body,
+      ) as Promise<AutoPolicySaveResult>,
+
+    attachTaskEnvironment: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.attachTaskEnvironment,
+        bearerToken,
+        request,
+      ) as Promise<TaskEnvironmentAttachmentResult>,
 
     getSandboxCosts: (bearerToken) =>
       ipcRenderer.invoke(
@@ -323,10 +464,11 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<SandboxCostsFetchResult>,
 
-    getSandboxCatalogue: (bearerToken) =>
+    getSandboxCatalogue: (bearerToken, context) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getSandboxCatalogue,
         bearerToken,
+        context,
       ) as Promise<SandboxCatalogueFetchResult>,
 
     getVoiceAvailability: (bearerToken) =>
@@ -348,14 +490,6 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         voiceSessionId,
       ) as Promise<VoiceSessionEndFetchResult>,
-
-    // The voice router's model call, opaque JSON in and out.
-    routeVoiceUtterance: (bearerToken, requestBody) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.routeVoiceUtterance,
-        bearerToken,
-        requestBody,
-      ) as Promise<VoiceRouteFetchResult>,
 
     setVoiceSessionLive: (live) =>
       ipcRenderer.invoke(
@@ -464,6 +598,34 @@ export function buildAuthBridge(): AuthBridgeSurface {
         botId,
       ) as Promise<SlackAppWriteResult>,
 
+    setSlackAppDms: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setSlackAppDms,
+        bearerToken,
+        request,
+      ) as Promise<SlackAppWriteResult>,
+
+    updateBotRunSettings: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotRunSettings,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    updateBotReplyMode: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotReplyMode,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    deleteBot: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.deleteBot,
+        bearerToken,
+        request,
+      ) as Promise<BotDeleteResult>,
+
     getSandboxGrants: (bearerToken, environmentId, hostId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getSandboxGrants,
@@ -479,19 +641,19 @@ export function buildAuthBridge(): AuthBridgeSurface {
         teamId,
       ) as Promise<TeamEnvironmentFetchResult>,
 
+    replaceEnvironmentApiKey: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.replaceEnvironmentApiKey,
+        bearerToken,
+        request,
+      ) as Promise<EnvironmentApiKeyReplaceResult>,
+
     getEnvironmentProviders: (bearerToken, environmentId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getEnvironmentProviders,
         bearerToken,
         environmentId,
       ) as Promise<EnvironmentProvidersFetchResult>,
-
-    mintExecutableWriteGrant: (bearerToken, hostId) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.mintExecutableWriteGrant,
-        bearerToken,
-        hostId,
-      ) as Promise<ExecutableWriteGrantFetchResult>,
 
     decideSecretRequest: (bearerToken, environmentId, requestId, decision) =>
       ipcRenderer.invoke(
@@ -508,6 +670,19 @@ export function buildAuthBridge(): AuthBridgeSurface {
     beginAuthAttempt: () => undefined,
 
     onAuthCallback: (handler) => subscribeAuthCallback(handler),
+    getTeamChatAutoArchive: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamChatAutoArchiveReadResult>,
+    setTeamChatAutoArchive: (bearerToken, teamId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+        request,
+      ) as Promise<TeamChatAutoArchiveWriteResult>,
   };
 }
 
@@ -519,10 +694,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
  */
 export interface AuthTokenStoreBridgeSurface {
   get(): Promise<StoredCredentials | null>;
+  getSignInStorageLow(): Promise<boolean>;
+  subscribeSignInStorageLow(handler: Listener<boolean>): Disposable;
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void>;
+  ): Promise<SignInSaveResult>;
   rotate(expected: {
     readonly userId: string;
     readonly token: string;
@@ -537,6 +714,15 @@ export interface AuthTokenStoreBridgeSurface {
 
 export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
   return {
+    subscribeSignInStorageLow: (handler) =>
+      subscribe<{ readonly low: boolean }>(
+        RunnerHostEvent.authSignInStorageLowChanged,
+        (change) => handler(change.low),
+      ),
+    getSignInStorageLow: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreGetSignInStorageLow,
+      ) as Promise<boolean>,
     get: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.authTokenStoreGet,
@@ -546,7 +732,7 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
         RunnerHostInvoke.authTokenStoreSignIn,
         tokens,
         identity,
-      ) as Promise<void>,
+      ) as Promise<SignInSaveResult>,
     rotate: (expected) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.authTokenStoreRotate,
@@ -571,6 +757,50 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
         legacy,
       ) as Promise<CredentialsMigrationOutcome>,
+  };
+}
+
+export function buildHostTokensBridge(): HostTokensBridgeSurface {
+  return {
+    era: (userId) =>
+      readSyncNumberFor(
+        RunnerHostSync.hostTokensEra,
+        userId,
+        NO_ISSUED_HOST_TOKEN_ERA,
+      ),
+    obtain: (userId, hostId, fresh, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensObtain,
+        userId,
+        hostId,
+        fresh,
+        expectedEra,
+      ) as Promise<HostTokenObtainReply>,
+    renew: (userId, hostIds, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensRenew,
+        userId,
+        hostIds,
+        expectedEra,
+      ) as Promise<HostTokenRenewReply>,
+    adopt: (userId, hostId, token, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensAdopt,
+        userId,
+        hostId,
+        token,
+        expectedEra,
+      ) as Promise<HostTokenEraReply>,
+    forgetUser: (userId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensForgetUser,
+        userId,
+      ) as Promise<HostTokenEraReply>,
+    subscribe: (handler) =>
+      subscribe<HostTokenBridgeChange>(
+        RunnerHostEvent.hostTokensChange,
+        handler,
+      ),
   };
 }
 

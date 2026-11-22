@@ -3,10 +3,12 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderWithoutQueries,
   screen,
   waitFor,
 } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import {
   hostScopeFixture,
@@ -216,6 +218,16 @@ vi.mock("@/lib/safe-area-insets", async (importOriginal) => ({
 
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 
+/** The tour reads the memory act's host state through TanStack Query. */
+function render(ui: ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return renderWithoutQueries(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
 function tourScope(selection: HostScopeSelection): HostScope {
   const hosts = hostsMock.ids.map((hostId) =>
     hostsMock.sandboxIds.includes(hostId)
@@ -227,6 +239,7 @@ function tourScope(selection: HostScopeSelection): HostScope {
             state: "awake",
             frozen: false,
             summary: null,
+            ownerKind: "unknown",
             teamOwned: false,
           },
         })
@@ -310,8 +323,8 @@ function currentStepId(): string | null {
 
 async function advanceToStep(stepId: string): Promise<void> {
   const stepIds = capabilityMock.available
-    ? ["task-tabs", "providers", "session-import"]
-    : ["task-tabs", "providers"];
+    ? ["task-tabs", "providers", "agent-memories", "session-import"]
+    : ["task-tabs", "providers", "agent-memories"];
   const target = stepIds.indexOf(stepId);
   for (
     let index = stepIds.indexOf(currentStepId() ?? "");
@@ -442,7 +455,7 @@ describe("OnboardingPage", () => {
     setMobileApp(false);
   });
 
-  it("shows the fixed three-step desktop flow and advances by step id", async () => {
+  it("shows the fixed four-step desktop flow and advances by step id", async () => {
     renderPage();
 
     expect(currentStepId()).toBe("task-tabs");
@@ -456,6 +469,9 @@ describe("OnboardingPage", () => {
     await advanceToStep("providers");
     expect(screen.getByTestId("detected-agents-stub")).toBeTruthy();
     expect(screen.queryByTestId("provider-prefetch")).toBeNull();
+
+    await advanceToStep("agent-memories");
+    expect(screen.getByTestId("onboarding-memory-stage")).toBeTruthy();
 
     await advanceToStep("session-import");
     expect(screen.getByTestId("onboarding-session-import-stage")).toBeTruthy();
@@ -480,7 +496,7 @@ describe("OnboardingPage", () => {
     const { container } = renderPage();
 
     expect(container.querySelector(".onboarding-eyebrow")?.textContent).toBe(
-      "Workspace · 1 of 3",
+      "Workspace · 1 of 4",
     );
     expect(container.querySelector(".onboarding-wordmark")).not.toBeNull();
     expect(screen.getByTestId("onboarding-skip").textContent).toBe(
@@ -593,10 +609,12 @@ describe("OnboardingPage", () => {
     capabilityMock.available = false;
     renderPage();
 
-    await advanceToStep("providers");
+    await advanceToStep("agent-memories");
     expect(screen.queryByTestId("onboarding-session-import-stage")).toBeNull();
     expect(scanMock.activeCalls.at(-1)).toBe(false);
 
+    // The memory act is the last one without import, so its primary ends the
+    // tour.
     fireEvent.click(screen.getByTestId("onboarding-advance"));
 
     expect(useOnboardingStore.getState().completedAt).toEqual(
@@ -831,7 +849,7 @@ describe("OnboardingPage", () => {
     expect(screen.getByTestId("onboarding-step")).toBe(currentStep);
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
-    await waitFor(() => expect(currentStepId()).toBe("session-import"));
+    await waitFor(() => expect(currentStepId()).toBe("agent-memories"));
   });
 });
 
@@ -1113,7 +1131,7 @@ describe("OnboardingPage phone layout", () => {
       { clientX: 280, clientY: 300 },
       { clientX: 160, clientY: 306 },
     );
-    await waitFor(() => expect(currentStepId()).toBe("session-import"));
+    await waitFor(() => expect(currentStepId()).toBe("agent-memories"));
 
     drag(
       surface,

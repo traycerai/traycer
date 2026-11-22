@@ -54,7 +54,7 @@ export function StandaloneBotsBridge(): null {
   // does not answer the method would silently leave the list stale.
   const hostKey = hostId ?? UNKNOWN_HOST_PLACEHOLDER;
   useBotListChangedSubscriptionForHost(hostKey, supported);
-  const environments = useEnvironmentListQuery(client, supported);
+  const environments = useEnvironmentListQuery(supported);
   const bots = useBotListQuery(client, supported);
   const environmentData = environments.data;
   const botData = bots.data;
@@ -89,12 +89,14 @@ export function StandaloneBotsBridge(): null {
     reachability.status === "unreachable" ||
     directoryWait.kind === "dead" ||
     directoryWait.kind === "timed-out";
+  const botsListed = botData !== undefined;
   // `useTeamSetups` answers a new array each render: an equal one is no change
   // to everything reading the store.
   useEffect(() => {
     const current = useStandaloneBotsStore.getState();
     if (
       current.settled === settled &&
+      current.botsListed === botsListed &&
       current.directory.model === model &&
       sameSetups(current.directory.setups, setups)
     ) {
@@ -103,7 +105,8 @@ export function StandaloneBotsBridge(): null {
     useStandaloneBotsStore.setState({
       directory: { model, setups },
       settled,
+      botsListed,
     });
-  }, [model, setups, settled]);
+  }, [botsListed, model, setups, settled]);
   return null;
 }

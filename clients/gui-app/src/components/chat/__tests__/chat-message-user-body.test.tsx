@@ -5,11 +5,17 @@ import {
   render as rtlRender,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock, MockInstance } from "vitest";
 import { useState, type ReactNode } from "react";
+import {
+  drawsRobotGlyph,
+  mascotPathsAt,
+  renderedMascotPaths,
+} from "@/components/bots/__tests__/mascot-drawing";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -25,6 +31,10 @@ import {
 import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
+import {
+  useComposerDropScope,
+  useComposerDropScopeTarget,
+} from "@/components/chat/composer/composer-drop-scope";
 import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timeline-follow-latch";
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -82,6 +92,9 @@ import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 beforeEach(() => {
   installFreshIndexedDb();
   resetLandingImageBudgetReservationsForTesting();
+  localHost.id = null;
+  fileDropMocks.resolveDroppedFilePaths.mockReset();
+  fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([]);
 });
 
 const attachmentMocks = vi.hoisted(() => {
@@ -106,6 +119,12 @@ const composerPickerMocks = vi.hoisted(() => ({
   useComposerPickerItems: vi.fn(),
 }));
 const reportableErrorToastMock = vi.hoisted(() => vi.fn());
+const fileDropMocks = vi.hoisted(() => ({
+  resolveDroppedFilePaths:
+    vi.fn<(files: ReadonlyArray<File>) => Promise<string[]>>(),
+}));
+/** This renderer's own host id: `null` is the real answer with no host runtime. */
+const localHost = vi.hoisted(() => ({ id: null as string | null }));
 const openEpicHandleMocks = vi.hoisted(() => {
   const hasAttachmentBytes = vi.fn((_hash: string) => false);
   const readAttachmentBytes = vi.fn(
@@ -136,12 +155,16 @@ vi.mock("@/lib/reportable-error-toast", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     fileDrops: {
-      resolveDroppedFilePaths: () => Promise.resolve([]),
+      resolveDroppedFilePaths: fileDropMocks.resolveDroppedFilePaths,
       copyDroppedFilePaths: (paths: readonly string[]) =>
         Promise.resolve(paths),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
   }),
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => localHost.id,
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -868,6 +891,53 @@ describe("<UserMessageBody /> agent messages", () => {
     });
   });
 
+  it("keeps a file dropped on the edit card out of the message box of the pane around it", () => {
+    const received = vi.fn();
+    function PaneBox() {
+      useComposerDropScopeTarget({
+        onDragEnter: received,
+        onDragLeave: received,
+        onDragOver: received,
+        onDrop: received,
+        overlayVariant: null,
+      });
+      return null;
+    }
+    function Pane() {
+      const scope = useComposerDropScope();
+      return (
+        <div {...scope.zoneProps}>
+          <UserMessageBody
+            actions={editingUserActions(INLINE_EDIT_INITIAL_CONTENT)}
+            message={{
+              ...plainUserMessage("Edit this message"),
+              structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+            }}
+          />
+          {scope.provide(<PaneBox />)}
+          {scope.overlay}
+        </div>
+      );
+    }
+    render(
+      <TooltipProvider>
+        <Pane />
+      </TooltipProvider>,
+    );
+    const send = screen.getByRole("button", { name: "Send edit" });
+    const file = new File(["x"], "notes.txt", { type: "text/plain" });
+    const transfer = {
+      files: [file],
+      types: ["Files"],
+      items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      getData: () => "",
+    };
+
+    expect(fireEvent.dragEnter(send, { dataTransfer: transfer })).toBe(true);
+    expect(fireEvent.drop(send, { dataTransfer: transfer })).toBe(false);
+    expect(received).not.toHaveBeenCalled();
+  });
+
   it("ignores populated workspace roots for the inline edit skill picker when global fallback is disabled", async () => {
     useWorkspaceFoldersStore.setState({
       byHost: {
@@ -1212,6 +1282,62 @@ describe("<UserMessageBody /> agent messages", () => {
     ]);
   });
 
+  it.each([
+    ["pending", "pending", true],
+    ["stored", null, false],
+  ] as const)(
+    "holds Send edit while an edited message's file is %s",
+    async (_label, uploadState, held) => {
+      const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+      const baseEditing = actions.editing;
+      if (baseEditing === null) throw new Error("expected editing actions");
+      const withFile: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "fileAttachment",
+                attrs: {
+                  id: "file-1",
+                  hash: "a".repeat(64),
+                  fileName: "report.pdf",
+                  mediaType: "application/pdf",
+                  size: 10,
+                  uploadState,
+                },
+              },
+            ],
+          },
+        ],
+      };
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            message={{
+              ...plainUserMessage("Edit this message"),
+              structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+            }}
+            actions={{
+              ...actions,
+              editing: {
+                ...baseEditing,
+                currentContent: withFile,
+                canSubmit: true,
+              },
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      const send = await screen.findByRole("button", { name: "Send edit" });
+      await waitFor(() => {
+        expect(send.getAttribute("disabled") !== null).toBe(held);
+      });
+    },
+  );
+
   it("adds a dropped image to the inline edit attachment strip", async () => {
     render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });
@@ -1497,7 +1623,11 @@ describe("<UserMessageBody /> agent messages", () => {
         render(
           <ChatContainerContext value="epic-1">
             <ChatTranscriptProvider
-              value={{ chatId: "chat-1", hostId: "host-1" }}
+              value={{
+                chatId: "chat-1",
+                hostId: "host-1",
+                payerHostId: "host-1",
+              }}
             >
               <UserMessageBody actions={null} message={crossMessage(null)} />
             </ChatTranscriptProvider>
@@ -1517,6 +1647,52 @@ describe("<UserMessageBody /> agent messages", () => {
         renderTeamBotSender(ONE_TEAM_MAIN_BOT_DIRECTORY);
 
         expect(screen.getByRole("button", { name: "Tracy" })).toBeTruthy();
+      });
+    });
+
+    describe("the sender's picture in the card's header", () => {
+      function senderHeader(): HTMLElement {
+        const header = screen.getByText("Received message").parentElement;
+        if (header === null) throw new Error("the card has no header");
+        return header;
+      }
+
+      function resolveSender(bot: { botId: string; title: string } | null) {
+        peerMocks.byId[CROSS_ID] = {
+          epicId: "epic-2",
+          agentId: CROSS_ID,
+          hostId: "host-2",
+          title: "Cross Task Sender",
+          surface: "gui",
+          bot,
+        };
+        render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+      }
+
+      it("is the robot glyph for an agent sender", () => {
+        resolveSender(null);
+
+        const picture = within(senderHeader()).getByTestId("a2a-peer-picture");
+        expect(picture.getAttribute("data-peer")).toBe("agent");
+        expect(picture.querySelector("svg.lucide-bot")).not.toBeNull();
+        expect(renderedMascotPaths(picture)).toEqual([]);
+      });
+
+      it("is the bot's own 16px mascot for a bot sender, not the robot glyph", () => {
+        resolveSender({ botId: "bot-1", title: "Release bot" });
+
+        const picture = within(senderHeader()).getByTestId("a2a-peer-picture");
+        expect(picture.getAttribute("data-peer")).toBe("bot");
+        expect(renderedMascotPaths(picture)).toEqual(
+          mascotPathsAt("bot-1", false, 16),
+        );
+        expect(drawsRobotGlyph(picture)).toBe(false);
+      });
+
+      it("replaces the inbox icon the header carried", () => {
+        resolveSender(null);
+
+        expect(senderHeader().querySelector("svg.lucide-inbox")).toBeNull();
       });
     });
 
@@ -2557,5 +2733,58 @@ describe("<ChatMessage /> sender overline timestamp", () => {
 
     expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
     expect(screen.getByText("You").parentElement?.textContent).toBe("You");
+  });
+});
+
+describe("<UserMessageBody /> inline edit, a file dropped from the desktop", () => {
+  const REPORT_PATH = "/Users/me/report.pdf";
+
+  afterEach(() => {
+    cleanup();
+    reportableErrorToastMock.mockClear();
+  });
+
+  function pdfFile(): File {
+    return new File(["report"], "report.pdf", { type: "application/pdf" });
+  }
+
+  it("on another machine shows the inline-edit toast and types no path", async () => {
+    localHost.id = "host-elsewhere";
+    fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.drop(editor, {
+      dataTransfer: dataTransferWithFiles([pdfFile()]),
+    });
+
+    await waitFor(() => {
+      expect(reportableErrorToastMock).toHaveBeenCalledTimes(1);
+    });
+    expect(reportableErrorToastMock).toHaveBeenCalledWith(
+      "Couldn't attach report.pdf.",
+      {
+        description:
+          "Files can't be added while editing. Send them in a new message.",
+      },
+      expect.objectContaining({ source: "Chat composer" }),
+    );
+    expect(editor.textContent).not.toContain(REPORT_PATH);
+  });
+
+  it("on this machine types the path and shows no toast", async () => {
+    localHost.id = TAB_HOST_ID;
+    fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.drop(editor, {
+      dataTransfer: dataTransferWithFiles([pdfFile()]),
+    });
+
+    await waitFor(() => {
+      expect(editor.textContent).toContain(REPORT_PATH);
+    });
+    expect(reportableErrorToastMock).not.toHaveBeenCalled();
   });
 });

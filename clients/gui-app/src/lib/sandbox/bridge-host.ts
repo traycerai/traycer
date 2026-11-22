@@ -12,6 +12,7 @@ import {
   canvasRecord,
   parseCanvasBox,
   parseCanvasElement,
+  parseCanvasPageActivity,
   parseCanvasPageError,
   parseCanvasRelativeLink,
   parseCanvasTextSelection,
@@ -19,6 +20,7 @@ import {
   type CanvasElement,
   type CanvasElementLocator,
   type CanvasMode,
+  type CanvasPageActivity,
   type CanvasPageError,
   type CanvasTextSelection,
 } from "./canvas-bridge";
@@ -67,6 +69,18 @@ export interface SandboxResource {
 
 export type SandboxDisplayMode = "inline" | "fullscreen";
 
+/** What a served page's zoom script is told (`traycer/html/view`). */
+export interface SandboxHtmlView {
+  /** Pinch and Ctrl-wheel zoom: only a page that fills its tile has them. */
+  readonly enabled: boolean;
+  readonly scale: number;
+  /**
+   * The reader is commenting on the page, whose script then keeps touches
+   * from the page's own handlers, so the pinch listens ahead of them.
+   */
+  readonly commenting: boolean;
+}
+
 /** The MCP Apps `hostContext`, as much of it as we fill. */
 export interface SandboxHostContext {
   readonly theme: ResolvedTheme;
@@ -102,6 +116,28 @@ export const SANDBOX_SCROLL_GESTURE_EVENT = "traycer:sandbox-scroll-gesture";
 export interface SandboxWheel {
   readonly deltaX: number;
   readonly deltaY: number;
+  /**
+   * The page's cancel of this wheel took, so its content stays still. False
+   * once Chromium has latched the sequence to scrolling, which it does when a
+   * sequence's opening wheel passes uncanceled.
+   */
+  readonly cancelable: boolean;
+  /** The page still has horizontal room toward what is left (back) or right (forward). */
+  readonly ownsBack: boolean;
+  readonly ownsForward: boolean;
+}
+
+/**
+ * A link on a served html artifact page that leads out of its artifact, for
+ * the app to open against the artifacts tree.
+ */
+export interface SandboxArtifactLink {
+  /** As the page's author wrote it, `../` and all. */
+  readonly href: string;
+  /** The clicked page, from the artifacts tree root. */
+  readonly pagePath: string;
+  /** The clicked page's address, whose origin an href written out in full may share. */
+  readonly pageUrl: string;
 }
 
 /** One wheel event never moves the app further than this, whatever a page sends. */
@@ -117,6 +153,8 @@ export interface SandboxBridgeEvents {
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
   readonly onRelativeLink?: (href: string) => void;
+  /** Only from the proven page of a served plain-html artifact. */
+  readonly onArtifactLink?: (link: SandboxArtifactLink) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onSize: (size: SandboxSize) => void;
   /**
@@ -168,6 +206,10 @@ export interface SandboxBridgeHostOptions {
       }
     | {
         readonly kind: "served";
+        /**
+         * The document carries the selection script: a canvas board when it
+         * has no `pages`, or an html page a reader can comment on.
+         */
         readonly canvas?: boolean;
         readonly nonce: string;
         readonly forwardedShortcuts: readonly ForwardedShortcut[];
@@ -461,6 +503,26 @@ export class SandboxBridgeHost {
       readonly settle: (result: Record<string, unknown> | null) => void;
     }
   >();
+  /** What the app last asked of the current document through `setMode`. */
+  private requestedMode: CanvasMode | null = null;
+  private readonly pageActivityListeners = new Set<
+    (activity: CanvasPageActivity) => void
+  >();
+  /** The newest report of each kind since the last delivery. */
+  private readonly pendingPageActivity = new Map<
+    CanvasPageActivity["kind"],
+    CanvasPageActivity
+  >();
+  private pageActivityFrame: number | null = null;
+
+  /**
+   * Hears what a commentable html page reports while the app has it in Edit;
+   * returns the way to stop listening.
+   */
+  onPageActivity(listener: (activity: CanvasPageActivity) => void): () => void {
+    this.pageActivityListeners.add(listener);
+    return () => this.pageActivityListeners.delete(listener);
+  }
 
   hitTest(point: {
     readonly x: number;
@@ -592,9 +654,48 @@ export class SandboxBridgeHost {
   }
 
   setMode(mode: CanvasMode): Promise<boolean> {
+    this.requestedMode = mode;
+    if (mode !== "edit") this.dropPageActivity();
     return this.canvasRequest("set-mode", { mode }).then(
       (result) => result !== null,
     );
+  }
+
+  /** A board is the canvas's own document: one page, never navigated. */
+  private isCanvasBoard(): boolean {
+    return (
+      this.options.document.kind === "served" &&
+      this.options.document.canvas === true &&
+      this.options.document.pages === null
+    );
+  }
+
+  /**
+   * These hints come from a nonce-proven page, not proven human input. Once
+   * the app enables Edit, page scripts can forge picks or hover reports that
+   * change selection or outlines, or open a draft. They cannot enable Edit,
+   * post a comment or invoke privileged host operations through this channel.
+   * Delivery keeps the latest report per kind per animation frame; incoming
+   * parsing is not rate-limited.
+   */
+  private receivePageActivity(activity: CanvasPageActivity): void {
+    if (this.isCanvasBoard() || this.requestedMode !== "edit") return;
+    this.pendingPageActivity.set(activity.kind, activity);
+    if (this.pageActivityFrame !== null) return;
+    this.pageActivityFrame = window.requestAnimationFrame(() => {
+      this.pageActivityFrame = null;
+      const due = [...this.pendingPageActivity.values()];
+      this.pendingPageActivity.clear();
+      for (const pending of due)
+        for (const listener of this.pageActivityListeners) listener(pending);
+    });
+  }
+
+  private dropPageActivity(): void {
+    this.pendingPageActivity.clear();
+    if (this.pageActivityFrame === null) return;
+    window.cancelAnimationFrame(this.pageActivityFrame);
+    this.pageActivityFrame = null;
   }
 
   private canvasDocumentProven(): boolean {
@@ -698,6 +799,9 @@ export class SandboxBridgeHost {
     } else if (method === "traycer/canvas/relative-link") {
       const href = parseCanvasRelativeLink(params);
       if (href !== null) this.options.events.onRelativeLink?.(href);
+    } else {
+      const activity = parseCanvasPageActivity(method, params);
+      if (activity !== null) this.receivePageActivity(activity);
     }
   }
 
@@ -747,6 +851,9 @@ export class SandboxBridgeHost {
     this.earlyError = false;
     this.initialized = false;
     this.crashed = false;
+    // A new page starts in its own first mode, whatever the last one was in.
+    this.requestedMode = null;
+    this.dropPageActivity();
     this.queuedNotifications.length = 0;
     this.clearTimer(this.pageHandshakeTimer);
     const unanswered = [...this.pendingResponses.values()];
@@ -882,11 +989,7 @@ export class SandboxBridgeHost {
   frameLoaded(): void {
     if (this.phase === "disposed") return;
     this.loads += 1;
-    if (
-      this.options.document.kind === "served" &&
-      this.options.document.canvas === true &&
-      this.servedPages() === null
-    ) {
+    if (this.isCanvasBoard()) {
       // Query navigation authorizes exactly one reload of this board. Its
       // ready must still prove both the nonce and the requested URL.
       if (this.loads > (this.canvasReload?.document ?? this.documents)) {
@@ -922,18 +1025,25 @@ export class SandboxBridgeHost {
     });
   }
 
-  /** Plain HTML proves readiness without an MCP App's initialized handshake. */
-  setHtmlView(enabled: boolean, scale: number): void {
+  /**
+   * Plain HTML proves readiness without an MCP App's initialized handshake.
+   * Every served page carries the zoom script; a canvas board does not.
+   */
+  setHtmlView(view: SandboxHtmlView): void {
     if (
       this.phase !== "ready" ||
       this.options.document.kind !== "served" ||
-      this.options.document.canvas === true
+      this.isCanvasBoard()
     )
       return;
     this.post({
       jsonrpc: "2.0",
       method: "traycer/html/view",
-      params: { enabled, scale },
+      params: {
+        enabled: view.enabled,
+        scale: view.scale,
+        commenting: view.commenting,
+      },
     });
   }
 
@@ -973,6 +1083,8 @@ export class SandboxBridgeHost {
     this.phase = "disposed";
     for (const timer of this.timers) window.clearTimeout(timer);
     this.timers.clear();
+    this.dropPageActivity();
+    this.pageActivityListeners.clear();
     const unanswered = [...this.pendingResponses.values()];
     this.pendingResponses.clear();
     for (const settle of unanswered) settle(false);
@@ -1078,7 +1190,38 @@ export class SandboxBridgeHost {
 
   private relayHtmlZoom(params: unknown): void {
     const scale = parseHtmlZoom(params);
-    if (scale !== null) this.options.events.onHtmlZoom?.(scale);
+    if (scale === null) return;
+    this.options.events.onHtmlZoom?.(scale);
+    // A zoom moves every box on the page, whether or not it also scrolled.
+    if (this.canvasEnabled()) this.receivePageActivity({ kind: "layout" });
+  }
+
+  /**
+   * A claim like any other a served page makes: it counts only from the page
+   * that proved itself with the armed nonce, and only where the frame shows a
+   * plain-html artifact's pages. A canvas board reports its own links, and an
+   * MCP App's links stay on `ui/open-link` and its confirm.
+   */
+  private relayArtifactLink(params: unknown): void {
+    if (
+      this.servedPages() === null ||
+      this.phase !== "ready" ||
+      this.crashed ||
+      !isRecord(params) ||
+      params.nonce !== this.options.document.nonce ||
+      typeof params.href !== "string" ||
+      params.href.length > MAX_LINK_URL_CHARS ||
+      typeof params.page !== "string"
+    ) {
+      return;
+    }
+    const page = parseArtifactAddress(params.page);
+    if (page === null) return;
+    this.options.events.onArtifactLink?.({
+      href: params.href,
+      pagePath: page.path,
+      pageUrl: params.page,
+    });
   }
 
   private dispatch(message: InboundMessage): void {
@@ -1086,6 +1229,9 @@ export class SandboxBridgeHost {
     switch (method) {
       case "traycer/notifications/document-ready":
         this.onDocumentReady(params);
+        return;
+      case "traycer/notifications/artifact-link":
+        this.relayArtifactLink(params);
         return;
       case "traycer/notifications/page-missing":
         this.reportStandInPage(params, (pages) => pages.onPageMissing());
@@ -1247,11 +1393,7 @@ export class SandboxBridgeHost {
     params: Record<string, unknown>,
     pages: SandboxServedPages | null,
   ): boolean {
-    if (
-      this.options.document.kind === "served" &&
-      this.options.document.canvas === true &&
-      pages === null
-    ) {
+    if (this.isCanvasBoard()) {
       return this.acceptCanvasDocument(params);
     } else if (pages !== null) {
       // At most one ready may run ahead of its load.
@@ -1377,5 +1519,13 @@ function parseWheel(params: unknown): SandboxWheel | null {
   if (deltaMode === 2) scale = WHEEL_LINE_PX * 20;
   const clamp = (delta: number): number =>
     Math.max(-MAX_WHEEL_DELTA_PX, Math.min(MAX_WHEEL_DELTA_PX, delta * scale));
-  return { deltaX: clamp(deltaX), deltaY: clamp(deltaY) };
+  // A page can only ever under-claim a gesture: a missing or forged flag
+  // reads as content it cannot hold still, never as room it does not have.
+  return {
+    deltaX: clamp(deltaX),
+    deltaY: clamp(deltaY),
+    cancelable: params.cancelable === true,
+    ownsBack: params.ownsBack !== false,
+    ownsForward: params.ownsForward !== false,
+  };
 }

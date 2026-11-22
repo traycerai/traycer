@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ExpandedImageBody,
   ExpandedImageDialogContent,
   type ExpandedImageState,
 } from "@/components/chat/expanded-image-dialog";
@@ -73,11 +74,15 @@ function renderOpenDialog(image: ExpandedImageState): void {
       <Dialog open modal={false}>
         <ExpandedImageDialogContent
           title="a misty pier"
-          alt="a misty pier"
-          image={image}
-          suggestedName="pier.png"
-          onCloseAutoFocus={undefined}
-        />
+          navigation={{ index: 0, count: 1, onNavigate: () => {} }}
+          onCloseAutoFocus={() => {}}
+        >
+          <ExpandedImageBody
+            alt="a misty pier"
+            image={image}
+            suggestedName="pier.png"
+          />
+        </ExpandedImageDialogContent>
       </Dialog>
     </QueryClientProvider>,
   );

@@ -192,8 +192,6 @@ describe("<HostOverviewDesktopAppRow />", () => {
       "available",
       snapshotWith({ status: "available", latestVersion: "1.5.0" }),
     ],
-    ["up to date", snapshotWith({ status: "up-to-date" })],
-    ["checking", snapshotWith({ status: "checking" })],
     [
       "a plain error",
       snapshotWith({ status: "error", errorMessage: "offline" }),
@@ -229,13 +227,12 @@ describe("<HostOverviewDesktopAppRow />", () => {
     expect(bridge.installUpdate).not.toHaveBeenCalled();
   });
 
-  it("claims Up to date for an up-to-date snapshot, with no action", () => {
+  it("omits the row for an up-to-date snapshot", () => {
     renderRow(snapshotWith({ status: "up-to-date" }), new StubBridge());
-    expect(stateText()).toBe("Up to date (v1.4.0)");
-    expect(screen.queryByTestId("host-overview-desktop-app-action")).toBeNull();
+    expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
   });
 
-  it("claims Up to date after an automatic check that found nothing (idle + lastCheckedAt + latestVersion)", () => {
+  it("omits the row after an automatic check finds nothing", () => {
     renderRow(
       snapshotWith({
         status: "idle",
@@ -245,7 +242,7 @@ describe("<HostOverviewDesktopAppRow />", () => {
       }),
       new StubBridge(),
     );
-    expect(stateText()).toBe("Up to date (v1.4.0)");
+    expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
   });
 
   it.each([
@@ -258,12 +255,20 @@ describe("<HostOverviewDesktopAppRow />", () => {
       }),
     ],
     ["checking", snapshotWith({ status: "checking" })],
-    ["error", snapshotWith({ status: "error", errorMessage: "offline" })],
     ["unavailable", snapshotWith({ status: "unavailable" })],
-  ])("shows only the version, never Up to date, when %s", (_name, snapshot) => {
+  ])("omits the row when the updater is %s", (_name, snapshot) => {
     renderRow(snapshot, new StubBridge());
-    expect(stateText()).toBe("v1.4.0");
-    expect(stateText()).not.toContain("Up to date");
+    expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
+  });
+
+  it("shows a plain error without an action", () => {
+    renderRow(
+      snapshotWith({ status: "error", errorMessage: "offline" }),
+      new StubBridge(),
+    );
+
+    expect(stateText()).toBe("Update failed");
+    expect(screen.getByText("offline")).toBeTruthy();
     expect(screen.queryByTestId("host-overview-desktop-app-action")).toBeNull();
   });
 
@@ -334,7 +339,10 @@ describe("<HostOverviewDesktopAppRow />", () => {
   });
 
   it("is exposed as a group named Traycer Desktop", () => {
-    renderRow(snapshotWith({}), new StubBridge());
+    renderRow(
+      snapshotWith({ status: "available", latestVersion: "1.5.0" }),
+      new StubBridge(),
+    );
     screen.getByRole("group", { name: "Traycer Desktop" });
   });
 

@@ -36,6 +36,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { RevertButton } from "@/components/layout-editor/inspector/inspector-row";
 import {
   arrangementChangeLine,
+  panelChangeLines,
   styleChangeLines,
   type LayoutChangeLine,
 } from "@/components/layout-editor/inspector/layout-change-lines";
@@ -72,7 +73,7 @@ const PRESET_CAPTIONS: Readonly<Record<LayoutPresetId, string>> = {
 };
 
 const PRESET_HELPER =
-  "Applying a preset replaces visibility and style choices. Your arrangement, such as placement, order, widths and provider choices, stays as it is. You can undo it.";
+  "Applying a preset replaces display and style choices. Your panels and arrangement, such as placement, order, widths and provider choices, stay as they are. You can undo it.";
 
 /** One toast for every apply, so a second apply replaces the first's Undo. */
 const PRESET_TOAST_ID = "layout-preset-applied";
@@ -105,7 +106,8 @@ export function PresetsBlock(props: {
   // change a preset puts back. Arrangement changes still show under View
   // changes, with a note that presets keep them.
   const modified = layoutModified(snapshot);
-  const kept = layoutChanges(snapshot).arrangement.length;
+  const changes = layoutChanges(snapshot);
+  const kept = changes.arrangement.length + changes.panels.length;
   const changed = modified || kept > 0;
   const page = useLayoutFormHost() === "page";
   const open = useViewChangesOpen((state) => state.open) && changed;
@@ -164,8 +166,9 @@ export function PresetsBlock(props: {
               className="text-pretty text-ui-xs text-muted-foreground"
             >
               {/* Named for what it counts: every line under Arrangement in
-                  View changes - placement, order, widths, the phone footer
-                  and provider choices - none of which a preset touches. */}
+                  View changes - placement, order, widths, the phone footer,
+                  provider choices and panels shown - none of which a preset
+                  touches. */}
               {`Presets keep your arrangement: ${String(kept)} ${kept === 1 ? "change" : "changes"} under Arrangement.`}
             </span>
           ) : null}
@@ -588,7 +591,10 @@ function ChangeList(props: {
   const changes = layoutChanges(snapshot);
   const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
   const styles = styleChangeLines(changes.styles, snapshot, values);
-  const arrangement = changes.arrangement.map(arrangementChangeLine);
+  const arrangement = [
+    ...panelChangeLines(changes.panels, values),
+    ...changes.arrangement.map(arrangementChangeLine),
+  ];
   const keys = [...styles, ...arrangement].map((line) => line.key);
   // A line's ↺ takes its line with it, and a focused button that unmounts
   // drops focus to the page. Focus moves first, to the next line's ↺, the
@@ -724,32 +730,35 @@ function applyPreset(presetId: LayoutPresetId, reveal: () => void): void {
     }
   });
   presetToastWatch = stopWatching;
-  toast(`${PRESET_LABELS[presetId]} applied. Placement and order kept.`, {
-    id: PRESET_TOAST_ID,
-    onAutoClose: stopWatchingPresetToast,
-    onDismiss: stopWatchingPresetToast,
-    action: {
-      label: "Undo",
-      onClick: () => {
-        stopWatchingPresetToast();
-        if (!sameValues(getLayoutSnapshot(), applied)) return;
-        useLayoutEditorStore.getState().recordGesture(() => {
-          useLayoutStore.getState().replaceAll({
-            ...getLayoutSnapshot(),
-            basePreset: before.basePreset,
-            overrides: before.overrides,
+  toast(
+    `${PRESET_LABELS[presetId]} applied. Placement, order and panels kept.`,
+    {
+      id: PRESET_TOAST_ID,
+      onAutoClose: stopWatchingPresetToast,
+      onDismiss: stopWatchingPresetToast,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          stopWatchingPresetToast();
+          if (!sameValues(getLayoutSnapshot(), applied)) return;
+          useLayoutEditorStore.getState().recordGesture(() => {
+            useLayoutStore.getState().replaceAll({
+              ...getLayoutSnapshot(),
+              basePreset: before.basePreset,
+              overrides: before.overrides,
+            });
           });
-        });
+        },
+      },
+      cancel: {
+        label: "View changes",
+        onClick: () => {
+          reveal();
+          setViewChangesOpen(true);
+        },
       },
     },
-    cancel: {
-      label: "View changes",
-      onClick: () => {
-        reveal();
-        setViewChangesOpen(true);
-      },
-    },
-  });
+  );
 }
 
 /** The watch that keeps the one preset toast honest, while it is up. */

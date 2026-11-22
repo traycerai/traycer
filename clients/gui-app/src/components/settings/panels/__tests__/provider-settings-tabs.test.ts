@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
 import {
   PROVIDER_TAB_ORDER,
+  providerKeyTab,
   supportedTabsFor,
   tabsForView,
   type ProvidersPanelView,
@@ -287,5 +288,18 @@ describe("tabsForView", () => {
     for (const view of ["mcp-servers", "skills"] as const) {
       expect(tabsForView(EVERY_TAB, view)).toHaveLength(1);
     }
+  });
+});
+
+describe("providerKeyTab", () => {
+  it("keeps the key on Account when a key is supported", () => {
+    expect(providerKeyTab({ apiKeySupported: true })).toEqual({
+      tab: "account",
+      label: "Account",
+    });
+  });
+
+  it("names no tab when the provider has no key", () => {
+    expect(providerKeyTab({ apiKeySupported: false })).toBeNull();
   });
 });

@@ -120,6 +120,7 @@ function ReportedSessionItem(props: {
     if (tile === null) return;
     const target = openTile(
       tileIntent(tile, { epicId: session.taskId }, "explicit", "direct_ui"),
+      "user",
     );
     if (target !== null) onNavigate();
   }, [session, hostId, navigate, onNavigate, openTile, tile]);

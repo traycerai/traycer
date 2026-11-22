@@ -13,6 +13,8 @@ export const epicMutationKeys = {
   exportArtifacts: () => ["epic.exportArtifacts"] as const,
   downloadHtmlArtifact: (hostId: string, artifactId: string) =>
     ["epic.downloadHtmlArtifact", hostId, artifactId] as const,
+  downloadChatFile: (hostId: string, chatId: string, hash: string) =>
+    ["epic.downloadChatFile", hostId, chatId, hash] as const,
   updateChatRunSettings: () => ["epic.updateChatRunSettings"] as const,
   updateChatProfile: () => ["epic.updateChatProfile"] as const,
   setChatArchived: () => ["epic.setChatArchived"] as const,
@@ -39,4 +41,5 @@ export const epicMutationKeys = {
   clearArtifactVersionHistory: () =>
     ["epic.clearArtifactVersionHistory"] as const,
   deleteArtifact: () => ["epic.deleteArtifact"] as const,
+  deleteAgentSubtree: () => ["epic.deleteAgentSubtree"] as const,
 };

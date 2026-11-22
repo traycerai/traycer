@@ -234,15 +234,18 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
       if (treePath === null) return;
       const tile = tileForTreePath(treePath);
       if (tile === null) return;
-      openTile({
-        node: tile,
-        target: { tabId: props.viewTabId },
-        gesture,
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: tile,
+          target: { tabId: props.viewTabId },
+          gesture,
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openTile, props.viewTabId, tileForTreePath],
   );

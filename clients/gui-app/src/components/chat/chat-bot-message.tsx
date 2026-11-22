@@ -1,3 +1,4 @@
+import { BotFeedbackDraftCard } from "@/components/bots/bot-feedback-draft-card";
 import {
   Fragment,
   useEffect,
@@ -7,14 +8,20 @@ import {
 } from "react";
 import {
   ChevronRight,
+  MessageSquarePlus,
   MessageSquareText,
   Pencil,
+  Reply,
   RotateCcw,
 } from "lucide-react";
-import type {
-  BotAnnouncement,
-  BotAnnouncementKind,
-  BotQuestion,
+import {
+  BOT_QUESTION_SKIPPED_TEXT,
+  botQuestionAnswersText,
+  botQuestionsText,
+  type BotAnnouncement,
+  type BotAnnouncementKind,
+  type BotQuestion,
+  type BotQuestionAnswerSet,
 } from "@traycer/protocol/persistence/epic/messages";
 import { BOT_THREAD_ANCHOR_ANSWER } from "@traycer/protocol/host/bot/conversation-schemas";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
@@ -31,13 +38,15 @@ import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { retrospectiveSheetLinkHostId } from "@/components/settings/move/retrospective-sheet-link-host";
 import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overview-dated-lines";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useRelativeTimestamp } from "@/lib/relative-time";
+import { useMessageTime, useRelativeTimestamp } from "@/lib/relative-time";
 import { formatClockDuration } from "@/lib/format-duration";
 import {
   botRowThreadAnchorKind,
   firstLineOf,
 } from "@/lib/bots/bot-trunk-model";
+import { botReplyTargetOf } from "@/lib/bots/bot-reply-target";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
@@ -45,7 +54,7 @@ import { cn } from "@/lib/utils";
 import {
   AvatarStack,
   BotAvatar,
-  MemberAvatar,
+  PersonAvatar,
 } from "@/components/bots/bot-avatars";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { BotSurfaceCard } from "@/components/bots/bot-surface-card";
@@ -61,17 +70,33 @@ import type {
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
+import { useTimestampDrawn } from "./use-timestamp-drawn";
 import {
   answerDraftKey,
+  useBotDraftActions,
   useBotDraftsStore,
+  withoutAnswerFailure,
 } from "@/stores/bots/bot-drafts-store";
 import { QuestionCard, type QuestionCardQuestion } from "./question-card";
+import { ChatReplyBadgeSlot } from "./chat-reply-badge";
 import {
   EMPTY_QUESTION_CARD_DRAFT,
   botQuestionCardSettlement,
+  draftText,
+  questionCardMovedBlock,
+  questionCardMovedHow,
+  questionCardMovedLine,
   questionCardView,
+  type QuestionCardSettlement,
 } from "./question-card-view";
+import {
+  HostRpcError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
+import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TextSegment } from "./segments/text-segment";
+import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 
 /**
  * One row of a bot's channel or thread, in Slack's message layout (Tracy
@@ -81,16 +106,21 @@ import { TextSegment } from "./segments/text-segment";
  * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A row that asks without
- * waiting (decision 121) draws the question card in place of its text and
- * options, and carries its thread's line as a question does. A post that
+ * waiting (decision 121) draws the question card in place of its options,
+ * under any text beyond its questions' own, and carries its thread's line as a
+ * question does. A post that
  * points into a task (T89) draws the surface's card under its text. A bot that
  * answers posts itself (reply mode `direct`) replies in the channel, as a
  * plain row.
  *
- * In the channel, "Reply in thread" is among the row's hover actions, as
- * Slack offers it on every message, and a thread roots on the row it is
- * opened from (decision 114): a member's post, a question or proposal, a
- * direct reply and any other row of the bot each open their own
+ * Every stored row offers Reply among its hover actions (T166), where the
+ * tab's host and the bot's take one: the box of the row's own conversation,
+ * the channel's or the thread's, names the message, and the send links the
+ * two. In the channel "Create thread" sits beside it, "Open thread" on a row
+ * whose thread is listed, as Discord offers both on every message; a row in
+ * a thread offers Reply alone, since threads do not nest. A thread roots on
+ * the row it is opened from (decision 114): a member's post, a question or
+ * proposal, a direct reply and any other row of the bot each open their own
  * thread, the reply's apart from the post's, and each carries its own
  * thread line. Where the bot's host does not say it takes replies under
  * such a row (`threadAnchorKinds`), a direct reply opens the thread under
@@ -100,24 +130,41 @@ import { TextSegment } from "./segments/text-segment";
  * agent chat's reason and actions where the bot's session names the post's
  * turn as its last failed attempt, and the receipt of that turn under them.
  *
- * Under a reply of the bot, the receipt of the turn that wrote it (Tracy
- * Bots T86): what the turn did and how long it took, shown while the row is
- * hovered or the receipt has keyboard focus, and always while the turn
- * runs. It opens the turn's session, landed on the turn. A touch screen
- * has no hover: a long press on any row offers its "Reply in thread", and
- * on a reply its receipt, in a sheet instead.
+ * Under every row of the bot a turn wrote, a reply, a question or an
+ * announcement, the receipt of that turn (Tracy Bots T86, decision 173):
+ * what the turn did and how long it took, or while it runs how long it has
+ * been running, always shown. It opens the turn's session, landed on the
+ * turn. A row no turn wrote draws none. A touch screen has no hover, and its
+ * rows show no actions until pressed: a long press on a row offers its Reply
+ * and its thread's action, the receipt where the row has one, and on a
+ * message the bot failed to answer its Retry and Edit, in a sheet instead,
+ * each with its name written out.
+ *
+ * A bot's reply that answers a member's message (T165) draws that message's
+ * badge above its header, unless the message is the row directly above; a
+ * member's answers to a bot's card (T167) draw the card's badge, there too,
+ * and so does a member's message that replies to one they chose (T166).
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
- * the top of the thread panel: the same row, with nothing on hover.
+ * the top of the thread panel: the same row, with nothing on hover and no
+ * badge, since the message it answers is in the channel and not above it.
+ * `timeLink` makes its time a link that shows the post in its channel, as a
+ * Threads card's post does (Tracy Bots T137); `null` leaves the time a label.
  */
 export function ChatBotMessage(props: {
   readonly message: ChatMessageModel;
   readonly presentation: ChatBotPresentation;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, hoverActions } = props;
+  const { message, presentation, hoverActions, timeLink } = props;
   const sentAt = message.sentAt ?? message.createdAt;
-  const body = <BotMessageText message={message} />;
+  const body =
+    message.questionAnswers === undefined ? (
+      <BotMessageText message={message} />
+    ) : (
+      <QuestionAnswerList set={message.questionAnswers} />
+    );
   if (message.role === "assistant") {
     return (
       <BotRow
@@ -126,6 +173,7 @@ export function ChatBotMessage(props: {
         sentAt={sentAt}
         body={body}
         hoverActions={hoverActions}
+        timeLink={timeLink}
       />
     );
   }
@@ -136,6 +184,7 @@ export function ChatBotMessage(props: {
       sentAt={sentAt}
       body={body}
       hoverActions={hoverActions}
+      timeLink={timeLink}
     />
   );
 }
@@ -150,8 +199,9 @@ function MemberRow(props: {
   readonly sentAt: number;
   readonly body: ReactNode;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, sentAt, body, hoverActions } = props;
+  const { message, presentation, sentAt, body, hoverActions, timeLink } = props;
   const name = message.senderLabel ?? "Member";
   const postId = message.persistentMessageId;
   const threadLine =
@@ -160,15 +210,23 @@ function MemberRow(props: {
       : presentation.threadLine(postId);
   const replyInThread =
     postId === null ? null : memberReplyInThread(message, postId, presentation);
+  const thread: RowThreadAction | null =
+    replyInThread === null
+      ? null
+      : { open: replyInThread, listed: threadLine !== null };
+  const reply = replyTo(presentation, postId, name, message.content);
   const { failed, recovery, failedReceipt } = memberFailureOf(
     message,
     presentation,
   );
-  const sheet = useRowSheet(hoverActions && replyInThread !== null);
+  const sheet = useRowSheet(
+    hoverActions && rowHasSheetAction(reply, thread, failed, null),
+  );
   return (
     <BotMessageFrame
+      replyBadge={replyBadgeOf(message, hoverActions)}
       avatar={
-        <MemberAvatar
+        <PersonAvatar
           userId={message.senderUserId ?? null}
           name={name}
           avatarUrl={message.senderAvatarUrl ?? null}
@@ -181,16 +239,23 @@ function MemberRow(props: {
       instanceId={message.id}
       testId="bot-member-row"
       hoverActions={hoverActions}
-      replyInThread={replyInThread}
+      reply={reply}
+      thread={thread}
       failed={failed}
       longPress={sheet.longPress}
+      timeLink={timeLink}
     >
+      <UserMessageAttachmentGallery
+        align="start"
+        attachments={message.attachments}
+        browserAnnotations={message.browserAnnotations}
+      />
       {body}
       {failed === null ? null : (
         <UnansweredLine failed={failed} recovery={recovery} />
       )}
       {failedReceipt === null ? null : (
-        <TurnReceiptLine receipt={failedReceipt} alwaysShown />
+        <TurnReceiptLine receipt={failedReceipt} />
       )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
@@ -205,13 +270,213 @@ function MemberRow(props: {
           onOpenChange={sheet.setOpen}
           name={name}
           text={message.content}
-          replyInThread={replyInThread}
+          reply={reply}
+          thread={thread}
+          failed={failed}
           receipt={null}
           botTitle={presentation.botTitle}
         />
       )}
     </BotMessageFrame>
   );
+}
+
+/**
+ * A member's message drawn outside its own channel or thread - the message a
+ * delivery brought into one of the bot's sessions (Tracy Bots T159): the
+ * member's row with nothing on hover and `place` under its text. Until the
+ * message is read its text is a placeholder, and where it cannot be read the
+ * row says so; the row is never empty.
+ */
+export function ChatBotDeliveredPost(props: {
+  readonly message: ChatMessageModel;
+  /** `message`: its text is read; `loading`: it is being read; `unavailable`: it cannot be. */
+  readonly body: "message" | "loading" | "unavailable";
+  /** Where the message was written, and how its turn ended, under it. */
+  readonly place: ReactNode;
+}): ReactElement {
+  const { message, body, place } = props;
+  const name = message.senderLabel ?? "Member";
+  return (
+    <BotMessageFrame
+      replyBadge={null}
+      avatar={
+        <PersonAvatar
+          userId={message.senderUserId ?? null}
+          name={name}
+          avatarUrl={message.senderAvatarUrl ?? null}
+          size="lg"
+        />
+      }
+      name={name}
+      bot={false}
+      sentAt={message.sentAt ?? message.createdAt}
+      instanceId={message.id}
+      testId="bot-delivered-post"
+      hoverActions={false}
+      reply={null}
+      thread={null}
+      failed={null}
+      longPress={null}
+      timeLink={null}
+    >
+      <UserMessageAttachmentGallery
+        align="start"
+        attachments={message.attachments}
+        browserAnnotations={message.browserAnnotations}
+      />
+      <DeliveredPostBody message={message} body={body} />
+      {place}
+    </BotMessageFrame>
+  );
+}
+
+/** The delivered row's text, or what stands in for it until or unless it is read. */
+function DeliveredPostBody(props: {
+  readonly message: ChatMessageModel;
+  readonly body: "message" | "loading" | "unavailable";
+}): ReactElement {
+  if (props.body === "loading") {
+    return (
+      <div
+        role="status"
+        aria-label="Loading message"
+        className="h-4 w-full max-w-64 animate-pulse rounded-sm bg-foreground/10"
+        data-testid="bot-delivered-post-loading"
+      />
+    );
+  }
+  if (props.body === "unavailable") {
+    return (
+      <p
+        className="text-ui-sm text-muted-foreground"
+        data-testid="bot-delivered-post-stand-in"
+      >
+        Message unavailable
+      </p>
+    );
+  }
+  if (props.message.questionAnswers !== undefined) {
+    return <QuestionAnswerList set={props.message.questionAnswers} />;
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      {props.message.segments.map((segment) =>
+        segment.kind === "text" ? (
+          <TextSegment
+            key={segment.id}
+            findUnitId={null}
+            markdown={segment.markdown}
+            isStreaming={false}
+            nextStepActions={null}
+          />
+        ) : null,
+      )}
+    </div>
+  );
+}
+
+/**
+ * A member's answers to a bot's card sent together (T167): each question as
+ * the card asked it, and under it their answer, or Skipped.
+ */
+function QuestionAnswerList(props: {
+  readonly set: BotQuestionAnswerSet;
+}): ReactElement {
+  return (
+    <dl
+      data-testid="bot-question-answers"
+      className="flex min-w-0 flex-col gap-1.5"
+    >
+      {props.set.answers.map((entry) => (
+        <div key={entry.questionIndex} className="flex min-w-0 flex-col">
+          <dt className="text-ui-xs break-words whitespace-pre-wrap text-muted-foreground">
+            {entry.question}
+          </dt>
+          <dd
+            className={
+              entry.answer === null
+                ? "text-ui-sm text-muted-foreground"
+                : "text-ui-sm break-words whitespace-pre-wrap text-foreground"
+            }
+          >
+            {entry.answer ?? BOT_QUESTION_SKIPPED_TEXT}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * The badge of the message a row answers (T165), drawn in a channel's or a
+ * thread's list (`hoverActions`): a bot's reply names the member's message,
+ * and hides it when that message is the row directly above; a member's
+ * answers to a bot's card (T167) name the card, and a member's message that
+ * replies to one they chose (T166) names that one, both shown there too.
+ * `null` on any other row.
+ */
+function replyBadgeOf(
+  message: ChatMessageModel,
+  hoverActions: boolean,
+): ReactNode {
+  if (!hoverActions) return null;
+  if (message.role === "assistant") {
+    return message.repliesTo === undefined ? null : (
+      <ChatReplyBadgeSlot
+        rowMessageId={message.persistentMessageId}
+        answeredId={message.repliesTo}
+        adjacency="when-apart"
+        questionCount={null}
+      />
+    );
+  }
+  const answers = message.questionAnswers;
+  if (answers !== undefined) {
+    return (
+      <ChatReplyBadgeSlot
+        rowMessageId={message.persistentMessageId}
+        answeredId={answers.questionMessageId}
+        adjacency="always"
+        questionCount={answers.answers.length}
+      />
+    );
+  }
+  return message.repliesTo === undefined ? null : (
+    <ChatReplyBadgeSlot
+      rowMessageId={message.persistentMessageId}
+      answeredId={message.repliesTo}
+      adjacency="always"
+      questionCount={null}
+    />
+  );
+}
+
+/** Whether a row has anything for its long-press sheet ({@link RowSheet}) to offer. */
+function rowHasSheetAction(
+  reply: (() => void) | null,
+  thread: RowThreadAction | null,
+  failed: FailedMessageActions | null,
+  receipt: ChatBotTurnReceipt | null,
+): boolean {
+  if (reply !== null || thread !== null || receipt !== null) return true;
+  return failed !== null && (failed.onRetry !== null || failed.onEdit !== null);
+}
+
+/**
+ * A row's Reply (T166): names the row `messageId`, written by `author`, in
+ * the box of its conversation; `null` for a row not stored yet, and where
+ * nothing can carry a reply.
+ */
+function replyTo(
+  presentation: ChatBotPresentation,
+  messageId: string | null,
+  author: string,
+  text: string,
+): (() => void) | null {
+  const { reply } = presentation;
+  if (reply === null || messageId === null) return null;
+  return () => reply(botReplyTargetOf(messageId, author, text));
 }
 
 /**
@@ -227,16 +492,19 @@ export function ChatBotAppPost(props: {
 }): ReactElement {
   return (
     <BotMessageFrame
-      avatar={<BotAvatar size="lg" />}
+      replyBadge={null}
+      avatar={<MessageBotAvatar />}
       name={props.name}
       bot={false}
       sentAt={null}
       instanceId={props.testId}
       testId={props.testId}
       hoverActions={false}
-      replyInThread={null}
+      reply={null}
+      thread={null}
       failed={null}
       longPress={null}
+      timeLink={null}
     >
       {props.children}
     </BotMessageFrame>
@@ -292,7 +560,11 @@ function failedActionsOf(
           message.senderUserId ?? null,
         );
   if (failed === null) return null;
-  const { retry, edit } = failed;
+  const { retry } = failed;
+  // Edit puts the text back in the box and its send replaces the row. The
+  // box holds an image's bytes, the row only its hash, so a row with images
+  // keeps Retry, which re-sends them, and offers no Edit that would drop them.
+  const edit = message.attachments.length === 0 ? failed.edit : null;
   const parked = failed.state === "parked";
   if (recovery !== null) {
     return {
@@ -331,57 +603,68 @@ function BotRow(props: {
   readonly sentAt: number;
   readonly body: ReactNode;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, sentAt, body, hoverActions } = props;
+  const { message, presentation, sentAt, body, hoverActions, timeLink } = props;
+  const { chooseOption } = presentation;
   const announcement = message.announcement ?? null;
   const question = message.question ?? null;
   const questions = question === null ? null : presentation.questions;
-  const { replyInThread, threadLine } = botRowThread(message, presentation);
+  const { replyInThread, threadLine, thread } = botRowThread(
+    message,
+    presentation,
+  );
+  const text = botRowText(message);
+  const reply = replyTo(
+    presentation,
+    message.persistentMessageId,
+    presentation.botTitle,
+    text,
+  );
   const receipt = replyReceiptFor(message, presentation);
   const sheet = useRowSheet(
-    hoverActions && (receipt !== null || replyInThread !== null),
+    hoverActions && rowHasSheetAction(reply, thread, null, receipt),
   );
   return (
     <BotMessageFrame
-      avatar={<BotAvatar size="lg" />}
+      replyBadge={replyBadgeOf(message, hoverActions)}
+      avatar={<MessageBotAvatar />}
       name={presentation.botTitle}
       bot
       sentAt={sentAt}
       instanceId={message.id}
       testId={announcement === null ? "bot-reply-row" : "bot-announcement"}
       hoverActions={hoverActions}
-      replyInThread={replyInThread}
+      reply={reply}
+      thread={thread}
       failed={null}
       longPress={sheet.longPress}
+      timeLink={timeLink}
     >
       {question !== null && questions !== null ? (
-        <BotQuestionCard
-          messageId={message.persistentMessageId}
+        <BotAskingBody
+          message={message}
           question={question}
-          botTitle={presentation.botTitle}
           questions={questions}
+          botTitle={presentation.botTitle}
+          text={<BotRowBody announcement={announcement} body={body} />}
         />
       ) : (
         <BotRowBody announcement={announcement} body={body} />
       )}
-      {message.surface === undefined ? null : (
-        <BotSurfaceCard
-          messageId={message.persistentMessageId}
-          surface={message.surface}
-          postText={message.content}
-        />
-      )}
+      <BotRowCards message={message} />
       {message.options === undefined || questions !== null ? null : (
         <ReplyOptions
           options={message.options}
-          onChoose={presentation.chooseOption}
+          onChoose={
+            chooseOption === null
+              ? null
+              : (choice) => chooseOption(message.persistentMessageId, choice)
+          }
         />
       )}
-      {receipt === null ? null : (
-        <TurnReceiptLine
-          receipt={receipt}
-          alwaysShown={receipt.endedAt === null}
-        />
+      {presentation.replyReceipt === null ? null : (
+        <TurnReceiptSlot receipt={receipt} />
       )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
@@ -395,8 +678,10 @@ function BotRow(props: {
           open={sheet.open}
           onOpenChange={sheet.setOpen}
           name={presentation.botTitle}
-          text={message.content}
-          replyInThread={replyInThread}
+          text={text}
+          reply={reply}
+          thread={thread}
+          failed={null}
           receipt={receipt}
           botTitle={presentation.botTitle}
         />
@@ -407,7 +692,7 @@ function BotRow(props: {
 
 /**
  * A touch screen has no hover to reveal a row's actions with: a long press
- * on the row offers them in a sheet. `longPress` is `null` where the row
+ * of a finger or a pen on the row offers them in a sheet. `longPress` is `null` where the row
  * offers none (`enabled` false). `shown` holds from the first long press
  * on, so a channel mounts a sheet only for the rows someone pressed.
  */
@@ -426,6 +711,7 @@ function useRowSheet(enabled: boolean): {
     },
     disabled: !enabled,
     acceptsMouse: false,
+    acceptsPen: true,
   });
   return {
     open,
@@ -435,21 +721,28 @@ function useRowSheet(enabled: boolean): {
   };
 }
 
-/** The receipt under a reply of the bot; an announcement has none. */
+/**
+ * A bot's row's text as the bot wrote it, its text parts a line apart, as
+ * the reply badge reads a post (`postTextOf`). The row's `content` is only a
+ * preview, its whitespace folded and its length cut, so its first line is
+ * not the message's.
+ */
+function botRowText(message: ChatMessageModel): string {
+  return message.segments
+    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .join("\n");
+}
+
+/** The receipt under a row of the bot, by the turn that wrote it; `null` where none did. */
 function replyReceiptFor(
   message: ChatMessageModel,
   presentation: ChatBotPresentation,
 ): ChatBotTurnReceipt | null {
-  if (
-    message.announcement !== undefined ||
-    presentation.replyReceipt === null
-  ) {
-    return null;
-  }
+  if (presentation.replyReceipt === null) return null;
   return presentation.replyReceipt(replyMessageIdsOf(message));
 }
 
-/** The message ids a reply's row carries: its own, and every record of its turn. */
+/** The message ids a bot's row carries: its own, and every record of its turn. */
 function replyMessageIdsOf(message: ChatMessageModel): ReadonlyArray<string> {
   const ids = message.turnMessageIds ?? [];
   const own = message.persistentMessageId;
@@ -470,14 +763,101 @@ function BotRowBody(props: {
   );
 }
 
+function BotRowCards(props: { readonly message: ChatMessageModel }): ReactNode {
+  const { message } = props;
+  return (
+    <>
+      {message.feedbackDraft === undefined ? null : (
+        <BotFeedbackDraftCard
+          key={`${message.feedbackDraft.source.hostId}:${message.feedbackDraft.source.epicId}:${message.feedbackDraft.source.chatId}:${message.feedbackDraft.source.blockId}`}
+          {...message.feedbackDraft}
+        />
+      )}
+      {message.surface === undefined ? null : (
+        <BotSurfaceCard
+          messageId={message.persistentMessageId}
+          surface={message.surface}
+          postText={message.content}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * A row that asks: the card, under its text when that says more than its
+ * questions. The text is the row's whole text, as its segments carry it:
+ * `content` is the list's short, whitespace-folded preview, which stops
+ * matching the questions once they run long or over more than one line.
+ */
+function BotAskingBody(props: {
+  readonly message: ChatMessageModel;
+  readonly question: BotQuestion;
+  readonly questions: ChatBotQuestions;
+  readonly botTitle: string;
+  readonly text: ReactNode;
+}): ReactElement {
+  const { message, question, questions, botTitle, text } = props;
+  return (
+    <>
+      {collectAssistantReplyText(message.segments) ===
+      botQuestionsText(question.questions).trim()
+        ? null
+        : text}
+      <BotQuestionCard
+        messageId={message.persistentMessageId}
+        question={question}
+        botTitle={botTitle}
+        questions={questions}
+      />
+    </>
+  );
+}
+
+/** One of a member's answers moving off a card, with the settlement that overtook it. */
+interface MovedAnswer {
+  readonly index: number;
+  readonly question: string;
+  readonly answer: string;
+  readonly settlement: QuestionCardSettlement;
+  /** Who settled it: the member's user id; `null` for the asker. */
+  readonly settledBy: string | null;
+}
+
+/**
+ * Whether the bot's host refused a card's send because someone settled a
+ * question of it first (`E_BOT_QUESTION_ALREADY_SETTLED`). A host that
+ * predates the code refuses with `RPC_ERROR`, read as any other failure.
+ */
+function settledFirst(error: unknown): boolean {
+  const refusal = finalRefusalOf(error);
+  return (
+    refusal instanceof HostRpcError &&
+    refusal.code === "E_BOT_QUESTION_ALREADY_SETTLED"
+  );
+}
+
 /**
  * The card of the questions a bot's row asks, each settlement named as this
  * surface names its members, and the person's own answers kept under the bot
  * (`useBotDraftsStore`) so they outlive the view; without actions until the
  * row is written. A sent answer that the host does not take is given back to
- * edit; one whose question shows settled, or a draft with nothing of the
- * person's left in it, is spent. Discuss takes the draft off the card into
- * the discussion's box.
+ * edit, and the surface's box says it was not sent; one whose question shows
+ * settled by it, or a draft with nothing of the person's left in it, is
+ * spent. An answer whose question someone else settled first moves off the
+ * card into the surface's box, unsent, below what the box held, and the box
+ * says who settled it (T186); a card drawn where it has no box of its own
+ * leaves that to the copy that has. A send the host refused because a
+ * question of it was settled first stays held as sent, saying nothing, until
+ * that settlement shows here: the reply can beat the settlement to this
+ * window. A question of that send still open then goes back to edit.
+ *
+ * On a card of two or more questions whose answers go together (`answerAll`,
+ * T167), one Submit sends them all. A send the host refused gives them all
+ * back. One that ended without saying whether it reached the host waits,
+ * nothing sent again, for the transcript's next baseline, from this session
+ * store or the one that replaced it: settled by then, the answers are spent;
+ * still open, they are given back to edit as they were.
  */
 function BotQuestionCard(props: {
   /** The row, by its message id; `null` before it is written. */
@@ -487,15 +867,19 @@ function BotQuestionCard(props: {
   readonly questions: ChatBotQuestions;
 }): ReactElement {
   const { messageId, question, botTitle, questions } = props;
-  const { botId, viewerUserId, memberName, answer, discuss } = questions;
+  const { botId, viewerUserId, memberName, answer, answerAll, baseline, box } =
+    questions;
   const drafts = useBotDraftsStore((state) => state.answers[botId]);
-  const setAnswer = useBotDraftsStore((state) => state.setAnswer);
+  // A send or settlement that answers after the account retired changes nothing.
+  const { setAnswer, moveAnswers, noticeBox } = useBotDraftActions();
   const cardQuestions = question.questions.map(
     (item, index): QuestionCardQuestion => ({
       index,
       text: item.text,
       options: item.options,
       allowFreeText: item.allowFreeText,
+      // Absent from a host below `chat.subscribe@1.43`: one pick.
+      several: item.multiSelect === true,
       settlement: botQuestionCardSettlement(
         item.settlement,
         memberName,
@@ -515,7 +899,8 @@ function BotQuestionCard(props: {
           .filter(
             (item) =>
               drafts?.[answerDraftKey(messageId, item.index)] !== undefined &&
-              questionCardView(item.settlement, item.draft).kind === "settled",
+              questionCardView(item.settlement, item.draft, item.several)
+                .kind === "settled",
           )
           .map((item) => answerDraftKey(messageId, item.index))
           .join("\n");
@@ -523,8 +908,176 @@ function BotQuestionCard(props: {
     if (spent.length === 0) return;
     for (const key of spent.split("\n")) setAnswer(botId, key, null);
   }, [botId, setAnswer, spent]);
+  const overtaken =
+    messageId === null || box === null
+      ? ""
+      : cardQuestions
+          .filter(
+            (item) =>
+              drafts?.[answerDraftKey(messageId, item.index)] !== undefined &&
+              questionCardView(item.settlement, item.draft, item.several)
+                .kind === "overtaken",
+          )
+          .map((item) => answerDraftKey(messageId, item.index))
+          .join("\n");
+  useEffect(() => {
+    if (overtaken.length === 0 || messageId === null || box === null) return;
+    const byKey = new Map(
+      question.questions.map((item, index) => [
+        answerDraftKey(messageId, index),
+        { index, item },
+      ]),
+    );
+    moveAnswers(botId, box, overtaken.split("\n"), (taken) => {
+      const moved = taken
+        .flatMap(([key, draft]): ReadonlyArray<MovedAnswer> => {
+          const entry = byKey.get(key);
+          const settled = entry?.item.settlement ?? null;
+          if (entry === undefined || settled === null) return [];
+          const settlement = botQuestionCardSettlement(
+            settled,
+            memberName,
+            viewerUserId,
+          );
+          const own = draftText(draft, entry.item.multiSelect === true);
+          return settlement === null || own === null
+            ? []
+            : [
+                {
+                  index: entry.index,
+                  question: entry.item.text,
+                  answer: own,
+                  settlement,
+                  settledBy:
+                    settled.by.kind === "person" ? settled.by.userId : null,
+                },
+              ];
+        })
+        .sort((a, b) => a.index - b.index);
+      if (moved.length === 0) return null;
+      const first = moved[0];
+      // Settled by more than one, the line credits none of them with what
+      // the others did.
+      const oneSettler = moved.every(
+        (item) => item.settledBy === first.settledBy,
+      );
+      return {
+        block: questionCardMovedBlock(moved, question.questions.length > 1),
+        notice: questionCardMovedLine(
+          oneSettler ? first.settlement.by : null,
+          questionCardMovedHow(moved.map((item) => item.settlement)),
+          botTitle,
+          moved.length,
+        ),
+      };
+    });
+  }, [
+    botId,
+    botTitle,
+    box,
+    memberName,
+    messageId,
+    moveAnswers,
+    overtaken,
+    question,
+    viewerUserId,
+  ]);
+  // A baseline from another session store is a later one too: the registry
+  // replaced the store, whose epochs start again, and its snapshot is new.
+  const resynced =
+    messageId === null ||
+    baseline === null ||
+    baseline.epoch === NO_TRANSCRIPT_BASELINE
+      ? ""
+      : cardQuestions
+          .filter((item) => {
+            const since =
+              drafts?.[answerDraftKey(messageId, item.index)]?.unsureSince ??
+              null;
+            return (
+              item.settlement === null &&
+              since !== null &&
+              (since.store !== baseline.store || since.epoch !== baseline.epoch)
+            );
+          })
+          .map((item) => answerDraftKey(messageId, item.index))
+          .join("\n");
+  useEffect(() => {
+    if (resynced.length === 0) return;
+    for (const key of resynced.split("\n")) {
+      const latest = useBotDraftsStore.getState().answers[botId]?.[key];
+      if (latest !== undefined) {
+        setAnswer(botId, key, { ...latest, sent: null, unsureSince: null });
+      }
+    }
+  }, [botId, resynced, setAnswer]);
+  // A send the bot's host refused as settled already holds its answers until
+  // one of its questions shows settled here; those move or are spent as
+  // above. Any of its questions still open go back to edit, and where one
+  // held an answer of the person's the box says the send failed: sent again,
+  // it is not refused. Said where the box already says who answered first,
+  // the failure goes under that line (`noticeBox`).
+  const released =
+    messageId === null
+      ? ""
+      : [
+          ...new Set(
+            cardQuestions.flatMap((item) => {
+              const held =
+                drafts?.[answerDraftKey(messageId, item.index)]
+                  ?.heldForSettlement ?? null;
+              return held === null ? [] : [held];
+            }),
+          ),
+        ]
+          .flatMap((held) => {
+            const keys = held.split("\n");
+            const items = cardQuestions.filter((item) =>
+              keys.includes(answerDraftKey(messageId, item.index)),
+            );
+            return items.every((item) => item.settlement === null)
+              ? []
+              : items
+                  .filter((item) => item.settlement === null)
+                  .map((item) => answerDraftKey(messageId, item.index));
+          })
+          .join("\n");
+  useEffect(() => {
+    if (released.length === 0 || messageId === null) return;
+    const severalOf = new Map(
+      question.questions.map((item, index) => [
+        answerDraftKey(messageId, index),
+        item.multiSelect === true,
+      ]),
+    );
+    const given: string[] = [];
+    for (const key of released.split("\n")) {
+      const latest = useBotDraftsStore.getState().answers[botId]?.[key];
+      if (latest === undefined || latest.heldForSettlement === null) continue;
+      setAnswer(botId, key, { ...latest, sent: null, heldForSettlement: null });
+      if (draftText(latest, severalOf.get(key) === true) !== null) {
+        given.push(key);
+      }
+    }
+    if (given.length > 0 && box !== null) {
+      noticeBox(botId, box, { kind: "answer-failed", keys: given });
+    }
+  }, [botId, box, messageId, noticeBox, question, released, setAnswer]);
   const keyOf = (index: number): string | null =>
     messageId === null ? null : answerDraftKey(messageId, index);
+  // A new send takes back what the box said of an earlier one that failed,
+  // and only that; one that fails while an answer of it is still on the card
+  // says so there.
+  const sending = (): void => {
+    if (box === null) return;
+    const said = useBotDraftsStore.getState().boxNotices[botId]?.[box];
+    if (said !== undefined && said.kind !== "moved") {
+      noticeBox(botId, box, withoutAnswerFailure(said));
+    }
+  };
+  const failed = (keys: ReadonlyArray<string>): void => {
+    if (box !== null) noticeBox(botId, box, { kind: "answer-failed", keys });
+  };
   return (
     <QuestionCard
       asker={botTitle}
@@ -534,25 +1087,97 @@ function BotQuestionCard(props: {
           ? null
           : (index, draft) => {
               const key = keyOf(index);
-              if (key !== null) setAnswer(botId, key, draft);
+              if (key !== null) {
+                setAnswer(botId, key, {
+                  ...draft,
+                  unsureSince: null,
+                  heldForSettlement: null,
+                });
+              }
             }
       }
       onAnswer={(given) => {
         const key = keyOf(given.questionIndex);
         if (messageId === null || key === null || answer === null) return;
-        answer(messageId, given).catch(() => {
+        sending();
+        answer(messageId, given).catch((error: unknown) => {
           const latest = useBotDraftsStore.getState().answers[botId]?.[key];
-          if (latest !== undefined) {
-            setAnswer(botId, key, { ...latest, sent: null });
+          if (latest === undefined) return;
+          if (settledFirst(error)) {
+            setAnswer(botId, key, { ...latest, heldForSettlement: key });
+            return;
           }
+          setAnswer(botId, key, { ...latest, sent: null });
+          failed([key]);
         });
       }}
-      onDiscuss={
-        messageId === null || discuss === null
+      onAnswerAll={
+        // A card of one question keeps its own Submit and Skip, and `answer`.
+        answerAll === null ||
+        messageId === null ||
+        baseline === null ||
+        question.questions.length < 2
           ? null
-          : (index, draft) => {
-              discuss(messageId, draft);
-              setAnswer(botId, answerDraftKey(messageId, index), null);
+          : (entries) => {
+              const sentUnder = baseline;
+              const text = botQuestionAnswersText(
+                entries.map((entry) => {
+                  const item = cardQuestions.find(
+                    (candidate) => candidate.index === entry.questionIndex,
+                  );
+                  return {
+                    questionIndex: entry.questionIndex,
+                    question: item?.text ?? "",
+                    answer:
+                      entry.skipped || item === undefined
+                        ? null
+                        : draftText(item.draft, item.several),
+                    skipped: entry.skipped,
+                  };
+                }),
+              );
+              sending();
+              answerAll(messageId, { entries, text }).catch(
+                (error: unknown) => {
+                  const keys = entries.map((entry) =>
+                    answerDraftKey(messageId, entry.questionIndex),
+                  );
+                  const current =
+                    useBotDraftsStore.getState().answers[botId] ?? {};
+                  if (settledFirst(error)) {
+                    const held = keys.join("\n");
+                    for (const key of keys) {
+                      const latest = current[key];
+                      if (latest !== undefined) {
+                        setAnswer(botId, key, {
+                          ...latest,
+                          heldForSettlement: held,
+                        });
+                      }
+                    }
+                    return;
+                  }
+                  const unsure = mayHaveReachedHost(error);
+                  // The person's own answers, which the failure names: an
+                  // untouched question went as skipped, and nothing of theirs
+                  // is on its card to send again.
+                  const kept: string[] = [];
+                  for (const entry of entries) {
+                    const key = answerDraftKey(messageId, entry.questionIndex);
+                    const latest = current[key];
+                    if (latest === undefined) continue;
+                    if (!entry.skipped) kept.push(key);
+                    setAnswer(
+                      botId,
+                      key,
+                      unsure
+                        ? { ...latest, unsureSince: sentUnder }
+                        : { ...latest, sent: null },
+                    );
+                  }
+                  if (kept.length > 0) failed(kept);
+                },
+              );
             }
       }
     />
@@ -584,7 +1209,8 @@ function memberReplyInThread(
  * reply and any other row where the bot's host names that row among
  * its thread anchors. A direct reply whose host does not opens the thread
  * under the post it answers, with no line here; any other row then takes
- * none.
+ * none. `thread` is the row's action for it, which reads "Open thread" once
+ * the thread it opens is listed.
  */
 function botRowThread(
   message: ChatMessageModel,
@@ -592,6 +1218,7 @@ function botRowThread(
 ): {
   readonly replyInThread: (() => void) | null;
   readonly threadLine: ChatBotThreadLine | null;
+  readonly thread: RowThreadAction | null;
 } {
   const anchorKind = botRowThreadAnchorKind({
     announcementKind: message.announcement?.kind ?? null,
@@ -608,24 +1235,59 @@ function botRowThread(
         : null;
   }
   const open = presentation.openAnnouncementThread;
+  const listedLine =
+    anchorId === null || presentation.threadLine === null
+      ? null
+      : presentation.threadLine(anchorId);
+  const replyInThread =
+    anchorId === null || open === null
+      ? null
+      : () => open(anchorId, ownThread ? anchorKind : null);
   return {
-    replyInThread:
-      anchorId === null || open === null
+    replyInThread,
+    threadLine: ownThread ? listedLine : null,
+    thread:
+      replyInThread === null
         ? null
-        : () => open(anchorId, ownThread ? anchorKind : null),
-    threadLine:
-      !ownThread || anchorId === null || presentation.threadLine === null
-        ? null
-        : presentation.threadLine(anchorId),
+        : { open: replyInThread, listed: listedLine !== null },
   };
 }
 
 /**
+ * A row's way into its thread: "Create thread", or "Open thread" once the
+ * thread it opens is listed (`listed`).
+ */
+interface RowThreadAction {
+  readonly open: () => void;
+  readonly listed: boolean;
+}
+
+function threadActionLabel(thread: RowThreadAction): string {
+  return thread.listed ? "Open thread" : "Create thread";
+}
+
+/**
+ * The bot's picture beside its message: its mascot a size under a person's
+ * picture, in the middle of the same box, so a bot's rows and a person's
+ * keep one text column.
+ */
+function MessageBotAvatar(): ReactElement {
+  return (
+    <span className="flex size-10 shrink-0 items-center justify-center">
+      <BotAvatar size="default" />
+    </span>
+  );
+}
+
+/**
  * Slack's message frame: picture on the left, name and time on the first
- * line, and whatever the row carries under it. On a bot's row the picture
- * and the name open the bot's card.
+ * line, and whatever the row carries under it; above them, the badge of the
+ * message a reply answers (T165). On a bot's row the picture and the name
+ * open the bot's card.
  */
 function BotMessageFrame(props: {
+  /** The answered message's badge, which may draw nothing; `null` for a row that answers none. */
+  readonly replyBadge: ReactNode;
   readonly avatar: ReactNode;
   readonly name: string;
   /** A bot's row: its picture and name open its card. */
@@ -637,12 +1299,16 @@ function BotMessageFrame(props: {
   readonly testId: string;
   /** Whether the row offers its actions on hover; the post a thread opens on does not. */
   readonly hoverActions: boolean;
-  /** Opens the row's thread, from its hover actions; `null` for a row that takes none. */
-  readonly replyInThread: (() => void) | null;
+  /** Replies to the row in its own conversation's box (T166); `null` where none can. */
+  readonly reply: (() => void) | null;
+  /** The row's way into its thread, among its hover actions; `null` for a row that takes none. */
+  readonly thread: RowThreadAction | null;
   /** Retry and Edit, among the hover actions of a message the bot failed to answer. */
   readonly failed: FailedMessageActions | null;
   /** A long press that opens the row's sheet on a touch screen; `null` for a row with none. */
   readonly longPress: LongPress | null;
+  /** Shows the row in its channel, from its time; `null` leaves the time a label. */
+  readonly timeLink: (() => void) | null;
   readonly children: ReactNode;
 }): ReactElement {
   const nameClassName = "truncate text-ui-sm font-semibold text-foreground";
@@ -653,7 +1319,7 @@ function BotMessageFrame(props: {
   return (
     <div
       data-testid={props.testId}
-      className="group/message relative flex w-full gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-foreground/3"
+      className="group/message relative flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 transition-colors hover:bg-foreground/3"
       {...longPress?.handlers}
       // The click a long press ends with opened the sheet already; it does
       // not also reach what was under the finger.
@@ -667,56 +1333,110 @@ function BotMessageFrame(props: {
             }
       }
     >
-      {carded ? (
-        <BotIdentityTrigger>
-          <button
-            type="button"
-            aria-label={props.name}
-            className="self-start rounded-md focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            {props.avatar}
-          </button>
-        </BotIdentityTrigger>
-      ) : (
-        props.avatar
-      )}
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-ui-xs">
-          {carded ? (
-            <BotIdentityTrigger>
-              <button
-                type="button"
-                className={cn(
-                  nameClassName,
-                  "rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring",
-                )}
-                data-testid="bot-row-name"
-              >
-                {props.name}
-              </button>
-            </BotIdentityTrigger>
-          ) : (
-            <span className={nameClassName}>{props.name}</span>
-          )}
-          {props.sentAt === null ? null : (
-            <ChatMessageTimestamp
-              timestamp={props.sentAt}
-              separated={false}
-              instanceId={props.instanceId}
-            />
-          )}
+      {props.replyBadge}
+      <div className="flex w-full gap-2">
+        {carded ? (
+          <BotIdentityTrigger>
+            <button
+              type="button"
+              aria-label={props.name}
+              className="self-start rounded-md focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              {props.avatar}
+            </button>
+          </BotIdentityTrigger>
+        ) : (
+          props.avatar
+        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-ui-xs">
+            {carded ? (
+              <BotIdentityTrigger>
+                <button
+                  type="button"
+                  className={cn(
+                    nameClassName,
+                    "rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring",
+                  )}
+                  data-testid="bot-row-name"
+                >
+                  {props.name}
+                </button>
+              </BotIdentityTrigger>
+            ) : (
+              <span className={nameClassName}>{props.name}</span>
+            )}
+            {props.sentAt === null ? null : (
+              <RowTime
+                sentAt={props.sentAt}
+                instanceId={props.instanceId}
+                link={props.timeLink}
+              />
+            )}
+          </div>
+          {props.children}
         </div>
-        {props.children}
       </div>
       {!props.hoverActions ||
-      (props.replyInThread === null &&
+      (props.reply === null &&
+        props.thread === null &&
         (props.failed?.onRetry ?? null) === null) ? null : (
         <MessageActions
-          onReplyInThread={props.replyInThread}
+          reply={props.reply}
+          thread={props.thread}
           failed={props.failed}
         />
       )}
     </div>
+  );
+}
+
+/**
+ * A row's time; a link where it shows the row in its channel (`link`), and
+ * only while the time is drawn, so a hidden stamp leaves no empty tab stop.
+ */
+function RowTime(props: {
+  readonly sentAt: number;
+  readonly instanceId: string;
+  readonly link: (() => void) | null;
+}): ReactElement {
+  const drawn = useTimestampDrawn(props.sentAt);
+  const time = (
+    <ChatMessageTimestamp
+      timestamp={props.sentAt}
+      separated={false}
+      instanceId={props.instanceId}
+    />
+  );
+  if (props.link === null || !drawn) return time;
+  return (
+    <RowTimeLink sentAt={props.sentAt} onClick={props.link}>
+      {time}
+    </RowTimeLink>
+  );
+}
+
+/**
+ * The time as a link, named for the time it shows and for what it does. Its
+ * own leaf, as the stamp is, so the minute tick the name reads repaints only
+ * this link.
+ */
+function RowTimeLink(props: {
+  readonly sentAt: number;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}): ReactElement {
+  const time = useMessageTime(props.sentAt);
+  return (
+    <button
+      type="button"
+      aria-label={`${time}, show in channel`}
+      className="rounded-sm text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+      data-testid="bot-row-time-link"
+      onClick={props.onClick}
+    >
+      {props.children}
+    </button>
   );
 }
 
@@ -859,17 +1579,16 @@ function UnansweredLine(props: {
 }
 
 /**
- * The receipt under a reply, or under a post the bot did not answer: the
- * turn's activity and how long it took, or while it runs how long it has
- * been running, in the muted style of Slack's "3 replies"; it opens the
- * turn. Revealed while the row is hovered or the receipt has keyboard focus,
- * and hidden on a touch screen, unless `alwaysShown`.
+ * The receipt under a row of the bot, or under a post the bot did not
+ * answer: the turn's activity and how long it took, or while it runs how
+ * long it has been running, in the muted style of the row's time, as a
+ * Slack app's footer sits under its attachment; it opens the turn. Always
+ * shown, at rest and on a touch screen alike.
  */
 function TurnReceiptLine(props: {
   readonly receipt: ChatBotTurnReceipt;
-  readonly alwaysShown: boolean;
 }): ReactElement {
-  const { receipt, alwaysShown } = props;
+  const { receipt } = props;
   const label = turnReceiptLabel(receipt);
   return (
     <button
@@ -877,11 +1596,7 @@ function TurnReceiptLine(props: {
       data-testid="bot-turn-receipt"
       data-running={receipt.endedAt === null ? "true" : "false"}
       onClick={receipt.open}
-      className={cn(
-        "-ml-1 flex w-fit max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-ui-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
-        !alwaysShown &&
-          "opacity-0 group-hover/message:opacity-100 focus-visible:opacity-100 pointer-coarse:hidden",
-      )}
+      className="-ml-1 flex w-fit max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-ui-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
     >
       <span className="min-w-0 truncate">
         {label ?? <RunningFor startedAt={receipt.startedAt} />}
@@ -891,16 +1606,43 @@ function TurnReceiptLine(props: {
   );
 }
 
+/**
+ * The line a bot's row keeps for its receipt wherever the surface draws
+ * receipts. The turn behind a row is named by the host after the row has
+ * drawn, so the row holds the line's height from its first paint and the
+ * receipt fills it without moving the rows under it. A row no turn wrote
+ * keeps the line empty.
+ */
+function TurnReceiptSlot(props: {
+  readonly receipt: ChatBotTurnReceipt | null;
+}): ReactElement {
+  if (props.receipt !== null) {
+    return <TurnReceiptLine receipt={props.receipt} />;
+  }
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="bot-turn-receipt-slot"
+      className="py-0.5 text-ui-xs"
+    >
+      {"\u00A0"}
+    </div>
+  );
+}
+
 /** How long a running turn has been running, counting each second. */
-function RunningFor(props: { readonly startedAt: number }): ReactElement {
+export function RunningFor(props: {
+  readonly startedAt: number;
+}): ReactElement {
   const seconds = useElapsedSeconds(props.startedAt, 0, null);
   return <span className="tabular-nums">{formatClockDuration(seconds)}</span>;
 }
 
 /**
  * The sheet a long press on a row opens on a touch screen, which has no
- * hover to show the row's actions with: "Reply in thread" where the row
- * takes one, and on a reply "How Tracy answered", with the receipt's label.
+ * hover to show the row's actions with: Retry and Edit on a message the bot
+ * failed to answer, Reply and the thread's action where the row takes them,
+ * and on a reply "How Tracy answered", with the receipt's label.
  */
 function RowSheet(props: {
   readonly open: boolean;
@@ -908,11 +1650,16 @@ function RowSheet(props: {
   /** Who wrote the row. */
   readonly name: string;
   readonly text: string;
-  readonly replyInThread: (() => void) | null;
+  readonly reply: (() => void) | null;
+  readonly thread: RowThreadAction | null;
+  readonly failed: FailedMessageActions | null;
   readonly receipt: ChatBotTurnReceipt | null;
   readonly botTitle: string;
 }): ReactElement {
-  const { open, onOpenChange, botTitle, replyInThread, receipt } = props;
+  const { open, onOpenChange, botTitle, reply, thread, failed, receipt } =
+    props;
+  const onRetry = failed?.onRetry ?? null;
+  const onEdit = failed?.onEdit ?? null;
   // The drawer portals to <body>; re-assert the theme there, as every sheet
   // does.
   const { resolvedTheme, themePreset } = useResolvedTheme();
@@ -931,21 +1678,63 @@ function RowSheet(props: {
           <DrawerDescription>{firstLineOf(props.text) ?? ""}</DrawerDescription>
         </div>
         <div className="flex flex-col px-2 pt-1 pb-safe-bottom-gutter">
-          {replyInThread === null ? null : (
+          {onRetry === null ? null : (
             <button
               type="button"
-              data-testid="bot-reply-sheet-reply-in-thread"
+              data-testid="bot-reply-sheet-retry"
+              className={cn(itemClassName, "disabled:opacity-50")}
+              disabled={failed?.retrying === true}
+              onClick={() => {
+                onOpenChange(false);
+                onRetry();
+              }}
+            >
+              <RotateCcw aria-hidden="true" className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">Retry</span>
+            </button>
+          )}
+          {onEdit === null ? null : (
+            <button
+              type="button"
+              data-testid="bot-reply-sheet-edit"
               className={itemClassName}
               onClick={() => {
                 onOpenChange(false);
-                replyInThread();
+                onEdit();
               }}
             >
-              <MessageSquareText
-                aria-hidden="true"
-                className="size-4 shrink-0"
-              />
-              <span className="min-w-0 truncate">Reply in thread</span>
+              <Pencil aria-hidden="true" className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">Edit</span>
+            </button>
+          )}
+          {reply === null ? null : (
+            <button
+              type="button"
+              data-testid="bot-reply-sheet-reply"
+              className={itemClassName}
+              onClick={() => {
+                onOpenChange(false);
+                reply();
+              }}
+            >
+              <Reply aria-hidden="true" className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">Reply</span>
+            </button>
+          )}
+          {thread === null ? null : (
+            <button
+              type="button"
+              data-testid="bot-reply-sheet-thread"
+              className={itemClassName}
+              onClick={() => {
+                onOpenChange(false);
+                thread.open();
+              }}
+            >
+              <ThreadActionIcon thread={thread} className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">
+                {threadActionLabel(thread)}
+              </span>
             </button>
           )}
           {receipt === null ? null : (
@@ -972,18 +1761,19 @@ function RowSheet(props: {
 
 /**
  * Slack's message actions, floating at the row's top right while it is
- * hovered or one of them has keyboard focus; always shown on a touch screen,
- * which has no hover.
+ * hovered or one of them has keyboard focus. A touch screen has no hover,
+ * so its rows show no actions at rest and offer them on a long press.
  */
 function MessageActions(props: {
-  readonly onReplyInThread: (() => void) | null;
+  readonly reply: (() => void) | null;
+  readonly thread: RowThreadAction | null;
   readonly failed: FailedMessageActions | null;
 }): ReactElement {
-  const { onReplyInThread, failed } = props;
+  const { reply, thread, failed } = props;
   return (
     <div
       data-testid="bot-message-actions"
-      className="pointer-events-none absolute top-1 right-2 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100"
+      className="pointer-events-none absolute top-1 right-2 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
     >
       {failed === null || failed.onRetry === null ? null : (
         <>
@@ -1007,17 +1797,38 @@ function MessageActions(props: {
           )}
         </>
       )}
-      {onReplyInThread === null ? null : (
+      {reply === null ? null : (
         <MessageAction
-          label="Reply in thread"
-          testId="bot-message-reply-in-thread"
+          label="Reply"
+          testId="bot-message-reply"
           disabled={false}
-          onClick={onReplyInThread}
+          onClick={reply}
         >
-          <MessageSquareText aria-hidden="true" />
+          <Reply aria-hidden="true" />
+        </MessageAction>
+      )}
+      {thread === null ? null : (
+        <MessageAction
+          label={threadActionLabel(thread)}
+          testId="bot-message-thread"
+          disabled={false}
+          onClick={thread.open}
+        >
+          <ThreadActionIcon thread={thread} className={undefined} />
         </MessageAction>
       )}
     </div>
+  );
+}
+
+function ThreadActionIcon(props: {
+  readonly thread: RowThreadAction;
+  readonly className: string | undefined;
+}): ReactElement {
+  return props.thread.listed ? (
+    <MessageSquareText aria-hidden="true" className={props.className} />
+  ) : (
+    <MessageSquarePlus aria-hidden="true" className={props.className} />
   );
 }
 
@@ -1075,6 +1886,8 @@ const ANNOUNCEMENT_LABELS: Readonly<Record<BotAnnouncementKind, string>> = {
   automation: "Automation created",
   "bot-created": "New bot",
   policy: "Policy change",
+  // Rows a released host wrote before announcements stopped asking; no
+  // current host writes one.
   question: "Question",
 };
 
@@ -1193,7 +2006,7 @@ const THREAD_LINE_STACK_MAX = 3;
 /**
  * Whether a post's thread has something for its line to show: a reply, or
  * the bot answering in it now. Before that the thread is reached through
- * the row's "Reply in thread" action.
+ * the row's thread action.
  */
 function threadStarted(
   line: ChatBotThreadLine | null,
@@ -1293,6 +2106,8 @@ function ThreadLineCount(props: {
           count={unreadCount}
           size="xs"
           testId="bot-thread-unread-count"
+          corner={null}
+          noun="unread"
         />
       )}
       {replies === 0 ? null : (

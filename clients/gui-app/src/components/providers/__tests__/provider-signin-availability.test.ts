@@ -85,10 +85,51 @@ describe("providerSignInUnavailableHint", () => {
       "sign-in",
     );
     expect(hint).toContain("does not support browser sign-in");
-    expect(hint).toContain("Account tab");
+    expect(hint).toContain("own CLI");
+    expect(hint).not.toContain("API key");
     expect(hint).not.toContain("above");
     expect(hint).not.toContain("local host");
   });
+
+  it.each([
+    {
+      providerId: "amp",
+      name: "Amp",
+      usage: false,
+      tab: "Account",
+    },
+    {
+      providerId: "kiro",
+      name: "Kiro",
+      usage: true,
+      tab: "Account",
+    },
+  ] as const)(
+    "names $tab when $name has no browser sign-in and a key",
+    ({ providerId, name, usage, tab }) => {
+      const hint = providerSignInUnavailableHint(
+        providerState({
+          providerId,
+          apiKey: { supported: true, configured: false, source: null },
+          loginCapability: null,
+          nativeCapabilities: {
+            supportedTabs: usage
+              ? ["general", "env", "usage"]
+              : ["general", "env"],
+            mcp: null,
+            plugins: null,
+            skills: null,
+            modelProviders: null,
+          },
+        }),
+        true,
+        "sign-in",
+      );
+      expect(hint).toBe(
+        `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on ${tab}.`,
+      );
+    },
+  );
 
   it("treats an empty-but-non-null oauthArgs as sign-in capable, not as no sign-in", () => {
     // The ACP-authenticate shape (antigravity): no `terminalLogin`, and a
@@ -230,13 +271,37 @@ describe("providerSignInUnavailableHint", () => {
   });
 
   it.each([
-    { providerId: "amp", name: "Amp", apiKeySupported: true },
-    { providerId: "kiro", name: "Kiro", apiKeySupported: true },
-    { providerId: "hermes", name: "Hermes Agent", apiKeySupported: false },
-    { providerId: "kilocode", name: "Kilo Code", apiKeySupported: false },
+    {
+      providerId: "amp",
+      name: "Amp",
+      apiKeySupported: true,
+      usage: false,
+      tab: "Account",
+    },
+    {
+      providerId: "kiro",
+      name: "Kiro",
+      apiKeySupported: true,
+      usage: true,
+      tab: "Account",
+    },
+    {
+      providerId: "hermes",
+      name: "Hermes Agent",
+      apiKeySupported: false,
+      usage: true,
+      tab: null,
+    },
+    {
+      providerId: "kilocode",
+      name: "Kilo Code",
+      apiKeySupported: false,
+      usage: false,
+      tab: null,
+    },
   ] as const)(
-    "points $providerId at both model pickers and only supported Account credentials",
-    ({ providerId, name, apiKeySupported }) => {
+    "points $providerId at both model pickers and only its key tab",
+    ({ providerId, name, apiKeySupported, usage, tab }) => {
       const state = providerState({
         providerId,
         apiKey: {
@@ -252,6 +317,15 @@ describe("providerSignInUnavailableHint", () => {
           remoteSafe: null,
           selfOpensBrowser: null,
         },
+        nativeCapabilities: {
+          supportedTabs: usage
+            ? ["general", "env", "usage"]
+            : ["general", "env"],
+          mcp: null,
+          plugins: null,
+          skills: null,
+          modelProviders: null,
+        },
       });
       const terminalHint = `${name} is signed in from a terminal. Open its model picker in a chat or on the start page and use the terminal sign-in there.`;
       for (const isSelectedHostLocal of [true, false]) {
@@ -260,14 +334,11 @@ describe("providerSignInUnavailableHint", () => {
           isSelectedHostLocal,
           "sign-in",
         );
-        if (apiKeySupported) {
-          expect(hint).toBe(
-            `${terminalHint} Or set an API key on the Account tab.`,
-          );
+        if (tab !== null) {
+          expect(hint).toBe(`${terminalHint} Or set an API key on ${tab}.`);
         } else {
           expect(hint).toBe(terminalHint);
           expect(hint).not.toContain("API key");
-          expect(hint).not.toContain("Account tab");
         }
       }
     },

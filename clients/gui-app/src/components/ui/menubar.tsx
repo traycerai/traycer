@@ -2,6 +2,7 @@ import type { ComponentProps } from "react";
 import { Menubar as Primitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 export function Menubar(props: ComponentProps<typeof Primitive.Root>) {
   return <Primitive.Root {...props} />;
@@ -33,11 +34,13 @@ const ITEM_CLASS =
 export function MenubarContent(
   props: ComponentProps<typeof Primitive.Content>,
 ) {
-  const { className, collisionPadding, ...rest } = props;
+  const { className, collisionPadding, ref, ...rest } = props;
   const insets = useSafeAreaCollisionPadding();
+  const contentRef = useOverlayDragSuppressionRef(ref);
   return (
     <Primitive.Portal>
       <Primitive.Content
+        ref={contentRef}
         align="start"
         sideOffset={0}
         collisionPadding={collisionPadding ?? insets}

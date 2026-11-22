@@ -127,7 +127,7 @@ export function useChatSetupFailureRestoreDriver(
         "Setup failed before the first message could run.",
         undefined,
         {
-          title: "Workspace setup failed",
+          title: "Folder setup failed",
           message: "Setup failed before the first message could run.",
           code: null,
           source: "Chat setup",

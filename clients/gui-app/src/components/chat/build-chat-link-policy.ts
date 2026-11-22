@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { QueryClient } from "@tanstack/react-query";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -21,6 +22,10 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
+import {
+  fromTracyTranscript,
+  type TracyTranscriptOrigin,
+} from "@/lib/tab-navigation/intents";
 import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -93,11 +98,20 @@ export interface ChatLinkPolicyDeps {
   readonly workspaceClient: HostClient<HostRpcRegistry> | null;
   readonly navigate: UseNavigateResult<string>;
   /**
+   * The Tracy transcript the links are drawn in, taken when the policy is
+   * built; a link that opens another task carries it, so the task has a way
+   * back to Tracy. `null` everywhere else.
+   */
+  readonly tracyOrigin: TracyTranscriptOrigin | null;
+  /**
    * The one tile-open seam (C1). The policy stays pure - the provider hands
    * in `useEpicTileNavigation().openTile` - and every link open here is a
    * single-click gesture, so the placement setting decides where it lands.
    */
-  readonly openTile: (intent: TileOpenIntent) => void;
+  readonly openTile: (
+    intent: TileOpenIntent,
+    provenance: NestedFocusProvenance,
+  ) => void;
 }
 
 /**
@@ -263,7 +277,7 @@ export function openResolvedArtifact(
         nodeId: artifact.artifactId,
         fallbackHostId: resolveHostId,
         openNode: (node) => {
-          deps.openTile(chatLinkOpenIntent(deps.tabId, node));
+          deps.openTile(chatLinkOpenIntent(deps.tabId, node), "user");
         },
         onBeforeOpen: null,
         onOpened: () => {
@@ -286,15 +300,18 @@ export function openResolvedArtifact(
   // `epicId|focusArtifactId|focusedAt`).
   navigateToTabIntent(
     deps.navigate,
-    openOrFocusEpicIntent({
-      epicId: artifactEpicId,
-      focus: {
-        focusArtifactId: artifact.artifactId,
-        focusedAt: Date.now(),
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
-    }),
+    fromTracyTranscript(
+      openOrFocusEpicIntent({
+        epicId: artifactEpicId,
+        focus: {
+          focusArtifactId: artifact.artifactId,
+          focusedAt: Date.now(),
+          focusThreadId: undefined,
+          migrationSource: undefined,
+        },
+      }),
+      deps.tracyOrigin,
+    ),
     undefined,
   );
 }
@@ -416,7 +433,7 @@ function openWorkspaceFileRef(
   if (link.line !== null) {
     setWorkspaceFileRevealTarget(deps.tabId, ref.id, link.line, link.col);
   }
-  deps.openTile(chatLinkOpenIntent(deps.tabId, ref));
+  deps.openTile(chatLinkOpenIntent(deps.tabId, ref), "user");
 }
 
 /** The click's supersession token, checked when the existence probe settles. */

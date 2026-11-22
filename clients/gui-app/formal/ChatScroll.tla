@@ -43,6 +43,10 @@ CONSTANTS
     HasScrollEnd,       \* FALSE: no `scrollend` event (WebKit)
     DeferUnderFinger,   \* TRUE: a scrollTop write while a finger is down lands
                         \*   after the lift (not iOS 27: it applies at once)
+    DirtyFrameWrites,   \* TRUE: a write issued in a frame whose scrollable size
+                        \*   changed may not hold when that frame renders: it
+                        \*   lands, reverts, clamps or lands a frame late
+                        \*   (iOS 26.5 WebKit, the send-6 trace)
     HideKinds,          \* subset of {"intact", "collapse"}: a retained in-pane
                         \*   chat is visibility:hidden (geometry intact); a
                         \*   top-level pane is display:none (scrollTop reset)
@@ -58,7 +62,8 @@ CONSTANTS
     Fixes,              \* subset of {"nav", "toward", "restore", "pill", "cancel",
                         \*   "paint", "supersede", "arrive", "reach", "live",
                         \*   "fling", "evidence", "nested", "fallen", "depart", "keep",
-                        \*   "padend", "turnguard"; "turnclear" is rejected},
+                        \*   "padend", "turnguard"; "turnclear" is rejected;
+                        \*   "layouthold" is proposed, "holdnowindow" rejected},
                         \*   with at most one estimate-hold rule ("hold-init",
                         \*   "hold-all", "hold-mvcp", "hold-release", "hold-end",
                         \*   "hold-boot"): the fixes
@@ -88,7 +93,8 @@ CONSTANTS
     WheelDirs,          \* the ways a wheel may turn
     WheelsApart,        \* each wheel waits for the scroll report before it
     AboveTailGrows, TailRemounts, Viewports, AppWrites, TailHead,
-    ReportBeforeGrowth  \* the absorbed-report scenario reports before measured growth
+    ReportBeforeGrowth, \* the absorbed-report scenario reports before measured growth
+    Sends               \* a send that voids the transcript window (SendVoid)
 
 \* Landed current-source switches: K (#3110), PressKey (#3135), A (#3138).
 \* pressDown is physical contact state and survives spending the gesture arm.
@@ -140,6 +146,10 @@ TailSnap == Snap("follow", 0, 0, 0)
 NoPend == [on |-> FALSE, row |-> 0, off |-> 0]
 NoGeo == [on |-> FALSE, s |-> 0]
 NoView == [on |-> FALSE, s |-> 0, h |-> 0, v |-> 0]
+\* The writes issued since this frame's scrollable size changed: `from` is
+\* the offset before the first of them, `to` the last one's target, `low`
+\* the lowest end the content had while they were issued.
+NoBurst == [on |-> FALSE, from |-> 0, to |-> 0, low |-> 0]
 Intent(k, row, off) == [k |-> k, row |-> row, off |-> off]
 
 VARIABLES
@@ -385,13 +395,22 @@ CommitPending(x) ==
 (***************************************************************************)
 (* The scroll node. A programmatic write cancels a native smooth scroll    *)
 (* and ends in `scrollend`. A contact may override a write, never replay it.*)
+(* A synchronous read after a write sees its target. With DirtyFrameWrites, *)
+(* a write issued in a frame whose scrollable size changed joins that       *)
+(* frame's burst, which the frame decides when it renders (Frame).          *)
 (***************************************************************************)
+BurstAfter(x, t) ==
+    IF ~(DirtyFrameWrites /\ x.frameDirty) THEN x.burst
+    ELSE IF x.burst.on THEN [x.burst EXCEPT !.to = t, !.low = Min(@, MaxS(x))]
+    ELSE [on |-> TRUE, from |-> x.s, to |-> t, low |-> MaxS(x)]
+
 Write(x, t) ==
     IF DeferUnderFinger /\ x.finger
     THEN [x EXCEPT !.touchWriteMayLand = @ \/ (x.armed.src = "touch" /\ t # x.s)]
     ELSE IF t = x.s THEN [x EXCEPT !.smooth = -1]
     ELSE [x EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
-                   !.depAt = Tr(x, t), !.armed = Carry(x, t), !.mom = TrMom(x, t), !.awayFloor = TrAwayFloor(x, t), !.lastView = ViewAfterMove(x, t, FALSE)]
+                   !.depAt = Tr(x, t), !.armed = Carry(x, t), !.mom = TrMom(x, t), !.awayFloor = TrAwayFloor(x, t), !.lastView = ViewAfterMove(x, t, FALSE),
+                   !.burst = BurstAfter(x, t)]
 
 (***************************************************************************)
 (* Promises. A LegendList command's promise is named by its token. It      *)
@@ -611,7 +630,18 @@ NewCorr(x) ==
     IN [x EXCEPT !.cgen = g, !.corr = [on |-> TRUE, gen |-> g, rgen |-> x.rgen,
                                        att |-> 0, stage |-> "none"]]
 
-StartEndCorrection(x) == CorrIssue(NewCorr(x))
+\* Proposed ("layouthold"): the latch issues no end write and queues no
+\* scrollToEnd while the send reshapes the list. Two bits: the window bit is
+\* `transcriptWindow.invalidated` (the void until the snapshot returns); the
+\* structural bit opens at a commit that changes the row sequence and closes
+\* in the first animation frame after the frame that commit rendered in
+\* (HoldClose). The rejected "holdnowindow" keeps the structural bit alone.
+WindowBit(x) == x.inval /\ "holdnowindow" \notin Fixes
+Held(x) == "layouthold" \in Fixes /\ (WindowBit(x) \/ x.holdStruct # "none")
+
+\* startEndCorrection: while held, a correction is owed and nothing is
+\* written or queued.
+StartEndCorrection(x) == IF Held(x) THEN [x EXCEPT !.owed = TRUE] ELSE CorrIssue(NewCorr(x))
 
 (***************************************************************************)
 (* The controller's reader-gesture handler (handleTimelineReaderGesture).  *)
@@ -694,6 +724,17 @@ Arrived(x) ==
     THEN [x.cand EXCEPT !.arr = TRUE] ELSE NoCand
 
 ReconcileStrictBottom(x, native, top) == ReconcileAt(x, native, top, FALSE)
+
+\* "layouthold": a bit's rising edge cancels the active correction (unless a
+\* free navigation owns the view), retires a queued end command the latch
+\* records, and owes a following reader one correction.
+HoldOpened(x) ==
+    LET x1 == SupersedeEnd(IF OwnsNav(x) THEN x ELSE CancelCorr(x), x.s)
+    IN IF x1.perm THEN [x1 EXCEPT !.owed = TRUE] ELSE x1
+OpenStructuralHold(x) ==
+    IF "layouthold" \notin Fixes THEN x
+    ELSE IF x.holdStruct = "none" THEN HoldOpened([x EXCEPT !.holdStruct = "open"])
+    ELSE [x EXCEPT !.holdStruct = "open"]
 
 \* Fixed ("followguard"): a follow the latch starts itself leaves a free
 \* reader free while a blocking gesture arm of theirs headed away from the end
@@ -904,7 +945,8 @@ ObserveLiveGeometry(x0) ==
          THEN [CancelCorr(reported) EXCEPT !.depAt = reported.s]
     ELSE LET arrived == MomArrived(reported)
              x == NotePressView(ReportAfterDeparture(MomNoted(reported))) IN
-    IF AtBottom(x) THEN ReconcileStrictBottom(x, TRUE, x.s)
+    \* "layouthold": a strict-bottom report leaves nothing owed.
+    IF AtBottom(x) THEN ReconcileStrictBottom([x EXCEPT !.owed = FALSE], TRUE, x.s)
     \* Ahead of a correction in flight: its writes only move toward the end.
     ELSE IF Unexplained(x)
          THEN LatchSetIntent(HandleReaderGesture(PublishAt(SupersedeEnd(x, x.s)), TRUE, TRUE, TRUE), FALSE)
@@ -988,6 +1030,10 @@ FollowEndIfPermitted(x0) ==
                     !.depWheel = y.armed.nested]
     ELSE IF ~y.perm \/ CorrSuppressed(y) \/ ArmBlocks(y.armed) THEN y
     ELSE StartEndCorrection(y)
+
+\* "layouthold": each bit's falling edge flushes the owed correction once
+\* neither bit is set.
+FlushOwed(x) == IF Held(x) \/ ~x.owed THEN x ELSE FollowEndIfPermitted([x EXCEPT !.owed = FALSE])
 
 \* beginOwnedEndNavigation / beginOwnedFreeNavigation and their completions
 BeginOwnedEnd(x) == NewCorr(LatchSetIntent([x EXCEPT !.armed = NoArm, !.mom = NoMom, !.headedEnd = NoHeadedEnd], TRUE))
@@ -1239,7 +1285,9 @@ MountState(store, reg, lo, hi, real, rowsVer, tok) ==
             store |-> store, reg |-> reg,
             known |-> {}, est |-> EST, pend |-> 0, ls |-> 0, jump |-> FALSE, wheelPend |-> 0,
             idleRestore |-> 0, pad |-> 0, turn |-> TRUE, depAt |-> -1, depMoved |-> FALSE, depAhead |-> FALSE, depWheel |-> FALSE,
-            boot |-> IF InitialEnd /\ follow THEN "settling" ELSE "none", runner |-> TRUE]
+            boot |-> IF InitialEnd /\ follow THEN "settling" ELSE "none", runner |-> TRUE,
+            frameDirty |-> FALSE, burst |-> NoBurst, late |-> -1,
+            inval |-> FALSE, holdStruct |-> "none", owed |-> FALSE]
         s0 == IF follow THEN MaxS(base)
               ELSE IF pendMeas.on THEN Clamp(base, Pos(base, pendMeas.row) - pendMeas.off)
               ELSE 0
@@ -1287,6 +1335,9 @@ Quiescent(x) ==
     /\ ~x.settling /\ ~x.structUnsettled
     /\ ~x.finger /\ x.flingDir = 0 /\ ~x.dragging /\ x.wheelPend = 0
     /\ x.pad = 0 /\ x.boot # "settling"
+    \* A voided window waiting for its snapshot, a frame still to render, a
+    \* write still to land late, a layout hold still to close.
+    /\ ~x.inval /\ ~x.frameDirty /\ ~x.burst.on /\ x.late = -1 /\ x.holdStruct = "none"
     /\ \A i \in x.lo..x.hi : InWindow(x, i) => x.sz[i] = x.real[i]
     \* A saved row still loading is in flight: the snapshot's older rows are
     \* on their way, and the windowed line demands the owning turn.
@@ -1324,7 +1375,8 @@ Init ==
                  pill |-> Pills, hide |-> Hides, remount |-> Remounts, jump |-> Jumps,
                  nested |-> NestedWheels, unscrolled |-> UnscrolledWheels, pad |-> Pads,
                  turnEnd |-> TurnEnds, relayout |-> Relayouts, idleShrink |-> IdleShrinks, cycle |-> Cycles, aboveTail |-> AboveTailGrows,
-                 tailRemount |-> TailRemounts, viewport |-> Viewports, appWrite |-> AppWrites]
+                 tailRemount |-> TailRemounts, viewport |-> Viewports, appWrite |-> AppWrites,
+                 send |-> Sends]
     /\ last = "Init"
 
 Spend(k) == budget' = [budget EXCEPT ![k] = @ - 1]
@@ -1423,10 +1475,41 @@ AppendRow ==
     /\ w.inputMove = "none"
     /\ LET x1 == [w EXCEPT !.hi = @ + 1, !.rowsVer = @ + 1, !.settling = TRUE,
                            !.hydFx = TRUE, !.structUnsettled = TRUE,
-                           !.sz[w.hi + 1] = w.est]
-       IN w' = FollowEndIfPermitted(ReEstimate(x1, DataPass))
+                           !.sz[w.hi + 1] = w.est, !.frameDirty = @ \/ DirtyFrameWrites]
+       IN w' = FollowEndIfPermitted(OpenStructuralHold(ReEstimate(x1, DataPass)))
     /\ Spend("append") /\ last' = "AppendRow"
     /\ UNCHANGED <<intent, flags>>
+
+\* A send voids the transcript window until its snapshot returns
+\* (`invalidated`); for that time the content carries the sent row as a
+\* skeleton at the list's estimate. In the model the skeleton is that row
+\* appended at its estimate, so its inflate is a key-sequence commit (the
+\* real height arrives with Measure), and the snapshot's return is a re-key
+\* commit that changes no geometry.
+SendVoid ==
+    /\ w.mounted /\ w.turn /\ Can("send") /\ w.hi < R /\ ~w.inval
+    /\ w.inputMove = "none"
+    /\ LET x1 == [w EXCEPT !.hi = @ + 1, !.rowsVer = @ + 1, !.settling = TRUE,
+                           !.hydFx = TRUE, !.structUnsettled = TRUE,
+                           !.sz[w.hi + 1] = w.est, !.inval = TRUE,
+                           !.frameDirty = @ \/ DirtyFrameWrites]
+           x2 == ReEstimate(x1, DataPass)
+           \* The window setter runs before the structural one.
+           x3 == IF "layouthold" \in Fixes /\ WindowBit(x2) THEN HoldOpened(x2) ELSE x2
+       IN w' = FollowEndIfPermitted(OpenStructuralHold(x3))
+    /\ Spend("send") /\ last' = "SendVoid"
+    /\ UNCHANGED <<intent, flags>>
+
+\* The snapshot returns: the window bit clears in the same commit that opens
+\* the structural bit, so nothing is flushed here.
+SnapshotReturn ==
+    /\ w.mounted /\ w.inval
+    /\ LET x1 == [w EXCEPT !.inval = FALSE, !.rowsVer = @ + 1, !.settling = TRUE,
+                           !.hydFx = TRUE, !.structUnsettled = TRUE,
+                           !.frameDirty = @ \/ DirtyFrameWrites]
+       IN w' = FollowEndIfPermitted(OpenStructuralHold(ReEstimate(x1, DataPass)))
+    /\ last' = "SnapshotReturn"
+    /\ UNCHANGED <<intent, flags, budget>>
 
 \* An older row arrives above (a snapshot that grows after mount). MVCP's
 \* data channel keeps the visible rows still.
@@ -1434,14 +1517,14 @@ PrependRow ==
     /\ w.mounted /\ Can("prepend") /\ w.lo > 1
     /\ LET x1 == [w EXCEPT !.lo = @ - 1, !.rowsVer = @ + 1, !.settling = TRUE,
                            !.hydFx = TRUE, !.structUnsettled = TRUE,
-                           !.sz[w.lo - 1] = w.est]
+                           !.sz[w.lo - 1] = w.est, !.frameDirty = @ \/ DirtyFrameWrites]
            x2 == IF Measurable(x1)
                  THEN [x1 EXCEPT !.s = @ + x1.sz[w.lo - 1], !.depAt = Tr(x1, x1.s + x1.sz[w.lo - 1]),
                                  !.armed = TrArm(x1, x1.s + x1.sz[w.lo - 1]),
                                  !.mom = TrMom(x1, x1.s + x1.sz[w.lo - 1]), !.awayFloor = TrAwayFloor(x1, x1.s + x1.sz[w.lo - 1]),
                                  !.lastView = ViewAfterMove(x1, x1.s + x1.sz[w.lo - 1], FALSE)]
                  ELSE x1
-       IN w' = FollowEndIfPermitted(ReEstimate(x2, DataPass))
+       IN w' = FollowEndIfPermitted(OpenStructuralHold(ReEstimate(x2, DataPass)))
     /\ Spend("prepend") /\ last' = "PrependRow"
     /\ UNCHANGED <<intent, flags>>
 
@@ -1520,10 +1603,20 @@ SettleFrames ==
 
 \* The timeline's structural settle: scrollHeight held still for two frames
 \* with no end correction outstanding.
+\* The structural hold closes in the settle loop's first frame, before its
+\* first read, so the settle comes after it.
 StructSettle ==
-    /\ w.mounted /\ w.structUnsettled /\ w.pendEnd = 0
+    /\ w.mounted /\ w.structUnsettled /\ w.pendEnd = 0 /\ w.holdStruct = "none"
     /\ w' = FollowEndIfPermitted([w EXCEPT !.structUnsettled = FALSE])
     /\ last' = "StructSettle"
+    /\ UNCHANGED <<intent, flags, budget>>
+
+\* "layouthold": the structural-settle loop's first animation frame after
+\* the frame its commit rendered in closes the structural bit, then flushes.
+HoldClose ==
+    /\ w.mounted /\ w.holdStruct = "framed"
+    /\ w' = FlushOwed([w EXCEPT !.holdStruct = "none"])
+    /\ last' = "HoldClose"
     /\ UNCHANGED <<intent, flags, budget>>
 
 \* The hydration retry (a passive effect on every rows change).
@@ -1550,7 +1643,7 @@ ResizeObserved ==
 \* model's sizes, so the pad opens at the environment's choice.
 PadOpen ==
     /\ w.mounted /\ w.turn /\ Measurable(w) /\ Can("pad") /\ w.pad = 0
-    /\ LET x1 == [w EXCEPT !.pad = 2, !.ro = TRUE]
+    /\ LET x1 == [w EXCEPT !.pad = 2, !.ro = TRUE, !.frameDirty = @ \/ DirtyFrameWrites]
        IN /\ w' = x1
           \* A free reader's landing on the strict bottom that the pad moves
           \* the end on from before any report sees it is no arrival (Measure).
@@ -1574,6 +1667,8 @@ PadCycle ==
        IN /\ t # w.s
           /\ w' = [w EXCEPT !.s = t, !.dirty = TRUE, !.ro = TRUE,
                             !.smooth = -1, !.send = HasScrollEnd,
+                            !.frameDirty = @ \/ DirtyFrameWrites,
+                            !.burst = IF @.on THEN [@ EXCEPT !.low = Min(@, t)] ELSE @,
                             !.depAt = IF "padannounce" \in Fixes THEN Tr(w, t) ELSE @,
                             !.armed = IF "padannounce" \in Fixes THEN RangeArm(w, t) ELSE @,
                             !.mom = IF "padannounce" \in Fixes THEN TrMom(w, t) ELSE @,
@@ -1584,7 +1679,8 @@ PadCycle ==
 
 PadReset ==
     /\ w.pad # 0
-    /\ LET x1 == [w EXCEPT !.pad = 0, !.ro = TRUE]
+    /\ LET x0 == [w EXCEPT !.pad = 0, !.ro = TRUE, !.frameDirty = @ \/ DirtyFrameWrites]
+           x1 == [x0 EXCEPT !.burst = IF @.on THEN [@ EXCEPT !.low = Min(@, MaxS(x0))] ELSE @]
            t == Clamp(x1, w.s)
            x2 == IF t = w.s THEN x1
                  ELSE [x1 EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
@@ -1815,8 +1911,38 @@ CorrFrame ==
             ELSE LET x1 == ViewRead([w EXCEPT !.corr.stage = "none"]) IN
                  IF "ledgermaint" \in Fixes /\ Unexplained(x1)
                  THEN PublishReadDeparture(x1)
-                 ELSE IF ~Measurable(x1) \/ AtBottom(x1) THEN CancelCorr(x1) ELSE CorrIssue(x1)
+                 ELSE IF ~Measurable(x1) \/ AtBottom(x1) THEN CancelCorr(x1)
+                 \* "layouthold": the reissue is gated as the first issue is.
+                 ELSE IF Held(x1) THEN [CancelCorr(x1) EXCEPT !.owed = TRUE]
+                 ELSE CorrIssue(x1)
     /\ last' = "CorrFrame"
+    /\ UNCHANGED <<intent, flags, budget>>
+
+\* A frame renders. With DirtyFrameWrites, the burst a size change exposed
+\* is decided here: it lands as issued; reverts to the offset before it;
+\* clamps to the lowest end the content had while it was issued; or reverts
+\* now and lands its last target at the next frame. A write the previous
+\* frame left to land late lands now, over this frame's. The browser
+\* announces none of this, so the latch's ledger and references stay as the
+\* code left them. The structural hold's commit has now rendered.
+FrameOutcomes == {"land", "revert", "clamp", "late"}
+FrameLabels == {"Frame(" \o o \o ")" : o \in FrameOutcomes}
+Frame(o) ==
+    /\ w.mounted
+    /\ w.frameDirty \/ w.burst.on \/ w.late # -1 \/ w.holdStruct = "open"
+    /\ o = "land" \/ w.burst.on
+    /\ LET b == w.burst
+           own == CASE o \in {"revert", "late"} -> Clamp(w, b.from)
+                    [] o = "clamp" -> Clamp(w, Min(w.s, b.low))
+                    [] OTHER -> w.s
+           t == IF w.late # -1 THEN Clamp(w, w.late) ELSE own
+       IN w' = [w EXCEPT !.s = t, !.dirty = @ \/ t # w.s,
+                         !.smooth = IF t # w.s THEN -1 ELSE @,
+                         !.send = IF t # w.s THEN HasScrollEnd ELSE @,
+                         !.frameDirty = FALSE, !.burst = NoBurst,
+                         !.late = IF o = "late" THEN b.to ELSE -1,
+                         !.holdStruct = IF @ = "open" THEN "framed" ELSE @]
+    /\ last' = "Frame(" \o o \o ")"
     /\ UNCHANGED <<intent, flags, budget>>
 
 (***************************************************************************)
@@ -2217,7 +2343,8 @@ LedgerNext ==
            ELSE IF last' = "TouchEnd" /\ w'.liftLanding THEN -1
            ELSE IF "liftledger" \in Fixes /\ last' = "TouchEnd" /\ ~w.silent THEN w'.s
            ELSE IF w'.rgen # w.rgen THEN -1
-           ELSE IF last' = "ViewportChange" THEN credited
+           \* A frame's revert, clamp or late landing is not announced.
+           ELSE IF last' = "ViewportChange" \/ last' \in FrameLabels THEN credited
            ELSE IF led = -1 \/ ReaderMoved(last') THEN credited
            ELSE IF AtBottom(w') THEN w'.s
            ELSE (IF AtBottom(w) THEN w.s ELSE credited) + w'.s - w.s
@@ -2226,6 +2353,7 @@ Steps ==
     \/ Grow \/ AboveTailGrow \/ \E k \in {"remount", "recycle", "empty", "unknown-row"} : TailBlockChange(k)
     \/ \E v \in {1, 2, 3} : ViewportChange(v)
     \/ IdleTailShrink \/ IdleTailRegrow \/ AppendRow \/ PrependRow \/ \E i \in Rows : Measure(i) \/ AverageJump
+    \/ SendVoid \/ SnapshotReturn \/ \E o \in FrameOutcomes : Frame(o) \/ HoldClose
     \/ SettleFrames \/ StructSettle \/ HydrationEffect \/ ResizeObserved
     \/ PadOpen \/ PadReset \/ PadCycle \/ TurnEnd \/ BootSettle \/ Relayout
     \/ LibReady \/ LibReadyTimeout \/ LibFinish \/ SmoothStep
@@ -2337,6 +2465,8 @@ TypeOK ==
     /\ w.wheelPend \in {-1, 0, 1}
     /\ w.pad \in {0, 2}
     /\ w.boot \in {"none", "settling", "kept"}
+    /\ w.holdStruct \in {"none", "open", "framed"}
+    /\ w.owed => Held(w)
 
 \* "It does not stay where I put it": at rest, the transcript shows the tail
 \* the reader asked for, the row they scrolled to, or the row they picked.

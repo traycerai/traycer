@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -13,6 +14,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { setAppSuspended } from "@/lib/notifications/notification-presence";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   mockLocalHostEntry,
@@ -43,7 +46,7 @@ import {
   hostNotificationsSubscribeClientFrameSchema,
   type HostNotificationEntry,
   type HostNotificationsCloudFeedRow,
-  type HostNotificationsCloudFeedRowV16,
+  type HostNotificationsCloudFeedRowV17,
   type HostNotificationsIndicatorStateResponse,
   type HostNotificationsMarkReadRequest,
   type HostNotificationsSubscribeClientFrame,
@@ -254,11 +257,31 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
 // Backs `useNotificationsServingHostEntry`'s relay-only fallback: `null`
 // stands for "no `RunnerHostProvider`", which the hook treats as
 // local-capable so an undeclared shell never silently acquires the fallback.
+// The shell's suspend/resume signals the provider listens to come from a real
+// `MockRunnerHost`, so a case raises them through its own emitters.
+const shellSignals = new MockRunnerHost({
+  signInUrl: "https://auth.example/sign-in",
+  authnBaseUrl: "https://auth.example",
+  localHost: null,
+  hosts: [],
+  workspaceFolderPickerPaths: undefined,
+  hasLocalHost: undefined,
+  traycerCli: undefined,
+});
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () =>
     servingHostFallbackState.hasLocalHost === null
       ? null
-      : { hasLocalHost: servingHostFallbackState.hasLocalHost },
+      : {
+          hasLocalHost: servingHostFallbackState.hasLocalHost,
+          onSystemSuspended: (
+            handler: Parameters<MockRunnerHost["onSystemSuspended"]>[0],
+          ) => shellSignals.onSystemSuspended(handler),
+          onSystemResumed: (
+            handler: Parameters<MockRunnerHost["onSystemResumed"]>[0],
+          ) => shellSignals.onSystemResumed(handler),
+        },
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -484,6 +507,9 @@ class MockStreamSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     this.requestReconnectCount += 1;
   }
@@ -529,6 +555,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,
@@ -774,6 +801,22 @@ function fatalClose(code: string): StreamCloseReason {
   };
 }
 
+function fatalCloseWithDoorReason(
+  code: string,
+  doorReason: string | null,
+): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code,
+      reason: `test close: ${code}`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      ...(doorReason === null ? {} : { doorReason }),
+    },
+  };
+}
+
 function createHostClient(
   markReadCalls: Array<HostNotificationsMarkReadRequest>,
 ): HostClient<HostRpcRegistry> {
@@ -1008,7 +1051,7 @@ function createBotHostClient(
 function botVerdictRow(
   entryId: string,
   createdAt: number,
-): HostNotificationsCloudFeedRowV16 {
+): HostNotificationsCloudFeedRowV17 {
   return {
     entryId,
     originHostId: BOT_HOST_ID,
@@ -1596,7 +1639,7 @@ describe("<NotificationsSessionProvider />", () => {
           .sessionFor("agent.activity.subscribe")
           .emitClosed(fatalClose("UNAUTHORIZED"));
       });
-      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(0);
       act(() => {
         vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       });
@@ -1620,6 +1663,51 @@ describe("<NotificationsSessionProvider />", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([
+    { method: "agent.activity.subscribe", doorReason: "enrolment_broken" },
+    { method: "agent.activity.subscribe", doorReason: "host_claimed" },
+    { method: "agent.activity.subscribe", doorReason: null },
+    { method: "notifications.subscribe", doorReason: "enrolment_broken" },
+    { method: "notifications.subscribe", doorReason: "host_claimed" },
+    { method: "notifications.subscribe", doorReason: null },
+    {
+      method: "host.notifications.feed.subscribe",
+      doorReason: "enrolment_broken",
+    },
+    { method: "host.notifications.feed.subscribe", doorReason: "host_claimed" },
+    { method: "host.notifications.feed.subscribe", doorReason: null },
+  ] as const)(
+    "does not start sign-in recovery for host-token $method close ($doorReason)",
+    async ({ method, doorReason }) => {
+      const { streamClient } = await renderHostNotificationsProvider();
+      act(() => {
+        streamClient
+          .sessionFor(method)
+          .emitClosed(fatalCloseWithDoorReason("UNAUTHORIZED", doorReason));
+      });
+      expect(mockAuth.revalidateCurrentContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["enrolment_broken", "host_claimed", null] as const)(
+    "does not start sign-in recovery for the no-pool cloud feed (%s)",
+    async (doorReason) => {
+      streamState.cloudFeedSupport = "supported";
+      const { streamClient } = await renderHostNotificationsProvider();
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toContain(
+          "host.notifications.cloudFeed.subscribe",
+        );
+      });
+      act(() => {
+        streamClient
+          .sessionFor("host.notifications.cloudFeed.subscribe")
+          .emitClosed(fatalCloseWithDoorReason("UNAUTHORIZED", doorReason));
+      });
+      expect(mockAuth.revalidateCurrentContext).not.toHaveBeenCalled();
+    },
+  );
 
   it("turns only post-baseline cloud snapshot arrivals into notification displays", async () => {
     const queryClient = new QueryClient();
@@ -2098,6 +2186,7 @@ describe("<NotificationsSessionProvider />", () => {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,
@@ -3525,6 +3614,101 @@ describe("<NotificationsSessionProvider />", () => {
     expect(markReadCalls).toEqual([]);
   });
 
+  it("withdraws the focus claim on the shell's leave edges and restores it on resume", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    servingHostFallbackState.hasLocalHost = true;
+    const { streamClient } = await renderHostNotificationsProvider();
+    const frames = streamClient.session.clientFrames;
+    const focusedOf = (index: number): boolean | null => {
+      const frame = frames.at(index);
+      return frame !== undefined && frame.kind === "presence"
+        ? frame.focused
+        : null;
+    };
+    try {
+      expect(focusedOf(0)).toBe(true);
+
+      // A call or another app interrupting audio is not the person leaving.
+      act(() => {
+        shellSignals.emitSystemSuspended("interrupted");
+      });
+      expect(frames).toHaveLength(1);
+
+      act(() => {
+        shellSignals.emitSystemSuspended("background");
+      });
+      expect(frames).toHaveLength(2);
+      expect(focusedOf(1)).toBe(false);
+
+      act(() => {
+        shellSignals.emitSystemResumed({
+          backgroundedForMs: 5_000,
+          screenLocked: false,
+        });
+      });
+      expect(frames).toHaveLength(3);
+      expect(focusedOf(2)).toBe(true);
+
+      // The desktop's screen lock or sleep is the person leaving too.
+      act(() => {
+        shellSignals.emitSystemSuspended("locked");
+      });
+      expect(frames).toHaveLength(4);
+      expect(focusedOf(3)).toBe(false);
+
+      act(() => {
+        shellSignals.emitSystemResumed({
+          backgroundedForMs: null,
+          screenLocked: false,
+        });
+      });
+      expect(frames).toHaveLength(5);
+      expect(focusedOf(4)).toBe(true);
+    } finally {
+      setAppSuspended(false);
+    }
+  });
+
+  it("keeps the focus claim withdrawn across a wake behind the lock screen until the unlock", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    servingHostFallbackState.hasLocalHost = true;
+    const { streamClient } = await renderHostNotificationsProvider();
+    const frames = streamClient.session.clientFrames;
+    const focusedOf = (index: number): boolean | null => {
+      const frame = frames.at(index);
+      return frame !== undefined && frame.kind === "presence"
+        ? frame.focused
+        : null;
+    };
+    try {
+      act(() => {
+        shellSignals.emitSystemSuspended("locked");
+      });
+      expect(frames).toHaveLength(2);
+      expect(focusedOf(1)).toBe(false);
+
+      // The machine woke but the screen is still locked: nobody is here.
+      act(() => {
+        shellSignals.emitSystemResumed({
+          backgroundedForMs: null,
+          screenLocked: true,
+        });
+      });
+      expect(frames).toHaveLength(2);
+
+      act(() => {
+        shellSignals.emitSystemResumed({
+          backgroundedForMs: null,
+          screenLocked: false,
+        });
+      });
+      expect(frames).toHaveLength(3);
+      expect(focusedOf(2)).toBe(true);
+    } finally {
+      setAppSuspended(false);
+    }
+  });
+
   it("consumes a terminal crash that arrives while that terminal is visible", async () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const { markReadCalls } = await renderHostNotificationsProvider();
@@ -3858,7 +4042,7 @@ describe("<NotificationsSessionProvider />", () => {
     );
     const emitCloudSnapshot = (
       version: number,
-      rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
+      rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>,
     ): void => {
       act(() => {
         cloudSession.emitServerFrame({

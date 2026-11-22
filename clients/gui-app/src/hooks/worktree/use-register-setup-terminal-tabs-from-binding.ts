@@ -85,25 +85,32 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
       // would alias handles when the same session opens in multiple views.
       // Dedup/convergence with the setup card's "Open terminal" is by
       // content `id`, not instance.
-      openTile({
-        ...tileIntent(
-          {
-            id: sessionId,
-            instanceId: uuidv4(),
-            type: "terminal",
-            name: setupTerminalTitle(entry),
-            titleSource: "manual",
-            hostId,
-            cwd: setupTerminalCwd(entry),
-            origin: "setup",
-          },
-          { tabId: viewTabId },
-          // Keep the owner visible while setup runs in its background tab.
-          "host",
-          "direct_ui",
-        ),
-        placement: { kind: "tab", paneId: pane.id, index: null },
-      });
+      openTile(
+        {
+          ...tileIntent(
+            {
+              id: sessionId,
+              instanceId: uuidv4(),
+              type: "terminal",
+              name: setupTerminalTitle(entry),
+              titleSource: "manual",
+              hostId,
+              cwd: setupTerminalCwd(entry),
+              origin: "setup",
+            },
+            { tabId: viewTabId },
+            // Keep the owner visible while setup runs in its background tab.
+            "host",
+            "direct_ui",
+          ),
+          placement: { kind: "tab", paneId: pane.id, index: null },
+        },
+        // A worktree binding reporting `setupState: "running"` registers this
+        // terminal; nobody clicked. The `"host"` gesture above already says the
+        // tile opens in the background, but a gesture is a disposition - it does
+        // not say who asked - so the actor is stated here instead.
+        "automatic",
+      );
     });
   }, [
     binding,

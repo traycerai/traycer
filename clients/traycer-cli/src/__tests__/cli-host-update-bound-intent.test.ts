@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command, CommanderError, Option } from "commander";
 import { buildProgram } from "../index";
+import * as cgroupRelocationModule from "../host/cgroup-relocation";
 import * as hostUpdateModule from "../commands/host-update";
 
 const loggerMock = vi.hoisted(() => ({
@@ -157,6 +158,14 @@ describe("an rc-era parser exits on --intent with nothing executed", () => {
 
 describe("the shipped parser forwards the bound intent RAW to the command body", () => {
   beforeEach(() => {
+    vi.spyOn(
+      cgroupRelocationModule,
+      "relocateOutOfHostCgroupIfNeeded",
+    ).mockResolvedValue({ kind: "not-needed" });
+    vi.spyOn(
+      cgroupRelocationModule,
+      "acknowledgeRelocationEntry",
+    ).mockImplementation(() => undefined);
     // Throwing rather than exiting: `runEntry` records `process.exitCode` and
     // lets the loop drain, so nothing on these paths should reach
     // `process.exit` at all - and a real exit would take the whole suite down.

@@ -1,3 +1,4 @@
+import { openBotChannelFind } from "@/lib/bots/bot-channel-find";
 import { useTileFindStore } from "@/stores/tile-find";
 
 // Canonical command surface for active-owner tile-find. Keyboard dispatch and
@@ -6,6 +7,7 @@ import { useTileFindStore } from "@/stores/tile-find";
 // re-implemented across `lib/keybindings/dispatch.ts` and the menu listener.
 
 export function openActiveTileFind(): boolean {
+  if (openBotChannelFind()) return true;
   return useTileFindStore.getState().openActiveOwner();
 }
 

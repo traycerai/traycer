@@ -5,6 +5,7 @@ import {
   useState,
   type ReactElement,
 } from "react";
+import { flushSync } from "react-dom";
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
@@ -132,6 +133,20 @@ function dockHeightFor(lines: number): number {
     DOCK_ONE_LINE_PX +
     Math.round((extra * (DOCK_EIGHT_LINES_PX - DOCK_ONE_LINE_PX)) / 7)
   );
+}
+
+/**
+ * `?dock=none`: the list is drawn with no composer dock under it
+ * (`composerOverlayHeight` 0), the page a read-only transcript, such as a bot
+ * chat's, shows.
+ */
+const NO_DOCK = params.get("dock") === "none";
+
+/** How many times the list has reported that the reader moved it. A module
+ *  counter with one stable reporter, so counting re-renders nothing. */
+let readerMovedReports = 0;
+function noteReaderMoved(): void {
+  readerMovedReports += 1;
 }
 
 const SETTINGS: ChatRunSettings = {
@@ -1208,7 +1223,9 @@ export function WindowedFixture(): ReactElement {
       insertAboveInRow: () => {
         throw new Error("legacy line only");
       },
-      hide: (kind) => setHideKind(kind),
+      // Commit in the oracle's live-read task: a later commit lets a pending
+      // wheel move the transcript between that reading and the actual hide.
+      hide: (kind) => flushSync(() => setHideKind(kind)),
       show: () => setHideKind("none"),
       remount: (sameInstance) => {
         setInstance((current) => {
@@ -1408,6 +1425,15 @@ export function WindowedFixture(): ReactElement {
       releaseRangesIn: (ms: number): void => {
         window.setTimeout(() => host.releaseRanges(), ms);
       },
+      // Answers every held range in the caller's own task: the store has the
+      // rows before this returns, so a caller that sampled the list in the
+      // same task knows what it looked like at delivery.
+      releaseRanges: (): void => host.releaseRanges(),
+      // What a surface holding a pending jump does: name the ordinal it
+      // waits on, so the store plans its hydration, and clear it with `null`.
+      holdOrdinal: (ordinal: number | null): void =>
+        handle.store.getState().requestTranscriptOrdinal(ordinal),
+      readerMovedReports: (): number => readerMovedReports,
       // A row's drawn height, and whether a placeholder drew it.
       rowHeight: (rowId: string) => {
         const node = scrollNode();
@@ -1442,6 +1468,7 @@ export function WindowedFixture(): ReactElement {
               taskId={TASK_ID}
               epicId={EPIC_ID}
               hostId={null}
+              payerHostId={null}
               messages={messages}
               transcriptWindow={transcriptWindow}
               onVisibleOrdinalRangeChange={reportVisibleRange}
@@ -1457,7 +1484,8 @@ export function WindowedFixture(): ReactElement {
               systemOverlayActive={false}
               scrollRequest={null}
               onScrollRequestSettled={null}
-              composerOverlayHeight={dockHeightFor(draftLines)}
+              composerOverlayHeight={NO_DOCK ? 0 : dockHeightFor(draftLines)}
+              onReaderMoved={noteReaderMoved}
               subagentDrillIn={subagentDrillIn}
             />
           </TileMinimapScope>

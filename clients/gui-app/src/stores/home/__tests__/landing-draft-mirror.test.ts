@@ -9,6 +9,7 @@ import type {
   IStreamSession,
   ServerFrameHandler,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { setMobileApp } from "@/lib/mobile-app";
 import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
 import {
   acquireDraftMirrorSession,
@@ -55,6 +56,7 @@ import {
   collectUnadoptedLandingDrafts,
   landingDraftIsDirty,
   landingDraftRememberSynced,
+  resumableLandingDraftId,
   freshLandingMirrorState,
   MAX_LOCAL_ADOPTED_LANDING_MIRRORS,
   useLandingDraftStore,
@@ -143,11 +145,13 @@ function frozenLandingHostDocument(
   };
 }
 
-function controlledStream(): {
+interface ControlledStream {
   readonly client: never;
   readonly started: { value: boolean };
   readonly emit: (frame: Parameters<ServerFrameHandler>[0]) => void;
-} {
+}
+
+function controlledStream(): ControlledStream {
   const started = { value: false };
   let onFrame: ServerFrameHandler | null = null;
   const session: IStreamSession = {
@@ -156,6 +160,7 @@ function controlledStream(): {
       onFrame = handler;
     },
     onStatusChange: () => undefined,
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => undefined,
     getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),
@@ -302,6 +307,29 @@ describe("landing draft host-mirror bookkeeping", () => {
       .getState()
       .setDraftContent(id, EMPTY_LANDING_DRAFT_CONTENT, { from: 1, to: 1 });
     expect(collectUnadoptedLandingDrafts().map((d) => d.id)).toEqual([id]);
+  });
+
+  it("never offers a draft opened for one host to the mirror, and keeps its host through a host document", () => {
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((draft) =>
+        draft.id === id ? { ...draft, namedHostId: "host-a" } : draft,
+      ),
+    }));
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(id, EMPTY_LANDING_DRAFT_CONTENT, { from: 1, to: 1 });
+    expect(collectUnadoptedLandingDrafts()).toEqual([]);
+    expect(
+      applyLandingHostDocument(
+        frozenLandingHostDocument(id, 1, FROZEN_CLAUDE_SETTINGS),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+    expect(
+      useLandingDraftStore.getState().drafts.find((d) => d.id === id)
+        ?.namedHostId,
+    ).toBe("host-a");
   });
 
   it("adopted drafts upsert to that host; dropLocalMirror does not host-delete", () => {
@@ -2470,6 +2498,172 @@ describe("landing draft host-mirror bookkeeping", () => {
           ).toBe(true);
         });
         expect(activateTabSpy).not.toHaveBeenCalled();
+      } finally {
+        activateTabSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("re-key moves the mobile app's resume draft onto the successor", () => {
+    const hostId = "host-landing-ultracode";
+
+    beforeEach(() => {
+      setMobileApp(true);
+    });
+
+    afterEach(() => {
+      setMobileApp(false);
+      useLandingDraftStore.setState({ resumeDraftId: null });
+    });
+
+    function openAncestorAsResume(id: string): void {
+      useLandingDraftStore.setState({
+        drafts: [
+          {
+            id,
+            content: EMPTY_LANDING_DRAFT_CONTENT,
+            selection: null,
+            lastTouchedAt: 0,
+            settings: null,
+            composerMode: "chat",
+            workspace: emptyLandingDraftWorkspaceSnapshot(),
+            ...freshLandingMirrorState(),
+            adoption: { state: "adopted", hostId },
+            origin: "own",
+            ownerHostId: hostId,
+          },
+        ],
+        activeDraftId: id,
+        resumeDraftId: id,
+      });
+    }
+
+    async function openSession(): Promise<ControlledStream> {
+      const stream = controlledStream();
+      acquireDraftMirrorSession({
+        hostId,
+        client: {
+          request: (method: string) =>
+            method === "drafts.list"
+              ? Promise.resolve({
+                  drafts: [],
+                  tombstones: [],
+                  snapshotSeq: 0,
+                  scopeId: null,
+                })
+              : Promise.reject(new Error(`unexpected ${method}`)),
+        } as never,
+        streamClient: stream.client,
+        timing: undefined,
+      });
+      await vi.waitFor(() => {
+        expect(stream.started.value).toBe(true);
+      });
+      return stream;
+    }
+
+    function emitUpsert(
+      stream: ControlledStream,
+      storeSeq: number,
+      document: DraftDocument,
+    ): void {
+      stream.emit({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        storeSeq,
+        draftId: document.draftId,
+        revision: document.revision,
+        draft: document,
+      });
+    }
+
+    function emitDelete(
+      stream: ControlledStream,
+      storeSeq: number,
+      draftId: string,
+    ): void {
+      stream.emit({
+        kind: "delete",
+        hasBinaryPayload: false,
+        storeSeq,
+        draftId,
+        revision: 1,
+      });
+    }
+
+    it("follows a successor that arrives while the ancestor row is still present", async () => {
+      const activateTabSpy = vi
+        .spyOn(tabCommandCoordinator, "activateTab")
+        .mockReturnValue(null);
+      try {
+        openAncestorAsResume("resume-old");
+        const stream = await openSession();
+
+        emitUpsert(stream, 1, {
+          ...frozenLandingHostDocument("resume-new", 1, null),
+          supersedes: "resume-old",
+        });
+        emitDelete(stream, 2, "resume-old");
+
+        await vi.waitFor(() => {
+          expect(
+            useLandingDraftStore.getState().drafts.map((d) => d.id),
+          ).toEqual(["resume-new"]);
+        });
+        expect(resumableLandingDraftId()).toBe("resume-new");
+      } finally {
+        activateTabSpy.mockRestore();
+      }
+    });
+
+    it("follows a successor whose ancestor's delete arrived first", async () => {
+      const activateTabSpy = vi
+        .spyOn(tabCommandCoordinator, "activateTab")
+        .mockReturnValue(null);
+      try {
+        openAncestorAsResume("resume-old");
+        const stream = await openSession();
+
+        emitDelete(stream, 1, "resume-old");
+        await vi.waitFor(() => {
+          expect(useLandingDraftStore.getState().drafts).toEqual([]);
+        });
+        emitUpsert(stream, 2, {
+          ...frozenLandingHostDocument("resume-new", 1, null),
+          supersedes: "resume-old",
+        });
+
+        await vi.waitFor(() => {
+          expect(resumableLandingDraftId()).toBe("resume-new");
+        });
+      } finally {
+        activateTabSpy.mockRestore();
+      }
+    });
+
+    it("keeps the resume draft when the successor supersedes some other draft", async () => {
+      const activateTabSpy = vi
+        .spyOn(tabCommandCoordinator, "activateTab")
+        .mockReturnValue(null);
+      try {
+        openAncestorAsResume("resume-old");
+        const stream = await openSession();
+
+        emitUpsert(stream, 1, {
+          ...frozenLandingHostDocument("unrelated-new", 1, null),
+          supersedes: "unrelated-old",
+        });
+
+        await vi.waitFor(() => {
+          expect(
+            useLandingDraftStore
+              .getState()
+              .drafts.some((d) => d.id === "unrelated-new"),
+          ).toBe(true);
+        });
+        expect(useLandingDraftStore.getState().resumeDraftId).toBe(
+          "resume-old",
+        );
       } finally {
         activateTabSpy.mockRestore();
       }

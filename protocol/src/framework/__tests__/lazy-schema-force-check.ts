@@ -3,6 +3,7 @@ import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../scripts/git-output-limi
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { mentionsLazySchema } from "./lazy-schema-thunk-rules-scanner";
 
 export type ForceCheck = {
   readonly refused: boolean;
@@ -142,7 +143,7 @@ export function listLazySchemaModules(
     if (!existsSync(full)) {
       continue;
     }
-    if (!readFileSync(full, "utf8").includes("lazySchema(")) {
+    if (!mentionsLazySchema(readFileSync(full, "utf8"))) {
       continue;
     }
     files.push(full);

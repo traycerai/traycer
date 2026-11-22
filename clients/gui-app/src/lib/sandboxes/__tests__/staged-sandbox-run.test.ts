@@ -1,3 +1,6 @@
+import { createPendingStageStorage } from "@/lib/sandboxes/pending-stage-storage";
+import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
+import { budgetCatalogue } from "./sandbox-catalogue-fixture";
 import {
   afterEach,
   beforeEach,
@@ -7,26 +10,18 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { QueryClient } from "@tanstack/react-query";
 import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type {
-  SandboxCreateRequest,
-  SandboxSummary,
-  SandboxVerbGesture,
-} from "@traycer/protocol/host/sandbox-control";
+  SandboxCatalogueFetchResult,
+  SandboxListFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
 } from "@traycer/protocol/host/sandbox-control";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type {
-  SandboxCreateFetchResult,
-  SandboxListFetchResult,
-} from "@traycer-clients/shared/host-client/sandbox-control";
-import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
-import { AuthService } from "@/lib/auth/auth-service";
-import { HostDirectoryService } from "@/lib/host";
+import { SANDBOX_RATE_LIMIT_FIXTURE } from "@traycer/protocol/host/__tests__/sandbox-rate-limit-fixture";
 import {
   createFailure,
   runStagedSandbox,
@@ -46,7 +41,6 @@ import {
 import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { authQueryKeys } from "@/lib/query-keys";
 import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
@@ -55,27 +49,19 @@ import {
   usePendingSandboxSendStore,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-
-const NEW_HOST_ID = "host-new";
-const SANDBOX_ID = "sbx_new";
-
-const SHAPE = {
-  os: "linux",
-  cpus: 2,
-  memoryMb: 4096,
-  diskMb: null,
-  region: "us-east",
-  idleMinutes: 30,
-  destroyAfterRestingMinutes: 4_320,
-} as const;
-
-const PERSONAL_NEW: StagedSandboxTarget = {
-  kind: "new",
-  configuration: { kind: "personal" },
-  shape: SHAPE,
-  name: "",
-  wakeString: null,
-};
+import {
+  created,
+  DIALABLE,
+  harness as baseHarness,
+  listOf,
+  NEW_HOST_ID,
+  PERSONAL_NEW,
+  row,
+  SANDBOX_ID,
+  SHAPE,
+  ScriptedDirectory,
+  type Script,
+} from "./staged-sandbox-run-harness";
 
 const TEAM_NEW: StagedSandboxTarget = {
   kind: "new",
@@ -94,152 +80,14 @@ const RESTING: StagedSandboxTarget = {
   verb: "resume",
 };
 
-function row(overrides: Partial<SandboxSummary>): SandboxSummary {
-  return sandboxSummaryFixture({
-    id: SANDBOX_ID,
-    hostId: NEW_HOST_ID,
-    ...overrides,
-  });
-}
-
-const DIALABLE: HostDirectoryEntry = {
-  hostId: NEW_HOST_ID,
-  label: "review-box",
-  kind: "remote",
-  websocketUrl: "ws://host-new.test",
-  version: null,
-  transportDialability: "dialable",
-};
-
-/** The control plane's answers, scripted per test. */
-interface Script {
-  createSandbox: (request: SandboxCreateRequest) => SandboxCreateFetchResult;
-  teamEnvironment: TeamEnvironmentFetchResult;
-  /** One list answer per read; the last repeats. */
-  lists: SandboxListFetchResult[];
-  /** One directory answer per `findById`; the last repeats. */
-  entries: Array<HostDirectoryEntry | null>;
-}
-
-const created: SandboxCreateFetchResult = {
-  kind: "ok",
-  accepted: {
-    sandboxId: SANDBOX_ID,
-    hostId: NEW_HOST_ID,
-    sandbox: row({ state: "creating" }),
-  },
-};
-
-function listOf(summary: SandboxSummary): SandboxListFetchResult {
-  return { kind: "ok", response: { sandboxes: [summary] } };
-}
-
-function scriptFor(overrides: Partial<Script>): Script {
-  return {
-    createSandbox: () => created,
-    teamEnvironment: { kind: "ok", environmentId: "env-acme" },
-    lists: [listOf(row({ state: "awake", guestConfigured: true }))],
-    entries: [DIALABLE],
-    ...overrides,
-  };
-}
-
-/** The real `AuthService`, its three sandbox reads answered by the script. */
-class ScriptedAuth extends AuthService {
-  readonly requests: SandboxCreateRequest[] = [];
-  readonly environmentReads: string[] = [];
-  listReads = 0;
-  private readonly answers: Script;
-
-  constructor(answers: Script) {
-    super({ runnerHost: createFakeRunnerHost({}) });
-    this.answers = answers;
-  }
-
-  override createSandbox(
-    request: SandboxCreateRequest,
-  ): Promise<SandboxCreateFetchResult> {
-    this.requests.push(request);
-    return Promise.resolve(this.answers.createSandbox(request));
-  }
-
-  override getTeamEnvironment(
-    teamId: string,
-  ): Promise<TeamEnvironmentFetchResult> {
-    this.environmentReads.push(teamId);
-    return Promise.resolve(this.answers.teamEnvironment);
-  }
-
-  override listSandboxes(): Promise<SandboxListFetchResult> {
-    const { lists } = this.answers;
-    const answer = lists[Math.min(this.listReads, lists.length - 1)];
-    this.listReads += 1;
-    return Promise.resolve(answer);
-  }
-}
-
-/** The real `HostDirectoryService`, its lookups answered by the script. */
-class ScriptedDirectory extends HostDirectoryService {
-  refreshes = 0;
-  lookups = 0;
-  private readonly answers: Script;
-
-  constructor(answers: Script) {
-    super({
-      runnerHost: createFakeRunnerHost({}),
-      remoteFetcher: null,
-      onRegistryPollTick: null,
-      authContextId: null,
-      credentialGeneration: null,
-      localHostIdSeeder: () => Promise.resolve(null),
-    });
-    this.answers = answers;
-  }
-
-  override refresh(): Promise<readonly HostDirectoryEntry[]> {
-    this.refreshes += 1;
-    return Promise.resolve([]);
-  }
-
-  override findById(): HostDirectoryEntry | null {
-    const { entries } = this.answers;
-    const answer = entries[Math.min(this.lookups, entries.length - 1)];
-    this.lookups += 1;
-    return answer;
-  }
-}
-
 let surfaceCount = 0;
 let surfaceKey = "";
 const directories: ScriptedDirectory[] = [];
 
 function harness(overrides: Partial<Script>, wakeResult: boolean) {
-  const script = scriptFor(overrides);
-  const auth = new ScriptedAuth(script);
-  const directory = new ScriptedDirectory(script);
-  directories.push(directory);
-  const clock = { now: 1_000_000, sleeps: 0 };
-  const wake = vi.fn<
-    (hostId: string, gesture: SandboxVerbGesture) => Promise<boolean>
-  >(() => Promise.resolve(wakeResult));
-  const deps: StagedSandboxRunDeps = {
-    auth,
-    directory,
-    queryClient: new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    }),
-    userId: null,
-    wake,
-    // An older host has no environment.status: the baseline fixtures keep their old reading.
-    readSettings: () => Promise.resolve("unsupported"),
-    now: () => clock.now,
-    sleep: (ms) => {
-      clock.now += ms;
-      clock.sleeps += 1;
-      return Promise.resolve();
-    },
-  };
-  return { auth, directory, wake, deps, clock };
+  const built = baseHarness(overrides, wakeResult, 1_000_000);
+  directories.push(built.directory);
+  return built;
 }
 
 function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
@@ -380,6 +228,46 @@ describe("runStagedSandbox creating", () => {
     );
     expect(second).toBe(first);
     expect(third).not.toBe(first);
+  });
+
+  it("reports the create's own queued rateLimit onto the stage while still waiting, and a fresh poll with none clears it", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { deps } = harness(
+      {
+        createSandbox: () => ({
+          kind: "ok",
+          accepted: {
+            sandboxId: SANDBOX_ID,
+            hostId: NEW_HOST_ID,
+            sandbox: row({ state: "creating", ...SANDBOX_RATE_LIMIT_FIXTURE }),
+          },
+        }),
+        lists: [
+          listOf(row({ state: "creating", ...SANDBOX_RATE_LIMIT_FIXTURE })),
+          listOf(row({ state: "awake", guestConfigured: true })),
+        ],
+      },
+      true,
+    );
+    const sleep = deps.sleep;
+    const seenAtEachPoll: Array<SandboxSummary["rateLimit"] | null> = [];
+    const observing: StagedSandboxRunDeps = {
+      ...deps,
+      sleep: (ms) => {
+        seenAtEachPoll.push(stageOf().rateLimit ?? null);
+        return sleep(ms);
+      },
+    };
+
+    await run(false, observing);
+
+    // Still waiting, under the vendor's quota: the queued state is on the
+    // stage for the setup line to read.
+    expect(seenAtEachPoll).toEqual([SANDBOX_RATE_LIMIT_FIXTURE.rateLimit]);
+    // The quota lifted: the next real poll clears the stale queue, not
+    // leaving the last-known wait stuck on the stage.
+    expect(stageOf().rateLimit).toBeNull();
+    expect(stageOf().phase).toBe("handoff");
   });
 });
 
@@ -830,6 +718,136 @@ describe("runStagedSandbox settling", () => {
     expect(clock.sleeps).toBe(1);
     expect(stageOf().phase).toBe("handoff");
   });
+
+  it("waits beyond the legacy deadline for a fresh 480 second provider create budget", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    vi.spyOn(auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: budgetCatalogue(480_000),
+    });
+    const sleep = deps.sleep;
+    let legacyDeadlinePhase: string | undefined;
+    let legacyDeadlineFailure: object | null | undefined;
+    await run(false, {
+      ...deps,
+      sleep: async (ms) => {
+        await sleep(ms);
+        if (clock.now - 1_000_000 === 360_000) {
+          legacyDeadlinePhase = stageOf().phase;
+          legacyDeadlineFailure = stageOf().failure;
+        }
+      },
+    });
+    expect(legacyDeadlinePhase).toBe("creating");
+    expect(legacyDeadlineFailure).toBeNull();
+    expect(clock.now - 1_000_000).toBe(480_000);
+    expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+  });
+
+  it.each([
+    ["rejects", () => Promise.reject(new Error("offline"))],
+    [
+      "answers a network error",
+      () =>
+        Promise.resolve({ kind: "network-error" as const, detail: "offline" }),
+    ],
+  ])(
+    "still sends the create and waits the 360 second floor when the fresh catalogue read %s, after reading the projected context",
+    async (_name, answer) => {
+      useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+      const { auth, deps, clock } = harness(
+        { lists: [listOf(row({ state: "creating" }))] },
+        true,
+      );
+      const preflight = vi
+        .spyOn(auth, "getSandboxCatalogue")
+        .mockImplementation(answer);
+
+      await run(false, deps);
+
+      expect(preflight).toHaveBeenCalledTimes(1);
+      expect(preflight).toHaveBeenCalledWith({
+        environmentId: null,
+        os: SHAPE.os,
+        cpus: SHAPE.cpus,
+        memoryMb: SHAPE.memoryMb,
+        diskMb: SHAPE.diskMb,
+        region: SHAPE.region,
+      });
+      expect(auth.requests).toHaveLength(1);
+      expect(clock.now - 1_000_000).toBe(STAGED_CREATE_BUDGET_MS);
+      expect(stageOf().createAttempt).toEqual({
+        budgetMs: STAGED_CREATE_BUDGET_MS,
+        startedAt: 1_000_000,
+      });
+      expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+    },
+  );
+
+  it.each([
+    [
+      "accepts a late catalogue",
+      (release: (result: SandboxCatalogueFetchResult) => void) =>
+        release({ kind: "ok", catalogue: budgetCatalogue(600_000) }),
+      "success",
+    ],
+    [
+      "accepts a late rejection",
+      (release: (result: SandboxCatalogueFetchResult) => void) =>
+        release({ kind: "network-error", detail: "offline" }),
+      "error",
+    ],
+  ] as const)(
+    "bounds a stalled catalogue preflight at 2000 ms, then creates on the 360 second floor while the shared query still %s",
+    async (_name, settle, queryStatus) => {
+      vi.useFakeTimers();
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+      try {
+        useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+        const { auth, deps, clock } = harness(
+          { lists: [listOf(row({ state: "creating" }))] },
+          true,
+        );
+        let release: (result: SandboxCatalogueFetchResult) => void = () =>
+          undefined;
+        const preflight = vi.spyOn(auth, "getSandboxCatalogue").mockReturnValue(
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+        );
+
+        const running = run(false, deps);
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(preflight).toHaveBeenCalledTimes(1);
+        expect(auth.requests).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(auth.requests).toHaveLength(1);
+        await running;
+
+        expect(clock.now - 1_000_000).toBe(STAGED_CREATE_BUDGET_MS);
+        expect(stageOf().createAttempt).toEqual({
+          budgetMs: STAGED_CREATE_BUDGET_MS,
+          startedAt: 1_000_000,
+        });
+
+        // The query was not cancelled: the late answer still lands in it.
+        settle(release);
+        await vi.advanceTimersByTimeAsync(0);
+        const [query] = deps.queryClient.getQueryCache().getAll();
+        expect(query.state.status).toBe(queryStatus);
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("times out when the budget runs out with the sandbox still on its way", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
@@ -1598,4 +1616,151 @@ describe("settleVerdict", () => {
       expect(settleVerdict(row({ state }))).toBeNull();
     },
   );
+});
+
+describe("retained create attempt", () => {
+  function retained() {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 900_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      step: "booting",
+      sendTaken: true,
+      createAttempt: { budgetMs: 480_000, startedAt: 1_000_000 },
+    });
+    onTestFinished(holdHandoffOwner(surfaceKey, null, ownerGoneOnUnmount));
+  }
+
+  it("waits for a known created row through catalogue outage under the retained bound", async () => {
+    retained();
+    useStagedSandboxStore.getState().setTarget(surfaceKey, TEAM_NEW);
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    const preflight = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockRejectedValue(new Error("offline"));
+    const environment = vi
+      .spyOn(auth, "getTeamEnvironment")
+      .mockRejectedValue(new Error("offline"));
+    await runStagedSandbox(
+      surfaceKey,
+      false,
+      { taskId: null, resume: true },
+      deps,
+    );
+    expect(preflight).not.toHaveBeenCalled();
+    expect(environment).not.toHaveBeenCalled();
+    expect(auth.requests).toEqual([]);
+    expect(clock.now).toBe(1_480_000);
+    expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+  });
+
+  it("an idempotent resend without a known row retains its bound without rereading inventory", async () => {
+    retained();
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { createdSandboxId: null, createdHostId: null });
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    const preflight = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockRejectedValue(new Error("offline"));
+    await run(false, deps);
+    expect(auth.requests).toHaveLength(1);
+    expect(preflight).not.toHaveBeenCalled();
+    expect(clock.now).toBe(1_480_000);
+  });
+
+  it("persists the post-preflight origin through the pending-stage serialized reload path", async () => {
+    const sendId = "attempt-origin";
+    surfaceKey = pendingSendSurfaceKey(sendId);
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
+    usePendingSandboxSendStore.getState().add(pendingSend({ id: sendId }));
+    onTestFinished(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+    });
+    const ownership = holdPendingSandboxSendOwnership(sendId);
+    onTestFinished(ownership.release);
+    await ownership.ready;
+    retained();
+    const storage = createPendingStageStorage();
+    const name = persistKey(STORE_KEYS.stagedSandboxSend);
+    const serialized = storage.getItem(name);
+    if (typeof serialized !== "string")
+      throw new Error("expected persisted stage");
+    useStagedSandboxStore.setState({
+      bySurface: { [surfaceKey]: { ...stageOf(), createAttempt: null } },
+    });
+    createPendingStageStorage().setItem(name, serialized);
+    await useStagedSandboxStore.persist.rehydrate();
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    clock.now = 1_200_000;
+    vi.spyOn(auth, "getSandboxCatalogue").mockRejectedValue(
+      new Error("offline"),
+    );
+    await runStagedSandbox(
+      surfaceKey,
+      false,
+      { taskId: null, resume: true },
+      deps,
+    );
+    expect(clock.now).toBe(1_480_000);
+    expect(stageOf().createAttempt).toEqual({
+      budgetMs: 480_000,
+      startedAt: 1_000_000,
+    });
+  });
+
+  it("Keep waiting resets only the driver origin while retaining the original create bound", async () => {
+    retained();
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    clock.now = 1_200_000;
+    const preflight = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockRejectedValue(new Error("offline"));
+    await run(false, deps);
+    expect(clock.now).toBe(1_680_000);
+    expect(preflight).not.toHaveBeenCalled();
+    expect(stageOf().createAttempt).toEqual({
+      budgetMs: 480_000,
+      startedAt: 1_200_000,
+    });
+  });
+
+  it("a fresh retry discards the old attempt and reads the new bound", async () => {
+    retained();
+    const { auth, deps, clock } = harness(
+      { lists: [listOf(row({ state: "creating" }))] },
+      true,
+    );
+    const preflight = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockResolvedValue({ kind: "ok", catalogue: budgetCatalogue(600_000) });
+    await run(true, deps);
+    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(clock.now).toBe(1_600_000);
+    expect(stageOf().createAttempt).toEqual({
+      budgetMs: 600_000,
+      startedAt: 1_000_000,
+    });
+  });
 });

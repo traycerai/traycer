@@ -67,6 +67,7 @@ import {
   deriveEpicSyncPillState,
   deriveEpicWriteCommandAlert,
   summarizeEpicWriteCommands,
+  type ArtifactSyncReading,
   type EpicHostDirtyState,
   type EpicSyncPillState,
   type EpicWriteCommandAlert,
@@ -593,27 +594,74 @@ const selectWriteCommandSummary = createSelector(
  * and never re-renders the pill.
  */
 export function useEpicSyncPillState(): EpicSyncPillState {
-  return useEpicStore((s) =>
-    deriveEpicSyncPillState({
-      hostTransportStatus: s.hostTransportStatus,
-      cloudSyncStatus: s.cloudSyncStatus,
-      hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
-      hostDirtyState: selectHostDirtyState(s),
-      hasUnsyncedDocClassChanges: s.isDirty,
-      writeCommands: selectWriteCommandSummary(s),
-      hasConnectedOnce: s.hasConnectedOnce,
-      // The two legs the pill used to ignore entirely. Without them the pill
-      // could derive `synced` from a `LocalRoomConnection` and render "All
-      // changes synced" beside the durability plane's "Stored locally" -
-      // `s5-status-truthfulness` instance 1.
-      durability: s.durabilityStatus ?? undefined,
-      localProtection: s.localProtection ?? undefined,
-      durabilityLegsNegotiated: s.durabilityLegsNegotiated,
-      // The ninth leg, and the one that is about the DOCUMENT rather than
-      // about where the work is going - `s5-mirror-first-serving`.
-      cloudFreshness: s.cloudFreshness ?? undefined,
-    }),
+  return useEpicStore(selectEpicSyncPillState);
+}
+
+function selectEpicSyncPillState(s: OpenEpicState): EpicSyncPillState {
+  return deriveEpicSyncPillState({
+    hostTransportStatus: s.hostTransportStatus,
+    cloudSyncStatus: s.cloudSyncStatus,
+    hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
+    hostDirtyState: selectHostDirtyState(s),
+    hasUnsyncedDocClassChanges: s.isDirty,
+    writeCommands: selectWriteCommandSummary(s),
+    hasConnectedOnce: s.hasConnectedOnce,
+    // The two legs the pill used to ignore entirely. Without them the pill
+    // could derive `synced` from a `LocalRoomConnection` and render "All
+    // changes synced" beside the durability plane's "Stored locally" -
+    // `s5-status-truthfulness` instance 1.
+    durability: s.durabilityStatus ?? undefined,
+    localProtection: s.localProtection ?? undefined,
+    durabilityLegsNegotiated: s.durabilityLegsNegotiated,
+    // The ninth leg, and the one that is about the DOCUMENT rather than
+    // about where the work is going - `s5-mirror-first-serving`.
+    cloudFreshness: s.cloudFreshness ?? undefined,
+    artifactSync: s.artifactSync ?? undefined,
+  });
+}
+
+/** The artifact sync reading of the open epic in context. */
+export function useEpicArtifactSyncReading(): ArtifactSyncReading {
+  const rooms = useEpicStore((s) => s.artifactSync?.rooms ?? null);
+  const waitingNewArtifacts = useEpicStore(
+    (s) => s.artifactSync?.waitingNewArtifacts ?? 0,
   );
+  const pillState = useEpicStore(selectEpicSyncPillState);
+  return { rooms, waitingNewArtifacts, pillState };
+}
+
+/**
+ * The same reading of a registered epic, for a surface outside its session
+ * provider. `null` while no session is registered for it.
+ */
+export function useRegisteredEpicArtifactSyncReading(
+  epicId: string | null,
+): ArtifactSyncReading | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  const subscribe = (listener: () => void) =>
+    handle?.store.subscribe(listener) ?? noopSubscribe;
+  const rooms = useSyncExternalStore(
+    subscribe,
+    () => handle?.store.getState().artifactSync?.rooms ?? null,
+    () => null,
+  );
+  const waitingNewArtifacts = useSyncExternalStore(
+    subscribe,
+    () => handle?.store.getState().artifactSync?.waitingNewArtifacts ?? 0,
+    () => 0,
+  );
+  const pillState = useSyncExternalStore(
+    subscribe,
+    () =>
+      handle === null ? null : selectEpicSyncPillState(handle.store.getState()),
+    () => null,
+  );
+  return pillState === null ? null : { rooms, waitingNewArtifacts, pillState };
 }
 
 /**
@@ -1198,15 +1246,6 @@ export function epicNodeRecency(
     recency[id] = state.tuiAgents.byId[id].updatedAt;
   }
   return recency;
-}
-
-export function useEpicHasArtifactRecords(): boolean {
-  return useEpicStore(
-    (s) =>
-      s.chats.allIds.length > 0 ||
-      s.artifacts.allIds.length > 0 ||
-      s.tuiAgents.allIds.length > 0,
-  );
 }
 
 export function useEpicTerminalAgent(
@@ -2524,6 +2563,19 @@ export function useEpicTreeNode(id: string): TreeNode | null {
   });
 }
 
+/**
+ * A node's title in the open epic's tree, `null` when the tree has no such
+ * node or there is no open epic: the read for a surface that also mounts
+ * outside an `<EpicSessionProvider>`, as a bot tab does.
+ */
+export function useMaybeEpicTreeNodeTitle(id: string): string | null {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.tree.nodeById, id) ? s.tree.nodeById[id].title : null,
+    null,
+  );
+}
+
 export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
   const enabled = useAgentRolesEnabled();
   const claims = useEpicStore((s) =>
@@ -2772,6 +2824,20 @@ export function useArtifactById(id: string | null): ArtifactProjection | null {
     if (Object.hasOwn(s.artifacts.byId, id)) return s.artifacts.byId[id];
     return null;
   });
+}
+
+/**
+ * Whether an artifact is one loose file and not a folder. A loose HTML page
+ * carries the same kind as an HTML folder, so its change is that one file's
+ * own and never a folder of files. False outside an open epic.
+ */
+export function useIsLooseFileArtifact(id: string): boolean {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.artifacts.byId, id) &&
+      s.artifacts.byId[id].layout === "file",
+    false,
+  );
 }
 
 /**

@@ -381,6 +381,7 @@ function ScreencastPeekSurface(props: {
         role="img"
         aria-label="Browser screencast, view only"
         data-testid="browser-screencast-view"
+        data-history-gesture-owner=""
         className={SCREENCAST_SURFACE_CLASS}
       >
         {pixels}

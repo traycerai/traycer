@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 
 afterEach(() => {
   cleanup();
@@ -80,5 +81,13 @@ describe("HostBusyForceDeferDialog", () => {
       expect(handlers.onForce).toHaveBeenCalledTimes(1);
       expect(handlers.onDefer).not.toHaveBeenCalled();
     });
+  });
+
+  it("keeps the details body scrollable between the fixed header and footer", () => {
+    renderDialog(false);
+
+    expectScrollableDialogLayout(
+      screen.getByTestId("host-busy-force-defer-dialog"),
+    );
   });
 });

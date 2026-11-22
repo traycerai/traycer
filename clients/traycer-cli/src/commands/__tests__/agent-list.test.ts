@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentListCommand } from "../agent-list";
-import { callHostRpc } from "../../internal/host-rpc";
+import { callAgentHostRpc } from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
@@ -23,10 +23,10 @@ vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
     typeof import("../../internal/host-rpc")
   >("../../internal/host-rpc");
-  return { ...actual, callHostRpc: vi.fn() };
+  return { ...actual, callAgentHostRpc: vi.fn() };
 });
 
-const rpcMock = vi.mocked(callHostRpc);
+const rpcMock = vi.mocked(callAgentHostRpc);
 
 /**
  * The row WITHOUT `agent.list@9.1`'s session facet, split out so the expected
@@ -56,7 +56,7 @@ const LEGACY_LIST_RESPONSE = {
       ...LEGACY_ROW_BEFORE_SESSION_FACET,
       // `agent.list@9.1`'s session facet. Required on the canonical row and
       // supplied by the upgrade path for an older host, so a mock that stands
-      // in for the TRANSPORT - which is what `callHostRpc` is here - has to
+      // in for the TRANSPORT - which is what `callAgentHostRpc` is here - has to
       // carry it. A GUI chat has no PTY session, so `null` is its answer.
       sessionState: null,
       lastExit: null,
@@ -78,7 +78,7 @@ const LEGACY_LIST_RESPONSE = {
 
 const LEGACY_HUMAN_OUTPUT = `Agents in epic (relative to you):
 You:
-agent-parent [self] "Parent" gui/codex dir: /repo
+agent-parent [self] "Parent" gui/codex profile: unobservable mode: unobservable dir: /repo
 
 Legend:
 [self]: this agent, i.e. the caller of agent.list
@@ -88,7 +88,8 @@ S: the agent can be sent messages to
 R/S: the agent has a readable transcript and can be sent messages to
 -: no available action
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree`;
+worktree: <path>: the agent runs in a dedicated git worktree
+profile: <id> / mode: <word>: the provider profile (ambient is the provider's own login) and permission mode the agent's future turns use, in the form traycer_configure_agent takes back. unobservable means the answering host cannot report that value`;
 
 // Key ORDER is load-bearing: the assertions below compare `JSON.stringify`
 // bytes, and zod emits in schema-declaration order - `runConfig` comes from
@@ -193,6 +194,7 @@ describe("agent list run config", () => {
             model: { kind: "concrete", slug: "gpt-5.6-codex" },
             reasoningEffort: "high",
             fastMode: true,
+            serviceTier: null,
           },
         },
       ],
@@ -422,7 +424,7 @@ describe("agent list run tuple", () => {
     );
   });
 
-  it("renders no token on a null row", async () => {
+  it("renders null run-tuple fields as unobservable", async () => {
     rpcMock.mockResolvedValue(
       tupleListing([
         { id: "known", profile: "ambient", permissionMode: "supervised" },
@@ -435,22 +437,21 @@ describe("agent list run tuple", () => {
     const lines = (result.human ?? "").split("\n");
     const unknown = lines.find((line) => line.startsWith("unknown "));
     expect(unknown).toBeDefined();
-    expect(unknown).not.toMatch(/ profile: /);
-    expect(unknown).not.toMatch(/ mode: /);
+    expect(unknown).toContain("profile: unobservable mode: unobservable");
+    expect(result.human).toContain(
+      "unobservable means the answering host cannot report that value",
+    );
   });
 
-  it("prints no token and no legend line when no row carries a tuple", async () => {
+  it("prints the unobservable token and legend when every row is unanswerable", async () => {
     rpcMock.mockResolvedValue(
       tupleListing([{ id: "unknown", profile: null, permissionMode: null }]),
     );
 
     const result = await buildCommand()(makeCtx(false));
 
-    expect(result.human).not.toContain(TUPLE_LEGEND);
-    for (const line of (result.human ?? "").split("\n")) {
-      expect(line).not.toMatch(/ profile: /);
-      expect(line).not.toMatch(/ mode: /);
-    }
+    expect(result.human).toContain(TUPLE_LEGEND);
+    expect(result.human).toContain("profile: unobservable mode: unobservable");
   });
 });
 
@@ -543,6 +544,7 @@ describe("agent list --compact", () => {
             model: { kind: "concrete", slug: "gpt-5.6-codex" },
             reasoningEffort: null,
             fastMode: null,
+            serviceTier: null,
           },
         },
       ],

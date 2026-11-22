@@ -1,7 +1,13 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentSecretV12,
+  EnvironmentStatusResponseV12,
+} from "@traycer/protocol/host/environment-schemas";
 import type { RunningHost } from "@/components/settings/environment/hosts-running-configuration-model";
+import type { ThisComputer } from "@/components/settings/move/this-computer";
+import type { ThisComputersMove } from "@/components/settings/move/use-this-computers-move";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,12 +20,23 @@ import {
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+
+const secretRoute = vi.hoisted(() => ({
+  calls: [] as Array<{
+    method: string;
+    params: unknown;
+    enabled: boolean;
+  }>,
+  hostReads: [] as string[],
+}));
 
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
   secrets: [] as EnvironmentSecretV12[],
   tasks: [] as readonly { readonly id: string }[],
   hosts: [] as RunningHost[],
+  status: null as EnvironmentStatusResponseV12 | null,
   user: null as AuthenticatedUser | null,
   staged: null as { readonly target: { readonly kind: string } } | null,
   openLink: vi.fn(() => Promise.resolve()),
@@ -28,7 +45,8 @@ const mocks = vi.hoisted(() => ({
     hostName: "this computer",
     client: null,
   },
-  thisComputersMove: "unknown" as "pending" | "unknown" | "not_moved" | "moved",
+  thisComputersMove: "unknown" as ThisComputersMove,
+  useRealMove: false,
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -42,8 +60,67 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: { secrets: mocks.secrets } }),
+  useHostQuery: (args: { readonly method: string }) => {
+    if (args.method === "environment.secrets.list") {
+      secretRoute.hostReads.push(args.method);
+    }
+    return {
+      data:
+        args.method === "environment.status"
+          ? mocks.status
+          : { secrets: mocks.secrets },
+      error: null,
+    };
+  },
 }));
+
+vi.mock("@/hooks/environment/use-host-own-environment", () => ({
+  useHostOwnEnvironment: (
+    client: unknown,
+    hostId: string | null,
+    enabled: boolean,
+  ) => {
+    const resolved = enabled && client !== null && hostId !== null;
+    return {
+      environmentId: resolved ? "env-personal" : null,
+      resolved,
+    };
+  },
+}));
+
+vi.mock("@/hooks/environment/use-environment-cloud", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/environment/use-environment-cloud")
+    >();
+  return {
+    ...actual,
+    useEnvironmentCloudQuery: (args: {
+      method: string;
+      params: unknown;
+      enabled: boolean;
+    }) => {
+      const read = {
+        method: args.method,
+        params: args.params,
+        enabled: args.enabled,
+      };
+      const alreadyRecorded = secretRoute.calls.some(
+        (current) =>
+          current.method === read.method &&
+          JSON.stringify(current.params) === JSON.stringify(read.params) &&
+          current.enabled === read.enabled,
+      );
+      if (!alreadyRecorded) secretRoute.calls.push(read);
+      return {
+        data: args.enabled
+          ? { secrets: [...mocks.secrets], removed: [] }
+          : undefined,
+        isError: false,
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
@@ -60,9 +137,25 @@ vi.mock("@/hooks/host/use-requester-host-id", () => ({
 vi.mock("@/components/settings/move/this-computer", () => ({
   useThisComputer: () => mocks.thisComputer,
 }));
-vi.mock("@/components/settings/move/use-this-computers-move", () => ({
-  useThisComputersMove: () => mocks.thisComputersMove,
-}));
+vi.mock(
+  "@/components/settings/move/use-this-computers-move",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/move/use-this-computers-move")
+      >();
+    return {
+      ...actual,
+      useThisComputersMove: (
+        computer: ThisComputer,
+        enabled: boolean,
+      ): ThisComputersMove =>
+        mocks.useRealMove
+          ? actual.useThisComputersMove(computer, enabled)
+          : mocks.thisComputersMove,
+    };
+  },
+);
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: mocks.tasks }),
@@ -135,6 +228,10 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
 }));
 
 import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 function storedKeyProvider(): ProviderCliState {
   return {
@@ -145,18 +242,17 @@ function storedKeyProvider(): ProviderCliState {
 
 function secret(): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "secret-1",
     name: "DEPLOY_KEY",
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
   };
 }
 
@@ -167,8 +263,6 @@ function runningHost(hostId: string, kind: RunningHost["kind"]): RunningHost {
     name: hostId,
     kind,
     isThisComputer: false,
-    lastReportedAt: null,
-    applied: [],
   };
 }
 
@@ -208,6 +302,7 @@ describe("GettingStartedSettingsPanel", () => {
     mocks.secrets = [];
     mocks.tasks = [];
     mocks.hosts = [];
+    mocks.status = null;
     mocks.user = zeroUser();
     mocks.staged = null;
     mocks.thisComputer = {
@@ -216,7 +311,10 @@ describe("GettingStartedSettingsPanel", () => {
       client: null,
     };
     mocks.thisComputersMove = "unknown";
+    mocks.useRealMove = false;
     mocks.openLink.mockClear();
+    secretRoute.calls = [];
+    secretRoute.hostReads = [];
     navigateMock.mockReset();
     activateTabIntentMock.mockClear();
     setSectionMock.mockReset();
@@ -261,7 +359,6 @@ describe("GettingStartedSettingsPanel", () => {
       screen.queryByRole("button", { name: /Browser sign-ins/ }),
     ).toBeNull();
     expect(screen.queryByRole("button", { name: /Add credits/ })).toBeNull();
-    expect(screen.queryByTestId("set-up-personal")).toBeNull();
     expect(screen.queryByTestId("set-up-team-group")).toBeNull();
   });
 
@@ -306,7 +403,7 @@ describe("GettingStartedSettingsPanel", () => {
     expect(screen.getByRole("status").textContent).toBe("0 of 5 complete");
     expect(
       screen.getByTestId("getting-started-card-credits").textContent,
-    ).toContain("Credits pay for your sandboxes, awake or resting.");
+    ).toContain("Credits pay for your sandboxes.");
   });
 
   it("completes a step by the fact it names, never by a click", () => {
@@ -412,13 +509,48 @@ describe("GettingStartedSettingsPanel", () => {
     render(<GettingStartedSettingsPanel />);
 
     const card = screen.getByTestId("getting-started-card-move");
+    expect(card.textContent).toContain("Move this computer to Personal");
     expect(card.textContent).toContain(
-      "Move this computer's settings to Personal",
+      "So your settings follow you to every computer and sandbox.",
     );
-    expect(card.textContent).toContain(
-      "So they work on every computer and sandbox you use.",
+    expect(card.textContent).toContain("Move to Personal");
+
+    fireEvent.click(card);
+
+    expect(useMoveSheetStore.getState().target).toEqual({
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+  });
+
+  it("shows the move item when consent is awaited after all planes moved", () => {
+    mocks.useRealMove = true;
+    mocks.thisComputer = {
+      hostId: "old",
+      hostName: "Old laptop",
+      client: null,
+    };
+    mocks.status = environmentStatusFixture({
+      principal: null,
+      planes: { records: "moved", broker: "moved", room: "moved" },
+      consent: null,
+      setup: { stage: "moving_settings", state: "awaiting_consent" },
+    });
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <GettingStartedSettingsPanel />
+      </QueryClientProvider>,
     );
-    expect(card.textContent).toContain("Show me what moves");
+
+    const card = screen.getByTestId("getting-started-card-move");
+    expect(
+      screen.getByRole("button", {
+        name: "Move this computer to Personal, Not started",
+      }),
+    ).toBe(card);
+    expect(card.textContent).toContain("Move this computer to Personal");
+    expect(card.textContent).toContain("Move to Personal");
 
     fireEvent.click(card);
 
@@ -439,8 +571,20 @@ describe("GettingStartedSettingsPanel", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Move this computer's settings to Personal, Complete",
+        name: "Move this computer to Personal, Complete",
       }),
     ).toBeTruthy();
+  });
+
+  it("does not show the move card for a team-owned computer", () => {
+    mocks.thisComputer = {
+      hostId: "old",
+      hostName: "Old laptop",
+      client: null,
+    };
+    mocks.thisComputersMove = "team";
+    render(<GettingStartedSettingsPanel />);
+
+    expect(screen.queryByTestId("getting-started-card-move")).toBeNull();
   });
 });

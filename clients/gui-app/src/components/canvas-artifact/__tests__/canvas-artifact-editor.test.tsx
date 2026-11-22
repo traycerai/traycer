@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import type { ComponentType, ReactNode } from "react";
+import { useEffect, type ComponentType, type ReactNode } from "react";
 import {
   afterEach,
   beforeEach,
@@ -18,6 +18,12 @@ import {
   type Mock,
 } from "vitest";
 import type { NodeChange, NodeProps } from "@xyflow/react";
+import {
+  Awareness,
+  applyAwarenessUpdate,
+  encodeAwarenessUpdate,
+} from "y-protocols/awareness";
+import * as Y from "yjs";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import {
   readCanvasLayout,
@@ -26,6 +32,7 @@ import {
   upsertNote,
 } from "@traycer/protocol/persistence/epic/canvas-layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { CanvasArtifactEditor } from "../canvas-artifact-editor";
 import { useCanvasSelectionStore } from "../canvas-selection-store";
 import type { CanvasFrameEvents } from "../canvas-frame";
@@ -95,7 +102,6 @@ interface FakeFlowInstance {
   readonly zoomTo: (zoom: number) => void;
   readonly setCenter: (x: number, y: number, options: object) => void;
   readonly fitView: (options: FitViewOptions) => void;
-  readonly getViewport: () => FlowViewport;
   readonly setViewport: (viewport: FlowViewport) => Promise<boolean>;
 }
 
@@ -108,7 +114,9 @@ interface FakeFlowInstance {
 // does), and the move lifecycle. `setViewport` mirrors xyflow's own
 // behavior for a programmatic set: it fires `onMove` then `onMoveEnd`
 // synchronously with the new viewport, which is what lets the editor's own
-// "programmatic wheel moves fire end on every tick" comment hold in a test.
+// "programmatic wheel moves fire end on every frame" comment hold in a test.
+// React Flow reports the viewport the editor last rendered, unless a test
+// pins `reportedViewport` to play a React Flow that has yet to catch up.
 interface FlowCapture {
   nodes: CanvasFlowNode[];
   dragStop: DragStop | null;
@@ -119,6 +127,8 @@ interface FlowCapture {
   zoomTo: Mock<(zoom: number) => void>;
   setCenter: Mock<(x: number, y: number, options: object) => void>;
   fitView: Mock<(options: FitViewOptions) => void>;
+  setViewport: Mock<(viewport: FlowViewport) => void>;
+  reportedViewport: FlowViewport | null;
   onMove: MoveHandler | null;
   onMoveStart: MoveHandler | null;
   onMoveEnd: MoveHandler | null;
@@ -133,10 +143,23 @@ const flow: FlowCapture = vi.hoisted(() => ({
   zoomTo: vi.fn<(zoom: number) => void>(),
   setCenter: vi.fn<(x: number, y: number, options: object) => void>(),
   fitView: vi.fn<(options: FitViewOptions) => void>(),
+  setViewport: vi.fn<(viewport: FlowViewport) => void>(),
+  reportedViewport: null,
   onMove: null,
   onMoveStart: null,
   onMoveEnd: null,
 }));
+
+// The inspector is parked behind a constant. This lets the one describe that
+// exercises it switch the constant on; every other test sees it off.
+const inspector = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../canvas-model", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../canvas-model")>();
+  return Object.defineProperty({ ...actual }, "CANVAS_INSPECTOR_ENABLED", {
+    enumerable: true,
+    get: () => inspector.enabled,
+  });
+});
 
 vi.mock("@xyflow/react", async () => {
   const { createContext, useContext, useEffect } = await import("react");
@@ -151,8 +174,8 @@ vi.mock("@xyflow/react", async () => {
             zoomTo: flow.zoomTo,
             setCenter: flow.setCenter,
             fitView: flow.fitView,
-            getViewport: () => flow.viewport ?? { x: 0, y: 0, zoom: 1 },
             setViewport: (next) => {
+              flow.setViewport(next);
               flow.onMove?.(null, next);
               flow.onMoveEnd?.(null, next);
               return Promise.resolve(true);
@@ -199,10 +222,13 @@ vi.mock("@xyflow/react", async () => {
       );
     },
     Background: () => null,
-    // Board headers counter-scale by the viewport zoom; jsdom has no
-    // viewport, so every read sees the identity transform.
-    useStore: (selector: (state: { transform: number[] }) => number) =>
-      selector({ transform: [0, 0, 1] }),
+    // The store's transform is the viewport React Flow has drawn: the one
+    // the editor last rendered, unless a test pins an older one.
+    useStore: <T,>(selector: (state: { transform: number[] }) => T): T => {
+      const shown = flow.reportedViewport ??
+        flow.viewport ?? { x: 0, y: 0, zoom: 1 };
+      return selector({ transform: [shown.x, shown.y, shown.zoom] });
+    },
     NodeToolbar: (props: { children: ReactNode }) => props.children,
     Position: { Top: "top" },
     NodeResizer: (props: { onResizeEnd?: ResizeEnd }) => {
@@ -372,6 +398,8 @@ afterEach(() => {
   flow.zoomTo.mockClear();
   flow.setCenter.mockClear();
   flow.fitView.mockClear();
+  flow.setViewport.mockClear();
+  flow.reportedViewport = null;
   flow.viewport = null;
   flow.onMove = null;
   flow.onMoveStart = null;
@@ -406,6 +434,78 @@ function startRenamingBoard(title: string): HTMLElement {
   return screen.getByRole("textbox", { name: "Board name" });
 }
 
+it("opens the current canvas page in the expanded view", async () => {
+  const user = userEvent.setup();
+  mountEditor();
+  openPageMenu();
+  fireEvent.click(screen.getByRole("button", { name: "Details" }));
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  const dialog = screen.getByRole("dialog", { name: "Canvas" });
+  expect(
+    within(dialog).getByRole("img", { name: "Specs preview" }),
+  ).toBeTruthy();
+  expect(within(dialog).queryByRole("button", { name: "Expand" })).toBeNull();
+  await user.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(screen.getByRole("img", { name: "Specs preview" })).toBeTruthy();
+});
+
+it("cancels the active tool before Escape closes the expanded canvas", async () => {
+  const user = userEvent.setup();
+  mountEditor();
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  const dialog = screen.getByRole("dialog", { name: "Canvas" });
+  await user.click(within(dialog).getByRole("button", { name: "Hand (H)" }));
+  expect(
+    within(dialog)
+      .getByRole("button", { name: "Hand (H)" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+  expect(
+    within(dialog)
+      .getByRole("button", { name: "Select (V)" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("clears a selected note before Escape closes the expanded canvas", async () => {
+  const user = userEvent.setup();
+  mountEditor();
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
+  expect(nodeNamed("note:note-1").selected).toBe(true);
+
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+  expect(nodeNamed("note:note-1").selected).toBe(false);
+
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("commits a sticky note on Escape without closing the expanded canvas", async () => {
+  const user = userEvent.setup();
+  const { store } = mountEditor();
+  await user.click(screen.getByRole("button", { name: "Expand" }));
+  const dialog = screen.getByRole("dialog", { name: "Canvas" });
+  fireEvent.doubleClick(
+    within(dialog).getByRole("button", { name: "Edit sticky note" }),
+  );
+  const textarea = within(dialog).getByRole("textbox", {
+    name: "Sticky note text",
+  });
+  await user.clear(textarea);
+  await user.type(textarea, "Saved note");
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+  expect(store.getSnapshot().layout.notes["note-1"].text).toBe("Saved note");
+});
+
 describe("CanvasArtifactEditor pages and boards", () => {
   it("names the current page on the menu button and marks it in the list", () => {
     mountEditor();
@@ -413,7 +513,9 @@ describe("CanvasArtifactEditor pages and boards", () => {
       "Flow",
     );
     openPageMenu();
-    const pages = within(screen.getByRole("list", { name: "Canvas pages" }));
+    const pageList = screen.getByRole("list", { name: "Canvas pages" });
+    expectFocusRingInset(pageList, ["-m-1", "p-1"]);
+    const pages = within(pageList);
     expect(
       pages.getByRole("button", { name: "Flow" }).getAttribute("aria-current"),
     ).toBe("page");
@@ -1587,6 +1689,20 @@ describe("CanvasArtifactEditor wheel settling", () => {
     return stage;
   }
 
+  // A wheel event only queues its move; the next animation frame applies it.
+  function applyWheelFrame(): void {
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+  }
+
+  // A zoom gesture reaches React Flow once it has been quiet for 120ms.
+  function settleZoomGesture(): void {
+    act(() => {
+      vi.advanceTimersByTime(120);
+    });
+  }
+
   it("keeps the near board live at mount, before any gesture", () => {
     const { sourceForBoard } = mountWheelEditor();
     expect(sourceForBoard).toHaveBeenCalledWith(NEAR);
@@ -1657,6 +1773,7 @@ describe("CanvasArtifactEditor wheel settling", () => {
     const stage = stageElement();
 
     fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    applyWheelFrame();
     expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
     const panned = flow.viewport;
     if (panned === null) throw new Error("the canvas never panned");
@@ -1676,6 +1793,7 @@ describe("CanvasArtifactEditor wheel settling", () => {
     const stage = stageElement();
 
     fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    applyWheelFrame();
     const panned = flow.viewport;
     if (panned === null) throw new Error("the canvas never panned");
 
@@ -1702,6 +1820,7 @@ describe("CanvasArtifactEditor wheel settling", () => {
     const stage = stageElement();
 
     fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    applyWheelFrame();
     const panned = flow.viewport;
     if (panned === null) throw new Error("the canvas never panned");
     const onMoveStart = flow.onMoveStart;
@@ -1739,6 +1858,544 @@ describe("CanvasArtifactEditor wheel settling", () => {
     // fitView is a bare mock with no viewport side effect in this harness,
     // so the cancelled wheel settle must not have fired on its own.
     expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+  });
+
+  describe("one camera move per animation frame", () => {
+    // INITIAL_VIEW is { x: 60, y: 100, zoom: 0.6 }, and jsdom lays the stage
+    // out at the screen's origin.
+    it("adds up the wheel events of a frame, each capped on its own, into a single move", () => {
+      mountWheelEditor();
+      const stage = stageElement();
+
+      fireEvent.wheel(stage, { deltaX: 30, deltaY: 10 });
+      fireEvent.wheel(stage, { deltaX: 30, deltaY: -4 });
+      // A momentum tail: capped at 80, as it would be arriving alone.
+      fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+      expect(flow.setViewport).not.toHaveBeenCalled();
+
+      applyWheelFrame();
+
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      expect(flow.setViewport).toHaveBeenCalledWith({
+        x: 60 - 30 - 30 - 80,
+        y: 100 - 10 + 4,
+        zoom: 0.6,
+      });
+      expect(flow.viewport).toEqual({ x: -80, y: 94, zoom: 0.6 });
+    });
+
+    it("zooms about each event's own point, in the order the events came", () => {
+      mountWheelEditor();
+      const stage = stageElement();
+
+      fireEvent.wheel(stage, {
+        deltaY: -100,
+        ctrlKey: true,
+        clientX: 200,
+        clientY: 100,
+      });
+      fireEvent.wheel(stage, { deltaX: 50, deltaY: 0 });
+      fireEvent.wheel(stage, {
+        deltaY: -100,
+        ctrlKey: true,
+        clientX: 400,
+        clientY: 300,
+      });
+      applyWheelFrame();
+      settleZoomGesture();
+
+      // Each zoom keeps the canvas point under its pointer where it was.
+      const step = Math.exp(0.3);
+      const first = { x: 200 - (200 - 60) * step, y: 100, zoom: 0.6 * step };
+      const panned = { ...first, x: first.x - 50 };
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      const moved = flow.setViewport.mock.calls[0][0];
+      expect(moved.zoom).toBeCloseTo(panned.zoom * step, 10);
+      expect(moved.x).toBeCloseTo(400 - (400 - panned.x) * step, 10);
+      expect(moved.y).toBeCloseTo(300 - (300 - panned.y) * step, 10);
+    });
+
+    it("builds each frame on the last one even while React Flow still reports an older viewport", () => {
+      mountWheelEditor();
+      const stage = stageElement();
+      // React Flow reports a viewport only once React has rendered it; a
+      // busy canvas can be frames behind the wheel.
+      flow.reportedViewport = { x: 60, y: 100, zoom: 0.6 };
+
+      fireEvent.wheel(stage, { deltaX: 40, deltaY: 0 });
+      applyWheelFrame();
+      fireEvent.wheel(stage, { deltaX: 40, deltaY: 0 });
+      applyWheelFrame();
+
+      expect(flow.setViewport).toHaveBeenLastCalledWith({
+        x: 60 - 40 - 40,
+        y: 100,
+        zoom: 0.6,
+      });
+    });
+
+    it("starts again from React Flow's viewport once another camera move has taken over", () => {
+      mountWheelEditor();
+      const stage = stageElement();
+      fireEvent.wheel(stage, { deltaX: 40, deltaY: 0 });
+      applyWheelFrame();
+
+      // A drag pans the canvas somewhere else entirely.
+      const dragged = { x: 500, y: 500, zoom: 0.6 };
+      act(() => {
+        flow.onMoveStart?.(new MouseEvent("mousedown"), dragged);
+        flow.onMove?.(new MouseEvent("mousemove"), dragged);
+        flow.onMoveEnd?.(new MouseEvent("mouseup"), dragged);
+      });
+      fireEvent.wheel(stage, { deltaX: 40, deltaY: 0 });
+      applyWheelFrame();
+
+      expect(flow.setViewport).toHaveBeenLastCalledWith({
+        x: 460,
+        y: 500,
+        zoom: 0.6,
+      });
+    });
+
+    it("drops a move still queued when the editor unmounts", () => {
+      mountWheelEditor();
+      fireEvent.wheel(stageElement(), { deltaX: 40, deltaY: 0 });
+
+      cleanup();
+      vi.advanceTimersToNextFrame();
+
+      expect(flow.setViewport).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a finger pinch", () => {
+    // INITIAL_VIEW is { x: 60, y: 100, zoom: 0.6 }.
+    const PINCH_OUT = { x: 40, y: 90, zoom: 0.8 };
+    const PINCH_WIDER = { x: 20, y: 80, zoom: 1 };
+    // Zoomed out and panned right: FAR is on screen and nearest the centre.
+    const TOWARDS_FAR = { x: -300, y: 0, zoom: 0.5 };
+
+    // xyflow reports a touch move with the browser's own TouchEvent.
+    function pinchTo(viewport: FlowViewport): void {
+      act(() => {
+        flow.onMove?.(new TouchEvent("touchmove"), viewport);
+      });
+    }
+    function liftFingers(viewport: FlowViewport): void {
+      act(() => {
+        flow.onMoveEnd?.(new TouchEvent("touchend"), viewport);
+      });
+    }
+    function zoomLayer(): HTMLElement {
+      const element = screen.getByRole("group", {
+        name: "Canvas pane",
+      }).parentElement;
+      if (element === null) throw new Error("could not find the zoom layer");
+      return element;
+    }
+
+    it("keeps the viewport React Flow is given until the fingers have been quiet for 120ms, and shows the zoom on the layer meanwhile", () => {
+      mountWheelEditor();
+
+      pinchTo(PINCH_OUT);
+      applyWheelFrame();
+      pinchTo(PINCH_WIDER);
+      applyWheelFrame();
+
+      expect(zoomLayer().style.transform).toMatch(/scale\(/);
+      expect(flow.viewport).toEqual({ x: 60, y: 100, zoom: 0.6 });
+      expect(flow.setViewport).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(103);
+      });
+      expect(flow.viewport).toEqual({ x: 60, y: 100, zoom: 0.6 });
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      expect(flow.viewport).toEqual(PINCH_WIDER);
+      expect(zoomLayer().style.transform).toBe("");
+    });
+
+    it("keeps a pinch that has stopped changing the zoom on the layer, and a lift of the fingers does not draw it", () => {
+      mountWheelEditor();
+
+      pinchTo(PINCH_OUT);
+      liftFingers({ ...PINCH_OUT, x: 30 });
+      applyWheelFrame();
+
+      expect(flow.viewport).toEqual({ x: 60, y: 100, zoom: 0.6 });
+      expect(zoomLayer().style.transform).toMatch(/scale\(/);
+
+      settleZoomGesture();
+      expect(flow.viewport).toEqual({ ...PINCH_OUT, x: 30 });
+    });
+
+    it("picks the live boards once the pinch has been quiet for 200ms, not on each move or on the lift", () => {
+      const { sourceForBoard } = mountWheelEditor();
+
+      pinchTo({ x: -100, y: 50, zoom: 0.55 });
+      applyWheelFrame();
+      pinchTo(TOWARDS_FAR);
+      applyWheelFrame();
+      liftFingers(TOWARDS_FAR);
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+      // The redraw at 120ms does not pick them either.
+      settleZoomGesture();
+      expect(flow.viewport).toEqual(TOWARDS_FAR);
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+      act(() => {
+        vi.advanceTimersByTime(79);
+      });
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+    });
+
+    it("picks the live boards where a one-finger pan ended when it follows the pinch before the settle", () => {
+      const { sourceForBoard } = mountWheelEditor();
+      const pinched = { x: 300, y: 100, zoom: 0.5 };
+
+      pinchTo(pinched);
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(flow.viewport).toEqual(pinched);
+
+      // Same zoom, no pinch held: the pan goes straight to the viewport.
+      pinchTo(TOWARDS_FAR);
+      liftFingers(TOWARDS_FAR);
+      expect(flow.viewport).toEqual(TOWARDS_FAR);
+      act(() => {
+        vi.advanceTimersByTime(49);
+      });
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+      // The settle runs 200ms after the pinch's last move.
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+    });
+
+    it("hands a one-finger pan, with the zoom unchanged and no pinch held, straight to the viewport", () => {
+      const { sourceForBoard } = mountWheelEditor();
+      const panned = { x: -300, y: 100, zoom: 0.6 };
+
+      pinchTo(panned);
+
+      expect(flow.viewport).toEqual(panned);
+      expect(zoomLayer().style.transform).toBe("");
+      expect(flow.setViewport).not.toHaveBeenCalled();
+
+      // A pan is settled by its own end, as before.
+      liftFingers(panned);
+      expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+    });
+
+    it("hands a mouse move that changes the zoom straight to the viewport", () => {
+      mountWheelEditor();
+
+      act(() => {
+        flow.onMove?.(new MouseEvent("mousemove"), PINCH_OUT);
+      });
+
+      expect(flow.viewport).toEqual(PINCH_OUT);
+      expect(zoomLayer().style.transform).toBe("");
+    });
+  });
+});
+
+describe("CanvasArtifactEditor zoom gestures", () => {
+  // The gesture scales what is already drawn and React Flow redraws once, at
+  // the end. INITIAL_VIEW is { x: 60, y: 100, zoom: 0.6 }.
+  const STEP = Math.exp(0.3);
+  const ZOOM_IN = { deltaY: -100, ctrlKey: true, clientX: 200, clientY: 100 };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function pane(): HTMLElement {
+    return screen.getByRole("group", { name: "Canvas pane" });
+  }
+  function layer(): HTMLElement {
+    const element = pane().parentElement;
+    if (element === null) throw new Error("could not find the zoom layer");
+    return element;
+  }
+  function transformOf(value: string): {
+    x: number;
+    y: number;
+    scale: number;
+  } {
+    const match = /^translate\((.+)px, (.+)px\) scale\((.+)\)$/.exec(value);
+    if (match === null) throw new Error(`not a layer transform: "${value}"`);
+    return {
+      x: Number(match[1]),
+      y: Number(match[2]),
+      scale: Number(match[3]),
+    };
+  }
+  function layerTransform(): { x: number; y: number; scale: number } {
+    return transformOf(layer().style.transform);
+  }
+  function frame(): void {
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+  }
+  function wait(ms: number): void {
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  }
+
+  it("scales the drawn canvas about the pointer and tells React Flow only once the gesture is quiet", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+
+    // Scaling about (200, 100) keeps that point of the picture in place.
+    const shown = layerTransform();
+    expect(shown.scale).toBeCloseTo(STEP, 10);
+    expect(shown.x).toBeCloseTo(200 * (1 - STEP), 10);
+    expect(shown.y).toBeCloseTo(100 * (1 - STEP), 10);
+    expect(layer().style.willChange).toBe("transform");
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    expect(flow.viewport).toEqual({ x: 60, y: 100, zoom: 0.6 });
+
+    // 120ms after the wheel event, not after the frame that drew it.
+    wait(103);
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    wait(1);
+
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(flow.viewport?.zoom).toBeCloseTo(0.6 * STEP, 10);
+    expect(flow.viewport?.x).toBeCloseTo(200 - 140 * STEP, 10);
+    // The layer lets go in the render that draws the real viewport.
+    expect(layer().style.transform).toBe("");
+    expect(layer().style.willChange).toBe("");
+  });
+
+  it("gives the backdrop the inverse of the layer's transform, so the dot grid and fill stay on the stage", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY: 100 });
+    frame();
+
+    const scaled = layerTransform();
+    const countered = transformOf(
+      layer().style.getPropertyValue("--canvas-backdrop-transform"),
+    );
+    expect(scaled.scale).toBeCloseTo(1 / STEP, 10);
+    // The backdrop sits inside the layer: its transform runs first, then
+    // the layer's. Together they must leave it exactly where it was.
+    expect(scaled.scale * countered.scale).toBeCloseTo(1, 10);
+    expect(scaled.scale * countered.x + scaled.x).toBeCloseTo(0, 8);
+    expect(scaled.scale * countered.y + scaled.y).toBeCloseTo(0, 8);
+
+    wait(120);
+    expect(layer().style.getPropertyValue("--canvas-backdrop-transform")).toBe(
+      "",
+    );
+  });
+
+  it.each([
+    ["minimum", 4000, 0.05],
+    ["maximum", -4000, 4],
+  ])(
+    "lets go of the layer after a gesture runs into the %s zoom, and after pinching on at it",
+    (_limit, deltaY, zoom) => {
+      mountEditor();
+      for (let step = 0; step < 6; step += 1)
+        fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY });
+      frame();
+      wait(120);
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      expect(flow.viewport?.zoom).toBe(zoom);
+      expect(layer().style.transform).toBe("");
+
+      // Nothing changes at the limit, so React Flow has nothing to redraw.
+      fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY });
+      frame();
+      wait(120);
+      expect(flow.viewport?.zoom).toBe(zoom);
+      expect(layer().style.transform).toBe("");
+      expect(layer().style.willChange).toBe("");
+    },
+  );
+
+  it("lets go of the layer when React Flow draws a viewport other than the one it was handed", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    // React Flow settles somewhere else: a limit of its own, a rounding.
+    flow.reportedViewport = { x: 10, y: 20, zoom: 0.7 };
+
+    wait(120);
+
+    // Kept over a drawing it does not match, the layer would show the
+    // canvas transformed twice.
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(layer().style.transform).toBe("");
+    expect(layer().style.willChange).toBe("");
+  });
+
+  it("holds the redraw back for as long as wheel events keep coming", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    wait(100);
+    fireEvent.wheel(pane(), ZOOM_IN);
+    wait(119);
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    expect(layerTransform().scale).toBeCloseTo(STEP * STEP, 10);
+
+    wait(1);
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(flow.viewport?.zoom).toBeCloseTo(0.6 * STEP * STEP, 10);
+  });
+
+  it("carries a pan that joins the gesture on the layer and redraws both together", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    const zoomed = layerTransform();
+
+    fireEvent.wheel(pane(), { deltaX: 50, deltaY: -20 });
+    frame();
+
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    expect(layerTransform().x).toBeCloseTo(zoomed.x - 50, 10);
+    expect(layerTransform().y).toBeCloseTo(zoomed.y + 20, 10);
+
+    wait(120);
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(flow.viewport?.x).toBeCloseTo(200 - 140 * STEP - 50, 10);
+    expect(flow.viewport?.y).toBeCloseTo(100 + 20, 10);
+    expect(layer().style.transform).toBe("");
+  });
+
+  it("follows React Flow when it draws an earlier pan under a zoom in progress", () => {
+    mountEditor();
+    // React Flow has yet to draw anything past the starting viewport.
+    flow.reportedViewport = { x: 60, y: 100, zoom: 0.6 };
+    fireEvent.wheel(pane(), { deltaX: 40, deltaY: 0 });
+    frame();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    // The layer shows the pan too: React Flow has not drawn it.
+    expect(layerTransform().x).toBeCloseTo(200 * (1 - STEP) - 40 * STEP, 10);
+
+    // The pan lands. The layer keeps the same picture over the new drawing.
+    flow.reportedViewport = { x: 20, y: 100, zoom: 0.6 };
+    act(() => {
+      flow.onMove?.(null, { x: 20, y: 100, zoom: 0.6 });
+    });
+
+    expect(layerTransform().x).toBeCloseTo(200 * (1 - STEP), 10);
+    expect(layerTransform().scale).toBeCloseTo(STEP, 10);
+  });
+
+  it("lets go of the layer when the gesture ends where it began, with nothing for React Flow to redraw", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY: 100 });
+    frame();
+    expect(layer().style.willChange).toBe("transform");
+
+    wait(120);
+
+    expect(layer().style.transform).toBe("");
+    expect(layer().style.willChange).toBe("");
+  });
+
+  it("hands React Flow the zoom on screen before another camera move starts from it", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /, zoom$/ }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Fit to screen$/ }));
+
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(flow.setViewport.mock.calls[0][0].zoom).toBeCloseTo(0.6 * STEP, 10);
+    expect(flow.setViewport.mock.invocationCallOrder[0]).toBeLessThan(
+      flow.fitView.mock.invocationCallOrder[0],
+    );
+    expect(layer().style.transform).toBe("");
+    // Nothing is left to redraw later.
+    wait(200);
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+  });
+
+  it("redraws nothing for a gesture the editor unmounted under", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+
+    cleanup();
+    vi.advanceTimersByTime(200);
+
+    expect(flow.setViewport).not.toHaveBeenCalled();
+  });
+});
+
+describe("CanvasArtifactEditor wheel moves under fullscreen", () => {
+  it("lets go of a zoom in progress when a board goes fullscreen, and comes back to the zoomed view", () => {
+    mountEditor();
+    const pane = screen.getByRole("group", { name: "Canvas pane" });
+    const layer = pane.parentElement;
+    if (layer === null) throw new Error("could not find the zoom layer");
+    fireEvent.wheel(pane, { deltaY: -100, ctrlKey: true });
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+    expect(layer.style.transform).not.toBe("");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home fullscreen" }),
+    );
+
+    // The fullscreen board must not be drawn through the gesture's scale.
+    expect(layer.style.transform).toBe("");
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Back to canvas" }));
+    expect(flow.viewport?.zoom).toBeCloseTo(0.6 * Math.exp(0.3), 10);
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops a move queued just before a board went fullscreen, which owns the viewport from then on", () => {
+    mountEditor();
+    const pane = screen.getByRole("group", { name: "Canvas pane" });
+    fireEvent.wheel(pane, { deltaX: 40, deltaY: 0 });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home fullscreen" }),
+    );
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+
+    expect(flow.setViewport).not.toHaveBeenCalled();
   });
 });
 
@@ -1859,5 +2516,287 @@ describe("CanvasArtifactEditor hidden-pane geometry", () => {
       resizeCallback?.();
     });
     expect(sourceForBoard).not.toHaveBeenCalled();
+  });
+});
+
+describe("an expanded canvas is the same editor the tile rendered", () => {
+  interface Expandable {
+    readonly store: CanvasLayoutStore;
+    readonly awareness: Awareness | null;
+    readonly frameEvents: CanvasFrameEvents | null;
+    readonly viewOnly: boolean;
+  }
+
+  function mountExpandable(overrides: Partial<Expandable>): CanvasLayoutStore {
+    const options: Expandable = {
+      store: storeFromFixture(file),
+      awareness: null,
+      frameEvents: null,
+      viewOnly: false,
+      ...overrides,
+    };
+    render(
+      <TooltipProvider>
+        <CanvasArtifactEditor
+          artifactId={ARTIFACT_ID}
+          store={options.store}
+          awareness={options.awareness}
+          user={{ name: "Ada", color: "#112233" }}
+          sourceForBoard={() => null}
+          boardFiles={null}
+          frameEvents={options.frameEvents}
+          liveSlotBudget={0}
+          boardByteLengths={null}
+          viewOnly={options.viewOnly}
+        />
+      </TooltipProvider>,
+    );
+    return options.store;
+  }
+
+  function expandCanvas(): HTMLElement {
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    return screen.getByRole("dialog", { name: "Canvas" });
+  }
+
+  /** Every control the toolbar offers, bar the pair that raise and lower it. */
+  function controlNames(scope: HTMLElement): string[] {
+    return within(scope)
+      .getAllByRole("button")
+      .map((control) => control.getAttribute("aria-label") ?? "")
+      .filter((name) => name !== "" && name !== "Expand" && name !== "Close");
+  }
+
+  function pageMenuNames(scope: HTMLElement): string {
+    return String(
+      within(scope).getByRole("button", { name: "Pages" }).textContent,
+    );
+  }
+
+  afterEach(() => {
+    inspector.enabled = false;
+    act(() => useCanvasSelectionStore.getState().clear());
+  });
+
+  describe("presence", () => {
+    function remoteCursorOn(awareness: Awareness, page: string): void {
+      const remote = new Awareness(new Y.Doc());
+      remote.setLocalState({
+        canvasCursor: {
+          x: 10,
+          y: 20,
+          artifactId: ARTIFACT_ID,
+          page,
+          user: { name: "Grace", color: "#aabbcc" },
+        },
+      });
+      applyAwarenessUpdate(
+        awareness,
+        encodeAwarenessUpdate(remote, [remote.clientID]),
+        "remote",
+      );
+    }
+
+    it("shows a collaborator's cursor on the expanded canvas", () => {
+      const awareness = new Awareness(new Y.Doc());
+      mountExpandable({ awareness });
+      const dialog = expandCanvas();
+
+      act(() => remoteCursorOn(awareness, "page-1"));
+
+      expect(within(dialog).getByText("Grace")).toBeTruthy();
+    });
+
+    it("publishes the reader's own pointer from the expanded canvas", () => {
+      const awareness = new Awareness(new Y.Doc());
+      mountExpandable({ awareness });
+      const dialog = expandCanvas();
+
+      fireEvent.pointerMove(
+        within(dialog).getByRole("group", { name: "Canvas pane" }),
+        {
+          clientX: 40,
+          clientY: 50,
+        },
+      );
+
+      expect(awareness.getLocalState()).toMatchObject({
+        canvasCursor: {
+          artifactId: ARTIFACT_ID,
+          page: "page-1",
+          user: { name: "Ada" },
+        },
+      });
+    });
+  });
+
+  describe("the frame events the tile passed in", () => {
+    it("renders the tile's toolbar controls in the expanded toolbar and runs them", () => {
+      const toggled = vi.fn();
+      mountExpandable({
+        frameEvents: canvasFrameEvents({
+          commentsEnabled: true,
+          renderToolbarControls: () => (
+            <button type="button" onClick={toggled}>
+              Comments
+            </button>
+          ),
+        }),
+      });
+      const dialog = expandCanvas();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Comments" }));
+
+      expect(toggled).toHaveBeenCalledTimes(1);
+    });
+
+    it("arms comment mode from the expanded canvas on the one registered view", () => {
+      const onCanvasView = vi.fn<(view: CanvasCommentView | null) => void>();
+      mountExpandable({
+        frameEvents: canvasFrameEvents({ commentsEnabled: true, onCanvasView }),
+      });
+      const dialog = expandCanvas();
+      const lastView = (): CanvasCommentView | null =>
+        onCanvasView.mock.calls.at(-1)?.[0] ?? null;
+      expect(lastView()?.commenting).toBe(false);
+
+      fireEvent.keyDown(within(dialog).getByLabelText("Canvas"), {
+        code: "KeyC",
+      });
+
+      expect(lastView()?.commenting).toBe(true);
+    });
+
+    it("shows the inspector for the selected board inside the expanded canvas, and closes it", () => {
+      inspector.enabled = true;
+      mountExpandable({
+        frameEvents: canvasFrameEvents({
+          renderPanel: (_store, { onClose }) => (
+            <aside aria-label="Annotations">
+              <button type="button" onClick={onClose}>
+                Close annotations
+              </button>
+            </aside>
+          ),
+        }),
+      });
+      const dialog = expandCanvas();
+
+      streamChanges([{ type: "select", id: `board:${HOME}`, selected: true }]);
+      const panel = within(dialog).getByLabelText("Annotations");
+      fireEvent.click(
+        within(panel).getByRole("button", { name: "Close annotations" }),
+      );
+
+      expect(within(dialog).queryByLabelText("Annotations")).toBeNull();
+    });
+  });
+
+  describe("the Pages popover", () => {
+    it("opens inside the raised surface and takes the first Escape, leaving the second to lower the surface", async () => {
+      const user = userEvent.setup();
+      mountExpandable({});
+      const dialog = expandCanvas();
+
+      await user.click(within(dialog).getByRole("button", { name: "Pages" }));
+      const pages = screen.getByRole("list", { name: "Canvas pages" });
+      expect(dialog.contains(pages)).toBe(true);
+
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("list", { name: "Canvas pages" })).toBeNull();
+      expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  describe("continuity", () => {
+    it("is never unmounted by expanding or collapsing, and carries the reader's state both ways", () => {
+      const mounted = vi.fn();
+      function MountProbe(): ReactNode {
+        useEffect(() => {
+          mounted();
+        }, []);
+        return null;
+      }
+      mountExpandable({
+        frameEvents: canvasFrameEvents({
+          renderToolbarControls: () => <MountProbe />,
+        }),
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Hand (H)" }));
+
+      const dialog = expandCanvas();
+      expect(
+        within(dialog)
+          .getByRole("button", { name: "Hand (H)" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Pages" }));
+      const details = screen.getByRole("button", { name: "Details" });
+      expect(dialog.contains(details)).toBe(true);
+      fireEvent.click(details);
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Rectangle (R)" }),
+      );
+      fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(pageMenuNames(document.body)).toBe("Details");
+      expect(
+        screen
+          .getByRole("button", { name: "Rectangle (R)" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      // The toolbar is part of the editor, so a rebuilt editor would mount it again.
+      expect(mounted).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("the gates", () => {
+    it("offers a view-only canvas exactly the controls inline and expanded, and no way to edit a note", () => {
+      mountExpandable({ viewOnly: true });
+      const inline = controlNames(document.body);
+
+      const dialog = expandCanvas();
+
+      expect(controlNames(dialog)).toEqual(inline);
+      expect(
+        within(dialog).queryByRole("button", { name: "Rectangle (R)" }),
+      ).toBeNull();
+      fireEvent.doubleClick(within(dialog).getByText("start here"));
+      expect(
+        within(dialog).queryByRole("textbox", { name: "Sticky note text" }),
+      ).toBeNull();
+    });
+
+    it("refuses comment mode on a canvas that cannot take comments, expanded or not", () => {
+      const onCanvasView = vi.fn<(view: CanvasCommentView | null) => void>();
+      mountExpandable({
+        frameEvents: canvasFrameEvents({
+          commentsEnabled: false,
+          onCanvasView,
+        }),
+      });
+      const dialog = expandCanvas();
+
+      fireEvent.keyDown(within(dialog).getByLabelText("Canvas"), {
+        code: "KeyC",
+      });
+
+      expect(onCanvasView.mock.calls.at(-1)?.[0]?.commenting).toBe(false);
+    });
+
+    it("keeps a view-only canvas from selecting a note", () => {
+      mountExpandable({ viewOnly: true });
+      expandCanvas();
+
+      streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
+
+      expect(
+        screen.queryByRole("complementary", { name: "Note inspector" }),
+      ).toBeNull();
+    });
   });
 });

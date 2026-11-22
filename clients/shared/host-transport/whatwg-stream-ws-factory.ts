@@ -44,6 +44,7 @@ class WhatwgStreamWebSocket implements StreamWebSocketLike {
 
   private readonly url: string;
   private readonly ticket: DialTicket;
+  readonly dialStarted: Promise<void>;
   private native: WebSocket | null = null;
   /**
    * Guards against emitting a second close for a socket already given up on,
@@ -64,6 +65,7 @@ class WhatwgStreamWebSocket implements StreamWebSocketLike {
     this.ticket = hostDialGate.acquire(priority, () => {
       this.dial();
     });
+    this.dialStarted = this.ticket.granted;
   }
 
   private dial(): void {

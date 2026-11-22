@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { renderTile } from "@/components/epic-canvas/renderers/tile-render";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import {
   useTileFindStore,
@@ -18,21 +19,9 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
     props.children,
 }));
-// The chat body is not mounted for real; it reports the tile the minimap
-// context names, which is what the composer inside it publishes under.
-vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
-  const { use } = await import("react");
-  const { TileMinimapContext } =
-    await import("@/components/epic-canvas/tile-minimap/tile-minimap-context");
-  return {
-    ChatTile: () => (
-      <div
-        data-testid="renderer-chat"
-        data-minimap-tile={use(TileMinimapContext) ?? ""}
-      />
-    ),
-  };
-});
+vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
+  ChatTile: () => <div data-testid="renderer-chat" />,
+}));
 vi.mock("@/components/epic-canvas/renderers/tui-agent-tile", () => ({
   TuiAgentTile: () => <div data-testid="renderer-terminal-agent" />,
 }));
@@ -191,6 +180,7 @@ describe("renderTile tile find scope", () => {
             isActive: true,
           })}
         </>,
+        { wrapper: WithTestQueryClient },
       );
 
       const scope = screen.getByTestId("tile-find-scope");
@@ -211,25 +201,6 @@ describe("renderTile tile find scope", () => {
     },
   );
 
-  it("names the tile to the body it renders, so a composer inside it can publish under that tile", () => {
-    const node = NODES[0];
-    render(
-      <>
-        {renderTile({
-          node,
-          viewTabId: "view-1",
-          tileId: "pane-1",
-          epicId: "epic-1",
-          isActive: true,
-        })}
-      </>,
-    );
-
-    expect(
-      screen.getByTestId("renderer-chat").getAttribute("data-minimap-tile"),
-    ).toBe(node.instanceId);
-  });
-
   it("keeps inactive or hidden tile scopes from owning find", async () => {
     const node = NODES[0];
     render(
@@ -242,6 +213,7 @@ describe("renderTile tile find scope", () => {
           isActive: false,
         })}
       </>,
+      { wrapper: WithTestQueryClient },
     );
 
     await waitFor(() => {
@@ -264,6 +236,7 @@ describe("renderTile tile find scope", () => {
           isActive: true,
         })}
       </>,
+      { wrapper: WithTestQueryClient },
     );
 
     await waitFor(() => {

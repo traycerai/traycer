@@ -1,5 +1,6 @@
 export * from "./unary-schemas";
 export * from "./chat-attachment";
+export * from "./chat-file";
 export * from "./artifact-objects";
 export * from "./artifact-versions";
 export * from "./artifact-attachment";
@@ -9,6 +10,7 @@ export * from "./chat-backup-status";
 // exported before the three modules that consume it.
 export * from "./record-list-revision";
 export * from "./chat-records";
+export * from "./chat-hydration";
 export * from "./tui-agent-records";
 export * from "./chat-replica-read";
 export * from "./cloud-chat";

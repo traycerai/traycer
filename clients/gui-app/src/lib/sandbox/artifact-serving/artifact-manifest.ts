@@ -13,6 +13,14 @@ export interface ArtifactManifest {
   readonly files: Readonly<Record<string, ArtifactManifestEntry>>;
 }
 
+/**
+ * The artifact's own pages: what a link inside it can open, and what a
+ * comment can go on.
+ */
+export function artifactPagePaths(manifest: ArtifactManifest): string[] {
+  return Object.keys(manifest.files).filter((path) => /\.html?$/i.test(path));
+}
+
 export function resolveManifestPath(
   manifest: ArtifactManifest,
   path: string,

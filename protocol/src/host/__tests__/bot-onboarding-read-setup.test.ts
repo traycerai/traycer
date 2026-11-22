@@ -4,6 +4,7 @@ import {
   botOnboardingReadV10,
   botOnboardingReadV11,
   botOnboardingReadV12,
+  botOnboardingReadV13,
 } from "@traycer/protocol/host/bot/contracts";
 
 const BOT_A = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -23,8 +24,9 @@ const V10_RESPONSE = {
 const entry = hostRpcRegistry["bot.onboarding.read"][1];
 
 describe("bot.onboarding.read@1.1 setup", () => {
-  it("is frozen between 1.0 and the 1.2 head", () => {
-    expect(entry.latestMinor).toBe(2);
+  it("is frozen between 1.0 and the 1.3 head", () => {
+    expect(entry.latestMinor).toBe(3);
+    expect(entry.versions[3].contract).toBe(botOnboardingReadV13);
     expect(entry.versions[2].contract).toBe(botOnboardingReadV12);
     expect(entry.versions[1].contract).toBe(botOnboardingReadV11);
     expect(entry.versions[0].contract).toBe(botOnboardingReadV10);
@@ -133,5 +135,79 @@ describe("bot.onboarding.read@1.2 setup state", () => {
     expect(parse({ botId: BOT_A, title: "Tracy" })).toBe(false);
     expect(parse({ ...NEEDS_HOST, state: "ready" })).toBe(false);
     expect(parse({ ...NEEDS_HOST, arrival: { kind: "machine" } })).toBe(false);
+  });
+});
+
+describe("bot.onboarding.read@1.3 arrival on a team's own computer", () => {
+  const LIVE = {
+    botId: BOT_A,
+    title: "Tracy",
+    state: "live",
+    arrival: { kind: "machine" },
+  } as const;
+
+  it("accepts a machine arrival beside cloud, and nothing else", () => {
+    const parse = (setup: object) =>
+      botOnboardingReadV13.responseSchema.safeParse({ ...V10_RESPONSE, setup })
+        .success;
+    expect(parse(LIVE)).toBe(true);
+    expect(parse({ ...LIVE, arrival: { kind: "cloud" } })).toBe(true);
+    expect(parse({ ...LIVE, arrival: { kind: "laptop" } })).toBe(false);
+  });
+
+  it("keeps 1.2 frozen on cloud alone, so a machine arrival is projected, never sent", () => {
+    expect(
+      botOnboardingReadV12.responseSchema.safeParse({
+        ...V10_RESPONSE,
+        setup: LIVE,
+      }).success,
+    ).toBe(false);
+    expect(entry.versions[3].responseGrowthProjectionGated).toBe(true);
+  });
+
+  it("upgrades a 1.2 response unchanged", () => {
+    const upgrade = entry.versions[3].upgradeFromPreviousVersion;
+    if (upgrade === null) throw new Error("expected a 1.2 to 1.3 upgrade path");
+    const v12 = botOnboardingReadV12.responseSchema.parse({
+      ...V10_RESPONSE,
+      setup: { ...LIVE, arrival: { kind: "cloud" } },
+    });
+    expect(upgrade.upgradeResponse(v12)).toEqual(v12);
+  });
+});
+
+describe("bot.onboarding.read@1.3 setup whose machine is joining", () => {
+  const HOST_JOINING = {
+    botId: BOT_A,
+    title: "Tracy",
+    state: "host_joining",
+    arrival: { kind: "machine" },
+  } as const;
+  const parseAt = (
+    contract: typeof botOnboardingReadV12 | typeof botOnboardingReadV13,
+    setup: object,
+  ): boolean =>
+    contract.responseSchema.safeParse({ ...V10_RESPONSE, setup }).success;
+
+  it("accepts host_joining at 1.3 with a machine arrival", () => {
+    expect(
+      botOnboardingReadV13.responseSchema.parse({
+        ...V10_RESPONSE,
+        setup: HOST_JOINING,
+      }).setup,
+    ).toEqual(HOST_JOINING);
+  });
+
+  it("keeps 1.2 frozen on needs_host and live, so host_joining is projected, never sent", () => {
+    expect(parseAt(botOnboardingReadV12, HOST_JOINING)).toBe(false);
+    expect(
+      parseAt(botOnboardingReadV12, { ...HOST_JOINING, arrival: null }),
+    ).toBe(false);
+  });
+
+  it("still names no other state", () => {
+    expect(
+      parseAt(botOnboardingReadV13, { ...HOST_JOINING, state: "joining" }),
+    ).toBe(false);
   });
 });

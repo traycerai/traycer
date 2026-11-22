@@ -1,4 +1,6 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   ChevronRight,
   EllipsisVertical,
@@ -8,7 +10,7 @@ import {
 } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
-import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { LiveBotAvatar, NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -41,6 +43,7 @@ import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-s
 import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
@@ -51,6 +54,7 @@ import { useBotFollowedThreads } from "@/hooks/bots/use-bot-followed-threads";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
 import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
@@ -112,7 +116,7 @@ export function BotChannelSidebar(props: {
 }): ReactNode {
   const { activeBotId, hostId, threadsView, onChannelOpened } = props;
   const client = useTabHostClient();
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   useRereadEnvironmentListOnFocus(true);
   const bots = useBotListQuery(client, true);
   const connectable = useConnectableHostIds();
@@ -177,8 +181,11 @@ export function BotChannelSidebar(props: {
   const [newBot, setNewBot] = useState<NewBotTarget | null>(null);
   const openChannel = (channel: SidebarChannel): void => {
     onChannelOpened();
-    if (channel.botId === activeBotId) {
-      threadsView?.onLeave();
+    // The surface's own channel, whichever row the caller marks current: a
+    // picker over Threads marks none.
+    const surface = useTracySurfaceStore.getState();
+    if (channel.botId === surface.botId) {
+      surface.showChannel();
       return;
     }
     openBotChannel(channel.botId, null);
@@ -195,38 +202,40 @@ export function BotChannelSidebar(props: {
       {threadsView === null ? null : (
         <ThreadsRow hostId={hostId} bots={botList} view={threadsView} />
       )}
-      <SortableColumnList
-        ids={model.groups.map((group) => group.environmentId)}
-        onReorder={(order) => setSectionOrder(order, answeredModel)}
-        renderLifted={(environmentId) => (
-          <SectionLiftedHeader
-            label={
-              model.groups.find(
-                (group) => group.environmentId === environmentId,
-              )?.label ?? environmentId
-            }
-          />
-        )}
-      >
-        {model.groups.map((group) => (
-          <SidebarSection
-            key={group.environmentId}
-            answeredModel={answeredModel}
-            group={group}
-            activeBotId={currentBotId}
-            unreadByBotId={unreadByBotId}
-            canSetMainBot={canSetMainBot}
-            setup={
-              teamSetups.setups.find(
-                (setup) => setup.environmentId === group.environmentId,
-              ) ?? null
-            }
-            hostId={hostId}
-            onOpenChannel={openChannel}
-            onNewBot={setNewBot}
-          />
-        ))}
-      </SortableColumnList>
+      <UnlessBotListFailed bots={bots}>
+        <SortableColumnList
+          ids={model.groups.map((group) => group.environmentId)}
+          onReorder={(order) => setSectionOrder(order, answeredModel)}
+          renderLifted={(environmentId) => (
+            <SectionLiftedHeader
+              label={
+                model.groups.find(
+                  (group) => group.environmentId === environmentId,
+                )?.label ?? environmentId
+              }
+            />
+          )}
+        >
+          {model.groups.map((group) => (
+            <SidebarSection
+              key={group.environmentId}
+              answeredModel={answeredModel}
+              group={group}
+              activeBotId={currentBotId}
+              unreadByBotId={unreadByBotId}
+              canSetMainBot={canSetMainBot}
+              setup={
+                teamSetups.setups.find(
+                  (setup) => setup.environmentId === group.environmentId,
+                ) ?? null
+              }
+              hostId={hostId}
+              onOpenChannel={openChannel}
+              onNewBot={setNewBot}
+            />
+          ))}
+        </SortableColumnList>
+      </UnlessBotListFailed>
       {noTeam ? <CreateTeamRow /> : null}
       <NewBotDialog
         target={newBot}
@@ -235,6 +244,26 @@ export function BotChannelSidebar(props: {
         onClose={() => setNewBot(null)}
       />
     </nav>
+  );
+}
+
+/**
+ * The sections, or the bot list's failure with Retry while it has loaded
+ * nothing: with no bots, the sections would read as having none, and offer
+ * to make one.
+ */
+function UnlessBotListFailed(props: {
+  readonly bots: UseQueryResult<unknown, HostRpcError>;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { bots } = props;
+  if (!bots.isError || bots.data !== undefined) return props.children;
+  return (
+    <BotReadFailure
+      message="Couldn't load your bots."
+      onRetry={() => void bots.refetch()}
+      testId="bot-channel-sidebar-error"
+    />
   );
 }
 
@@ -678,10 +707,10 @@ function ChannelRow(props: {
         active
           ? "bg-accent text-accent-foreground"
           : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
-        bold && !active && "font-semibold text-foreground",
+        bold && "font-semibold text-foreground",
       )}
     >
-      <NamedBotAvatar botId={bot.botId} size="sm" />
+      <LiveBotAvatar botId={bot.botId} hostId={hostId} size="sm" />
       {/* The star sits on the name, before any count. */}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="truncate">{bot.title}</span>
@@ -703,6 +732,8 @@ function ChannelRow(props: {
           count={unreadCount}
           size="sm"
           testId="bot-channel-row-unread-count"
+          corner={null}
+          noun="unread"
         />
       )}
     </button>

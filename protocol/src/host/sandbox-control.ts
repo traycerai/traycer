@@ -132,13 +132,21 @@ export const sandboxRouteReadinessSchema: z.ZodType<SandboxRouteReadiness> =
  * create and destroy answers carry it (the server's `SandboxView`). The list
  * excludes destroyed rows.
  */
+/** A create waiting for quota; an absent field preserves older servers' behavior. */
+export interface SandboxRateLimit {
+  readonly limited: true;
+  readonly retryAfterAt: number | null;
+}
+
 export interface SandboxSummary {
+  /** Whole start/resume attempt; absent from older servers. */
+  readonly wakeBudgetMs?: number;
   /** The sandbox id: the path segment of every `/api/sandboxes/:id` verb. */
   readonly id: string;
   /** The host id the sandbox enrolled under; joins the host list row. */
   readonly hostId: string;
   readonly kind: SandboxKind;
-  /** `tensorlake`, `daytona`, `gke-automation`; read as text, never branched on. */
+  /** Provider slug; read as text, never branched on. */
   readonly provider: string;
   readonly region: string;
   readonly os: SandboxOs;
@@ -150,6 +158,7 @@ export interface SandboxSummary {
   readonly frozen: boolean;
   /** The vendor's or the lifecycle's code on a `failed` row, else `null`. */
   readonly failureCode: string | null;
+  readonly rateLimit?: SandboxRateLimit;
   /** `null` = the default idle period (30 minutes). */
   readonly idleMinutes: number | null;
   /** Created by an agent for one task; offered in no picker. */
@@ -194,7 +203,8 @@ export interface SandboxSummary {
   readonly priceMcPerHour: SandboxHourlyPrice | null;
   /**
    * The environment the sandbox belongs to; `null` from a server that
-   * predates environments, which reads as the person's Personal one.
+   * predates environments. An absent id does not establish Personal
+   * membership; the sandbox's environment is unknown.
    */
   readonly environmentId: string | null;
   /**
@@ -263,6 +273,30 @@ export interface SandboxSummary {
    * catalogue gives it; `null` from a server before the field.
    */
   readonly regionLabel: string | null;
+  /**
+   * When this sandbox stops running, because the control plane no longer
+   * runs sandboxes of its kind after that date; `null` on every ordinary row
+   * and from a server before the field.
+   *
+   * On an UNFROZEN row this comes with no resting deadline (`destroyAt` is
+   * `null`), because the control plane does not end a withdrawn row for
+   * resting while this date stands. A FROZEN row is the exception: it keeps
+   * its own day-30 `destroyAt`, which is decided ahead of the withdrawal, so
+   * a frozen withdrawn row carries BOTH fields. A surface that names one
+   * deadline must prefer `destroyAt` wherever it is set — that is the day the
+   * control plane acts on — and read this date only when it is `null`.
+   *
+   * What it marks is an **announced calendar day in UTC**. The instant
+   * inside that day carries no meaning — nothing compares this value to the
+   * clock, and the drain it announces is operational — so render its UTC day
+   * and no clock time. Reading it in the reader's own zone names the day
+   * before for every reader west of UTC, and names two different days to two
+   * readers of one announcement; a clock time would promise a cutoff that
+   * nothing enforces.
+   */
+  readonly withdrawalEndsAt: number | null;
+  /** When the suspended session is lost; absent on older servers. */
+  readonly suspendedSessionEndsAt?: number | null;
 }
 
 /**
@@ -418,6 +452,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
   z.object({
     id: z.string().min(1),
     hostId: z.string().min(1),
+    wakeBudgetMs: z.number().positive().optional(),
     kind: sandboxKindSchema,
     provider: z.string(),
     region: z.string(),
@@ -429,6 +464,12 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     state: z.enum(HOST_SANDBOX_STATES),
     frozen: z.boolean(),
     failureCode: z.string().nullable(),
+    rateLimit: z
+      .object({
+        limited: z.literal(true),
+        retryAfterAt: z.number().finite().nullable(),
+      })
+      .optional(),
     idleMinutes: z.number().int().positive().nullable(),
     burst: z.boolean(),
     createdByHostId: z.string().nullable(),
@@ -474,6 +515,8 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     // fail the row, and with it the whole sandbox list.
     operation: sandboxOperationSchema.nullable().default(null).catch(null),
     regionLabel: z.string().nullable().default(null),
+    withdrawalEndsAt: z.number().nullable().default(null),
+    suspendedSessionEndsAt: z.number().nullable().optional(),
   }),
 );
 
@@ -591,6 +634,8 @@ export interface SandboxShapeBounds {
   readonly diskMinMb: number;
   readonly diskMaxMb: number;
   readonly diskDefaultMb: number;
+  /** Allocation step; absent on older catalogues. */
+  readonly diskStepMb?: number;
 }
 
 export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
@@ -607,6 +652,7 @@ export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
       diskMinMb: z.number().int().positive(),
       diskMaxMb: z.number().int().positive(),
       diskDefaultMb: z.number().int().positive(),
+      diskStepMb: z.number().int().positive().optional().catch(undefined),
     }),
   );
 
@@ -634,14 +680,18 @@ export const sandboxShapeRungSchema: z.ZodType<SandboxShapeRung> = lazySchema(
 
 /**
  * A region's rates per unit, in millicredits an hour, as the server bills
- * them (memory and disk in GiB, `MB / 1024`): a shape's awake price is
- * `ceil((cpus × vcpu + memory GB × memory) × multiplier)`; `disk` is the
- * snapshot rate a suspended or stopped sandbox pays instead.
+ * them (memory and disk in GiB, `MB / 1024`). Awake bills CPU, memory and
+ * optional awake disk; suspended bills memory and disk; stopped bills disk.
+ * Each total is multiplied by the margin and rounded up.
  */
 export interface SandboxCataloguePricing {
   readonly vcpuHourMillicredits: number;
   readonly memoryGbHourMillicredits: number;
   readonly diskGbHourMillicredits: number;
+  /** Absent or null uses the snapshot disk rate. */
+  readonly suspendedMemoryGbHourMillicredits?: number | null;
+  /** Absent or null bills no disk while awake. */
+  readonly awakeDiskGbHourMillicredits?: number | null;
   readonly multiplier: number;
 }
 
@@ -651,9 +701,37 @@ export const sandboxCataloguePricingSchema: z.ZodType<SandboxCataloguePricing> =
       vcpuHourMillicredits: z.number().nonnegative(),
       memoryGbHourMillicredits: z.number().nonnegative(),
       diskGbHourMillicredits: z.number().nonnegative(),
+      suspendedMemoryGbHourMillicredits: z
+        .number()
+        .nonnegative()
+        .nullable()
+        .optional()
+        .catch(undefined),
+      awakeDiskGbHourMillicredits: z
+        .number()
+        .nonnegative()
+        .nullable()
+        .optional()
+        .catch(undefined),
       multiplier: z.number().positive(),
     }),
   );
+
+export interface SandboxShapePrice {
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number;
+  readonly priceMcPerHour: SandboxHourlyPrice;
+}
+
+const sandboxShapePriceSchema: z.ZodType<SandboxShapePrice> = lazySchema(() =>
+  z.object({
+    cpus: z.number().positive(),
+    memoryMb: z.number().int().positive(),
+    diskMb: z.number().int().positive(),
+    priceMcPerHour: sandboxHourlyPriceSchema,
+  }),
+);
 
 export interface SandboxCatalogueRegion {
   readonly id: string;
@@ -661,11 +739,94 @@ export interface SandboxCatalogueRegion {
   /** The price of the provider's SMALLEST shape here, for a "from" line. */
   readonly fromPriceMcPerHour: SandboxHourlyPrice;
   /**
-   * The per-unit rates any shape here is priced from; `null` from a server
-   * that predates them, which leaves only the "from" price.
+   * The fallback per-unit rates; `null` when a server supplies none or prices
+   * whole shapes instead. Exact {@link shapePrices} take precedence.
    */
   readonly pricing: SandboxCataloguePricing | null;
+  /** Exact rung prices; absent from servers that publish only unit rates. */
+  readonly shapePrices?: readonly SandboxShapePrice[];
 }
+
+/** Null environment selects Personal, as it does on a create. */
+export interface SandboxCatalogueReadinessRequest {
+  readonly environmentId: string | null;
+  readonly os: SandboxOs;
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number | null;
+  readonly region: string;
+}
+
+export const sandboxCatalogueReadinessRequestSchema: z.ZodType<SandboxCatalogueReadinessRequest> =
+  lazySchema(() =>
+    z.object({
+      environmentId: z.string().min(1).nullable(),
+      os: sandboxOsSchema,
+      cpus: z.number().positive(),
+      memoryMb: z.number().int().positive(),
+      diskMb: z.number().int().positive().nullable(),
+      region: z.string().min(1),
+    }),
+  );
+
+export interface SandboxCatalogueReadiness {
+  readonly request: {
+    readonly os: SandboxOs;
+    readonly shape: {
+      readonly cpus: number;
+      readonly memoryMb: number;
+      readonly diskMb: number;
+    };
+    readonly generationId: string | null;
+    readonly launchForm: {
+      readonly kind: "template";
+      readonly object: string;
+      readonly digest: string;
+    } | null;
+    readonly region: string;
+  };
+  readonly result: { readonly warm: number | null };
+}
+
+const sandboxCatalogueReadinessSchema: z.ZodType<SandboxCatalogueReadiness> =
+  lazySchema(() =>
+    z
+      .object({
+        request: z.object({
+          os: sandboxOsSchema,
+          shape: z.object({
+            cpus: z.number().positive(),
+            memoryMb: z.number().positive(),
+            diskMb: z.number().positive(),
+          }),
+          generationId: z.string().min(1).nullable(),
+          launchForm: z
+            .object({
+              kind: z.literal("template"),
+              object: z.string().min(1),
+              digest: z.string().regex(/^[a-f0-9]{64}$/),
+            })
+            .nullable(),
+          region: z.string().min(1),
+        }),
+        result: z.object({ warm: z.number().int().nonnegative().nullable() }),
+      })
+      .refine(
+        ({ request }) =>
+          request.generationId === null || request.launchForm === null,
+        {
+          message:
+            "A readiness request cannot name both a generation and a launch form",
+        },
+      )
+      .refine(
+        ({ request, result }) =>
+          result.warm === null ||
+          request.generationId !== null ||
+          request.launchForm !== null,
+        { message: "A warmth count requires a generation or launch form" },
+      ),
+  );
 
 export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
   lazySchema(() =>
@@ -673,12 +834,21 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
       id: z.string().min(1),
       label: z.string(),
       fromPriceMcPerHour: sandboxHourlyPriceSchema,
-      pricing: sandboxCataloguePricingSchema.nullable().default(null),
+      pricing: sandboxCataloguePricingSchema
+        .nullable()
+        .default(null)
+        .catch(null),
+      shapePrices: z.array(sandboxShapePriceSchema).optional().catch(undefined),
     }),
   );
 
 export interface SandboxCatalogueProvider {
   readonly provider: string;
+  /** Whole attempts, derived from this provider's lifecycle budgets. */
+  readonly createBudgetMs?: number;
+  /** Recorded p95 create-to-registration in raw milliseconds; absent on older servers. */
+  readonly coldCreateMeasuredMs?: number | null;
+  readonly readiness?: SandboxCatalogueReadiness;
   readonly os: readonly SandboxOs[];
   /**
    * The bounds a create must fall inside. A server that lists
@@ -721,6 +891,16 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
   lazySchema(() =>
     z.object({
       provider: z.string().min(1),
+      // Optional enrichments may be newer than this reader; malformed values
+      // leave the core catalogue and its older-server fallbacks usable.
+      createBudgetMs: z.number().positive().optional().catch(undefined),
+      coldCreateMeasuredMs: z
+        .number()
+        .nonnegative()
+        .nullable()
+        .optional()
+        .catch(undefined),
+      readiness: sandboxCatalogueReadinessSchema.optional().catch(undefined),
       os: z.array(sandboxOsSchema),
       shape: sandboxShapeBoundsSchema,
       // Absent, unparseable, or without exactly one default reads as `null`,
@@ -738,7 +918,7 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
       wakeClass: z.string(),
       dockerInGuest: z.boolean(),
       creatable: z.boolean().default(true),
-      notCreatableReason: z.string().nullable().default(null),
+      notCreatableReason: z.string().nullable().default(null).catch(null),
       regions: z.array(sandboxCatalogueRegionSchema),
     }),
   );
@@ -754,7 +934,7 @@ export const sandboxCatalogueSchema: z.ZodType<SandboxCatalogue> = lazySchema(
   () =>
     z.object({
       providers: z.array(sandboxCatalogueProviderSchema),
-      offeredAgents: z.array(z.string()).optional(),
+      offeredAgents: z.array(z.string()).optional().catch(undefined),
     }),
 );
 
@@ -856,7 +1036,9 @@ export type SandboxCreditSource = "personal" | "team-allowance" | "team";
  *    (`os-not-offered`, `region-not-offered`, `cpus-out-of-range`,
  *    `memory-out-of-range`, `memory-per-cpu-out-of-range`, `disk-out-of-range`,
  *    `provider-plan-too-small`: the account's plan cannot create any shape
- *    of the provider, see `SandboxCatalogueProvider.creatable`).
+ *    of the provider, see `SandboxCatalogueProvider.creatable`;
+ *    `provider-withdrawn`: no new sandbox of that operating system is made
+ *    any more, and the rows already on it carry `withdrawalEndsAt`).
  *  - `insufficient_credit` (`402`): the create gate refused; `reason`
  *    (`denied`, `unverified`, `unsupported-subscription`), the shortfall
  *    (`null` when the balance is unknown) and the burn it was computed from.
@@ -929,6 +1111,11 @@ export const SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE =
  * old name, so trying again is safe.
  */
 export const SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE = "rename_unavailable";
+/**
+ * A kept team sandbox (a create or a Keep) whose environment already has its
+ * bot host: a kept sandbox or a team machine (Tracy Bots T141).
+ */
+export const SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS = "team_host_exists";
 
 // -----------------------------------------------------------------------------
 // Lifecycle verbs

@@ -20,7 +20,6 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type {
   ChatSearchMessageHit,
   ChatSearchMessageMatch,
-  ChatSearchResponse,
 } from "@traycer/protocol/host/chat-search/schemas";
 import { HistoryMessageHits } from "@/components/epics/history-message-hits";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
@@ -184,12 +183,10 @@ const EXPANSION_BASE: ChatSearchBaseRequest = {
 
 function readyStatus(
   messages: ReadonlyArray<ChatSearchMessageMatch>,
-  indexState: ChatSearchResponse["indexState"],
 ): Extract<ChatSearchMessageHitsStatus, { readonly kind: "ready" }> {
   return {
     kind: "ready",
     messages,
-    indexState,
     expansionBase: EXPANSION_BASE,
     showMore: null,
     loadingMore: false,
@@ -265,7 +262,7 @@ afterEach(() => {
 
 describe("HistoryMessageHits: when the question cannot be asked", () => {
   it("renders nothing, and asks nothing, below the body-search minimum", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { container } = renderSection({ query: " b " });
 
@@ -277,7 +274,7 @@ describe("HistoryMessageHits: when the question cannot be asked", () => {
 
   it("renders nothing with no host runtime above it", () => {
     testState.hostPresent = false;
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { container } = renderSection({});
 
@@ -292,7 +289,7 @@ describe("HistoryMessageHits: when the question cannot be asked", () => {
   });
 
   it("searches every accessible task on the effective host", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({ query: "browser" });
 
@@ -326,7 +323,7 @@ function headerBand(): HTMLElement {
 describe("HistoryMessageHits: the header", () => {
   it("names the host in the heading, so the region's name carries it too", () => {
     testState.hostEntry = TANVEER_HOST;
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({});
 
@@ -339,7 +336,7 @@ describe("HistoryMessageHits: the header", () => {
   });
 
   it("falls back to this machine when the directory has no label", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({});
 
@@ -349,7 +346,7 @@ describe("HistoryMessageHits: the header", () => {
   });
 
   it("is a direct sibling of its region, in the same scrolling flow", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { container } = renderSection({});
 
@@ -367,7 +364,7 @@ describe("HistoryMessageHits: the header", () => {
   });
 
   it("owns the one top border, and no margin, in both placements", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     for (const standalone of [false, true]) {
       renderSection({ standalone });
@@ -378,10 +375,10 @@ describe("HistoryMessageHits: the header", () => {
   });
 
   it("draws no visible count line and no Tasks-style badge", () => {
-    testState.status = readyStatus(
-      [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
-      "complete",
-    );
+    testState.status = readyStatus([
+      messageMatch("chat-1", 1),
+      messageMatch("chat-2", 1),
+    ]);
 
     renderSection({});
 
@@ -393,7 +390,7 @@ describe("HistoryMessageHits: the header", () => {
   });
 
   it("pins to the top and the bottom under All, to the top only standalone", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({ standalone: false });
     expect(headerBand().className).toContain("top-0");
@@ -406,7 +403,7 @@ describe("HistoryMessageHits: the header", () => {
   });
 
   it("hands off to chat search with the plain 'Refine in chat search' label", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({});
 
@@ -416,7 +413,7 @@ describe("HistoryMessageHits: the header", () => {
   });
 
   it("is not a row stop: only the hit controls carry the row-navigation hooks", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { onRowKeyDown } = renderSection({});
     const label = screen.getByRole("button", {
@@ -479,7 +476,7 @@ describe("HistoryMessageHits: the header label scrolls its region", () => {
   });
 
   it("scrolls the region to its start, smoothly by default", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /^Message matches/ }));
@@ -494,7 +491,7 @@ describe("HistoryMessageHits: the header label scrolls its region", () => {
 
   it("jumps instantly under reduced motion", () => {
     reducedMotion = true;
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /^Message matches/ }));
@@ -508,7 +505,7 @@ describe("HistoryMessageHits: the header label scrolls its region", () => {
 
 describe("HistoryMessageHits: when it draws no header", () => {
   it("draws none below the minimum, with no runtime, or for an absent source", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
     const short = renderSection({ query: "b", standalone: false });
     expect(short.container.querySelector("h3")).toBeNull();
     cleanup();
@@ -525,7 +522,7 @@ describe("HistoryMessageHits: when it draws no header", () => {
   });
 
   it("draws none in count-only, however ready the answer", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { container } = renderSection({ display: "count-only" });
 
@@ -553,10 +550,10 @@ describe("HistoryMessageHits: the filters line", () => {
   const LINE = "Filters apply to tasks only.";
 
   it("is one muted line, only while a task filter is active", () => {
-    testState.status = readyStatus(
-      [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
-      "complete",
-    );
+    testState.status = readyStatus([
+      messageMatch("chat-1", 1),
+      messageMatch("chat-2", 1),
+    ]);
 
     renderSection({ filtersActive: false });
     expect(screen.queryByText(LINE)).toBeNull();
@@ -574,7 +571,7 @@ describe("HistoryMessageHits: the filters line", () => {
   });
 
   it("shows under standalone Messages too", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({ filtersActive: true, standalone: true });
 
@@ -582,7 +579,7 @@ describe("HistoryMessageHits: the filters line", () => {
   });
 
   it("is absent when the message group itself is not drawn", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({ filtersActive: true, display: "count-only" });
 
@@ -606,7 +603,7 @@ describe("HistoryMessageHits: the count line", () => {
     const { rerender } = renderSection({});
     const before = screen.getByRole("status");
 
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
     rerender();
 
     expect(screen.getByRole("status")).toBe(before);
@@ -615,10 +612,7 @@ describe("HistoryMessageHits: the count line", () => {
 
   it("adds a plus when more pages of chats remain", () => {
     testState.status = {
-      ...readyStatus(
-        [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
-        "complete",
-      ),
+      ...readyStatus([messageMatch("chat-1", 1), messageMatch("chat-2", 1)]),
       showMore: () => {},
     };
 
@@ -630,10 +624,10 @@ describe("HistoryMessageHits: the count line", () => {
 
 describe("HistoryMessageHits: the count it reports upward", () => {
   it("reports a primitive N once ready", () => {
-    testState.status = readyStatus(
-      [messageMatch("chat-1", 1), messageMatch("chat-2", 1)],
-      "complete",
-    );
+    testState.status = readyStatus([
+      messageMatch("chat-1", 1),
+      messageMatch("chat-2", 1),
+    ]);
 
     const { onCountChange } = renderSection({});
 
@@ -642,7 +636,7 @@ describe("HistoryMessageHits: the count it reports upward", () => {
 
   it("reports N+ while a next cursor exists", () => {
     testState.status = {
-      ...readyStatus([messageMatch("chat-1", 1)], "complete"),
+      ...readyStatus([messageMatch("chat-1", 1)]),
       showMore: () => {},
     };
 
@@ -675,7 +669,7 @@ describe("HistoryMessageHits: the count it reports upward", () => {
   });
 
   it("reports nothing below the body-search minimum", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { onCountChange } = renderSection({ query: "b" });
 
@@ -685,7 +679,7 @@ describe("HistoryMessageHits: the count it reports upward", () => {
 
   it("reports nothing with no host client to ask", () => {
     testState.hostPresent = false;
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { onCountChange } = renderSection({});
 
@@ -693,7 +687,7 @@ describe("HistoryMessageHits: the count it reports upward", () => {
   });
 
   it("reports a real zero when a ready search found nothing", () => {
-    testState.status = readyStatus([], "complete");
+    testState.status = readyStatus([]);
 
     const { onCountChange } = renderSection({});
 
@@ -701,7 +695,7 @@ describe("HistoryMessageHits: the count it reports upward", () => {
   });
 
   it("does not report again when a re-render leaves the projection unchanged", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { onCountChange, rerender } = renderSection({});
     rerender();
@@ -713,7 +707,7 @@ describe("HistoryMessageHits: the count it reports upward", () => {
 
 describe("HistoryMessageHits: count-only display", () => {
   it("draws nothing but still asks, so the Tasks badge stays live", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { container, onCountChange } = renderSection({
       display: "count-only",
@@ -725,7 +719,7 @@ describe("HistoryMessageHits: count-only display", () => {
   });
 
   it("draws nothing even in standalone form", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     const { container } = renderSection({
       display: "count-only",
@@ -801,7 +795,7 @@ describe("HistoryMessageHits: the standalone Messages pane", () => {
   });
 
   it("renders the hits themselves", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({ standalone: true });
 
@@ -844,43 +838,17 @@ describe("HistoryMessageHits: loading and failure", () => {
   });
 
   it("says so when the search found nothing", () => {
-    testState.status = readyStatus([], "complete");
+    testState.status = readyStatus([]);
 
     renderSection({});
 
     expect(screen.getByText("No messages match.")).toBeTruthy();
-    // A complete index means the empty answer is the whole answer; there is
-    // no caveat to add, and adding one would imply doubt that does not exist.
-    // (The header's count line is always a status, so look for the caveat.)
-    expect(screen.queryByText(/Still indexing/)).toBeNull();
-  });
-
-  // History never shows the caveat itself - it names the host in its own
-  // header instead - whether the partial index came back empty or not.
-  it("never shows the still-indexing caveat on an empty result from a partial index", () => {
-    testState.status = readyStatus([], "partial");
-
-    renderSection({});
-
-    expect(screen.queryByText(/Still indexing/)).toBeNull();
-    expect(screen.getByText("No messages match.")).toBeTruthy();
-  });
-
-  it("never shows the still-indexing caveat on a partial index that DID find something", () => {
-    // The other half of the pair, so the omission cannot regress to only
-    // ever holding on the empty branch.
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "partial");
-
-    renderSection({});
-
-    expect(screen.queryByText(/Still indexing/)).toBeNull();
-    expect(screen.queryByText("No messages match.")).toBeNull();
   });
 });
 
 describe("HistoryMessageHits: the two ways out", () => {
   it("opens a hit on the host that answered the search", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -898,7 +866,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
   it("dismisses the History overlay when a hit opens from the modal form", () => {
     testState.historyOverlayActive = true;
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -907,7 +875,7 @@ describe("HistoryMessageHits: the two ways out", () => {
   });
 
   it("leaves the overlay alone when History is a tab", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({});
     fireEvent.click(screen.getByRole("button", { name: /Chat chat-1/ }));
@@ -920,7 +888,7 @@ describe("HistoryMessageHits: the two ways out", () => {
   // flight. The refusal is asked when the hit is CLICKED, not when it rendered.
   it("refuses to open a hit in a task whose deletion is in flight, and opens it again once that settles", async () => {
     testState.historyOverlayActive = true;
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
     const held = holdEpicBatchDelete(queryClient, ["epic-1"]);
 
     renderSection({});
@@ -940,7 +908,7 @@ describe("HistoryMessageHits: the two ways out", () => {
   });
 
   it("opens a hit whose task is not the one being deleted", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
     void holdEpicBatchDelete(queryClient, ["epic-other"]);
 
     renderSection({});
@@ -951,7 +919,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 
   it("hands the trimmed query to the dialog, scoped to every task", () => {
     testState.historyOverlayActive = true;
-    testState.status = readyStatus([messageMatch("chat-1", 1)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 1)]);
 
     renderSection({ query: "  browser  " });
     fireEvent.click(
@@ -969,7 +937,7 @@ describe("HistoryMessageHits: the two ways out", () => {
 describe("HistoryMessageHits: keyboard", () => {
   it("binds History's traversal to every hit control", () => {
     // Header, "N matches" disclosure and the best-hit child: three stops.
-    testState.status = readyStatus([messageMatch("chat-1", 3)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 3)]);
 
     const { container, onRowKeyDown } = renderSection({});
     const stops = container.querySelectorAll("[data-chat-search-nav]");
@@ -983,7 +951,7 @@ describe("HistoryMessageHits: keyboard", () => {
   });
 
   it("lets Left and Right on a header expand and collapse instead of reaching History's traversal", () => {
-    testState.status = readyStatus([messageMatch("chat-1", 3)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 3)]);
 
     const { onRowKeyDown } = renderSection({});
     const header = screen.getByRole("button", {
@@ -1007,7 +975,7 @@ describe("HistoryMessageHits: a host switch is a different index", () => {
     // host in the key the expanded group and the page cursors under it would
     // survive onto rows from another machine's index, where those cursors and
     // that chat id mean nothing.
-    testState.status = readyStatus([messageMatch("chat-1", 2)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 2)]);
 
     const { rerender } = renderSection({});
     const toggle = screen.getByRole("button", { name: "2 matches" });
@@ -1033,7 +1001,7 @@ describe("HistoryMessageHits: a host switch is a different index", () => {
   it("keeps the expansion when nothing about the request moved", () => {
     // The other side of the key, so it cannot regress into remounting on every
     // render and silently collapsing a group the reader just opened.
-    testState.status = readyStatus([messageMatch("chat-1", 2)], "complete");
+    testState.status = readyStatus([messageMatch("chat-1", 2)]);
 
     const { rerender } = renderSection({});
     fireEvent.click(screen.getByRole("button", { name: "2 matches" }));

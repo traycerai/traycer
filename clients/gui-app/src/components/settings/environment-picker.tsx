@@ -21,7 +21,11 @@ import {
 } from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
 import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +35,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -44,7 +50,8 @@ import {
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import {
   useMoveSheetStore,
   type MoveSheetTarget,
@@ -70,8 +77,8 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   // Syncs host-reported state into the window's pick: the store is read by
   // pages that do not mount this hook.
   useEffect(() => {
-    setDefaultPick(defaultPick);
-  }, [defaultPick, setDefaultPick]);
+    setDefaultPick(defaultPick, scope.activeHostId);
+  }, [defaultPick, setDefaultPick, scope.activeHostId]);
   useEffect(() => {
     if (stale) setPick(null);
   }, [stale, setPick]);
@@ -79,9 +86,22 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
 }
 
 /**
- * Settings ▸ Environment's dropdown, at the head of the group: Personal, a
- * Local row under it for each computer whose own settings have not moved,
- * and the team rows. The pick decides what every page below it
+ * The dropdown's pick upkeep for while the dropdown is not on screen: a phone
+ * shows a section's page without the rail, and a running settings search
+ * replaces the rail's list. Without it a Local pick whose computer has since
+ * moved, or turned out to be a team's, would keep its page offering the move.
+ * Mounted with every Settings page (`SettingsPanelForSection`); with the
+ * dropdown on screen too, both write the same answer.
+ */
+export function EnvironmentPickUpkeep(): ReactNode {
+  useEnvironmentPickerModel(useHostScopeFor(WINDOW_HOST_SELECTION));
+  return null;
+}
+
+/**
+ * Settings ▸ Environment's dropdown: Personal, teams and invitations, then
+ * computers running their own settings or still setting up.
+ * The pick decides what every page below it
  * shows; it never changes which host this window works on.
  */
 export function EnvironmentPicker(props: {
@@ -91,14 +111,12 @@ export function EnvironmentPicker(props: {
 }): ReactNode {
   const model = useEnvironmentPickerModel(props.scope);
   const running = useHostsRunningPersonal(true);
+  const openAddHost = useAddHostDialogStore((state) => state.openDialog);
   const pick = useSettingsEnvironmentPickStore(
-    (state) => state.pick ?? state.defaultPick,
+    (state) => state.pick ?? model.defaultPick,
   );
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  const setScopedHostId = useSettingsHostScopeStore(
-    (state) => state.setScopedHostId,
-  );
   const choose = (next: EnvironmentPick): void => {
     moveEnvironmentPick({
       next,
@@ -110,7 +128,7 @@ export function EnvironmentPicker(props: {
   };
   // Finish moving and Rename both continue on that host's Overview.
   const openHostOverview = (hostId: string): void => {
-    setScopedHostId(hostId);
+    carryViewedHostIntoSettingsScope(hostId);
     navigateToSettingsSection("host");
   };
   // Outside the menu, which unmounts its content as it closes on `Review`.
@@ -120,7 +138,12 @@ export function EnvironmentPicker(props: {
   return (
     <>
       <DropdownMenu>
-        <EnvironmentPickerTrigger pick={pick} />
+        <EnvironmentPickerTrigger
+          pick={pick}
+          row={model.localRows.find(
+            (row) => pick.kind === "local" && row.hostId === pick.hostId,
+          )}
+        />
         <DropdownMenuContent
           align="start"
           className="w-[min(28rem,calc(100vw-2rem))]"
@@ -150,6 +173,24 @@ export function EnvironmentPicker(props: {
                 onRename={openHostOverview}
               />
             ))}
+            <TeamRows
+              pick={pick}
+              onPick={choose}
+              onReview={setReviewing}
+              onConnectComputer={() =>
+                openAddHost(props.scope.hosts.map((host) => host.hostId))
+              }
+            />
+            {model.localRows.length > 0 ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>
+                  {model.localRows.some((row) => row.kind === "setup")
+                    ? "Computers"
+                    : "Runs its own settings"}
+                </DropdownMenuLabel>
+              </>
+            ) : null}
             {model.localRows.map((row) => (
               <EnvironmentPickerRow
                 key={row.hostId}
@@ -159,10 +200,10 @@ export function EnvironmentPicker(props: {
                   hostName: row.name,
                 })}
                 label={row.name}
-                badge="Local"
-                badgeTooltip={LOCAL_BADGE_TOOLTIP}
+                badge={null}
+                badgeTooltip={null}
                 subtitle={row.subtitle}
-                nested
+                nested={false}
                 disabled={row.needsUpdate}
                 testId={`environment-picker-local-${row.hostId}`}
                 onSelect={() =>
@@ -175,7 +216,6 @@ export function EnvironmentPicker(props: {
                 verb={localRowVerb(row, openMoveSheet, openHostOverview)}
               />
             ))}
-            <TeamRows pick={pick} onPick={choose} onReview={setReviewing} />
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -257,15 +297,21 @@ function localRowVerb(
 
 function EnvironmentPickerTrigger(props: {
   readonly pick: EnvironmentPick;
+  readonly row: LocalPickerRow | undefined;
 }): ReactNode {
   const { pick } = props;
   const teamLabel = usePickedTeamLabel(
     pick.kind === "team" ? pick.environmentId : "",
   );
   let label: ReactNode = "Personal";
+  let title = "Personal";
   let local = false;
-  if (pick.kind === "local") {
+  if (pick.kind === "unresolved") {
+    label = <AgentSpinningDotsLabel />;
+    title = "";
+  } else if (pick.kind === "local") {
     label = pick.hostName;
+    title = pick.hostName;
     local = true;
   } else if (pick.kind === "team") {
     // A pick the membership list cannot name is either an invitation the
@@ -274,6 +320,7 @@ function EnvironmentPickerTrigger(props: {
     label = teamLabel ?? (
       <InvitedTeamNameLabel environmentId={pick.environmentId} />
     );
+    title = teamLabel ?? "";
   }
   return (
     <DropdownMenuTrigger asChild>
@@ -282,19 +329,33 @@ function EnvironmentPickerTrigger(props: {
         variant="outline"
         size="sm"
         className="w-full justify-between"
+        aria-label={pick.kind === "unresolved" ? "Choose settings" : undefined}
         data-testid="environment-picker-trigger"
       >
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate">{label}</span>
+          <TooltipWrapper
+            label={title.length > 0 ? title : null}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <span className="truncate">{label}</span>
+          </TooltipWrapper>
           {local ? (
             <TooltipWrapper
-              label={LOCAL_BADGE_TOOLTIP}
+              label={
+                props.row?.kind === "setup"
+                  ? props.row.subtitle
+                  : LOCAL_BADGE_TOOLTIP
+              }
               side="top"
               sideOffset={undefined}
               align={undefined}
             >
               <Badge variant="secondary" size="xs">
-                Local
+                {props.row?.kind === "setup"
+                  ? "Setup"
+                  : "Runs its own settings"}
               </Badge>
             </TooltipWrapper>
           ) : null}

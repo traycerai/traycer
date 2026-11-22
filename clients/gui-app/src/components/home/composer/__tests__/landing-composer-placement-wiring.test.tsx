@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import { LANDING_COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -76,12 +77,15 @@ const STAGED_INTENT: WorktreeIntent = {
 let landingTarget: LandingPlacementTarget = READ_TARGET;
 
 const testState = vi.hoisted(() => ({
+  editorClassName: null as string | null,
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
   snapshot: null as (() => void) | null,
   ingesting: false,
   createPending: false,
   pasteDisabled: false,
+  /** The `pathsReachTarget` the composer handed `useLandingComposerPaste`. */
+  pastePathsReachTarget: null as boolean | null,
   resolvingPaths: false,
   runPendingImageJob: null as
     | ((job: (signal: AbortSignal) => Promise<void>) => void)
@@ -168,6 +172,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {
     ComposerBody: (props: ComposerBodyProps) => {
+      testState.editorClassName = props.editorClassName;
       testState.bodySubmit = props.onSubmit;
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
@@ -229,6 +234,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    setDraftAccountFollowsDefault: vi.fn(),
     seedUnseededDraft: vi.fn(() => false),
     createDraft: vi.fn(() => "draft-for-test"),
     // handleSnapshot's unbound-create branch now calls createDraftWithId
@@ -246,6 +252,8 @@ vi.mock("@/stores/home/landing-draft-store", () => {
   );
   return {
     useLandingDraftStore,
+    // No draft in this suite was opened for a host.
+    useLandingDraftNamedHostId: () => null,
   };
 });
 
@@ -282,9 +290,30 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   interface ToolbarMockState {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: {
+      readonly harnessId: string;
+      readonly profileId: string;
+    } | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (
+      account: {
+        readonly harnessId: string;
+        readonly profileId: string;
+      } | null,
+    ) => void;
     readonly selectedModel: null;
     readonly values: {
       readonly selection: {
@@ -308,7 +337,68 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       readonly modelsLoaded: boolean;
     };
   }
-  const toolbarStore = createStore<ToolbarMockState>(() => ({
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => ({
+    accountChosen: false,
+    defaultAccount: null,
+    setAccountChosen: (chosen) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const account = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        account !== null &&
+        state.selection.profileId === account.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        accountChosen: chosen,
+        selection: presentedSelection,
+      });
+    },
+    setDefaultAccount: (account) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        state.defaultAccount !== null &&
+        state.selection.profileId === state.defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        defaultAccount: account,
+        selection: presentedSelection,
+      });
+    },
     ultracode: false,
     selectedModel: null,
     selection: {
@@ -344,6 +434,12 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
+/** This renderer's own host id, which the composer compares its placement host with. */
+const localHost = vi.hoisted(() => ({ id: null as string | null }));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => localHost.id,
+}));
+
 vi.mock("@/hooks/composer/use-landing-composer-paste", async (importActual) => {
   const actual =
     await importActual<
@@ -351,8 +447,12 @@ vi.mock("@/hooks/composer/use-landing-composer-paste", async (importActual) => {
     >();
   return {
     ...actual,
-    useLandingComposerPaste: (params: { readonly disabled: boolean }) => {
+    useLandingComposerPaste: (params: {
+      readonly disabled: boolean;
+      readonly pathsReachTarget: boolean;
+    }) => {
       testState.pasteDisabled = params.disabled;
+      testState.pastePathsReachTarget = params.pathsReachTarget;
       // Mirror runPendingImageJob → isIngestingImages so submit gating covers
       // the in-place paste path (not the deleted attach-at-anchor path).
       const runPendingImageJob = (
@@ -411,6 +511,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // Same treatment as `use-composer-dictation` above: a host-backed readiness
@@ -492,6 +593,7 @@ function render(ui: ReactElement): RenderResult {
 afterEach(() => {
   cleanup();
   testState.actionsTarget = null;
+  testState.editorClassName = null;
   testState.bodySubmit = null;
   testState.installEditor = null;
   testState.snapshot = null;
@@ -499,6 +601,8 @@ afterEach(() => {
   testState.composerIsPinned = true;
   testState.submitRefusal = null;
   testState.pickerCalls = [];
+  testState.pastePathsReachTarget = null;
+  localHost.id = null;
   testState.toolbarStore?.setState({
     selection: {
       harnessId: "claude",
@@ -527,6 +631,8 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
@@ -553,6 +659,19 @@ describe("landing composer placement wiring", () => {
     // equality check on fields would pass for either one.
     expect(testState.actionsTarget).toBe(SUBMIT_TARGET);
     expect(testState.actionsTarget).not.toBe(READ_TARGET);
+  });
+
+  it("passes only the shared landing editor classname", () => {
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    expect(testState.editorClassName).toBe(LANDING_COMPOSER_EDITOR_CLASSNAME);
   });
 });
 
@@ -818,5 +937,71 @@ describe("landing composer clears a refused §54 notice on host change", () => {
     // resurrect.
     resolveTo("host-b", "Build Box");
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+});
+
+// A typed path means something only where the placement host's files are the
+// ones the path names. The paste hook decides from this one flag; what it does
+// with each answer is pinned beside it, in `use-landing-composer-paste-remote-files`.
+describe("landing composer: do typed paths reach the placement host", () => {
+  it.each([
+    { local: "host-a", reaches: true, machine: "this machine" },
+    { local: "host-elsewhere", reaches: false, machine: "another machine" },
+    { local: null, reaches: false, machine: "no local host known" },
+  ])(
+    "hands its paste $reaches when the placement host is host-a and this renderer is on $machine",
+    ({ local, reaches }) => {
+      localHost.id = local;
+      render(
+        <LandingComposer
+          draftId={null}
+          pendingCreateId="pending-1"
+          initialSettings={null}
+          workspaceControls={() => null}
+        />,
+      );
+
+      expect(testState.pastePathsReachTarget).toBe(reaches);
+    },
+  );
+
+  it("hands its paste false when the placement has no host, even where this renderer knows none either", () => {
+    localHost.id = null;
+    landingTarget = { ...READ_TARGET, resolvedHostId: null };
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    expect(testState.pastePathsReachTarget).toBe(false);
+  });
+
+  it("follows the placement when its resolved host moves between machines", () => {
+    localHost.id = "host-a";
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    expect(testState.pastePathsReachTarget).toBe(true);
+
+    landingTarget = { ...READ_TARGET, resolvedHostId: "host-b" };
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    expect(testState.pastePathsReachTarget).toBe(false);
   });
 });

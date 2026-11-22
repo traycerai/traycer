@@ -81,6 +81,9 @@ export const runnerMutationKeys = {
   supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
+  // Reveal a saved music session's files (Sounds → Record session).
+  revealSoundtrackRecording: () =>
+    ["runner.soundtrack.revealRecording"] as const,
   // On-demand V8 heap snapshot of this renderer (Diagnostics → Memory).
   // The key identifies the mutation; it does NOT serialize it - TanStack
   // Query only serializes on `scope`, which the caller sets, and which is
@@ -123,6 +126,8 @@ export const runnerMutationKeys = {
   logLevelsSet: () => ["runner.logLevels.set"] as const,
   agentRolesEnabledSet: () =>
     ["runner.featureSettings.agentRoles.set"] as const,
+  agentFeedbackEnabledSet: () =>
+    ["runner.featureSettings.agentFeedback.set"] as const,
   setAllowPrereleaseUpdates: () =>
     ["runner.appUpdates.setAllowPrerelease"] as const,
   globalShortcutsSet: (id: GlobalShortcutId) =>
@@ -130,6 +135,7 @@ export const runnerMutationKeys = {
   // Settings → Alerts, the push rows. Both act on the ONE device this
   // renderer runs on, so a static key is the whole scope - there is no second
   // OS permission to hold a separate entry for.
+  pushRegistrationRetry: () => ["runner.pushRegistration.retry"] as const,
   pushPermissionRequest: () => ["runner.pushPermission.request"] as const,
   pushPermissionOpenSettings: () =>
     ["runner.pushPermission.openSettings"] as const,

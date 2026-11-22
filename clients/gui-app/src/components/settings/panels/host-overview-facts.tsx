@@ -6,11 +6,9 @@ import { useSettingsDensity } from "@/providers/settings-density-context";
 
 /**
  * A group's facts as a label-over-value grid: one column on a phone, up to
- * three across a wide pane. The Installation tab's About this host and Install
- * record both read this way, so a host's account facts and its install facts
- * share one shape. Sized by the CARD's width (a container query), not the
- * viewport's: the Settings pane is narrower than the window beside its
- * sidebar.
+ * three across a wide pane. The install record's remaining facts read this
+ * way. Sized by the CARD's width (a container query), not the viewport's: the
+ * Settings pane is narrower than the window beside its sidebar.
  */
 export function HostOverviewFacts(props: {
   readonly children: ReactNode;

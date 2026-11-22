@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
+import { BOT_COLOR_HEX_PATTERN } from "@traycer/protocol/host/bot/colors";
 
 /**
  * `bot.*` - bots (Tracy Bots): owner-only, host-bound chat containers that
@@ -134,6 +135,157 @@ export const botRecordSchema = lazySchema(() =>
 );
 export type BotRecord = z.infer<typeof botRecordSchema>;
 
+// ---- a bot's appearance ------------------------------------------------ //
+
+/** The colour a bot's icon is drawn in, as it is saved. */
+const botColorHexSchema = lazySchema(() =>
+  z.string().regex(BOT_COLOR_HEX_PATTERN),
+);
+
+/**
+ * The pixel mascots a bot's icon may name. A client draws the ones it has art
+ * for and takes any other as no choice of shape.
+ */
+export const BOT_MASCOT_SHAPES = [
+  "blob",
+  "block",
+  "flame",
+  "ghost",
+  "capsule",
+  "cat",
+  "shield",
+  "sun",
+  "diamond",
+  "doc",
+] as const;
+export const botMascotShapeSchema = lazySchema(() => z.enum(BOT_MASCOT_SHAPES));
+export type BotMascotShape = z.infer<typeof botMascotShapeSchema>;
+
+/** What a mascot wears over its eyes; `none` is a choice to wear nothing. */
+export const BOT_MASCOT_EYEWEAR = [
+  "none",
+  "glasses",
+  "shades",
+  "visor",
+] as const;
+export const botMascotEyewearSchema = lazySchema(() =>
+  z.enum(BOT_MASCOT_EYEWEAR),
+);
+export type BotMascotEyewear = z.infer<typeof botMascotEyewearSchema>;
+
+/** What a mascot carries on its head; `none` is a choice to carry nothing. */
+export const BOT_MASCOT_ACCESSORIES = [
+  "none",
+  "antenna",
+  "antennae",
+  "sprout",
+  "bow",
+  "sparkle",
+  "flag",
+  "horns",
+  "halo",
+] as const;
+export const botMascotAccessorySchema = lazySchema(() =>
+  z.enum(BOT_MASCOT_ACCESSORIES),
+);
+export type BotMascotAccessory = z.infer<typeof botMascotAccessorySchema>;
+
+/**
+ * The bot's chosen icon: a mascot the GUI draws from its shape's name, never
+ * stored as pixels.
+ */
+export const botAppearanceMarkSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("mascot"),
+    shape: botMascotShapeSchema,
+  }),
+);
+export type BotAppearanceMark = z.infer<typeof botAppearanceMarkSchema>;
+
+/**
+ * What a person chose for a bot's look, as it is written: every value one
+ * this protocol knows. A mascot, eyewear or accessory is `null` for the
+ * default the GUI derives from the bot's id, and clearing one brings that
+ * back. A colour is `null` only on a bot created without one.
+ */
+export const botAppearanceChoiceSchema = lazySchema(() =>
+  z.object({
+    mark: botAppearanceMarkSchema.nullable(),
+    /** The colour the mascot is drawn in. */
+    color: botColorHexSchema.nullable(),
+    eyewear: botMascotEyewearSchema.nullable(),
+    accessory: botMascotAccessorySchema.nullable(),
+  }),
+);
+export type BotAppearanceChoice = z.infer<typeof botAppearanceChoiceSchema>;
+
+/**
+ * What a reader takes a choice it cannot read as: one a newer writer made,
+ * a mark kind, mascot shape, colour, eyewear or accessory past this
+ * protocol's own.
+ */
+export const BOT_APPEARANCE_UNRECOGNISED = "unrecognised";
+export const BOT_UNRECOGNISED_MARK = {
+  kind: BOT_APPEARANCE_UNRECOGNISED,
+} as const;
+
+/**
+ * A bot's look as it is read. A choice this protocol cannot read becomes
+ * {@link BOT_APPEARANCE_UNRECOGNISED} rather than failing the row, so a
+ * value a newer writer adds never blanks a list it rides in. `eyewear` and
+ * `accessory` are absent from a writer that predates them, which a reader
+ * takes as no choice.
+ */
+export const botAppearanceSchema = lazySchema(() =>
+  z.object({
+    mark: z
+      .union([
+        botAppearanceMarkSchema,
+        z.object({ kind: z.literal(BOT_APPEARANCE_UNRECOGNISED) }),
+      ])
+      .nullable()
+      .catch(BOT_UNRECOGNISED_MARK),
+    color: z
+      .union([botColorHexSchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
+      .nullable()
+      .catch(BOT_APPEARANCE_UNRECOGNISED),
+    /**
+     * The colour the bot was created with, which clearing its colour brings
+     * back. Read only: no request carries it. Absent or `null` on a bot
+     * created without one.
+     */
+    createdColor: botColorHexSchema.nullable().optional().catch(null),
+    eyewear: z
+      .union([botMascotEyewearSchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
+      .nullable()
+      .optional()
+      .catch(BOT_APPEARANCE_UNRECOGNISED),
+    accessory: z
+      .union([botMascotAccessorySchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
+      .nullable()
+      .optional()
+      .catch(BOT_APPEARANCE_UNRECOGNISED),
+  }),
+);
+export type BotAppearance = z.infer<typeof botAppearanceSchema>;
+
+/**
+ * A bot row as the directory carries it (`bot.list@1.2`, `bot.read@1.1`,
+ * `bot.updateAppearance@1.0`): the bot record and its appearance. Absent from
+ * a host that predates it, which a reader takes as every choice at its
+ * default. The record every other method and minor carries stays without it.
+ */
+export const botDirectoryRecordSchemaV12 = lazySchema(() =>
+  botRecordSchema.extend({ appearance: botAppearanceSchema.optional() }),
+);
+/** `bot.list@1.3` and `bot.read@1.2`: one pending account choice per bot. */
+export const botDirectoryRecordSchema = lazySchema(() =>
+  botDirectoryRecordSchemaV12.extend({
+    profileChoice: z.literal("ambiguous").nullable().optional(),
+  }),
+);
+export type BotDirectoryRecord = z.infer<typeof botDirectoryRecordSchema>;
+
 // ---- bot.create -------------------------------------------------------- //
 
 /**
@@ -195,11 +347,26 @@ export const botListResponseSchemaV10 = lazySchema(() =>
  * `bot.list@1.1` adds each environment's main bot (decision 30): environment
  * id to bot id, for every listed environment with a live bot. `null` when the
  * answering host predates it (a `1.0` response upgraded), which says nothing
- * about which bot is main.
+ * about which bot is main. Frozen: its rows carry no appearance.
  */
-export const botListResponseSchema = lazySchema(() =>
+export const botListResponseSchemaV11 = lazySchema(() =>
   z.object({
     bots: z.array(botRecordSchema),
+    mainBotIds: z.record(z.string().min(1), botIdSchema).nullable(),
+  }),
+);
+
+/** `bot.list@1.2`: each row carries the bot's appearance. */
+export const botListResponseSchemaV12 = lazySchema(() =>
+  z.object({
+    bots: z.array(botDirectoryRecordSchemaV12),
+    mainBotIds: z.record(z.string().min(1), botIdSchema).nullable(),
+  }),
+);
+/** The bound host's pending account choice, once per bot. */
+export const botListResponseSchema = lazySchema(() =>
+  z.object({
+    bots: z.array(botDirectoryRecordSchema),
     mainBotIds: z.record(z.string().min(1), botIdSchema).nullable(),
   }),
 );
@@ -212,8 +379,17 @@ export const botReadRequestSchema = lazySchema(() =>
 );
 export type BotReadRequest = z.infer<typeof botReadRequestSchema>;
 
-export const botReadResponseSchema = lazySchema(() =>
+/** `bot.read@1.0`'s response, frozen: the row without its appearance. */
+export const botReadResponseSchemaV10 = lazySchema(() =>
   z.object({ bot: botRecordSchema }),
+);
+
+/** `bot.read@1.1`: the row and its appearance. */
+export const botReadResponseSchemaV11 = lazySchema(() =>
+  z.object({ bot: botDirectoryRecordSchemaV12 }),
+);
+export const botReadResponseSchema = lazySchema(() =>
+  z.object({ bot: botDirectoryRecordSchema }),
 );
 export type BotReadResponse = z.infer<typeof botReadResponseSchema>;
 
@@ -273,6 +449,34 @@ export const botUpdateResponseSchema = lazySchema(() =>
   z.object({ bot: botRecordSchema }),
 );
 export type BotUpdateResponse = z.infer<typeof botUpdateResponseSchema>;
+
+// ---- bot.updateAppearance ---------------------------------------------- //
+
+/**
+ * The bot's look, one choice at a time: a key left out keeps its choice, and
+ * `null` clears it: a mascot, eyewear or accessory back to the default, a
+ * colour back to the one the bot was created with. Changing it takes the
+ * same authority as renaming the bot.
+ */
+export const botUpdateAppearanceRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    mark: botAppearanceMarkSchema.nullable().optional(),
+    color: botColorHexSchema.nullable().optional(),
+    eyewear: botMascotEyewearSchema.nullable().optional(),
+    accessory: botMascotAccessorySchema.nullable().optional(),
+  }),
+);
+export type BotUpdateAppearanceRequest = z.infer<
+  typeof botUpdateAppearanceRequestSchema
+>;
+
+export const botUpdateAppearanceResponseSchema = lazySchema(() =>
+  z.object({ bot: botDirectoryRecordSchemaV12 }),
+);
+export type BotUpdateAppearanceResponse = z.infer<
+  typeof botUpdateAppearanceResponseSchema
+>;
 
 // ---- bot.notificationLevel.read / bot.notificationLevel.set ------------ //
 
@@ -845,15 +1049,6 @@ export const botTaskLastCheckinSchema = lazySchema(() =>
 );
 export type BotTaskLastCheckin = z.infer<typeof botTaskLastCheckinSchema>;
 
-/** The turn of the bot's chat that read a check-in: a session chat and its turn. */
-export const botCheckinTurnSchema = lazySchema(() =>
-  z.object({
-    chatId: z.string().min(1),
-    turnId: z.string().min(1),
-  }),
-);
-export type BotCheckinTurn = z.infer<typeof botCheckinTurnSchema>;
-
 /** A member as the bot's records name one: their user id. */
 const botMemberIdSchema = lazySchema(() => z.string().min(1).max(36));
 
@@ -885,51 +1080,6 @@ export const botTaskRunRequestSchema = lazySchema(() =>
   }),
 );
 export type BotTaskRunRequest = z.infer<typeof botTaskRunRequestSchema>;
-
-/**
- * One entry of a task's check-in history (`bot.subscribe@1.4`, T86), newest
- * first, as the bot's bound host kept it:
- *
- *  - `received` - a host's report: when the bound host received it, the
- *    host that composed it (`hostId` `null` for a report from before T83,
- *    which names none), what it said in counts (`agentsStarted` `null` when
- *    the host could not read its agents), and the turn of the bot's chat
- *    that read it, `null` until one has;
- *  - `missed` - no host reported for at least one whole period past a due
- *    time: `dueAt` the first due time missed, `missedThrough` the latest,
- *    `reason` why (`no-host-reported`: no report arrived from any host), and
- *    `caughtUpAt` when the next report was received, `null` until one is.
- */
-export const botTaskCheckinRecordSchema = lazySchema(() =>
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("received"),
-      receivedAt: z.number().int(),
-      hostId: hostIdSchema.nullable(),
-      hostName: z.string().min(1),
-      outcome: z.enum(["idle", "still-running", "deleted", "deleted-owner"]),
-      agentsStarted: z.number().int().nonnegative().nullable(),
-      ticketsOpened: z.number().int().nonnegative(),
-      ticketsClosed: z.number().int().nonnegative(),
-      backgroundEvents: z.number().int().nonnegative(),
-      turn: botCheckinTurnSchema.nullable(),
-      /**
-       * The member whose Run now this report answered (T92): the first
-       * report filed after they asked. `null` for a pass on the task's own
-       * cadence, and from a host that predates it.
-       */
-      requestedByUserId: botMemberIdSchema.nullable().default(null),
-    }),
-    z.object({
-      kind: z.literal("missed"),
-      dueAt: z.number().int(),
-      missedThrough: z.number().int(),
-      reason: z.enum(["no-host-reported"]),
-      caughtUpAt: z.number().int().nullable(),
-    }),
-  ]),
-);
-export type BotTaskCheckinRecord = z.infer<typeof botTaskCheckinRecordSchema>;
 
 /**
  * What an agent of one of the bot's tasks waits on a person for, as the
@@ -1104,14 +1254,6 @@ export const botTaskEntrySchema = lazySchema(() =>
        */
       createdByChatId: z.string().min(1).max(36).nullable().default(null),
       /**
-       * The task's check-in history (`bot.subscribe@1.4`, T86), newest
-       * first, kept by the bot's bound host and mirrored into its
-       * environment room like `lastCheckin`. `null` from a host that
-       * predates it, where `lastCheckin` is all there is, and wherever
-       * `lastCheckin` is `null` for want of the room.
-       */
-      checkins: z.array(botTaskCheckinRecordSchema).nullable().default(null),
-      /**
        * What the task's agents wait on a person for now (`bot.subscribe@1.5`,
        * T89), kept by the bot's bound host and mirrored into its environment
        * room like `lastCheckin`; empty when nothing waits. `null` from a
@@ -1122,7 +1264,7 @@ export const botTaskEntrySchema = lazySchema(() =>
       /**
        * What members did to the automation from the Activity page (T92),
        * kept by the bot's bound host and mirrored into its environment room
-       * like `checkins`: who paused it and since when, who stopped it, and a
+       * like `lastCheckin`: who paused it and since when, who stopped it, and a
        * Run now not answered yet. `null` for none, and from a host that
        * predates them.
        */
@@ -1150,8 +1292,8 @@ export const botTaskEntrySchema = lazySchema(() =>
 export type BotTaskEntry = z.infer<typeof botTaskEntrySchema>;
 
 /**
- * The task entry of `bot.subscribe@1.4`, frozen by hand: with the check-in
- * history and the members' pause, stop and Run now (T92), and without the
+ * The task entry of `bot.subscribe@1.4`, frozen by hand: with pause, stop and
+ * Run now (T92), and without the
  * `@1.5` open surfaces, so a 1.4 peer's re-parse strips them.
  */
 const botTaskEntrySchemaV14 = lazySchema(() =>
@@ -1171,7 +1313,6 @@ const botTaskEntrySchemaV14 = lazySchema(() =>
       label: z.string().min(1).max(64).nullable().default(null),
       originRequestId: z.string().min(1).max(64).nullable().default(null),
       createdByChatId: z.string().min(1).max(36).nullable().default(null),
-      checkins: z.array(botTaskCheckinRecordSchema).nullable().default(null),
       pause: botTaskPauseSchema.nullable().default(null),
       stop: botTaskStopSchema.nullable().default(null),
       runRequest: botTaskRunRequestSchema.nullable().default(null),
@@ -1195,8 +1336,7 @@ const botTaskEntrySchemaV14 = lazySchema(() =>
 );
 
 /**
- * The task entry of `bot.subscribe@1.3`, frozen by hand: with the provenance
- * and without the `@1.4` check-in history, so a 1.3 peer's re-parse strips it.
+ * The task entry of `bot.subscribe@1.3`, frozen by hand with provenance.
  */
 const botTaskEntrySchemaV13 = lazySchema(() =>
   z

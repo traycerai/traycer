@@ -142,6 +142,19 @@ export interface LandingDraftTab {
    * pick of its own, so the draft's Send goes there even after a reload.
    */
   readonly returnedSandbox: StoredReturnedSandbox | null;
+  /** Local to this device: a row that arrives without it counts as chosen and never moves. */
+  readonly accountFollowsDefault: boolean;
+  /**
+   * The machine this draft was opened FOR, when the gesture that opened it
+   * named one (Settings ▸ Mobile simulators' "Set up with an agent"); null
+   * for every other draft. Its composer passes it to `useComposerPlacement`
+   * as a caller-named host - picker fixed, Send refused while it is offline -
+   * and never places it on the window's pin or the effective host. Local to
+   * this device like `returnedSandbox`, and the mirror never adopts a named
+   * row (`collectUnadoptedLandingDrafts`), so no other device can open it as
+   * an ordinary draft.
+   */
+  readonly namedHostId: string | null;
 }
 
 export type LandingDraftAdoption =
@@ -194,6 +207,8 @@ export interface InstallLandingDraftInput {
    * stamps it; a stored record keeps its own.
    */
   readonly returnedSandbox: ReturnedSandbox | StoredReturnedSandbox | null;
+  /** As {@link LandingDraftTab.namedHostId}. */
+  readonly namedHostId: string | null;
   readonly durability: LandingDraftDurability;
 }
 
@@ -201,12 +216,23 @@ interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
   /**
-   * Returns an active draft id. Desktop/browser: always creates a fresh
-   * draft and sets it active. In the INSTALLED MOBILE APP (`isMobileApp()`),
-   * returns the newest existing draft instead - the phone has one stable
-   * composer.
+   * The draft THIS device's "New task" comes back to: the one it last minted
+   * there or opened by hand. Never moved by a mirrored row, so a draft open
+   * on another device is not it. Read only by the installed mobile app
+   * (`resumableLandingDraftId`), whose one composer has no tab strip to pick
+   * a draft from; it may name a row since closed or removed, which reads as
+   * none.
+   */
+  readonly resumeDraftId: string | null;
+  /**
+   * Mints a fresh draft, sets it active and returns its id, on every shell:
+   * its callers fill the draft they are handed, so it is never an existing
+   * one. The mobile app's "New task" resumes a draft through
+   * `resumableLandingDraftId` instead.
    */
   createDraft: (settings: ChatRunSettings | null) => string;
+  /** Name `id` as the draft this device's "New task" comes back to. */
+  setResumeDraft: (id: string) => void;
   /**
    * Coordinator-only stable-id source creation (restore/sync, landing
    * null-draft mount key stability) - explicit ids always mint, on every
@@ -297,6 +323,8 @@ interface LandingDraftStoreState {
   setDraftSelection: (id: string, selection: DraftSelection | null) => void;
   /** Update the run settings of a specific draft. No-op when id not found. */
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
+  /** Local: nothing is published. */
+  setDraftAccountFollowsDefault: (id: string, follows: boolean) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
   /**
@@ -457,6 +485,8 @@ function readProjectedDrafts(
         ...mirrorFieldsFromExisting(draft.id),
         closed: draft.closed === true,
         returnedSandbox: parseReturnedSandbox(draft.returnedSandbox),
+        accountFollowsDefault: draft.accountFollowsDefault === true,
+        namedHostId: parseNamedHostId(draft.namedHostId),
       },
     ];
   });
@@ -548,6 +578,8 @@ function parsePersistedLandingDrafts(
           ...parseLandingMirrorFields(raw),
           closed: raw.closed === true,
           returnedSandbox: parseReturnedSandbox(raw.returnedSandbox),
+          accountFollowsDefault: raw.accountFollowsDefault === true,
+          namedHostId: parseNamedHostId(raw.namedHostId),
         },
       ];
     }),
@@ -657,14 +689,33 @@ function isUnseededLandingDraft(draft: LandingDraftTab): boolean {
 }
 
 /**
- * Newest OPEN landing draft, for the installed mobile app's single stable
- * composer: an id-less "new draft" activation reuses this instead of minting
- * (see `createDraft`). `null` when no open draft exists. A closed draft is
+ * The existing draft an id-less "new draft" activation lands on instead of
+ * minting, `null` when there is none. In the installed mobile app that is
+ * this device's own draft (`resumeDraftId`) while it is still open, whatever
+ * its content: the phone has ONE stable composer and no tab strip to close a
+ * second draft tab, and every open draft mirrored from another device is an
+ * open row here too, so the newest of those is not what the person was
+ * typing on this one. Keyed on the PRODUCT flag, never the viewport (see
+ * `@/lib/mobile-app`): a responsively-narrow desktop browser keeps normal
+ * multi-draft behavior. Elsewhere
+ * it is the newest open draft, which the tab strip shows. A closed draft is
  * retained-but-hidden (see `closeDraft`) and is never resurrected implicitly;
  * it comes back only through `openDraft`.
  */
-export function newestLandingDraftId(): string | null {
-  return newestDraft(useLandingDraftStore.getState().drafts);
+export function resumableLandingDraftId(): string | null {
+  const state = useLandingDraftStore.getState();
+  return isMobileApp() ? openResumeDraft(state) : newestDraft(state.drafts);
+}
+
+function openResumeDraft(state: {
+  readonly drafts: ReadonlyArray<LandingDraftTab>;
+  readonly resumeDraftId: string | null;
+}): string | null {
+  const id = state.resumeDraftId;
+  return id !== null &&
+    state.drafts.some((draft) => draft.id === id && isOpenLandingDraft(draft))
+    ? id
+    : null;
 }
 
 function newestDraft(drafts: ReadonlyArray<LandingDraftTab>): string | null {
@@ -686,24 +737,12 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
     (set, get) => ({
       drafts: [],
       activeDraftId: null,
+      resumeDraftId: null,
 
-      createDraft: (settings) => {
-        // The installed mobile app has ONE stable composer: its header has
-        // no tab strip, so a second draft tab could never be closed. "New
-        // task" therefore lands back on the existing draft - whatever its
-        // content - instead of minting another. Keyed on the PRODUCT flag,
-        // never the viewport (see `@/lib/mobile-app`): a responsively-narrow
-        // desktop browser keeps normal multi-draft behavior. Explicit-id
-        // creation (`createDraftWithId`) is a restore/sync path and always
-        // mints exactly that draft.
-        if (isMobileApp()) {
-          const existing = newestDraft(get().drafts);
-          if (existing !== null) {
-            set({ activeDraftId: existing });
-            return existing;
-          }
-        }
-        return get().createDraftWithId(uuidv4(), settings);
+      createDraft: (settings) => get().createDraftWithId(uuidv4(), settings),
+
+      setResumeDraft: (id) => {
+        set({ resumeDraftId: id });
       },
 
       createDraftWithId: (id, settings) => {
@@ -727,6 +766,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           composerMode: useSettingsStore.getState().composerMode,
           workspace: readLandingDraftWorkspaceSnapshotForHost(hostId),
           ...freshLandingMirrorState(),
+          accountFollowsDefault: settings === null,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -750,7 +790,12 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           drafts: updateDraftWorkspace(state, id, () => workspace).drafts.map(
             (d) =>
               d.id === id
-                ? { ...d, settings, generation: draft.generation + 1 }
+                ? {
+                    ...d,
+                    settings,
+                    accountFollowsDefault: true,
+                    generation: draft.generation + 1,
+                  }
                 : d,
           ),
         }));
@@ -783,11 +828,17 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // (or re-mints) its local row from there.
           supersedes: sourceId,
           returnedSandbox: source.returnedSandbox,
+          accountFollowsDefault: source.accountFollowsDefault,
+          // The fork is the same draft to the person: a host its opener
+          // named stays named.
+          namedHostId: source.namedHostId,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
           activeDraftId:
             state.activeDraftId === sourceId ? nextId : state.activeDraftId,
+          resumeDraftId:
+            state.resumeDraftId === sourceId ? nextId : state.resumeDraftId,
         }));
         notifyDraftLocalEdit(nextId);
         return true;
@@ -813,6 +864,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
             input.returnedSandbox === null
               ? null
               : storeReturnedSandbox(input.returnedSandbox),
+          namedHostId: input.namedHostId,
         };
         const before = get().drafts;
         try {
@@ -904,7 +956,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         // not handed back still closed.
         draftRuntimeRegistry.reopen(id);
         if (!draft.closed) {
-          set({ activeDraftId: id });
+          set({ activeDraftId: id, resumeDraftId: id });
           return;
         }
         // Reopening a replica is local view state, like closing one: looking
@@ -922,6 +974,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
               : d,
           ),
           activeDraftId: id,
+          resumeDraftId: id,
         }));
         if (!local) {
           notifyDraftLocalEdit(id);
@@ -1050,6 +1103,18 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         notifyDraftLocalEdit(id);
       },
 
+      setDraftAccountFollowsDefault: (id, follows) => {
+        const draft = get().drafts.find((d) => d.id === id);
+        if (draft === undefined || draft.accountFollowsDefault === follows) {
+          return;
+        }
+        set((state) => ({
+          drafts: state.drafts.map((d) =>
+            d.id === id ? { ...d, accountFollowsDefault: follows } : d,
+          ),
+        }));
+      },
+
       setDraftReturnedSandbox: (id, given) => {
         const draft = get().drafts.find((d) => d.id === id);
         const returned = given === null ? null : storeReturnedSandbox(given);
@@ -1133,6 +1198,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
         })),
         activeDraftId: state.activeDraftId,
+        resumeDraftId: state.resumeDraftId,
       }),
       // Sanitize the localStorage payload on rehydration the same way
       // `readProjectedDrafts` sanitizes the desktop projection, so a legacy tab
@@ -1151,6 +1217,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
             persisted.activeDraftId,
             drafts,
           ),
+          resumeDraftId:
+            typeof persisted.resumeDraftId === "string"
+              ? persisted.resumeDraftId
+              : null,
         };
       },
     },
@@ -1209,6 +1279,18 @@ export function useActiveLandingDraftShell(): {
   return useLandingDraftShell(activeDraftId);
 }
 
+/** The host `draftId` was opened for, or `null` when nothing named one. */
+export function useLandingDraftNamedHostId(
+  draftId: string | null,
+): string | null {
+  return useLandingDraftStore((state) =>
+    draftId === null
+      ? null
+      : (state.drafts.find((draft) => draft.id === draftId)?.namedHostId ??
+        null),
+  );
+}
+
 /** Stable draft-shell projection for one retained top-level draft surface. */
 export function useLandingDraftShell(draftId: string | null): {
   readonly draftId: string | null;
@@ -1256,6 +1338,13 @@ function areLandingDraftsEqual(
       return false;
     }
     if (left[index].closed !== right[index].closed) return false;
+    // Local provenance moves without a content edit: another window choosing
+    // the Terminal login on purpose changes only this.
+    if (
+      left[index].accountFollowsDefault !== right[index].accountFollowsDefault
+    ) {
+      return false;
+    }
     if (
       !sameStoredReturnedSandbox(
         left[index].returnedSandbox,
@@ -1263,6 +1352,7 @@ function areLandingDraftsEqual(
       )
     )
       return false;
+    if (left[index].namedHostId !== right[index].namedHostId) return false;
   }
   return true;
 }
@@ -1332,6 +1422,8 @@ function projectLandingDraftForDesktop(
     ...(draft.returnedSandbox === null
       ? {}
       : { returnedSandbox: returnedSandboxToJson(draft.returnedSandbox) }),
+    ...(draft.accountFollowsDefault ? { accountFollowsDefault: true } : {}),
+    ...(draft.namedHostId === null ? {} : { namedHostId: draft.namedHostId }),
   };
 }
 
@@ -1374,6 +1466,10 @@ function parseComposerMode(value: unknown): ComposerMode {
   // draft gets in `createDraft`. The settings store hydrates synchronously
   // from localStorage, so it is readable by the time drafts are restored.
   return useSettingsStore.getState().composerMode;
+}
+
+function parseNamedHostId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
@@ -1787,6 +1883,8 @@ export function freshLandingMirrorState(): Pick<
   | "confirmedHostBlobHashes"
   | "closed"
   | "returnedSandbox"
+  | "accountFollowsDefault"
+  | "namedHostId"
 > {
   return {
     adoption: UNADOPTED_LANDING_DRAFT,
@@ -1800,6 +1898,8 @@ export function freshLandingMirrorState(): Pick<
     confirmedHostBlobHashes: [],
     closed: false,
     returnedSandbox: null,
+    accountFollowsDefault: false,
+    namedHostId: null,
   };
 }
 
@@ -1968,6 +2068,12 @@ export function landingDraftRememberSynced(
         hostRevision: sameLine
           ? Math.max(draft.hostRevision, hostRevision)
           : hostRevision,
+        // Clamped behind a newer observed revision: the held revision is
+        // another writer's, not this acknowledgement, so the account
+        // provenance loses its proof and the row counts as chosen.
+        accountFollowsDefault:
+          draft.accountFollowsDefault &&
+          !(sameLine && hostRevision < draft.hostRevision),
         // Record WHOSE revision this is. Nothing else on the ACK path does,
         // so without it a draft that was only ever published - never sent a
         // host document - keeps a null owner forever, and the frontier check
@@ -2076,6 +2182,32 @@ function keptReturnedSandbox(
 }
 
 /**
+ * Only this window's own write echoing back keeps the provenance. A newer revision
+ * is another writer's, and a cloud head (revision 0) proves nothing: equal values
+ * are not an own echo.
+ */
+function keptAccountFollowsDefault(
+  existing: LandingDraftTab | undefined,
+  document: DraftDocument,
+): boolean {
+  return (
+    existing !== undefined &&
+    existing.accountFollowsDefault &&
+    document.revision > 0 &&
+    existing.ownerHostId === document.ownerHostId &&
+    existing.hostRevision === document.revision
+  );
+}
+
+/**
+ * A host document never names the draft's machine: only a gesture on this
+ * device does, and a named row is never adopted, so the row here keeps it.
+ */
+function keptNamedHostId(existing: LandingDraftTab | undefined): string | null {
+  return existing?.namedHostId ?? null;
+}
+
+/**
  * A host document's frozen settings carry no Ultracode request; the row's own
  * same-draft Claude request survives the echo.
  */
@@ -2156,6 +2288,8 @@ export function applyLandingHostDocument(
       existing,
     ),
     returnedSandbox: keptReturnedSandbox(existing),
+    accountFollowsDefault: keptAccountFollowsDefault(existing, document),
+    namedHostId: keptNamedHostId(existing),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);
@@ -2164,7 +2298,17 @@ export function applyLandingHostDocument(
       next.closed && state.activeDraftId === next.id
         ? null
         : state.activeDraftId;
-    return { drafts, activeDraftId };
+    // A successor of this device's resume draft (a host re-mint, or a fork
+    // made on another device) is the same draft to the person: "New task"
+    // follows it, as it follows a fork made here (`forkDraft`). The ancestor
+    // may already be gone (its tombstone can arrive first), so this matches
+    // on the remembered id, not on a row.
+    const resumeDraftId =
+      document.supersedes !== null &&
+      state.resumeDraftId === document.supersedes
+        ? next.id
+        : state.resumeDraftId;
+    return { drafts, activeDraftId, resumeDraftId };
   });
   return true;
 }
@@ -2190,13 +2334,14 @@ export function collectLandingDirtyWrites(hostId: string): ReadonlyArray<{
 }
 
 export function collectUnadoptedLandingDrafts(): ReadonlyArray<LandingDraftTab> {
-  return useLandingDraftStore
-    .getState()
-    .drafts.filter(
-      (draft) =>
-        draft.adoption.state === "unadopted" &&
-        draft.generation > draft.syncedGeneration,
-    );
+  return useLandingDraftStore.getState().drafts.filter(
+    (draft) =>
+      draft.adoption.state === "unadopted" &&
+      // A named draft stays on this device: another device would open it
+      // without its host and place it wherever that window points.
+      draft.namedHostId === null &&
+      draft.generation > draft.syncedGeneration,
+  );
 }
 
 /**

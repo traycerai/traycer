@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import {
   act,
   cleanup,
@@ -132,6 +133,28 @@ function invitedEntry(
   };
 }
 
+/** An informational collaboration row: unread activity, never attention. */
+function commentEntry(
+  id: string,
+  createdAt: number,
+  readAt: number | null,
+  epicId: string,
+): NotificationEntry {
+  return {
+    id,
+    createdAt,
+    readAt,
+    event: {
+      kind: NOTIFICATION_EVENT_TYPES.COMMENT_ADDED,
+      epicId,
+      artifactType: "spec",
+      artifactId: "artifact-1",
+      threadId: "thread-1",
+      actorName: "Alice",
+    },
+  };
+}
+
 interface FakeHandle {
   readonly callbacks: NotificationsStreamCallbacks;
 }
@@ -177,6 +200,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,
@@ -420,28 +444,6 @@ describe("NotificationsBell", () => {
     outside.remove();
   });
 
-  it("suppresses title-bar dragging only while the popover is open", async () => {
-    const runnerHost = createRunnerHost();
-    mountBell(runnerHost, undefined);
-
-    const isSuppressed = () =>
-      useTitleBarDragStore.getState().suppressors.has("notifications");
-
-    expect(isSuppressed()).toBe(false);
-
-    fireEvent.click(screen.getByTestId("notifications-bell"));
-    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
-    expect(isSuppressed()).toBe(true);
-
-    fireEvent.click(screen.getByTestId("notifications-bell"));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(isSuppressed()).toBe(false);
-  });
-
   it("does not focus the first header action on pointer open", async () => {
     const runnerHost = createRunnerHost();
     const { factory, handle } = fakeFactory();
@@ -587,7 +589,7 @@ describe("NotificationsBell", () => {
     act(() => {
       handle().callbacks.onSnapshot(
         { schemaVersion: "2" },
-        buildSnapshot([invitedEntry("quiet-seed", 1, null, "e1")]),
+        buildSnapshot([commentEntry("quiet-seed", 1, null, "e1")]),
       );
     });
 

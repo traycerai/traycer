@@ -716,9 +716,67 @@ export type EpicStatusSubscribeServerFrameV11 = z.infer<
 >;
 
 /**
- * The downgrade bridge for a peer below {@link EPIC_STATUS_DURABILITY_LEGS_MINOR}.
+ * The first `epic.status.subscribe` minor carrying `artifactSync`, and the
+ * floor the host must clear before putting it on the wire.
+ */
+export const EPIC_STATUS_ARTIFACT_SYNC_MINOR = 2;
+
+/**
+ * Whether this task's artifacts are reaching the cloud, as far as the host can
+ * say from the rooms it holds and the new artifacts it is holding for one.
  *
- * The host composes `@1.1` frames unconditionally and projects here, per
+ * - `rooms`: `current` is nothing owed or every room carried; `retrying` is
+ *   something on this host still trying on its own; `stopped` is a room owed
+ *   the cloud that nothing will try again until a new credential or a new
+ *   open. A surface must not promise a retry on `stopped`.
+ * - `waitingNewArtifacts`: artifacts created on this host with no room yet.
+ *
+ * ABSENT MEANS UNKNOWN, as with the durability legs: a host that does not send
+ * it has said nothing about the rooms, and a surface keeps what it showed
+ * before this minor.
+ */
+export const epicArtifactSyncSchema = lazySchema(() =>
+  z.object({
+    rooms: z.enum(["current", "retrying", "stopped"]),
+    waitingNewArtifacts: z.number().int().nonnegative(),
+  }),
+);
+export type EpicArtifactSync = z.infer<typeof epicArtifactSyncSchema>;
+
+const epicStatusArtifactSyncFields = {
+  artifactSync: lazySchema(() => epicArtifactSyncSchema.optional()),
+} as const;
+
+/** `@1.2` server frames: `@1.1` plus `artifactSync` on the same two frames. */
+const epicStatusSubscribeSnapshotFrameSchemaV12 = lazySchema(() =>
+  epicStatusSubscribeSnapshotFrameSchemaV11.extend(
+    epicStatusArtifactSyncFields,
+  ),
+);
+const epicStatusSubscribeCloudSyncStatusFrameSchemaV12 = lazySchema(() =>
+  epicStatusSubscribeCloudSyncStatusFrameSchemaV11.extend(
+    epicStatusArtifactSyncFields,
+  ),
+);
+
+export const epicStatusSubscribeServerFrameSchemaV12 = lazySchema(() => {
+  const [, , ...epicStatusSubscribeSharedFrameSchemasV11] =
+    epicStatusSubscribeServerFrameSchemaV11.options;
+  return z.discriminatedUnion("kind", [
+    epicStatusSubscribeSnapshotFrameSchemaV12,
+    epicStatusSubscribeCloudSyncStatusFrameSchemaV12,
+    ...epicStatusSubscribeSharedFrameSchemasV11,
+  ]);
+});
+export type EpicStatusSubscribeServerFrameV12 = z.infer<
+  typeof epicStatusSubscribeServerFrameSchemaV12
+>;
+
+/**
+ * The downgrade bridge for a peer below {@link EPIC_STATUS_ARTIFACT_SYNC_MINOR}
+ * or {@link EPIC_STATUS_DURABILITY_LEGS_MINOR}.
+ *
+ * The host composes `@1.2` frames unconditionally and projects here, per
  * SUBSCRIBER, on the way out. Per subscriber rather than per frame because the
  * `cloudSyncStatus` frame is a BROADCAST: one session fans a single frame out
  * to subscribers that negotiated different minors, so a decision taken where
@@ -732,17 +790,21 @@ export type EpicStatusSubscribeServerFrameV11 = z.infer<
  * cannot tell it.
  */
 export function epicStatusFrameForNegotiatedMinor(
-  frame: EpicStatusSubscribeServerFrameV11,
+  frame: EpicStatusSubscribeServerFrameV12,
   negotiatedMinor: number,
 ): EpicStatusSubscribeServerFrameV10 {
-  if (negotiatedMinor >= EPIC_STATUS_DURABILITY_LEGS_MINOR) {
-    // `@1.1` is a superset of `@1.0` in TYPE as well as on the wire, so the
-    // frame passes through unchanged and the return type stays honest: every
-    // `@1.0` reader can read an `@1.1` frame, it just ignores the legs.
+  if (negotiatedMinor >= EPIC_STATUS_ARTIFACT_SYNC_MINOR) {
+    // Each minor is a superset of the last in TYPE as well as on the wire, so
+    // the frame passes through unchanged and the return type stays honest:
+    // every `@1.0` reader can read it, it just ignores what it does not know.
     return frame;
   }
   if (frame.kind !== "snapshot" && frame.kind !== "cloudSyncStatus") {
     return frame;
+  }
+  const { artifactSync: _artifactSync, ...withoutArtifactSync } = frame;
+  if (negotiatedMinor >= EPIC_STATUS_DURABILITY_LEGS_MINOR) {
+    return withoutArtifactSync;
   }
   const {
     durability: _durability,
@@ -751,7 +813,7 @@ export function epicStatusFrameForNegotiatedMinor(
     localProtection: _localProtection,
     freshness: _freshness,
     ...projected
-  } = frame;
+  } = withoutArtifactSync;
   return projected;
 }
 
@@ -791,5 +853,14 @@ export const epicStatusSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: epicStatusSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStatusSubscribeServerFrameSchemaV11,
+  clientFrameSchema: epicStatusSubscribeClientFrameSchemaV10,
+});
+
+/** Additive minor: `artifactSync` joins the same two server frames. */
+export const epicStatusSubscribeV12 = defineStreamRpcContract({
+  method: "epic.status.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: epicStatusSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStatusSubscribeServerFrameSchemaV12,
   clientFrameSchema: epicStatusSubscribeClientFrameSchemaV10,
 });

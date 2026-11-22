@@ -1,0 +1,138 @@
+import { describe, expect, it } from "vitest";
+import {
+  providerCliStateSchema,
+  type ProviderCliState,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  hiddenModelProvidersForHarness,
+  modelProviderHidden,
+  modelProviderGroupId,
+  providersListReportsHiddenModelProviders,
+  withoutHiddenModelProviderRows,
+  withoutHiddenModelProviders,
+} from "../provider-hidden-model-providers";
+
+describe("hidden model provider helpers", () => {
+  it("enables visibility only for providers.list 10.10 and later in major 10", () => {
+    expect(providersListReportsHiddenModelProviders(null)).toBe(false);
+    expect(
+      providersListReportsHiddenModelProviders({ major: 10, minor: 9 }),
+    ).toBe(false);
+    expect(
+      providersListReportsHiddenModelProviders({ major: 10, minor: 10 }),
+    ).toBe(true);
+    expect(
+      providersListReportsHiddenModelProviders({ major: 10, minor: 11 }),
+    ).toBe(true);
+    expect(
+      providersListReportsHiddenModelProviders({ major: 11, minor: 0 }),
+    ).toBe(false);
+  });
+
+  it("reads the hidden list from only the matching harness row", () => {
+    const rows = [
+      providerRow("opencode", ["openrouter"]),
+      providerRow("claude-code", ["other"]),
+      providerRow("codex", undefined),
+    ];
+    expect([...hiddenModelProvidersForHarness(rows, "opencode")]).toEqual([
+      "openrouter",
+    ]);
+    expect([...hiddenModelProvidersForHarness(rows, "claude")]).toEqual([
+      "other",
+    ]);
+    // An older host's row carries no list, and a missing row hides nothing.
+    expect(hiddenModelProvidersForHarness(rows, "codex").size).toBe(0);
+    expect(hiddenModelProvidersForHarness(rows, "grok").size).toBe(0);
+    expect(hiddenModelProvidersForHarness(undefined, "opencode").size).toBe(0);
+  });
+
+  it("filters hidden groups, preserves ungrouped models, and keeps a hidden selected model", () => {
+    const models = [
+      { id: "a", metadata: { openCodeProviderId: "openrouter" } },
+      { id: "b", metadata: { openCodeProviderId: "anthropic" } },
+      { id: "c", metadata: {} },
+    ];
+    expect(
+      withoutHiddenModelProviders(models, new Set(["openrouter"]), null).map(
+        (model) => model.id,
+      ),
+    ).toEqual(["b", "c"]);
+    const onlyHidden = models.slice(0, 2);
+    expect(
+      withoutHiddenModelProviders(
+        onlyHidden,
+        new Set(["openrouter", "anthropic"]),
+        null,
+      ),
+    ).toEqual([]);
+    expect(
+      withoutHiddenModelProviders(
+        models,
+        new Set(["openrouter", "anthropic"]),
+        models[1] ?? null,
+      ).map((model) => model.id),
+    ).toEqual(["b", "c"]);
+    expect(
+      modelProviderGroupId({ metadata: { openCodeProviderId: "" } }),
+    ).toBeNull();
+  });
+
+  it("matches models only when their OpenCode provider is hidden", () => {
+    const hidden = new Set(["openrouter"]);
+    expect(
+      modelProviderHidden(
+        { metadata: { openCodeProviderId: "openrouter" } },
+        hidden,
+      ),
+    ).toBe(true);
+    expect(
+      modelProviderHidden(
+        { metadata: { openCodeProviderId: "anthropic" } },
+        hidden,
+      ),
+    ).toBe(false);
+    expect(modelProviderHidden({ metadata: {} }, hidden)).toBe(false);
+  });
+
+  it("filters hidden groups for picker rows and search while keeping the selected row", () => {
+    const rows = [
+      { id: "openrouter:a", providerGroupId: "openrouter" },
+      { id: "anthropic:a", providerGroupId: "anthropic" },
+      { id: "ungrouped", providerGroupId: null },
+      { id: "openrouter:selected", providerGroupId: "openrouter" },
+    ];
+    const hidden = new Set(["openrouter"]);
+    const visibleRows = withoutHiddenModelProviderRows(
+      rows,
+      hidden,
+      "openrouter:selected",
+    );
+    // The picker feeds this same filtered array to browse rows and search rows.
+    expect(visibleRows.map((row) => row.id)).toEqual([
+      "anthropic:a",
+      "ungrouped",
+      "openrouter:selected",
+    ]);
+    expect(withoutHiddenModelProviderRows(rows, new Set(), "")).toBe(rows);
+  });
+});
+
+function providerRow(
+  providerId: ProviderId,
+  hiddenModelProviders: readonly string[] | undefined,
+): ProviderCliState {
+  return providerCliStateSchema.parse({
+    providerId,
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    ...(hiddenModelProviders === undefined ? {} : { hiddenModelProviders }),
+  });
+}

@@ -63,8 +63,11 @@ export function useBrowserTabClose(args: BrowserTabCloseArgs): BrowserTabClose {
     onSuccess: () => {
       const pointer = findOpenTileInTab(viewTabId, tile);
       if (pointer === null) return;
-      navigateNested(epicId, viewTabId, () =>
-        prepareClose(viewTabId, pointer.paneId, pointer.instanceId),
+      navigateNested(
+        epicId,
+        viewTabId,
+        () => prepareClose(viewTabId, pointer.paneId, pointer.instanceId),
+        "user",
       );
     },
     onError: () => {

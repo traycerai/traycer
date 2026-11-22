@@ -5,9 +5,57 @@ import type {
   CanvasNote,
 } from "@traycer/protocol/persistence/epic/canvas-layout";
 
+import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
+import { artifactMountsShareSite } from "@/lib/sandbox/artifact-serving/artifact-address";
+
 export const CANVAS_LOCAL_ORIGIN = Symbol("canvas-local");
-export const LIVE_BOARD_SLOT_BUDGET = 24;
 const LIVE_BOARD_BYTES_PER_SLOT = 40 * 1024;
+/**
+ * How many board frames a canvas keeps live, in slots of
+ * {@link LIVE_BOARD_BYTES_PER_SLOT}.
+ *
+ * Where the shell serves the canvas from one site (the desktop), its boards
+ * share one renderer process apart from the app's, so a light board costs a
+ * few MB rather than a process of its own: measured in one process, 24
+ * screenshot boards took 68 MB and 24 DOM mockups 250 MB. 48 slots keep a
+ * dense page near 500 MB, and most pages never unload a board, which loses
+ * the state it had.
+ *
+ * Every other shell holds the boards in the app's own content process. A
+ * browser on a computer keeps 24 there.
+ *
+ * A phone or tablet ends that process when it grows too large, and the app
+ * reloads: an iPhone 13 did so on a pinch over 24 live mockups. A phone shows
+ * two or three boards at a time, so 8 covers the screen and a ring around it;
+ * a tablet shows more and keeps 12.
+ */
+export function liveBoardSlotBudget(
+  bridge: Pick<SandboxArtifactBridge, "artifactOrigin"> | null,
+  artifactId: string,
+  device: CanvasDevice,
+): number {
+  if (bridge !== null && artifactMountsShareSite(bridge, artifactId)) return 48;
+  if (device === "phone") return 8;
+  return device === "tablet" ? 12 : 24;
+}
+/** The hardware a canvas is drawn on, as far as its memory to spare goes. */
+export type CanvasDevice = "phone" | "tablet" | "computer";
+// The narrowest tablet's short side is 600 CSS pixels and up; no phone's is.
+const TABLET_SHORT_SIDE = 600;
+/**
+ * Touch-first hardware is a phone or a tablet whichever app or browser it
+ * runs, and the screen tells the two apart: its short side does not change
+ * with the window or with rotation.
+ */
+export function canvasDevice(
+  coarsePointer: boolean,
+  screen: { readonly width: number; readonly height: number },
+): CanvasDevice {
+  if (!coarsePointer) return "computer";
+  return Math.min(screen.width, screen.height) < TABLET_SHORT_SIDE
+    ? "phone"
+    : "tablet";
+}
 /** The selection/board inspector is parked, not removed: the panels stay in
  * the tree behind this flag until the inspector earns its place in the UI. */
 export const CANVAS_INSPECTOR_ENABLED: boolean = false;

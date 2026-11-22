@@ -1,10 +1,10 @@
 import path from "node:path";
 import {
-  sendAgentMessageRequestSchemaV11,
+  sendAgentMessageRequestSchemaV12,
   sendAgentMessageResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
-  callHostRpcWithDispatch,
+  callAgentHostRpcWithDispatch,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -79,7 +79,7 @@ export function buildAgentSendCommand(opts: {
   return async () => {
     const workspace =
       opts.workspace === null ? null : requireWorkspacePath(opts.workspace);
-    const request = parseUserInput(sendAgentMessageRequestSchemaV11, {
+    const request = parseUserInput(sendAgentMessageRequestSchemaV12, {
       senderAgentId: resolveSenderAgentId(opts.senderAgentId),
       epicId: resolveEpicId(opts.epicId),
       receiverAgentId: opts.to,
@@ -89,7 +89,7 @@ export function buildAgentSendCommand(opts: {
       workspace,
     });
     const result = await toAgentCliError(
-      callHostRpcWithDispatch(
+      callAgentHostRpcWithDispatch(
         "agent.sendMessage",
         request,
         workspace === null ? SEND_MESSAGE_DISPATCH : WORKSPACE_SEND_DISPATCH,

@@ -153,6 +153,7 @@ function startCard(): ReactNode {
       imageResults={[]}
       artifact={null}
       mcpApp={null}
+      feedbackDraft={null}
       variant="card"
       headerFindUnitId={null}
     />
@@ -194,6 +195,7 @@ function restartCard(): ReactNode {
       imageResults={[]}
       artifact={null}
       mcpApp={null}
+      feedbackDraft={null}
       variant="card"
       headerFindUnitId={null}
     />
@@ -222,7 +224,9 @@ function Harness(props: {
     </QueryClientProvider>
   );
   return (
-    <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
+    <ChatTranscriptProvider
+      value={{ chatId: CHAT_ID, hostId: HOST_ID, payerHostId: HOST_ID }}
+    >
       <EpicSessionContext.Provider value={epicHandle}>
         <TabHostProvider hostId={HOST_ID}>
           <TooltipProvider>

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import log from "electron-log";
+import { ipcRenderer } from "electron";
 import {
   afterEach,
   beforeEach,
@@ -17,6 +18,7 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../../ipc-contracts/ipc-channels";
+import { buildAuthBridge } from "../../../electron-preload/auth-bridge";
 import type {
   DesktopPublishedHostSnapshot,
   LocalHostUnresponsive,
@@ -32,6 +34,10 @@ import type {
   IpcWindowRegistry,
 } from "../runner-ipc-bridge";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+} from "@traycer-clients/shared/auth/host-token-source";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import {
   createEmptyPerWindowSnapshot,
@@ -66,7 +72,19 @@ import type {
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
+import type {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  parseBotDeleteRequest,
+  parseBotUpdateReplyModeRequest,
+  parseBotUpdateRunSettingsRequest,
+} from "../ipc-parsers";
 import type {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -88,7 +106,21 @@ import {
   userBearerClaims,
 } from "../../auth/__tests__/jws-fixture";
 
-const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+const liveWindows = vi.hoisted(
+  (): {
+    current: ReadonlyArray<{
+      readonly isDestroyed: () => boolean;
+      readonly isFocused: () => boolean;
+    }>;
+  } => ({ current: [] }),
+);
+const featureSettings = vi.hoisted(() => ({
+  agentRoles: false,
+  agentFeedback: true,
+}));
+const recordedMainLoggerCalls = vi.hoisted(() => ({
+  entries: [] as Array<{ readonly level: string; readonly values: unknown[] }>,
+}));
 /** The control-plane call the `runSandboxVerb` handler makes, observed. */
 const runSandboxVerbViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof runSandboxVerbViaHttp>(async () => ({
@@ -170,6 +202,27 @@ const disconnectSlackAppViaHttpMock = vi.hoisted(() =>
     detail: "unscripted",
   })),
 );
+const setSlackAppDmsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof setSlackAppDmsViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
+const updateBotRunSettingsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof updateBotRunSettingsViaHttp>(async () => ({
+    kind: "no_response",
+  })),
+);
+const updateBotReplyModeViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof updateBotReplyModeViaHttp>(async () => ({
+    kind: "no_response",
+  })),
+);
+const deleteBotViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof deleteBotViaHttp>(async () => ({
+    kind: "no_response",
+  })),
+);
 /** The secrets broker's grants read and decide the two handlers make, observed. */
 const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
@@ -222,13 +275,25 @@ vi.mock("@traycer-clients/shared/host-client/slack-app", () => ({
   registerSlackAppViaHttp: registerSlackAppViaHttpMock,
   mintSlackAppInstallUrlViaHttp: mintSlackAppInstallUrlViaHttpMock,
   disconnectSlackAppViaHttp: disconnectSlackAppViaHttpMock,
+  setSlackAppDmsViaHttp: setSlackAppDmsViaHttpMock,
 }));
-vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
-  fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
-  fetchTeamEnvironmentViaHttp: fetchTeamEnvironmentViaHttpMock,
-  fetchEnvironmentProvidersViaHttp: fetchEnvironmentProvidersViaHttpMock,
-  decideSecretRequestViaHttp: decideSecretRequestViaHttpMock,
+vi.mock("@traycer-clients/shared/host-client/bot-setup", () => ({
+  updateBotRunSettingsViaHttp: updateBotRunSettingsViaHttpMock,
+  updateBotReplyModeViaHttp: updateBotReplyModeViaHttpMock,
+  deleteBotViaHttp: deleteBotViaHttpMock,
 }));
+vi.mock(
+  "@traycer-clients/shared/host-client/sandbox-secrets",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-client/sandbox-secrets")
+    >()),
+    fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
+    fetchTeamEnvironmentViaHttp: fetchTeamEnvironmentViaHttpMock,
+    fetchEnvironmentProvidersViaHttp: fetchEnvironmentProvidersViaHttpMock,
+    decideSecretRequestViaHttp: decideSecretRequestViaHttpMock,
+  }),
+);
 /**
  * `app`-level event listeners, recorded rather than discarded so a test can
  * drive them. `epic-visibility-ipc.ts` registers a `render-process-gone`
@@ -238,17 +303,30 @@ const appEventState = vi.hoisted(() => ({
   listeners: new Map<string, Set<(...args: unknown[]) => void>>(),
 }));
 const readFeatureSettingsMock = vi.hoisted(() =>
-  vi.fn(async () => ({ agentRoles: featureSettings.agentRoles })),
+  vi.fn(async () => ({
+    agentRoles: featureSettings.agentRoles,
+    artifactVersioning: false,
+  })),
+);
+const readAgentFeedbackConfigMock = vi.hoisted(() =>
+  vi.fn(() => ({ enabled: featureSettings.agentFeedback })),
 );
 const setAgentRolesEnabledMock = vi.hoisted(() =>
   vi.fn(async (enabled: boolean) => {
     featureSettings.agentRoles = enabled;
   }),
 );
+const setAgentFeedbackEnabledMock = vi.hoisted(() =>
+  vi.fn(async (enabled: boolean) => {
+    featureSettings.agentFeedback = enabled;
+  }),
+);
 vi.mock("@traycer/protocol/config/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@traycer/protocol/config/store")>()),
   readFeatureSettings: readFeatureSettingsMock,
+  readAgentFeedbackConfigSync: readAgentFeedbackConfigMock,
   setAgentRolesEnabled: setAgentRolesEnabledMock,
+  setAgentFeedbackEnabled: setAgentFeedbackEnabledMock,
 }));
 
 /**
@@ -323,7 +401,7 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     fromWebContents: vi.fn(() => null),
-    getAllWindows: vi.fn(() => []),
+    getAllWindows: vi.fn(() => liveWindows.current),
   },
   Notification: {
     isSupported: (): boolean => false,
@@ -352,20 +430,40 @@ vi.mock("electron", () => ({
       ipcMainState.syncListeners.get(channel)?.delete(listener);
     },
   },
-}));
-
-vi.mock("electron-log", () => ({
-  default: {
-    transports: {
-      file: { level: "info" },
-      console: { level: "info" },
+  ipcRenderer: {
+    on: vi.fn(),
+    removeListener: vi.fn(),
+    invoke: (channel: string, ...args: unknown[]): Promise<unknown> => {
+      const handler = ipcMainState.handlers.get(channel);
+      if (handler === undefined) {
+        return Promise.reject(new Error("IPC handler is not registered"));
+      }
+      return Promise.resolve(handler(sender(0), ...args));
     },
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
   },
 }));
+
+vi.mock("electron-log", () => {
+  const record =
+    (level: string) =>
+    (...values: unknown[]): void => {
+      recordedMainLoggerCalls.entries.push({ level, values });
+    };
+  return {
+    default: {
+      transports: {
+        file: { level: "info" },
+        console: { level: "info" },
+      },
+      silly: vi.fn(record("silly")),
+      verbose: vi.fn(record("verbose")),
+      debug: vi.fn(record("debug")),
+      info: vi.fn(record("info")),
+      warn: vi.fn(record("warn")),
+      error: vi.fn(record("error")),
+    },
+  };
+});
 
 class FakeHost extends EventEmitter implements IpcHostLifecycle {
   private snapshot: DesktopPublishedHostSnapshot | null = null;
@@ -659,6 +757,46 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function valueContainsText(value: unknown, text: string): boolean {
+  if (typeof value === "string") return value.includes(text);
+  if (value instanceof Error) {
+    return (
+      valueContainsText(value.message, text) ||
+      valueContainsText(value.stack, text) ||
+      valueContainsText(value.cause, text)
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => valueContainsText(entry, text));
+  }
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Object.values(value).some((entry) => valueContainsText(entry, text))
+  );
+}
+
+function valueContainsSerializedBody(value: unknown, body: string): boolean {
+  if (typeof value === "string") return value.includes(body);
+  if (value instanceof Error) {
+    return (
+      valueContainsSerializedBody(value.message, body) ||
+      valueContainsSerializedBody(value.stack, body) ||
+      valueContainsSerializedBody(value.cause, body)
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => valueContainsSerializedBody(entry, body));
+  }
+  if (value === null || typeof value !== "object") return false;
+  return (
+    JSON.stringify(value) === body ||
+    Object.values(value).some((entry) =>
+      valueContainsSerializedBody(entry, body),
+    )
+  );
+}
+
 function readQuitRequestId(message: SentMessage | undefined): string {
   if (message === undefined) {
     throw new Error("quitRequested message missing");
@@ -732,10 +870,14 @@ beforeEach(() => {
   ipcMainState.handlers.clear();
   ipcMainState.syncListeners.clear();
   sentMessages.length = 0;
+  recordedMainLoggerCalls.entries.length = 0;
+  liveWindows.current = [];
   vi.unstubAllGlobals();
   featureSettings.agentRoles = false;
+  featureSettings.agentFeedback = true;
   readFeatureSettingsMock.mockClear();
   setAgentRolesEnabledMock.mockClear();
+  setAgentFeedbackEnabledMock.mockClear();
 });
 
 afterEach(() => {
@@ -771,6 +913,12 @@ describe("RunnerIpcBridge", () => {
       const channels = Array.from(ipcMainState.handlers.keys()).sort();
       expect(channels).toEqual(
         [
+          RunnerHostInvoke.readSoundtrackSet,
+          // A build that is not production records the music to disk.
+          RunnerHostInvoke.openSoundtrackRecording,
+          RunnerHostInvoke.appendSoundtrackRecording,
+          RunnerHostInvoke.closeSoundtrackRecording,
+          RunnerHostInvoke.revealSoundtrackRecording,
           RunnerHostInvoke.sandboxArtifactRegister,
           RunnerHostInvoke.sandboxArtifactUnregister,
           RunnerHostInvoke.sandboxArtifactRespond,
@@ -783,6 +931,7 @@ describe("RunnerIpcBridge", () => {
           // atomic conditional delete); §6 adds the one-time legacy→file
           // migration channel.
           RunnerHostInvoke.authTokenStoreGet,
+          RunnerHostInvoke.authTokenStoreGetSignInStorageLow,
           RunnerHostInvoke.authTokenStoreSignIn,
           RunnerHostInvoke.authTokenStoreRotate,
           RunnerHostInvoke.authTokenStoreDelete,
@@ -795,9 +944,14 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.updateHostVersionPolicy,
           // The sandbox control plane, for traycer-server's CORS reason.
           RunnerHostInvoke.listSandboxes,
+          RunnerHostInvoke.listEnvironments,
+          RunnerHostInvoke.saveAutoPolicy,
+          RunnerHostInvoke.attachTaskEnvironment,
           RunnerHostInvoke.getSandboxCosts,
           RunnerHostInvoke.getSandboxCatalogue,
           RunnerHostInvoke.getTraycerModels,
+          RunnerHostInvoke.getTeamChatAutoArchive,
+          RunnerHostInvoke.setTeamChatAutoArchive,
           RunnerHostInvoke.createSandbox,
           RunnerHostInvoke.destroySandbox,
           RunnerHostInvoke.patchSandbox,
@@ -809,7 +963,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.getVoiceAvailability,
           RunnerHostInvoke.mintVoiceSession,
           RunnerHostInvoke.endVoiceSession,
-          RunnerHostInvoke.routeVoiceUtterance,
           RunnerHostInvoke.setVoiceSessionLive,
           RunnerHostInvoke.setVoiceSessionIndicator,
           // A bot's Slack app, on traycer-server too.
@@ -818,12 +971,20 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.registerSlackApp,
           RunnerHostInvoke.mintSlackAppInstallUrl,
           RunnerHostInvoke.disconnectSlackApp,
+          RunnerHostInvoke.setSlackAppDms,
+          RunnerHostInvoke.updateBotRunSettings,
+          RunnerHostInvoke.updateBotReplyMode,
+          RunnerHostInvoke.deleteBot,
+          RunnerHostInvoke.readHostOwnership,
+          RunnerHostInvoke.listTeamComputers,
+          RunnerHostInvoke.releaseTeamComputer,
+          RunnerHostInvoke.mintTeamComputerInstallToken,
           // The secrets broker, on authn.
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,
           RunnerHostInvoke.getEnvironmentProviders,
+          RunnerHostInvoke.replaceEnvironmentApiKey,
           RunnerHostInvoke.decideSecretRequest,
-          RunnerHostInvoke.mintExecutableWriteGrant,
           RunnerHostInvoke.listUserSessions,
           RunnerHostInvoke.revokeUserSession,
           RunnerHostInvoke.revokeAllSessions,
@@ -1018,6 +1179,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.logLevelsSet,
           RunnerHostInvoke.featureSettingsGet,
           RunnerHostInvoke.agentRolesEnabledSet,
+          RunnerHostInvoke.agentFeedbackEnabledSet,
           RunnerHostInvoke.fontsList,
           RunnerHostInvoke.zoomGet,
           RunnerHostInvoke.zoomSet,
@@ -1066,6 +1228,10 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.browserViewLoginImportRun,
           RunnerHostInvoke.pipCaptureStart,
           RunnerHostInvoke.pipCaptureStop,
+          RunnerHostInvoke.hostTokensObtain,
+          RunnerHostInvoke.hostTokensRenew,
+          RunnerHostInvoke.hostTokensAdopt,
+          RunnerHostInvoke.hostTokensForgetUser,
           // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
           RunnerHostInvoke.selectionAttach,
           RunnerHostInvoke.selectionReportEvidence,
@@ -1076,6 +1242,133 @@ describe("RunnerIpcBridge", () => {
       bridge.dispose();
     },
   );
+
+  it("drops an adopt request from a window's prior era", async () => {
+    const mod = await import("../register-runner-ipc");
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      authTokenStore: undefined,
+      hostTokens,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const forget = ipcMainState.handlers.get(
+      RunnerHostInvoke.hostTokensForgetUser,
+    );
+    const adopt = ipcMainState.handlers.get(RunnerHostInvoke.hostTokensAdopt);
+    if (forget === undefined || adopt === undefined)
+      throw new Error("host-token IPC handlers are missing");
+
+    await expect(forget(bareEvent(), "user-a")).resolves.toEqual({ era: 1 });
+    await expect(
+      adopt(
+        bareEvent(),
+        "user-a",
+        "computer-a",
+        { token: "old-window-token", expiresAtMs: Date.now() + 60_000 },
+        0,
+      ),
+    ).resolves.toEqual({ era: 1 });
+    expect(hostTokens.current("user-a", "computer-a")).toBeNull();
+    expect(hostTokens.era("user-a")).toBe(1);
+    bridge.dispose();
+  });
+
+  it("supersedes a waiting renewal after its era is forgotten", async () => {
+    const mod = await import("../register-runner-ipc");
+    let mintCalls = 0;
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve({ kind: "no-sign-in" });
+      },
+      signIn: () => "sign-in-a",
+      now: () => Date.now(),
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      authTokenStore: undefined,
+      hostTokens,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const renew = ipcMainState.handlers.get(RunnerHostInvoke.hostTokensRenew);
+    if (renew === undefined)
+      throw new Error("host-token renew handler missing");
+    const changeRegistered = vi.spyOn(bridge.authSession, "on");
+    const initialChangeHandlers = changeRegistered.mock.calls.length;
+
+    const pending = renew(bareEvent(), "user-a", [], 0);
+    await vi.waitFor(() =>
+      expect(changeRegistered.mock.calls.length).toBe(
+        initialChangeHandlers + 1,
+      ),
+    );
+    await hostTokens.forgetUser("user-a");
+    bridge.authSession.set({
+      status: "signed-in",
+      token: "new-sign-in-token",
+      profile: {
+        userId: "user-a",
+        userName: "User A",
+        email: "a@example.invalid",
+      },
+    });
+
+    await expect(pending).resolves.toEqual({
+      renewal: { kind: "superseded" },
+      era: 1,
+    });
+    expect(mintCalls).toBe(0);
+    bridge.dispose();
+  });
+
+  it("answers null when the main era read throws", async () => {
+    const mod = await import("../register-runner-ipc");
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      authTokenStore: undefined,
+      hostTokens,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    vi.spyOn(hostTokens, "era").mockImplementation(() => {
+      throw new Error("era source unavailable");
+    });
+
+    expect(
+      invokeSyncWithSenderAndArgs(RunnerHostSync.hostTokensEra, 0, "user-a"),
+    ).toBeNull();
+    bridge.dispose();
+  });
 
   it("gets and sets agent roles through typed IPC, rejecting non-boolean payloads", async () => {
     const mod = await import("../register-runner-ipc");
@@ -1103,18 +1396,54 @@ describe("RunnerIpcBridge", () => {
 
     await expect(getHandler(bareEvent())).resolves.toEqual({
       agentRoles: false,
+      agentFeedback: true,
     });
     await expect(setHandler(bareEvent(), true)).resolves.toEqual({
       agentRoles: true,
+      agentFeedback: true,
     });
     expect(setAgentRolesEnabledMock).toHaveBeenCalledWith(true);
     await expect(getHandler(bareEvent())).resolves.toEqual({
       agentRoles: true,
+      agentFeedback: true,
     });
     await expect(setHandler(bareEvent(), "yes")).rejects.toThrow(
       "featureSettings:agentRoles:set requires a boolean",
     );
     expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("updates agent feedback through the feature-settings IPC channel", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const setHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.agentFeedbackEnabledSet,
+    );
+    if (setHandler === undefined) {
+      throw new Error("agent feedback IPC handler was not registered");
+    }
+
+    await expect(setHandler(bareEvent(), false)).resolves.toEqual({
+      agentRoles: false,
+      agentFeedback: false,
+    });
+    expect(setAgentFeedbackEnabledMock).toHaveBeenCalledWith(false);
+    await expect(setHandler(bareEvent(), "no")).rejects.toThrow(
+      "featureSettings:agentFeedback:set requires a boolean",
+    );
+    expect(setAgentFeedbackEnabledMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 
@@ -1280,6 +1609,11 @@ describe("RunnerIpcBridge", () => {
         disconnectSlackAppViaHttpMock,
         ["bot-1"],
       ],
+      [
+        RunnerHostInvoke.setSlackAppDms,
+        setSlackAppDmsViaHttpMock,
+        [{ botId: "bot-1", dmsEnabled: false }],
+      ],
     ];
     for (const [channel, mock, args] of calls) {
       const handler = ipcMainState.handlers.get(channel);
@@ -1292,6 +1626,132 @@ describe("RunnerIpcBridge", () => {
         IAP_PROXY_TOKEN,
       ]);
     }
+    bridge.dispose();
+  });
+
+  it("forwards the parsed DM setting request and rejects one without its boolean", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.setSlackAppDms);
+    if (handler === undefined)
+      throw new Error("setSlackAppDms handler missing");
+
+    await handler(bareEvent(), "bearer-1", {
+      botId: "bot-1",
+      dmsEnabled: false,
+    });
+    expect(setSlackAppDmsViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      { botId: "bot-1", dmsEnabled: false },
+    );
+    await expect(
+      handler(bareEvent(), "bearer-1", { botId: "bot-1" }),
+    ).rejects.toThrow();
+    expect(setSlackAppDmsViaHttpMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("sends the three bot writes through the HTTP transport and reports parser paths without values", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const runSettings = {
+      botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      harness: "claude",
+      model: "model-1",
+      effort: null,
+      profile: null,
+    };
+    const replyMode = {
+      botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      replyMode: "direct",
+    };
+    const deletion = { botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV" };
+
+    const runHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.updateBotRunSettings,
+    );
+    const replyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.updateBotReplyMode,
+    );
+    const deleteHandler = ipcMainState.handlers.get(RunnerHostInvoke.deleteBot);
+    if (
+      runHandler === undefined ||
+      replyHandler === undefined ||
+      deleteHandler === undefined
+    ) {
+      throw new Error("bot setup handler missing");
+    }
+    await runHandler(bareEvent(), "bearer-1", runSettings);
+    await replyHandler(bareEvent(), "bearer-1", replyMode);
+    await deleteHandler(bareEvent(), "bearer-1", deletion);
+
+    expect(updateBotRunSettingsViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      fetchEnvironmentTransport,
+      runSettings,
+    );
+    expect(updateBotReplyModeViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      fetchEnvironmentTransport,
+      replyMode,
+    );
+    expect(deleteBotViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      fetchEnvironmentTransport,
+      deletion,
+    );
+
+    const runError = (() => {
+      try {
+        parseBotUpdateRunSettingsRequest({ ...runSettings, model: "" });
+      } catch (error) {
+        return error;
+      }
+      throw new Error("invalid run settings were accepted");
+    })();
+    expect(String(runError)).toContain("updateBotRunSettings.request.model");
+    expect(String(runError)).not.toContain('""');
+    expect(() =>
+      parseBotUpdateReplyModeRequest({ ...replyMode, replyMode: "sideways" }),
+    ).toThrow("updateBotReplyMode.request.replyMode");
+    const deleteError = (() => {
+      try {
+        parseBotDeleteRequest({ botId: "private-invalid-id" });
+      } catch (error) {
+        return error;
+      }
+      throw new Error("invalid bot id was accepted");
+    })();
+    expect(String(deleteError)).toContain("deleteBot.request.botId");
+    expect(String(deleteError)).not.toContain("private-invalid-id");
     bridge.dispose();
   });
 
@@ -1545,6 +2005,189 @@ describe("RunnerIpcBridge", () => {
     expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenCalledTimes(1);
     expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
+  });
+
+  it("keeps a replaced environment API key out of main logs, bridge errors, and renderer results", async () => {
+    type ReplaceScenario =
+      | {
+          readonly kind: "response";
+          readonly status: number;
+          readonly body: unknown;
+        }
+      | { readonly kind: "throw-get" }
+      | { readonly kind: "reject-post" };
+
+    const apiKey = "TRAYCER_API_KEY_PRIVACY_CANARY_7a56d9";
+    const request = {
+      environmentId: "environment-1",
+      profileId: "profile-1",
+      harnessId: "claude",
+      key: apiKey,
+    };
+    const httpRequestBody = JSON.stringify({
+      kind: "api_key",
+      harnessId: request.harnessId,
+      key: apiKey,
+      expectedBindingVersion: 17,
+    });
+    const ipcRequestBody = JSON.stringify(request);
+    const malformedRequest = {
+      environmentId: "environment-1",
+      profileId: "profile-1",
+      key: apiKey,
+    };
+    const malformedRequestBody = JSON.stringify(malformedRequest);
+    const scenarios: Array<ReplaceScenario> = [
+      {
+        kind: "response",
+        status: 200,
+        body: {
+          profileId: request.profileId,
+          harnessId: request.harnessId,
+          kind: "api_key",
+          status: "connected",
+        },
+      },
+      { kind: "response", status: 409, body: { code: "binding-changed" } },
+      {
+        kind: "response",
+        status: 422,
+        body: { code: "harness_token_shape" },
+      },
+      { kind: "response", status: 401, body: { code: "unauthorized" } },
+      { kind: "response", status: 403, body: { code: "forbidden" } },
+      {
+        kind: "response",
+        status: 409,
+        body: { code: "profile_record_account_unproven" },
+      },
+      {
+        kind: "response",
+        status: 404,
+        body: { code: "profile_record_not_found" },
+      },
+      {
+        kind: "response",
+        status: 500,
+        body: { code: "request_failed", message: "synthetic server detail" },
+      },
+      { kind: "throw-get" },
+      { kind: "reject-post" },
+    ];
+    let scenario: ReplaceScenario = { kind: "throw-get" };
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      if (init?.method === "GET") {
+        if (scenario.kind === "throw-get") {
+          throw new Error("synthetic transport failure");
+        }
+        return jsonResponse(200, {
+          connections: [{ profileId: request.profileId, bindingVersion: 17 }],
+        });
+      }
+      if (scenario.kind === "reject-post") {
+        return Promise.reject(new Error("synthetic transport failure"));
+      }
+      if (scenario.kind === "response") {
+        return jsonResponse(scenario.status, scenario.body);
+      }
+      throw new Error("unexpected key replacement request");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const preload = buildAuthBridge();
+    const rendererResults: unknown[] = [];
+    const escapedErrors: unknown[] = [];
+    for (const nextScenario of scenarios) {
+      scenario = nextScenario;
+      try {
+        rendererResults.push(
+          await preload.replaceEnvironmentApiKey("bearer-fixture", request),
+        );
+      } catch (error: unknown) {
+        escapedErrors.push(error);
+      }
+    }
+
+    const callsBeforeMalformed = fetchMock.mock.calls.length;
+    try {
+      rendererResults.push(
+        await ipcRenderer.invoke(
+          RunnerHostInvoke.replaceEnvironmentApiKey,
+          "bearer-fixture",
+          malformedRequest,
+        ),
+      );
+    } catch (error: unknown) {
+      escapedErrors.push(error);
+    }
+    bridge.dispose();
+
+    const resultKinds = rendererResults.map((result) => {
+      if (
+        result !== null &&
+        typeof result === "object" &&
+        "kind" in result &&
+        typeof result.kind === "string"
+      ) {
+        return result.kind;
+      }
+      return "invalid-result";
+    });
+    const resultsHaveClosedShape = rendererResults.every(
+      (result) =>
+        result !== null &&
+        typeof result === "object" &&
+        !Array.isArray(result) &&
+        Object.hasOwn(result, "kind") &&
+        Object.keys(result).length === 1,
+    );
+    const observations = [
+      recordedMainLoggerCalls.entries,
+      escapedErrors,
+      rendererResults,
+    ];
+    const keyIsAbsent = observations.every(
+      (value) => !valueContainsText(value, apiKey),
+    );
+    const requestBodiesAreAbsent = [
+      httpRequestBody,
+      ipcRequestBody,
+      malformedRequestBody,
+    ].every((body) =>
+      observations.every((value) => !valueContainsSerializedBody(value, body)),
+    );
+
+    expect(resultKinds).toEqual([
+      "ok",
+      "binding-changed",
+      "malformed-key",
+      "unauthorized",
+      "forbidden",
+      "account-unproven",
+      "removed",
+      "failed",
+      "failed",
+      "failed",
+      "failed",
+    ]);
+    expect(resultsHaveClosedShape).toBe(true);
+    expect(escapedErrors.length).toBe(0);
+    expect(fetchMock.mock.calls.length - callsBeforeMalformed).toBe(0);
+    expect(keyIsAbsent).toBe(true);
+    expect(requestBodiesAreAbsent).toBe(true);
   });
 
   it("releases sleep prevention when the renderer process disappears", async () => {
@@ -5571,6 +6214,7 @@ describe("RunnerIpcBridge", () => {
       foregroundAppLocal: {
         userId: "user-1",
         entry: { id: "host.error:failure-1", updatedAt: 40 },
+        inboxOnly: false,
       },
     };
 
@@ -5799,6 +6443,103 @@ describe("RunnerIpcBridge", () => {
     expect(await show(null)).toBe("undeliverable");
     expect(await show(undefined)).toBe("undeliverable");
     bridge.dispose();
+  });
+
+  describe("notificationShow with app-local context", () => {
+    const entry = { id: "host.error:failure-1", updatedAt: 40 };
+
+    async function installBridge() {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      const focusedWindow = buildWindow();
+      const senderWindow = buildWindow();
+      registry.add("window-focused", 101, focusedWindow);
+      registry.add("window-sender", 202, senderWindow);
+      focusedWindow.setFocused(true);
+      liveWindows.current = [focusedWindow, senderWindow];
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      const handler = ipcMainState.handlers.get(
+        RunnerHostInvoke.notificationShow,
+      );
+      if (handler === undefined) throw new Error("notificationShow missing");
+      const sender = Object.assign(new EventEmitter(), { id: 202 });
+      const event = { sender, senderFrame: { parent: null } };
+      const show = (foregroundAppLocal: unknown) =>
+        handler(
+          event,
+          "Traycer",
+          "Background agent failed",
+          null,
+          "app-local:host.error:failure-1",
+          "user-1:host.error:failure-1:40",
+          "app-local",
+          foregroundAppLocal,
+          undefined,
+        );
+      const foregroundDisplays = () =>
+        focusedWindow.sentMessages.filter(
+          (message) =>
+            message.channel === RunnerHostEvent.notificationForegroundDisplay,
+        );
+      return { bridge, foregroundDisplays, show };
+    }
+
+    // Timeout for the dynamic import of the whole IPC surface (see the first
+    // case in this file).
+    it(
+      "relays an inbox-only display to the focused window with its flag, and shows no native notification",
+      { timeout: 30_000 },
+      async () => {
+        const { bridge, foregroundDisplays, show } = await installBridge();
+
+        expect(await show({ userId: "user-1", entry, inboxOnly: true })).toBe(
+          "presented",
+        );
+
+        expect(foregroundDisplays()).toEqual([
+          {
+            channel: RunnerHostEvent.notificationForegroundDisplay,
+            payload: expect.objectContaining({
+              foregroundAppLocal: { userId: "user-1", entry, inboxOnly: true },
+            }),
+          },
+        ]);
+        bridge.dispose();
+      },
+    );
+
+    it.each([
+      ["missing", { userId: "user-1", entry }],
+      ["a string", { userId: "user-1", entry, inboxOnly: "true" }],
+      ["a number", { userId: "user-1", entry, inboxOnly: 1 }],
+      ["null", { userId: "user-1", entry, inboxOnly: null }],
+    ])(
+      "rejects foreground app-local context whose inboxOnly is %s",
+      async (_name, context) => {
+        const { bridge, foregroundDisplays, show } = await installBridge();
+
+        await expect(show(context)).rejects.toThrow(
+          "notifications.show requires foreground app-local context or null",
+        );
+
+        expect(foregroundDisplays()).toEqual([]);
+        bridge.dispose();
+      },
+    );
   });
 
   it("routes a chat notification click to the window that already has the chat open, not MRU", async () => {

@@ -22,9 +22,15 @@
  * for a future copy verb that moves bytes host-to-host without the agent
  * ever holding them. Do not reintroduce a byte-carrying file RPC.
  */
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
+import { chatRecordHeadStampSchema } from "@traycer/protocol/host/epic/chat-records";
+import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
 import { browserSessionReferenceSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
 import {
   chatRunSettingsStrictSchemaPreUltracode,
   tuiHarnessIdSchema,
@@ -635,8 +641,9 @@ export type HostAgentRemoteSenderFacts = z.infer<
 
 /**
  * Dial-only create. `agent.create@3.0` is a RELEASED client contract and
- * cannot grow a field, so the sender-facts envelope lives here, on the
- * host-agent optional channel, where it is free to change in place.
+ * cannot grow a field, so the sender-facts envelope uses a separate host-agent
+ * RPC. That RPC is versioned too: v1.0 is frozen, and v1.1 carries a named
+ * service tier without letting an older peer silently drop the choice.
  *
  * The v3.0 request is EXTENDED rather than nested for two reasons, both
  * load-bearing:
@@ -654,6 +661,10 @@ export type HostAgentRemoteSenderFacts = z.infer<
  * cross-host folderless create would silently reach the target as
  * inherit-from-parent — and the parent it would try to inherit from is the
  * record the target does not have.
+ *
+ * `host.agent.createFromRemoteSender@1.0` is frozen. Its `@1.1` extension adds
+ * the optional nullable service tier; callers pin named tiers to that host
+ * method version so a 1.0 peer cannot silently strip the choice.
  */
 export const hostAgentCreateFromRemoteSenderRequestSchema = lazySchema(() =>
   createAgentRequestSchemaV30.extend({
@@ -661,8 +672,17 @@ export const hostAgentCreateFromRemoteSenderRequestSchema = lazySchema(() =>
     workspaceIntent: z.literal("folderless").nullable(),
   }),
 );
-export type HostAgentCreateFromRemoteSenderRequest = z.infer<
+export type HostAgentCreateFromRemoteSenderRequestV10 = z.infer<
   typeof hostAgentCreateFromRemoteSenderRequestSchema
+>;
+
+export const hostAgentCreateFromRemoteSenderRequestSchemaV11 = lazySchema(() =>
+  hostAgentCreateFromRemoteSenderRequestSchema.extend({
+    serviceTier: z.string().nullable().optional(),
+  }),
+);
+export type HostAgentCreateFromRemoteSenderRequest = z.infer<
+  typeof hostAgentCreateFromRemoteSenderRequestSchemaV11
 >;
 
 export const hostAgentCreateFromRemoteSenderV10 = defineRpcContract({
@@ -673,6 +693,108 @@ export const hostAgentCreateFromRemoteSenderV10 = defineRpcContract({
   // warnings. The caller briefs it with `agent.sendMessage`, which already
   // routes cross-host.
   responseSchema: createAgentResponseSchema,
+});
+
+export const hostAgentCreateFromRemoteSenderV11 = defineRpcContract({
+  method: "host.agent.createFromRemoteSender",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostAgentCreateFromRemoteSenderRequestSchemaV11,
+  responseSchema: createAgentResponseSchema,
+});
+
+export const hostAgentCreateFromRemoteSenderUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostAgentCreateFromRemoteSenderV10,
+  typeof hostAgentCreateFromRemoteSenderV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * The created agent's record as the cloud acknowledged it, relayed by the
+ * owning host: the fields of the cloud row that a host keeps for a record
+ * another host owns. `tenantKind` stays a plain string, as on the cloud row,
+ * so a tenant a newer deploy adds still parses. Timestamps and the head are
+ * bounded as the record rows a host serves bound them
+ * (`chatRecordSummarySchema`, `chatRecordHeadStampSchema`): integer
+ * milliseconds, never negative.
+ */
+export const hostAgentCreatedRecordSchema = lazySchema(() =>
+  z.object({
+    taskId: z.string().min(1),
+    chatId: z.string().min(1),
+    ownerUserId: z.string().min(1),
+    ownerHostId: z.string().min(1),
+    tenantKind: z.string().min(1),
+    createdAt: z.number().int().nonnegative(),
+    visibility: cloudChatVisibilitySchema,
+    metadataRevision: z.number().int().nonnegative(),
+    title: z.string().nullable(),
+    isTitleEditedByUser: z.boolean(),
+    parentChatId: z.string().nullable(),
+    isArchived: z.boolean(),
+    archiveChangedAt: z.number().int().nonnegative().nullable(),
+    runSettingsSummary: z.string().nullable(),
+    metadataUpdatedAt: z.number().int().nonnegative(),
+    roleClaims: z.array(roleClaimSchema),
+    head: chatRecordHeadStampSchema.nullable(),
+  }),
+);
+export type HostAgentCreatedRecord = z.infer<
+  typeof hostAgentCreatedRecordSchema
+>;
+
+/**
+ * Whether the cloud held the created agent's record when the owning host
+ * answered. `admitted` carries the record the cloud acknowledged; `pending`
+ * means the owner's bounded wait ended first, or the task has not been
+ * uploaded yet, and the record reaches the cloud through the owner's
+ * ordinary retry.
+ */
+export const hostAgentCreateAdmissionSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("admitted"),
+      record: hostAgentCreatedRecordSchema,
+    }),
+    z.object({ status: z.literal("pending") }),
+  ]),
+);
+export type HostAgentCreateAdmission = z.infer<
+  typeof hostAgentCreateAdmissionSchema
+>;
+
+/**
+ * `@1.2` adds `admission` to the response. `null` is what a caller reads from
+ * an owner on `@1.1` or older, through the upgrade below: that owner never
+ * reported whether the cloud held the record.
+ */
+export const hostAgentCreateFromRemoteSenderResponseSchemaV12 = lazySchema(() =>
+  createAgentResponseSchema.extend({
+    admission: hostAgentCreateAdmissionSchema.nullable(),
+  }),
+);
+export type HostAgentCreateFromRemoteSenderResponse = z.infer<
+  typeof hostAgentCreateFromRemoteSenderResponseSchemaV12
+>;
+
+export const hostAgentCreateFromRemoteSenderV12 = defineRpcContract({
+  method: "host.agent.createFromRemoteSender",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: hostAgentCreateFromRemoteSenderRequestSchemaV11,
+  responseSchema: hostAgentCreateFromRemoteSenderResponseSchemaV12,
+});
+
+export const hostAgentCreateFromRemoteSenderUpgradeV11ToV12 = defineUpgradePath<
+  typeof hostAgentCreateFromRemoteSenderV11,
+  typeof hostAgentCreateFromRemoteSenderV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, admission: null }),
 });
 
 /**

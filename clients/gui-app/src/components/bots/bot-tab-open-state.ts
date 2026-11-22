@@ -62,21 +62,61 @@ export function botPausedCopy(
  *   environment room (T65); the tab never moves to the bot's host;
  * - `paused`: no host can run the bot's turns now; the reason picks the
  *   banner's copy, and the channel still renders;
+ * - `reconnecting`: the open failed only because the tab's host got no
+ *   verdict from the cloud; it is asked again when that host's
+ *   cloud-recovery doorbell rings, and on the tab's own backoff
+ *   ({@link botTabReopenDelayMs});
  * - `failed`: the open itself failed.
  */
 export type BotTabOpenState =
   | { readonly kind: "opening" }
   | { readonly kind: "serving" }
   | { readonly kind: "paused"; readonly reason: BotTabPausedReason }
+  | { readonly kind: "reconnecting" }
   | { readonly kind: "failed"; readonly message: string };
+
+/**
+ * A failed `bot.open`: what it said, and whether it failed only because the
+ * host could not reach the cloud (`isTransientCloudFailure`).
+ */
+export interface BotTabOpenFailure {
+  readonly message: string;
+  readonly transient: boolean;
+}
+
+const REOPEN_FIRST_WAIT_MS = 5_000;
+const REOPEN_LONGEST_WAIT_MS = 60_000;
+
+/**
+ * How long the tab waits before it asks a transiently failed open again by
+ * itself, after `failures` such failures in a row (at least 1): 5 s, doubling
+ * to a minute, drawn over [50%, 100%] of that so tabs that failed together do
+ * not ask together. The host owes a doorbell ring only for an outage it can
+ * see end (an open breaker, a `Retry-After`); a lone 5xx owes none, and
+ * without this the open would wait for a ring that never comes.
+ */
+export function botTabReopenDelayMs(
+  failures: number,
+  random: () => number,
+): number {
+  const wait = Math.min(
+    REOPEN_LONGEST_WAIT_MS,
+    REOPEN_FIRST_WAIT_MS * 2 ** Math.max(0, failures - 1),
+  );
+  return Math.round(wait * (0.5 + random() * 0.5));
+}
 
 /** Reads `bot.open`'s answer for the tab. */
 export function botTabOpenState(input: {
   readonly response: BotOpenResponse | undefined;
-  readonly error: string | null;
+  readonly error: BotTabOpenFailure | null;
 }): BotTabOpenState {
   const { response, error } = input;
-  if (error !== null) return { kind: "failed", message: error };
+  if (error !== null) {
+    return error.transient
+      ? { kind: "reconnecting" }
+      : { kind: "failed", message: error.message };
+  }
   if (response === undefined) return { kind: "opening" };
   const { outcome } = response;
   switch (outcome.kind) {

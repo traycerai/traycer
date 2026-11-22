@@ -10,7 +10,7 @@ import {
   memberRemovedToastBody,
   memberRowTitle,
   removePreviewTitle,
-  viewerCanSeeLine,
+  seeButNotChangeLine,
 } from "@/components/settings/members/copy";
 import type { MembersListMember } from "@/components/settings/members/types";
 
@@ -35,7 +35,6 @@ function member(overrides: Partial<MembersListMember>): MembersListMember {
     linkedPlan: false,
     inviteState: "accepted",
     invitedAddress: null,
-    removalState: "none",
     ...overrides,
   };
 }
@@ -110,19 +109,15 @@ describe("legacyRoleNotice", () => {
 
 /** NEW-154-23: a confirm on every demotion, and none on a promotion. */
 describe("role changes that need a confirm", () => {
-  it.each([
-    ["admin", "editor"],
-    ["admin", "viewer"],
-    ["editor", "viewer"],
-  ] as const)("treats %s to %s as a demotion", (from, to) => {
-    expect(isRoleDemotion(from, to)).toBe(true);
+  it("treats admin to editor as a demotion", () => {
+    expect(isRoleDemotion("admin", "editor")).toBe(true);
   });
 
   it.each([
-    ["viewer", "editor"],
-    ["viewer", "admin"],
     ["editor", "admin"],
     ["editor", "editor"],
+    ["viewer", "editor"],
+    ["viewer", "admin"],
   ] as const)("treats %s to %s as no demotion", (from, to) => {
     expect(isRoleDemotion(from, to)).toBe(false);
   });
@@ -136,15 +131,21 @@ describe("role changes that need a confirm", () => {
     );
   });
 
-  it("says what an admin loses, what an editor loses, and both for admin to viewer", () => {
-    expect(demotionConfirmBody("Priya", "Acme", "admin", "editor")).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
-    );
+  it("says what an editor loses on the way to viewer", () => {
     expect(demotionConfirmBody("Priya", "Acme", "editor", "viewer")).toBe(
       "Priya can no longer change Acme's settings. They can still see them.",
     );
+  });
+
+  it("says both losses when an admin goes straight to viewer", () => {
     expect(demotionConfirmBody("Priya", "Acme", "admin", "viewer")).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy. Priya can no longer change Acme's settings. They can still see them.",
+      "Priya can no longer invite people or change roles. Priya can no longer change Acme's settings. They can still see them.",
+    );
+  });
+
+  it("says what an admin loses on the way to editor", () => {
+    expect(demotionConfirmBody("Priya", "Acme", "admin", "editor")).toBe(
+      "Priya can no longer invite people or change roles.",
     );
   });
 
@@ -154,10 +155,10 @@ describe("role changes that need a confirm", () => {
   });
 });
 
-/** NEW-154-24: one standing line for a viewer, on every page. */
-describe("viewerCanSeeLine", () => {
-  it("says what a viewer can and cannot do", () => {
-    expect(viewerCanSeeLine("Acme")).toBe(
+/** NEW-154-24: one standing line for a read-only configuration, on every page. */
+describe("seeButNotChangeLine", () => {
+  it("says what the reader can and cannot do", () => {
+    expect(seeButNotChangeLine("Acme")).toBe(
       "You can see Acme's settings but not change them.",
     );
   });

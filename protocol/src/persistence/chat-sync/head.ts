@@ -415,21 +415,56 @@ function payloadHasCanvasAnnotations(payload: unknown): boolean {
   });
 }
 
-function queuedItemHasCanvasAnnotations(item: unknown): boolean {
-  return (
-    typeof item === "object" &&
-    item !== null &&
-    "message" in item &&
-    payloadHasCanvasAnnotations(item.message)
-  );
+/**
+ * A Slack message (`slackUserMessageSchema`) is a user payload kind no reader
+ * before 1.13 can decode: its union rejects the kind, and the message-role
+ * passthrough does not reach a nested kind.
+ */
+export const CHAT_SYNC_SLACK_MESSAGE_READER_FLOOR: SchemaVersion = {
+  major: 1,
+  minor: 13,
+};
+
+/** The floor a user payload demands, or `null` when every supported reader decodes it. */
+function readerFloorForUserPayload(payload: unknown): SchemaVersion | null {
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    "kind" in payload &&
+    payload.kind === "slack"
+  )
+    return CHAT_SYNC_SLACK_MESSAGE_READER_FLOOR;
+  return payloadHasCanvasAnnotations(payload)
+    ? CHAT_SYNC_CANVAS_ANNOTATION_READER_FLOOR
+    : null;
 }
 
-/** Canvas changes the known user payload, so pre-1.10 readers cannot decode it.
- * The publisher combines this floor with the event floor before writing HEAD;
- * gating at HEAD prevents every shard fetch on an incompatible reader. */
+function readerFloorForQueuedItem(item: unknown): SchemaVersion | null {
+  return typeof item === "object" && item !== null && "message" in item
+    ? readerFloorForUserPayload(item.message)
+    : null;
+}
+
+function higherReaderFloor(
+  a: SchemaVersion | null,
+  b: SchemaVersion | null,
+): SchemaVersion | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return b.major > a.major || (b.major === a.major && b.minor > a.minor)
+    ? b
+    : a;
+}
+
+/** Canvas evidence (1.10) and Slack messages (1.13) change the known user
+ * payload, so older readers cannot decode it; this answers the higher floor
+ * the messages demand. The publisher combines it with the event floor before
+ * writing HEAD; gating at HEAD prevents every shard fetch on an incompatible
+ * reader. */
 export function chatSyncReaderFloorForTranscriptMessages(
   messages: Iterable<unknown>,
 ): SchemaVersion | null {
+  let floor: SchemaVersion | null = null;
   for (const message of messages) {
     if (
       typeof message !== "object" ||
@@ -439,10 +474,12 @@ export function chatSyncReaderFloorForTranscriptMessages(
       !("message" in message)
     )
       continue;
-    if (payloadHasCanvasAnnotations(message.message))
-      return CHAT_SYNC_CANVAS_ANNOTATION_READER_FLOOR;
+    floor = higherReaderFloor(
+      floor,
+      readerFloorForUserPayload(message.message),
+    );
   }
-  return null;
+  return floor;
 }
 
 /**
@@ -469,25 +506,29 @@ export function chatSyncReaderFloorForTranscriptEvents(
 ): SchemaVersion | null {
   let floor: SchemaVersion | null = null;
   for (const event of events) {
-    // An unaccepted prompt may exist only in a queue event. Its canvas
-    // evidence requires the same floor as a transcript message, regardless of
-    // whether it has a crop. This is higher than either judge-row floor.
+    // An unaccepted prompt may exist only in a queue event. Its payload
+    // requires the same floor as a transcript message: canvas evidence,
+    // regardless of whether it has a crop, or a Slack message. Either is
+    // higher than both judge-row floors.
     const metadata = event.metadata;
-    if (
-      metadata !== null &&
-      (queuedItemHasCanvasAnnotations(metadata.item) ||
-        (Array.isArray(metadata.items) &&
-          metadata.items.some(queuedItemHasCanvasAnnotations)))
-    ) {
-      return CHAT_SYNC_CANVAS_ANNOTATION_READER_FLOOR;
+    if (metadata !== null) {
+      floor = higherReaderFloor(floor, readerFloorForQueuedItem(metadata.item));
+      if (Array.isArray(metadata.items)) {
+        for (const item of metadata.items) {
+          floor = higherReaderFloor(floor, readerFloorForQueuedItem(item));
+        }
+      }
     }
     if (autoJudgeNoticeRowSource(event) !== null) {
-      floor = CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR;
-    } else if (
-      floor === null &&
-      autoJudgeUnattendedDenialRowSource(event) !== null
-    ) {
-      floor = CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR;
+      floor = higherReaderFloor(
+        floor,
+        CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR,
+      );
+    } else if (autoJudgeUnattendedDenialRowSource(event) !== null) {
+      floor = higherReaderFloor(
+        floor,
+        CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR,
+      );
     }
   }
   return floor;

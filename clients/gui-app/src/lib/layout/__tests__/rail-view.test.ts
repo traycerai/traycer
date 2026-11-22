@@ -34,13 +34,13 @@ describe("setSidebarSide", () => {
       origin: { kind: "tab" },
     });
 
-    setSidebarSide("right");
+    setSidebarSide("left");
 
     expect(useLayoutEditorStore.getState().history.past).toHaveLength(1);
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
   });
 
   it("writes against the arrangement as it is NOW, not a snapshot taken earlier", () => {
@@ -52,12 +52,12 @@ describe("setSidebarSide", () => {
     });
     const before = useLayoutStore.getState().arrangement;
 
-    setSidebarSide("right");
+    setSidebarSide("left");
 
     // Every other field is the live one, the moved `usageHost` included.
     expect(useLayoutStore.getState().arrangement).toEqual({
       ...before,
-      sidebarSide: "right",
+      sidebarSide: "left",
     });
   });
 });

@@ -6,6 +6,47 @@ import {
 } from "../sentry-scrub";
 
 describe("shared client Sentry scrub", () => {
+  it("scrubs fingerprints, exception types and error transaction names", () => {
+    const event: ClientSentryEvent = {
+      fingerprint: [
+        "ENOENT /home/synthetic-user/.traycer/cli/install/host-main.cjs",
+        "https://service.invalid/fetch?token=synthetic-credential",
+        "{{ default }}",
+      ],
+      transaction:
+        "GET /home/synthetic-user/.traycer/cli/install/host-main.cjs?token=synthetic-credential",
+      exception: {
+        values: [
+          {
+            type: "Error /home/synthetic-user/.traycer/cli/install/host-main.cjs https://service.invalid/fetch?token=synthetic-credential",
+          },
+          { type: "TypeError" },
+          { type: "ChatWriterLeaseHeldError" },
+          { type: "host-main.abc123.$chunk" },
+          { type: "a.b.$1" },
+        ],
+      },
+    };
+
+    scrubSentryEventInPlace(event);
+
+    expect(event.fingerprint).toEqual([
+      "ENOENT /home/<redacted>/.traycer/cli/install/host-main.cjs",
+      "https://service.invalid/fetch?token=<redacted>",
+      "{{ default }}",
+    ]);
+    expect(event.transaction).toBe(
+      "GET /home/<redacted>/.traycer/cli/install/host-main.cjs?token=<redacted>",
+    );
+    expect(event.exception?.values?.map((value) => value.type)).toEqual([
+      "Error /home/<redacted>/.traycer/cli/install/host-main.cjs https://service.invalid/fetch?token=<redacted>",
+      "TypeError",
+      "ChatWriterLeaseHeldError",
+      "host-main.abc123.$chunk",
+      "a.b.$1",
+    ]);
+  });
+
   it("redacts the exception message an unhandled error uploads", () => {
     const event: ClientSentryEvent = {
       exception: {

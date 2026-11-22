@@ -1,12 +1,20 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  ACCESS_HOST_ID,
+  ACCESS_HOST_NAME,
+} from "./access-host-directory-entry";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import type {
   EnvironmentNotice,
   EnvironmentReviewEntry,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
   EnvironmentWriteOutcome,
-  HostRemoteAccessSetResponse,
+  HostRemoteAccessSetResponseV20,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import type { ConfigEnvEntry } from "@traycer/protocol/host/config/schemas";
@@ -16,6 +24,9 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentMessengerWrapper } from "@/lib/environment/__tests__/environment-test-support";
 
 /**
  * A fake host for the Access and setup tab and the Personal page notices. The
@@ -25,8 +36,13 @@ import type { HostRpcRegistry } from "@/lib/host";
  * Writes are recorded in `requests`, in the order the host received them.
  */
 
-export const ACCESS_HOST_ID = "host-a";
-export const ACCESS_HOST_NAME = "dev-box";
+export {
+  ACCESS_HOST_ID,
+  ACCESS_HOST_NAME,
+  accessHostDirectoryEntryFor,
+  resetAccessHostDirectoryEntry,
+  setAccessHostDirectoryEntry,
+} from "./access-host-directory-entry";
 
 /** The methods a current host advertises in its handshake. */
 export const ACCESS_METHODS: readonly string[] = [
@@ -40,12 +56,14 @@ export const ACCESS_METHODS: readonly string[] = [
   "config.env.localOverride.clear",
   "config.env.list",
   "host.remoteAccess.set",
+  "host.status.refresh",
+  "environment.host.read",
   "providers.list",
   "providers.setProfileEnabled",
 ];
 
 export interface AccessHostState {
-  status: EnvironmentStatusResponseV11;
+  status: EnvironmentStatusResponseV13;
   /** The host cannot answer `environment.status` (it is down). */
   failStatus: boolean;
   notices: EnvironmentNotice[];
@@ -54,7 +72,10 @@ export interface AccessHostState {
   providers: ProviderCliState[];
   envEntries: ConfigEnvEntry[];
   /** What `host.remoteAccess.set` answers. */
-  remoteAccessAnswer: HostRemoteAccessSetResponse;
+  remoteAccessAnswer: HostRemoteAccessSetResponseV20;
+  remoteAccessError: HostRpcError | null;
+  statusRefreshError: Error | null;
+  binding: EnvironmentHostBinding | null;
   /** What `environment.undo` answers. */
   undoAnswer: EnvironmentWriteOutcome;
   /** `config.env.localOverride.set` answers `needs_grant` instead of saving. */
@@ -94,7 +115,10 @@ export function accessHostState(
     overrides: [],
     providers: [],
     envEntries: [],
-    remoteAccessAnswer: { state: "on" },
+    remoteAccessAnswer: { state: "off" },
+    remoteAccessError: null,
+    statusRefreshError: null,
+    binding: null,
     undoAnswer: { outcome: "saved", revision: 2 },
     localOverrideNeedsGrant: false,
     ...overrides,
@@ -104,7 +128,14 @@ export function accessHostState(
 export function buildAccessHost(
   overrides: Partial<AccessHostState>,
 ): AccessHost {
-  return buildAccessHostOn(ACCESS_HOST_ID, overrides);
+  return buildAccessHostCore(ACCESS_HOST_ID, overrides, undefined);
+}
+
+export function buildAccessHostWithMessenger(
+  overrides: Partial<AccessHostState>,
+  wrapMessenger: EnvironmentMessengerWrapper,
+): AccessHost {
+  return buildAccessHostCore(ACCESS_HOST_ID, overrides, wrapMessenger);
 }
 
 /** The same fake host, addressed by another host id. */
@@ -112,12 +143,29 @@ export function buildAccessHostOn(
   hostId: string,
   overrides: Partial<AccessHostState>,
 ): AccessHost {
+  return buildAccessHostCore(hostId, overrides, undefined);
+}
+
+function buildAccessHostCore(
+  hostId: string,
+  overrides: Partial<AccessHostState>,
+  wrapMessenger: EnvironmentMessengerWrapper | undefined,
+): AccessHost {
   const state = accessHostState(overrides);
   const requests: RecordedRequest[] = [];
-  const reads: AccessHostReads = { status: 0, notices: 0, review: 0 };
+  const reads: AccessHostReads = {
+    status: 0,
+    notices: 0,
+    review: 0,
+  };
   const { client } = buildEnvironmentClient({
     hostId,
+    wrapMessenger,
     handlers: {
+      "environment.host.read": () => {
+        if (state.binding === null) throw new Error("Binding unavailable");
+        return { ...state.binding, sharingGeneration: null };
+      },
       "environment.status": () => {
         reads.status += 1;
         if (state.failStatus) throw new Error("the host is down");
@@ -152,7 +200,13 @@ export function buildAccessHostOn(
       "config.env.list": () => ({ entries: [...state.envEntries] }),
       "host.remoteAccess.set": (request) => {
         requests.push({ method: "host.remoteAccess.set", params: request });
+        if (state.remoteAccessError !== null) throw state.remoteAccessError;
         return state.remoteAccessAnswer;
+      },
+      "host.status.refresh": (request) => {
+        requests.push({ method: "host.status.refresh", params: request });
+        if (state.statusRefreshError !== null) throw state.statusRefreshError;
+        return {};
       },
       "environment.setup.retry": (request) => {
         requests.push({ method: "environment.setup.retry", params: request });
@@ -219,7 +273,7 @@ export function reviewEntryFixture(
 ): EnvironmentReviewEntry {
   return {
     entryId: "entry-1",
-    reason: "credential_like_value",
+    reason: "executable_entry",
     kind: "variable",
     key: "DATABASE_URL",
     os: "any",
@@ -231,6 +285,43 @@ export function reviewEntryFixture(
 
 /** The sign-in origin the dashboard links resolve against. */
 export const DASHBOARD_ORIGIN = "https://example.invalid";
+
+export interface FakeEnvironmentCloud {
+  readonly cloud: EnvironmentCloud;
+  readonly requests: EnvironmentTransportRequest[];
+  readonly origin: { current: boolean };
+}
+
+export interface FakeEnvironmentCloudAnswer {
+  readonly status: number;
+  readonly body: unknown;
+}
+
+export type FakeEnvironmentCloudResponder = (
+  request: EnvironmentTransportRequest,
+) => FakeEnvironmentCloudAnswer | Promise<FakeEnvironmentCloudAnswer>;
+
+export function fakeEnvironmentCloud(
+  answer: FakeEnvironmentCloudAnswer | FakeEnvironmentCloudResponder,
+): FakeEnvironmentCloud {
+  const requests: EnvironmentTransportRequest[] = [];
+  const origin = { current: true };
+  return {
+    cloud: {
+      authnBaseUrl: "https://authn.test",
+      bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
+      onOriginSignIn: () => origin.current,
+      transport: async (request) => {
+        requests.push(request);
+        const response =
+          typeof answer === "function" ? await answer(request) : answer;
+        return { status: response.status, text: JSON.stringify(response.body) };
+      },
+    },
+    requests,
+    origin,
+  };
+}
 
 /** A shell with a sign-in origin, which is what the dashboard links need. */
 export function dashboardRunnerHost(): IRunnerHost {

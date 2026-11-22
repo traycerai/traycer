@@ -47,6 +47,7 @@ import type {
   StreamFrameEnvelope,
 } from "../stream-session";
 import { isRetryableSessionLifecycleFatal } from "../stream-session";
+import { isCredentialRefusal } from "../door-refusal";
 import type { TimerHandle } from "../timers";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -54,7 +55,9 @@ import {
   HostRpcError,
   HostTransportFailureError,
   markMayHaveReachedHost,
+  markTargetAnswer,
   negotiatedVersionMeetsRequirement,
+  transportFailureBeforeSend,
   RetryableTransportError,
   type RequestOfMethod,
   type RequiredHostMethodVersion,
@@ -109,17 +112,16 @@ import {
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_FINE_CREDITS,
-  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
   SESSION_CAPABILITY_RESUME,
   SESSION_CAPABILITY_TUNNEL_STREAMS,
   creditPayloadSchema,
   decodeMuxFrame,
   encodeMuxFrame,
+  encodedSubscribeStreamId,
   fatalPayloadSchema,
   sessionOpenAckPayloadSchema,
   unaryResponsePayloadSchema,
   type EncodeMuxFrameInput,
-  type MemberCredentialHandoff,
   type MuxFrame,
   type QosClassValue,
   type SessionManifests,
@@ -206,7 +208,7 @@ function qosForStreamMethod(method: string): QosClassValue {
  * R4-E3):
  *   mint fresh grant → dial relay(?grant) → attach_ack{sid}
  *     → Noise-NK handshake (msg0 → msg1)
- *     → open{bearer, manifest, authz:null, resume:null}  (re-presents bearer, A2)
+ *     → open{bearer:"", manifest, authz:{v:2, grant}, resume:null}  (host-only token, A2)
  *     → openAck{manifest, capabilities}  → compat mirror → ready
  *     → re-subscribe every live stream
  *
@@ -288,7 +290,8 @@ type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
  * checked by CODE rather than by any recovery flag because the two are
  * orthogonal: the same code arrives both retryable (the host's JWKS lookup
  * timed out) and terminal (our bearer is genuinely bad), and neither is host
- * evidence.
+ * evidence. A refusal carrying a `doorReason` is credential plane whatever its
+ * code (`keys_unavailable` rides `NETWORK_ERROR`).
  *
  * Deliberately narrow rather than a guessed "credential family": every other
  * fatal on this path - a relay policy close, a malformed frame, a phase
@@ -330,7 +333,7 @@ function emptyReattachMarks(): ReattachMarks {
 function sessionFatalProvenance(
   details: FatalErrorDetails,
 ): ConnectionLossProvenance {
-  return details.code === "UNAUTHORIZED"
+  return details.code === "UNAUTHORIZED" || details.doorReason !== undefined
     ? "not-host-evidence"
     : "host-transport-plane";
 }
@@ -547,25 +550,6 @@ export interface RemoteSessionOptions<
    * `NO_TRANSPORT_EVIDENCE`. Host dialers pass `null`.
    */
   readonly evidence: RemoteSessionEvidence | null;
-  /**
-   * Mints the credential a team host spends for this session's member, or
-   * `null` for a composition that never opens one: a personal host, which
-   * takes the user bearer on `open`, and a host-to-host dialer.
-   *
-   * A team host spends only a member credential the client hands it after
-   * `OPEN_ACK`, so nothing may run on the session before that frame. When the
-   * host offers {@link SESSION_CAPABILITY_MEMBER_CREDENTIAL}, the session
-   * mints, enqueues `CREDENTIAL_UPDATE {bearer: null, memberCredential}` and
-   * only then becomes `ready`, which is what releases parked unary callers and
-   * re-opens streams; the same on every re-attach, except that a credential
-   * minted for an attach that dropped before carrying it is carried by the
-   * next one instead of a new mint. A mint that resolves `null`
-   * or throws is logged and the session goes on, so the host's own refusal
-   * still names the cause.
-   */
-  readonly mintMemberCredential:
-    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
-    | null;
 }
 
 /**
@@ -578,9 +562,7 @@ export interface RemoteSessionOptions<
  * checked at run time:
  *
  *  - `authz` is always `null` on its `open`: {@link PoolSessionAuth} has no
- *    slot to fill;
- *  - it never mints or hands off a member credential: there is no minter,
- *    and a pool `openAck` that offers the capability is not acted on.
+ *    slot to fill.
  *
  * There is no re-authentication loop: that loop re-presents an attach grant
  * to the relay, and the pool re-authorizes its own connections. Nor a
@@ -646,9 +628,6 @@ type SessionDial =
       readonly hostStaticPublicKey: Uint8Array;
       readonly grantProvider: AttachGrantProvider;
       readonly auth: RemoteSessionAuth;
-      readonly mintMemberCredential:
-        | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
-        | null;
     }
   | {
       readonly kind: "pool";
@@ -952,6 +931,8 @@ interface ActiveConnection {
   readonly generation: number;
   /** The grant this relay attach presented; `null` on a direct pool leg. */
   attachGrant: AttachGrant | null;
+  /** When {@link attachGrant} expires, by {@link attachGrantExpiresAt}. */
+  attachGrantExpiresAt: number | null;
   /**
    * The relay leg, or the direct leg to the pool. The one thing that outlives
    * nothing: a relink replaces it and keeps the rest of this record, which is
@@ -984,11 +965,6 @@ interface ActiveConnection {
   bodyCompressionSupported: boolean;
   /** Whether the HOST advertised `SESSION_CAPABILITY_TUNNEL_STREAMS`; gates `host.tunnel.open` in `openSubscription`. */
   tunnelStreamsSupported: boolean;
-  /**
-   * Whether this connection's `OPEN_ACK` is held while the member credential
-   * is minted. A second ack on the same connection is ignored meanwhile.
-   */
-  memberCredentialPending: boolean;
   /**
    * The relay's last word on the host leg. A session that negotiated resume
    * sets it back only when an exchange completes: until then the host has not
@@ -1316,14 +1292,6 @@ export class RemoteSession<
   private nextStreamId = 1;
   private readyBoundaryGeneration: number | null = null;
   /**
-   * A minted member credential whose attach went stale or lost its host
-   * before it could carry it. The mint flow holds an adoption claim for the
-   * credential it just handed out, so a fresh mint on the redial answers that
-   * one is already pending; the next attach that offers the capability carries
-   * this one instead of minting.
-   */
-  private undeliveredMemberCredential: MemberCredentialHandoff | null = null;
-  /**
    * The bearer presented in the current connection's `open` frame, captured
    * at send time so the `UNAUTHORIZED` session-fatal recovery can tell
    * whether the NEXT attach would present a different token (progress) or
@@ -1491,7 +1459,6 @@ export class RemoteSession<
             hostStaticPublicKey: options.hostStaticPublicKey,
             grantProvider: options.grantProvider,
             auth: options.auth,
-            mintMemberCredential: options.mintMemberCredential,
           };
     this.evidence =
       "poolUrl" in options
@@ -2128,17 +2095,15 @@ export class RemoteSession<
       // connection deduplicates the key. This connection does not - either
       // the caller never had a key, or the re-dial landed on a host
       // incarnation whose handshake omits the capability - so dispatching
-      // would execute a mutation the host may already have run. Ambiguous
-      // (`HostTransportFailureError`, not the retryable subclass) is the
-      // honest answer: the first attempt genuinely may have committed, and
-      // this session must not turn "may have" into "did, twice".
+      // would execute a mutation the host may already have run. Non-retryable,
+      // and this attempt sent nothing, so it reads as not reached. An earlier
+      // attempt's uncertainty is the retry messenger's wrapper, which engages
+      // because these details are non-null.
       return Promise.reject(
-        new HostTransportFailureError({
-          code: "RPC_ERROR",
+        transportFailureBeforeSend({
           message: `Remote session cannot honour the idempotency key a replay of '${method}' requires`,
           requestId,
           method,
-          fatalDetails: null,
         }),
       );
     }
@@ -2307,7 +2272,6 @@ export class RemoteSession<
       qos: QosClass.INTERACTIVE,
       json: {
         bearer,
-        memberCredential: null,
       } satisfies CredentialUpdatePayload,
       binary: null,
     });
@@ -2665,6 +2629,7 @@ export class RemoteSession<
       this.attachDirect(generation, dial.poolUrl);
       return;
     }
+    const grantRequestedAt = Date.now();
     const provision = await dial.grantProvider();
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
@@ -2674,6 +2639,7 @@ export class RemoteSession<
       return;
     }
     const grant = provision.grant;
+    const grantExpiresAt = attachGrantExpiresAt(grant, grantRequestedAt);
 
     const noise = await NoiseChannel.begin(dial.hostStaticPublicKey);
     if (generation !== this.connectGeneration || this.isClosed()) {
@@ -2688,7 +2654,13 @@ export class RemoteSession<
       webSocketFactory: this.options.webSocketFactory,
       handlers: this.socketHandlers((): RelaySocket => relaySocket),
     });
-    this.installConnection(generation, grant, relaySocket, noise);
+    this.installConnection(
+      generation,
+      grant,
+      grantExpiresAt,
+      relaySocket,
+      noise,
+    );
   }
 
   /** A mint that produced no grant: authn refused, or none is available now. */
@@ -2723,6 +2695,7 @@ export class RemoteSession<
     // prevent. A host that really is down still produces its refusal at the
     // `handleConnectionLost` funnel, which observes the host's own plane.
     this.reportEvidenceOutcome(this.dialAttemptId(generation), "indeterminate");
+    this.markStreamsReconnecting(provision.retryCause ?? null);
     const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({
       cause: `could not mint an attach grant: ${provision.detail}`,
@@ -2767,12 +2740,18 @@ export class RemoteSession<
       startedAt: Date.now(),
     };
     void (async () => {
+      const grantRequestedAt = Date.now();
       const provision = await grantProvider();
       if (!ownsSession()) {
         return;
       }
       if (provision.kind === "ok") {
-        this.dialClaim(generation, connection, attachBaseUrl, provision.grant);
+        this.dialClaim(
+          connection,
+          attachBaseUrl,
+          provision.grant,
+          grantRequestedAt,
+        );
         return;
       }
       connection.activeClaimDial = null;
@@ -2792,10 +2771,10 @@ export class RemoteSession<
   }
 
   private dialClaim(
-    generation: number,
     connection: ActiveConnection,
     attachBaseUrl: string,
     grant: AttachGrant,
+    grantRequestedAt: number,
   ): void {
     const relaySocket: RelaySocket = new RelaySocket({
       attachBaseUrl,
@@ -2807,9 +2786,14 @@ export class RemoteSession<
     });
     connection.socket = relaySocket;
     connection.attachGrant = grant;
+    connection.attachGrantExpiresAt = attachGrantExpiresAt(
+      grant,
+      grantRequestedAt,
+    );
     connection.legEnd = null;
     connection.legAttached = false;
-    this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
+    // The attach_ack budget starts at open: see `onLegOpen`.
+    this.clearPhaseTimer();
   }
 
   /**
@@ -2823,7 +2807,7 @@ export class RemoteSession<
       webSocketFactory: this.options.webSocketFactory,
       handlers: this.socketHandlers((): RelaySocket => socket),
     });
-    this.installConnection(generation, null, socket, PLAIN_MUX_CHANNEL);
+    this.installConnection(generation, null, null, socket, PLAIN_MUX_CHANNEL);
   }
 
   /**
@@ -2850,6 +2834,7 @@ export class RemoteSession<
     return {
       onAttachAck: (sid, resumeKey) =>
         deliver((generation) => this.onAttachAck(generation, sid, resumeKey)),
+      onOpen: () => deliver((generation) => this.onLegOpen(generation)),
       onData: (bytes) => {
         // Count delivery before any filtering: a late socket frame still
         // consumed incoming bytes, even when it cannot enter the current mux.
@@ -2890,10 +2875,13 @@ export class RemoteSession<
           if (this.connection !== null) {
             this.connection.legEnd = { code: info.code, reason: info.reason };
           }
+          const provenance = this.legEndProvenance(socket());
           this.handleLegLost(
             generation,
-            describeSocketClose(this.phase, info),
-            "host-transport-plane",
+            provenance === "host-transport-plane"
+              ? describeSocketClose(this.phase, info)
+              : `${describeSocketClose(this.phase, info)} after its attach grant expired`,
+            provenance,
           );
           if (immediateRedialEarned) {
             // A user is watching this recovery happen; sleeping out the
@@ -2909,6 +2897,7 @@ export class RemoteSession<
   private installConnection(
     generation: number,
     attachGrant: AttachGrant | null,
+    attachGrantExpiresAt: number | null,
     socket: RelaySocket,
     channel: MuxChannel,
   ): ActiveConnection {
@@ -2928,6 +2917,7 @@ export class RemoteSession<
     const connection: ActiveConnection = {
       generation,
       attachGrant,
+      attachGrantExpiresAt,
       socket,
       channel,
       scheduler,
@@ -2940,7 +2930,6 @@ export class RemoteSession<
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       tunnelStreamsSupported: false,
-      memberCredentialPending: false,
       hostAttached: true,
       ledger: new ResumeLedger((report) => this.logResumeGap(report)),
       resumeNegotiated: false,
@@ -2963,8 +2952,44 @@ export class RemoteSession<
     };
     this.connection = connection;
     this.parkedRefusals = 0;
-    this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
+    // The attach_ack budget starts at open: see `onLegOpen`.
+    this.clearPhaseTimer();
     return connection;
+  }
+
+  /**
+   * A leg that ended before it opened, at or after its attach grant expired,
+   * says nothing about the host: the relay refuses an expired grant, and the
+   * grant can expire while the dial waits for a slot (`ws-dial-gate.ts`), a
+   * wait with no bound of its own. The redial mints a fresh grant, which can
+   * expire in the queue as well. A host that never connects can therefore
+   * stay connecting with only indeterminate outcomes for as long as its dials
+   * keep outliving their grants: one discarded attempt per grant bounds
+   * neither the discarded attempts in a row nor the detection time.
+   */
+  private legEndProvenance(socket: RelaySocket): ConnectionLossProvenance {
+    const expiresAt = this.connection?.attachGrantExpiresAt ?? null;
+    if (!socket.hasOpened() && expiresAt !== null && Date.now() >= expiresAt) {
+      return "not-host-evidence";
+    }
+    return "host-transport-plane";
+  }
+
+  /**
+   * The current leg reached WebSocket open. `ATTACH_ACK_TIMEOUT_MS` is the
+   * relay budget after the socket opens (`config.ts`), so it starts here and
+   * not at the dial: until open, the dial timer of the socket bounds the wait
+   * from the dial gate grant, and time this client spent queued behind its
+   * own dials is never reported as a host refusal.
+   */
+  private onLegOpen(generation: number): void {
+    if (this.isCurrent(generation)) {
+      this.armPhaseTimer(
+        generation,
+        ATTACH_ACK_TIMEOUT_MS,
+        "attach-ack-timeout",
+      );
+    }
   }
 
   private onAttachAck(
@@ -3664,7 +3689,7 @@ export class RemoteSession<
     connection: ActiveConnection,
     json: Record<string, unknown> | null,
   ): void {
-    if (this.phase !== "opening" || connection.memberCredentialPending) {
+    if (this.phase !== "opening") {
       return;
     }
     if (!connection.hostAttached) {
@@ -3760,105 +3785,7 @@ export class RemoteSession<
         FINE_INITIAL_BULK_SEND_CREDITS,
       );
     }
-    // A pool session has no minter, so a pool `openAck` offering the
-    // capability is never acted on: the member credential is not requested
-    // from, nor handed to, a pool peer.
-    const mintMemberCredential =
-      this.dial.kind === "relay" ? this.dial.mintMemberCredential : null;
-    if (
-      mintMemberCredential !== null &&
-      parsed.data.capabilities.includes(SESSION_CAPABILITY_MEMBER_CREDENTIAL)
-    ) {
-      const held = this.undeliveredMemberCredential;
-      if (held !== null) {
-        this.undeliveredMemberCredential = null;
-        this.enqueueMemberCredential(connection, held);
-        this.completeOpen(generation, connection);
-        return;
-      }
-      // The open-ack timer stays armed across the mint, so a mint that never
-      // settles drops this attach like a missing ack would.
-      connection.memberCredentialPending = true;
-      void this.handOffMemberCredential(
-        generation,
-        connection,
-        mintMemberCredential,
-      );
-      return;
-    }
     this.completeOpen(generation, connection);
-  }
-
-  /**
-   * Mints the member credential and enqueues it as the session's first frame
-   * after `OPEN_ACK`, then completes the open. `INTERACTIVE` frames leave in
-   * enqueue order, and nothing else is enqueued before `ready`, so the host
-   * reads the credential before any request this session carries.
-   */
-  private async handOffMemberCredential(
-    generation: number,
-    connection: ActiveConnection,
-    mint: (hostId: string) => Promise<MemberCredentialHandoff | null>,
-  ): Promise<void> {
-    let handoff: MemberCredentialHandoff | null = null;
-    let failure: "mint-unavailable" | "mint-failed" | null = null;
-    try {
-      handoff = await mint(this.options.hostId);
-      if (handoff === null) {
-        failure = "mint-unavailable";
-      }
-    } catch {
-      failure = "mint-failed";
-    }
-    if (
-      !this.isCurrent(generation) ||
-      this.connection !== connection ||
-      this.phase !== "opening"
-    ) {
-      this.holdUndeliveredMemberCredential(handoff);
-      return;
-    }
-    connection.memberCredentialPending = false;
-    if (!connection.hostAttached) {
-      // Parked exactly as `handleOpenAck` parks a pre-ready detach: the
-      // redial's own ack carries the held credential.
-      this.holdUndeliveredMemberCredential(handoff);
-      return;
-    }
-    if (handoff === null) {
-      // Console on purpose, as the dial-failure log: shared transport code
-      // with no logger seam.
-      console.warn(
-        `[remote-session] member credential not handed: ${failure ?? "mint-unavailable"}`,
-      );
-    } else {
-      this.enqueueMemberCredential(connection, handoff);
-    }
-    this.completeOpen(generation, connection);
-  }
-
-  private holdUndeliveredMemberCredential(
-    handoff: MemberCredentialHandoff | null,
-  ): void {
-    if (handoff !== null) {
-      this.undeliveredMemberCredential = handoff;
-    }
-  }
-
-  private enqueueMemberCredential(
-    connection: ActiveConnection,
-    handoff: MemberCredentialHandoff,
-  ): void {
-    this.enqueueMessage(connection, {
-      type: MuxFrameType.CREDENTIAL_UPDATE,
-      streamId: SESSION_CONTROL_STREAM_ID,
-      qos: QosClass.INTERACTIVE,
-      json: {
-        bearer: null,
-        memberCredential: handoff,
-      } satisfies CredentialUpdatePayload,
-      binary: null,
-    });
   }
 
   /** The `ready` boundary of an accepted open. */
@@ -3866,6 +3793,7 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.phase = "ready";
     this.reattachMarks.openAckAt = Date.now();
+    this.options.auth.door?.admitted();
     // The host accepted the `open{bearer}`: any prior UNAUTHORIZED episode is
     // over, so a later one starts its no-progress bound from a clean slate.
     this.noProgressUnauthorizedReconnects = 0;
@@ -4669,13 +4597,36 @@ export class RemoteSession<
           parsed.data.error.message,
         );
       }
-      entry.reject(
-        HostRpcError.fromWireEnvelope(
-          parsed.data.error,
-          entry.requestId,
-          entry.method,
-        ),
+      const wireError = parsed.data.error;
+      const answered = HostRpcError.fromWireEnvelope(
+        wireError,
+        entry.requestId,
+        entry.method,
       );
+      if (answered.doorRefusal !== null)
+        this.options.auth.door?.refused(answered.doorRefusal);
+      // A transient refusal is this call's no-dispatch attestation: it may be sent again,
+      // and nothing is minted for it.
+      const answer =
+        wireError.retryable === true
+          ? new RetryableTransportError({
+              code: answered.code,
+              message: answered.message,
+              requestId: entry.requestId,
+              method: entry.method,
+              fatalDetails: answered.doorRefusal ?? {
+                code: wireError.code,
+                reason: wireError.message,
+                incompatibleMethods: null,
+                upgradeGuidance: null,
+                retryable: true,
+              },
+              doorRefusal: answered.doorRefusal,
+              replaySafetyFromKey: false,
+            })
+          : answered;
+      markTargetAnswer(answer);
+      entry.reject(answer);
       return;
     }
     try {
@@ -5537,7 +5488,7 @@ export class RemoteSession<
     if (dial.kind !== "relay") {
       return;
     }
-    const { socket, attachGrant } = connection;
+    const { socket, attachGrant, attachGrantExpiresAt } = connection;
     const lostAttempt = `${this.dialAttemptId(generation)}-lost`;
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) rebuilding: the relay no longer holds this session`,
@@ -5562,6 +5513,7 @@ export class RemoteSession<
         const installed = this.installConnection(
           nextGeneration,
           attachGrant,
+          attachGrantExpiresAt,
           socket,
           noise,
         );
@@ -5690,6 +5642,7 @@ export class RemoteSession<
     // the expected-outage HOLD above the death streak the loss feeds. Two
     // honest reports beat one that tries to mean both.
     this.reportRestartIntentIfPresent(details);
+    this.options.auth.door?.refused(details);
     // Classified BEFORE the retryable arm, and that order is the whole point.
     // `retryable` says how to RECOVER; it says nothing about what the failure
     // is evidence OF, and the two are independent. A host whose own JWKS fetch
@@ -5719,7 +5672,7 @@ export class RemoteSession<
       return;
     }
     const auth = this.revalidator();
-    if (details.code === "UNAUTHORIZED" && auth !== null) {
+    if (isCredentialRefusal(details) && auth !== null) {
       this.handleUnauthorizedSessionFatal(generation, details, auth);
       return;
     }
@@ -5801,7 +5754,7 @@ export class RemoteSession<
     details: FatalErrorDetails,
     rejectedBearer: string | null,
   ): Promise<void> {
-    const outcome = await this.revalidateWithinBudget(auth);
+    const outcome = await this.revalidateWithinBudget(auth, details);
     if (generation !== this.connectGeneration) {
       // A stale completion: the generation this revalidation was recovering
       // has been superseded while it was in flight. It owns nothing now - it
@@ -6013,6 +5966,7 @@ export class RemoteSession<
    */
   private async revalidateWithinBudget(
     auth: RemoteSessionAuth | PoolSessionAuth,
+    refusal: FatalErrorDetails,
   ): Promise<RemoteSessionAuthRecoveryOutcome> {
     let timer: TimerHandle | null = null;
     const budget = new Promise<RemoteSessionAuthRecoveryOutcome>((resolve) => {
@@ -6034,7 +5988,7 @@ export class RemoteSession<
         if (reconnect === null) {
           return "rejected" as const;
         }
-        return reconnect();
+        return reconnect(refusal);
       })
       .catch((): RemoteSessionAuthRecoveryOutcome => "network-error");
     try {
@@ -6711,6 +6665,15 @@ export class RemoteSession<
     }
     if (!this.isLegCurrent(connection, leg)) {
       return;
+    }
+    // A SUBSCRIBE is sent from here on, whatever `sendData` answers: the host
+    // may act on a write that reports failure. Before here (a seal that
+    // rejected, a leg that went while it sealed) nothing left this client, so
+    // the subscription may still replay its start. Both the first write and a
+    // ledger resend pass through here.
+    const subscribeStreamId = encodedSubscribeStreamId(muxFrame);
+    if (subscribeStreamId !== null) {
+      this.subscriptions.get(subscribeStreamId)?.noteOpenRequestSent();
     }
     if (!connection.socket.sendData(sealed)) {
       this.handleLegLost(generation, "write-failed", "host-transport-plane");
@@ -7518,6 +7481,26 @@ function indexMethodRegistry(
 ): MethodVersionRegistry {
   const entry = registry[method];
   return entry as MethodVersionRegistry;
+}
+
+/**
+ * When an attach grant expires, by this client clock. Authn mints the grant
+ * after it was requested, stamps `iat` in whole seconds rounded down, and sets
+ * the JWT `exp` to `iat` plus the `expiresInSeconds` it returns; the relay
+ * refuses the grant from `exp` on, with no tolerance. So, read on one clock,
+ * the request time rounded down to its second plus that lifetime is at or
+ * before `exp`: a leg the relay refused for an expired grant is never counted
+ * as the host. The error runs the other way: a leg that failed for a host
+ * reason from this until `exp` is discarded instead, at most once per grant.
+ * That interval is the mint's second minus the request's second: none when
+ * both fall in the same second, and less than the request-to-mint time plus
+ * one second otherwise. It is wall-clock time (`Date.now`): a backward clock
+ * change can count a leg on an already expired grant as the host, and a
+ * forward one can discard the failure of a leg on a live grant; so can a
+ * difference between this clock and the authn or relay clock.
+ */
+function attachGrantExpiresAt(grant: AttachGrant, requestedAt: number): number {
+  return (Math.floor(requestedAt / 1000) + grant.expiresInSeconds) * 1000;
 }
 
 /**

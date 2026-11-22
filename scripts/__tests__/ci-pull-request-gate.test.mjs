@@ -8,7 +8,7 @@
 // against the last GREEN push (scripts/ci-last-green-sha.sh), and trunk-red
 // watches every push workflow.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -502,7 +502,7 @@ describe("a job that narrows a push run compares against the last green push", (
 
   // Nx writes to `~/.nx` unless told otherwise, and a cache saved from a job that
   // failed on the dirty tree `--fix` leaves would pass that job on its re-run.
-  it("pre-commit.yml: only a passing push saves the directory Nx writes to", () => {
+  it("pre-commit.yml: only a non-cold passing push saves the directory Nx writes to", () => {
     const { workflow } = workflows.find(
       ({ file }) => file === "pre-commit.yml",
     );
@@ -513,7 +513,9 @@ describe("a job that narrows a push run compares against the last green push", (
     );
     // A push runs only on `main`, so nothing a pull request or a dispatched
     // branch run builds becomes an entry `main` restores.
-    expect(save.if).toBe("github.event_name == 'push'");
+    expect(save.if).toBe(
+      "${{ !inputs.cold && (github.event_name == 'push') }}",
+    );
     expect(triggers(workflow).push).toEqual({ branches: ["main"] });
     expect(restore.with.path).toBe("${{ matrix.cache }}");
     expect(save.with.path).toBe(restore.with.path);
@@ -526,6 +528,76 @@ describe("a job that narrows a push run compares against the last green push", (
     expect(lanes.lint).toContain(job.env.NX_CACHE_DIRECTORY);
     expect(lanes.compile).toContain(job.env.NX_CACHE_DIRECTORY);
     expect(lanes.build).toEqual([".nx/react-compiler-cache"]);
+  });
+
+  // A fresh checkout gives every file a new mtime, so an ESLint cache on the
+  // default strategy reads as all stale, and a cache the lane does not carry
+  // starts empty: either way the project is linted cold on every push.
+  it("pre-commit.yml: the lint lane carries every ESLint cache, keyed by content", () => {
+    const { workflow } = workflows.find(
+      ({ file }) => file === "pre-commit.yml",
+    );
+    const lint = workflow.jobs["workspace-checks"].strategy.matrix.include
+      .find(({ lane }) => lane === "lint")
+      .cache.trim()
+      .split("\n");
+    const { workspaces } = JSON.parse(
+      readFileSync(join(REPO_ROOT, "package.json"), "utf8"),
+    );
+    // A `dir/*` workspace pattern names every directory under `dir` that holds
+    // a manifest; any other glob would need a matcher this test does not have.
+    const projects = workspaces.flatMap((pattern) => {
+      if (!pattern.endsWith("/*")) {
+        expect(pattern, "workspace pattern").not.toMatch(/[*?[{]/);
+        return [pattern];
+      }
+      const parent = pattern.slice(0, -2);
+      return readdirSync(join(REPO_ROOT, parent), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => `${parent}/${entry.name}`)
+        .filter((dir) => existsSync(join(REPO_ROOT, dir, "package.json")));
+    });
+    const cached = [];
+    for (const project of projects) {
+      const manifest = JSON.parse(
+        readFileSync(join(REPO_ROOT, project, "package.json"), "utf8"),
+      );
+      // `lint` runs ESLint itself or through `lint:files`.
+      const script = ["lint", "lint:files"]
+        .map((name) => manifest.scripts?.[name] ?? "")
+        .join("\n");
+      // A project that runs its linters from a script (gui-app's
+      // `scripts/lint-files.mjs`) passes the flags there, so the command
+      // includes every file of the project the script names.
+      const command = [
+        script,
+        ...script
+          .split(/\s+/)
+          .filter((token) => /\.[cm]?[jt]s$/.test(token))
+          .map((token) => join(REPO_ROOT, project, token))
+          .filter((path) => existsSync(path))
+          .map((path) => readFileSync(path, "utf8")),
+      ].join("\n");
+      if (
+        !/eslint/.test(command) ||
+        !/(?:^|["'\s])--cache(?=$|["'\s])/m.test(command)
+      ) {
+        continue;
+      }
+      cached.push(project);
+      expect(command, project).toMatch(/--cache-strategy(?:["',\s]+|=)content/);
+      // The lane carries the file ESLint writes by default; `--cache-location`
+      // and the deprecated `--cache-file` move it.
+      expect(command, project).not.toMatch(/--cache-(?:location|file)/);
+      expect(lint, project).toContain(`${project}/.eslintcache`);
+    }
+    expect(cached).toEqual(
+      expect.arrayContaining([
+        "protocol",
+        "clients/gui-app",
+        "packages/html-source",
+      ]),
+    );
   });
 
   it("browser-regressions.yml: the filter reads the answer from the step's output", () => {
@@ -666,18 +738,35 @@ describe("a workflow whose push run decides inside itself", () => {
 describe("test.yml `tests`", () => {
   const { workflow } = workflows.find(({ file }) => file === "test.yml");
   const job = workflow.jobs.tests;
+  const bootstrapProof = workflow.jobs["bootstrap-proof"];
 
   it("is the single check for the whole test matrix", () => {
     expect(job.name).toBe("tests");
-    expect(job.needs).toEqual(["test"]);
+    expect(job.needs).toEqual(["test", "bootstrap-proof"]);
     expect(normalize(job.if).startsWith(`always() && (${GATE})`)).toBe(true);
+  });
+
+  it("gates the optional bootstrap matrix behind the PR gate and explicit dispatch input", () => {
+    expect(gates(normalize(bootstrapProof.if))).toBe(true);
+    expect(normalize(bootstrapProof.if)).toBe(
+      `(${GATE}) && github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix`,
+    );
   });
 
   it("is one bash step with no checkout, failing unless the matrix passed", () => {
     expect(job.steps).toHaveLength(1);
     expect(job.steps[0].uses).toBeUndefined();
     expect(job.steps[0].env.RESULT).toBe("${{ needs.test.result }}");
+    expect(job.steps[0].env.PROOF_REQUESTED).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix }}",
+    );
+    expect(job.steps[0].env.PROOF_RESULT).toBe(
+      "${{ needs.bootstrap-proof.result }}",
+    );
     expect(job.steps[0].run).toContain('test "$RESULT" = success');
+    expect(job.steps[0].run).toContain(
+      'if [ "$PROOF_REQUESTED" = true ]; then test "$PROOF_RESULT" = success; fi',
+    );
   });
 });
 
@@ -696,18 +785,23 @@ describe("trunk-red.yml", () => {
     expect(workflow.on.workflow_run.types).toEqual(["completed"]);
   });
 
-  it("holds no permission at the top and actions: write on its one job", () => {
+  // The owner ruled that no test may need a retry: a test passes on its first
+  // attempt (3 Nov 2026), so a failure is red on attempt 1 and is fixed
+  // forward. Re-running a run needs `actions: write`; the one job holds no
+  // scope, so it cannot re-run anything.
+  it("holds no permission at the top or on its one job, so it re-runs nothing", () => {
     expect(workflow.permissions).toEqual({});
     const jobs = Object.values(workflow.jobs);
     expect(jobs).toHaveLength(1);
-    expect(jobs[0].permissions).toEqual({ actions: "write" });
+    expect(jobs[0].permissions).toEqual({});
+    expect(jobs[0].steps).toHaveLength(1);
+    expect(String(jobs[0].steps[0].run)).not.toMatch(/\bgh\b|rerun/);
   });
 
   it("acts only on a first-attempt push run", () => {
     const condition = normalize(Object.values(workflow.jobs)[0].if);
     expect(condition).toContain("github.event.workflow_run.event == 'push'");
-    // Its own retry is attempt two: the job that started it waits for it, so
-    // a second run of this workflow must not retry or report again.
+    // A later attempt is a person's re-run; only attempt 1 is judged.
     expect(condition).toContain("github.event.workflow_run.run_attempt == 1");
   });
 
@@ -732,22 +826,6 @@ describe("trunk-red.yml", () => {
     expect(condition).not.toContain("timed_out");
   });
 
-  // One retry in all, whoever starts it: the attempt is read before every
-  // re-run request, so a person's re-run is the retry and no third attempt
-  // starts.
-  it("reads the run attempt before every re-run request", () => {
-    const run = Object.values(workflow.jobs)[0]
-      .steps.map((step) => String(step.run ?? ""))
-      .join("\n");
-    expect(run).toContain("attempt_now()");
-    const loop = run.slice(run.indexOf("for try in 1 2 3"));
-    const read = loop.indexOf("attempt_now");
-    const rerun = loop.indexOf("gh run rerun");
-    expect(read).toBeGreaterThan(-1);
-    expect(rerun).toBeGreaterThan(-1);
-    expect(read).toBeLessThan(rerun);
-  });
-
   it("interpolates no expression into a run body", () => {
     for (const step of Object.values(workflow.jobs)[0].steps) {
       expect(String(step.run ?? "")).not.toContain("${{");
@@ -756,30 +834,13 @@ describe("trunk-red.yml", () => {
 
   // The owner decided a red `main` is reported by FAILING, not by a message:
   // the failed `trunk-red` run is the one signal an alert has to watch. So
-  // nothing here may carry a webhook or a secret, and every route to "still
-  // red" has to end the job non-zero, while a flake that passed its retry and
-  // a retry a person cancelled stay green. Asserted on the parsed step, so a
-  // reformat of the YAML cannot hide a path that went quiet.
+  // nothing here may carry a webhook or a secret, and every run of the job
+  // ends non-zero. Asserted on the parsed step, so a reformat of the YAML
+  // cannot hide a path that went quiet.
   describe("reports a red main by failing the job and sends nothing anywhere", () => {
-    const step = Object.values(workflow.jobs)[0].steps.find((candidate) =>
-      String(candidate.run ?? "").includes("gh run rerun"),
-    );
+    const step = Object.values(workflow.jobs)[0].steps[0];
     const env = step?.env ?? {};
     const run = String(step?.run ?? "");
-    const reportBody = /\breport\(\) \{\n([\s\S]*?)\n\s*\}\n/.exec(run)?.[1];
-    const successBlock =
-      /if \[ "\$\{conclusion\}" = "success" \]; then\n([\s\S]*?)\n\s*fi\n/.exec(
-        run,
-      )?.[1];
-    const cancelledBlock =
-      /if \[ "\$\{conclusion\}" = "cancelled" \]; then\n([\s\S]*?)\n\s*fi\n/.exec(
-        run,
-      )?.[1];
-
-    it("finds the step that re-runs the run, and its report()", () => {
-      expect(step).toBeDefined();
-      expect(reportBody).toBeDefined();
-    });
 
     it("holds no Slack or webhook env key and reads no secret, in the step or anywhere in the workflow", () => {
       expect(Object.keys(env).length).toBeGreaterThan(0);
@@ -800,32 +861,15 @@ describe("trunk-red.yml", () => {
       expect(run).not.toMatch(/slack|webhook/i);
     });
 
-    it("ends report() in exit 1, after writing its line to the job summary", () => {
-      const body = String(reportBody);
-      expect(body).toContain('>> "$GITHUB_STEP_SUMMARY"');
-      expect(body).toContain("::error::");
-      expect(body.trim().endsWith("exit 1")).toBe(true);
-      expect(body).not.toMatch(/exit 0/);
-    });
-
-    it("exits 0 for a flake that passed its retry and for a retry a person cancelled", () => {
-      expect(successBlock).toBeDefined();
-      expect(cancelledBlock).toBeDefined();
-      for (const block of [String(successBlock), String(cancelledBlock)]) {
-        expect(block.trim().endsWith("exit 0")).toBe(true);
-        expect(block).not.toMatch(/\breport\b/);
-      }
-    });
-
-    it("reports a retry that is still red: the last statement is a report call, after both exit-0 branches", () => {
+    it("writes its line to the job summary and an error annotation, then exits 1 on every path", () => {
       const lines = run
         .split("\n")
         .map((line) => line.trim())
         .filter((line) => line.length > 0);
-      expect(lines.at(-1)).toMatch(/^report "failed twice/);
-      expect(run.lastIndexOf("report ")).toBeGreaterThan(
-        run.indexOf('"${conclusion}" = "cancelled"'),
-      );
+      expect(run).toContain('>> "$GITHUB_STEP_SUMMARY"');
+      expect(run).toContain("::error::");
+      expect(lines.at(-1)).toBe("exit 1");
+      expect(run).not.toMatch(/exit 0/);
     });
   });
 });

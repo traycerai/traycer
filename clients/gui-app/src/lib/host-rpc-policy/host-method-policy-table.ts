@@ -6,7 +6,11 @@ import type {
   RpcSchedulingMode,
   RpcSchedulingPolicy,
 } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
-import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import {
+  HOST_UNARY_RPC_ROUTES,
+  type ClientHostUnaryRpcMethod,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   ProviderManagedInstallState,
   ProviderManagedVersions,
@@ -15,6 +19,7 @@ import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-de
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { moveIsRunning } from "@/lib/environment/move-in-progress";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
+import { CHAT_FILE_READ_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/chat-file-read-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
@@ -23,10 +28,11 @@ import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-s
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
 
-// Mounted configuration reads reuse the apply-status cadence.
+// Configuration reads keep their cadence only while the window is attended.
 const CONFIGURATION_READ_POLL = {
   kind: "fixed",
   intervalMs: 5 * SECOND_MS,
+  requiresWindowAttention: true,
 } as const;
 
 export type ConditionPollLane = {
@@ -48,7 +54,11 @@ export type ErasedConditionPollPolicy<
 
 type HostMethodPollPolicy<Method extends keyof HostRpcRegistry & string> =
   | null
-  | { readonly kind: "fixed"; readonly intervalMs: number }
+  | {
+      readonly kind: "fixed";
+      readonly intervalMs: number;
+      readonly requiresWindowAttention?: true;
+    }
   | ErasedConditionPollPolicy<Method>;
 
 type HostMethodScheduling<Method extends keyof HostRpcRegistry & string> = {
@@ -92,6 +102,12 @@ export function defineConditionPolicy<
     staleDataErrorLane: entry.staleDataErrorLane,
     resetLaneIds: entry.resetLaneIds,
   };
+}
+
+export function environmentStatusMoveRunning(
+  data: ResponseOfMethod<HostRpcRegistry, "environment.status">,
+): boolean {
+  return moveIsRunning(data) || data.move?.state === "running";
 }
 
 const ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE: ConditionPollLane = {
@@ -391,7 +407,8 @@ const A2A_PEER_PENDING_POLL_LANE: ConditionPollLane = {
 };
 
 /**
- * This computer's move into Personal, while it can still progress.
+ * This computer's move into Personal, while it can still progress, and a
+ * started move or give while `move` answers `running`.
  *
  * `environment.status` is the ONLY source of the move's own state, so this
  * read's cadence IS the frame rate of the line a person is watching - the
@@ -623,6 +640,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     poll: null,
   },
+  // A cold answer waits on the same refresh-safe CLI handshake as a usage read.
+  "providers.readModelRoutes": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "host.notifications.list": { ...LATEST_SCHEDULING, poll: null },
   "host.notificationHooks.status": { ...LATEST_SCHEDULING, poll: null },
   // Testing a hook sends a real notification.
@@ -637,6 +660,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "host.accountSettings.refresh": { ...LATEST_SCHEDULING, poll: null },
   "host.notifications.getConfig": { ...LATEST_SCHEDULING, poll: null },
   // Setting notification configuration persists user intent.
   "host.notifications.setConfig": {
@@ -1558,6 +1582,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // one read per open, picked up by reopening.
   "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
+  "epic.getChatTitle": { ...LATEST_SCHEDULING, poll: null },
   // A sandbox's permanent end remains here after it leaves the live list.
   // A mounted task refreshes that fact even when no host can notify it.
   "epic.listTaskHosts": {
@@ -1573,6 +1598,14 @@ export const HOST_METHOD_POLL_TABLE = {
   // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
   // interval here would re-fetch megabytes to re-learn a constant.
   "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // A file attachment's bytes, fetched when its chip is opened. Content-addressed
+  // like the image read, so nothing polls it. Up to 16 MiB in one response, so
+  // it declares the same two-minute budget `drafts.putBlob` does.
+  "epic.readChatFile": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CHAT_FILE_READ_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   // Like the chat attachment read, artifact attachment bytes are addressed by
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
@@ -1589,6 +1622,14 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "chat.mcpApp.updateModelContext": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A feedback draft's preview is read when the user opens "View"; the
+  // decision is a click that may send, so each one runs, in order.
+  "chat.feedbackDraft.preview": { ...LATEST_SCHEDULING, poll: null },
+  "chat.feedbackDraft.decide": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -1610,6 +1651,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // One-shot read: the doc content of an unreachable owner's chat cannot
   // change while its owner is away.
   "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
+  // A write the person's send waits on: each call runs, in order, and a
+  // second one for a chat already back answers `not-evicted` at once.
+  "epic.hydrateChat": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The store-backed chat RECORD channel.
   //
   // POLLED, at a cadence, and the reason is that there is no invalidation edge
@@ -1734,6 +1782,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "bot.updateAppearance": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.claimAuthority": {
     mode: "fifo",
@@ -1749,6 +1802,8 @@ export const HOST_METHOD_POLL_TABLE = {
   // coalescing into one message - a post, or a reply whose `threadId` names
   // the thread; the same text into two threads is two params, never joined.
   "bot.conversation.list": { ...LATEST_SCHEDULING, poll: null },
+  // A search box's read: only the newest query's answer is shown.
+  "bot.conversation.search": { ...LATEST_SCHEDULING, poll: null },
   "bot.conversation.send": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2076,43 +2131,6 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Profile sync. The overview is statuses only and is read from the source
-  // host while its dialog is open; the three `host.*` methods travel between
-  // two linked hosts and are never sent by an app.
-  "providers.profileSync.overview": {
-    ...LATEST_SCHEDULING,
-    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
-  },
-  "providers.profileSync.syncNow": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileSync.setKeepInSync": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.profileSync.acceptAccount": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.profileSync.apply": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.profileSync.offerCredential": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.profileSync.fetchCredential": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
   "providers.detectVersion": { ...LATEST_SCHEDULING, poll: null },
   // Starting login spawns a provider-authentication process.
   "providers.startLogin": {
@@ -2149,6 +2167,17 @@ export const HOST_METHOD_POLL_TABLE = {
   // actually left a terminal behind. Concurrent clicks are collapsed
   // host-side, which is where that decision belongs.
   "providers.startTerminalLogin": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Each begin captures its own choice; each settle must consume its own token.
+  "providers.beginApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.settleApiKeyChange": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2214,6 +2243,21 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The native-memory switch, the same shape and ordering story as its
+  // neighbour: a per-provider write whose order matters, scoped by
+  // `providerNativeMemoryWriteScope` on the hook.
+  "providers.setNativeMemory": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Hiding one OpenCode model provider: a per-provider write whose order
+  // matters, scoped by `providerModelProviderVisibilityWriteScope` on the hook.
+  "providers.setModelProviderHidden": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Whether the provider settings document is unusable as a whole: a plain
   // read, latest wins.
   "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },
@@ -2245,6 +2289,28 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Enabling a provider changes persisted provider configuration.
   "providers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Signing out revokes credentials; an identical repeat must not coalesce.
+  "providers.signOutProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A name answer writes the account's label everywhere; an identical repeat
+  // must not coalesce.
+  "providers.answerProfileName": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A preview is a read of who may move. Identical in-flight calls coalesce.
+  "providers.previewProfileMove": { ...LATEST_SCHEDULING, poll: null },
+  // A commit records an operation. An identical repeat must not coalesce,
+  // so a retry still receives the recorded results.
+  "providers.commitProfileMove": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2506,6 +2572,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // The environment methods: reads take the latest answer; writes, Verify and
   // the link steps are ordered and never joined.
   "environment.localOverrides": { ...LATEST_SCHEDULING, poll: null },
+  "environment.proposals": { ...LATEST_SCHEDULING, poll: null },
   "environment.secrets.list": {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
@@ -2540,7 +2607,7 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("environment.status", {
       classify: (data) => {
         if (data === undefined) return ENVIRONMENT_STATUS_STEADY_POLL_LANE;
-        return moveIsRunning(data)
+        return environmentStatusMoveRunning(data)
           ? ENVIRONMENT_MOVE_RUNNING_POLL_LANE
           : ENVIRONMENT_STATUS_STEADY_POLL_LANE;
       },
@@ -2551,16 +2618,6 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "environment.notices": { ...LATEST_SCHEDULING, poll: null },
   "environment.review": { ...LATEST_SCHEDULING, poll: null },
-  "providers.link": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "providers.linkComplete": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
   "config.env.localOverride.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2631,10 +2688,16 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "host.status.refresh": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The environments redesign: the move, a configuration through the server
   // pool, members and the retrospective sheet. Reads take the latest answer;
   // every write is ordered and never joined.
   "environment.move.plan": { ...LATEST_SCHEDULING, poll: null },
+  "environment.move.outcome": { ...LATEST_SCHEDULING, poll: null },
   "environment.move.stopPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.revision": {
     ...LATEST_SCHEDULING,
@@ -2646,6 +2709,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "environment.history": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.previewLocalFacts": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.seats": {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
@@ -2684,6 +2748,16 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.move.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.stage": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.start": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2817,6 +2891,13 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
+  // The Settings write observer owns its bounded, single-flight refresh loop.
+  "config.agentMemories.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.agentMemories.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.browser.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -3002,20 +3083,21 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
   },
-} satisfies HostMethodPolicyTable;
+} satisfies Pick<HostMethodPolicyTable, ClientHostUnaryRpcMethod>;
 
-const hostMethodPolicyTable: HostMethodPolicyTable = HOST_METHOD_POLL_TABLE;
+const hostMethodPolicyTable: Partial<HostMethodPolicyTable> =
+  HOST_METHOD_POLL_TABLE;
 
 export const hostRpcSchedulingPolicy: RpcSchedulingPolicy<HostRpcRegistry> = {
   modeFor(method, params) {
-    const mode = hostMethodPolicyTable[method].mode;
+    const mode = hostMethodPolicyTable[method]?.mode ?? LATEST_SCHEDULING.mode;
     return typeof mode === "function" ? mode(params) : mode;
   },
   latestScopeFor(method, params) {
-    return hostMethodPolicyTable[method].latestScope?.(params);
+    return hostMethodPolicyTable[method]?.latestScope?.(params);
   },
   joinResponseTimeoutMs(method) {
-    return hostMethodPolicyTable[method].joinResponseTimeoutMs;
+    return hostMethodPolicyTable[method]?.joinResponseTimeoutMs ?? null;
   },
 };
 
@@ -3033,9 +3115,9 @@ export function stampHostRpcMethod<
 }
 
 export function assertExactHostMethodPollTableKeys(
-  table: HostMethodPolicyTable,
+  table: Pick<HostMethodPolicyTable, ClientHostUnaryRpcMethod>,
 ): void {
-  const registryKeys = Object.keys(hostRpcRegistry).sort();
+  const registryKeys = Object.keys(HOST_UNARY_RPC_ROUTES).sort();
   const tableKeys = Object.keys(table).sort();
   const hasExactKeys =
     registryKeys.length === tableKeys.length &&
@@ -3043,7 +3125,7 @@ export function assertExactHostMethodPollTableKeys(
 
   if (!hasExactKeys) {
     throw new Error(
-      `Host method poll table must exactly match hostRpcRegistry. Registry: ${registryKeys.join(", ")}. Table: ${tableKeys.join(", ")}.`,
+      `Host method poll table must exactly match client-routable host methods. Registry: ${registryKeys.join(", ")}. Table: ${tableKeys.join(", ")}.`,
     );
   }
 }

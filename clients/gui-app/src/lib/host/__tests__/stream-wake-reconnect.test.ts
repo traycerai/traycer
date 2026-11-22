@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 
 // `subscribeStreamWakeReconnect` registers the `window 'online'` listener first,
 // then the OS-resume subscription. These tests pin that the first listener is
@@ -53,6 +54,7 @@ function makeClient() {
     cloudAuthorized: () => false,
     authnBaseUrl: "http://localhost:5005",
     auth: null,
+    hostTokens: inertHostTokenSource(),
     // Local (plain-WS) target: sweep eligibility only gates the remote-session
     // cache, so this is inert here.
     proactiveWakeEligible: true,
@@ -155,6 +157,7 @@ describe("subscribeStreamWakeReconnect", () => {
     // probe redials immediately.
     runnerHost.emitSystemResumed({
       backgroundedForMs: WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS - 1,
+      screenLocked: false,
     });
     expect(reconnectAll).toHaveBeenLastCalledWith("wake-resume", {
       probeFirst: true,
@@ -169,6 +172,7 @@ describe("subscribeStreamWakeReconnect", () => {
     // collapses them into one reading and this pair fails.
     runnerHost.emitSystemResumed({
       backgroundedForMs: WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS,
+      screenLocked: false,
     });
     expect(reconnectAll).toHaveBeenLastCalledWith("wake-resume", {
       probeFirst: false,
@@ -186,7 +190,10 @@ describe("subscribeStreamWakeReconnect", () => {
 
     // Desktop/web resume (no measured dwell): byte-identical to the old
     // behavior - default probe, default deadline.
-    runnerHost.emitSystemResumed({ backgroundedForMs: null });
+    runnerHost.emitSystemResumed({
+      backgroundedForMs: null,
+      screenLocked: false,
+    });
     expect(reconnectAll).toHaveBeenLastCalledWith("wake-resume", {
       probeFirst: true,
       wakeProbe: null,

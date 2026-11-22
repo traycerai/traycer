@@ -463,6 +463,16 @@ describe("formatChatCredentialNotice", () => {
         ],
       ],
     ],
+    [
+      "a cloud provider named like an inherited member, verbatim",
+      { kind: "cloud-provider", source: "constructor" },
+      [
+        [
+          "Chats here run on constructor, so there are no plan limits to show.",
+          false,
+        ],
+      ],
+    ],
   ])("words %s", (_name, credential, parts) => {
     expect(
       formatChatCredentialNotice(credential).map((part) => [

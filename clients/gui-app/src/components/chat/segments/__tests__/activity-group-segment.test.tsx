@@ -1024,6 +1024,7 @@ const SHARED_TOOL: ToolSegment = {
   imageResults: [],
   artifact: null,
   mcpApp: null,
+  feedbackDraft: null,
 };
 
 const SHARED_APPROVAL: ApprovalSegment = {

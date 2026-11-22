@@ -21,7 +21,6 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
   useCanEditConfiguration,
-  useConfigurationIsPersonal,
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
@@ -29,20 +28,16 @@ import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { TeamSkillUpload } from "./team-skill-upload";
 import { ConfigurationReadFailed } from "./team-read-failed";
+import { SkillsIntroduction } from "./configuration-introduction";
 
 export function TeamSkillsPage(): ReactNode {
-  const personal = useConfigurationIsPersonal();
   // Keyed by configuration: a draft or a write's outcome stays with the
   // configuration it was made in.
   const configurationKey = useConfigurationKey();
   return (
     <SettingsPanelShell
       title="Skills"
-      description={
-        personal
-          ? "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal."
-          : "Instructions for a kind of task, available to agents running this team."
-      }
+      description={<SkillsIntroduction />}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <TeamSkills key={configurationKey} providerId={null} />

@@ -363,7 +363,7 @@ function CurrentTaskRow(props: {
 // Current tasks spans every host, so each row reads its own task's worktrees
 // (where its PRs come from) from the host that owns the task, falling back to
 // the window's host for a cloud task. Reading per row also means a row hidden
-// behind "Show more" probes nothing until it is shown.
+// behind "Show more" probes nothing until it is shown. Expanding is one-way.
 function useCurrentTaskWorktrees(
   item: HistoryItem,
 ): readonly WorktreeHostEntryV12[] {

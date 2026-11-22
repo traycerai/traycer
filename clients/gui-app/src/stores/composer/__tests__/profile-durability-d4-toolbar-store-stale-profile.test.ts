@@ -52,6 +52,7 @@ function catalogWithLoadedModels(): ComposerToolbarCatalog {
     hostId: HOST_ID,
     harnesses: [AVAILABLE_CLAUDE],
     modelsHarnessId: "claude",
+    modelsProfileId: "tombstoned-uuid",
     models: [
       {
         harnessId: "claude",
@@ -68,6 +69,7 @@ function catalogWithLoadedModels(): ComposerToolbarCatalog {
       },
     ],
     modelsLoaded: true,
+    modelsFailed: false,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
     ultracodeCarried: false,
@@ -147,8 +149,10 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       hostId: HOST_ID,
       harnesses: [{ ...AVAILABLE_CLAUDE, available: false }],
       modelsHarnessId: "claude",
+      modelsProfileId: "tombstoned-uuid",
       models: [],
       modelsLoaded: true,
+      modelsFailed: false,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,

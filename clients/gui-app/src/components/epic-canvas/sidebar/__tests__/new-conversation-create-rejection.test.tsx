@@ -4,6 +4,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
+import type { ModelOption } from "@/components/home/data/landing-options";
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
@@ -150,6 +151,8 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
@@ -229,9 +232,123 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
-  const store = createStore(() => ({
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const store = createStore<ToolbarMockState>((set, get) => ({
+    accountChosen: false,
+    defaultAccount: emptyDefaultAccount,
+    setAccountChosen: (chosen: boolean) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultAccount = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        defaultAccount !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === defaultAccount.harnessId &&
+        state.selection.harnessId === defaultAccount.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: defaultAccount.profileId,
+        };
+      } else if (
+        defaultAccount !== null &&
+        state.selection.profileId === defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        accountChosen: chosen,
+        selection: presentedSelection,
+      });
+    },
+    setDefaultAccount: (
+      account: {
+        readonly harnessId: string;
+        readonly profileId: string;
+      } | null,
+    ) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        state.defaultAccount !== null &&
+        state.selection.profileId === state.defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        defaultAccount: account,
+        selection: presentedSelection,
+      });
+    },
     ultracode: false,
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
     values: {
@@ -260,8 +377,12 @@ const stubHostClient = {
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
 };
-vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
-vi.mock("@/lib/host/runtime", () => ({
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => stubHostClient,
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => stubHostClient,
   // The create stamps `sentFromHostId` from the directory's local host at
   // submit - see `testState.getLocalHostId` for the default and the
@@ -316,9 +437,7 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   });
   return {
     ...actual,
-    useComposerPaste: stubPasteResult,
-    // The modal calls `useComposerHashPaste` (the hash-only adapter), not
-    // `useComposerPaste` above - without this the real hook ran underneath.
+    // The modal's paste hook, stubbed so no real ingest runs underneath.
     useComposerHashPaste: stubPasteResult,
   };
 });

@@ -1,5 +1,6 @@
 import {
   taskOrganization,
+  useOrganizationTaskSlices,
   useOrganizationTasks,
 } from "@/hooks/organization/organization-context";
 import type {
@@ -24,6 +25,8 @@ import {
 } from "@/components/home/data/home-page.data";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
+import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { useOptionalHostClient } from "@/lib/host";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
@@ -32,7 +35,9 @@ import {
   useWorktreeHostIndex,
 } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import {
+  historySortForHost,
   listCloudTasksRequestForHistorySearch,
+  negotiatedListTasksSortsByCreated,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
 import type {
@@ -78,6 +83,14 @@ export interface UseHistoryQueryResult {
   error: Error | null;
   hostId: string | null;
   /**
+   * The order these rows are in: the search's own sort, except that a saved
+   * `created-desc` reads as `recent` on a host that cannot order by creation.
+   * Name the rows and their timestamps by this, not by the search.
+   */
+  readonly sort: HistorySortOption;
+  /** Whether this host can order by creation date, so a menu may offer it. */
+  readonly createdSortAvailable: boolean;
+  /**
    * The identity these rows were scoped to - `resolveCloudTasksUserId`'s
    * WIDENED answer, which admits an `unverified` session's local plane. Cache
    * identity for a follow-up read of the same rows (the phone's in-progress
@@ -118,7 +131,21 @@ export function useHistoryQuery(
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const trimmedQuery = params.search.query.trim();
+  // The same client `useCloudEpicTasksQuery` sends on, so the sort it is
+  // handed is one its host accepts.
+  const listTasksVersion = useHostNegotiatedMethodVersion(
+    useOptionalHostClient(),
+    "epic.listTasks",
+  );
+  const createdSortAvailable =
+    negotiatedListTasksSortsByCreated(listTasksVersion);
+  const effectiveSearch = useMemo(() => {
+    const sort = historySortForHost(params.search.sort, createdSortAvailable);
+    return sort === params.search.sort
+      ? params.search
+      : { ...params.search, sort };
+  }, [createdSortAvailable, params.search]);
+  const trimmedQuery = effectiveSearch.query.trim();
   const debouncedQuery = useDebouncedValue(trimmedQuery, SEARCH_DEBOUNCE_MS);
   const [fallbackNowMs] = useState(() => Date.now());
   const nowMs = params.nowMs ?? fallbackNowMs;
@@ -156,11 +183,11 @@ export function useHistoryQuery(
     ],
   );
   const request = useMemo<ListCloudTasksRequest>(() => {
-    const search = patchHistorySearch(params.search, {
+    const search = patchHistorySearch(effectiveSearch, {
       query: debouncedQuery,
     });
     return listCloudTasksRequestForHistorySearch(search);
-  }, [debouncedQuery, params.search]);
+  }, [debouncedQuery, effectiveSearch]);
   const activityRefreshScope = useMemo(
     () => JSON.stringify(request),
     [request],
@@ -191,7 +218,7 @@ export function useHistoryQuery(
     completeness: unionCompleteness,
     initialLegRefused,
   } = useCloudEpicTasksQuery(request, { enabled: true });
-  const chatHostFilterActive = params.search.chatHosts.length > 0;
+  const chatHostFilterActive = effectiveSearch.chatHosts.length > 0;
   const hostChatHostSupport = useChatHostFilterSupport(hostId);
   const isQueryDebouncing = debouncedQuery !== trimmedQuery;
   const shouldProjectLocally =
@@ -230,6 +257,7 @@ export function useHistoryQuery(
       (id) => !taskContexts.localHomedTaskIds.has(id),
     ),
   ]);
+  const organizationSlices = useOrganizationTaskSlices();
   const contextItems = useMemo(
     () =>
       filterHistoryItemsLocally(
@@ -245,20 +273,20 @@ export function useHistoryQuery(
         ).map((item) => ({
           ...item,
           organization: taskOrganization(
-            organization?.view,
+            organizationSlices,
             item.epicId,
             item.organization,
           ),
         })),
-        params.search,
+        effectiveSearch,
       ),
     [
       currentUserId,
       nowMs,
-      params.search,
+      effectiveSearch,
       taskContexts.tasksById,
       taskContexts.localHomedTaskIds,
-      organization,
+      organizationSlices,
     ],
   );
   // Locally matched tasks are unioned under the cloud page: the cloud rows
@@ -288,14 +316,14 @@ export function useHistoryQuery(
         allBaseItems.map((item) => ({
           ...item,
           organization: taskOrganization(
-            organization?.view,
+            organizationSlices,
             item.epicId,
             item.organization,
           ),
         })),
         worktreesByEpicId,
       ),
-    [allBaseItems, worktreesByEpicId, organization],
+    [allBaseItems, worktreesByEpicId, organizationSlices],
   );
 
   const data = useMemo<HistoryFetchResult | undefined>(() => {
@@ -330,11 +358,11 @@ export function useHistoryQuery(
     // When id-fetched extras joined the settled list they arrive appended out
     // of order, so that path re-sorts the union client-side instead.
     const items = shouldProjectLocally
-      ? projectHistoryItems(allItems, params.search)
+      ? projectHistoryItems(allItems, effectiveSearch)
       : settledHistoryItems(
           allItems,
           contextExtrasCount,
-          params.search.sort,
+          effectiveSearch.sort,
           debouncedQuery,
         );
     const canUseServerFacets =
@@ -433,7 +461,7 @@ export function useHistoryQuery(
     debouncedQuery,
     initialLegRefused,
     isQueryDebouncing,
-    params.search,
+    effectiveSearch,
     presentsCachedPage,
     shouldProjectLocally,
     firstPage,
@@ -513,6 +541,8 @@ export function useHistoryQuery(
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,
+    sort: effectiveSearch.sort,
+    createdSortAvailable,
     currentUserId,
     localContextMatchKey: JSON.stringify(localTaskIds),
     activityRefreshScope,
@@ -642,7 +672,9 @@ function settledHistoryItems(
   // Host-synthesized local homes belong on page one, while later cloud pages
   // remain cloud-owned. Sort the loaded union by the durable key even when a
   // filter or picker disables the optimistic active-row overlay.
-  if (sort === "recent") return sortProjectedHistoryItems(items, sort, query);
+  if (sort === "recent" || sort === "created-desc") {
+    return sortProjectedHistoryItems(items, sort, query);
+  }
   if (contextExtrasCount > 0) {
     return sortProjectedHistoryItems(items, sort, query);
   }

@@ -147,6 +147,8 @@ export const hostNotificationChatStoppedPayloadSchema = lazySchema(() =>
       messageId: idSchema.optional(),
       eventId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
+      /** Present only with `backgroundWorkRunning` when only another agent's reply is pending. */
+      awaitingAgentReply: z.literal(true).optional(),
       automaticRecovery: z.literal(true).optional(),
       /** Present only on a completed turn the provider paused before verification. */
       unverified: z.literal(true).optional(),
@@ -178,6 +180,8 @@ export const hostNotificationEpicStoppedPayloadSchema = lazySchema(() =>
       providerId: z.string().optional(),
       occurrenceId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
+      /** Present only with `backgroundWorkRunning` when only another agent's reply is pending. */
+      awaitingAgentReply: z.literal(true).optional(),
       automaticRecovery: z.literal(true).optional(),
     })
     .catchall(z.unknown()),
@@ -273,6 +277,27 @@ export const hostNotificationInterviewPayloadSchema = lazySchema(() =>
 );
 export type HostNotificationInterviewPayload = z.infer<
   typeof hostNotificationInterviewPayloadSchema
+>;
+
+/**
+ * `feedback.drafted` payload: the chat whose agent drafted feedback and the
+ * `tool_call` block that carries the draft. The draft's text stays on the
+ * block, not here: this row also reaches email and hooks.
+ */
+export const hostNotificationFeedbackDraftPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("feedback_draft"),
+      epicId: idSchema,
+      chatId: idSchema,
+      chatTitle: z.string(),
+      taskTitle: z.string(),
+      blockId: idSchema,
+    })
+    .catchall(z.unknown()),
+);
+export type HostNotificationFeedbackDraftPayload = z.infer<
+  typeof hostNotificationFeedbackDraftPayloadSchema
 >;
 
 /**
@@ -654,14 +679,6 @@ export const hostNotificationSecretGrantRequestPayloadSchema = lazySchema(() =>
 export type HostNotificationSecretGrantRequestPayload = z.infer<
   typeof hostNotificationSecretGrantRequestPayloadSchema
 >;
-
-/** What `traycer_secret_export` can mint. */
-export const HOST_NOTIFICATION_SECRET_EXPORT_KINDS = [
-  "presigned_url",
-  "short_lived_credentials",
-] as const;
-export type HostNotificationSecretExportKind =
-  (typeof HOST_NOTIFICATION_SECRET_EXPORT_KINDS)[number];
 
 /**
  * `secret.export.minted`: The server no longer writes this kind; readers drop
@@ -1106,6 +1123,32 @@ export type HostNotificationHooksRemovedPayload = z.infer<
   typeof hostNotificationHooksRemovedPayloadSchema
 >;
 
+export const hostNotificationReadonlyAccessRetiredPayloadSchema = lazySchema(
+  () =>
+    z.discriminatedUnion("scope", [
+      z
+        .object({
+          kind: z.literal("readonly_access_retired"),
+          scope: z.literal("task"),
+          taskId: idSchema,
+          taskTitle: z.string().max(200),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("readonly_access_retired"),
+          scope: z.literal("team"),
+          environmentId: idSchema,
+          teamName: z.string().min(1).max(200),
+          invitation: z.boolean(),
+        })
+        .strict(),
+    ]),
+);
+export type HostNotificationReadonlyAccessRetiredPayload = z.infer<
+  typeof hostNotificationReadonlyAccessRetiredPayloadSchema
+>;
+
 export const hostNotificationKnownPayloadSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationChatStoppedPayloadSchema,
@@ -1133,10 +1176,12 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationEnvironmentMoveStalledPayloadSchema,
     hostNotificationEnvironmentApplyFailedPayloadSchema,
     hostNotificationTeamRoleChangedPayloadSchema,
+    hostNotificationReadonlyAccessRetiredPayloadSchema,
     hostNotificationTeamHostReturnedPayloadSchema,
     hostNotificationSecretRemovedPayloadSchema,
     hostNotificationSandboxNoticePayloadSchema,
     hostNotificationHooksRemovedPayloadSchema,
+    hostNotificationFeedbackDraftPayloadSchema,
   ]),
 );
 export type HostNotificationKnownPayload = z.infer<
@@ -1231,6 +1276,8 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "environment_move_stalled";
     case "environment.apply.failed":
       return payloadKind === "environment_apply_failed";
+    case "access.readonly.retired":
+      return payloadKind === "readonly_access_retired";
     case "team.role.changed":
       return payloadKind === "team_role_changed";
     case "team.host.returned":
@@ -1241,5 +1288,7 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "sandbox_notice";
     case "notification.hooks.removed":
       return payloadKind === "notification_hooks_removed";
+    case "feedback.drafted":
+      return payloadKind === "feedback_draft";
   }
 }

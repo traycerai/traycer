@@ -11,7 +11,14 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 const windowHost = vi.hoisted(
-  (): { client: HostClient<HostRpcRegistry> | null } => ({ client: null }),
+  (): {
+    client: HostClient<HostRpcRegistry> | null;
+    auth: {
+      environmentCloud: () => EnvironmentCloud;
+      listEnvironments: () => Promise<EnvironmentDirectoryResult>;
+    } | null;
+    fakeAuthn: FakeEnvironmentAuthn | null;
+  } => ({ client: null, auth: null, fakeAuthn: null }),
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -21,7 +28,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
       if (windowHost.client === null) throw new Error("no window host");
       return windowHost.client;
     },
-    useHostBinding: () => ({ hostClient: windowHost.client }),
+    useHostBinding: () => ({
+      hostClient: windowHost.client,
+      auth: windowHost.auth,
+    }),
   };
 });
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
@@ -36,16 +46,14 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => windowHost.client,
 }));
-// The configuration status chip reads the host runtime this suite does not mount.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => null,
-}));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { act, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import {
   MockHostMessenger,
   type MockHandlerMap,
@@ -55,7 +63,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -72,6 +80,10 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  createFakeEnvironmentAuthn,
+  type FakeEnvironmentAuthn,
+} from "@/components/settings/environment/__tests__/environment-authn-test-support";
 
 const HOST_ID = "host-a";
 /** The window host's scope status; a case sets it before it mounts. */
@@ -99,7 +111,10 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   windowScopeStatus = "ready";
+  windowHost.fakeAuthn?.restore();
   windowHost.client = null;
+  windowHost.auth = null;
+  windowHost.fakeAuthn = null;
   useAuthStore.setState({ status: "signed-out" });
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
@@ -142,8 +157,8 @@ function mountPage(options: {
   readonly pick: EnvironmentPick;
   readonly methods: readonly string[] | null;
   readonly status: () =>
-    | EnvironmentStatusResponseV11
-    | Promise<EnvironmentStatusResponseV11>;
+    | EnvironmentStatusResponseV13
+    | Promise<EnvironmentStatusResponseV13>;
 }): Mounted {
   return mountSection({
     ...options,
@@ -159,8 +174,8 @@ function mountSection(options: {
   /** `null` records nothing: no handshake has completed yet. */
   readonly methods: readonly string[] | null;
   readonly status: () =>
-    | EnvironmentStatusResponseV11
-    | Promise<EnvironmentStatusResponseV11>;
+    | EnvironmentStatusResponseV13
+    | Promise<EnvironmentStatusResponseV13>;
 }): Mounted {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": options.status,
@@ -183,6 +198,7 @@ function mountSection(options: {
       legacyMembers: [],
     }),
   };
+  const fakeAuthn = createFakeEnvironmentAuthn(handlers);
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "req-source",
@@ -200,6 +216,31 @@ function mountSection(options: {
   );
   const client = spine.createRequester(entry);
   windowHost.client = client;
+  const listed: unknown[] = [];
+  // The fake authn has no route for this read, so it is answered and recorded here.
+  const hostLists: unknown[] = [];
+  windowHost.auth = {
+    environmentCloud: () => ({
+      ...fakeAuthn.cloud,
+      transport: (request) => {
+        const url = new URL(request.url);
+        const route = /\/environments\/([^/]+)\/hosts$/u.exec(url.pathname);
+        if (route === null || !url.searchParams.has("include")) {
+          return fakeAuthn.cloud.transport(request);
+        }
+        hostLists.push({ environmentId: decodeURIComponent(route[1]) });
+        return Promise.resolve({
+          status: 200,
+          text: JSON.stringify({ hosts: [] }),
+        });
+      },
+    }),
+    listEnvironments: () => {
+      listed.push({});
+      return Promise.resolve({ kind: "ok" as const, list: environments });
+    },
+  };
+  windowHost.fakeAuthn = fakeAuthn;
   if (options.methods !== null) {
     recordNegotiatedHostManifest(
       HOST_ID,
@@ -242,10 +283,14 @@ function mountSection(options: {
   );
   return {
     messenger,
-    sent: (method) =>
-      messenger.calls
+    sent: (method) => [
+      ...(method === "environment.list" ? listed : []),
+      ...(method === "environment.host.list" ? hostLists : []),
+      ...fakeAuthn.paramsOf(method),
+      ...messenger.calls
         .filter((call) => call.method === method)
         .map((call) => call.params),
+    ],
   };
 }
 
@@ -319,7 +364,7 @@ describe("PersonalPageFrame's source, one per pick", () => {
   });
 
   it("shows a spinner and sends neither source's reads until the host's status answers, then mounts the right one", async () => {
-    let answer: (status: EnvironmentStatusResponseV11) => void = () =>
+    let answer: (status: EnvironmentStatusResponseV13) => void = () =>
       undefined;
     const mounted = mountPage({
       pick: { kind: "personal" },

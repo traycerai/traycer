@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import { AVAILABLE_HOST_ROW_SURFACE_STATE } from "@/components/settings/host-scope/host-option-model";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import {
   UNKNOWN_FLEET_UPDATE_VIEW,
   type FleetUpdateView,
@@ -58,7 +60,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={viewA}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
         <HostOptionRow
@@ -69,7 +70,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={viewB}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
       </>,
@@ -97,7 +97,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "idle" })}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
         <HostOptionRow
@@ -108,7 +107,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "failed" })}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
       </>,
@@ -128,7 +126,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "failed" })}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
         <HostOptionRow
@@ -139,7 +136,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "idle" })}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
       </>,
@@ -161,7 +157,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={null}
         nameRef={null}
-        nameWraps={false}
         environmentLabel={null}
       />,
     );
@@ -182,7 +177,6 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           blockingSessionCount: 3,
         })}
         nameRef={null}
-        nameWraps={false}
         environmentLabel={null}
       />,
     );
@@ -212,7 +206,6 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={null}
         nameRef={null}
-        nameWraps={false}
         environmentLabel="acme"
       />,
     );
@@ -232,7 +225,6 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={null}
         nameRef={null}
-        nameWraps={false}
         environmentLabel={null}
       />,
     );
@@ -252,7 +244,6 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={null}
           nameRef={null}
-          nameWraps={false}
           environmentLabel="acme"
         />
         <HostOptionRow
@@ -263,7 +254,6 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={null}
           nameRef={null}
-          nameWraps={false}
           environmentLabel={null}
         />
       </>,
@@ -272,6 +262,110 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
       "acme",
     );
     expect(queryByTestId("host-option-environment-host-b")).toBeNull();
+  });
+});
+
+describe("HostOptionRow — compact names and marks", () => {
+  afterEach(cleanup);
+
+  it("keeps a long name truncated beside its refusal in the merged row", () => {
+    const name = "A very long host name that must remain readable";
+    const host = hostScopeOptionFixture({
+      hostId: "host-long",
+      name,
+    });
+    const { getByText } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="pin"
+        surfaceState={{ kind: "refused", word: "needs update" }}
+        updateView={null}
+        nameRef={null}
+        environmentLabel={null}
+      />,
+    );
+
+    const nameElement = getByText(name);
+    expect(nameElement.className.split(/\s+/)).toContain("truncate");
+    expect(nameElement.className.split(/\s+/)).toContain("min-w-[8ch]");
+    expect(nameElement.getAttribute("title")).toBeNull();
+    const nameRow = nameElement.parentElement;
+    expect(nameRow?.classList.contains("items-center")).toBe(true);
+    const marks = getByText("needs update");
+    expect(nameRow?.contains(marks)).toBe(true);
+    const marksGroup = marks.parentElement;
+    expect(marksGroup?.className.split(/\s+/)).not.toContain("shrink-0");
+    expect(marksGroup?.className.split(/\s+/)).toContain("min-w-0");
+    expect(marksGroup?.className.split(/\s+/)).toContain("whitespace-nowrap");
+    expect(
+      nameElement.compareDocumentPosition(marks) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("caps a long environment label and the update badge, with each full text in its tooltip", () => {
+    const environmentLabel =
+      "A very long environment name that overflows the host list";
+    const host = hostScopeOptionFixture({ hostId: "host-a", name: "Host A" });
+    const { getByTestId } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="view"
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+        updateView={fleetView({ kind: "waiting-to-activate" })}
+        nameRef={null}
+        environmentLabel={environmentLabel}
+      />,
+    );
+
+    const label = getByTestId("host-option-environment-host-a");
+    expect(label.textContent).toBe(environmentLabel);
+    expect(label.className.split(/\s+/)).toContain("truncate");
+    expect(label.className.split(/\s+/)).toContain("max-w-32");
+    expect(tooltipTextNear(label)).toBe(environmentLabel);
+
+    const badge = getByTestId("host-option-update-badge-host-a");
+    expect(badge.textContent).toBe("restart to finish");
+    expect(badge.className.split(/\s+/)).toContain("truncate");
+    expect(badge.className.split(/\s+/)).toContain("max-w-32");
+    expect(tooltipTextNear(badge)).toBe("restart to finish");
+  });
+});
+
+describe("HostOptionRow — frozen sandbox state", () => {
+  afterEach(cleanup);
+
+  it("shows Out of credits beside the sandbox's lifecycle word", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "sandbox-host",
+      kind: "sandbox",
+      sandbox: {
+        state: "suspended",
+        frozen: true,
+        summary: null,
+        ownerKind: "unknown",
+        teamOwned: false,
+      },
+    });
+    const { getByText } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="view"
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+        updateView={null}
+        nameRef={null}
+        environmentLabel={null}
+      />,
+    );
+
+    expect(getByText("Suspended", { exact: true })).toBeTruthy();
+    expect(getByText(HOST_FROZEN_WORD, { exact: true })).toBeTruthy();
   });
 });
 
@@ -292,7 +386,6 @@ describe("HostOptionRow — terminal-run note", () => {
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={UNKNOWN_FLEET_UPDATE_VIEW}
         nameRef={null}
-        nameWraps={false}
         environmentLabel={null}
       />,
     );

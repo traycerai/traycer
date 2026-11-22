@@ -3,6 +3,7 @@ import { useCallback, useContext, useEffect, useMemo } from "react";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { deriveCollabUser } from "@/editor-core/awareness/derive-collab-user";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { artifactTreePath } from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
@@ -21,7 +22,8 @@ import {
   CanvasFrameEventsContext,
   type CanvasArtifactFixture,
 } from "./canvas-surface-context";
-import { LIVE_BOARD_SLOT_BUDGET } from "./canvas-model";
+import { canvasDevice, liveBoardSlotBudget } from "./canvas-model";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useCanvasLayout, useCanvasLayoutDocument } from "./use-canvas-layout";
 
 export interface CanvasErrorAttachment extends CanvasPageError {
@@ -76,6 +78,13 @@ function useBoardFiles(artifact: ArtifactProjection) {
     [head],
   );
 }
+function useLiveBoardSlotBudget(artifactId: string): number {
+  return liveBoardSlotBudget(
+    useRunnerHostOrNull()?.sandboxArtifacts ?? null,
+    artifactId,
+    canvasDevice(useCoarsePointer(), window.screen),
+  );
+}
 function useCachedBoardReader(readSpan: ArtifactReadSpan): ArtifactReadSpan {
   const cache = useMemo(() => createArtifactByteCache(readSpan), [readSpan]);
   useEffect(() => () => cache.clear(), [cache]);
@@ -118,6 +127,7 @@ function LiveCanvasSurface({
     resolveOutsideReference,
   );
   const { boardFiles, boardByteLengths } = useBoardFiles(artifact);
+  const liveSlotBudget = useLiveBoardSlotBudget(artifactId);
   return store === null ? (
     <div role="status" className="p-4 text-ui-sm text-muted-foreground">
       Opening canvas…
@@ -137,7 +147,7 @@ function LiveCanvasSurface({
       boardFiles={boardFiles}
       boardByteLengths={boardByteLengths}
       frameEvents={frameEvents}
-      liveSlotBudget={LIVE_BOARD_SLOT_BUDGET}
+      liveSlotBudget={liveSlotBudget}
     />
   );
 }
@@ -164,6 +174,7 @@ function FixtureCanvasSurface({
     fixture.resolveOutsideReference,
   );
   const { boardFiles, boardByteLengths } = useBoardFiles(artifact);
+  const liveSlotBudget = useLiveBoardSlotBudget(artifactId);
   return store === null ? null : (
     <CanvasArtifactEditor
       key={artifactId}
@@ -179,7 +190,7 @@ function FixtureCanvasSurface({
       boardFiles={boardFiles}
       boardByteLengths={boardByteLengths}
       frameEvents={frameEvents}
-      liveSlotBudget={LIVE_BOARD_SLOT_BUDGET}
+      liveSlotBudget={liveSlotBudget}
     />
   );
 }

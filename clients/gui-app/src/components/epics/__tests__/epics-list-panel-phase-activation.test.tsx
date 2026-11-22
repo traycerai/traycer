@@ -79,6 +79,7 @@ import {
 import { flattenLayoutRefs, tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 /**
  * F-phase: opening a legacy Phase row from the epics list must route through
@@ -109,7 +110,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
+  useHistoryQuery: (params: UseHistoryQueryParams) => ({
     data: {
       items: testState.items,
       availableRepos: [],
@@ -118,6 +119,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       facets: { repos: [], workspaces: [], ownershipScopes: [] },
       worktreesByEpicId: new Map(),
     },
+    sort: params.search.sort,
+    createdSortAvailable: true,
     isPending: false,
     isFetching: false,
     error: null,
@@ -178,6 +181,7 @@ function phaseHistoryItem(): HistoryItem {
     taskType: "phase",
     title: "Legacy phase row",
     initialUserPrompt: "",
+    createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
     updatedLabel: "about 2 hours ago",
     updatedBucket: "today",

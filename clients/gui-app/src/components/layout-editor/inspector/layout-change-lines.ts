@@ -72,6 +72,21 @@ export function styleChangeLines(
 }
 
 /**
+ * The change list's lines for panels shown or hidden, measured against the
+ * default: no preset differs on them, so naming the applied one would suggest
+ * it decides them.
+ */
+export function panelChangeLines(
+  changes: ReadonlyArray<StyleChange>,
+  values: LayoutValues,
+): ReadonlyArray<LayoutChangeLine> {
+  return styleLines(changes, values, PRESET_VALUES.default).map((line) => ({
+    ...line,
+    baseline: `${PRESET_LABELS.default}: ${line.baseline}`,
+  }));
+}
+
+/**
  * One line per setting, both values as bare words. A region's display is
  * stored as `shown` and `size` but set by one control, so the two collapse
  * into one line that carries both changes.

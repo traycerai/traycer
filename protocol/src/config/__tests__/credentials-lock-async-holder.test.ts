@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeCredentialsFile, type StoredCredentials } from "../credentials";
@@ -10,6 +9,14 @@ import {
   type RefreshFn,
   type RefreshResult,
 } from "../credentials-mutation";
+import { createCaseWorkDir, endCaseWorkDir } from "./credentials-run-root";
+
+// Files in this worker share one module cache: reset it before this file's
+// imports so credentials-lock.ts is first evaluated against the
+// `node:child_process` spy below, even when another file already loaded it.
+vi.hoisted(() => {
+  vi.resetModules();
+});
 
 // Row 5: these tests pin a contended `acquireCredentialsLock` against a
 // live holder (5a), a stale spent-base marker owned by a live process driven
@@ -48,12 +55,12 @@ describe.skipIf(isWindows)("credentials-lock async holder (row 5)", () => {
   let workDir: string;
 
   beforeEach(() => {
-    workDir = mkdtempSync(join(tmpdir(), "traycer-cred-lock-async-holder-"));
+    workDir = createCaseWorkDir("traycer-cred-lock-async-holder-");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    rmSync(workDir, { recursive: true, force: true });
+    endCaseWorkDir(workDir);
   });
 
   describe("acquireCredentialsLock - contended against a live holder (5a)", () => {
@@ -212,6 +219,7 @@ describe.skipIf(isWindows)("credentials-lock async holder (row 5)", () => {
       const stub = refreshStub();
       const store = createCredentialsMutationStore({
         paths: { credentialsPath, metaPath, lockPath },
+        onDiskPressure: null,
         refresh: stub.fn,
         lockWaitMs: 500,
         lockPollIntervalMs: 25,

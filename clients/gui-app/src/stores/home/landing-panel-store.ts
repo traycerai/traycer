@@ -449,8 +449,11 @@ export interface LandingPanelStoreState {
     Partial<Record<string, LandingPanelLayout>>
   >;
   /**
-   * Retains the v1 global layout only for pages that have not yet recorded
-   * their own layout. New layout writes always target one landing page.
+   * The layout of every page that has not yet recorded its own (and the v1
+   * global layout, which it started as).
+   *
+   * Its width follows the last width set on ANY page, so a new start page
+   * opens at the width the previous one was left at.
    */
   readonly fallbackLayout: LandingPanelLayout | null;
   readonly pendingKills: ReadonlyArray<LandingPanelPendingKill>;
@@ -649,6 +652,13 @@ function initialLandingPanelState(): PersistedLandingPanelState & {
   };
 }
 
+/**
+ * The layout a start page shows.
+ *
+ * Always a STORED object, never one built here: the panel selects this result
+ * straight from the store, and a fresh object per call is a new snapshot on
+ * every read, which re-renders without end.
+ */
 export function landingPanelLayoutFor(
   state: Pick<
     LandingPanelStoreState,
@@ -867,13 +877,21 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
           state.panelReveal === null ? state : { panelReveal: null },
         ),
       setPanelWidthFraction: (landingPageId, panelWidthFraction) =>
-        set((state) =>
-          updateLandingPanelLayout(state, landingPageId, {
-            ...landingPanelLayoutFor(state, landingPageId),
-            panelWidthFraction:
-              clampLandingPanelWidthFraction(panelWidthFraction),
-          }),
-        ),
+        set((state) => {
+          const fraction = clampLandingPanelWidthFraction(panelWidthFraction);
+          return {
+            ...updateLandingPanelLayout(state, landingPageId, {
+              ...landingPanelLayoutFor(state, landingPageId),
+              panelWidthFraction: fraction,
+            }),
+            // The width also becomes every unrecorded page's width, which is
+            // what a start page created next opens at.
+            fallbackLayout: {
+              ...(state.fallbackLayout ?? DEFAULT_LANDING_PANEL_LAYOUT),
+              panelWidthFraction: fraction,
+            },
+          };
+        }),
       setPanelMaximized: (landingPageId, maximized) =>
         set((state) =>
           updateLandingPanelLayout(state, landingPageId, {

@@ -2,6 +2,7 @@
  * Docs: see ../SETTINGS.md (Fallback).
  * Update that file whenever this settings surface changes.
  */
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import {
   useCallback,
@@ -94,6 +95,7 @@ import {
 import { FallbackDangerZone } from "@/components/settings/panels/fallback/fallback-danger-zone";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 import { FallbackConflictAnnouncementsProvider } from "@/components/settings/panels/fallback/fallback-conflict-announcements-provider";
+import { FallbackTeamRoutingInEffect } from "@/components/settings/panels/fallback/fallback-team-routing-in-effect";
 import {
   FallbackTestModelButton,
   FallbackTestModelPanel,
@@ -297,7 +299,6 @@ function FallbackSettingsPanelBody(props: {
    * button nobody pressed). The editor clears it once it has been honoured.
    */
   const [returnFocusToReset, setReturnFocusToReset] = useState(false);
-
   /**
    * The authoritative read of what the host actually has, for the two cases that
    * need one: a save whose reply was lost, and a reset - whose result is by
@@ -369,6 +370,22 @@ function FallbackSettingsPanelBody(props: {
   // refetched policy. This is also what seeds the reducer, which is why there
   // is no hydration effect anywhere in this file.
   const editorKey = `${scope.hostId ?? ""}:${resetGeneration}`;
+
+  // A team computer: routing here is the team's, for everyone who works on
+  // this machine, so the page reads it out and offers no editor. The host
+  // refuses a write either way (`TeamHostRoutingIsTheTeamsError`); this is
+  // what keeps a member from being shown controls that cannot take.
+  //
+  // An unreadable row does not change that - there is no own routing to set
+  // instead - so the read-out says so rather than being skipped.
+  if (query.data.source === "team") {
+    return (
+      <FallbackTeamRoutingInEffect
+        policy={query.data.policy}
+        storedPolicyUnreadable={query.data.storedPolicyUnreadable}
+      />
+    );
+  }
   return (
     // Which tier conflicts have been announced, for exactly the editor's
     // lifetime - the same key - so leaving the Equivalent models tab and
@@ -671,6 +688,15 @@ function FallbackPolicyEditor(props: {
           });
         })
         .catch((error: unknown) => {
+          if (reportedSaveFailure(error) === null) {
+            setOverrideOrigins((origins) => {
+              const nextOrigins = new Map(origins);
+              nextOrigins.delete(requestId);
+              return nextOrigins;
+            });
+            dispatch({ type: "save-abandoned", requestId });
+            return;
+          }
           const failure = classifyFallbackSaveFailure(error, "draft");
           dispatch({
             type: "save-failed",
@@ -1054,8 +1080,7 @@ function FallbackPolicyEditor(props: {
         group={FALLBACK.definitions.fallback}
         // The page is already titled Fallback. This strip is the master switch
         // for all three tabs, not a section beside them, so a heading repeating
-        // the page name is the second name `notification-chime-settings-section`
-        // refuses for the same reason.
+        // the page name would be a second name for the same controls.
         showTitle={false}
         tone="default"
         dataTestId="settings-fallback-group"
@@ -1433,10 +1458,11 @@ type UnrefreshedResetSubject = "pre-reset-values" | "own-edit" | "rollback";
 function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
   switch (subject) {
     // D330: a reset that succeeded proves the host WROTE something, not that
-    // what it wrote differs from this. Resetting an already-default policy
-    // yields the same values back, and the follow-up get that would have shown
-    // that is exactly the request that failed - so the old "not what this host
-    // is using now" asserted an inequality the client cannot know.
+    // what it wrote differs from this. Resetting a policy that already matches
+    // what a reset writes yields the same values back, and the follow-up get
+    // that would have shown that is exactly the request that failed - so the
+    // old "not what this host is using now" asserted an inequality the client
+    // cannot know.
     case "pre-reset-values":
       return "This page still shows the settings from before the reset. Select Reload settings to show what's now saved on this host.";
     case "own-edit":
@@ -1529,7 +1555,7 @@ function UnrefreshedResetNotice(props: {
 /**
  * What the panel says when the stored policy could not be read.
  *
- * The host answers a corrupt row with the DEFAULT policy plus this flag rather
+ * The host answers a corrupt row with routing off, plus this flag, rather
  * than throwing, precisely so this page still renders and the user can
  * overwrite it - a panel that failed to load would leave the bad row with no
  * way to replace it. So the copy has to be clear that what is on screen is not

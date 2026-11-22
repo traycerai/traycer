@@ -1150,8 +1150,8 @@ const unavailableProviderRateLimitsSchemaV80 = lazySchema(() =>
  * available arm: `host.getRateLimitUsage@4.0` was the last of the three to be
  * frozen here, when that arm opened 5.0.
  *
- * Every other arm is shared with the live union by reference: they carry no
- * provider-id enum, so there is nothing for them to drift on.
+ * The other arms retain their published shapes. Freeze a shared arm here
+ * before adding fields on the current line, even when it has no provider id.
  */
 export const providerRateLimitsSchemaV80 = lazySchema(() =>
   z.union([
@@ -1190,9 +1190,9 @@ const unavailableProviderRateLimitsSchemaV91 = lazySchema(() =>
  * 3.0. `host.getRateLimitUsage@5.0` is not here: its response is an echo of the
  * provider the caller named, which the compat gate excepts.
  *
- * Every available arm is shared with the live union by reference: they carry
- * no provider-id enum, so there is nothing for them to drift on. The first
- * available ARM added after 1.5.0 must not be added here.
+ * Available arms retain their published shapes. Freeze a shared arm here
+ * before adding fields on the current line. An available arm introduced
+ * after 1.5.0 must not be added here.
  */
 export const providerRateLimitsSchemaV91 = lazySchema(() =>
   z.union([
@@ -1465,4 +1465,43 @@ export const providersConsumeRateLimitResetCreditResponseSchema = lazySchema(
 );
 export type ProvidersConsumeRateLimitResetCreditResponse = z.infer<
   typeof providersConsumeRateLimitResetCreditResponseSchema
+>;
+
+/**
+ * Asks which model `modelSlug` runs on for each profile when the CLI is spawned
+ * in `workingDirectory`. An alias's route belongs to one account in one folder:
+ * a project's `env.ANTHROPIC_DEFAULT_MODEL` moves it, so an answer for another
+ * profile or folder says nothing about this one.
+ */
+export const providersReadModelRoutesRequestSchema = lazySchema(() =>
+  z.object({
+    providerId: z.literal("claude-code"),
+    workingDirectory: z.string().min(1),
+    modelSlug: z.string().min(1),
+    profileIds: z.array(z.string().nullable()),
+  }),
+);
+export type ProvidersReadModelRoutesRequest = z.infer<
+  typeof providersReadModelRoutesRequestSchema
+>;
+
+/**
+ * `resolvedModel` is `null` when the CLI's handshake named no first-party model
+ * for the alias, or could not be read: the alias stays unresolved.
+ * `validForMs` is measured from this response on the host's clock and is not
+ * renewed by asking again; a route past it says nothing.
+ */
+export const providersReadModelRoutesResponseSchema = lazySchema(() =>
+  z.object({
+    routes: z.array(
+      z.object({
+        profileId: z.string().nullable(),
+        resolvedModel: z.string().min(1).nullable(),
+        validForMs: z.number().int().nonnegative(),
+      }),
+    ),
+  }),
+);
+export type ProvidersReadModelRoutesResponse = z.infer<
+  typeof providersReadModelRoutesResponseSchema
 >;

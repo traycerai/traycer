@@ -72,6 +72,10 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   featureSettings: null,
   mobileApp: false,
   phoneLayout: false,
+  soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
+  soundtrackOn: false,
 };
 
 describe("settings search index", () => {

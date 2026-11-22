@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  EPIC_STATUS_ARTIFACT_SYNC_MINOR,
   EPIC_STATUS_DURABILITY_LEGS_MINOR,
   epicStatusFrameForNegotiatedMinor,
   epicStatusSubscribeServerFrameSchemaV10,
   epicStatusSubscribeServerFrameSchemaV11,
+  epicStatusSubscribeServerFrameSchemaV12,
   type EpicStatusSubscribeServerFrameV11,
 } from "../status-subscribe";
 import { hostStreamRpcRegistry } from "../../registry";
@@ -62,7 +64,6 @@ function cloudSyncStatusWithLegs(): EpicStatusSubscribeServerFrameV11 {
 describe("epic.status.subscribe durability legs", () => {
   it("registers the legs above the minor cli-v1.3.0 shipped", () => {
     const major = hostStreamRpcRegistry["epic.status.subscribe"][1];
-    expect(major.latestMinor).toBe(EPIC_STATUS_DURABILITY_LEGS_MINOR);
     expect(EPIC_STATUS_DURABILITY_LEGS_MINOR).toBeGreaterThan(0);
     // The floor is a version this registry actually installs - a gate keyed to
     // a minor nothing serves would refuse the legs to every peer forever.
@@ -161,5 +162,79 @@ describe("epic.status.subscribe durability legs", () => {
         EPIC_STATUS_DURABILITY_LEGS_MINOR - 1,
       ),
     ).toEqual(pong);
+  });
+});
+
+describe("epic.status.subscribe artifactSync", () => {
+  const ARTIFACT_SYNC = { rooms: "stopped", waitingNewArtifacts: 2 } as const;
+
+  function frames() {
+    return [
+      epicStatusSubscribeServerFrameSchemaV12.parse({
+        kind: "snapshot",
+        authorityEpoch: "epoch-1",
+        securityEpoch: 0,
+        permissionRole: null,
+        cloudSyncStatus: "connected",
+        ...LEGS,
+        artifactSync: ARTIFACT_SYNC,
+        dirty: null,
+        migration: null,
+        deletion: { state: "none" },
+        hasBinaryPayload: false,
+      }),
+      epicStatusSubscribeServerFrameSchemaV12.parse({
+        kind: "cloudSyncStatus",
+        authorityEpoch: "epoch-1",
+        status: "connected",
+        ...LEGS,
+        artifactSync: ARTIFACT_SYNC,
+        hasBinaryPayload: false,
+      }),
+    ];
+  }
+
+  it("is served by the top of the line and reaches a peer on it", () => {
+    const major = hostStreamRpcRegistry["epic.status.subscribe"][1];
+    expect(major.latestMinor).toBe(EPIC_STATUS_ARTIFACT_SYNC_MINOR);
+    for (const frame of frames()) {
+      expect(
+        epicStatusFrameForNegotiatedMinor(
+          frame,
+          EPIC_STATUS_ARTIFACT_SYNC_MINOR,
+        ),
+      ).toMatchObject({ artifactSync: ARTIFACT_SYNC });
+    }
+  });
+
+  it("is dropped for a legs peer, which keeps its legs", () => {
+    for (const frame of frames()) {
+      const projected = epicStatusFrameForNegotiatedMinor(
+        frame,
+        EPIC_STATUS_DURABILITY_LEGS_MINOR,
+      );
+      expect(projected).not.toHaveProperty("artifactSync");
+      expect(projected).toMatchObject({ durability: "cloud" });
+    }
+  });
+
+  it("is dropped with the legs for a @1.0 peer", () => {
+    for (const frame of frames()) {
+      const projected = epicStatusFrameForNegotiatedMinor(frame, 0);
+      expect(projected).not.toHaveProperty("artifactSync");
+      expect(projected).not.toHaveProperty("durability");
+    }
+  });
+
+  it("refuses a count that is not one", () => {
+    expect(
+      epicStatusSubscribeServerFrameSchemaV12.safeParse({
+        kind: "cloudSyncStatus",
+        authorityEpoch: "epoch-1",
+        status: "connected",
+        artifactSync: { rooms: "current", waitingNewArtifacts: -1 },
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
   });
 });

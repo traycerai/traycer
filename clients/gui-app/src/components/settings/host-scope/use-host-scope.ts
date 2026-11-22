@@ -1,5 +1,12 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import type { HostIdentityGetResponse } from "@traycer/protocol/host/identity/schemas";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { TEAM_MEMBERSHIP_REQUIRED_MESSAGE } from "@traycer-clients/shared/host-transport/local-open-auth";
+import { hostDoorStateFor } from "@/stores/host/host-door-state-store";
+import { DOOR_STATE_TITLES } from "@/lib/host/door-state-titles";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { createLocalMaintenanceFallbackClient } from "@/lib/host/local-maintenance-fallback-client";
 import type {
   ActivateRefusalReason,
@@ -16,10 +23,20 @@ import { appLogger } from "@/lib/logger";
 import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   deriveHostScopeStatus,
+  isHostScopeUsable,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
-import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import {
+  useHostOptions,
+  type HostOptions,
+} from "@/components/settings/host-scope/use-host-options";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useHostsRunningConfiguration } from "@/components/settings/environment/use-hosts-running-configuration";
+import { useSettingsHostEntry } from "@/components/settings/host-scope/use-settings-host-entry";
+import {
+  environmentPickValue,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   findHostOption,
@@ -34,7 +51,7 @@ import {
 } from "@/components/settings/host-scope/host-option-model";
 
 export interface HostScope {
-  /** Every host this account owns or this client can dial, merged and sorted. */
+  /** The surface's options, with the global host facts preserved. */
   readonly hosts: readonly HostScopeOption[];
   /** The host being administered. `null` when there are no hosts, or `vanished`. */
   readonly host: HostScopeOption | null;
@@ -42,6 +59,11 @@ export interface HostScope {
   readonly hostLabel: string;
   /** The id that was picked but is no longer listed — only when `vanished`. */
   readonly vanishedHostId: string | null;
+  /** Settings remembers the selected name after its membership row leaves. */
+  readonly vanishedSelection: {
+    readonly name: string;
+    readonly forget: () => void;
+  } | null;
   /** Drop an explicit pick and follow the active host again. */
   readonly returnToActive: () => void;
   /** The app-wide active host — where new work lands and the bell reads from. */
@@ -68,7 +90,7 @@ export interface HostScope {
    * selection authority, which validates against the fleet, persists, and
    * re-derives; the new effective host comes back down to every window.
    */
-  readonly makeActive: (hostId: string) => void;
+  readonly makeActive: (hostId: string) => Promise<boolean>;
   /**
    * An Activate is in flight. The button MUST gate on this.
    *
@@ -89,6 +111,8 @@ export interface HostScope {
   readonly listsFailed: boolean;
   /** Re-request both host lists after a failure. */
   readonly retryLists: () => void;
+  /** Retry a failed status read while a Settings host entry stays pending. */
+  readonly retryEntryStatus: (() => void) | null;
   /** Reference "now" for relative timestamps; ticks once a minute. */
   readonly nowMs: number;
 }
@@ -112,15 +136,76 @@ export interface HostScopeSelection {
   readonly setScopedHostId: (hostId: string | null) => void;
 }
 
-/**
- * The one host-scope hook for the Host group in Settings. Every panel under the
- * sidebar's picker reads this and nothing else, which is what makes the
- * switcher authoritative rather than one more picker among five.
- */
+/** The picked environment's host selection, shared by the rail and host panels. */
 export function useHostScope(): HostScope {
-  const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
-  const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
-  return useHostScopeFor({ scopedHostId, setScopedHostId });
+  const options = useHostOptions();
+  const pick = useEnvironmentPick();
+  const pendingHostId = useSettingsHostScopeStore((s) => s.pendingHostId);
+  const selection = useSettingsHostScopeStore(
+    (s) => s.hostByEnvironment[environmentPickValue(pick)] ?? null,
+  );
+  const selectHost = useSettingsHostScopeStore((s) => s.selectHost);
+  const entry = useSettingsHostEntry();
+  const configurationPicked = pick.kind === "personal" || pick.kind === "team";
+  const membership = useHostsRunningConfiguration(
+    configurationPicked ? pick : { kind: "personal" },
+    configurationPicked,
+  );
+  const membershipState = settingsMembershipState(pick, membership.state);
+  const ready = membershipState === "ready";
+  const hosts = useMemo(() => {
+    if (!ready || pendingHostId !== null) return [];
+    const memberIds = new Set(
+      pick.kind === "local"
+        ? [pick.hostId]
+        : membership.hosts.map((host) => host.hostId),
+    );
+    return options.hosts.filter((host) => memberIds.has(host.hostId));
+  }, [ready, pendingHostId, pick, membership.hosts, options.hosts]);
+  const setScopedHostId = useCallback(
+    (hostId: string | null) => {
+      if (hostId === null) {
+        selectHost(pick, null);
+        return;
+      }
+      const host = findHostOption(hosts, hostId);
+      if (host !== null) selectHost(pick, { hostId, name: host.name });
+    },
+    [pick, selectHost, hosts],
+  );
+  const retryLists = (): void => {
+    options.retryLists();
+    membership.retry();
+    entry.retry();
+  };
+  const listsFailed =
+    options.listsFailed || membershipState === "failed" || entry.failed;
+  const scope = useHostScopeWithOptions(
+    {
+      scopedHostId: (selection ?? hosts.at(0))?.hostId ?? null,
+      setScopedHostId,
+    },
+    {
+      ...options,
+      hosts,
+      listsResolved: options.listsResolved && ready && pendingHostId === null,
+      listsFailed,
+      isLoading:
+        options.isLoading ||
+        membershipState === "loading" ||
+        (pendingHostId !== null && !entry.failed),
+      retryLists,
+    },
+  );
+  return {
+    ...scope,
+    retryEntryStatus: entry.retryStatus,
+    activeHost: findHostOption(options.hosts, options.activeHostId),
+    vanishedSelection:
+      scope.vanishedHostId !== null && selection !== null
+        ? { name: selection.name, forget: () => selectHost(pick, null) }
+        : null,
+  };
 }
 
 /**
@@ -135,7 +220,7 @@ export function useHostScope(): HostScope {
  * A team, and Personal on a window whose host does not run it, read the
  * cloud instead (`PersonalPageFrame`).
  */
-const WINDOW_HOST_SELECTION: HostScopeSelection = {
+export const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
   setScopedHostId: () => undefined,
 };
@@ -172,12 +257,15 @@ export function useAccountHostScope(): HostScope {
  * wrongly.
  */
 export function useHostScopeFor(selection: HostScopeSelection): HostScope {
+  return useHostScopeWithOptions(selection, useHostOptions());
+}
+
+function useHostScopeWithOptions(
+  selection: HostScopeSelection,
+  options: HostOptions,
+): HostScope {
   const ambientClient = useHostClient();
   const runnerHost = useRunnerHost();
-  // The list itself is shared with every other picker in the app — see
-  // `useHostOptions`. What is left here is the SELECTION on top of it, which is
-  // the only part Settings and the usage popover own.
-  const options = useHostOptions();
   const { hosts, activeHostId, listsResolved, listsFailed, nowMs } = options;
 
   const { scopedHostId, setScopedHostId } = selection;
@@ -235,8 +323,8 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
   // hope — so only the `following` branch may swap in the ambient client.
   // Any other branch handing back `ambientClient` would be the exact
   // substitution this status enum exists to make impossible.
-  const resolvedClient =
-    status === "following" ? ambientClient : overrideClient;
+  const scopedClient = status === "following" ? ambientClient : overrideClient;
+  const resolvedClient = isHostScopeUsable(status) ? scopedClient : null;
 
   // The local-maintenance fallback wrap, HERE and nowhere else: this is the
   // one point where every scope consumer's client is decided, so decorating
@@ -274,6 +362,7 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
       host?.name ??
       (resolved.vanishedHostId === null ? "No host" : UNNAMED_HOST_LABEL),
     vanishedHostId: resolved.vanishedHostId,
+    vanishedSelection: null,
     returnToActive: () => setScopedHostId(null),
     activeHostId,
     activeHost: findHostOption(hosts, activeHostId),
@@ -287,6 +376,7 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     isLoading: options.isLoading,
     listsFailed,
     retryLists: options.retryLists,
+    retryEntryStatus: null,
     nowMs,
   };
 }
@@ -327,18 +417,34 @@ function subscribePendingActivation(listener: () => void): () => void {
  * can hold its controls while one is running.
  */
 export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
-  readonly makeActive: (hostId: string) => void;
+  readonly makeActive: (hostId: string) => Promise<boolean>;
   readonly isActivating: boolean;
   readonly activatingHostId: string | null;
 } {
   const authority = useRunnerHost().selectionAuthority;
+  const hostClient = useHostClient();
+  const { mutateAsync: probeLocalHost } = useHostMutation<
+    HostRpcRegistry,
+    "host.identity.get",
+    unknown,
+    HostScopeOption
+  >({
+    client: (option) =>
+      option.entry === null ? null : hostClient.createRequester(option.entry),
+    method: "host.identity.get",
+    mapVariables: () => ({}),
+    options: {
+      mutationKey: hostMaintenanceMutationKeys.identityGet(),
+      retry: false,
+    },
+  });
   const activatingHostId = useSyncExternalStore(
     subscribePendingActivation,
     () => pendingActivations.get(authority) ?? null,
   );
   const makeActive = useCallback(
     (hostId: string) => {
-      if (pendingActivations.has(authority)) return;
+      if (pendingActivations.has(authority)) return Promise.resolve(false);
       const option = findHostOption(hosts, hostId);
       // Defence for every caller, not only the Overview that hides the
       // button: a management-only row is never made the window's host.
@@ -346,22 +452,88 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
         appLogger.debug("[host-scope] activate refused: management-only host", {
           hostId,
         });
-        return;
+        return Promise.resolve(false);
       }
       pendingActivations.set(authority, hostId);
       notifyPendingActivation();
-      void requestActivate(authority, hostId, option).finally(() => {
+      const activation =
+        option?.connectable && option.entry?.kind === "local"
+          ? requestLocalHostActivation(
+              authority,
+              hostClient,
+              option,
+              probeLocalHost,
+            )
+          : requestActivate(authority, hostId, option);
+      return activation.finally(() => {
         pendingActivations.delete(authority);
         notifyPendingActivation();
       });
     },
-    [authority, hosts],
+    [authority, hostClient, hosts, probeLocalHost],
   );
   return {
     makeActive,
     isActivating: activatingHostId !== null,
     activatingHostId,
   };
+}
+
+/**
+ * An explicit local pick must ask the local door even when its old lease is
+ * dead. Persisting preference alone can keep a ready remote host serving, so
+ * the effective-host streams never try this computer and never explain its
+ * admission refusal. This one read uses the existing request authority and
+ * grant adapter; automatic selection and background work do not call it.
+ */
+async function requestLocalHostActivation(
+  authority: SelectionAuthorityClient,
+  client: HostClient<HostRpcRegistry>,
+  option: HostScopeOption,
+  probe: (option: HostScopeOption) => Promise<HostIdentityGetResponse>,
+): Promise<boolean> {
+  const context = client.getRequestContext();
+  if (context === null || option.entry === null) return false;
+  try {
+    await probe(option);
+  } catch {
+    // A different account must not inherit this account's refusal or pick.
+    if (context.abortSignal.aborted || client.getRequestContext() !== context)
+      return false;
+    showLocalHostActivationFailure(option.hostId, option.name, () => {
+      if (
+        !context.abortSignal.aborted &&
+        client.getRequestContext() === context
+      )
+        useSignOutConfirmStore.getState().setOpen(true);
+    });
+    return false;
+  }
+  if (context.abortSignal.aborted || client.getRequestContext() !== context)
+    return false;
+  return requestActivate(authority, option.hostId, option);
+}
+
+function showLocalHostActivationFailure(
+  hostId: string,
+  hostName: string,
+  switchAccount: () => void,
+): void {
+  const doorState = hostDoorStateFor(hostId)?.kind;
+  if (doorState === "not-a-member") {
+    toast.error(TEAM_MEMBERSHIP_REQUIRED_MESSAGE, {
+      action: {
+        label: "Switch account",
+        onClick: switchAccount,
+      },
+    });
+    return;
+  }
+  if (doorState === "token-unavailable" || doorState === "token-expired") {
+    toast.error(DOOR_STATE_TITLES[doorState]);
+    return;
+  }
+  toast.error(activateRefusalMessage("unrecognized", hostName));
 }
 
 /**
@@ -376,8 +548,9 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
  * `ok: true` resolves only after the authority validated, persisted, and
  * re-derived, so the analytics event below is fired against a preference that
  * actually landed - and it is the ONLY `HostSelected` in the app now. A
- * refusal is a real answer about a host, not a transport failure, so each one
- * says what the user can do about it instead of a generic error.
+ * recognized refusal says what the user can do about it. `unrecognized`
+ * covers a failed call or an unreadable answer: the choice may already have
+ * persisted, so its words make no claim about which machine is active.
  *
  * Deliberately not refused by the authority, and therefore never toasted
  * here: a registered host that is currently OFFLINE. Preferred is intent, not
@@ -387,17 +560,21 @@ export async function requestActivate(
   authority: SelectionAuthorityClient,
   hostId: string,
   option: HostScopeOption | null,
-): Promise<void> {
+): Promise<boolean> {
   let result: ActivateResult;
   try {
     result = await authority.activate(hostId);
   } catch (error: unknown) {
+    // Like an unreadable answer, a failed call leaves the outcome unknown.
+    // `unrecognized` makes no claim about which machine is active.
     appLogger.warn("[host-scope] activate request failed", {
       hostId,
       error: String(error),
     });
-    toast.error("Couldn't activate this host. Try again.");
-    return;
+    toast.error(
+      activateRefusalMessage("unrecognized", option?.name ?? "that machine"),
+    );
+    return false;
   }
   if (result.ok) {
     // Preferred is intent, not liveness: a sleeping sandbox is now preferred,
@@ -407,11 +584,12 @@ export async function requestActivate(
       source: "direct_ui",
       host_kind: option?.isLocalMachine === true ? "local" : "remote",
     });
-    return;
+    return true;
   }
   toast.error(
-    activateRefusalMessage(result.reason, option?.name ?? "That host"),
+    activateRefusalMessage(result.reason, option?.name ?? "that machine"),
   );
+  return false;
 }
 
 /**
@@ -419,33 +597,29 @@ export async function requestActivate(
  * rather than a hand-written copy of it.
  *
  * A `Record` keyed on `ActivateRefusalReason` is the census: the day the
- * contract grows a sixth arm, this object fails to compile with the missing
+ * contract grows another arm, this object fails to compile with the missing
  * key named, instead of silently routing a new refusal into the generic
  * fallback and telling the user nothing about a reason the engine took the
  * trouble to distinguish. That is exactly how `persist-failed` arrived.
- *
- * Two families, and the split matters for the copy: `unknown-host` /
- * `incompatible` are statements ABOUT THE HOST and name it (`team-host` is
- * one too, said once for every team host); `not-attached` /
- * `persist-failed` are failures of this window's own machinery, where naming
- * the host would misattribute the fault to a machine that is fine.
  */
 const ACTIVATE_REFUSAL_COPY: Record<
   ActivateRefusalReason,
   (label: string) => string
 > = {
-  "unknown-host": (label) =>
-    `${label} is no longer registered to this account.`,
-  incompatible: (label) =>
-    `${label} needs a host update before it can be activated.`,
+  "unknown-host": () =>
+    "It's gone from your account. The previous machine stays active.",
+  incompatible: () => "Update the app to use this machine.",
   "team-host": () => TEAM_HOST_ACTIVATE_REASON,
-  "not-attached": () =>
-    "This window lost its connection to the selection service - reload and try again.",
+  "not-attached": () => "Try again in a moment.",
   // Nothing moved: the preference was refused BEFORE any state changed and no
   // event fired, so the same Activate is safe to retry verbatim - which is why
   // this says "try again" and not "it may or may not have applied".
-  "persist-failed": () => "Couldn't save your choice - try again.",
-  unrecognized: (label) => `Couldn't activate ${label}.`,
+  "persist-failed": () =>
+    "The choice didn't stick — the previous machine stays active. Try again.",
+  // A failed call or an unreadable answer leaves the outcome unknown, so
+  // this makes no claim about which machine is active.
+  unrecognized: (label) =>
+    `Couldn't confirm ${label} as the app's machine. Check which machine is active, then try again.`,
 };
 
 function activateRefusalMessage(
@@ -453,4 +627,14 @@ function activateRefusalMessage(
   label: string,
 ): string {
   return ACTIVATE_REFUSAL_COPY[reason](label);
+}
+
+/** A Local pick needs no membership; an unresolved pick cannot claim its result. */
+function settingsMembershipState(
+  pick: EnvironmentPick,
+  state: "ready" | "loading" | "failed",
+): "ready" | "loading" | "failed" {
+  if (pick.kind === "local") return "ready";
+  if (pick.kind === "unresolved") return "loading";
+  return state;
 }

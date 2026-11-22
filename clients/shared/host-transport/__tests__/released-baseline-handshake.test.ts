@@ -725,6 +725,7 @@ describe.skipIf(baselines.length === 0)(
           endpoint: () => mockLocalHostEntry,
           hostId: mockLocalHostEntry.hostId,
           bearer: () => ctx.credentials,
+          userId: ctx.identity.userId,
           auth: null,
           clock: null,
           hostCredentialMint: null,

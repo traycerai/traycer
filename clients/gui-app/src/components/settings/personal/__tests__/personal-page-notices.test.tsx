@@ -11,22 +11,31 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
-// The grant minter a write carries is read from the host binding: the real
-// runtime's binding, with only its `auth` swapped for a minter. The client is a
-// REAL `HostClient` over an in-memory messenger (`buildAccessHost`): only the
-// host on the far side is faked.
-const hostMock = vi.hoisted(
-  (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
-);
+// The page's reads of Personal's id, notices and review sheet are the app's own
+// calls to authn through the real runtime's binding, with only its `auth`
+// swapped for the fake sign-in. The client is a real `HostClient` over an
+// in-memory messenger (`buildAccessHost`): only the host on the far side is faked.
+const hostMock = vi.hoisted((): { auth: AuthService | null } => ({
+  auth: null,
+}));
+const toastErrorMock = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: toastErrorMock,
+    info: vi.fn(),
+    message: vi.fn(),
+  },
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
     useHostBinding: () => {
       const real = actual.useHostBinding();
-      return real === null || hostMock.binding === null
+      return real === null || hostMock.auth === null
         ? real
-        : { ...real, auth: hostMock.binding.auth };
+        : { ...real, auth: hostMock.auth };
     },
   };
 });
@@ -39,7 +48,6 @@ vi.mock("@/lib/settings-navigation", () => ({
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -58,9 +66,21 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
+  EnvironmentReviewEntry,
   EnvironmentReviewEntryV12,
   EnvironmentStatusResponse,
 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentTransportAnswer,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import type { AuthService } from "@/lib/auth/auth-service";
+import {
+  createFakeEnvironmentCloudServices,
+  createFakeEnvironmentCloudTransport,
+  jsonEnvironmentAnswer,
+} from "../../../../../__tests__/create-fake-runner-host";
 import {
   ACCESS_HOST_ID,
   ACCESS_HOST_NAME,
@@ -75,6 +95,7 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { provider } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -95,8 +116,10 @@ afterEach(() => {
   useRetrospectiveSheetStore.setState({ target: null, open: false });
   resetNegotiatedManifests();
   scopeOverrides.current = {};
-  hostMock.binding = null;
+  hostMock.auth = null;
   navigateToSettingsSectionMock.mockReset();
+  toastErrorMock.mockReset();
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
 function FakePanel(): ReactNode {
@@ -113,8 +136,11 @@ interface FrameOptions {
   /** The host id the window addresses; the notice's host id is compared to it. */
   readonly windowHostId: string;
   readonly runnerHost: IRunnerHost | null;
-  /** `true` stands up a grant minter, so a write's grant is observable. */
-  readonly mintsGrants: boolean;
+  readonly onAuthnRequest:
+    | ((
+        request: EnvironmentTransportRequest,
+      ) => EnvironmentTransportAnswer | null)
+    | null;
 }
 
 const SHELL_PAGE: FrameOptions = {
@@ -122,13 +148,109 @@ const SHELL_PAGE: FrameOptions = {
   methods: ACCESS_METHODS,
   windowHostId: ACCESS_HOST_ID,
   runnerHost: null,
-  mintsGrants: true,
+  onAuthnRequest: null,
 };
+
+interface AuthnLog {
+  readonly queryClient: QueryClient;
+  readonly requests: EnvironmentTransportRequest[];
+  notices: number;
+  review: number;
+}
+
+function authnLog(queryClient: QueryClient): AuthnLog {
+  return { queryClient, requests: [], notices: 0, review: 0 };
+}
+
+// An Undo is recorded among the host's writes so "keep here, then undo everywhere" is ordered.
+function hostBackedAuthnAnswer(
+  host: AccessHost,
+  log: AuthnLog,
+  request: EnvironmentTransportRequest,
+): EnvironmentTransportAnswer | null {
+  const path = new URL(request.url).pathname;
+  if (request.method === "GET" && path.endsWith("/notices")) {
+    log.notices += 1;
+    return jsonEnvironmentAnswer({
+      notices: host.state.notices.map((notice, index) => ({
+        kind: notice.kind,
+        key: notice.key,
+        os: notice.os === "any" ? null : notice.os,
+        revision: index + 1,
+        writtenAt: notice.writtenAt,
+        source: notice.source,
+        hostId: notice.from.kind === "host" ? notice.from.hostId : null,
+        hostName: notice.from.kind === "host" ? notice.from.hostLabel : null,
+        displaced: "previous",
+      })),
+    });
+  }
+  if (request.method === "GET" && path.endsWith("/review")) {
+    log.review += 1;
+    return jsonEnvironmentAnswer({
+      review: {
+        hosts: [],
+        needsYou: host.state.review.map((entry, index) => ({
+          type: "held",
+          heldId: entry.entryId,
+          revision: index + 1,
+          kind: entry.kind,
+          key: entry.key,
+          os: entry.os === "any" ? null : entry.os,
+          hostId: entry.hostId ?? ACCESS_HOST_ID,
+          sharingGeneration: null,
+          hostName: ACCESS_HOST_NAME,
+          heldAt: entry.heldAt,
+          live: null,
+          op: "put",
+          value: heldValueOf(entry),
+        })),
+      },
+    });
+  }
+  if (request.method === "POST" && path.endsWith("/undo")) {
+    host.requests.push({ method: "environment.undo", params: request.body });
+    const answer = host.state.undoAnswer;
+    if (answer.outcome === "needs_grant") {
+      return {
+        status: 403,
+        text: JSON.stringify({ code: "executable_write_needs_grant" }),
+      };
+    }
+    if (answer.outcome === "stale") {
+      return {
+        status: 409,
+        text: JSON.stringify({ code: "superseded", current: null }),
+      };
+    }
+    return jsonEnvironmentAnswer({
+      item: {
+        kind: "variable",
+        key: "LOG_LEVEL",
+        os: null,
+        value: { value: "debug" },
+        revision: 2,
+        updatedAt: 2,
+        writtenBy: { source: "dashboard", hostId: null, hostName: null },
+      },
+    });
+  }
+  return null;
+}
+
+function heldValueOf(
+  entry: EnvironmentReviewEntry | EnvironmentReviewEntryV12,
+): unknown {
+  const command = "command" in entry ? entry.command : null;
+  if (command === null) return {};
+  const [path, ...args] = command.split(" ");
+  return entry.kind === "shell" ? { path, args } : { text: command };
+}
 
 /**
  * The page under the host runtime Settings gives it: the real provider, and
  * the scope's client re-provided the way a host-scoped panel does, so the
- * page's own chip reads the same host the page does.
+ * page reads the same host the panel does.
  */
 function ScopedHostRuntime(props: { readonly children: ReactNode }): ReactNode {
   return (
@@ -174,21 +296,36 @@ function ScopedBinding(props: { readonly children: ReactNode }): ReactNode {
   );
 }
 
-function renderPage(host: AccessHost, options: FrameOptions): void {
+function renderPage(host: AccessHost, options: FrameOptions): AuthnLog {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const log = authnLog(queryClient);
   recordNegotiatedHostMethods(options.windowHostId, options.methods);
-  hostMock.binding = options.mintsGrants
-    ? {
-        auth: {
-          mintExecutableWriteGrant: () =>
-            Promise.resolve({
-              kind: "ok" as const,
-              grant: "grant-1",
-              expiresInSeconds: 600,
-            }),
-          getCredentialGeneration: () => 0,
-        },
-      }
-    : null;
+  const { auth } = createFakeEnvironmentCloudServices({
+    listEnvironments: () =>
+      Promise.resolve({
+        kind: "ok" as const,
+        list: { environments: PERSONAL_ENVIRONMENTS },
+      }),
+    transport: createFakeEnvironmentCloudTransport({
+      environments: () => PERSONAL_ENVIRONMENTS,
+      onRequest: (request) => {
+        log.requests.push(request);
+        return (
+          options.onAuthnRequest?.(request) ??
+          hostBackedAuthnAnswer(host, log, request)
+        );
+      },
+    }),
+    runnerHostOverrides: { authnBaseUrl: "https://authn.example.test" },
+  });
+  hostMock.auth = auth;
+  // The reads of Personal's id and its notices wait for a verified viewer.
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-me", username: "user-me" },
+  });
   // These cases are about a host's own pages, which a Local row reads.
   useSettingsEnvironmentPickStore.setState({
     pick: {
@@ -206,9 +343,6 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
     status: "ready",
     client: host.client,
   };
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
   const page: ReactNode = (
     <PersonalPageFrame section={options.section}>
       <FakePanel />
@@ -225,6 +359,33 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
       </ScopedHostRuntime>
     </QueryClientProvider>,
   );
+  return log;
+}
+
+const PERSONAL_ENVIRONMENTS: EnvironmentDescriptorV11[] = [
+  {
+    environmentId: "environment-personal",
+    ownerKind: "user" as const,
+    ownerId: "user-me",
+    roomId: "room-personal",
+    label: "Personal",
+    effectiveRole: "owner" as const,
+    kind: "personal" as const,
+    hostCount: 1,
+    providerHandle: null,
+  },
+];
+
+function renderUndoAuthnPage(code: string): EnvironmentTransportRequest[] {
+  const host = hostWith({}, { notices: [noticeFixture({})] });
+  return renderPage(host, {
+    ...SHELL_PAGE,
+    onAuthnRequest: (request) =>
+      request.method === "POST" &&
+      new URL(request.url).pathname.endsWith("/undo")
+        ? { status: 403, text: JSON.stringify({ code }) }
+        : null,
+  }).requests;
 }
 
 /** A held entry as an `environment.review@1.2` host sends it. */
@@ -252,12 +413,10 @@ function hostWith(
   });
 }
 
-/** Lets everything a NEGATIVE assertion depends on happen first. */
-async function settle(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
+// So a negative assertion runs after the reads it depends on, not a guessed delay.
+async function settled(log: AuthnLog): Promise<void> {
+  await waitFor(() => {
+    expect(log.queryClient.isFetching()).toBe(0);
   });
 }
 
@@ -291,9 +450,7 @@ describe("a Personal page's convergence notices", () => {
     const rows = await screen.findAllByTestId("personal-notice");
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("LOG_LEVEL from dev-box now applies everywhere."),
-      expect.stringContaining(
-        "DATABASE_URL from the dashboard now applies everywhere.",
-      ),
+      expect.stringContaining("DATABASE_URL now applies everywhere."),
     ]);
     // Under the page's heading, in the shell's header with the status line.
     const header = rows[0].closest("header");
@@ -350,34 +507,59 @@ describe("a Personal page's convergence notices", () => {
       {},
       { notices: [noticeFixture({ kind: "mcp_server", key: "linear" })] },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     await waitFor(() => {
-      expect(host.reads.notices).toBeGreaterThan(0);
+      expect(log.notices).toBeGreaterThan(0);
     });
-    await settle();
+    await settled(log);
     expect(screen.queryByTestId("personal-page-notices")).toBeNull();
     expect(screen.queryByTestId("personal-notice")).toBeNull();
-  });
-
-  it("reads no notices on a host that does not have environment.notices", async () => {
-    const host = hostWith({}, { notices: [noticeFixture({})] });
-    renderPage(host, {
-      ...SHELL_PAGE,
-      methods: ACCESS_METHODS.filter(
-        (method) => method !== "environment.notices",
-      ),
-    });
-
-    await screen.findByRole("button", { name: "Edit the page" });
-    await settle();
-    expect(screen.queryByTestId("personal-notice")).toBeNull();
-    expect(host.reads.notices).toBe(0);
   });
 });
 
 describe("Undo on a notice", () => {
-  it("sends environment.undo with the notice id and the grant", async () => {
+  it("shows the permission toast for authn's non-grant 403", async () => {
+    const requests = renderUndoAuthnPage("forbidden");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalled();
+    });
+    expect(toastErrorMock.mock.calls[0]?.[0]).toBe(
+      "This change needs permission.",
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "POST",
+        url: "https://authn.example.test/api/v3/environments/environment-personal/changes/1/undo",
+        body: { kind: "variable", key: "LOG_LEVEL", os: null },
+      }),
+    );
+  });
+
+  it("keeps the row's confirmation line for authn's grant 403", async () => {
+    const requests = renderUndoAuthnPage("executable_write_needs_grant");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    expect(
+      (await screen.findByTestId("personal-notice-refusal")).textContent,
+    ).toBe(
+      "Couldn't undo: it needs your confirmation. Sign in again and retry.",
+    );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "POST",
+        url: "https://authn.example.test/api/v3/environments/environment-personal/changes/1/undo",
+        body: { kind: "variable", key: "LOG_LEVEL", os: null },
+      }),
+    );
+  });
+
+  it("sends the Undo to authn with the change's kind, key and os", async () => {
     const host = hostWith({}, { notices: [noticeFixture({})] });
     renderPage(host, SHELL_PAGE);
 
@@ -385,25 +567,13 @@ describe("Undo on a notice", () => {
 
     await waitFor(() => {
       expect(host.paramsOf("environment.undo")).toEqual([
-        { noticeId: "notice-1", executableWriteGrant: "grant-1" },
+        { kind: "variable", key: "LOG_LEVEL", os: null },
       ]);
     });
     expect(screen.queryByTestId("personal-notice-refusal")).toBeNull();
   });
 
-  it("has no Undo once the notice cannot be undone, but still says the change", async () => {
-    const host = hostWith(
-      {},
-      { notices: [noticeFixture({ undoAvailable: false })] },
-    );
-    renderPage(host, SHELL_PAGE);
-
-    const row = await screen.findByTestId("personal-notice");
-    expect(row.textContent).toContain("LOG_LEVEL from dev-box");
-    expect(within(row).queryByRole("button")).toBeNull();
-  });
-
-  it("says the value was changed again since when the host answers stale", async () => {
+  it("says the value was changed again since when authn answers superseded", async () => {
     const host = hostWith(
       {},
       {
@@ -424,24 +594,7 @@ describe("Undo on a notice", () => {
     ).toBe("Couldn't undo: LOG_LEVEL was changed again since.");
   });
 
-  it("says the undo waits for a reconnect when the host queued it", async () => {
-    const host = hostWith(
-      {},
-      {
-        notices: [noticeFixture({})],
-        undoAnswer: { outcome: "pending", uploadId: "upload-1" },
-      },
-    );
-    renderPage(host, SHELL_PAGE);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
-
-    expect(
-      (await screen.findByTestId("personal-notice-refusal")).textContent,
-    ).toBe("Undo applies when this host reconnects.");
-  });
-
-  it("asks the person to sign in again when the host needs a confirmation", async () => {
+  it("asks the person to sign in again when authn asks for a confirmation", async () => {
     const host = hostWith(
       {},
       {
@@ -488,12 +641,11 @@ describe("Keep this host's value", () => {
         params: {
           target: { kind: "variable", key: "LOG_LEVEL" },
           value: "debug",
-          executableWriteGrant: "grant-1",
         },
       },
       {
         method: "environment.undo",
-        params: { noticeId: "notice-1", executableWriteGrant: "grant-1" },
+        params: { kind: "variable", key: "LOG_LEVEL", os: null },
       },
     ]);
     expect(screen.queryByTestId("personal-notice-refusal")).toBeNull();
@@ -560,12 +712,12 @@ describe("Keep this host's value", () => {
         envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
       },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const row = await screen.findByTestId("personal-notice");
     expect(row.textContent).toContain("LOG_LEVEL from laptop");
     expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
-    await settle();
+    await settled(log);
     expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
   });
 
@@ -577,10 +729,10 @@ describe("Keep this host's value", () => {
         envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
       },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const row = await screen.findByTestId("personal-notice");
-    await settle();
+    await settled(log);
     expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
     expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
   });
@@ -593,27 +745,27 @@ describe("Keep this host's value", () => {
         envEntries: [{ key: "OTHER", value: "x" }],
       },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const row = await screen.findByTestId("personal-notice");
-    await settle();
+    await settled(log);
     expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
     expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
   });
 
-  it("is not offered when the undo is gone", async () => {
+  it("draws no row and no Keep for a change authn's list does not carry", async () => {
     const host = hostWith(
       {},
-      {
-        notices: [noticeFixture({ from: FROM_DEV_BOX, undoAvailable: false })],
-        envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
-      },
+      { notices: [], envEntries: [{ key: "LOG_LEVEL", value: "debug" }] },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
-    const row = await screen.findByTestId("personal-notice");
-    await settle();
-    expect(within(row).queryByRole("button")).toBeNull();
+    await waitFor(() => {
+      expect(log.notices).toBeGreaterThan(0);
+    });
+    await settled(log);
+    expect(screen.queryByTestId("personal-notice")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Keep / })).toBeNull();
   });
 
   it("keeps a provider's variable as that provider's override", async () => {
@@ -657,39 +809,23 @@ describe("Keep this host's value", () => {
           key: "ANTHROPIC_BASE_URL",
         },
         value: "http://proxy",
-        executableWriteGrant: "grant-1",
       },
     ]);
   });
 });
 
 describe("a Personal page's 'needs you' rows", () => {
-  it("says why each value waits, and sends a held key-shaped value to its retrospective sheet, a held command to the host's, and the rest to Secrets", async () => {
+  it("says why a held command waits, and sends it to the host's retrospective sheet", async () => {
     const host = hostWith(
       {},
       {
         review: [
-          reviewEntryFixture({
-            entryId: "entry-1",
-            key: "DATABASE_URL",
-            reason: "credential_like_value",
-          }),
           heldCommandEntry({
             entryId: "entry-2",
             kind: "shell",
             key: "shell",
             reason: "executable_entry",
             command: "zsh -l",
-          }),
-          reviewEntryFixture({
-            entryId: "entry-3",
-            key: "LOG_LEVEL",
-            reason: "needs_grant",
-          }),
-          reviewEntryFixture({
-            entryId: "entry-4",
-            key: "FUTURE_THING",
-            reason: "a_reason_from_a_newer_host",
           }),
         ],
       },
@@ -698,40 +834,21 @@ describe("a Personal page's 'needs you' rows", () => {
 
     const rows = await screen.findAllByTestId("personal-review-row");
     expect(rows.map((row) => row.textContent)).toEqual([
-      "DATABASE_URL looks like a key and is on hold until you choose · Review",
       expect.stringContaining(
         "shell (shell) is what terminals and agents start in: zsh -l and is on hold until you choose",
       ),
-      expect.stringContaining(
-        "LOG_LEVEL is waiting for you: was changed without your confirmation.",
-      ),
-      expect.stringContaining("FUTURE_THING is waiting for you."),
     ]);
-    for (const row of rows) {
-      expect(within(row).getByRole("button", { name: "Review" })).toBeTruthy();
-    }
-
-    // Any other reason's Review opens Secrets.
-    fireEvent.click(within(rows[2]).getByRole("button", { name: "Review" }));
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
-    expect(useRetrospectiveSheetStore.getState().open).toBe(false);
+    expect(
+      within(rows[0]).getByRole("button", { name: "Review" }),
+    ).toBeTruthy();
 
     // A held command's opens the host's retrospective sheet.
-    fireEvent.click(within(rows[1]).getByRole("button", { name: "Review" }));
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
+    expect(navigateToSettingsSectionMock).not.toHaveBeenCalled();
     expect(useRetrospectiveSheetStore.getState()).toMatchObject({
       open: true,
       target: { hostId: ACCESS_HOST_ID, hostName: ACCESS_HOST_NAME },
     });
-
-    // The held value's opens its own retrospective sheet.
-    fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
-    const sheet = await screen.findByTestId("retrospective-sheet");
-    expect(
-      within(sheet).getByTestId("retrospective-held-entry-1"),
-    ).toBeTruthy();
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
   });
 
   it("words a held variable from a host that sends none by what it changes", async () => {
@@ -789,7 +906,7 @@ describe("a team's host on a Personal page", () => {
         review: [reviewEntryFixture({})],
       },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const line = await screen.findByTestId("team-owned-line");
     expect(
@@ -800,22 +917,22 @@ describe("a team's host on a Personal page", () => {
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).not.toBeNull();
 
-    await settle();
+    await settled(log);
     expect(screen.queryByTestId("personal-notice")).toBeNull();
     expect(screen.queryByTestId("personal-review-row")).toBeNull();
-    expect(host.reads.notices).toBe(0);
-    expect(host.reads.review).toBe(0);
+    expect(log.notices).toBe(0);
+    expect(log.review).toBe(0);
   });
 
   it("does not put the person's own page in an inert region", async () => {
     const host = hostWith({ principal: { kind: "personal" } }, {});
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const edit = await screen.findByRole("button", { name: "Edit the page" });
     await waitFor(() => {
       expect(host.reads.status).toBeGreaterThan(0);
     });
-    await settle();
+    await settled(log);
     expect(edit.closest("[inert]")).toBeNull();
     expect(screen.queryByTestId("team-owned-line")).toBeNull();
   });

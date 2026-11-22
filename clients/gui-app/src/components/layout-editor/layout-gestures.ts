@@ -1,8 +1,8 @@
 import type { LayoutArrangement } from "@/lib/layout/layout-arrangement";
 import type { RailVisibility } from "@/lib/layout/layout-values";
-import { isAutoRailRegionId, RAIL_REGION_IDS } from "@/lib/layout/rail";
+import { isAutoRailRegionId } from "@/lib/layout/rail";
 import { writeArrangement } from "@/lib/layout/arrangement-gestures";
-import type { RailRegionId, RegionId } from "@/lib/layout/region-id";
+import type { RegionId } from "@/lib/layout/region-id";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
@@ -18,10 +18,6 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  * `writeArrangement` (`lib/layout/arrangement-gestures.ts`) exactly once -
  * import it from there directly rather than through this module.
  */
-
-export function isRailRegionId(id: RegionId): id is RailRegionId {
-  return RAIL_REGION_IDS.some((candidate) => candidate === id);
-}
 
 /**
  * What a region's `shown` becomes when it is turned ON.

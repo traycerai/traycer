@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useId,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -16,7 +15,6 @@ import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import type { SplitSide } from "@/stores/tabs/layout";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -467,19 +465,15 @@ function SideFillableMember(
 }
 
 /**
- * The empty half's own menu, scoped to its partner. The title-bar drag
- * regions stand down while it is open, so its items fire over the
- * strip's drag spacer.
+ * The empty half's own menu, scoped to its partner.
  */
 function FillableSlotMenu(props: {
   readonly partner: HeaderTab;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   readonly children: ReactNode;
 }): ReactNode {
-  const [open, setOpen] = useState(false);
-  useTitleBarDragSuppression(`split-slot-menu:${useId()}`, open);
   return (
-    <ContextMenu onOpenChange={setOpen}>
+    <ContextMenu>
       <ContextMenuTrigger asChild>
         <div className="contents">{props.children}</div>
       </ContextMenuTrigger>

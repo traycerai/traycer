@@ -16,6 +16,7 @@ import type {
   BotAnnouncement,
   BotQuestion,
   BotSurfaceReference,
+  BotFeedbackDraftProjection,
 } from "@traycer/protocol/persistence/epic/messages";
 import type { BotSendReceipt } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
@@ -83,7 +84,9 @@ import {
   buildAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
+import { botMemberText } from "@/lib/bots/bot-member-text";
 import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
+import { groupArtifactFolderChanges } from "@/lib/chat/artifact-folder-bundles";
 import {
   isTransientLiveAssistantMessageId,
   transientLiveAssistantMessageId,
@@ -95,6 +98,7 @@ import type {
   ChatMessage as ChatMessageModel,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
+  ArtifactChangeEntry,
   ArtifactChangeRow,
   ChatMessageSteerBadge,
   FileChangeSegment,
@@ -2156,11 +2160,11 @@ function buildNotificationAnchorMessages(
 /**
  * Project an auto-mode refusal that nobody was there to be asked about.
  *
- * Under the attendance rule a chat running for another agent is refused rather
- * than parked: the model reads a tool error and the human reads nothing, so a
- * person opening that chat tomorrow cannot tell "refused without asking
- * anyone" from "a judge refused". This row is the only reader that arm will
- * ever have.
+ * Hosts used to refuse, rather than park, a judge-escalated approval in a chat
+ * running for another agent: the model read a tool error and the human read
+ * nothing, so a person opening that chat later could not tell "refused without
+ * asking anyone" from "a judge refused". This row is the only reader those
+ * journaled denials have. Hosts now park the approval and write none.
  *
  * Filtered and identified THROUGH the projection's own helper, like the fork
  * link and the provenance marker above it - the host numbers this row's
@@ -2393,6 +2397,7 @@ interface AssistantTurnAccumulator {
   question: BotQuestion | null;
   /** What in a task a bot's post points at, with its resolution; `null` on every other turn. */
   surface: BotSurfaceReference | null;
+  feedbackDraft: BotFeedbackDraftProjection | null;
   /** The member's post a bot's direct reply answers; `null` on every other turn. */
   repliesTo: string | null;
   imageResolutionsByBlockId: Map<
@@ -2917,6 +2922,7 @@ function renderPersistedAssistantMessageTurn(
     stoppedSignature(stopped),
     questionSignature(acc.question),
     surfaceSignature(acc.surface),
+    JSON.stringify(acc.feedbackDraft),
   ].join(":");
   const cached = turnCache.get(turnKey);
   if (cached !== undefined && cached.cacheKey === cacheKey) {
@@ -2973,6 +2979,8 @@ function mergeBotRowFields(
   existing.options = existing.options ?? message.options ?? null;
   existing.question = existing.question ?? message.question ?? null;
   existing.surface = existing.surface ?? message.surface ?? null;
+  existing.feedbackDraft =
+    existing.feedbackDraft ?? message.feedbackDraft ?? null;
   existing.repliesTo = existing.repliesTo ?? message.repliesTo ?? null;
 }
 
@@ -3049,6 +3057,7 @@ function addAssistantMessageToAccumulator(
     options: null,
     question: null,
     surface: null,
+    feedbackDraft: null,
     repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
@@ -3463,17 +3472,26 @@ function renderAssistantTurnRows(
   );
   // Stamp the recovery-action anchor last: completion/run-state passes rebuild
   // row objects, so they must finish before its single owner is selected.
-  if (!plan.split)
-    return withManualRungAnchor(withTurnCompletion(visibleRows, input));
+  const completedRows = withTurnCompletion(
+    plan.split
+      ? attachRunStateToTrailingAssistantSlice(
+          visibleRows,
+          input,
+          plan,
+          rowIdByBlockId,
+        )
+      : visibleRows,
+    input,
+  );
+  const { feedbackDraft } = input.acc;
+  if (feedbackDraft === null) return withManualRungAnchor(completedRows);
+  const firstAssistantIndex = completedRows.findIndex(
+    (row) => row.role === "assistant",
+  );
+  // Select after hidden slices and trailing boundaries have been resolved.
   return withManualRungAnchor(
-    withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(
-        visibleRows,
-        input,
-        plan,
-        rowIdByBlockId,
-      ),
-      input,
+    completedRows.map((row, index) =>
+      index === firstAssistantIndex ? { ...row, feedbackDraft } : row,
     ),
   );
 }
@@ -4079,7 +4097,10 @@ function renderUserMessage(
   ctx: RenderedMessagesDisplayContext,
   steerBadge: ChatMessageSteerBadge | null,
 ): ChatMessageModel {
-  const text = extractPlainTextFromComposerJSONContent(message.message.content);
+  const text =
+    message.conversationRequest === undefined
+      ? extractPlainTextFromComposerJSONContent(message.message.content)
+      : botMemberText(message.message.content);
   return {
     id: message.messageId,
     role: "user",
@@ -4119,6 +4140,15 @@ function renderUserMessage(
     ...(message.conversationRequest === undefined
       ? {}
       : { conversationRequest: message.conversationRequest }),
+    ...(message.questionAnswers === undefined
+      ? {}
+      : { questionAnswers: message.questionAnswers }),
+    ...(message.repliesTo === undefined
+      ? {}
+      : { repliesTo: message.repliesTo }),
+    ...(message.message.kind === "slack"
+      ? { slackMessage: message.message }
+      : {}),
   };
 }
 
@@ -4230,6 +4260,7 @@ function renderLiveAssistant(
     options: null,
     question: null,
     surface: null,
+    feedbackDraft: null,
     repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
@@ -4452,7 +4483,11 @@ function objectArtifactInsertionIndex(
   return insertion;
 }
 
-/** Deferred creation cards belong beside activity, before the closing reply. */
+/**
+ * HTML and canvas create / update cards can be emitted after the turn's later
+ * blocks (HTML ones at turn end), so they move back beside the activity that
+ * wrote them, before the closing reply.
+ */
 function placeObjectArtifactCards(
   blocks: ReadonlyArray<OpenContentBlock>,
 ): ReadonlyArray<OpenContentBlock> {
@@ -4460,7 +4495,7 @@ function placeObjectArtifactCards(
   for (const block of blocks) {
     if (
       block.type !== "artifact_operation" ||
-      block.operation !== "create" ||
+      block.operation === "delete" ||
       (block.kind !== "html" && block.kind !== "canvas")
     ) {
       ordered.push(block);
@@ -4568,13 +4603,14 @@ function buildAssistantSegments(
 }
 
 // Artifact rows for a turn's "Changes" group, from the manifest's tagged
-// entries (one entry per artifact index.md). One row per artifact, carrying the
-// merged before/after hashes for a click → diff.
-function artifactChangeRowsFromManifest(
+// entries: one row per markdown or file artifact, and one bundle per html or
+// canvas artifact holding each of its changed files with its merged
+// before/after hashes for a click → diff.
+function artifactChangeEntriesFromManifest(
   manifest: TurnCheckpointManifest | null,
-): ArtifactChangeRow[] {
+): ReadonlyArray<ArtifactChangeEntry> {
   if (manifest === null) return [];
-  return manifest.entries.flatMap((entry) => {
+  const rows = manifest.entries.flatMap((entry): ArtifactChangeRow[] => {
     if (!entry.artifact) return [];
     // A net-zero artifact (touched but left byte-identical this turn) is not a
     // change - drop it so the "Changes" group matches the Undo modal / restore,
@@ -4592,6 +4628,11 @@ function artifactChangeRowsFromManifest(
       },
     ];
   });
+  return groupArtifactFolderChanges(rows, (row) => ({
+    artifactId: row.artifactId,
+    kind: row.artifactKind,
+    title: row.title,
+  }));
 }
 
 function isSubagentChildSegment(
@@ -5082,10 +5123,10 @@ function groupFileChangeRuns(
   // Artifact rows come from the manifest's tagged entries (no inline
   // file_change segments exist for artifacts), so a turn that only touched
   // artifacts still gets a "Changes" group.
-  const artifactRows = artifactChangeRowsFromManifest(
+  const artifactEntries = artifactChangeEntriesFromManifest(
     checkpointView?.manifest ?? null,
   );
-  if (files.length === 0 && artifactRows.length === 0) {
+  if (files.length === 0 && artifactEntries.length === 0) {
     return flat;
   }
   // The aggregated "Changes" block only appears once the turn completes; while
@@ -5101,25 +5142,32 @@ function groupFileChangeRuns(
   // same file are merged into a single row whose diff spans the first edit's
   // pre-state to the last edit's post-state.
   const realChanges = mergeFileChangesByPath(files.filter(isRealFileChange));
-  if (realChanges.length === 0 && artifactRows.length === 0) {
+  if (realChanges.length === 0 && artifactEntries.length === 0) {
     return flat;
   }
   const groupId =
     realChanges.length > 0
       ? realChanges[0].id
-      : (checkpointView?.manifest.checkpointId ?? artifactRows[0].filePath);
+      : (checkpointView?.manifest.checkpointId ??
+        artifactEntryFilePath(artifactEntries[0]));
   return [
     ...flat,
     {
       id: `${groupId}:group`,
       kind: "file_change_group",
       files: realChanges,
-      artifacts: artifactRows,
+      artifacts: artifactEntries,
       checkpointManifest: checkpointView?.manifest ?? null,
       hasLaterOverlappingChanges:
         checkpointView?.hasLaterOverlappingChanges ?? false,
     },
   ];
+}
+
+function artifactEntryFilePath(entry: ArtifactChangeEntry): string {
+  return entry.kind === "single"
+    ? entry.item.filePath
+    : entry.members[0].item.filePath;
 }
 
 function fileChangesFromSegment(segment: MessageSegment): FileChangeSegment[] {
@@ -5306,6 +5354,14 @@ function toolCallMcpAppStamp(
   return mcpApp === undefined ? null : block.mcpApp;
 }
 
+/** A tool call's feedback draft, or `null`, normalizing older records that omit the field. */
+function toolCallFeedbackDraftStamp(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): Extract<OpenContentBlock, { type: "tool_call" }>["feedbackDraft"] {
+  const feedbackDraft: unknown = block.feedbackDraft;
+  return feedbackDraft === undefined ? null : block.feedbackDraft;
+}
+
 const BLOCK_HANDLERS: {
   [K in OpenContentBlock["type"]]: (
     block: Extract<OpenContentBlock, { type: K }>,
@@ -5384,6 +5440,7 @@ const BLOCK_HANDLERS: {
     imageResults: block.imageResults,
     artifact: toolCallArtifactStamp(block),
     mcpApp: toolCallMcpAppStamp(block),
+    feedbackDraft: toolCallFeedbackDraftStamp(block),
   }),
   file_change: (block) => ({
     kind: "file_change",

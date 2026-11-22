@@ -3,7 +3,10 @@ import {
   useQuery,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCatalogue,
+  SandboxCatalogueReadinessRequest,
+} from "@traycer/protocol/host/sandbox-control";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
@@ -14,10 +17,11 @@ import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbo
 /** The catalogue moves on a provider contract, not on a user's action. */
 const SANDBOX_CATALOGUE_STALE_MS = 10 * 60_000;
 
-function sandboxCatalogueQueryOptions(
+export function sandboxCatalogueQueryOptions(
   auth: AuthService | null,
   userId: string | null,
   enabled: boolean,
+  context: SandboxCatalogueReadinessRequest | null,
 ) {
   if (auth === null) {
     return queryOptions<SandboxCatalogue>({
@@ -27,16 +31,17 @@ function sandboxCatalogueQueryOptions(
     });
   }
   return queryOptions<SandboxCatalogue>({
-    queryKey: sandboxQueryKeys.catalogue(auth, userId),
+    queryKey: sandboxQueryKeys.catalogue(auth, userId, context),
     queryFn: async () => {
-      const result = await auth.getSandboxCatalogue();
+      const result = await auth.getSandboxCatalogue(context);
       if (result.kind === "ok") {
         return result.catalogue;
       }
       throw new Error(sandboxFailureMessage(result));
     },
     enabled,
-    staleTime: SANDBOX_CATALOGUE_STALE_MS,
+    staleTime: context === null ? SANDBOX_CATALOGUE_STALE_MS : 0,
+    refetchOnMount: context === null ? true : "always",
   });
 }
 
@@ -59,6 +64,7 @@ export function useSandboxCatalogue(
       auth,
       userId,
       signedIn && enabled && !unavailable,
+      null,
     ),
   );
 }

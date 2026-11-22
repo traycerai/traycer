@@ -1,8 +1,5 @@
 import { useState, type ReactNode } from "react";
-import {
-  HostMethodVersionUnsatisfiedError,
-  type ResponseOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentSecretsVerifyResponse,
@@ -29,13 +26,10 @@ import {
   type SecretVerifyLine,
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
-  SECRET_PENDING_REVIEW_LABEL,
   SECRET_RECOVERY_FALLBACK,
   SECRET_RECOVERY_STEPS,
   SECRET_RECOVERY_TITLE,
-  SECRET_RESTART_LINE,
   SECRET_REVOKED_LABEL,
-  SECRETS_NEED_UPDATED_HOST,
   secretAddedClause,
   secretRemovePreview,
   secretUsedByLine,
@@ -43,10 +37,8 @@ import {
   secretValueOrigin,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
-import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useSecretMcpServerNames } from "@/hooks/environment/team/use-mcp-servers";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { cn } from "@/lib/utils";
 
 const VERIFY_TONE: Readonly<Record<SecretVerifyLine["tone"], string>> = {
@@ -65,7 +57,7 @@ function Spinner(props: { readonly busy: boolean }): ReactNode {
   ) : null;
 }
 
-/** If the secret leaked: the order that closes it fastest. */
+/** If the secret leaked: the order that closes it fastest, open beside the versions. */
 function RecoveryOrder(): ReactNode {
   return (
     <div className="flex flex-col gap-1" data-testid="secret-recovery">
@@ -102,8 +94,6 @@ function removalFailure(
     | undefined,
   error: Error | null,
 ): string | null {
-  if (error instanceof HostMethodVersionUnsatisfiedError)
-    return SECRETS_NEED_UPDATED_HOST;
   if (error !== null) return error.message;
   if (answer?.outcome === "refused")
     return (
@@ -132,7 +122,7 @@ function SecretRowIdentity(props: {
     <div className="flex min-w-0 flex-col gap-0.5">
       <span className="flex flex-wrap items-center gap-2">
         <span
-          className="min-w-0 text-ui-sm text-muted-foreground"
+          className="min-w-0 wrap-anywhere text-ui-sm text-muted-foreground"
           data-testid="secret-row-line"
         >
           <span className="font-mono text-foreground">{props.secret.name}</span>
@@ -143,9 +133,6 @@ function SecretRowIdentity(props: {
         </span>
         {props.revoked ? (
           <Badge variant="outline">{SECRET_REVOKED_LABEL}</Badge>
-        ) : null}
-        {!props.revoked && props.secret.state === "pending_review" ? (
-          <Badge variant="outline">{SECRET_PENDING_REVIEW_LABEL}</Badge>
         ) : null}
       </span>
     </div>
@@ -193,26 +180,18 @@ function SecretRowControls(props: {
 /** A replacement's progress, on the row until it settles. */
 function SecretRowReplacement(props: {
   readonly secretId: string;
+  readonly kind: string;
   readonly client: HostClient<HostRpcRegistry>;
-  readonly hostName: (hostId: string) => string;
   readonly replacements: number;
 }): ReactNode {
   if (props.replacements === 0) return null;
   return (
-    <>
-      <SecretRotationStatus
-        key={props.replacements}
-        client={props.client}
-        secretId={props.secretId}
-        hostName={props.hostName}
-      />
-      <p
-        className="max-w-[72ch] text-ui-xs text-muted-foreground"
-        data-testid="secret-restart-line"
-      >
-        {SECRET_RESTART_LINE}
-      </p>
-    </>
+    <SecretRotationStatus
+      key={props.replacements}
+      client={props.client}
+      secretId={props.secretId}
+      kind={props.kind}
+    />
   );
 }
 
@@ -224,7 +203,6 @@ function SecretDetailsControls(props: {
   readonly secret: EnvironmentSecret;
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
-  readonly hostName: (hostId: string) => string;
   readonly onChanged: () => void;
   readonly revoked: boolean;
   readonly verifying: boolean;
@@ -266,10 +244,10 @@ function SecretDetailsControls(props: {
       <SecretRotationStatus
         client={props.client}
         secretId={props.secret.secretId}
-        hostName={props.hostName}
+        kind={props.secret.kind}
       />
       <SecretVersionsList
-        secret={props.secret}
+        secret={{ ...props.secret, revoked: props.revoked }}
         client={props.client}
         hostId={props.hostId}
         onChanged={props.onChanged}
@@ -282,7 +260,8 @@ function SecretDetailsControls(props: {
 /**
  * One secret on Settings ▸ Personal ▸ Secrets: "STRIPE_KEY · Set · sent to
  * api.stripe.com · added by you 24 Oct" with Replace, Remove and Details.
- * Details holds Verify, the versions and the recovery order; a replacement's
+ * The addresses stay on that line and wrap. Details holds Verify, the
+ * versions and the recovery order, open with the versions; a replacement's
  * progress stays on the row. No value is ever here. Verify and the versions
  * act on the secret by id, so they work for every kind, those already stored
  * included. A held secret's pending-review badge stays.
@@ -322,18 +301,11 @@ export function SecretRow(props: {
   // rotation from the start and re-reads it until it settles.
   const [replacements, setReplacements] = useState(0);
   const actions = useSecretRowActions({ ...props, removing: secret.revoked });
-  const environmentId = useDetailsEnvironmentId(props.client);
+  const environmentId = useDetailsEnvironmentId();
   const source = useConfigurationSource();
   // Personal's values, and a computer's own, are all the person's; a team's
   // author is not on the wire.
   const byYou = source.kind === "host" || source.configuration === "personal";
-  // The computers running Personal hold a copy of Personal's; a team's
-  // computers and every sandbox use the value without one.
-  const onPersonal = useEnvironmentPick().kind === "personal";
-  const running = useHostsRunningPersonal(true);
-  const holders = onPersonal
-    ? running.hosts.filter((host) => host.kind === "personal")
-    : [];
   const usedBy = secretUsedByLine(
     useSecretMcpServerNames(secret.secretId, removing),
   );
@@ -396,7 +368,6 @@ export function SecretRow(props: {
                   secret={secret}
                   client={props.client}
                   hostId={props.hostId}
-                  hostName={props.hostName}
                   onChanged={props.onChanged}
                   revoked={revoked}
                   verifying={actions.verify.isPending}
@@ -437,8 +408,8 @@ export function SecretRow(props: {
       )}
       <SecretRowReplacement
         secretId={secret.secretId}
+        kind={secret.kind}
         client={props.client}
-        hostName={props.hostName}
         replacements={replacements}
       />
       <ReplaceSecretValueDialog
@@ -477,7 +448,6 @@ export function SecretRow(props: {
                   ? null
                   : secretAddedClause(first.createdAt, byYou),
               version: current === undefined ? null : current.ordinal,
-              computers: holders.map((host) => host.name),
             })}
           </>
         }
@@ -514,7 +484,7 @@ function SecretRowRemoval(props: {
   readonly hostName: (hostId: string) => string;
   readonly pending: boolean;
 }): ReactNode {
-  const retry = useSecretRemovalRetry(props.client, props.hostId);
+  const retry = useSecretRemovalRetry();
   return (
     <>
       <SecretRemovalStatus

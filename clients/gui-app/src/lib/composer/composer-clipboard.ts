@@ -2,7 +2,7 @@ import type { Slice } from "@tiptap/pm/model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
-  mentionPlainTextFromAttrs,
+  mentionChipText,
   numberValue,
   quotePrefixLines,
   slashCommandLabelFromAttrs,
@@ -230,7 +230,7 @@ function composerClipboardInlinePlainText(
 ): string | null {
   if (node.type === "text") return node.text ?? "";
   if (node.type === "hardBreak") return "\n";
-  if (node.type === "mention") return mentionPlainTextFromAttrs(node.attrs);
+  if (node.type === "mention") return mentionChipText(node.attrs);
   if (node.type === "slashCommand") return ctx.slashText(node.attrs);
   if (node.type === "imageAttachment" || node.type === "attachmentGroup") {
     return "";

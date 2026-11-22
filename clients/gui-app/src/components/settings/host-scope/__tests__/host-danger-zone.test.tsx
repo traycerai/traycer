@@ -17,6 +17,10 @@ import {
 } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import type {
+  HostListItem,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -120,11 +124,45 @@ const SOME_CLIENT: HostClient<HostRpcRegistry> =
     }),
   });
 
-function remoteHost(hostId: string): HostScopeOption {
+const TEAM_OWNER: HostOwnerPrincipal = {
+  kind: "team",
+  id: "team-a",
+  name: "Alpha",
+};
+const PERSON_OWNER: HostOwnerPrincipal = { kind: "user", id: "user-me" };
+
+function registeredRemoteHost(
+  hostId: string,
+  owner: HostOwnerPrincipal,
+): HostScopeOption {
+  const kind = "personal";
+  const item: HostListItem = {
+    hostId,
+    displayName: hostId,
+    platform: "linux-x64",
+    kind,
+    publicKey: "pk",
+    createdAt: new Date(0).toISOString(),
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.4.2",
+      lastSeenAt: null,
+    },
+    owner,
+  };
   return hostScopeOptionFixture({
     hostId,
     name: hostId,
     isLocalMachine: false,
+    isActive: false,
+    connectable: true,
+    kind,
+    item,
+    sandbox: null,
   });
 }
 
@@ -294,7 +332,7 @@ describe("HostDangerZone", () => {
     render(
       <HostDangerZone
         scope={hostScopeFixture({
-          host: remoteHost("host-b"),
+          host: registeredRemoteHost("host-b", PERSON_OWNER),
           status: "unreachable",
           client: null,
         })}
@@ -338,7 +376,7 @@ describe("HostDangerZone", () => {
     render(
       <HostDangerZone
         scope={hostScopeFixture({
-          host: remoteHost("host-b"),
+          host: registeredRemoteHost("host-b", PERSON_OWNER),
           status: "ready",
           client: SOME_CLIENT,
         })}
@@ -360,7 +398,7 @@ describe("HostDangerZone", () => {
     render(
       <HostDangerZone
         scope={hostScopeFixture({
-          host: remoteHost("host-b"),
+          host: registeredRemoteHost("host-b", PERSON_OWNER),
           status: "ready",
           client: SOME_CLIENT,
         })}
@@ -375,6 +413,26 @@ describe("HostDangerZone", () => {
     // Bound to the host it is rendered for — the hook, the button and the
     // dialog all close over the same id, so a scope change cannot retarget it.
     expect(removeFromAccountHostIds).toContain("host-b");
+  });
+
+  it("withholds ordinary account removal for a team-owned physical host", () => {
+    const hostId = "host-team";
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: registeredRemoteHost(hostId, TEAM_OWNER),
+          status: "ready",
+          client: SOME_CLIENT,
+        })}
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("settings-remove-host-from-account"),
+    ).toBeNull();
+    expect(screen.queryByTestId("host-danger-zone")).toBeNull();
+    expect(removeFromAccountHostIds).toHaveLength(0);
+    expect(removeFromAccountSpy).not.toHaveBeenCalled();
   });
 
   it("does not offer account removal for this computer's host", () => {
@@ -422,9 +480,9 @@ describe("HostDangerZone", () => {
     ).toBeNull();
   });
 
-  it("leaves a sandbox's removal to its sandbox card: a status line, no control, and no deregister bound", () => {
+  it("points sandbox destruction to the header menu without a removal control", () => {
     // The server refuses to deregister a sandbox; its lifecycle belongs to the
-    // sandbox card, so the row names where to go instead of offering a button
+    // header menu, so the instruction names where to go instead of a button
     // that could only fail.
     render(
       <HostDangerZone
@@ -437,6 +495,7 @@ describe("HostDangerZone", () => {
               state: "awake",
               frozen: false,
               summary: null,
+              ownerKind: "unknown",
               teamOwned: false,
             },
           }),
@@ -450,7 +509,7 @@ describe("HostDangerZone", () => {
     ).toBeNull();
     expect(
       screen.getByTestId("settings-remove-host-sandbox-managed").textContent,
-    ).toBe("Managed from its sandbox card.");
+    ).toBe("To destroy this sandbox, use More in the header.");
     expect(removeFromAccountHostIds).not.toContain("host-sbx");
     expect(screen.getByTestId("host-danger-zone").textContent).not.toContain(
       "This host is a sandbox",
@@ -479,12 +538,13 @@ describe("HostDangerZone", () => {
     render(
       <HostDangerZone
         scope={hostScopeFixture({
-          host: remoteHost("host-b"),
+          host: registeredRemoteHost("host-b", PERSON_OWNER),
           status: "ready",
           client: SOME_CLIENT,
         })}
       />,
     );
+    expect(removeFromAccountHostIds).toContain("host-b");
     fireEvent.click(screen.getByTestId("settings-remove-host-from-account"));
     const dialog = screen.getByRole("dialog");
     const copy = dialog.textContent;
@@ -526,7 +586,7 @@ describe("HostDangerZone", () => {
     render(
       <HostDangerZone
         scope={hostScopeFixture({
-          host: remoteHost("host-b"),
+          host: registeredRemoteHost("host-b", PERSON_OWNER),
           status: "ready",
           client: SOME_CLIENT,
           returnToActive,

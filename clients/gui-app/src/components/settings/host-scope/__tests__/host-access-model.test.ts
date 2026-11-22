@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type {
+  ReviewHeldEntry,
+  UndoOutcome,
+} from "@traycer-clients/shared/environment/environment-review";
+import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
-  EnvironmentReviewEntryV12,
   EnvironmentStatusResponse,
-  EnvironmentWriteOutcome,
   LocalOverride,
   LocalOverrideTarget,
   RemoteAccessState,
@@ -50,32 +51,23 @@ function notice(overrides: Partial<EnvironmentNotice>): EnvironmentNotice {
   };
 }
 
-/** A review entry as an `environment.review@1.2` host sends it. */
-function reviewEntryV12(
-  overrides: Partial<EnvironmentReviewEntryV12>,
-): EnvironmentReviewEntryV12 {
-  return {
-    ...reviewEntry({}),
-    command: null,
-    event: null,
-    description: null,
-    harness: null,
-    value: null,
-    ...overrides,
-  };
-}
-
-function reviewEntry(
-  overrides: Partial<EnvironmentReviewEntry>,
-): EnvironmentReviewEntry {
+function reviewEntry(overrides: Partial<ReviewHeldEntry>): ReviewHeldEntry {
   return {
     entryId: "entry-1",
-    reason: "credential_like_value",
+    reason: "executable_entry",
     kind: "variable",
     key: "DATABASE_URL",
     os: "any",
     hostId: null,
     heldAt: 1,
+    command: null,
+    event: null,
+    description: null,
+    harness: null,
+    value: null,
+    op: "put",
+    heldRevision: 1,
+    liveRevision: null,
     ...overrides,
   };
 }
@@ -198,6 +190,10 @@ describe("remoteAccessQuestionShown", () => {
 describe("setupView", () => {
   it("is nothing without a setup record", () => {
     expect(setupView(null)).toBeNull();
+  });
+
+  it("does not show an awaiting consent move as unfinished setup", () => {
+    expect(setupView(setup("moving_settings", "awaiting_consent"))).toBeNull();
   });
 
   it("is nothing once the setup is done, by state or by stage", () => {
@@ -427,7 +423,7 @@ describe("noticeText", () => {
   it("names the dashboard", () => {
     expect(
       noticeText(notice({ key: "DATABASE_URL", from: { kind: "dashboard" } })),
-    ).toBe("DATABASE_URL from the dashboard now applies everywhere.");
+    ).toBe("DATABASE_URL now applies everywhere.");
   });
 
   it("names the host that made the change by its label", () => {
@@ -559,31 +555,18 @@ describe("keepLocalTarget", () => {
 });
 
 describe("undoRefusalText", () => {
-  const saved: EnvironmentWriteOutcome = { outcome: "saved", revision: 3 };
-  const pending: EnvironmentWriteOutcome = {
-    outcome: "pending",
-    uploadId: "upload-1",
-  };
-  const stale: EnvironmentWriteOutcome = {
+  const saved: UndoOutcome = { outcome: "saved", revision: 3 };
+  const stale: UndoOutcome = {
     outcome: "stale",
     currentRevision: 4,
     changedBy: { kind: "dashboard" },
   };
-  const needsGrant: EnvironmentWriteOutcome = { outcome: "needs_grant" };
+  const needsGrant: UndoOutcome = { outcome: "needs_grant" };
   const kept = { hostName: "dev-box" } as const;
 
   it("says nothing for an undo that went through, kept or not", () => {
     expect(undoRefusalText(saved, "LOG_LEVEL", null)).toBeNull();
     expect(undoRefusalText(saved, "LOG_LEVEL", kept)).toBeNull();
-  });
-
-  it("says the undo waits for a reconnect", () => {
-    expect(undoRefusalText(pending, "LOG_LEVEL", null)).toBe(
-      "Undo applies when this host reconnects.",
-    );
-    expect(undoRefusalText(pending, "LOG_LEVEL", kept)).toBe(
-      "Kept on dev-box. The change everywhere is undone when this host reconnects.",
-    );
   });
 
   it("says the value was changed again since", () => {
@@ -608,18 +591,9 @@ describe("undoRefusalText", () => {
 describe("reviewText", () => {
   const cases: ReadonlyArray<[reason: string, text: string]> = [
     [
-      "credential_like_value",
-      "DATABASE_URL looks like a key and is on hold until you choose",
-    ],
-    [
       "executable_entry",
       "DATABASE_URL (variable) changes how programs start and is on hold until you choose",
     ],
-    [
-      "needs_grant",
-      "DATABASE_URL is waiting for you: was changed without your confirmation.",
-    ],
-    ["a_reason_from_a_newer_host", "DATABASE_URL is waiting for you."],
   ];
   it.each(cases)("reason %s", (reason, text) => {
     expect(reviewText(reviewEntry({ reason }))).toBe(text);
@@ -628,7 +602,7 @@ describe("reviewText", () => {
   it("names a held MCP server's command and says it waits for a choice", () => {
     expect(
       reviewText(
-        reviewEntryV12({
+        reviewEntry({
           kind: "mcp_server",
           key: "env-e2e-memory",
           reason: "executable_entry",
@@ -640,26 +614,10 @@ describe("reviewText", () => {
     );
   });
 
-  it("names a held hook's command and event", () => {
-    expect(
-      reviewText(
-        reviewEntryV12({
-          kind: "hook",
-          key: "notify",
-          reason: "executable_entry",
-          command: "notify.sh",
-          event: "stop",
-        }),
-      ),
-    ).toBe(
-      "notify (hook) runs notify.sh on stop and is on hold until you choose",
-    );
-  });
-
   it("words a held environment setting by the program it changes", () => {
     expect(
       reviewText(
-        reviewEntryV12({
+        reviewEntry({
           kind: "env_override",
           key: "claude:NODE_OPTIONS",
           reason: "executable_entry",
@@ -675,7 +633,7 @@ describe("reviewText", () => {
   it("words a held setup script by when a sandbox runs it", () => {
     expect(
       reviewText(
-        reviewEntryV12({
+        reviewEntry({
           kind: "setup_script",
           key: "setup",
           reason: "executable_entry",
@@ -687,7 +645,19 @@ describe("reviewText", () => {
     );
   });
 
-  it("names the kind alone for a held command from a host that does not send it", () => {
+  it("names a held managed profile by its kind alone", () => {
+    expect(
+      reviewText(
+        reviewEntry({
+          kind: "managed_profile",
+          key: "claude:work",
+          reason: "executable_entry",
+        }),
+      ),
+    ).toBe("claude:work (managed profile) is on hold until you choose");
+  });
+
+  it("names the kind alone for a held command with no command to show", () => {
     expect(
       reviewText(
         reviewEntry({

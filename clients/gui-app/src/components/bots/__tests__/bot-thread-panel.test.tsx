@@ -10,6 +10,10 @@
  * drawn as the bot's, with no request to show. Every state opens on the
  * channel row the thread answers, drawn by the channel's own row component.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { StrictMode, useSyncExternalStore, type ReactNode } from "react";
 import {
   act,
@@ -22,8 +26,17 @@ import {
 } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   HostClient,
   type HostRequester,
@@ -38,6 +51,7 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import type { BotTurnLocateRequest } from "@traycer/protocol/host/bot/conversation-schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type {
   AgentSender,
@@ -51,6 +65,7 @@ import {
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -60,12 +75,45 @@ import type {
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
-import type { BotActivity } from "@/hooks/bots/use-bot-activity";
+import type {
+  BotActivity,
+  BotSessionActivity,
+} from "@/hooks/bots/use-bot-activity";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  hostClientLocating,
+  memberPost,
+  turnRef,
+  turnsAskedFor,
+} from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  expectPlainLineOutsideQuote,
+  PLAIN_LINE,
+  QUOTE_LINE,
+} from "@/components/bots/__tests__/bot-channel-rows-test-support";
+import {
+  sessionTargetOfTurn,
+  type BotTurnOpen,
+} from "@/stores/bots/bot-open-thread-store";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
+import type { BotReplyReach } from "@/hooks/bots/use-bot-send-version";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import {
+  storedBoxDraftsOf,
+  type StoredBoxDraft,
+} from "@/lib/bots/bot-box-draft-storage";
+import { botBoxDraftsKey } from "@/lib/persist";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  useVoiceSessionStore,
+  type VoiceSessionDriver,
+} from "@/stores/voice/voice-session-store";
 import {
   holdScreenLandscape,
   IPHONE_17,
@@ -78,6 +126,7 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 type ThreadTranscriptState = Pick<
   ChatSessionState,
   | "snapshotLoaded"
+  | "fatalClose"
   | "messages"
   | "events"
   | "transcriptRowContext"
@@ -121,8 +170,22 @@ const mocks = vi.hoisted(() => ({
     held: false,
     listeners: new Set<() => void>(),
   },
+  /** The person's read cursors as the host answers them: none behind anything unless a case says so. */
+  read: { cursors: {}, latest: {} },
 }));
 
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: mocks.toastFromHostError,
 }));
@@ -152,6 +215,12 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => activityStore((state) => state.activity),
+}));
+vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-read-cursor")
+  >()),
+  useBotReadCursors: () => ({ data: mocks.read }),
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
@@ -195,11 +264,24 @@ vi.mock("@/components/chat/chat-messages", async () => {
     ChatMessages: (props: {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
+      scrollRequest?: {
+        kind?: string;
+        messageId?: string;
+        rowId?: string;
+      } | null;
     }) => {
       const header = use(ChatTimelineHeaderContext);
       return (
         <Providers tileInstanceId={props.instanceId}>
-          <div data-testid="chat-messages-stub">
+          <div
+            data-testid="chat-messages-stub"
+            data-scroll-to={props.scrollRequest?.messageId ?? ""}
+            data-boundary-to={
+              props.scrollRequest?.kind === "boundary"
+                ? (props.scrollRequest.rowId ?? "")
+                : ""
+            }
+          >
             {header}
             {props.messages.length === 0 && header === null ? (
               <ChatEmptyState />
@@ -245,9 +327,19 @@ const activityStore = create<{ activity: BotActivity | null }>()(() => ({
   activity: null,
 }));
 
+import {
+  failedNotice,
+  staleNotice,
+} from "@/components/bots/__tests__/bot-read-notice-test-support";
 import { BotThreadPanel } from "@/components/bots/bot-thread-panel";
 import type { BotThreadPanelThread } from "@/components/bots/bot-thread-panel";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  boxInput,
+  editableIn,
+  textOf,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-bound";
@@ -325,6 +417,7 @@ function createThreadStore(
 ): UseBoundStore<StoreApi<ThreadTranscriptState>> {
   return create<ThreadTranscriptState>()(() => ({
     snapshotLoaded: true,
+    fatalClose: null,
     messages,
     events: [],
     transcriptRowContext: {},
@@ -356,6 +449,18 @@ const SEND_RESPONSE: BotConversationSendResponse = {
   requestId: "request-1",
   delivery: "written",
   threadId: THREAD_ID,
+};
+
+/** What a click on the "Hold" choice sends into the thread, replying to no message. */
+const HOLD_PICK: BotConversationSendRequest = {
+  botId: BOT_ID,
+  conversationId: CONVERSATION_ID,
+  text: "Hold",
+  threadId: THREAD_ID,
+  announcementId: null,
+  redeliver: null,
+  supersedes: null,
+  answer: null,
 };
 
 /** The channel's own rows, where the anchor's text is read from. */
@@ -395,7 +500,11 @@ let panelSent: BotSentPost | null;
 let panelLanding: BotTranscriptLanding | null;
 /** The bot's task list the panel is handed. */
 let panelTasks: ReadonlyArray<BotTaskEntry>;
+/** Where a Reply on a row of the thread reaches the bot. */
+let panelReplyReach: BotReplyReach;
 const onEditPost = vi.fn<(edit: BotComposerEdit) => void>();
+/** The turn a tap on the replying strip asks the tab to open. */
+const onOpenTurn = vi.fn<BotTurnOpen>();
 /** What the host answers the next `bot.conversation.send` with. */
 let sendAnswer: () => Promise<BotConversationSendResponse>;
 
@@ -443,6 +552,21 @@ function mountPanel(
   return render(panelTree(thread));
 }
 
+/** The panel as the bot's surface draws it, under that bot's identity. */
+function mountPanelInBotSurface(
+  thread: BotThreadPanelThread,
+  messages: ReadonlyArray<Message>,
+): RenderResult {
+  stageSessions(messages);
+  return render(
+    <BotIdentityContext
+      value={{ botId: BOT_ID, title: "Release Bot", owner: null }}
+    >
+      {panelTree(thread)}
+    </BotIdentityContext>,
+  );
+}
+
 /** The thread's session over `messages`, and the channel's over `channelMessages`. */
 function stageSessions(messages: ReadonlyArray<Message>): void {
   mocks.handle = {
@@ -461,32 +585,35 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={panelQueryClient}>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotThreadPanel
-              botId={BOT_ID}
-              hostId={HOST_ID}
-              boundHostId={HOST_ID}
-              botTitle="Release Bot"
-              conversationId={CONVERSATION_ID}
-              originMessageId={originOf(thread)}
-              sent={panelSent}
-              thread={thread}
-              tasks={panelTasks}
-              anchorSenderLabel={(senderUserId) =>
-                senderUserId === null ? "You" : "Tess Teammate"
-              }
-              resolveMember={resolveMember}
-              onClose={vi.fn()}
-              onOpenActivity={vi.fn()}
-              onEditPost={onEditPost}
-              onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
-              landOn={panelLanding}
-              quote={null}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotThreadPanel
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                boundHostId={HOST_ID}
+                imageReach="none"
+                answerReach="each"
+                replyReach={panelReplyReach}
+                botTitle="Release Bot"
+                conversationId={CONVERSATION_ID}
+                originMessageId={originOf(thread)}
+                sent={panelSent}
+                thread={thread}
+                tasks={panelTasks}
+                anchorSenderLabel={(senderUserId) =>
+                  senderUserId === null ? "You" : "Tess Teammate"
+                }
+                resolveMember={resolveMember}
+                onClose={vi.fn()}
+                onEditPost={onEditPost}
+                onOpenTurn={onOpenTurn}
+                landOn={panelLanding}
+                quote={null}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -508,10 +635,13 @@ beforeEach(() => {
   sent = [];
   panelSent = null;
   panelLanding = null;
+  mocks.read = { cursors: {}, latest: {} };
   panelTasks = [];
+  panelReplyReach = "none";
   panelOrigin = null;
   mocks.threadHandle.held = false;
   onEditPost.mockClear();
+  onOpenTurn.mockReset();
   activityStore.setState({ activity: null });
   channelMessages = [];
   mocks.locatedOrdinal = null;
@@ -556,10 +686,7 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
     expect(screen.queryByTestId("chat-messages-stub")).toBeNull();
     expect(screen.queryByTestId("bot-thread-reply-count")).toBeNull();
 
-    await user.type(
-      screen.getByRole("textbox", { name: "Reply in a new thread" }),
-      "Ship it",
-    );
+    typeInto(boxInput("Reply in a new thread"), "Ship it");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     expect(sent).toEqual([
@@ -626,10 +753,7 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     expect(within(origin).queryByText("Why did the build fail?")).toBeNull();
     expect(within(origin).queryByTestId("bot-message-actions")).toBeNull();
 
-    await user.type(
-      screen.getByRole("textbox", { name: "Reply in a new thread" }),
-      "Which job?",
-    );
+    typeInto(boxInput("Reply in a new thread"), "Which job?");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     expect(sent).toEqual([
@@ -657,10 +781,7 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
       );
     mountPanel({ kind: "unopened", retry: null, sendable: true }, []);
 
-    await user.type(
-      screen.getByRole("textbox", { name: "Reply in a new thread" }),
-      "Which job?",
-    );
+    typeInto(boxInput("Reply in a new thread"), "Which job?");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     expect(
@@ -681,22 +802,28 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     answeredPost();
     const taking = listed("user-teammate");
     const panel = mountPanel(taking, []);
-    const box = screen.getByTestId("bot-thread-composer-input");
-    await user.type(box, "Which job?");
+    const box = editableIn(screen.getByTestId("bot-thread-composer-input"));
+    // The person puts the focus in the box, then types.
+    await user.click(box);
+    typeInto(box, "Which job?");
 
     // Claimed: the room drops the earlier host's threads, and the new host
     // has not written its own yet.
     panel.rerender(
       panelTree({ kind: "unopened", retry: null, sendable: false }),
     );
-    expect(screen.getByTestId("bot-thread-composer-input")).toBe(box);
-    expect(box).toHaveProperty("value", "Which job?");
+    expect(editableIn(screen.getByTestId("bot-thread-composer-input"))).toBe(
+      box,
+    );
+    expect(textOf(box)).toBe("Which job?");
     expect(document.activeElement).toBe(box);
 
     // The new host writes the thread, and opens threads under a reply.
     panel.rerender(panelTree(taking));
-    expect(screen.getByTestId("bot-thread-composer-input")).toBe(box);
-    expect(box).toHaveProperty("value", "Which job?");
+    expect(editableIn(screen.getByTestId("bot-thread-composer-input"))).toBe(
+      box,
+    );
+    expect(textOf(box)).toBe("Which job?");
     expect(document.activeElement).toBe(box);
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
@@ -716,20 +843,19 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
       { kind: "unopened", retry: null, sendable: true },
       [],
     );
-    const box = (): HTMLTextAreaElement =>
-      screen.getByRole("textbox", { name: "Reply in a new thread" });
+    const box = (): HTMLElement => boxInput("Reply in a new thread");
     const sendButton = (): HTMLButtonElement =>
       screen.getByTestId("bot-thread-composer-send");
-    await user.type(box(), "Which job?");
+    typeInto(box(), "Which job?");
     expect(sendButton().disabled).toBe(false);
 
     panel.rerender(
       panelTree({ kind: "unopened", retry: null, sendable: false }),
     );
 
-    expect(box().value).toBe("Which job?");
+    expect(textOf(box())).toBe("Which job?");
     expect(sendButton().disabled).toBe(true);
-    await user.type(box(), "{Enter}");
+    typeInto(box(), "{Enter}");
     expect(sent).toEqual([]);
 
     panel.rerender(
@@ -743,6 +869,100 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
   });
 });
 
+describe("<BotThreadPanel /> what its box holds unsent", () => {
+  const ACCOUNT_ID = "user-drafts-account";
+
+  // The store reads and writes only once an account is signed in: points it at
+  // the account's key, as signing in does.
+  beforeEach(async () => {
+    useBotDraftsStore.persist.setOptions({ name: botBoxDraftsKey(ACCOUNT_ID) });
+    await useBotDraftsStore.persist.rehydrate();
+  });
+
+  afterEach(() => {
+    useBotDraftsStore.persist.setOptions({ name: botBoxDraftsKey(null) });
+    localStorage.removeItem(botBoxDraftsKey(ACCOUNT_ID));
+  });
+
+  /** The draft this device holds for the bot's box under `key`. */
+  function storedBox(key: string): StoredBoxDraft | undefined {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(botBoxDraftsKey(ACCOUNT_ID)) ?? "null",
+    );
+    const stored =
+      isRecord(parsed) && isRecord(parsed.state)
+        ? parsed.state.threadBoxes
+        : null;
+    return storedBoxDraftsOf(stored)[BOT_ID]?.[key];
+  }
+
+  it("keeps the thread's draft under the thread, apart from the channel's, on the device and in its box when the thread opens again", () => {
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, CONVERSATION_ID, {
+      text: "For the channel",
+      content: null,
+      held: [],
+    });
+    const thread = listed("user-teammate");
+    const box = (): HTMLElement =>
+      editableIn(screen.getByTestId("bot-thread-composer-input"));
+    const panel = mountPanel(thread, []);
+    expect(textOf(box())).toBe("");
+
+    typeInto(box(), "For the thread");
+    panel.unmount();
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(storedBox(originOf(thread))?.text).toBe("For the thread");
+    expect(storedBox(CONVERSATION_ID)?.text).toBe("For the channel");
+    mountPanel(thread, []);
+    expect(textOf(box())).toBe("For the thread");
+  });
+});
+
+describe("<BotThreadPanel /> Call", () => {
+  beforeEach(() => {
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: vi.fn<VoiceSessionDriver["start"]>(),
+        end: vi.fn<VoiceSessionDriver["end"]>(),
+        setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  });
+
+  it("is in the box of a listed thread, calling that thread, and not in the header", async () => {
+    const user = userEvent.setup();
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    const header = screen.getByTestId("bot-thread-close").closest("header");
+    if (header === null) throw new Error("expected the thread header");
+    expect(within(header).queryByRole("button", { name: /^Call/ })).toBeNull();
+    const call = within(screen.getByTestId("bot-thread-composer")).getByRole(
+      "button",
+      { name: "Call Release Bot" },
+    );
+
+    await user.click(call);
+
+    expect(useVoiceSessionStore.getState().driver?.start).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      threadId: THREAD_ID,
+    });
+  });
+
+  it("is not in the box replying under a question nobody has replied under", () => {
+    channelMessages = [announcement("question-1", "Ship the release today?")];
+    mountPanel({ kind: "unopened", retry: null, sendable: true }, []);
+
+    expect(screen.queryByTestId("bot-thread-composer-call")).toBeNull();
+  });
+});
+
 describe("<BotThreadPanel /> a direct reply's box through a failed read", () => {
   it("keeps the box and its draft beside Retry while the list's read fails, and sends the draft once the read recovers", async () => {
     const user = userEvent.setup();
@@ -753,18 +973,21 @@ describe("<BotThreadPanel /> a direct reply's box through a failed read", () => 
       { kind: "unopened", retry: null, sendable: true },
       [],
     );
-    const box = screen.getByRole("textbox", { name: "Reply in a new thread" });
-    if (!(box instanceof HTMLTextAreaElement)) throw new Error("no reply box");
-    await user.type(box, "Which job?");
+    const box = boxInput("Reply in a new thread");
+    typeInto(box, "Which job?");
 
     // The read after the bot's binding moved fails; the new binding has not
     // said it opens a thread under the reply.
-    panel.rerender(panelTree({ kind: "unopened", retry, sendable: false }));
-
-    expect(screen.getByRole("textbox", { name: "Reply in a new thread" })).toBe(
-      box,
+    panel.rerender(
+      panelTree({
+        kind: "unopened",
+        retry: failedNotice(retry),
+        sendable: false,
+      }),
     );
-    expect(box.value).toBe("Which job?");
+
+    expect(boxInput("Reply in a new thread")).toBe(box);
+    expect(textOf(box)).toBe("Which job?");
     expect(
       screen.getByTestId("bot-thread-composer-send").hasAttribute("disabled"),
     ).toBe(true);
@@ -780,9 +1003,7 @@ describe("<BotThreadPanel /> a direct reply's box through a failed read", () => 
       panelTree({ kind: "unopened", retry: null, sendable: true }),
     );
     expect(screen.queryByTestId("bot-thread-error")).toBeNull();
-    expect(screen.getByRole("textbox", { name: "Reply in a new thread" })).toBe(
-      box,
-    );
+    expect(boxInput("Reply in a new thread")).toBe(box);
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     expect(
@@ -847,18 +1068,66 @@ describe("<BotThreadPanel /> a listed thread", () => {
 
     await user.click(within(group).getByRole("button", { name: "Hold" }));
 
-    expect(sent).toEqual([
-      {
-        botId: BOT_ID,
-        conversationId: CONVERSATION_ID,
-        text: "Hold",
-        threadId: THREAD_ID,
-        announcementId: null,
-        redeliver: null,
-        supersedes: null,
-        answer: null,
-      },
-    ]);
+    expect(sent).toEqual([HOLD_PICK]);
+  });
+
+  it("posts the option a person clicks as a reply to the message that offered it where the reply reach is delivered", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "delivered";
+    const offered = botReply(["Ship it", "Hold"]);
+    mountPanel(listed("user-teammate"), [offered]);
+    const group = screen.getByRole("group", { name: "Choices" });
+
+    await user.click(within(group).getByRole("button", { name: "Hold" }));
+
+    expect(sent).toEqual([{ ...HOLD_PICK, replyTo: offered.messageId }]);
+  });
+
+  it("posts the option a person clicks as a reply to no message where the reply reach is held back", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "held-back";
+    mountPanel(listed("user-teammate"), [botReply(["Ship it", "Hold"])]);
+    const group = screen.getByRole("group", { name: "Choices" });
+
+    await user.click(within(group).getByRole("button", { name: "Hold" }));
+
+    expect(sent).toStrictEqual([HOLD_PICK]);
+  });
+
+  it("posts a choice once when its button is double clicked while the reply reach is delivered", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "delivered";
+    let land: (response: BotConversationSendResponse) => void = () => {};
+    sendAnswer = () => {
+      sendAnswer = () => Promise.resolve(SEND_RESPONSE);
+      return new Promise<BotConversationSendResponse>((resolve) => {
+        land = resolve;
+      });
+    };
+    const offered = botReply(["Ship it", "Hold"]);
+    mountPanel(listed("user-teammate"), [offered]);
+    const group = screen.getByRole("group", { name: "Choices" });
+
+    await user.dblClick(within(group).getByRole("button", { name: "Hold" }));
+    expect(sent).toEqual([{ ...HOLD_PICK, replyTo: offered.messageId }]);
+    const settled = Promise.withResolvers<void>();
+    const stopWatching = panelQueryClient
+      .getMutationCache()
+      .subscribe((event) => {
+        const status =
+          event.type === "updated" ? event.mutation.state.status : null;
+        if (status === "success" || status === "error") settled.resolve();
+      });
+    try {
+      land(SEND_RESPONSE);
+      await act(async () => {
+        await settled.promise;
+      });
+    } finally {
+      stopWatching();
+    }
+
+    expect(sent).toEqual([{ ...HOLD_PICK, replyTo: offered.messageId }]);
   });
 
   it("offers no second pick while the first is still being sent, and offers the choices again once it lands", async () => {
@@ -914,17 +1183,16 @@ describe("<BotThreadPanel /> a listed thread", () => {
     const user = userEvent.setup();
     const taking = listed("user-teammate");
     const view = mountPanel(taking, [botReply(["Ship it", "Hold"])]);
-    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
-    if (!(box instanceof HTMLTextAreaElement)) throw new Error("no reply box");
-    await user.type(box, "Which job?");
+    const box = boxInput("Reply in the thread");
+    typeInto(box, "Which job?");
 
     // The bot moved to a host that does not open a thread under its reply.
     view.rerender(panelTree({ ...taking, sendable: false }));
 
-    expect(box.value).toBe("Which job?");
+    expect(textOf(box)).toBe("Which job?");
     const sendButton = screen.getByTestId("bot-thread-composer-send");
     expect(sendButton.hasAttribute("disabled")).toBe(true);
-    await user.type(box, "{Enter}");
+    typeInto(box, "{Enter}");
     const group = screen.getByRole("group", { name: "Choices" });
     expect(
       within(group)
@@ -948,11 +1216,12 @@ describe("<BotThreadPanel /> a listed thread", () => {
     const user = userEvent.setup();
     const retry = vi.fn<() => void>();
     const taking = listed("user-teammate");
-    const panel = mountPanel({ ...taking, retry, sendable: false }, [
-      botReply(null),
-    ]);
+    const panel = mountPanel(
+      { ...taking, retry: staleNotice(retry), sendable: false },
+      [botReply(null)],
+    );
 
-    const failure = screen.getByTestId("bot-thread-error");
+    const failure = screen.getByTestId("bot-thread-stale");
     expect(
       within(screen.getByTestId("bot-thread-replies")).getByText(
         "Which way should I go?",
@@ -965,8 +1234,11 @@ describe("<BotThreadPanel /> a listed thread", () => {
     expect(retry).toHaveBeenCalledTimes(1);
 
     panel.rerender(panelTree(taking));
-    expect(screen.queryByTestId("bot-thread-error")).toBeNull();
-    await user.type(screen.getByTestId("bot-thread-composer-input"), "Thanks");
+    expect(screen.queryByTestId("bot-thread-stale")).toBeNull();
+    typeInto(
+      editableIn(screen.getByTestId("bot-thread-composer-input")),
+      "Thanks",
+    );
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     expect(sent.map((request) => request.text)).toEqual(["Thanks"]);
   });
@@ -982,10 +1254,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
     const user = userEvent.setup();
     mountPanel(listed("user-teammate"), []);
 
-    await user.type(
-      screen.getByRole("textbox", { name: "Reply in the thread" }),
-      "Hold for now",
-    );
+    typeInto(boxInput("Reply in the thread"), "Hold for now");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     expect(sent).toEqual([
@@ -1019,9 +1288,8 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     });
   }
 
-  function replyBox(): HTMLTextAreaElement {
-    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
-    if (!(box instanceof HTMLTextAreaElement)) throw new Error("no reply box");
+  function replyBox(): HTMLElement {
+    const box = boxInput("Reply in the thread");
     return box;
   }
 
@@ -1059,7 +1327,7 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     const strip = screen.getByTestId("bot-thread-replying-strip");
     expect(within(strip).getByText("Release Bot is replying…")).toBeTruthy();
 
-    await user.type(replyBox(), "And the nightly?");
+    typeInto(replyBox(), "And the nightly?");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     await waitFor(() => {
       expect(sent).toEqual([
@@ -1077,28 +1345,28 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     });
   });
 
-  it("keeps the reply box, its draft and its focus when the list returns the thread", async () => {
-    const user = userEvent.setup();
+  it("keeps the reply box, its draft and its focus when the list returns the thread", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
     const view = mountPanel(POSTED, []);
     const box = replyBox();
-    await user.type(box, "And the nightly?");
+    // The person puts the focus in the box, then types.
+    act(() => box.focus());
+    typeInto(box, "And the nightly?");
     expect(document.activeElement).toBe(box);
 
     view.rerender(panelTree(listed("user-teammate")));
 
     expect(screen.getByTestId("bot-thread-replies")).toBeTruthy();
     expect(replyBox()).toBe(box);
-    expect(box.value).toBe("And the nightly?");
+    expect(textOf(box)).toBe("And the nightly?");
     expect(document.activeElement).toBe(box);
   });
 
-  it("draws nothing between the post and the box while a listed thread's session connects", async () => {
-    const user = userEvent.setup();
+  it("draws nothing between the post and the box while a listed thread's session connects", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
     const view = mountPanel(POSTED, []);
     const box = replyBox();
-    await user.type(box, "And the nightly?");
+    typeInto(box, "And the nightly?");
     const zero = listed("user-teammate");
 
     mocks.threadHandle.held = true;
@@ -1124,7 +1392,7 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     expect(within(replies).getByTestId("bot-chat-transcript")).toBeTruthy();
     expect(replies.textContent).toBe("");
     expect(replyBox()).toBe(box);
-    expect(box.value).toBe("And the nightly?");
+    expect(textOf(box)).toBe("And the nightly?");
   });
 
   it("holds the place of a thread with replies with a spinner while its session connects", () => {
@@ -1157,9 +1425,9 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     const user = userEvent.setup();
     const retry = vi.fn<() => void>();
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
-    const view = mountPanel({ ...POSTED, retry }, []);
+    const view = mountPanel({ ...POSTED, retry: failedNotice(retry) }, []);
     const box = replyBox();
-    await user.type(box, "And the nightly?");
+    typeInto(box, "And the nightly?");
 
     const failure = screen.getByTestId("bot-thread-error");
     expect(postScroll().contains(screen.getByTestId("bot-thread-anchor"))).toBe(
@@ -1182,11 +1450,67 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
       ),
     ).toBeTruthy();
     expect(replyBox()).toBe(box);
-    expect(box.value).toBe("And the nightly?");
+    expect(textOf(box)).toBe("And the nightly?");
   });
 });
 
 describe("<BotThreadPanel /> the anchor", () => {
+  it("shows an image on the post before and after the channel row arrives", () => {
+    const image =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Ship the release today?" },
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "release-image",
+                fileName: "release-train.png",
+                mimeType: "image/png",
+                b64content: image,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    panelSent = {
+      threadId: THREAD_ID,
+      requestId: "req-1",
+      text: "Ship the release today?",
+      content,
+      senderUserId: null,
+      sentAt: 1_000,
+      delivery: "written",
+    };
+    mountPanel(listed("user-teammate"), []);
+    const pending = within(screen.getByTestId("bot-thread-anchor"));
+    expect(
+      pending.getByRole("img", { name: "release-train.png" }),
+    ).toHaveProperty("src", `data:image/png;base64,${image}`);
+    cleanup();
+
+    channelMessages = [
+      {
+        role: "user",
+        messageId: "anchor-1",
+        sender: { type: "user", userId: "user-teammate" },
+        message: { kind: "user", content, browserAnnotations: [] },
+        timestamp: 1_000,
+        sessionAnchor: null,
+      },
+    ];
+    mountPanel(listed("user-teammate"), []);
+    const loaded = within(screen.getByTestId("bot-thread-anchor"));
+    expect(
+      loaded.getByRole("img", { name: "release-train.png" }),
+    ).toHaveProperty("src", `data:image/png;base64,${image}`);
+  });
+
   it("draws a member's post under their name, with no request badge whether it is open or resolved", () => {
     mountPanel(listed("user-teammate"), []);
 
@@ -1297,21 +1621,52 @@ describe("<BotThreadPanel /> the anchor", () => {
 
   it("opens a thread whose list read failed on its post in its own scroll region", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
-    mountPanel({ kind: "failed", retry: () => undefined }, []);
+    mountPanel({ kind: "failed", retry: failedNotice(() => undefined) }, []);
 
     expectPostScrolls();
     expect(screen.queryByTestId("bot-thread-composer")).toBeNull();
     expect(screen.queryByTestId("bot-thread-replies")).toBeNull();
   });
 
-  it("heads the thread with its name, the bot's picture and the bot's title, without a hash", () => {
+  it("heads the thread with its name and the bot's title, without a hash or a picture", () => {
     mountPanel(listed("user-teammate"), []);
 
     const channel = screen.getByTestId("bot-thread-channel");
     expect(within(channel).getByText("Release Bot")).toBeTruthy();
     expect(channel.textContent).not.toContain("#");
-    expect(within(channel).getByTestId("bot-avatar")).toBeTruthy();
+    expect(within(channel).queryByTestId("bot-avatar")).toBeNull();
     expect(screen.getByRole("heading", { name: "Thread" })).toBeTruthy();
+  });
+
+  it("still draws the bot's picture in the replying strip while the bot replies in the thread", () => {
+    mountPanelInBotSurface(listed("user-teammate"), []);
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: null,
+          threads: {
+            [THREAD_ID]: {
+              state: "replying",
+              startedAt: 1_000,
+              step: null,
+              requestId: "req-1",
+              reason: null,
+            },
+          },
+        },
+      });
+    });
+
+    const strip = screen.getByTestId("bot-thread-replying-strip");
+    expect(within(strip).getByTestId("bot-avatar")).toBeTruthy();
+  });
+
+  it("rule 8: has no Activity button on a listed thread", () => {
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    expect(screen.queryByTestId("bot-thread-activity")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Activity" })).toBeNull();
   });
 
   it("shows the anchor without text while the channel has no row for it, and its text once the channel's row is there", () => {
@@ -1386,7 +1741,7 @@ describe("<BotThreadPanel /> the anchor", () => {
 
   it("draws a bot's own announcement in the bot's frame, with no request badge", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
-    mountPanel(listed(null), []);
+    mountPanelInBotSurface(listed(null), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");
     expect(within(anchor).getByText("Release Bot")).toBeTruthy();
@@ -1424,6 +1779,56 @@ describe("<BotThreadPanel /> the anchor", () => {
     expect(anchor.textContent).not.toMatch(/managed by/i);
     expect(anchor.textContent).not.toContain("Olive Owner");
   });
+});
+
+describe("<BotThreadPanel /> Reply on a row of the thread", () => {
+  it("names the row in the thread's box when Reply is chosen, and sends its id as the message it replies to", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "delivered";
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+    const row = within(screen.getByTestId("chat-messages-stub")).getByTestId(
+      "bot-reply-row",
+    );
+
+    await user.click(within(row).getByTestId("bot-message-reply"));
+
+    expect(
+      screen.getByTestId("bot-thread-composer-reply-author").textContent,
+    ).toBe("Release Bot");
+    expect(
+      screen.getByTestId("bot-thread-composer-reply-line").textContent,
+    ).toBe("Which way should I go?");
+    typeInto(boxInput("Reply in the thread"), "Hold");
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CONVERSATION_ID,
+        text: "Hold",
+        threadId: THREAD_ID,
+        announcementId: null,
+        redeliver: null,
+        supersedes: null,
+        answer: null,
+        replyTo: "reply-1",
+      },
+    ]);
+    expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+  });
+
+  it.each<BotReplyReach>(["held-back", "none"])(
+    "offers no Reply on a row of the thread where the reach is %s",
+    (reach) => {
+      panelReplyReach = reach;
+      mountPanel(listed("user-teammate"), [botReply(null)]);
+      const row = within(screen.getByTestId("chat-messages-stub")).getByTestId(
+        "bot-reply-row",
+      );
+
+      expect(within(row).queryByTestId("bot-message-reply")).toBeNull();
+    },
+  );
 });
 
 describe("<BotThreadPanel /> a message the bot failed to answer", () => {
@@ -1583,20 +1988,31 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     });
   });
 
+  it("offers no Reply on a row of the thread while the thread's box edits a failed reply", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "delivered";
+    mountFailedReply();
+    expect(within(replyRow()).getByTestId("bot-message-reply")).toBeTruthy();
+
+    await user.click(within(replyRow()).getByTestId("bot-message-edit"));
+
+    expect(screen.queryByTestId("bot-message-reply")).toBeNull();
+  });
+
   it("puts a failed reply back in the thread's box, and what is sent replaces it", async () => {
     const user = userEvent.setup();
     mountFailedReply();
-    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
+    const box = boxInput("Reply in the thread");
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
 
     await user.click(within(replyRow()).getByTestId("bot-message-edit"));
 
-    expect((box as HTMLTextAreaElement).value).toBe("Hold for now");
+    expect(textOf(box)).toBe("Hold for now");
     expect(
       screen.getByTestId("bot-thread-composer-editing").textContent,
     ).toContain("Sending replaces your message that failed.");
 
-    await user.type(box, " please");
+    typeInto(box, " please");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     expect(sent).toEqual([
@@ -1614,7 +2030,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
     });
-    expect((box as HTMLTextAreaElement).value).toBe("");
+    expect(textOf(box)).toBe("");
   });
 
   /** The viewer's failed reply in the thread under the bot's direct reply, put back in the box by its Edit and typed on. */
@@ -1634,9 +2050,9 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         VIEWER_USER_ID,
       ),
     ]);
-    const box = screen.getByTestId("bot-thread-composer-input");
+    const box = editableIn(screen.getByTestId("bot-thread-composer-input"));
     await user.click(within(replyRow()).getByTestId("bot-message-edit"));
-    await user.type(box, " please");
+    typeInto(box, " please");
     return { panel, taking, box };
   }
 
@@ -1647,15 +2063,15 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     panel.rerender(
       panelTree({ kind: "unopened", retry: null, sendable: false }),
     );
-    expect(box).toHaveProperty("value", "Hold for now please");
+    expect(textOf(box)).toBe("Hold for now please");
     expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
     // What it sends still replaces a message of the thread.
-    expect(screen.getByRole("textbox", { name: "Reply in the thread" })).toBe(
+    expect(boxInput("Reply in the thread")).toBe(box);
+    panel.rerender(panelTree(taking));
+    expect(editableIn(screen.getByTestId("bot-thread-composer-input"))).toBe(
       box,
     );
-    panel.rerender(panelTree(taking));
-    expect(screen.getByTestId("bot-thread-composer-input")).toBe(box);
-    expect(box).toHaveProperty("value", "Hold for now please");
+    expect(textOf(box)).toBe("Hold for now please");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     expect(sent).toEqual([
@@ -1712,15 +2128,13 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     act(() => land(SEND_RESPONSE));
 
     await waitFor(() => {
-      expect(box).toHaveProperty("value", "");
+      expect(textOf(box)).toBe("");
     });
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
     // With the edit ended, the box under the reply starts its thread again.
-    expect(screen.getByRole("textbox", { name: "Reply in a new thread" })).toBe(
-      box,
-    );
+    expect(boxInput("Reply in a new thread")).toBe(box);
     panel.rerender(panelTree(taking));
-    expect(box).toHaveProperty("value", "");
+    expect(textOf(box)).toBe("");
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
   });
 
@@ -1732,10 +2146,8 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     await user.click(screen.getByTestId("bot-thread-composer-edit-cancel"));
 
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
-    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
-    if (!(box instanceof HTMLTextAreaElement))
-      throw new Error("not a textarea");
-    expect(box.value).toBe("");
+    const box = boxInput("Reply in the thread");
+    expect(textOf(box)).toBe("");
     expect(sent).toEqual([]);
   });
 
@@ -1763,6 +2175,8 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(onEditPost).toHaveBeenCalledWith({
       requestId: POST_REQUEST,
       text: "Ship the release today?",
+      content: null,
+      held: [],
     });
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
 
@@ -1910,12 +2324,17 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(onEditPost).toHaveBeenCalledWith({
       requestId: POST_REQUEST,
       text: "Ship it?",
+      content: null,
+      held: [],
     });
   });
 
   it.each([
     ["not listed yet", { kind: "pending" } as const],
-    ["failed to read", { kind: "failed", retry: () => undefined } as const],
+    [
+      "failed to read",
+      { kind: "failed", retry: failedNotice(() => undefined) } as const,
+    ],
   ])(
     "says a refused retry of the anchor post in the panel while the thread is %s",
     async (_name, thread) => {
@@ -2001,8 +2420,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
 
-  it("offers Retry and no Edit on a teammate's reply", async () => {
-    const user = userEvent.setup();
+  it("says a teammate's reply failed, with no Retry and no Edit, and sends nothing", () => {
     activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
     mountPanel(listed(VIEWER_USER_ID), [
       memberMessage(
@@ -2014,15 +2432,14 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     ]);
     const row = replyRow();
 
+    expect(within(row).getByTestId("bot-message-unanswered")).toBeTruthy();
+    expect(within(row).queryByTestId("bot-message-retry")).toBeNull();
     expect(within(row).queryByTestId("bot-message-edit")).toBeNull();
-    await user.click(within(row).getByTestId("bot-message-retry"));
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0].redeliver).toEqual({ requestId: REPLY_REQUEST });
-    expect(sent[0].threadId).toBe(THREAD_ID);
+    expect(within(row).queryAllByRole("button", { name: "Retry" })).toEqual([]);
+    expect(sent).toEqual([]);
   });
 
-  it("offers Retry and no Edit on the anchor post a teammate wrote", () => {
+  it("says the anchor post a teammate wrote failed, with no Retry and no Edit", () => {
     channelMessages = [
       memberMessage("anchor-1", POST_REQUEST, "Ship it?", "user-teammate"),
     ];
@@ -2030,42 +2447,39 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     mountPanel(listed("user-teammate"), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByTestId("bot-message-unanswered")).toBeTruthy();
     expect(
-      within(anchor).getByTestId("bot-message-unanswered-retry"),
-    ).toBeTruthy();
+      within(anchor).queryByTestId("bot-message-unanswered-retry"),
+    ).toBeNull();
     expect(
       within(anchor).queryByTestId("bot-message-unanswered-edit"),
     ).toBeNull();
   });
 });
 
-describe("<BotThreadPanel /> the thread's tasks", () => {
-  function task(
-    taskId: string,
-    overrides: Partial<BotTaskEntry>,
-  ): BotTaskEntry {
-    return {
-      taskId,
-      cadence: { kind: "on-completion" },
-      lastCheckinAt: null,
-      lastCheckin: null,
-      nextAt: null,
-      state: "tracking",
-      endedReason: null,
-      createdByUserId: null,
-      spun: true,
-      label: null,
-      originRequestId: null,
-      createdByChatId: THREAD_ID,
-      checkins: null,
-      inputNeeded: null,
-      pause: null,
-      stop: null,
-      runRequest: null,
-      ...overrides,
-    };
-  }
+function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
+  return {
+    taskId,
+    cadence: { kind: "on-completion" },
+    lastCheckinAt: null,
+    lastCheckin: null,
+    nextAt: null,
+    state: "tracking",
+    endedReason: null,
+    createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: THREAD_ID,
+    inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
+    ...overrides,
+  };
+}
 
+describe("<BotThreadPanel /> the thread's tasks", () => {
   it("lists only the tasks this thread set up, each with the message it was set up for and no link out", () => {
     // The thread hangs off a member's post, whose row id its request names.
     const postId = conversationRequestMessageId("req-1");
@@ -2178,25 +2592,403 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
   it("becomes one row while its box has the focus, keeps the draft and the focused field, and restores with the keyboard down", async () => {
     const user = userEvent.setup();
+    panelTasks = [task("task-watch", { originRequestId: "req-1" })];
     mountPanel(listed("user-teammate"), [botReply(null)]);
-    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
+    const box = boxInput("Reply in the thread");
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
 
-    await user.type(box, "Not yet");
+    // jsdom does not compute `isContentEditable` from the attribute, which is
+    // how the focus layout tells a text entry from a button.
+    Object.defineProperty(box, "isContentEditable", {
+      configurable: true,
+      value: true,
+    });
+    await user.click(box);
+    typeInto(box, "Not yet");
     expect(composerForm().getAttribute("data-box-form")).toBe("one-row");
-    expect(shown("bot-thread-activity")).toBe(false);
-    expect(shown("bot-thread-session")).toBe(false);
+    expect(shown("bot-thread-tasks")).toBe(false);
     expect(shown("bot-thread-close")).toBe(true);
     expect(shown("bot-thread-composer-send")).toBe(true);
-    expect(screen.getByRole("textbox", { name: "Reply in the thread" })).toBe(
-      box,
-    );
+    expect(boxInput("Reply in the thread")).toBe(box);
     expect(document.activeElement).toBe(box);
-    expect((box as HTMLTextAreaElement).value).toBe("Not yet");
+    expect(textOf(box)).toBe("Not yet");
 
     lowerNativeKeyboard();
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
-    expect(shown("bot-thread-activity")).toBe(true);
-    expect(shown("bot-thread-session")).toBe(true);
+    expect(shown("bot-thread-tasks")).toBe(true);
+  });
+});
+
+describe("<BotThreadPanel /> the replying line as the way into the turn", () => {
+  const OTHER_REQUEST = "req-trunk";
+
+  function replying(requestId: string | null): BotSessionActivity {
+    return {
+      state: "replying",
+      startedAt: Date.now() - 65_000,
+      step: null,
+      requestId,
+      reason: null,
+    };
+  }
+
+  function turnOf(chatId: string, requestId: string, threadId: string | null) {
+    return turnRef({
+      chatId,
+      turnId: `turn-${requestId}`,
+      userMessageId: `prompt-${requestId}`,
+      threadId,
+      startedAt: Date.now() - 65_000,
+      endedAt: null,
+      summary: null,
+      messageIds: [],
+      requestIds: [requestId],
+    });
+  }
+
+  beforeEach(() => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "bot.conversation.send": { major: 1, minor: 1 },
+      "bot.turn.locate": { major: 1, minor: 0 },
+    });
+  });
+
+  afterEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  it("opens the thread's own session at its request, though the trunk is replying on another", async () => {
+    const user = userEvent.setup();
+    const threadTurn = turnOf("session-1", "req-1", THREAD_ID);
+    const trunkTurn = turnOf("trunk-chat", OTHER_REQUEST, null);
+    const asked: BotTurnLocateRequest[] = [];
+    mocks.client = hostClientLocating(
+      (request) => turnsAskedFor([threadTurn, trunkTurn], request),
+      asked,
+    );
+    mountPanel(listed("user-teammate"), []);
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: replying(OTHER_REQUEST),
+          threads: { [THREAD_ID]: replying("req-1") },
+        },
+      });
+    });
+    const button = await within(
+      screen.getByTestId("bot-thread-replying-strip"),
+    ).findByRole("button", { name: "Release Bot is replying…" });
+    await user.click(button);
+
+    const call = onOpenTurn.mock.calls.at(-1);
+    if (call === undefined) throw new Error("the strip opened nothing");
+    expect(call).toEqual([threadTurn, null]);
+    expect(sessionTargetOfTurn(call[0], call[1])).toEqual({
+      chatId: "session-1",
+      threadId: THREAD_ID,
+      messageId: "prompt-req-1",
+      sendPostId: null,
+    });
+    expect(asked.map((request) => request.requestIds)).toEqual([["req-1"]]);
+  });
+
+  it("is only the status line for a turn that answers no request, and becomes the button on the same node once it names one", async () => {
+    const turn = turnOf("session-1", "req-1", THREAD_ID);
+    const asked: BotTurnLocateRequest[] = [];
+    mocks.client = hostClientLocating(
+      (request) => turnsAskedFor([turn], request),
+      asked,
+    );
+    mountPanel(listed("user-teammate"), []);
+    const composer = screen.getByTestId("bot-thread-composer");
+
+    act(() => {
+      activityStore.setState({
+        activity: { trunk: null, threads: { [THREAD_ID]: replying(null) } },
+      });
+    });
+    const strip = screen.getByTestId("bot-thread-replying-strip");
+    expect(strip.getAttribute("role")).toBe("status");
+    expect(within(strip).getByText("Release Bot is replying…")).toBeTruthy();
+    expect(within(strip).queryByRole("button")).toBeNull();
+    expect(asked).toEqual([]);
+
+    act(() => {
+      activityStore.setState({
+        activity: { trunk: null, threads: { [THREAD_ID]: replying("req-1") } },
+      });
+    });
+    await within(strip).findByRole("button", {
+      name: "Release Bot is replying…",
+    });
+
+    expect(screen.getByTestId("bot-thread-replying-strip")).toBe(strip);
+    expect(screen.getByTestId("bot-thread-composer")).toBe(composer);
+  });
+});
+
+describe("<BotThreadPanel /> a reply that names the post the thread opens on", () => {
+  function userPost(): Message {
+    return {
+      role: "user",
+      messageId: "anchor-1",
+      sender: { type: "user", userId: "user-teammate" },
+      message: {
+        kind: "user",
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Ship the release today?" }],
+            },
+          ],
+        },
+        browserAnnotations: [],
+      },
+      timestamp: 1_000,
+      sessionAnchor: null,
+    };
+  }
+
+  it("badges the second reply, not the first directly under the post, and shows the post highlighted when chosen", async () => {
+    const user = userEvent.setup();
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    onTestFinished(() => scrolled.mockRestore());
+    channelMessages = [userPost()];
+    mountPanel(listed("user-teammate"), [
+      { ...botReply(null), repliesTo: "anchor-1" },
+      { ...userPost(), messageId: "between-1", timestamp: 2_500 },
+      {
+        ...botReply(null),
+        messageId: "reply-2",
+        timestamp: 3_000,
+        startedAt: 3_000,
+        repliesTo: "anchor-1",
+      },
+    ]);
+
+    const badges = screen.getAllByTestId("bot-reply-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.getAttribute("aria-label")).toBe(
+      "Replying to Tess Teammate: Ship the release today?",
+    );
+    const opening = screen.getByTestId("bot-thread-opening");
+    expect(scrolled).not.toHaveBeenCalled();
+
+    await user.click(badges[0]);
+
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest" });
+    expect(scrolled.mock.contexts).toEqual([opening]);
+    for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
+      expect(opening.classList.contains(token)).toBe(true);
+    }
+  });
+});
+
+describe("<BotThreadPanel /> a member's quote above a plain line, stored in two paragraphs", () => {
+  function quoteThenPlainLine(messageId: string): Message {
+    return memberPost({
+      messageId,
+      requestId: `req-${messageId}`,
+      lines: [QUOTE_LINE, PLAIN_LINE],
+      timestamp: 1_000,
+      resolvedBy: null,
+    });
+  }
+
+  it("keeps the plain line out of the quote in a member's reply", () => {
+    mountPanel(listed("user-teammate"), [quoteThenPlainLine("reply-1")]);
+
+    const row = within(screen.getByTestId("bot-thread-replies"))
+      .getByText("implementation not confirmed started.", { exact: false })
+      .closest<HTMLElement>('[data-testid="bot-member-row"]');
+    if (row === null) throw new Error("the reply is not drawn as a member row");
+    expectPlainLineOutsideQuote(row);
+  });
+
+  it("keeps the plain line out of the quote in the post the thread opens on", () => {
+    channelMessages = [quoteThenPlainLine("anchor-1")];
+    mountPanel(listed("user-teammate"), []);
+
+    expectPlainLineOutsideQuote(screen.getByTestId("bot-thread-anchor"));
+  });
+});
+
+describe("<BotThreadPanel /> a reply box whose stored draft names images still being read (T186)", () => {
+  afterEach(() => {
+    useBotDraftsStore.setState({ boxesReading: {} });
+  });
+
+  it("shows the stored text in a reply box that cannot be edited or sent until the person discards it, and then gives an empty reply box", async () => {
+    const user = userEvent.setup();
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    useBotDraftsStore.setState({
+      boxesReading: {
+        [BOT_ID]: { "anchor-1": { text: "Stored reply", replyTo: null } },
+      },
+    });
+    mountPanel(listed("user-teammate"), []);
+
+    const input = screen.getByTestId("bot-thread-composer-input");
+    expect(input).toHaveProperty("value", "Stored reply");
+    expect(input).toHaveProperty("disabled", true);
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.getByTestId("bot-thread-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+
+    await user.click(screen.getByTestId("bot-thread-composer-discard"));
+
+    expect(useBotDraftsStore.getState().boxesReading).toEqual({});
+    expect(screen.queryByTestId("bot-thread-composer-reading")).toBeNull();
+    expect(textOf(boxInput("Reply in the thread"))).toBe("");
+  });
+
+  describe("with a reply chosen while it waits (T166)", () => {
+    const REPLYING_TO = {
+      messageId: "message-1",
+      author: "Sam",
+      line: "Ship it on Friday",
+    };
+
+    function mountWaiting(reach: BotReplyReach): void {
+      panelReplyReach = reach;
+      channelMessages = [announcement("anchor-1", "Ship the release today?")];
+      useBotDraftsStore.setState({
+        boxesReading: {
+          [BOT_ID]: {
+            "anchor-1": { text: "Stored reply", replyTo: REPLYING_TO },
+          },
+        },
+      });
+      mountPanel(listed("user-teammate"), []);
+    }
+
+    it("shows the reply the box waits under, and cancelling it clears it from the waiting box", async () => {
+      const user = userEvent.setup();
+      mountWaiting("delivered");
+
+      expect(
+        screen.getByTestId("bot-thread-composer-reply-author").textContent,
+      ).toBe("Sam");
+      expect(
+        screen.getByTestId("bot-thread-composer-reply-line").textContent,
+      ).toBe("Ship it on Friday");
+
+      await user.click(screen.getByTestId("bot-thread-composer-reply-cancel"));
+
+      expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+      expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+      expect(
+        useBotDraftsStore.getState().boxesReading[BOT_ID]?.["anchor-1"],
+      ).toEqual({ text: "Stored reply", replyTo: null });
+    });
+
+    it("shows no reply where the bot's host takes none", () => {
+      mountWaiting("none");
+
+      expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+      expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+    });
+  });
+});
+
+describe("<BotThreadPanel /> the split panel's unread boundary", () => {
+  /** A reply of the bot's in the thread, at `at`. */
+  function threadReply(
+    messageId: string,
+    text: string,
+    at: number,
+  ): Extract<Message, { role: "assistant" }> {
+    return { ...announcement(messageId, text), timestamp: at, startedAt: at };
+  }
+
+  const REPLIES: ReadonlyArray<Message> = [
+    threadReply("reply-read", "Already read reply", 2_000),
+    threadReply("reply-new-1", "First new reply", 3_000),
+    threadReply("reply-new-2", "Second new reply", 4_000),
+  ];
+
+  function readBehindTwoReplies(): void {
+    mocks.read = {
+      cursors: { [THREAD_ID]: { messageId: "reply-read", seq: 2_000 } },
+      latest: { [THREAD_ID]: { messageId: "reply-new-2", seq: 4_000 } },
+    };
+  }
+
+  function boundaryTarget(): string {
+    return (
+      screen
+        .getByTestId("chat-messages-stub")
+        .getAttribute("data-boundary-to") ?? ""
+    );
+  }
+
+  it("opens on the New divider above the first unread reply, by a boundary request and not a message request", async () => {
+    readBehindTwoReplies();
+    mountPanel(listed(null), REPLIES);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-unread-divider]")).toHaveLength(
+        1,
+      );
+    });
+    const divider = document.querySelector("[data-unread-divider]");
+    expect(divider?.nextElementSibling?.textContent).toContain(
+      "First new reply",
+    );
+    const rowBelow =
+      divider?.nextElementSibling?.getAttribute("data-bot-read-row");
+    expect(rowBelow).toBeTruthy();
+    expect(boundaryTarget()).toBe(rowBelow);
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("");
+  });
+
+  it("opens on the New divider above a merged row that holds the cursor's record and a newer unread one", async () => {
+    mocks.read = {
+      cursors: { [THREAD_ID]: { messageId: "turn-a1", seq: 3_000 } },
+      latest: { [THREAD_ID]: { messageId: "turn-a2", seq: 4_000 } },
+    };
+    mountPanel(listed(null), [
+      threadReply("reply-read", "Already read reply", 2_000),
+      { ...threadReply("turn-a1", "Merged part one", 3_000), turnId: "turn-1" },
+      { ...threadReply("turn-a2", "Merged part two", 4_000), turnId: "turn-1" },
+    ]);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-unread-divider]")).toHaveLength(
+        1,
+      );
+    });
+    const divider = document.querySelector("[data-unread-divider]");
+    expect(divider?.nextElementSibling?.textContent).toContain(
+      "Merged part two",
+    );
+    const rowBelow =
+      divider?.nextElementSibling?.getAttribute("data-bot-read-row");
+    expect(rowBelow).toBeTruthy();
+    expect(boundaryTarget()).toBe(rowBelow);
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("");
+  });
+
+  it("lands on the message a permalink names and requests no boundary, though the replies are unread", async () => {
+    readBehindTwoReplies();
+    panelLanding = { messageId: "reply-new-2", sendPostId: null, visit: 1 };
+    mountPanel(listed(null), REPLIES);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+      ).toBe("assistant:ts:4000");
+    });
+    expect(boundaryTarget()).toBe("");
   });
 });

@@ -5,6 +5,7 @@ export * from "./agent-session-state";
 export * from "./asset-stream-schemas";
 export * from "./browser";
 export * from "./chat-fallback";
+export * from "./chat/feedback-draft";
 export * from "./chat/mcp-app";
 export * from "./chat-fork";
 export * from "./chat-search";
@@ -49,6 +50,7 @@ export * from "./workspace";
 export * from "./worktree-auto-cleanup-schemas";
 export * from "./worktree-changed-stream";
 export * from "./providers-changed-stream";
+export * from "./cloud-recovered-stream";
 
 export {
   hostRpcRegistry,
@@ -117,11 +119,16 @@ export {
   worktreeSetRepoBranchPrefixV10,
   worktreeGetBindingV10,
   PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
+  AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+  AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+  AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+  AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+  AGENT_FORK_SPEED_REQUIRED_HOST_VERSION,
+  HOST_AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
   type HostRpcRegistry,
   type HostStreamRpcRegistry,
 } from "./registry";
 export * from "./environment-schemas";
-export * from "./executable-write-grant";
 
 export {
   diskWorktreeEntrySchema,

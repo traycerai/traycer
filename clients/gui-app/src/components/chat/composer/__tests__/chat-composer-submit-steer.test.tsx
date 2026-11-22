@@ -729,7 +729,6 @@ function mountSubmit(input: MountSubmitInput): {
         onSubmitMessage: props.onSubmitMessage,
         onSideChat: null,
         targetHostId: null,
-        restingSandbox: null,
         queueEditTargetId: null,
         // The gate is off in these fixtures: they predate it and assert the
         // inline behaviour, which is what `false` preserves exactly.
@@ -761,6 +760,8 @@ function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

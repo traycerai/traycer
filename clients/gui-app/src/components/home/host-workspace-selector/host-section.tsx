@@ -12,7 +12,7 @@ import {
 import type { HostPickIntent } from "@/components/settings/host-scope/host-option-model";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 
 interface HostSectionProps {
   /**
@@ -79,13 +79,12 @@ export function WorkspaceHostSwitcher(
       refusalByHostId={props.refusalByHostId}
       inertExceptHostId={props.inertExceptHostId}
       intent={props.intent}
+      consequence={null}
       action={{
         kind: "manage-hosts",
         onSelect: () => {
           if (props.activeHostId !== null) {
-            useSettingsHostScopeStore
-              .getState()
-              .setScopedHostId(props.activeHostId);
+            carryViewedHostIntoSettingsScope(props.activeHostId);
           }
           // Named rather than left null: an Overview already open on another
           // tab comes back to Updates, as every host link does.
@@ -119,20 +118,26 @@ export function WorkspaceHostSwitcher(
  * It is the same `HostSwitcher` the Settings rail and the usage popover mount —
  * one row of chrome that names the current host and opens the list — rather
  * than a flat list of every host inline. The flat list was fine at one host and
- * became the whole top of the panel at four, pushing the Workspaces section it
+ * became the whole top of the panel at four, pushing the Folders section it
  * heads below the fold on exactly the accounts that own several machines.
  *
- * What stays local to this surface is only its framing: the "Host" heading that
- * pairs with "Workspaces" below it.
+ * What stays local to this surface is its framing: the "Host" heading that
+ * pairs with "Folders" below it.
  */
-export function HostSection(props: HostSectionProps): ReactNode {
+export function HostSection(
+  props: HostSectionProps & {
+    /** The section's heading. Callers pass "Host". */
+    readonly heading: string;
+  },
+): ReactNode {
+  const { heading, ...section } = props;
   return (
     <section
       data-testid="host-workspace-selector-host-section"
       className="w-full max-w-full min-w-0"
     >
-      <DropdownMenuLabel>Host</DropdownMenuLabel>
-      <WorkspaceHostSwitcher {...props} surface="field" />
+      <DropdownMenuLabel>{heading}</DropdownMenuLabel>
+      <WorkspaceHostSwitcher {...section} surface="field" />
     </section>
   );
 }

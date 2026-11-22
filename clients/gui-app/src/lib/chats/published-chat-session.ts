@@ -343,7 +343,6 @@ export function publishedChatSessionState(
     portForwards: [],
     runStatus: "idle",
     activeTurn: null,
-    renamedTurnIds: new Map(),
     turnLifecycleRevision: 0,
     steerProtocolSupported: false,
     queuedSteerRestartConfirmationSupported: () => false,
@@ -384,6 +383,7 @@ export function publishedChatSessionState(
     accumulatedSummaryGenerationSeated: true,
     accumulatedSummaryAssemblyStarted: false,
     backgroundItems: undefined,
+    accountWait: null,
     // A published copy is frozen and has no stream: there is no traversal to
     // hold its dispatch and no offer to answer, so both surfaces are absent
     // for the life of the surface rather than merely not-yet-arrived. That is
@@ -418,6 +418,7 @@ export function publishedChatSessionState(
     acceptedActions: {},
     pendingUserMessages: [],
     errorNotices: [],
+    evictedSendRefusal: null,
     deliveredNoticeActionIds: new Set<string>(),
     deliveredLastCopyActionIds: new Set<string>(),
     lastCopyPrompts: {},
@@ -584,7 +585,9 @@ export function createPublishedChatSessionHandle(
     epicId: input.epicId,
     chatId: input.chatId,
     userId: input.ownerUserId,
+    sessionGeneration: 0,
     store: boundStore,
+    lineBreakNotices: new WeakSet(),
     deliveredNotices: {
       notices: new WeakSet(),
       retainedClientActionIds: new Set<string>(),

@@ -151,7 +151,8 @@ export const judgeCatalog: CatalogState = {
   providers: [],
 };
 
-let modelStates: Record<string, ModelsState> = {};
+let modelStates: Partial<Record<string, ModelsState>> = {};
+const profileModelStates = new Map<string, ModelsState>();
 let version = 0;
 const listeners = new Set<() => void>();
 
@@ -173,13 +174,31 @@ export function setModels(harnessId: string, next: ModelsState): void {
   notify();
 }
 
-/** Every harness's model catalog goes back to pending. */
-export function resetModels(): void {
-  modelStates = {};
+/** Sets one account's model catalog without changing another account's read. */
+export function setProfileModels(
+  harnessId: string,
+  profileId: string,
+  next: ModelsState,
+): void {
+  profileModelStates.set(JSON.stringify([harnessId, profileId]), next);
   notify();
 }
 
-function modelsFor(harnessId: string): ModelsState {
+/** Every harness's model catalog goes back to pending. */
+export function resetModels(): void {
+  modelStates = {};
+  profileModelStates.clear();
+  notify();
+}
+
+function modelsFor(harnessId: string, profileId: string | null): ModelsState {
+  if (profileId !== null) {
+    return (
+      profileModelStates.get(JSON.stringify([harnessId, profileId])) ??
+      modelStates[harnessId] ??
+      PENDING_MODELS
+    );
+  }
   return modelStates[harnessId] ?? PENDING_MODELS;
 }
 
@@ -213,9 +232,13 @@ const modelsResultCache = new Map<
  * harness would rebuild the result, and its `models` array, on every
  * alternation.
  */
-function modelsResult(harnessId: string, enabled: boolean): ModelsResult {
-  const state = modelsFor(harnessId);
-  const key = `${enabled ? "on" : "off"}:${harnessId}`;
+function modelsResult(
+  harnessId: string,
+  enabled: boolean,
+  profileId: string | null,
+): ModelsResult {
+  const state = modelsFor(harnessId, profileId);
+  const key = JSON.stringify([enabled, harnessId, profileId]);
   const cached = modelsResultCache.get(key);
   if (cached !== undefined && cached.state === state) {
     return cached.result;
@@ -268,7 +291,7 @@ function catalogEntries(enabled: boolean): CatalogEntries {
   const value: CatalogEntries = {
     harnesses: enabled
       ? judgeCatalog.harnesses.map((row) => {
-          const state = modelsFor(row.id);
+          const state = modelsFor(row.id, null);
           return {
             ...row,
             models: state.kind === "ready" ? [...state.models] : [],
@@ -293,6 +316,10 @@ function catalogEntries(enabled: boolean): CatalogEntries {
 interface Activity {
   readonly enabled: boolean;
   readonly subscribed: boolean;
+}
+
+interface ModelsActivity extends Activity {
+  readonly profileId: string | null;
 }
 
 /**
@@ -341,19 +368,19 @@ export async function guiHarnessCatalogModuleMock(): Promise<
     useGuiHarnessModelsQuery: (
       harnessId: string,
       _workingDirectory: string | null,
-      activity: Activity,
+      activity: ModelsActivity,
     ) => {
       useCatalogVersion();
-      return modelsResult(harnessId, activity.enabled);
+      return modelsResult(harnessId, activity.enabled, activity.profileId);
     },
     useGuiHarnessModelsQueryForClient: (
       _client: unknown,
       harnessId: string,
       _workingDirectory: string | null,
-      activity: Activity,
+      activity: ModelsActivity,
     ) => {
       useCatalogVersion();
-      return modelsResult(harnessId, activity.enabled);
+      return modelsResult(harnessId, activity.enabled, activity.profileId);
     },
     useGuiHarnessCommandsQuery: (
       _client: unknown,

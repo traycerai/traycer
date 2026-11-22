@@ -194,7 +194,7 @@ test.describe("the pull zone on the row", () => {
       page,
       send.x + send.width / 2,
       zone.y + zone.height / 2,
-      -40,
+      -60,
     );
     await expect(page.locator(EXPANDED)).toBeVisible();
     await expect(page.locator("[data-composer-focus-row]")).toHaveCount(0);
@@ -208,7 +208,7 @@ test.describe("the pull zone on the row", () => {
     // away mid-pull: the release still has to end the pull.
     const firstLineTop = await typeDraft(page);
     const editor = await boxOf(page.locator(EDITOR));
-    await pullFrom(page, editor.x + editor.width / 2, firstLineTop - 1, -40);
+    await pullFrom(page, editor.x + editor.width / 2, firstLineTop - 1, -60);
     await expect(page.locator(EXPANDED)).toBeVisible();
     await page.waitForFunction("document.getAnimations().length === 0");
 
@@ -265,7 +265,7 @@ test.describe("the pull zone on the row", () => {
       page,
       zone.x + zone.width / 2,
       zone.y + zone.height / 2,
-      -40,
+      -60,
     );
     await expect(page.locator(EXPANDED)).toBeVisible();
     // The sheet eases to its top; read its zone once it is there.

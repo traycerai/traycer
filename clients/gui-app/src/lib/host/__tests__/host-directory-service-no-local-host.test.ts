@@ -1,14 +1,24 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  FleetRefreshOutcome,
+  LocalHostSnapshot,
+} from "@traycer-clients/shared/platform/runner-host";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  RemoteHostFetcher,
+  RemoteHostFetchOutcome,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   HostDirectoryService,
   type HostDirectoryServiceOptions,
 } from "@/lib/host/host-directory-service";
 import { lastLocalHostIdKey } from "@/lib/persist";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  setSettingsHostSelection,
+  settingsHostSelection,
+} from "@/stores/settings/__tests__/settings-host-scope-test-support";
 
 /**
  * Mirrors `host-directory-service.test.ts`'s own `LAST_LOCAL_HOST_ID_STORAGE_KEY`
@@ -83,7 +93,7 @@ afterEach(() => {
     directory.dispose();
   }
   window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
 });
 
 describe("HostDirectoryService with hasLocalHost: false and a persisted local host id", () => {
@@ -194,9 +204,7 @@ describe("HostDirectoryService with hasLocalHost: false and a persisted local ho
     // Primed as though a PREVIOUS (hasLocalHost: true) launch of this machine
     // had scoped Settings to the persisted id - the holder `adoptLocalHostId`
     // migrates when a re-enrollment fires.
-    useSettingsHostScopeStore
-      .getState()
-      .setScopedHostId(PERSISTED_LOCAL_HOST_ID);
+    setSettingsHostSelection(PERSISTED_LOCAL_HOST_ID);
     const host = makeHost(false, null);
     const directory = makeDirectory({
       authContextId: null,
@@ -209,7 +217,7 @@ describe("HostDirectoryService with hasLocalHost: false and a persisted local ho
     await directory.start();
     host.setLocalHost(localSnapshot);
 
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+    expect(settingsHostSelection()?.hostId ?? null).toBe(
       PERSISTED_LOCAL_HOST_ID,
     );
   });
@@ -309,9 +317,7 @@ describe("HostDirectoryService with hasLocalHost: true and a persisted local hos
       LAST_LOCAL_HOST_ID_STORAGE_KEY,
       PERSISTED_LOCAL_HOST_ID,
     );
-    useSettingsHostScopeStore
-      .getState()
-      .setScopedHostId(PERSISTED_LOCAL_HOST_ID);
+    setSettingsHostSelection(PERSISTED_LOCAL_HOST_ID);
     const host = makeHost(true, null);
     // The shell answers with a DIFFERENT id than the persisted one - a
     // re-enrollment (reinstall/replacement) discovered on this launch.
@@ -327,8 +333,500 @@ describe("HostDirectoryService with hasLocalHost: true and a persisted local hos
     await directory.start();
 
     expect(directory.getLocalHostId()).toBe("re-enrolled-host-id");
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
-      "re-enrolled-host-id",
+    expect(settingsHostSelection()?.hostId ?? null).toBe("re-enrolled-host-id");
+  });
+});
+
+/**
+ * The window narrator reads `hasConcludedDiscovery()` against the selection
+ * authority's fleet, through `useSyncExternalStore`, so on any render and not
+ * only on an emit. A shell with no local host must not conclude on a listing
+ * that names hosts until the fleet refresh it triggers has settled.
+ */
+describe("HostDirectoryService - announcing a concluded listing against the fleet refresh", () => {
+  const listedHost: HostDirectoryEntry = {
+    ...registryTwinOfPersistedId,
+    hostId: "listed-host-id",
+  };
+  const hostsFetcher: RemoteHostFetcher = () =>
+    Promise.resolve({ kind: "hosts", entries: [listedHost] });
+
+  async function startedDirectory(
+    host: MockRunnerHost,
+  ): Promise<HostDirectoryService> {
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: hostsFetcher,
+    });
+    await directory.startSeeded();
+    return directory;
+  }
+
+  function recordConcluded(directory: HostDirectoryService): boolean[] {
+    const observed: boolean[] = [];
+    directory.onChange(() => {
+      observed.push(directory.hasConcludedDiscovery());
+    });
+    return observed;
+  }
+
+  /** Every fleet refresh is held until the test settles it, by call order. */
+  function heldFleetRefresh(host: MockRunnerHost): {
+    readonly calls: () => number;
+    readonly release: (call: number) => void;
+    readonly settle: (call: number, outcome: FleetRefreshOutcome) => void;
+  } {
+    const settles: ((outcome: FleetRefreshOutcome) => void)[] = [];
+    vi.spyOn(host, "refreshHostFleet").mockImplementation(
+      () =>
+        new Promise<FleetRefreshOutcome>((resolve) => {
+          settles.push(resolve);
+        }),
     );
+    const settle = (call: number, outcome: FleetRefreshOutcome): void => {
+      const resolve = settles.at(call);
+      if (resolve === undefined) throw new Error(`no fleet refresh ${call}`);
+      resolve(outcome);
+    };
+    return {
+      calls: () => settles.length,
+      release: (call) => {
+        settle(call, { kind: "published" });
+      },
+      settle,
+    };
+  }
+
+  /** A directory for user-1 whose credential generation the test advances. */
+  async function rotatingDirectory(
+    host: MockRunnerHost,
+    outcomes: RemoteHostFetchOutcome[],
+  ): Promise<{
+    readonly directory: HostDirectoryService;
+    readonly rotate: () => void;
+  }> {
+    let generation = 0;
+    const directory = makeDirectory({
+      authContextId: () => "user-1",
+      credentialGeneration: () => generation,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: () => {
+        const next = outcomes.shift();
+        if (next === undefined) throw new Error("unexpected registry fetch");
+        return Promise.resolve(next);
+      },
+    });
+    await directory.startSeeded();
+    return {
+      directory,
+      rotate: () => {
+        generation += 1;
+      },
+    };
+  }
+
+  it("an unchanged listing while a concluded era's fleet read is in flight does not discard its unavailable", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const addedHost: HostDirectoryEntry = {
+      ...listedHost,
+      hostId: "added-host-id",
+    };
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost, addedHost] },
+      { kind: "hosts", entries: [listedHost, addedHost] },
+      { kind: "hosts", entries: [listedHost, addedHost] },
+    ]);
+    const concluding = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    fleet.release(0);
+    await concluding;
+
+    await directory.refresh();
+    expect(fleet.calls()).toBe(2);
+    await directory.refresh();
+    expect(fleet.calls()).toBe(2);
+    fleet.settle(1, { kind: "unavailable" });
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(true);
+    });
+    await directory.refresh();
+
+    expect(fleet.calls()).toBe(3);
+    fleet.release(2);
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(false);
+    });
+  });
+
+  it("a no-local-host shell holds the announcement until the fleet refresh resolves", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const directory = await startedDirectory(host);
+    const observed = recordConcluded(directory);
+
+    const refreshed = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+
+    expect(observed).not.toContain(true);
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+
+    fleet.release(0);
+    await refreshed;
+
+    expect(observed).toContain(true);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("an unchanged listing from a newer credential holds until its own fleet refresh settles", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory, rotate } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost] },
+    ]);
+
+    void directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    rotate();
+    const newer = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(2);
+    });
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+
+    fleet.release(1);
+    await newer;
+
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("an older credential's fleet refresh settling while a newer one is held does not conclude", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory, rotate } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost] },
+    ]);
+
+    const older = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    rotate();
+    void directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(2);
+    });
+    fleet.release(0);
+    await older;
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+  });
+
+  it("a newer credential's sign-out during the held fleet refresh withdraws the conclusion", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory, rotate } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "signed-out" },
+    ]);
+
+    const held = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    rotate();
+    await directory.refresh();
+    fleet.release(0);
+    await held;
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+  });
+
+  it("a same-era withdrawal after the in-flight slot is invalidated is not overwritten by the held fleet refresh", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "signed-out" },
+    ]);
+
+    const held = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    directory.invalidateInFlightRefresh();
+    await directory.refresh();
+    fleet.release(0);
+    await held;
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+  });
+
+  it("an unavailable fleet refresh concludes discovery as a failure", async () => {
+    const host = makeHost(false, null);
+    vi.spyOn(host, "refreshHostFleet").mockResolvedValue({
+      kind: "unavailable",
+    });
+    const directory = await startedDirectory(host);
+    const observed = recordConcluded(directory);
+
+    await directory.refresh();
+
+    expect(observed).toContain(true);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(directory.hasFailedDiscovery()).toBe(true);
+  });
+
+  it("with no identity, a published fleet is not re-requested on an unchanged listing", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const directory = await startedDirectory(host);
+
+    const first = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    fleet.release(0);
+    await first;
+    await directory.refresh();
+
+    expect(fleet.calls()).toBe(1);
+  });
+
+  it("a superseded fleet refresh concludes nothing", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const directory = await startedDirectory(host);
+
+    const refreshed = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    fleet.settle(0, { kind: "superseded" });
+    await refreshed;
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+    expect(directory.hasFailedDiscovery()).toBe(false);
+  });
+
+  it("an unchanged listing after an unavailable fleet re-requests it, and a published one ends the failure", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost] },
+    ]);
+
+    const first = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    fleet.settle(0, { kind: "unavailable" });
+    await first;
+    expect(directory.hasFailedDiscovery()).toBe(true);
+
+    await directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(2);
+    });
+    expect(directory.hasFailedDiscovery()).toBe(true);
+    fleet.settle(1, { kind: "published" });
+
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(false);
+    });
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("an unavailable fleet keeps the identity's fleet stale across a withdrawal, so the next listing re-requests it", async () => {
+    const host = makeHost(true, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "signed-out" },
+      { kind: "hosts", entries: [] },
+    ]);
+
+    await directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    fleet.settle(0, { kind: "unavailable" });
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(true);
+    });
+    await directory.refresh();
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+    expect(fleet.calls()).toBe(1);
+
+    await directory.refresh();
+
+    expect(fleet.calls()).toBe(2);
+  });
+
+  it("an unavailable fleet from an older commit neither concludes nor marks the fleet stale", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost] },
+    ]);
+
+    const older = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    directory.invalidateInFlightRefresh();
+    const newer = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(2);
+    });
+    fleet.settle(0, { kind: "unavailable" });
+    await older;
+
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+
+    fleet.settle(1, { kind: "published" });
+    await newer;
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(directory.hasFailedDiscovery()).toBe(false);
+
+    await directory.refresh();
+
+    expect(fleet.calls()).toBe(2);
+  });
+
+  it("a failed registry read from an older credential generation that lands after a newer commit is discarded", async () => {
+    const host = makeHost(false, null);
+    let generation = 0;
+    let resolveOlderFetch: (outcome: RemoteHostFetchOutcome) => void = () => {
+      throw new Error("the older fetch has not started");
+    };
+    let fetches = 0;
+    const directory = makeDirectory({
+      authContextId: () => "user-1",
+      credentialGeneration: () => generation,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: () => {
+        fetches += 1;
+        if (fetches > 1) {
+          return Promise.resolve({ kind: "hosts", entries: [listedHost] });
+        }
+        return new Promise<RemoteHostFetchOutcome>((resolve) => {
+          resolveOlderFetch = resolve;
+        });
+      },
+    });
+    await directory.startSeeded();
+
+    const older = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fetches).toBe(1);
+    });
+    generation += 1;
+    await directory.refresh();
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(directory.hasFailedDiscovery()).toBe(false);
+
+    resolveOlderFetch({ kind: "failed" });
+    await older;
+
+    expect(directory.hasFailedDiscovery()).toBe(false);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("a failed registry read after a good listing marks failure, and the next unchanged listing re-requests the fleet", async () => {
+    const host = makeHost(true, null);
+    const fleetRefresh = vi.spyOn(host, "refreshHostFleet");
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "failed" },
+      { kind: "hosts", entries: [listedHost] },
+    ]);
+
+    await directory.refresh();
+    expect(directory.hasFailedDiscovery()).toBe(false);
+    const requestsAfterListing = fleetRefresh.mock.calls.length;
+
+    await directory.refresh();
+    expect(directory.hasFailedDiscovery()).toBe(true);
+    expect(fleetRefresh).toHaveBeenCalledTimes(requestsAfterListing);
+
+    await directory.refresh();
+    expect(fleetRefresh).toHaveBeenCalledTimes(requestsAfterListing + 1);
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(false);
+    });
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
+  it("a shell with a local host reads the outcome of a membership-change request too", async () => {
+    const host = makeHost(true, null);
+    const fleet = heldFleetRefresh(host);
+    const secondHost: HostDirectoryEntry = {
+      ...listedHost,
+      hostId: "second-listed-host-id",
+    };
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost, secondHost] },
+      { kind: "hosts", entries: [listedHost, secondHost] },
+    ]);
+
+    await directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    fleet.settle(0, { kind: "published" });
+
+    await directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(2);
+    });
+    fleet.settle(1, { kind: "unavailable" });
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(true);
+    });
+
+    await directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(3);
+    });
+    fleet.settle(2, { kind: "published" });
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(false);
+    });
+  });
+
+  it("a shell with a local host announces without waiting on the fleet refresh", async () => {
+    const host = makeHost(true, null);
+    const fleetRefresh = vi
+      .spyOn(host, "refreshHostFleet")
+      .mockImplementation(
+        () => new Promise<FleetRefreshOutcome>(() => undefined),
+      );
+    const directory = await startedDirectory(host);
+    const observed = recordConcluded(directory);
+
+    await directory.refresh();
+
+    expect(fleetRefresh).toHaveBeenCalled();
+    expect(observed).toContain(true);
   });
 });

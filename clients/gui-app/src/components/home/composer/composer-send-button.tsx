@@ -16,7 +16,7 @@ interface ComposerSendButtonProps {
   onStopTurn: (() => void) | null;
   /**
    * When non-null (send mode only), the button is disabled and shows this
-   * string as its tooltip - e.g. "Select a workspace folder to start." `null`
+   * string as its tooltip - e.g. "Link at least one folder to start." `null`
    * leaves the normal "Send" affordance.
    */
   disabledHint: string | null;

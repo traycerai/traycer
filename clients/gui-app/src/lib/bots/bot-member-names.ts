@@ -70,15 +70,31 @@ export function botActivityMemberName(
 }
 
 /**
- * A user row's sender picture in a bot chat, the viewer's included; null
- * for an agent sender and for a member the directory has no picture of.
+ * A user row's sender picture in a bot chat; see {@link botMemberAvatarUrl}.
+ * Null for an agent sender.
  */
 export function botUserSenderAvatarUrl(
   sender: OpenUserMessageSender,
+  viewer: SenderDisplayContext["profile"],
   resolveMember: BotMemberResolver,
 ): string | null {
   if (sender.type !== "user") return null;
-  return resolveMember(sender.userId)?.avatarUrl ?? null;
+  return botMemberAvatarUrl(sender.userId, viewer, resolveMember);
+}
+
+/**
+ * A member's picture on a bot's surfaces. The viewer's comes from their own
+ * account, as their name does: a personal environment has no member list, so
+ * the directory never answers for its owner. Anyone else's, and the viewer's
+ * when their account has none, comes from the directory; null when it has none.
+ */
+export function botMemberAvatarUrl(
+  userId: string,
+  viewer: SenderDisplayContext["profile"],
+  resolveMember: BotMemberResolver,
+): string | null {
+  const own = viewer?.userId === userId ? (viewer.avatarUrl ?? null) : null;
+  return own ?? resolveMember(userId)?.avatarUrl ?? null;
 }
 
 /** A user row's sender in a bot chat, the viewer included; null for an agent sender. */

@@ -184,6 +184,7 @@ export function sendQuestionStates(
         names.viewerUserId,
       ),
       EMPTY_QUESTION_CARD_DRAFT,
+      item.multiSelect === true,
     );
     return view.kind === "settled"
       ? questionSettledLine(view.settlement, names.botTitle)

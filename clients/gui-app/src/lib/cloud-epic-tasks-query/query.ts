@@ -2,7 +2,10 @@ import type {
   CloudListTasksRequest,
   CloudTaskFilters,
 } from "@traycer/protocol/host/organization/schemas";
-import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  getNegotiatedHostMethodVersion,
+  getNegotiatedHostMethods,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   queryOptions,
   replaceEqualDeep,
@@ -34,6 +37,7 @@ import {
 import { beginLocalFirstRevalidationEpisode } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
+import { negotiatedOrganizationHistorySortsByCreated } from "@/lib/cloud-epic-tasks-query/created-sort-admission";
 import {
   admitCloudEpicTasksFirstPage,
   removeDeletedEpicsFromCloudTaskCaches,
@@ -705,6 +709,19 @@ function fetchOrganizationHistory(
   )
     return Promise.reject(
       new Error("Update this device to filter by labels or groups."),
+    );
+  // The tier serving labels and groups can be older than the host that let
+  // History offer this sort.
+  if (
+    options.request.sort === "created-desc" &&
+    !negotiatedOrganizationHistorySortsByCreated(
+      getNegotiatedHostMethodVersion(servingHostId, "organization.history"),
+    )
+  )
+    return Promise.reject(
+      new Error(
+        "Update this device to use Newest created with labels or groups.",
+      ),
     );
   return client.requestWithSignal(
     "organization.history",

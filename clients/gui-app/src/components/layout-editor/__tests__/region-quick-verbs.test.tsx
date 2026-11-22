@@ -282,12 +282,15 @@ describe("<LayoutRegionContextMenu />", () => {
 });
 
 describe("the microphone while Voice input is off (C4)", () => {
+  let priorVoiceInputEnabled = useSettingsStore.getState().voiceInputEnabled;
+
   beforeEach(() => {
+    priorVoiceInputEnabled = useSettingsStore.getState().voiceInputEnabled;
     useSettingsStore.getState().setVoiceInputEnabled(false);
   });
 
   afterEach(() => {
-    useSettingsStore.getState().setVoiceInputEnabled(true);
+    useSettingsStore.getState().setVoiceInputEnabled(priorVoiceInputEnabled);
   });
 
   it("offers 'Turn on Voice input' instead of Hide or Show, which would write a value nothing reads", () => {

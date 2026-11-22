@@ -14,7 +14,27 @@ import {
 function makeClaim(pinnedRowKey: string | null): FullscreenClaim & {
   readonly exit: Mock<() => void>;
 } {
-  return { exit: vi.fn<() => void>(), pinnedRowKey };
+  return { exit: vi.fn<() => void>(), pinnedRowKey, surface: null };
+}
+
+/**
+ * A claimant whose own surface is an open dialog, as an expanded artifact's
+ * is. It is in the document before the claim, which is the ordering a claimant
+ * cannot always avoid.
+ */
+function makeSurfaceClaim(): FullscreenClaim & {
+  readonly exit: Mock<() => void>;
+  readonly element: HTMLElement;
+} {
+  const element = document.createElement("div");
+  element.setAttribute("role", "dialog");
+  document.body.append(element);
+  return {
+    exit: vi.fn<() => void>(),
+    pinnedRowKey: null,
+    surface: () => element,
+    element,
+  };
 }
 
 function addDialog(): HTMLElement {
@@ -68,6 +88,10 @@ describe("claiming fullscreen", () => {
     releaseFullscreen(first);
 
     expect(claimFullscreen(second)).toBe(true);
+  });
+
+  it("admits a claimant whose own surface is already an open dialog", () => {
+    expect(claimFullscreen(makeSurfaceClaim())).toBe(true);
   });
 
   it("a release by a claim that does not hold fullscreen changes nothing", () => {
@@ -128,6 +152,27 @@ describe("yielding fullscreen", () => {
     expect(claimFullscreen(claim)).toBe(true);
 
     dialog.setAttribute("data-state", "open");
+
+    await waitFor(() => expect(claim.exit).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps a surface claimant when a dialog opens inside its own surface", async () => {
+    const claim = makeSurfaceClaim();
+    claimFullscreen(claim);
+
+    const nested = document.createElement("div");
+    nested.setAttribute("role", "dialog");
+    claim.element.append(nested);
+
+    await settleMutations();
+    expect(claim.exit).not.toHaveBeenCalled();
+  });
+
+  it("yields a surface claimant when a dialog opens outside its surface", async () => {
+    const claim = makeSurfaceClaim();
+    claimFullscreen(claim);
+
+    addDialog();
 
     await waitFor(() => expect(claim.exit).toHaveBeenCalledTimes(1));
   });
@@ -230,6 +275,26 @@ describe("blocked while something needs the reader", () => {
     release();
     release();
     expect(claimFullscreen(makeClaim(null))).toBe(true);
+  });
+
+  it("refuses a surface claimant too: a blocker is never its own surface's", () => {
+    const claim = makeSurfaceClaim();
+    const release = block();
+
+    expect(claimFullscreen(claim)).toBe(false);
+
+    release();
+    expect(claimFullscreen(claim)).toBe(true);
+  });
+
+  it("exempts only the claimant's own surface, not every surface", () => {
+    const first = makeSurfaceClaim();
+    const second = makeSurfaceClaim();
+
+    // Nothing holds the claim, so the only thing that can refuse `second` is
+    // `first`'s surface - which is a dialog it does not own.
+    expect(claimFullscreen(second)).toBe(false);
+    expect(first.exit).not.toHaveBeenCalled();
   });
 
   it("stays blocked until every blocker is released", () => {

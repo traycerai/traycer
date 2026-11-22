@@ -1,7 +1,14 @@
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  VariableEditSheet,
+  VariablePhoneRow,
+} from "@/components/settings/variable-edit-sheet";
+import { useIsSmallViewport } from "@/hooks/ui/use-small-viewport";
 import {
   Select,
   SelectContent,
@@ -10,11 +17,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
-import {
-  isCredentialShapedEnvName,
-  urlCarriesCredentials,
-} from "@/components/providers/credential-bearing-values";
-import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -32,9 +34,8 @@ const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Single grid shared by the header, every row, and the add row so the column
 // edges line up exactly (the previous header/rows used different padding). The
 // last track is fixed so the row delete button and the add button never shift
-// the Name/Value boundaries. Below `sm` the three columns can't fit, so rows
-// restack onto two lines - name + actions, then the value field full-width
-// (see VALUE_FIELD_PLACEMENT / ROW_ACTIONS_PLACEMENT) - and the header hides.
+// the Name/Value boundaries. Below `sm`, preview rows open an edit sheet and
+// the table header hides.
 const GRID =
   "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_4.75rem]";
 const VALUE_FIELD_PLACEMENT =
@@ -65,27 +66,7 @@ interface Draft {
   readonly value: string;
   readonly mode: EnvMode;
   readonly error: string | null;
-  /** Refused because the value looks like a key; the row offers Secrets. */
-  readonly keyShaped: boolean;
 }
-
-/**
- * What a row says when its value looks like a key, and where its link takes
- * the name and value: Add a secret, or a provider's Account tab for that
- * provider's own key.
- */
-export interface KeyRefusal {
-  /** The line, with its link between `before` and `after`. */
-  readonly before: string;
-  readonly link: string;
-  readonly after: string;
-  /** The value is cleared from the field rather than carried on. */
-  readonly clearsValue: boolean;
-  readonly onLink: (name: string, value: string) => void;
-}
-
-/** The refusal for a variable's name; `null` where nothing is refused. */
-export type KeyRefusalFor = ((name: string) => KeyRefusal) | null;
 
 function modeForValue(value: string | null): EnvMode {
   return value === null ? "unset" : "set";
@@ -97,7 +78,6 @@ function draftOf(entry: EnvOverrideValue): Draft {
     value: entry.value ?? "",
     mode: modeForValue(entry.value),
     error: null,
-    keyShaped: false,
   };
 }
 
@@ -106,8 +86,7 @@ function draftShowsEntry(draft: Draft, entry: EnvOverrideValue): boolean {
     draft.key === entry.key &&
     draft.value === (entry.value ?? "") &&
     draft.mode === modeForValue(entry.value) &&
-    draft.error === null &&
-    !draft.keyShaped
+    draft.error === null
   );
 }
 
@@ -152,52 +131,13 @@ function EnvRowFooter(props: {
   readonly draft: Draft;
   readonly disabled: boolean;
   readonly onTrim: () => void;
-  readonly keyRefusal: KeyRefusalFor;
-  /** The link handed the value on: the row drops its draft. */
-  readonly onRefusalFollowed: () => void;
 }) {
   const { draft, disabled, onTrim } = props;
-  if (draft.keyShaped && props.keyRefusal !== null) {
-    const name = draft.key.trim();
-    return (
-      <KeyRefusalLine
-        refusal={props.keyRefusal(name)}
-        disabled={disabled}
-        onLink={(refusal) => {
-          refusal.onLink(name, draft.value);
-          props.onRefusalFollowed();
-        }}
-      />
-    );
-  }
   if (draft.error !== null) {
     return <p className="text-ui-xs text-destructive">{draft.error}</p>;
   }
   if (draft.mode !== "set" || !hasEdgeWhitespace(draft.value)) return null;
   return <EnvValueWhitespaceNotice disabled={disabled} onTrim={onTrim} />;
-}
-
-function KeyRefusalLine(props: {
-  readonly refusal: KeyRefusal;
-  readonly disabled: boolean;
-  readonly onLink: (refusal: KeyRefusal) => void;
-}) {
-  const { refusal } = props;
-  return (
-    <p className="text-ui-xs text-destructive" data-testid="env-key-refusal">
-      {refusal.before}
-      <Button
-        type="button"
-        variant="link"
-        size="inline-xs"
-        disabled={props.disabled}
-        onClick={() => props.onLink(refusal)}
-      >
-        {refusal.link}
-      </Button>
-      {refusal.after}
-    </p>
-  );
 }
 
 function EnvValueWhitespaceNotice(props: {
@@ -226,27 +166,11 @@ function EnvValueWhitespaceNotice(props: {
   );
 }
 
-/**
- * Whether a saved value looks like a key: such a row never shows it, on any
- * page, whether or not the page refuses one being typed.
- */
+/** Whether a saved value looks like a key: such a row never shows it. */
 function savedKeyShaped(entry: EnvOverrideValue): boolean {
   return (
     entry.value !== null &&
     classifyCredential({ name: entry.key, value: entry.value }).credentialLike
-  );
-}
-
-/** Whether `value` is refused here as a key: only where a handler is set. */
-function refusedAsKey(
-  key: string,
-  value: string | null,
-  keyRefusal: KeyRefusalFor,
-): boolean {
-  return (
-    keyRefusal !== null &&
-    value !== null &&
-    classifyCredential({ name: key, value }).credentialLike
   );
 }
 
@@ -255,27 +179,6 @@ function draftError(key: string, otherKeys: readonly string[]): string | null {
     return "Name must match /^[A-Za-z_][A-Za-z0-9_]*$/.";
   }
   if (otherKeys.includes(key)) return `${key} already exists.`;
-  return null;
-}
-
-/**
- * Why a variable cannot be sent to a host that takes no credentials
- * (`credentialRefusal` set): a name that looks like a credential's (the
- * host's own rule, mirrored), or a SET value that is a URL carrying a
- * sign-in. The typed name and value stay in the fields.
- */
-function credentialError(
-  key: string,
-  value: string | null,
-  credentialRefusal: string | null,
-): string | null {
-  if (credentialRefusal === null) return null;
-  if (isCredentialShapedEnvName(key)) {
-    return `${credentialRefusal}: a variable whose name looks like a credential is not stored here.`;
-  }
-  if (value !== null && urlCarriesCredentials(value)) {
-    return `${credentialRefusal}: remove the sign-in from this URL.`;
-  }
   return null;
 }
 
@@ -300,11 +203,6 @@ function envRowsWithPending(
 export function EnvOverrideEditor(props: {
   readonly overrides: readonly EnvOverrideValue[];
   readonly disabled: boolean;
-  /**
-   * Set when the host takes no credentials: a value that is a URL with a
-   * sign-in is refused with this line instead of being committed.
-   */
-  readonly credentialRefusal: string | null;
   readonly namePlaceholder: string;
   readonly emptyLabel: string;
   /**
@@ -312,31 +210,8 @@ export function EnvOverrideEditor(props: {
    * everywhere"). An empty map for a list with nothing to say.
    */
   readonly rowNotes: ReadonlyMap<string, ReactNode>;
-  /**
-   * Rows on hold until the person chooses, by key, each with its `Review`
-   * control. Such a row shows its name only, never its value.
-   */
-  readonly onHold: ReadonlyMap<string, ReactNode>;
-  /**
-   * Rows a secret sets, by key, each with the secret's name: "NAME · from
-   * the secret NAME · Secrets", with no value and nothing to edit here.
-   */
-  readonly claimedBy: ReadonlyMap<string, string>;
-  /**
-   * Set where a value that looks like a key must not be stored as a
-   * variable: such a value is refused in its row with the refusal for its
-   * name, whose link takes the name and value on.
-   */
-  readonly keyRefusal: KeyRefusalFor;
   /** The latest stale refusal of a row's save, or `null` for none. */
   readonly staleRefusal: EnvStaleRefusal | null;
-  /**
-   * The hosts a SET save propagates to, for the editor's single pending
-   * footer ("`<key>` · Applying on `<n>` hosts…"); `null` for a save that
-   * reaches only this computer (a Local row, or the Shell host-process
-   * caller), which keeps the plain Adding/Saving/Removing text instead.
-   */
-  readonly applyingHostsCount?: number | null;
   /** Resolves after the write and its post-write overrides read complete. */
   readonly onCommit: (
     oldKey: string,
@@ -347,7 +222,8 @@ export function EnvOverrideEditor(props: {
   readonly onDelete: (key: string) => void | Promise<void>;
   readonly renderDetails?: (key: string) => ReactNode;
 }) {
-  const { credentialRefusal, namePlaceholder, emptyLabel } = props;
+  const { namePlaceholder, emptyLabel } = props;
+  const phone = useIsSmallViewport();
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<PendingEnvWrite | null>(null);
   const [savedRow, setSavedRow] = useState<SavedEnvRow | null>(null);
@@ -374,8 +250,12 @@ export function EnvOverrideEditor(props: {
     } catch (error) {
       submittingRef.current = false;
       setPending(null);
+      const failure = reportedSaveFailure(error);
+      if (failure === null) return;
       setWriteError(
-        error instanceof Error ? error.message : "Couldn't save this variable.",
+        failure instanceof Error
+          ? failure.message
+          : "Couldn't save this variable.",
       );
     }
   }
@@ -405,20 +285,10 @@ export function EnvOverrideEditor(props: {
       () => props.onDelete(key),
     );
   };
-  let pendingLabel: string | null = null;
-  if (pending !== null) {
-    const hostCount = props.applyingHostsCount ?? null;
-    if (pending.action === "put" && hostCount !== null) {
-      pendingLabel =
-        hostCount === 1
-          ? `${pending.key} · Applying on 1 host…`
-          : `${pending.key} · Applying on ${hostCount} hosts…`;
-    } else {
-      let action = pending.oldKey === "" ? "Adding" : "Saving";
-      if (pending.action === "remove") action = "Removing";
-      pendingLabel = `${pending.key} · ${action}`;
-    }
-  }
+  const feedback = <EnvWriteFeedback writeError={writeError} />;
+  // Every phone sheet shows the editor's one write error, so opening or
+  // closing a sheet clears it: an error never shows in a sheet it is not from.
+  const clearSheetError = (): void => setWriteError(null);
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/60">
@@ -447,29 +317,15 @@ export function EnvOverrideEditor(props: {
       {overrides.length > 0 ? (
         <ul className="divide-y divide-border/40">
           {overrides.map((entry) => {
-            const review = props.onHold.get(entry.key);
-            if (review !== undefined) {
-              return (
-                <EnvHeldRow key={entry.key} name={entry.key} review={review} />
-              );
-            }
-            const secretName = props.claimedBy.get(entry.key);
-            if (secretName !== undefined) {
-              return (
-                <EnvClaimedRow
-                  key={entry.key}
-                  name={entry.key}
-                  secretName={secretName}
-                />
-              );
-            }
             if (savedKeyShaped(entry)) {
               return (
                 <EnvMaskedRow
+                  phone={phone}
+                  feedback={feedback}
+                  onSheetToggle={clearSheetError}
                   key={entry.key}
                   entry={entry}
                   disabled={disabled}
-                  keyRefusal={props.keyRefusal}
                   note={props.rowNotes.get(entry.key) ?? null}
                   details={props.renderDetails?.(entry.key) ?? null}
                   onDelete={onDelete}
@@ -478,12 +334,13 @@ export function EnvOverrideEditor(props: {
             }
             return (
               <EnvOverrideRow
+                phone={phone}
+                feedback={feedback}
+                onSheetToggle={clearSheetError}
                 key={entry.key}
                 entry={entry}
                 otherKeys={keys.filter((k) => k !== entry.key)}
                 disabled={disabled}
-                credentialRefusal={credentialRefusal}
-                keyRefusal={props.keyRefusal}
                 note={props.rowNotes.get(entry.key) ?? null}
                 details={props.renderDetails?.(entry.key) ?? null}
                 staleRefusal={props.staleRefusal}
@@ -497,16 +354,18 @@ export function EnvOverrideEditor(props: {
       ) : null}
       {adding ? (
         <EnvOverrideAddRow
+          phone={phone}
+          feedback={feedback}
           existingKeys={keys}
-          claimedBy={props.claimedBy}
           disabled={disabled}
-          credentialRefusal={credentialRefusal}
-          keyRefusal={props.keyRefusal}
           namePlaceholder={namePlaceholder}
           onAdd={(key, value) => {
             onCommit("", key, value);
           }}
-          onCancel={() => setAdding(false)}
+          onCancel={() => {
+            setAdding(false);
+            if (phone) clearSheetError();
+          }}
         />
       ) : (
         <div className="border-t border-border/40 px-3 py-2">
@@ -515,33 +374,38 @@ export function EnvOverrideEditor(props: {
             size="sm"
             variant="outline"
             disabled={disabled}
-            onClick={() => setAdding(true)}
+            onClick={() => {
+              setAdding(true);
+              if (phone) clearSheetError();
+            }}
           >
             <Plus className="size-3.5" />
             Add a variable
           </Button>
         </div>
       )}
-      {pendingLabel === null ? null : (
-        <p role="status" className="px-3 py-2 text-ui-xs text-muted-foreground">
-          {pendingLabel}
-        </p>
-      )}
-      {writeError === null ? null : (
-        <p role="alert" className="px-3 py-2 text-ui-xs text-destructive">
-          {writeError}
-        </p>
-      )}
+      {phone ? null : feedback}
     </div>
   );
 }
 
+function EnvWriteFeedback(props: {
+  readonly writeError: string | null;
+}): ReactNode {
+  return props.writeError === null ? null : (
+    <p role="alert" className="px-3 py-2 text-ui-xs text-destructive">
+      {props.writeError}
+    </p>
+  );
+}
+
 function EnvOverrideRow(props: {
+  readonly phone: boolean;
+  readonly feedback: ReactNode;
+  readonly onSheetToggle: () => void;
   readonly entry: EnvOverrideValue;
   readonly otherKeys: readonly string[];
   readonly disabled: boolean;
-  readonly credentialRefusal: string | null;
-  readonly keyRefusal: KeyRefusalFor;
   readonly note: ReactNode;
   readonly details: ReactNode;
   readonly staleRefusal: EnvStaleRefusal | null;
@@ -553,8 +417,8 @@ function EnvOverrideRow(props: {
   ) => void;
   readonly onDelete: (key: string) => void;
 }) {
-  const { entry, otherKeys, disabled, credentialRefusal, onCommit, onDelete } =
-    props;
+  const { entry, otherKeys, disabled, onCommit, onDelete } = props;
+  const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => draftOf(entry));
   // After a completed save or stale refusal, follow the authoritative value
   // until the next edit, so a normalized or superseded draft is not resubmitted.
@@ -564,9 +428,10 @@ function EnvOverrideRow(props: {
   if (props.savedRow !== seenSavedRow) setSeenSavedRow(props.savedRow);
   const [following, setFollowing] = useState(false);
   const [seenRefusal, setSeenRefusal] = useState(
-    props.staleRefusal === null ? 0 : props.staleRefusal.seq,
+    () => props.staleRefusal?.seq ?? 0,
   );
   if (saved) {
+    setOpen(false);
     setFollowing(true);
     setDraft(draftOf(entry));
   } else if (
@@ -583,7 +448,7 @@ function EnvOverrideRow(props: {
   }
   const editDraft = (update: (current: Draft) => Draft): void => {
     setFollowing(false);
-    setDraft((current) => ({ ...update(current), keyShaped: false }));
+    setDraft(update);
   };
   const draftRef = useRef(draft);
   useEffect(() => {
@@ -601,37 +466,12 @@ function EnvOverrideRow(props: {
   useEffect(() => {
     onCommitRef.current = onCommit;
   }, [onCommit]);
-  const credentialRefusalRef = useRef(credentialRefusal);
-  useEffect(() => {
-    credentialRefusalRef.current = credentialRefusal;
-  }, [credentialRefusal]);
-  const keyRefusalRef = useRef(props.keyRefusal);
-  useEffect(() => {
-    keyRefusalRef.current = props.keyRefusal;
-  }, [props.keyRefusal]);
 
   const commitValue = (nextValue: string | null): void => {
-    // A refused draft waits for an edit; its cleared field is no value.
-    if (draft.keyShaped) return;
     const nextKey = draft.key.trim();
     const error = draftError(nextKey, otherKeys);
     if (error !== null) {
       setDraft((current) => ({ ...current, key: entry.key, error }));
-      return;
-    }
-    const refused = credentialError(nextKey, nextValue, credentialRefusal);
-    if (refused !== null) {
-      setDraft((current) => ({ ...current, error: refused }));
-      return;
-    }
-    if (refusedAsKey(nextKey, nextValue, props.keyRefusal)) {
-      const cleared = props.keyRefusal?.(nextKey).clearsValue === true;
-      setDraft((current) => ({
-        ...current,
-        value: cleared ? "" : current.value,
-        error: null,
-        keyShaped: true,
-      }));
       return;
     }
     setDraft((current) => ({ ...current, error: null }));
@@ -646,112 +486,121 @@ function EnvOverrideRow(props: {
   const trimValue = (): void => {
     const nextValue = draft.value.trim();
     editDraft((current) => ({ ...current, value: nextValue }));
-    commitValue(nextValue);
+    if (!props.phone) commitValue(nextValue);
   };
 
+  const phoneRef = useRef(props.phone);
+  useEffect(() => {
+    phoneRef.current = props.phone;
+  }, [props.phone]);
   useEffect(() => {
     return () => {
+      if (phoneRef.current) return;
       const current = draftRef.current;
-      if (current.keyShaped) return;
       const currentEntry = entryRef.current;
       const nextKey = current.key.trim();
       const nextValue = current.mode === "unset" ? null : current.value;
       const error = draftError(nextKey, otherKeysRef.current);
       if (error !== null) return;
-      if (
-        credentialError(nextKey, nextValue, credentialRefusalRef.current) !==
-          null ||
-        refusedAsKey(nextKey, nextValue, keyRefusalRef.current)
-      ) {
-        return;
-      }
       if (nextKey !== currentEntry.key || nextValue !== currentEntry.value) {
         onCommitRef.current(currentEntry.key, nextKey, nextValue);
       }
     };
   }, []);
 
-  return (
-    <li className="flex flex-col gap-1 px-3 py-2">
-      <div className={GRID}>
-        <Input
-          value={draft.key}
+  const editor = (
+    <>
+      <div className={props.phone ? "flex flex-col gap-4" : GRID}>
+        <EnvDraftFields
+          draft={draft}
           disabled={disabled}
-          spellCheck={false}
-          aria-label={`Name for ${entry.key}`}
-          className="h-8"
-          onChange={(event) =>
-            editDraft((current) => ({ ...current, key: event.target.value }))
-          }
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
-          }}
-          onBlur={commit}
-          font="mono"
-          size="xs"
+          phone={props.phone}
+          nameLabel={`Name for ${entry.key}`}
+          valueLabel={`Value for ${entry.key}`}
+          onName={(key) => editDraft((current) => ({ ...current, key }))}
+          onValue={(value) => editDraft((current) => ({ ...current, value }))}
+          onMode={(mode) => editDraft((current) => ({ ...current, mode }))}
+          onCommit={commit}
         />
-        <EnvValueField
-          value={draft.value}
-          mode={draft.mode}
-          disabled={disabled}
-          ariaLabel={`Value for ${entry.key}`}
-          className={VALUE_FIELD_PLACEMENT}
-          onModeChange={(mode) =>
-            editDraft((current) => ({ ...current, mode }))
-          }
-          onValueChange={(value) =>
-            editDraft((current) => ({ ...current, value }))
-          }
-          onBlur={commit}
-        />
-        <RemoveVariableButton
-          name={entry.key}
-          disabled={disabled}
-          onDelete={onDelete}
-        />
+        {props.phone ? null : (
+          <RemoveVariableButton
+            name={entry.key}
+            disabled={disabled}
+            onDelete={onDelete}
+          />
+        )}
       </div>
-      {props.note === null ? null : (
-        <p
-          data-testid="env-row-note"
-          className="text-ui-xs text-muted-foreground"
-        >
-          {props.note}
-        </p>
-      )}
-      <EnvRowFooter
-        draft={draft}
+      <EnvRowNote note={props.note} />
+      <EnvRowFooter draft={draft} disabled={disabled} onTrim={trimValue} />
+      <EnvRowDetails details={props.details} />
+    </>
+  );
+  if (!props.phone)
+    return <li className="flex flex-col gap-1 px-3 py-2">{editor}</li>;
+  const dismiss = (): void => {
+    if (disabled) return;
+    setOpen(false);
+    setFollowing(false);
+    setDraft(draftOf(entry));
+    props.onSheetToggle();
+  };
+  return (
+    <li className="flex min-w-0 flex-col gap-1">
+      <VariablePhoneRow
+        name={entry.key}
+        value={entry.value === null ? "Unset" : entry.value}
+        badge={null}
         disabled={disabled}
-        onTrim={trimValue}
-        keyRefusal={props.keyRefusal}
-        onRefusalFollowed={() => {
-          // The value went on; the row shows what is stored.
-          setFollowing(false);
+        onEdit={() => {
+          // Open on the stored value and follow it until the first edit, so
+          // Save never writes back a value changed while the sheet was shut.
+          setFollowing(true);
           setDraft(draftOf(entry));
+          setOpen(true);
+          props.onSheetToggle();
         }}
       />
-      {props.details === null ? null : (
-        <div className="flex justify-end">{props.details}</div>
+      {open ? null : (
+        <EnvPhoneRowStatus note={props.note} details={props.details} />
       )}
+      <VariableEditSheet
+        open={open}
+        title={entry.key}
+        busy={disabled}
+        saveDisabled={false}
+        removeLabel={`Remove ${entry.key}`}
+        onSave={() => {
+          if (draftShowsEntry(draft, entry)) dismiss();
+          else commit();
+        }}
+        onRemove={() => onDelete(entry.key)}
+        onDismiss={dismiss}
+      >
+        {editor}
+        {props.feedback}
+      </VariableEditSheet>
     </li>
   );
 }
 
 /**
  * A saved value that looks like a key: its name, dots in place of the value
- * and Remove, with the refusal for its name below where the page has one. The
- * value stays saved until the person acts; its link carries it on.
+ * and Remove.
  */
 function EnvMaskedRow(props: {
+  readonly phone: boolean;
+  readonly feedback: ReactNode;
+  readonly onSheetToggle: () => void;
   readonly entry: EnvOverrideValue;
   readonly disabled: boolean;
-  readonly keyRefusal: KeyRefusalFor;
   readonly note: ReactNode;
   readonly details: ReactNode;
   readonly onDelete: (key: string) => void;
 }) {
   const { entry, disabled } = props;
-  return (
-    <li className="flex flex-col gap-1 px-3 py-2" data-testid="env-masked-row">
+  const [open, setOpen] = useState(false);
+  const editor = (
+    <>
       <div className={GRID}>
         <span className="truncate font-mono text-ui-xs text-foreground">
           {entry.key}
@@ -766,31 +615,97 @@ function EnvMaskedRow(props: {
         >
           ••••••••
         </span>
-        <RemoveVariableButton
-          name={entry.key}
-          disabled={disabled}
-          onDelete={props.onDelete}
-        />
+        {props.phone ? null : (
+          <RemoveVariableButton
+            name={entry.key}
+            disabled={disabled}
+            onDelete={props.onDelete}
+          />
+        )}
       </div>
-      {props.note === null ? null : (
-        <p
-          data-testid="env-row-note"
-          className="text-ui-xs text-muted-foreground"
-        >
-          {props.note}
-        </p>
+      <EnvRowNote note={props.note} />
+      <EnvRowDetails details={props.details} />
+    </>
+  );
+  if (!props.phone)
+    return (
+      <li
+        className="flex flex-col gap-1 px-3 py-2"
+        data-testid="env-masked-row"
+      >
+        {editor}
+      </li>
+    );
+  return (
+    <li className="flex min-w-0 flex-col gap-1" data-testid="env-masked-row">
+      <VariablePhoneRow
+        name={entry.key}
+        value={
+          <span
+            aria-label={`${entry.key} is hidden`}
+            data-testid="env-masked-value"
+          >
+            ••••••••
+          </span>
+        }
+        badge={null}
+        disabled={disabled}
+        onEdit={() => {
+          setOpen(true);
+          props.onSheetToggle();
+        }}
+      />
+      {open ? null : (
+        <EnvPhoneRowStatus note={props.note} details={props.details} />
       )}
-      {props.keyRefusal === null ? null : (
-        <KeyRefusalLine
-          refusal={props.keyRefusal(entry.key)}
-          disabled={disabled}
-          onLink={(refusal) => refusal.onLink(entry.key, entry.value ?? "")}
-        />
-      )}
-      {props.details === null ? null : (
-        <div className="flex justify-end">{props.details}</div>
-      )}
+      <VariableEditSheet
+        open={open}
+        title={entry.key}
+        busy={disabled}
+        saveDisabled
+        removeLabel={`Remove ${entry.key}`}
+        onSave={null}
+        onRemove={() => props.onDelete(entry.key)}
+        onDismiss={() => {
+          setOpen(false);
+          props.onSheetToggle();
+        }}
+      >
+        {editor}
+        {props.feedback}
+      </VariableEditSheet>
     </li>
+  );
+}
+
+function EnvRowNote(props: { readonly note: ReactNode }): ReactNode {
+  if (props.note === null) return null;
+  return (
+    <p data-testid="env-row-note" className="text-ui-xs text-muted-foreground">
+      {props.note}
+    </p>
+  );
+}
+
+function EnvRowDetails(props: { readonly details: ReactNode }): ReactNode {
+  if (props.details === null) return null;
+  return <div className="flex justify-end">{props.details}</div>;
+}
+
+/**
+ * Under a closed phone row: its note and details, as the desktop row shows
+ * them. An open sheet shows them in the sheet instead.
+ */
+function EnvPhoneRowStatus(props: {
+  readonly note: ReactNode;
+  readonly details: ReactNode;
+}): ReactNode {
+  if (props.note === null && props.details === null) return null;
+  return (
+    <div className="flex min-w-0 flex-col gap-1 px-3 pb-2">
+      <EnvRowNote note={props.note} />
+      <EnvRowDetails details={props.details} />
+    </div>
   );
 }
 
@@ -817,205 +732,180 @@ function RemoveVariableButton(props: {
   );
 }
 
-function EnvHeldRow(props: {
-  readonly name: string;
-  readonly review: ReactNode;
-}) {
-  return (
-    <li
-      className="px-3 py-2.5 text-ui-sm text-muted-foreground"
-      data-testid="env-held-row"
-    >
-      <span className="font-mono text-foreground">{props.name}</span>
-      {" · on hold until you choose · "}
-      {props.review}
-    </li>
-  );
-}
-
-/** A variable a secret sets: the secret's, read and changed on Secrets. */
-function EnvClaimedRow(props: {
-  readonly name: string;
-  readonly secretName: string;
-}) {
-  return (
-    <li
-      className="px-3 py-2.5 text-ui-sm text-muted-foreground"
-      data-testid="env-claimed-row"
-    >
-      <EnvSecretClaim name={props.name} secretName={props.secretName} />
-    </li>
-  );
-}
-
-/** The secret that owns this variable, shared by saved rows and Add drafts. */
-function EnvSecretClaim(props: {
-  readonly name: string;
-  readonly secretName: string;
-}): ReactNode {
-  return (
-    <>
-      <span className="font-mono text-foreground">{props.name}</span>
-      {" · from the secret "}
-      <span className="font-mono">{props.secretName}</span>
-      {" · "}
-      <Button
-        type="button"
-        variant="link"
-        size="inline-xs"
-        onClick={() => navigateToSettingsSection("secrets")}
-      >
-        Secrets
-      </Button>
-    </>
-  );
-}
-
 function EnvOverrideAddRow(props: {
+  readonly phone: boolean;
+  readonly feedback: ReactNode;
   readonly existingKeys: readonly string[];
-  readonly claimedBy: ReadonlyMap<string, string>;
   readonly disabled: boolean;
-  readonly credentialRefusal: string | null;
-  readonly keyRefusal: KeyRefusalFor;
   readonly namePlaceholder: string;
   readonly onAdd: (key: string, value: string | null) => void;
   readonly onCancel: () => void;
 }) {
-  const {
-    existingKeys,
-    disabled,
-    credentialRefusal,
-    namePlaceholder,
-    onAdd,
-    onCancel,
-  } = props;
+  const { existingKeys, disabled, namePlaceholder, onAdd, onCancel } = props;
   const [draft, setDraft] = useState<Draft>(() => ({
     key: "",
     value: "",
     mode: "set",
     error: null,
-    keyShaped: false,
   }));
-  const [showClaim, setShowClaim] = useState(false);
-  const secretName = showClaim
-    ? (props.claimedBy.get(draft.key.trim()) ?? null)
-    : null;
-  const edit = (update: (current: Draft) => Draft): void => {
-    setDraft((current) => ({ ...update(current), keyShaped: false }));
-    setShowClaim(false);
-  };
 
   const add = (): void => {
     const nextKey = draft.key.trim();
-    if (props.claimedBy.has(nextKey)) {
-      setShowClaim(true);
-      setDraft((current) => ({ ...current, error: null, keyShaped: false }));
-      return;
-    }
-    if (draft.keyShaped) return;
     const nextValue = draft.mode === "unset" ? null : draft.value;
-    const error =
-      draftError(nextKey, existingKeys) ??
-      credentialError(nextKey, nextValue, credentialRefusal);
+    const error = draftError(nextKey, existingKeys);
     if (error !== null) {
       setDraft((current) => ({ ...current, error }));
-      return;
-    }
-    if (refusedAsKey(nextKey, nextValue, props.keyRefusal)) {
-      const cleared = props.keyRefusal?.(nextKey).clearsValue === true;
-      setDraft((current) => ({
-        ...current,
-        value: cleared ? "" : current.value,
-        error: null,
-        keyShaped: true,
-      }));
       return;
     }
     onAdd(nextKey, nextValue);
   };
 
-  return (
-    <div className="flex flex-col gap-1 border-t border-border/40 px-3 py-2">
-      <div className={GRID}>
-        <Input
-          value={draft.key}
-          disabled={disabled}
-          spellCheck={false}
-          placeholder={namePlaceholder}
-          aria-label="New variable name"
-          className="h-8"
-          onChange={(event) =>
-            edit((current) => ({ ...current, key: event.target.value }))
+  const editor = (
+    <>
+      <div className={props.phone ? "flex flex-col gap-4" : GRID}>
+        <label
+          className={
+            props.phone ? "flex w-full flex-col gap-2 text-ui-sm" : "contents"
           }
-          font="mono"
-          size="xs"
-        />
-        {secretName === null ? (
-          <EnvValueField
-            value={draft.value}
-            mode={draft.mode}
+        >
+          {props.phone ? "Name" : null}
+          <Input
+            value={draft.key}
             disabled={disabled}
-            ariaLabel="New variable value"
-            className={VALUE_FIELD_PLACEMENT}
-            onModeChange={(mode) => edit((current) => ({ ...current, mode }))}
-            onValueChange={(value) =>
-              edit((current) => ({ ...current, value }))
+            spellCheck={false}
+            placeholder={namePlaceholder}
+            aria-label="New variable name"
+            className="h-8"
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, key: event.target.value }))
             }
-            onBlur={() => undefined}
+            font="mono"
+            size="xs"
           />
-        ) : (
-          <div
-            className={cn(
-              VALUE_FIELD_PLACEMENT,
-              "text-ui-sm text-muted-foreground",
-            )}
-            data-testid="env-draft-claimed-row"
-          >
-            <EnvSecretClaim name={draft.key.trim()} secretName={secretName} />
+        </label>
+        <EnvValueField
+          multiline={props.phone}
+          value={draft.value}
+          mode={draft.mode}
+          disabled={disabled}
+          ariaLabel="New variable value"
+          className={VALUE_FIELD_PLACEMENT}
+          onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
+          onValueChange={(value) =>
+            setDraft((current) => ({ ...current, value }))
+          }
+          onBlur={() => undefined}
+        />
+        {props.phone ? null : (
+          <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              disabled={disabled || draft.key.trim().length === 0}
+              aria-label="Apply variable"
+              onClick={add}
+            >
+              <Check className="size-4 text-[var(--term-ansi-green)]" />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              disabled={disabled}
+              aria-label="Discard variable"
+              onClick={onCancel}
+            >
+              <X className="size-4" />
+            </Button>
           </div>
         )}
-        <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            disabled={
-              disabled || draft.key.trim().length === 0 || secretName !== null
-            }
-            aria-label="Apply variable"
-            onClick={add}
-          >
-            <Check className="size-4 text-[var(--term-ansi-green)]" />
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            disabled={disabled}
-            aria-label="Discard variable"
-            onClick={onCancel}
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
       </div>
-      {secretName === null ? (
-        <EnvRowFooter
-          draft={draft}
-          disabled={disabled}
-          onTrim={() =>
-            edit((current) => ({ ...current, value: current.value.trim() }))
-          }
-          keyRefusal={props.keyRefusal}
-          // The value went on; nothing is stored here.
-          onRefusalFollowed={onCancel}
+      <EnvRowFooter
+        draft={draft}
+        disabled={disabled}
+        onTrim={() =>
+          setDraft((current) => ({ ...current, value: current.value.trim() }))
+        }
+      />
+    </>
+  );
+  if (!props.phone)
+    return (
+      <div className="flex flex-col gap-1 border-t border-border/40 px-3 py-2">
+        {editor}
+      </div>
+    );
+  return (
+    <VariableEditSheet
+      open
+      title="Add a variable"
+      busy={disabled}
+      saveDisabled={draft.key.trim().length === 0}
+      removeLabel="Remove"
+      onRemove={null}
+      onSave={add}
+      onDismiss={onCancel}
+    >
+      {editor}
+      {props.feedback}
+    </VariableEditSheet>
+  );
+}
+
+function EnvDraftFields(props: {
+  readonly draft: Draft;
+  readonly disabled: boolean;
+  readonly phone: boolean;
+  readonly nameLabel: string;
+  readonly valueLabel: string;
+  readonly onName: (name: string) => void;
+  readonly onValue: (value: string) => void;
+  readonly onMode: (mode: EnvMode) => void;
+  readonly onCommit: () => void;
+}): ReactNode {
+  // A phone writes only from the sheet's Save, never on blur.
+  const onBlur = props.phone ? () => undefined : props.onCommit;
+  return (
+    <>
+      <label
+        className={
+          props.phone ? "flex w-full flex-col gap-2 text-ui-sm" : "contents"
+        }
+      >
+        {props.phone ? "Name" : null}
+        <Input
+          value={props.draft.key}
+          disabled={props.disabled}
+          spellCheck={false}
+          aria-label={props.nameLabel}
+          className="h-8"
+          font="mono"
+          size="xs"
+          onChange={(event) => props.onName(event.target.value)}
+          onBlur={onBlur}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
         />
-      ) : null}
-    </div>
+      </label>
+      <EnvValueField
+        multiline={props.phone}
+        value={props.draft.value}
+        mode={props.draft.mode}
+        disabled={props.disabled}
+        ariaLabel={props.valueLabel}
+        className={VALUE_FIELD_PLACEMENT}
+        onModeChange={props.onMode}
+        onValueChange={props.onValue}
+        onBlur={onBlur}
+      />
+    </>
   );
 }
 
 function EnvValueField(props: {
+  readonly multiline: boolean;
   readonly value: string;
   readonly mode: EnvMode;
   readonly disabled: boolean;
@@ -1036,7 +926,15 @@ function EnvValueField(props: {
     onBlur,
   } = props;
   return (
-    <div className={cn("flex min-w-0 items-center gap-2", className)}>
+    <div
+      className={cn(
+        props.multiline
+          ? "flex w-full flex-col gap-2 text-ui-sm"
+          : "flex min-w-0 items-center gap-2",
+        className,
+      )}
+    >
+      {props.multiline ? "Value" : null}
       <Select
         value={mode}
         disabled={disabled}
@@ -1057,21 +955,34 @@ function EnvValueField(props: {
           <SelectItem value="unset">Unset</SelectItem>
         </SelectContent>
       </Select>
-      <Input
-        value={mode === "unset" ? "" : value}
-        disabled={disabled || mode === "unset"}
-        spellCheck={false}
-        aria-label={ariaLabel}
-        placeholder={mode === "unset" ? "not set" : "value"}
-        className="h-8 min-w-0 flex-1"
-        onChange={(event) => onValueChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
-        onBlur={onBlur}
-        font="mono"
-        size="xs"
-      />
+      {props.multiline ? (
+        <Textarea
+          value={mode === "unset" ? "" : value}
+          disabled={disabled || mode === "unset"}
+          spellCheck={false}
+          aria-label={ariaLabel}
+          placeholder={mode === "unset" ? "not set" : "value"}
+          font="mono"
+          rows={4}
+          onChange={(event) => onValueChange(event.target.value)}
+        />
+      ) : (
+        <Input
+          value={mode === "unset" ? "" : value}
+          disabled={disabled || mode === "unset"}
+          spellCheck={false}
+          aria-label={ariaLabel}
+          placeholder={mode === "unset" ? "not set" : "value"}
+          className="h-8 min-w-0 flex-1"
+          onChange={(event) => onValueChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+          onBlur={onBlur}
+          font="mono"
+          size="xs"
+        />
+      )}
     </div>
   );
 }

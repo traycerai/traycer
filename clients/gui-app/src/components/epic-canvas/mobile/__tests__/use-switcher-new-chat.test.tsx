@@ -5,9 +5,10 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { HostRpcRegistry } from "@/lib/host";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
-import type { CreatedChatOpenIntent } from "@/lib/commands/actions";
+import type { OpenCreatedChatWhenProjectedWithNavigationArgs } from "@/lib/commands/actions/new-chat";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useSwitcherNewChat } from "@/components/epic-canvas/mobile/use-switcher-new-chat";
+import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 const EPIC_ID = "epic-1";
@@ -22,7 +23,9 @@ const spies = vi.hoisted(() => ({
   },
   setSelection: vi.fn(),
   openWhenProjected:
-    vi.fn<(args: { readonly intent: CreatedChatOpenIntent }) => () => void>(),
+    vi.fn<
+      (args: OpenCreatedChatWhenProjectedWithNavigationArgs) => () => void
+    >(),
   toastError: vi.fn(),
   placement: { refused: false },
   isPending: false,
@@ -155,6 +158,32 @@ describe("useSwitcherNewChat", () => {
       hostId: HOST_ID,
     });
     expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("lands the new chat in the slot the list chooses for, and in the shell's one tile from no list", async () => {
+    const target = { tabId: TAB_ID, slot: "secondary" as const };
+    const { result } = renderHook(
+      () => useSwitcherNewChat(EPIC_ID, TAB_ID, () => undefined),
+      {
+        wrapper: ({ children }) => (
+          <MobileTileOpenTargetContext value={target}>
+            {children}
+          </MobileTileOpenTargetContext>
+        ),
+      },
+    );
+    act(() => result.current.start(null));
+    await answer({ chatId: "chat-beside" });
+    expect(spies.openWhenProjected.mock.calls[0][0].mobileTarget).toEqual(
+      target,
+    );
+
+    const bare = renderHook(() =>
+      useSwitcherNewChat(EPIC_ID, TAB_ID, () => undefined),
+    );
+    act(() => bare.result.current.start(null));
+    await answer({ chatId: "chat-alone" });
+    expect(spies.openWhenProjected.mock.calls[1][0].mobileTarget).toBeNull();
   });
 
   it("opens nothing when the host refuses the create", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV16,
+  HostNotificationsCloudFeedRowV17,
   HostNotificationsIndicatorState,
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -202,7 +202,7 @@ describe("cloud notification indicator derivation", () => {
     entryId: string,
     threadId: string,
     readAt: number | null,
-  ): HostNotificationsCloudFeedRowV16 {
+  ): HostNotificationsCloudFeedRowV17 {
     return {
       entryId,
       originHostId: "host-b",
@@ -266,13 +266,52 @@ describe("cloud notification indicator derivation", () => {
   }
 
   function rowsById(
-    rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
-  ): Record<string, HostNotificationsCloudFeedRowV16> {
+    rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>,
+  ): Record<string, HostNotificationsCloudFeedRowV17> {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
+  it("keeps a feedback draft out of task and chat indicators", () => {
+    const row: HostNotificationsCloudFeedRowV17 = {
+      entryId: "draft-1",
+      originHostId: "host-b",
+      coalesceKey: "feedback.drafted:chat-1",
+      entry: {
+        id: "draft-1",
+        updatedAt: 1,
+        readAt: null,
+        kind: "feedback.drafted",
+        sourceRef: "draft-1",
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: null,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        payload: {
+          kind: "feedback_draft",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          chatTitle: "Chat",
+          taskTitle: "Epic",
+          blockId: "draft-1",
+        },
+      },
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+    expect(
+      selectCloudNotificationIndicators(
+        rowsById([row]),
+        ["epic-1"],
+        ["chat-1"],
+      ),
+    ).toEqual({
+      epics: {},
+      chats: {},
+    });
+  });
+
   it("does not light the chat's approval glyph for an unresolved browser prompt, though its unread row is counted", () => {
-    const browserRow: HostNotificationsCloudFeedRowV16 = {
+    const browserRow: HostNotificationsCloudFeedRowV17 = {
       entryId: "browser-1",
       originHostId: "host-b",
       coalesceKey: "browser.human.needed:chat-1",
@@ -370,6 +409,142 @@ describe("cloud notification indicator derivation", () => {
       unreadDone: false,
       unreadCount: 2,
     });
+  });
+
+  /** An `agent.stalled` row. Its `reason` is open text and decides nothing here. */
+  function stalled(input: {
+    readonly entryId: string;
+    readonly reason: string;
+    readonly readAt: number | null;
+    readonly updatedAt: number;
+  }): HostNotificationsCloudFeedRow {
+    return wrap(input.entryId, {
+      id: input.entryId,
+      updatedAt: input.updatedAt,
+      readAt: input.readAt,
+      kind: "agent.stalled",
+      sourceRef: null,
+      severity: "failure",
+      outcome: "errored",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "agent_stalled",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentId: "chat-1",
+        agentName: "Chat",
+        taskTitle: "Epic",
+        reason: input.reason,
+        title: "Slow",
+        outcome: "errored",
+      },
+    });
+  }
+
+  // A stall's reason is open text: a `long_turn` row (written by hosts that
+  // once alerted on long turns) is an ordinary stalled failure.
+  describe.each(["provider_buffering", "long_turn"])(
+    "an unread stall with reason %s",
+    (reason) => {
+      it("lights the failure glyph on its own and counts as unread", () => {
+        const result = selectCloudNotificationIndicators(
+          rowsById([
+            stalled({
+              entryId: "0001-stall",
+              reason,
+              readAt: null,
+              updatedAt: 1,
+            }),
+          ]),
+          [],
+          ["chat-1"],
+        );
+
+        expect(result.chats["chat-1"]).toEqual({
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: false,
+          unreadFailure: true,
+          unreadDone: false,
+          unreadCount: 1,
+        });
+      });
+
+      it("ends an older unread completion", () => {
+        const result = selectCloudNotificationIndicators(
+          rowsById([
+            stoppedAt({
+              entryId: "0001-done-unread",
+              severity: "done",
+              readAt: null,
+              updatedAt: 1,
+              chatId: "chat-1",
+            }),
+            stalled({
+              entryId: "0002-stall",
+              reason,
+              readAt: null,
+              updatedAt: 2,
+            }),
+          ]),
+          [],
+          ["chat-1"],
+        );
+
+        expect(result.chats["chat-1"]).toMatchObject({
+          unreadDone: false,
+          unreadFailure: true,
+        });
+      });
+
+      it("keeps an older unread failure lit", () => {
+        const result = selectCloudNotificationIndicators(
+          rowsById([
+            stoppedAt({
+              entryId: "0001-failure-unread",
+              severity: "failure",
+              readAt: null,
+              updatedAt: 1,
+              chatId: "chat-1",
+            }),
+            stalled({
+              entryId: "0002-stall",
+              reason,
+              readAt: null,
+              updatedAt: 2,
+            }),
+          ]),
+          [],
+          ["chat-1"],
+        );
+
+        expect(result.chats["chat-1"]).toMatchObject({
+          unreadFailure: true,
+          unreadDone: false,
+        });
+      });
+    },
+  );
+
+  it("treats a read long_turn stall exactly like a read ordinary stall", () => {
+    const resultFor = (reason: string) =>
+      selectCloudNotificationIndicators(
+        rowsById([
+          stoppedAt({
+            entryId: "0001-done-unread",
+            severity: "done",
+            readAt: null,
+            updatedAt: 1,
+            chatId: "chat-1",
+          }),
+          stalled({ entryId: "0002-stall", reason, readAt: 5, updatedAt: 2 }),
+        ]),
+        [],
+        ["chat-1"],
+      ).chats["chat-1"];
+
+    expect(resultFor("long_turn")).toEqual(resultFor("provider_buffering"));
   });
 
   it("lets a later completion own the glyph while retaining the failure row", () => {

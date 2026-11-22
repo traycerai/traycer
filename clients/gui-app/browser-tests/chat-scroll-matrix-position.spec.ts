@@ -76,8 +76,7 @@ async function detach(page: Page): Promise<ChatScrollView> {
   return view;
 }
 
-/** Hides the tile and returns the view the reader had in that same task,
- *  before React commits the hide. */
+/** Returns the live view read immediately before a verified synchronous hide. */
 const hideReadingLive = (page: Page, kind: HideKind): Promise<ChatScrollView> =>
   page.evaluate((k) => {
     const probe = window.__chatScrollProbe;
@@ -92,6 +91,17 @@ const hideReadingLive = (page: Page, kind: HideKind): Promise<ChatScrollView> =>
       reading: probe.readingRow(),
     };
     probe.hide(k);
+    const scope = document.querySelector<HTMLElement>(
+      "[data-chat-keyboard-scroll-scope]",
+    );
+    if (
+      scope === null ||
+      (k === "intact"
+        ? scope.style.visibility !== "hidden"
+        : scope.style.display !== "none")
+    ) {
+      throw new Error(`hide did not commit in the reading's task (${k})`);
+    }
     return view;
   }, kind);
 

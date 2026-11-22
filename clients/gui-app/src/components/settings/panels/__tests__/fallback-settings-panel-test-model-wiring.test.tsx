@@ -157,6 +157,7 @@ const MODELS_BY_HARNESS: ReadonlyMap<
 > = new Map([["codex", CODEX_MODELS]]);
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  harnessCatalogEntryNeedsRefresh: () => false,
   useGuiHarnessesQuery: () => ({
     data: {
       harnesses: [
@@ -390,6 +391,7 @@ function respond(
     policy: policyValue,
     storedPolicyUnreadable: false,
     inFlightCount: 0,
+    source: "own",
   };
 }
 

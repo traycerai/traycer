@@ -1,5 +1,10 @@
 import type { ReactNode } from "react";
 
+// This module imports nothing but React. cloud-ui-v2's homepage demo renders
+// `AgentHeaderLink` from source, on the server too, where a store reached
+// from here throws at import. Anything that reads app state goes in its own
+// module, as `a2a-peer-picture.tsx` does.
+
 /**
  * Clickable agent name used inside an A2A send/received segment header.
  * Rendered as a span (not a button/anchor) because `SegmentCard`/`SegmentRow`

@@ -36,6 +36,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
@@ -150,8 +151,11 @@ export function SimulatorTile(props: SimulatorTileProps) {
   }, [connectRequest, node.id, session]);
   const { openTile } = useEpicTileNavigation();
   const placeTile = useCallback(
-    (ref: SimulatorTileRef) => {
-      openTile(tileIntent(ref, { tabId: viewTabId }, "explicit", "direct_ui"));
+    (ref: SimulatorTileRef, provenance: NestedFocusProvenance) => {
+      openTile(
+        tileIntent(ref, { tabId: viewTabId }, "explicit", "direct_ui"),
+        provenance,
+      );
     },
     [openTile, viewTabId],
   );
@@ -228,7 +232,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
       state={state}
       v11={v11}
       closesSession={v11 || openedHere}
-      onCloseTile={closeTile}
+      onCloseTile={() => closeTile("user")}
     />
   );
 }
@@ -380,9 +384,15 @@ function useSimulatorConnect(args: {
   readonly session: SimulatorSession | null;
   /** The host answered an open this tile sent. */
   readonly onOpened: () => void;
-  readonly placeTile: (ref: SimulatorTileRef) => void;
+  readonly placeTile: (
+    ref: SimulatorTileRef,
+    provenance: NestedFocusProvenance,
+  ) => void;
 }): {
-  readonly connect: (target: SimulatorTileTarget) => void;
+  readonly connect: (
+    target: SimulatorTileTarget,
+    provenance: NestedFocusProvenance,
+  ) => void;
   readonly connecting: boolean;
   readonly supported: boolean;
 } {
@@ -394,7 +404,7 @@ function useSimulatorConnect(args: {
   // session the open asked for is here, so nothing is awaited any more.
   if (awaiting && session !== null) setAwaiting(false);
   const connect = useCallback(
-    (target: SimulatorTileTarget) => {
+    (target: SimulatorTileTarget, provenance: NestedFocusProvenance) => {
       setAwaiting(true);
       // The answer is read off the mutation's OWN promise, never off
       // `mutate`'s per-call callbacks. Those reach only an observer that is
@@ -421,6 +431,7 @@ function useSimulatorConnect(args: {
                 name: response.simulator.name,
                 instanceKey: response.session.instanceKey ?? null,
               }),
+              provenance,
             );
           },
           () => undefined,
@@ -521,9 +532,14 @@ function SimulatorInventoryGate(props: {
   /** An explicit open's pending request for this tile, consumed here. */
   readonly connectRequest: number | null;
   /** Sends this tile's `simulator.open`; `null` when the host lacks the verb. */
-  readonly onConnect: ((target: SimulatorTileTarget) => void) | null;
+  readonly onConnect:
+    | ((target: SimulatorTileTarget, provenance: NestedFocusProvenance) => void)
+    | null;
   readonly connecting: boolean;
-  readonly onPlaceTile: (ref: SimulatorTileRef) => void;
+  readonly onPlaceTile: (
+    ref: SimulatorTileRef,
+    provenance: NestedFocusProvenance,
+  ) => void;
 }) {
   const {
     node,
@@ -539,7 +555,7 @@ function SimulatorInventoryGate(props: {
   const { open } = useOpenSimulatorTile({ hostId });
   const openOther = useCallback(
     (simulator: SimulatorSummary) => {
-      open(simulator, onPlaceTile);
+      open(simulator, (ref) => onPlaceTile(ref, "user"));
     },
     [open, onPlaceTile],
   );
@@ -585,7 +601,8 @@ function SimulatorInventoryGate(props: {
       if (autoAttached.current || !autoAttach || !target.summary.booted) return;
     }
     autoAttached.current = true;
-    onConnect(target);
+    // A consumed connect request came from a row click; restoration did not.
+    onConnect(target, requested ? "user" : "automatic");
   }, [autoAttach, connectRequest, node.id, onConnect, state.booting, target]);
 
   return (
@@ -595,7 +612,9 @@ function SimulatorInventoryGate(props: {
       booting={state.booting}
       target={target}
       targetName={target?.summary.name ?? node.name}
-      onConnect={onConnect}
+      onConnect={
+        onConnect === null ? null : (selected) => onConnect(selected, "user")
+      }
       connecting={connecting}
       onOpen={onConnect === null ? null : openOther}
     />

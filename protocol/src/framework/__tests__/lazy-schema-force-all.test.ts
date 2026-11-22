@@ -67,6 +67,11 @@ const ZERO_MODULE_SCOPE_LAZY_SCHEMA: readonly ZeroCountFile[] = [
     reason:
       "comments only; the four `lazySchema(declareResidualCapture(...))` calls live in core.ts and host-private.ts",
   },
+  {
+    file: "src/host/agent/post-v1-gui-harnesses.ts",
+    reason:
+      "the name appears only in a comment; the stand-ins are the harness id schemas",
+  },
 ];
 
 describe("lazySchema force-all protocol stand-ins", () => {

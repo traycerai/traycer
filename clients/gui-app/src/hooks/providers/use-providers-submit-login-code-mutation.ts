@@ -13,7 +13,7 @@ import { providersMutationKeys } from "@/lib/query-keys";
 type SubmitLoginCodeMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">
+  Omit<RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">, "code">
 >;
 
 /**
@@ -28,20 +28,35 @@ type SubmitLoginCodeMutationResult = UseMutationResult<
  * same "surfaces that must stay inline-only" exception `TokenReauthForm`
  * uses for its own paste field.
  */
-export function useProvidersSubmitLoginCode(): SubmitLoginCodeMutationResult {
-  return useProvidersSubmitLoginCodeForClient(useHostClient());
+export function useProvidersSubmitLoginCode(
+  readCode: () => string,
+  clearCodeInput: () => void,
+): SubmitLoginCodeMutationResult {
+  return useProvidersSubmitLoginCodeForClient(
+    useHostClient(),
+    readCode,
+    clearCodeInput,
+  );
 }
 
 /** Client-scoped variant - see `useProvidersStartLoginForClient`. */
 export function useProvidersSubmitLoginCodeForClient(
   client: HostClient<HostRpcRegistry> | null,
+  readCode: () => string,
+  clearCodeInput: () => void,
 ): SubmitLoginCodeMutationResult {
-  return useHostMutation<HostRpcRegistry, "providers.submitLoginCode">({
+  return useHostMutation<
+    HostRpcRegistry,
+    "providers.submitLoginCode",
+    unknown,
+    Omit<RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">, "code">
+  >({
     client,
     method: "providers.submitLoginCode",
-    mapVariables: (variables) => variables,
+    mapVariables: (variables) => ({ ...variables, code: readCode() }),
     options: {
       mutationKey: providersMutationKeys.submitLoginCode(),
+      onSettled: clearCodeInput,
     },
   });
 }

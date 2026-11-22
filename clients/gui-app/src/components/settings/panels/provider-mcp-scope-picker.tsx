@@ -169,10 +169,10 @@ export function McpScopePicker(props: {
         onOpenAutoFocus={coarseOpenAutoFocus}
       >
         <Command>
-          <CommandInput placeholder="Search workspaces…" />
+          <CommandInput placeholder="Search folders…" />
           <CommandList>
             <CommandEmpty>
-              {loading ? "Resolving workspaces…" : "No workspaces found."}
+              {loading ? "Resolving folders…" : "No folders found."}
             </CommandEmpty>
             {multiScope ? (
               <CommandGroup heading="Everywhere">
@@ -188,7 +188,7 @@ export function McpScopePicker(props: {
                   <span className="min-w-0 flex-1">
                     <span className="block text-ui-sm">Global</span>
                     <span className="block text-ui-xs text-muted-foreground">
-                      Every workspace on this host
+                      Every folder on this host
                     </span>
                   </span>
                   {effectiveScope === "global" ? <SelectedCheck /> : null}
@@ -196,7 +196,7 @@ export function McpScopePicker(props: {
               </CommandGroup>
             ) : null}
             {targets.length > 0 ? (
-              <CommandGroup heading="This host's workspaces">
+              <CommandGroup heading="This host's folders">
                 {targets.map((target) => (
                   <CommandItem
                     key={target.path}
@@ -262,7 +262,7 @@ export function McpScopePicker(props: {
                     <FolderPlus className="size-4 shrink-0 text-muted-foreground" />
                   )}
                   <span className="min-w-0 flex-1 truncate text-ui-sm">
-                    Add a workspace folder…
+                    Add a folder…
                   </span>
                 </CommandItem>
               </CommandGroup>
@@ -275,7 +275,7 @@ export function McpScopePicker(props: {
 }
 
 /**
- * Says why the workspace group is missing instead of silently omitting it.
+ * Says why the folders group is missing instead of silently omitting it.
  * Plain text rather than a `CommandItem` on purpose - it is not selectable,
  * and it only renders when there is nothing to filter anyway.
  */
@@ -283,8 +283,8 @@ function NoWorkspacesNote(props: { readonly loading: boolean }): ReactNode {
   return (
     <p className="px-3 py-2 text-ui-xs text-muted-foreground">
       {props.loading
-        ? "Resolving this host's workspaces…"
-        : "No workspaces added on this host yet."}
+        ? "Resolving this host's folders…"
+        : "No folders added on this host yet."}
     </p>
   );
 }
@@ -301,7 +301,7 @@ function triggerContent(args: {
   readonly loading: boolean;
 }): { readonly title: string; readonly detail: string } {
   if (args.effectiveScope === "global") {
-    return { title: "Global", detail: "Every workspace on this host" };
+    return { title: "Global", detail: "Every folder on this host" };
   }
   if (args.active !== null) {
     // Branch first: among a repo's worktrees it is the ONLY differing part
@@ -315,8 +315,8 @@ function triggerContent(args: {
     return { title: workspaceFolderName(args.workspaceRoot), detail: "" };
   }
   return {
-    title: "Choose a workspace",
-    detail: args.loading ? "Resolving workspaces…" : "",
+    title: "Choose a folder",
+    detail: args.loading ? "Resolving folders…" : "",
   };
 }
 

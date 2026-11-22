@@ -179,7 +179,7 @@ describe("useSandboxVerb", () => {
     const { result } = renderHook(() => useSandboxVerb("sbx_1"), { wrapper });
     await act(async () => {
       await expect(result.current.mutateAsync("resume")).rejects.toThrow(
-        "credits ran out",
+        "This sandbox is out of credits. Add credits to wake it.",
       );
     });
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -307,7 +307,7 @@ describe("useSandboxAutomationOpen", () => {
     });
     expect(state.toastFromAuthError).toHaveBeenCalledTimes(1);
     expect(state.toastFromAuthError.mock.calls[0][1]).toBe(
-      "Couldn't open this team pod.",
+      "Couldn't open this team sandbox.",
     );
   });
 
@@ -334,7 +334,9 @@ describe("useSandboxAutomationOpen", () => {
       });
 
       await waitFor(() => {
-        expect(state.toastSuccess).toHaveBeenCalledWith("The team pod is open");
+        expect(state.toastSuccess).toHaveBeenCalledWith(
+          "The team sandbox is open",
+        );
       });
       expect(state.toastSuccess).toHaveBeenCalledTimes(1);
       expect(state.toastInfo).not.toHaveBeenCalled();
@@ -355,7 +357,9 @@ describe("useSandboxAutomationOpen", () => {
       });
 
       await waitFor(() => {
-        expect(state.toastInfo).toHaveBeenCalledWith("Opening the team pod…");
+        expect(state.toastInfo).toHaveBeenCalledWith(
+          "Opening the team sandbox…",
+        );
       });
       expect(state.toastSuccess).not.toHaveBeenCalled();
     });

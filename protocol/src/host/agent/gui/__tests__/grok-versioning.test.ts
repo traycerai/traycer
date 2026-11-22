@@ -174,6 +174,7 @@ function agentSummary(id: string, harnessId: string | null) {
       model: { kind: "concrete", slug: "gpt-5.6-sol" },
       reasoningEffort: "high",
       fastMode: true,
+      serviceTier: null,
     },
     // The `@9.1` session facet. `null` is the row's own "this host cannot
     // know" - a GUI chat has no PTY session - and every downgrade bridge

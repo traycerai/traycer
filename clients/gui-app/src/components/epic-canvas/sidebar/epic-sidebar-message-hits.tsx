@@ -186,7 +186,6 @@ function MessageHitsBody(props: {
       renderExpansion={renderExpansion}
       taskTitles={NO_TASK_TITLES}
       variant="compact"
-      showIndexingNotice
     />
   );
 }

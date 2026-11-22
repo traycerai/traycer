@@ -1641,6 +1641,7 @@ function monitorDeliverySegment(
     outputFile: null,
     mcp: null,
     managedCommand: null,
+    conversationMessage: null,
   };
   return {
     id,
@@ -1669,6 +1670,7 @@ function managedShellDeliverySegment(
       monitoring: false,
       hostId: null,
     },
+    conversationMessage: null,
   };
   return {
     id,
@@ -1703,6 +1705,7 @@ function toolSegment(
     imageResults: [],
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
     startedAt: 0,
     durationMs: null,
     parentId: null,
@@ -1739,6 +1742,7 @@ function a2aToolSegment(
     imageResults: [],
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
     startedAt: 0,
     durationMs: null,
     parentId: null,

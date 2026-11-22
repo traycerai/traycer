@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -11,10 +12,6 @@ import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
-import {
-  useVoiceSessionStore,
-  type VoiceSessionDriver,
-} from "@/stores/voice/voice-session-store";
 
 /**
  * The header's two clusters (L-156).
@@ -91,7 +88,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
-  useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
+  vi.unstubAllEnvs();
 });
 
 function place(patch: Partial<LayoutArrangement>): void {
@@ -261,119 +258,18 @@ describe("the header's bar clusters (L-156)", () => {
   });
 });
 
-/** The `ResizeObserver`s the header made, so a test can report a resize through the real callback. */
-const resizeObservers: FakeResizeObserver[] = [];
-
-class FakeResizeObserver implements ResizeObserver {
-  constructor(private readonly callback: ResizeObserverCallback) {
-    resizeObservers.push(this);
-  }
-
-  observe(): void {}
-
-  unobserve(): void {}
-
-  disconnect(): void {}
-
-  report(): void {
-    this.callback([], this);
-  }
-}
-
-function offerVoice(): void {
-  useVoiceSessionStore.setState({
-    availability: "live",
-    driver: {
-      start: vi.fn<VoiceSessionDriver["start"]>(),
-      end: vi.fn<VoiceSessionDriver["end"]>(),
-      setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
-    },
-  });
-}
-
-function renderHeader(): void {
-  render(
-    <TooltipProvider>
-      <AppHeader variant="app" />
-    </TooltipProvider>,
-  );
-}
-
-/** The box the tab strip is drawn in. */
-function tabsBox(): HTMLElement {
-  const box = screen.getByRole("tablist", { name: "Open tabs" }).parentElement;
-  if (box === null) throw new Error("the tab strip has no box");
-  return box;
-}
-
-describe("the header's centre zone for Talk", () => {
-  it("draws neither the zone nor its gap with no voice drawn, and the tabs keep the free width", () => {
-    renderHeader();
-
-    expect(screen.queryByTestId("app-header-centre-gap")).toBeNull();
-    expect(screen.queryByTestId("app-header-centre-zone")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    expect(tabsBox().classList.contains("flex-1")).toBe(true);
-  });
-
-  it("draws Talk in the zone with voice drawn, and the tabs give up the free width", () => {
-    offerVoice();
-    renderHeader();
-
-    const zone = screen.getByTestId("app-header-centre-zone");
-    expect(zone.contains(screen.getByRole("button", { name: "Talk" }))).toBe(
-      true,
+describe("the header in a build that offers the soundtrack", () => {
+  it("draws no soundtrack or music control", () => {
+    vi.stubEnv("MODE", "development");
+    render(
+      <TooltipProvider>
+        <AppHeader variant="app" />
+      </TooltipProvider>,
+      { wrapper: WithTestQueryClient },
     );
-    expect(zone.parentElement).toBe(screen.getByTestId("app-header"));
+
     expect(
-      screen
-        .getByTestId("app-header-centre-gap")
-        .compareDocumentPosition(zone) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(tabsBox().classList.contains("flex-1")).toBe(false);
-  });
-
-  it("puts the zone's middle on the header's middle through the observer, and drops the gap to nothing when the tabs reach past it", () => {
-    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    resizeObservers.length = 0;
-    offerVoice();
-    renderHeader();
-    vi.spyOn(
-      screen.getByTestId("app-header"),
-      "getBoundingClientRect",
-    ).mockReturnValue(new DOMRect(0, 0, 1000, 40));
-    vi.spyOn(
-      screen.getByTestId("app-header-centre-zone"),
-      "getBoundingClientRect",
-    ).mockReturnValue(new DOMRect(0, 0, 100, 40));
-    const tabsRect = vi.spyOn(tabsBox(), "getBoundingClientRect");
-    const gap = screen.getByTestId("app-header-centre-gap");
-    const frames: FrameRequestCallback[] = [];
-    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
-      frames.push(run);
-      return frames.length;
-    });
-    const reportResize = (): void => {
-      act(() => {
-        for (const observer of [...resizeObservers, ...resizeObservers]) {
-          observer.report();
-        }
-      });
-      // Nothing moves inside the observer's delivery: the write waits a frame,
-      // and a second report before it runs asks for no second one.
-      expect(frames).toHaveLength(1);
-      expect(gap.style.flexBasis).not.toBe(expected);
-      frames.splice(0).forEach((run) => run(0));
-    };
-
-    let expected = "250px";
-    tabsRect.mockReturnValue(new DOMRect(0, 0, 200, 40));
-    reportResize();
-    expect(gap.style.flexBasis).toBe("250px");
-
-    expected = "0px";
-    tabsRect.mockReturnValue(new DOMRect(0, 0, 700, 40));
-    reportResize();
-    expect(gap.style.flexBasis).toBe("0px");
+      screen.queryByRole("button", { name: /soundtrack|music/i }),
+    ).toBeNull();
   });
 });

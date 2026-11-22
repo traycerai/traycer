@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EnvironmentPlan } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { teamProviderStateWord } from "../team-provider-state-word";
+import { RETIRED_SECRET_ROW_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 function plan(
   harness: string,
@@ -20,13 +21,12 @@ function providerKey(
   overrides: Partial<EnvironmentSecret>,
 ): EnvironmentSecret {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
     secretId: `secret-${name}`,
     name,
     kind: "provider",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
@@ -80,7 +80,6 @@ describe("teamProviderStateWord", () => {
 
   it.each([
     ["revoked", { revoked: true }],
-    ["awaiting review", { state: "pending_review" }],
     ["not a provider secret", { kind: "api_key" }],
     ["another provider's variable", { name: "KIRO_API_KEY" }],
   ] as const)("does not count a key that is %s", (_label, overrides) => {

@@ -21,10 +21,20 @@ import {
 
 const HOST_ID = "host-1";
 const HOST_LABEL = "Work Mac";
+const directoryState = vi.hoisted(
+  (): {
+    data: readonly { hostId: string; kind: "local"; label: string }[];
+  } => ({
+    data: [{ hostId: "host-1", kind: "local", label: "Work Mac" }],
+  }),
+);
 
 const hostState = vi.hoisted(
   (): { client: HostClient<HostRpcRegistry> | null } => ({ client: null }),
 );
+const authServiceStub = vi.hoisted(() => ({
+  recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+}));
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
@@ -34,17 +44,22 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({
-    data: [{ hostId: HOST_ID, kind: "local", label: HOST_LABEL }],
+    data: directoryState.data,
   }),
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => hostState.client,
 }));
+vi.mock("@/lib/host", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: () => authServiceStub };
+});
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
     useHostBinding: () => ({ hostClient: { id: "real-client" } }),
+    useAuthService: () => authServiceStub,
   };
 });
 vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
@@ -158,6 +173,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   hostState.client = null;
+  directoryState.data = [
+    { hostId: "host-1", kind: "local", label: "Work Mac" },
+  ];
   resetNegotiatedManifests();
 });
 
@@ -194,6 +212,17 @@ describe("<ProviderReauthBanner /> key custody and the host's configuration", ()
       ),
     ).toBeDefined();
     expect(screen.queryByText(CUSTODY_SENTENCE)).toBeNull();
+  });
+
+  it("omits team custody details when the tab host has no known name", async () => {
+    hostRunning({ kind: "team", teamName: "Acme" });
+    directoryState.data = [];
+    renderBanner("amp", AMP);
+
+    expect(
+      await screen.findByText("Sign in to Amp to run it on Acme."),
+    ).toBeDefined();
+    expect(screen.queryByText(/Stored encrypted on /)).toBeNull();
   });
 
   it("shows no custody line for an env-override-only form", async () => {

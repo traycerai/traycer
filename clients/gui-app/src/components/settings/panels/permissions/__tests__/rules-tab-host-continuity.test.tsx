@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 /**
  * The Rules editor's unsaved text across a change of host scope, through the
  * REAL panel, `RulesTab`, `AutoModeHostGate` and `HostScopeGate`. Judge and
@@ -8,7 +9,7 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as rtlRender,
   screen,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -26,8 +27,11 @@ import {
   joinAutoPolicySections,
 } from "@/components/settings/panels/auto-policy-document";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
+import { useHostBinding } from "@/lib/host/runtime";
+import type { AutoPolicySave } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
 import {
   armSettingsOpenIntent,
   resetSettingsOpenIntentForTests,
@@ -66,9 +70,11 @@ function useScope(): HostScope {
     scopeStore.subscribe,
     scopeStore.get,
   );
+  const binding = useHostBinding();
   return hostScopeFixture({
     status,
     host: hostScopeOptionFixture({ hostId }),
+    client: binding?.hostClient ?? null,
   });
 }
 vi.mock("@/components/settings/host-scope/use-host-scope", () => {
@@ -83,9 +89,20 @@ vi.mock(
   async () => {
     const { scopedHostBindingFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
+    const { useHostBinding } = await import("@/lib/host/runtime");
     return {
-      useScopedHostBinding: (scope: HostScope) =>
-        scopedHostBindingFixture(scope),
+      useScopedHostBinding: (scope: HostScope) => {
+        const binding = useHostBinding();
+        const scoped = scopedHostBindingFixture(scope);
+        if (binding === null || scoped === null || scope.client === null) {
+          return null;
+        }
+        return {
+          ...binding,
+          hostClient: scope.client,
+          ...scoped,
+        };
+      },
     };
   },
 );
@@ -163,7 +180,7 @@ vi.mock("@/hooks/auto-mode/use-auto-policy-set-mutation", () => ({
   useAutoPolicySetMutation: () => ({
     // Held: the write never answers until the test releases it.
     mutate: (
-      variables: { readonly body: string },
+      variables: AutoPolicySave,
       callbacks: {
         readonly onSuccess: (response: {
           readonly updatedAt: string | null;
@@ -171,7 +188,7 @@ vi.mock("@/hooks/auto-mode/use-auto-policy-set-mutation", () => ({
       },
     ): void => {
       heldSaves.current.push({
-        body: variables.body,
+        body: variables.request.body,
         onSuccess: callbacks.onSuccess,
       });
     },
@@ -217,7 +234,7 @@ beforeEach(() => {
     refetchedFor.current.push(scopeStore.get().hostId);
     return Promise.resolve({ isError: false });
   });
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
   resetRulesEditForTests();
@@ -246,6 +263,10 @@ function discardButton(): HTMLButtonElement {
 async function openRules(): Promise<void> {
   const user = userEvent.setup();
   await user.click(screen.getByTestId("permissions-tab-rules"));
+}
+
+function render(ui: ReactNode) {
+  return rtlRender(ui, { wrapper: HostRuntimeTestProvider });
 }
 
 async function flushTimers(): Promise<void> {

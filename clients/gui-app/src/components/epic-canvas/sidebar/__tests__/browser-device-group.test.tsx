@@ -34,7 +34,6 @@ function group(
   return {
     hostId: "host-2",
     name: "Work Mac",
-    isLocal: false,
     offline: false,
     expanded: true,
     rows: [row("a"), row("b")],
@@ -69,9 +68,9 @@ describe("BrowserDeviceGroup", () => {
     expect(screen.queryByText("Offline")).toBeNull();
   });
 
-  it("labels the co-located device Local and a known-offline one Offline", () => {
-    mount(group({ isLocal: true, offline: true }), vi.fn());
-    expect(screen.getByText("Local")).toBeTruthy();
+  it("keeps the host name and labels a known-offline host Offline", () => {
+    mount(group({ offline: true }), vi.fn());
+    expect(screen.getByRole("button", { name: /Work Mac/ })).toBeTruthy();
     expect(screen.getByText("Offline")).toBeTruthy();
   });
 

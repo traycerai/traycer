@@ -1,15 +1,12 @@
 import type { ReactNode } from "react";
 import type {
   PushPermissionState,
-  PushSeverity,
+  PushRegistrationState,
 } from "@traycer-clients/shared/platform/runner-host";
 import { ALERTS } from "@/components/settings/panels/alerts-settings.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
-import { usePushMutedSeveritiesMutation } from "@/hooks/runner/use-push-muted-severities-mutation";
-import { usePushMutedSeveritiesQuery } from "@/hooks/runner/use-push-muted-severities-query";
 import {
   usePushPermissionOpenSettingsMutation,
   type PushPermissionOpenSettingsMutation,
@@ -22,45 +19,33 @@ import {
   usePushPermissionRequestMutation,
   type PushPermissionRequestMutation,
 } from "@/hooks/runner/use-push-permission-request-mutation";
+import { usePushRegistrationRetryMutation } from "@/hooks/runner/use-push-registration-retry-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
-import { useAuthStore } from "@/stores/auth/auth-store";
 
 type PushPermissionView =
   | { readonly kind: "loading" }
   | { readonly kind: "error"; readonly message: string }
-  | { readonly kind: PushPermissionState };
+  | {
+      readonly kind:
+        | Exclude<PushPermissionState, "granted">
+        | PushRegistrationState;
+    };
 
-// Which events exist at all is each host's choice (Notification events, the
-// row below); the status stays silent about that and describes only the OS
-// permission and the switches under it. "Only ... are sent" narrows and never
-// promises: a kind a host does not create is not sent either.
-const STATE_DESCRIPTIONS: { readonly [K in PushPermissionState]: string } = {
-  granted: "Only the kinds turned on below are sent.",
+const STATE_DESCRIPTIONS = {
+  registered: "Only the kinds turned on below are sent.",
+  pending: "Setting up push notifications…",
+  failed: "Push notifications couldn’t be set up. Try again.",
   denied: "Turned off for Traycer in system Settings.",
   prompt: "Allow Traycer to send push notifications.",
 };
 
 const READ_FAILED = "Couldn't read the notification permission.";
 
-// In the Sounds page's chime rows' order, so the two lists read alike.
-const SEVERITY_ROWS: ReadonlyArray<{
-  readonly severity: PushSeverity;
-  readonly row: SettingsRowDefinition;
-}> = [
-  {
-    severity: "needs_action",
-    row: ALERTS.definitions.pushNeedsAction,
-  },
-  { severity: "failure", row: ALERTS.definitions.pushFailure },
-  { severity: "done", row: ALERTS.definitions.pushDone },
-  { severity: "info", row: ALERTS.definitions.pushInfo },
-];
-
 /**
- * The OS push permission of the phone this renderer runs on, and under it the
- * severities that phone is pushed for. They belong under Application → Alerts
- * because they never vary with the selected host.
+ * The OS permission and last registration result for this app. The severities
+ * the phone is pushed for are the Push column of the same page
+ * (`usePushSeveritySwitches`). Both belong under Application → Alerts because
+ * they never vary with the selected host.
  *
  * The permission row exists because the OS remembers a refusal forever - the
  * app asks once, and after a "Don't Allow" no amount of relaunching can
@@ -72,35 +57,23 @@ const SEVERITY_ROWS: ReadonlyArray<{
  * The row carries no "on this device" qualifier: in this GUI "device" is the
  * UI word for a HOST (Settings → Devices lists hosts), so "this device" would
  * read as one more host-scoped setting - the exact confusion the row is here
- * to end - and "this phone" is wrong on a tablet. Its rows sit in the Alerts
- * page's Notifications group, which the panel draws.
+ * to end - and "this phone" is wrong on a tablet. The row sits in the Alerts
+ * page's System group, which the panel draws.
  *
- * The gate is the only thing rendered above them: every hook the rows use
+ * The gate is the only thing rendered above it: every hook the row uses
  * reaches the runner host, which throws in a host-less shell, so they live in
- * the children and run only once the gate has passed.
+ * the child and run only once the gate has passed.
  */
 export function PushPermissionSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
   if (!ALERTS.definitions.pushNotifications.availableWhen(availability)) {
     return null;
   }
-  return <PushPermissionRows />;
+  return <PushPermissionRow />;
 }
 
-function PushPermissionRows(): ReactNode {
+function PushPermissionRow(): ReactNode {
   const view = pushPermissionView(usePushPermissionQuery());
-  return (
-    <>
-      <PushPermissionRow view={view} />
-      <PushSeverityRows granted={view.kind === "granted"} />
-    </>
-  );
-}
-
-function PushPermissionRow(props: {
-  readonly view: PushPermissionView;
-}): ReactNode {
-  const { view } = props;
   const request = usePushPermissionRequestMutation();
   const openSettings = usePushPermissionOpenSettingsMutation();
   return (
@@ -130,6 +103,7 @@ function PushPermissionControl(props: {
   readonly openSettings: PushPermissionOpenSettingsMutation;
 }): ReactNode {
   const { kind, request, openSettings } = props;
+  const retry = usePushRegistrationRetryMutation();
   if (kind === "loading") {
     return (
       <AgentSpinningDots
@@ -140,9 +114,26 @@ function PushPermissionControl(props: {
       />
     );
   }
-  // Granted needs no control - there is nothing left to do here, and a button
-  // that only ever leads back to the OS would invite people to go turn it off.
-  if (kind === "granted") {
+  if (kind === "pending") {
+    return (
+      <AgentSpinningDots
+        className={undefined}
+        testId="push-registration-pending"
+        variant={undefined}
+        tone="muted"
+      />
+    );
+  }
+  if (kind === "failed") {
+    return (
+      <PushPermissionAction
+        label="Retry"
+        pending={retry.isPending}
+        onClick={() => retry.mutate()}
+      />
+    );
+  }
+  if (kind === "registered") {
     return <span className="text-ui-xs text-muted-foreground">On</span>;
   }
   if (kind === "denied") {
@@ -199,77 +190,16 @@ function PushPermissionAction(props: {
 }
 
 /**
- * A switch is on while its severity is NOT muted, and shows what the phone
- * stored for the signed-in account. The switches only narrow what the hosts
- * already send, so they move only while pushes are on: in every other state
- * there is nothing for them to narrow, and the row above says why.
- *
- * They also move only once this account's set has been read since the rows
- * started showing it. A toggle sends a whole set derived from the loaded one,
- * so an answer still in flight - or one cached before a change made while the
- * rows were not showing - must not be the base it is derived from.
- */
-function PushSeverityRows(props: { readonly granted: boolean }): ReactNode {
-  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
-  const query = usePushMutedSeveritiesQuery();
-  const mutation = usePushMutedSeveritiesMutation();
-  const loaded =
-    query.isSuccess && query.isFetchedAfterMount ? query.data : undefined;
-  const editing =
-    !props.granted ||
-    mutation.isPending ||
-    userId === null ||
-    loaded === undefined
-      ? null
-      : { userId, muted: loaded };
-  const shown = query.data ?? [];
-  return (
-    <>
-      {SEVERITY_ROWS.map((entry) => (
-        <SettingsRow
-          key={entry.severity}
-          row={entry.row}
-          control={
-            <Switch
-              checked={!shown.includes(entry.severity)}
-              disabled={editing === null}
-              aria-label={`${entry.row.label} push notifications`}
-              onCheckedChange={(delivered) => {
-                if (editing === null) return;
-                mutation.mutate({
-                  userId: editing.userId,
-                  severities: nextMutedSeverities(
-                    editing.muted,
-                    entry.severity,
-                    delivered,
-                  ),
-                });
-              }}
-            />
-          }
-        />
-      ))}
-    </>
-  );
-}
-
-function nextMutedSeverities(
-  muted: readonly PushSeverity[],
-  severity: PushSeverity,
-  delivered: boolean,
-): readonly PushSeverity[] {
-  const others = muted.filter((entry) => entry !== severity);
-  return delivered ? others : [...others, severity];
-}
-
-/**
- * A last-known state outranks a failed REFETCH. The row's job is to report the
- * OS switch, and a stale-but-real answer with its working button beats
+ * A last-known state outranks a failed REFETCH. The row reports the OS
+ * permission and local registration result, and a stale-but-real answer with its working button beats
  * replacing both with an apology; the error copy is for the case that has
  * nothing to show, which is the first read failing.
  */
 function pushPermissionView(query: PushPermissionQuery): PushPermissionView {
-  if (query.data !== undefined) return { kind: query.data };
+  if (query.data !== undefined) {
+    const { permission, registration } = query.data;
+    return { kind: permission === "granted" ? registration : permission };
+  }
   if (query.error !== null) {
     return { kind: "error", message: query.error.message };
   }

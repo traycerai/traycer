@@ -18,6 +18,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import type { ModelOption } from "@/components/home/data/landing-options";
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import type { LandingOwnerTeam } from "@/components/home/composer/landing-owner-model";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
 const host = vi.hoisted(() => ({
@@ -117,6 +118,7 @@ vi.mock(
 );
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
+    resolveOwnerForCreate: (owner: LandingOwnerTeam | null) => owner,
     submit: vi.fn(),
     selectTerminalAgent: vi.fn(),
     startTaskOnStagedSandbox: vi.fn(),
@@ -177,6 +179,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
@@ -213,14 +216,20 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
     refetch: () => Promise.resolve({ data: null, isError: false }),
   }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({
-    data: { providers: [] },
-    isFetching: false,
-    isError: false,
-    refetch: vi.fn(),
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({
+      data: { providers: [] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn(),
+    }),
   }),
-}));
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => () => null,
 }));

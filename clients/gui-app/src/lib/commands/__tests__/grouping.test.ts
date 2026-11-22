@@ -46,6 +46,21 @@ describe("bucketItems", () => {
     const order = bucketItems(items).map((b) => b.id);
     expect(order).toEqual(["actions", "theme", "help"]);
   });
+
+  it("renders Tracy's bots under their own heading right after Tasks", () => {
+    const items: ReadonlyArray<CommandItem> = [
+      stub({ id: "a", label: "Open settings", group: "actions" }),
+      stub({ id: "b", label: "Tracy", group: "bots", scope: "bots" }),
+      stub({ id: "e", label: "Fix login", group: "epics", scope: "epics" }),
+    ];
+    expect(
+      bucketItems(items).map((bucket) => [bucket.id, bucket.label]),
+    ).toEqual([
+      ["epics", "Tasks"],
+      ["bots", "Tracy"],
+      ["actions", "Actions"],
+    ]);
+  });
 });
 
 describe("filterByScope", () => {

@@ -52,6 +52,8 @@ const SLACK_REGISTER_REQUEST: SlackAppRegisterRequest = {
   signingSecret: "signing-secret-value",
 };
 
+const SLACK_DMS_REQUEST = { botId: "bot-1", dmsEnabled: false };
+
 const trackedServices: AuthService[] = [];
 
 function slackSpies() {
@@ -69,6 +71,9 @@ function slackSpies() {
       Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
     ),
     disconnectSlackApp: vi.fn<IRunnerHost["disconnectSlackApp"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    setSlackAppDms: vi.fn<IRunnerHost["setSlackAppDms"]>(() =>
       Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
     ),
   };
@@ -149,7 +154,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
 
     expect(await service.listSandboxes()).toEqual(unavailable);
     expect(await service.getSandboxCosts()).toEqual(unavailable);
-    expect(await service.getSandboxCatalogue()).toEqual(unavailable);
+    expect(await service.getSandboxCatalogue(null)).toEqual(unavailable);
     expect(await service.getTraycerModels()).toEqual(unavailable);
     expect(await service.createSandbox(CREATE_REQUEST)).toEqual(unavailable);
     expect(await service.destroySandbox("sbx_1", false)).toEqual(unavailable);
@@ -198,7 +203,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
 
     expect(await service.listSandboxes()).toEqual({ kind: "unauthorized" });
     expect(await service.getSandboxCosts()).toEqual({ kind: "unauthorized" });
-    expect(await service.getSandboxCatalogue()).toEqual({
+    expect(await service.getSandboxCatalogue(null)).toEqual({
       kind: "unauthorized",
     });
     expect(
@@ -243,12 +248,16 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     );
     expect(await service.mintSlackAppInstallUrl("bot-1")).toEqual(unavailable);
     expect(await service.disconnectSlackApp("bot-1")).toEqual(unavailable);
+    expect(await service.setSlackAppDms(SLACK_DMS_REQUEST)).toEqual(
+      unavailable,
+    );
 
     expect(slack.readSlackApp).not.toHaveBeenCalled();
     expect(slack.getSlackAppManifest).not.toHaveBeenCalled();
     expect(slack.registerSlackApp).not.toHaveBeenCalled();
     expect(slack.mintSlackAppInstallUrl).not.toHaveBeenCalled();
     expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
+    expect(slack.setSlackAppDms).not.toHaveBeenCalled();
   });
 
   it("control: with no reason set, signed-out Slack calls answer unauthorized instead of unavailable", async () => {
@@ -269,8 +278,12 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(await service.disconnectSlackApp("bot-1")).toEqual({
       kind: "unauthorized",
     });
+    expect(await service.setSlackAppDms(SLACK_DMS_REQUEST)).toEqual({
+      kind: "unauthorized",
+    });
     // Signed out, the bearer read stops them before the runner host.
     expect(slack.readSlackApp).not.toHaveBeenCalled();
     expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
+    expect(slack.setSlackAppDms).not.toHaveBeenCalled();
   });
 });

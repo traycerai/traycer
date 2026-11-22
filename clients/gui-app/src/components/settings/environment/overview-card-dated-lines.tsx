@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { onSettingsDate } from "@/lib/settings/settings-date";
 import type { OverviewCardLineProps } from "@/components/settings/environment/overview-card-line-props";
 import {
   overviewDatedCopy,
@@ -27,11 +28,11 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 
 /**
- * Overview settings-card dated lines (shared by an earlier version,
+ * Settings Details' dated lines (shared by an earlier version,
  * stopped using Personal with the cleanup it still owes, returned from a
  * team) and `Stop using Personal on this computer` with its help line.
- * `Moved to Personal on …` is E4's; the
- * `Details` line is a separate stub. The `Details` verb on the
+ * The accepted move date is history, shown here rather than on Overview.
+ * The `Details` verb on the
  * earlier-version line opens the retrospective sheet, mounted app-wide
  * (`EnvironmentSheetsHost`), which also shows it once by itself.
  */
@@ -57,12 +58,18 @@ export function OverviewCardDatedLines(
   });
   const cleanup = stopCleanup(props.status);
   const offerStop = planes !== null && planesOfferStopSharing(planes);
-  if (lines.length === 0 && !offerStop) return null;
+  const acceptedAt = props.status.consent?.acceptedAt ?? null;
+  if (acceptedAt === null && lines.length === 0 && !offerStop) return null;
   return (
     <div
       className="flex flex-col gap-2"
       data-testid="overview-card-dated-lines"
     >
+      {acceptedAt === null ? null : (
+        <p className="text-ui-sm text-foreground">
+          Moved to Personal {onSettingsDate(acceptedAt)}
+        </p>
+      )}
       {lines.map((line) =>
         line === SHARED_BY_EARLIER_VERSION_LINE ? (
           <p

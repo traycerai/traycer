@@ -632,8 +632,7 @@ describe("buildHostScopeOptions the computer's OS in the composer sub-line", () 
     const line = (hostId: string): string => {
       const option = options.find((candidate) => candidate.hostId === hostId);
       if (option === undefined) throw new Error(`no row for ${hostId}`);
-      // The composer row is titled `This computer`, so the name goes below.
-      return composerComputerSubLine(option, true, true);
+      return composerComputerSubLine(option, true);
     };
     return { local: line("windows-host"), other: line("linux-host") };
   }
@@ -642,7 +641,7 @@ describe("buildHostScopeOptions the computer's OS in the composer sub-line", () 
     expect(
       composerSubLines({ localPlatform: "win32", registryPlatform: null })
         .local,
-    ).toBe("windows-test-machine · Windows · Active");
+    ).toBe("Windows · Active");
   });
 
   it("names another computer's OS from its registry row", () => {

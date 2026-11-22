@@ -7,6 +7,7 @@ import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { MenuOpenMarker } from "@/components/ui/open-menus";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 function ContextMenu({
   ...props
@@ -45,17 +46,18 @@ function ContextMenuContent({
   // cap; both are displaceable by a caller (see
   // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  const contentRef = useOverlayDragSuppressionRef(ref);
   if (!paneFocused || concealed) return null;
   // During the exit animation, hover must not let a closed menu item steal
   // focus from the control its action just opened (for example, inline rename).
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="context-menu-content"
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 max-w-safe-dvw min-w-40 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:pointer-events-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 max-h-(--radix-context-menu-content-available-height) max-w-safe-dvw min-h-0 min-w-40 overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:pointer-events-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}
@@ -290,7 +292,7 @@ function ContextMenuSubContent({
         data-layout={layout}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:pointer-events-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-50 max-h-(--radix-context-menu-content-available-height) max-w-safe-dvw min-h-0 min-w-24 overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:pointer-events-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           layout === "panel" ? "p-3 text-ui-sm" : "p-1",
           className,
         )}

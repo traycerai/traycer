@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import {
   interactionStartedOnOverlay,
 } from "@/components/layout/dialogs/dialog-outside-guard";
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 
 interface PromotableModalFrameProps {
   readonly icon: ReactNode;
@@ -16,6 +17,8 @@ interface PromotableModalFrameProps {
   readonly contentClassName: string;
   /** Extra `data-*` attributes spread onto the content (debug/test hooks). */
   readonly dataAttributes: Record<string, string>;
+  /** Controls the body places in the title bar, before Promote and Close; `null` for none. */
+  readonly headerActions: ReactNode;
   readonly promoteAriaLabel: string;
   readonly promoteTestId: string;
   readonly closeTestId: string;
@@ -57,6 +60,14 @@ export function PromotableModalFrame(
 ): ReactNode {
   const overlayRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  // The frame is 80% of the window, so it lies over the side strip's and the
+  // header's window-drag regions. Electron resolves those at the OS level,
+  // before the DOM: a press on the frame where a drag region sits underneath
+  // moves the window and never reaches the frame (Settings' Host rows, in the
+  // frame's bottom-left corner, were unclickable over the strip's drag
+  // spacer). The frame mounts only while open, so holding a suppressor for
+  // its lifetime drops those regions to no-drag exactly while it is up.
+  useTitleBarDragSuppression(`promotable-modal:${useId()}`, true);
   // Sampled in the overlay's onPointerDown: while a nested layer (the
   // tier-filter/sort dropdown) is open, the dialog Content is pointer-events:none,
   // so the overlay is the hit-target for EVERY click-out - and the dialog's
@@ -109,7 +120,7 @@ export function PromotableModalFrame(
         onEscapeKeyDown={props.onEscapeKeyDown}
         {...props.dataAttributes}
       >
-        <header className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-secondary px-4 py-2">
+        <header className="@container/title-strip flex shrink-0 items-center gap-2 border-b border-border/60 bg-secondary px-4 py-2">
           {props.icon}
           <DialogPrimitive.Title
             data-slot="dialog-title"
@@ -117,7 +128,8 @@ export function PromotableModalFrame(
           >
             {props.title}
           </DialogPrimitive.Title>
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex min-w-0 items-center gap-1">
+            {props.headerActions}
             {/* No promote on phones: the strip-tab surface it opens isn't
                 mobile-ready, and below md the modal is already full-screen. */}
             <Button

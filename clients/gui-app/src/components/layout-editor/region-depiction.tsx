@@ -520,6 +520,7 @@ const RESOURCE_SPECIMEN: ReadonlyArray<StatusBarResourceMetricView> = (
   label,
   value: SAMPLE_RESOURCE_VALUES[metric],
   unavailableReason: null,
+  cpuCoresLabel: null,
 }));
 
 /**

@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import type {
   SlackAppRegisterRequest,
+  SlackAppDmsRequest,
   SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import {
@@ -17,7 +18,14 @@ import {
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
 } from "../slack-app";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
+import {
+  fetchEnvironmentTransport,
+  type EnvironmentTransport,
+  type EnvironmentTransportRequest,
+} from "../../environment/environment-cloud";
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
@@ -34,6 +42,7 @@ const APP: SlackAppView = {
   teamName: "Acme",
   botUserId: "U01",
   installedAt: 1_791_000_000_000,
+  dmsEnabled: true,
 };
 
 const REGISTER_REQUEST: SlackAppRegisterRequest = {
@@ -43,6 +52,8 @@ const REGISTER_REQUEST: SlackAppRegisterRequest = {
   clientSecret: "client-secret-value",
   signingSecret: "signing-secret-value",
 };
+
+const DMS_REQUEST: SlackAppDmsRequest = { botId: BOT_ID, dmsEnabled: false };
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -108,9 +119,22 @@ describe("Slack app transport requests", () => {
     },
     {
       route: "register",
-      call: () => registerSlackAppViaHttp(BASE, BEARER, null, REGISTER_REQUEST),
+      call: () =>
+        registerSlackAppViaHttp(
+          BASE,
+          BEARER,
+          null,
+          fetchEnvironmentTransport,
+          REGISTER_REQUEST,
+        ),
       body: { app: APP },
       sent: REGISTER_REQUEST,
+    },
+    {
+      route: "dms",
+      call: () => setSlackAppDmsViaHttp(BASE, BEARER, null, DMS_REQUEST),
+      body: { app: { ...APP, dmsEnabled: false } },
+      sent: DMS_REQUEST,
     },
   ])(
     "POSTs $route to its own path with the bearer and the JSON body",
@@ -169,7 +193,33 @@ describe("Slack app transport results", () => {
     stubFetch(async () => jsonResponse(200, { app: APP }));
 
     await expect(
-      registerSlackAppViaHttp(BASE, BEARER, null, REGISTER_REQUEST),
+      registerSlackAppViaHttp(
+        BASE,
+        BEARER,
+        null,
+        fetchEnvironmentTransport,
+        REGISTER_REQUEST,
+      ),
+    ).resolves.toEqual({ kind: "ok", app: APP });
+  });
+
+  it("returns the app the DM setting write left", async () => {
+    const app = { ...APP, dmsEnabled: false };
+    stubFetch(async () => jsonResponse(200, { app }));
+
+    await expect(
+      setSlackAppDmsViaHttp(BASE, BEARER, null, DMS_REQUEST),
+    ).resolves.toEqual({ kind: "ok", app });
+  });
+
+  it("defaults a released server's omitted DM setting and ignores a later field", async () => {
+    const { dmsEnabled: _dmsEnabled, ...legacyApp } = APP;
+    stubFetch(async () =>
+      jsonResponse(200, { app: { ...legacyApp, serverAddedMember: "later" } }),
+    );
+
+    await expect(
+      readSlackAppViaHttp(BASE, BEARER, null, BOT_ID),
     ).resolves.toEqual({ kind: "ok", app: APP });
   });
 
@@ -240,6 +290,29 @@ describe("Slack app transport results", () => {
     });
   });
 
+  it("maps a DM setting refusal and transport failure like the other writes", async () => {
+    stubFetch(async () =>
+      jsonResponse(404, {
+        statusCode: 404,
+        error: "Not found",
+        code: "NOT_FOUND",
+      }),
+    );
+    await expect(
+      setSlackAppDmsViaHttp(BASE, BEARER, null, DMS_REQUEST),
+    ).resolves.toEqual({ kind: "refused", status: 404, code: "NOT_FOUND" });
+
+    stubFetch(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await expect(
+      setSlackAppDmsViaHttp(BASE, BEARER, null, DMS_REQUEST),
+    ).resolves.toEqual({
+      kind: "network-error",
+      detail: "the request never completed (TypeError)",
+    });
+  });
+
   it("maps a 2xx body that breaks the contract to a network error", async () => {
     stubFetch(async () =>
       jsonResponse(200, { app: { ...APP, installState: "exploded" } }),
@@ -280,6 +353,7 @@ describe("Slack app transport results", () => {
       BASE,
       BEARER,
       null,
+      fetchEnvironmentTransport,
       REGISTER_REQUEST,
     );
 
@@ -287,6 +361,163 @@ describe("Slack app transport results", () => {
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(REGISTER_REQUEST.clientSecret);
     expect(serialized).not.toContain(REGISTER_REQUEST.signingSecret);
+  });
+
+  it("drops an unknown refusal code that echoes the signing secret", async () => {
+    const request = { ...REGISTER_REQUEST, signingSecret: "private-value" };
+    stubFetch(async () =>
+      jsonResponse(400, {
+        statusCode: 400,
+        error: "Bad request",
+        code: request.signingSecret,
+      }),
+    );
+
+    const result = await registerSlackAppViaHttp(
+      BASE,
+      BEARER,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+
+    expect(result).toEqual({
+      kind: "refused",
+      status: 400,
+      code: "unrecognized",
+    });
+    expect(JSON.stringify(result)).not.toContain(request.signingSecret);
+  });
+
+  it("sends registration through the supplied transport and never global fetch", async () => {
+    const requests: EnvironmentTransportRequest[] = [];
+    const transport: EnvironmentTransport = async (request) => {
+      requests.push(request);
+      return { status: 200, text: JSON.stringify({ app: APP }) };
+    };
+    const fetchMock = vi.fn<typeof fetch>(() => {
+      throw new Error("global fetch must not be used for registration");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      registerSlackAppViaHttp(BASE, BEARER, null, transport, REGISTER_REQUEST),
+    ).resolves.toEqual({ kind: "ok", app: APP });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      url: `${BASE}/api/slack/apps/register`,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${BEARER}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: REGISTER_REQUEST,
+    });
+  });
+
+  it.each([302, 307, 308, 0])(
+    "treats registration HTTP %i as an answered failure without retry",
+    async (status) => {
+      let calls = 0;
+      const transport: EnvironmentTransport = async () => {
+        calls += 1;
+        return { status, text: "" };
+      };
+      await expect(
+        registerSlackAppViaHttp(
+          BASE,
+          BEARER,
+          null,
+          transport,
+          REGISTER_REQUEST,
+        ),
+      ).resolves.toEqual({
+        kind: "network-error",
+        detail: `the server answered HTTP ${status} without a typed refusal`,
+      });
+      expect(calls).toBe(1);
+    },
+  );
+
+  it("uses manual redirect handling for registration's real fetch transport", async () => {
+    const fetchMock = stubFetch(async () => new Response("", { status: 302 }));
+    await expect(
+      registerSlackAppViaHttp(
+        BASE,
+        BEARER,
+        null,
+        fetchEnvironmentTransport,
+        REGISTER_REQUEST,
+      ),
+    ).resolves.toMatchObject({ kind: "network-error" });
+    const { init } = onlyCall(fetchMock);
+    expect(init.redirect).toBe("manual");
+  });
+
+  it("collapses an unreadable registration body without exposing either secret", async () => {
+    const transport: EnvironmentTransport = async () => ({
+      status: 500,
+      text: null,
+    });
+    const result = await registerSlackAppViaHttp(
+      BASE,
+      BEARER,
+      null,
+      transport,
+      REGISTER_REQUEST,
+    );
+    expect(result.kind).toBe("network-error");
+    expect(JSON.stringify(result)).not.toContain(REGISTER_REQUEST.clientSecret);
+    expect(JSON.stringify(result)).not.toContain(
+      REGISTER_REQUEST.signingSecret,
+    );
+  });
+
+  it.each([400, 500])(
+    "does not expose registration secrets echoed in HTTP %i",
+    async (status) => {
+      const transport: EnvironmentTransport = async () => ({
+        status,
+        text: `{"error":"${REGISTER_REQUEST.clientSecret} ${REGISTER_REQUEST.signingSecret}"}`,
+      });
+      const result = await registerSlackAppViaHttp(
+        BASE,
+        BEARER,
+        null,
+        transport,
+        REGISTER_REQUEST,
+      );
+      expect(result.kind).toBe("network-error");
+      expect(JSON.stringify(result)).not.toContain(
+        REGISTER_REQUEST.clientSecret,
+      );
+      expect(JSON.stringify(result)).not.toContain(
+        REGISTER_REQUEST.signingSecret,
+      );
+    },
+  );
+
+  it("does not expose registration secrets from a transport rejection", async () => {
+    const transport: EnvironmentTransport = async () => {
+      throw new Error(
+        `${REGISTER_REQUEST.clientSecret} ${REGISTER_REQUEST.signingSecret}`,
+      );
+    };
+    const result = await registerSlackAppViaHttp(
+      BASE,
+      BEARER,
+      null,
+      transport,
+      REGISTER_REQUEST,
+    );
+    expect(result.kind).toBe("network-error");
+    expect(JSON.stringify(result)).not.toContain(REGISTER_REQUEST.clientSecret);
+    expect(JSON.stringify(result)).not.toContain(
+      REGISTER_REQUEST.signingSecret,
+    );
   });
 });
 
@@ -358,5 +589,56 @@ describe("Slack app transport on a fetch that ignores its signal", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
     expect(await pending).toEqual(TIMED_OUT);
+  });
+});
+
+describe("a redirect answered to a Slack app request", () => {
+  it.each([307, 308])(
+    "reads a %i to the register request as a network error and sends the secrets nowhere else",
+    async (status) => {
+      const fetchMock = stubFetch(
+        async () =>
+          new Response(null, {
+            status,
+            headers: { location: "https://elsewhere.test/collect" },
+          }),
+      );
+
+      await expect(
+        registerSlackAppViaHttp(
+          BASE,
+          BEARER,
+          null,
+          fetchEnvironmentTransport,
+          REGISTER_REQUEST,
+        ),
+      ).resolves.toEqual({
+        kind: "network-error",
+        detail: `the server answered HTTP ${status} without a typed refusal`,
+      });
+
+      const { url, init } = onlyCall(fetchMock);
+      expect(url).toBe(`${BASE}/api/slack/apps/register`);
+      expect(init.redirect).toBe("manual");
+    },
+  );
+
+  it("reads a browser's opaque redirect as a network error", async () => {
+    const fetchMock = stubFetch(async () => createOpaqueRedirectResponse());
+
+    await expect(
+      registerSlackAppViaHttp(
+        BASE,
+        BEARER,
+        null,
+        fetchEnvironmentTransport,
+        REGISTER_REQUEST,
+      ),
+    ).resolves.toEqual({
+      kind: "network-error",
+      detail: "the server answered HTTP 0 without a typed refusal",
+    });
+
+    expect(onlyCall(fetchMock).init.redirect).toBe("manual");
   });
 });

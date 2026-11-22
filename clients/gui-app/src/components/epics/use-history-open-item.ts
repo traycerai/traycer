@@ -71,6 +71,7 @@ export function useHistoryOpenItem(
       openEpicFromCommand(navigate, item.epicId, pathname, {
         title: item.title,
         source: "direct_ui",
+        tracyOrigin: null,
       });
     },
     [isEpicDeleteInFlight, navigate, onOpenItem, onSelectEpic, pathname],

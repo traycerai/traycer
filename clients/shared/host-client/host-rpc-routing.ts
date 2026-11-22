@@ -2,6 +2,7 @@ import type {
   HostRpcRegistry,
   HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
+import type { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import {
   isPoolHostDirectoryEntry,
@@ -33,13 +34,15 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   target is. Never a sandbox and never the pool, so audio and on-device
  *   models never leave the person's machines.
  * - `pool-only` - the account-wide families: History (`epic.listTasks`),
+ *   the title a reference to a chat is drawn with (`epic.getChatTitle`),
  *   the notification cloud feed (`host.notifications.cloudFeed.*`),
  *   `environment.list` and `environment.binding.read`, `organization.*` and
  *   `autoPolicy.*`, a configuration's own cloud state (its records, secrets,
  *   members, host list, history and plans, and the skills and guide its room
  *   holds: what its Settings pages read and edit, so they work with no host
- *   running it), the environment arm
- *   (`environment.chats.subscribe`,
+ *   running it; a member's running work, which only the computer running it
+ *   can count, is the one members read that stays `target-host`), the
+ *   environment arm (`environment.chats.subscribe`,
  *   `.plainTerminals.subscribe`, `.communicationGraph.subscribe`), which no
  *   host serves, and the chat serving witness (`chat.serving.subscribe`),
  *   the server's published fact. A pool-only call never has a host fallback
@@ -47,8 +50,9 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * - `addressed-peer` - `host.status` and `host.getRuntimeCapabilities`: the
  *   session-level floor every peer genuinely serves, the pool included, so
  *   they go to whichever peer the requester names.
- * - `target-host-live-pool-at-rest` - a chat's transcript: the team sandbox
- *   serves it while it is live, the pool at rest. Which one is the caller's
+ * - `target-host-live-pool-at-rest` - a chat's transcript: its host serves
+ *   it while it is live, the pool at rest (a team sandbox that is not awake,
+ *   or a machine that dropped the chat's records). Which one is the caller's
  *   choice ({@link chatServingHostId}); both are allowed here. The
  *   whole-download pair (`epic.resolveCloudChatHead`,
  *   `epic.readCloudChatPart`) too: the pool serves it for a chat at rest that
@@ -66,9 +70,8 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * time - reachability, a refusal, an outage - ever moves a call between the
  * pool and a host.
  *
- * Exhaustive by type (`satisfies` over both registries rejects a missing and an
- * unknown name) and by test (`__tests__/host-rpc-routing.test.ts` walks the
- * released floor fixture and both registries).
+ * Exhaustive over client-routable names by type and test. Legacy profile-sync
+ * methods remain on the wire for released peers, with no client route.
  */
 export type HostRpcRoute =
   | "target-host"
@@ -79,9 +82,13 @@ export type HostRpcRoute =
   | "target-host-live-pool-at-rest";
 
 export type HostUnaryRpcMethod = keyof HostRpcRegistry & string;
+export type ClientHostUnaryRpcMethod = Exclude<
+  HostUnaryRpcMethod,
+  keyof typeof PROFILE_SYNC_LINK_RPC_METHODS
+>;
 export type HostStreamRpcMethod = keyof HostStreamRpcRegistry & string;
 
-/** The route of `method`, unary or stream; `null` for a name neither knows. */
+/** The client route of `method`, unary or stream; `null` when none is declared. */
 export function hostRpcRouteOf(method: string): HostRpcRoute | null {
   return ROUTE_BY_METHOD.get(method) ?? null;
 }
@@ -226,6 +233,20 @@ export function isTeamSandboxHostDirectoryEntry(
   );
 }
 
+/**
+ * Whether `entry` is a machine: a host that is neither a sandbox nor the pool.
+ * A machine holds its chats' records itself, and the serving witness answers
+ * `live` for them until the machine reports one it dropped (cold eviction).
+ */
+export function isMachineHostDirectoryEntry(
+  entry: HostDirectoryEntry,
+): boolean {
+  if (entry.kind === "local" || entry.kind === "mock") {
+    return true;
+  }
+  return isRemoteHostDirectoryEntry(entry) && entry.sandbox === null;
+}
+
 /** One chat, as the readiness witness is asked about it. */
 export interface ChatServingKey {
   /** The host that runs the chat (the tab's host). */
@@ -258,29 +279,30 @@ export interface ChatServingWitness {
  * opened on. A change of answer is a resubscribe to the other peer, as on a
  * reconnect.
  *
- * Only a TEAM SANDBOX's chat ever moves. A personal host's chat, local or
- * remote, and a personal sandbox's, is always served by its own host: that
- * host holds the chat (D8), and cross-host continuation is a clone, never a
- * move. That is an invariant, not a default, and holds whatever the witness
- * says.
+ * Only a chat the caller asks the witness about ever moves, and the caller
+ * asks about two kinds: a team sandbox's chat, which is at rest while its
+ * sandbox is not awake, and a machine's chat the caller has reason to think
+ * the machine dropped the records of (cold eviction). A machine's chat moves
+ * only on the machine's own eviction fact: the witness answers `live` for it
+ * until the machine has reported the chat evicted, and again once the machine
+ * has brought it back, which a caller may learn from the machine's own answer
+ * before the witness does and pass as `live`. It never moves on
+ * reachability, and a personal
+ * sandbox's chat is never asked about, so it stays on its own host.
+ * Cross-host continuation is a clone, never a move.
  *
- * `verdict` is the witness's answer for `chat`, `null` with no witness. It is
- * the value and never the witness: a compiled caller memoizes on what it
- * passes, and the witness keeps one identity while its verdicts move, so a
- * caller handed the witness kept its first answer for good.
+ * `verdict` is the witness's answer for `chat`, `null` when the caller does
+ * not ask the witness about it (or has none). It is the value and never the
+ * witness: a compiled caller memoizes on what it passes, and the witness keeps
+ * one identity while its verdicts move, so a caller handed the witness kept
+ * its first answer for good.
  */
 export function chatServingHostId(
   chat: ChatServingKey,
-  chatHost: HostDirectoryEntry | null,
   verdict: ChatServingVerdict | null,
   plan: HostRpcTierPlan,
 ): string {
-  if (
-    verdict === null ||
-    plan.pool === null ||
-    chatHost === null ||
-    !isTeamSandboxHostDirectoryEntry(chatHost)
-  ) {
+  if (verdict === null || plan.pool === null) {
     return chat.hostId;
   }
   return verdict === "live" ? chat.hostId : POOL_HOST_ID;
@@ -327,6 +349,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "autoPolicy.set": "pool-only",
   "bot.claimAuthority": "target-host",
   "bot.conversation.list": "target-host",
+  "bot.conversation.search": "target-host",
   "bot.conversation.send": "target-host",
   "bot.create": "target-host",
   "bot.delete": "target-host",
@@ -349,6 +372,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.readCursor.read": "target-host",
   "bot.readCursor.advance": "target-host",
   "bot.turn.locate": "target-host",
+  "bot.updateAppearance": "target-host",
   "bot.updateDirective": "target-host",
   "bot.updateReplyMode": "target-host",
   "bot.updateRunSettings": "target-host",
@@ -368,6 +392,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "chat.fallback.proceed": "target-host",
   "chat.fallback.returnToPreferred": "target-host",
   "chat.fallback.runManualRung": "target-host",
+  "chat.feedbackDraft.decide": "target-host",
+  "chat.feedbackDraft.preview": "target-host",
   "chat.locateRow": "target-host-live-pool-at-rest",
   "chat.mcpApp.callTool": "target-host",
   "chat.mcpApp.describeTool": "target-host",
@@ -381,6 +407,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "comments.setThreadStatus": "target-host",
   "config.browser.get": "target-host",
   "config.browser.set": "target-host",
+  "config.agentMemories.get": "target-host",
+  "config.agentMemories.set": "target-host",
   "config.catalog.get": "target-host",
   "config.catalog.set": "target-host",
   "config.env.delete": "target-host",
@@ -477,17 +505,23 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.members.invite": "pool-only",
   "environment.members.noticeSeen": "pool-only",
   "environment.members.remove": "pool-only",
-  "environment.members.removePreview": "pool-only",
+  // Counted by the computer that runs them; the pool is never asked.
+  "environment.members.removePreview": "target-host",
   "environment.members.seats": "pool-only",
   "environment.members.setRole": "pool-only",
   "environment.move.accept": "target-host",
+  "environment.move.outcome": "target-host",
   "environment.move.plan": "target-host",
+  "environment.move.stage": "target-host",
+  "environment.move.start": "target-host",
   "environment.move.stop": "target-host",
   "environment.move.stopPreview": "target-host",
   "environment.notices": "target-host",
   "environment.plans.list": "pool-only",
   "environment.plans.unlink": "pool-only",
   "environment.plans.unlinkPreview": "pool-only",
+  "environment.previewLocalFacts": "target-host",
+  "environment.proposals": "target-host",
   "environment.reachDiagnostics": "target-host",
   "environment.review": "target-host",
   "environment.review.heldApply": "target-host",
@@ -540,9 +574,12 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.finishArtifactImage": "target-host",
   "epic.getChatRunSettings": "target-host",
   "epic.getChatRunSettingsBatch": "target-host",
+  "epic.getChatTitle": "pool-only",
   "epic.getTaskContexts": "target-host",
   "epic.getWorkspaceContext": "target-host",
   "epic.grantAccess": "target-host",
+  // On the chat's own host: the pool holds the copy, never the records.
+  "epic.hydrateChat": "target-host",
   "epic.listChatPublicationTargets": "target-host",
   "epic.listChatRecords": "target-host",
   "epic.listCloudChatPayloads": "target-host",
@@ -567,6 +604,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.prepareArtifactImage": "target-host",
   "epic.readArtifactObject": "target-host",
   "epic.readChatAttachment": "target-host",
+  "epic.readChatFile": "target-host",
   // The whole-download pair: a host the device holds reads them as a byte
   // pipe, and the pool serves them for a chat its index cannot open
   // (`CHAT_INDEX_UNAVAILABLE` on `chat.subscribe`).
@@ -614,6 +652,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.getRuntimeCapabilities": "addressed-peer",
   "host.identity.get": "target-host",
   "host.identity.set": "target-host",
+  "host.accountSettings.refresh": "target-host",
   "host.notificationHooks.save": "target-host",
   "host.notificationHooks.status": "target-host",
   "host.notificationHooks.test": "target-host",
@@ -634,9 +673,6 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.portForward.acquireLease": "target-host",
   "host.portForward.leaseEnded": "target-host",
   "host.portForward.releaseLease": "target-host",
-  "host.profileSync.apply": "target-host",
-  "host.profileSync.fetchCredential": "target-host",
-  "host.profileSync.offerCredential": "target-host",
   "host.rebindLocalStore": "target-host",
   "host.remoteAccess.set": "target-host",
   "host.resolveRepoPaths": "target-host",
@@ -646,6 +682,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.service.register": "target-host",
   "host.service.status": "target-host",
   "host.status": "addressed-peer",
+  "host.status.refresh": "target-host",
   "host.update.activate": "target-host",
   "host.update.check": "target-host",
   "host.update.continue": "target-host",
@@ -678,14 +715,17 @@ export const HOST_UNARY_RPC_ROUTES = {
   "pr.getLocalDiffSummary": "target-host",
   "pr.getLocalFileDiff": "target-host",
   "providers.addCustomPath": "target-host",
+  "providers.answerProfileName": "target-host",
   "providers.awaitLogin": "target-host",
   "providers.awaitMcpAuth": "target-host",
   "providers.awaitModelProviderAuth": "target-host",
+  "providers.beginApiKeyChange": "target-host",
   "providers.cancelLogin": "target-host",
   "providers.cancelMcpAuth": "target-host",
   "providers.cancelModelProviderAuth": "target-host",
   "providers.clearApiKey": "target-host",
   "providers.clearProfileApiKey": "target-host",
+  "providers.commitProfileMove": "target-host",
   "providers.consumeRateLimitResetCredit": "target-host",
   "providers.deleteEnvOverride": "target-host",
   "providers.detectVersion": "target-host",
@@ -696,29 +736,29 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.fallbackPolicy.restoreTierGroups": "target-host",
   "providers.fallbackPolicy.set": "target-host",
   "providers.installPackVersion": "target-host",
-  "providers.link": "target-host",
-  "providers.linkComplete": "target-host",
   "providers.list": "target-host",
   "providers.listModelProviders": "target-host",
   "providers.mcpAuth": "target-host",
   "providers.modelProviderAuth": "target-host",
   "providers.nativeMutate": "target-host",
-  "providers.profileSync.acceptAccount": "target-host",
-  "providers.profileSync.overview": "target-host",
-  "providers.profileSync.setKeepInSync": "target-host",
-  "providers.profileSync.syncNow": "target-host",
+  "providers.previewProfileMove": "target-host",
+  "providers.readModelRoutes": "target-host",
   "providers.refreshPackDiscovery": "target-host",
   "providers.refreshProfileStatus": "target-host",
   "providers.removeCustomPath": "target-host",
   "providers.removePackVersion": "target-host",
   "providers.setApiKey": "target-host",
+  "providers.settleApiKeyChange": "target-host",
   "providers.setAutoJudge": "target-host",
   "providers.setEnabled": "target-host",
   "providers.setEnvOverride": "target-host",
+  "providers.setModelProviderHidden": "target-host",
+  "providers.setNativeMemory": "target-host",
   "providers.setNativeSubagents": "target-host",
   "providers.setPackPolicy": "target-host",
   "providers.setProfileApiKey": "target-host",
   "providers.setProfileEnabled": "target-host",
+  "providers.signOutProfile": "target-host",
   "providers.setSelection": "target-host",
   "providers.setTerminalAgentArgs": "target-host",
   "providers.settingsFile.reset": "target-host",
@@ -795,7 +835,9 @@ export const HOST_UNARY_RPC_ROUTES = {
   "worktree.setEntryMode": "target-host",
   "worktree.setRepoBranchPrefix": "target-host",
   "worktree.setRepoScripts": "target-host",
-} as const satisfies { readonly [Method in HostUnaryRpcMethod]: HostRpcRoute };
+} as const satisfies {
+  readonly [Method in ClientHostUnaryRpcMethod]: HostRpcRoute;
+};
 
 export const HOST_STREAM_RPC_ROUTES = {
   "agent.activity.subscribe": "target-host",
@@ -808,6 +850,9 @@ export const HOST_STREAM_RPC_ROUTES = {
   "browser.sessions": "target-host",
   "chat.serving.subscribe": "pool-only",
   "chat.subscribe": "target-host-live-pool-at-rest",
+  // The doorbell of the host that answered a read, never another: its
+  // `recovered` re-asks only that host's own failed reads.
+  "cloud.recovered.subscribe": "target-host",
   "drafts.subscribe": "target-host",
   "epic.communicationGraph.subscribe": "target-host",
   "epic.state.subscribe": "target-host",
@@ -830,6 +875,7 @@ export const HOST_STREAM_RPC_ROUTES = {
   "host.notifications.subscribe": "target-host",
   "host.sandbox.egress.subscribe": "target-host",
   "host.tunnel.open": "target-host",
+  "managedCommand.subscribeBotOutput": "target-host",
   "managedCommand.subscribeOutput": "target-host",
   "migration.run": "target-host",
   "notifications.subscribe": "target-host",

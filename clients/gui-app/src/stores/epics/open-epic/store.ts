@@ -34,6 +34,7 @@ import { replaceEqualDeep } from "@tanstack/react-query";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
+import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicCloudFreshness,
@@ -47,12 +48,22 @@ import type {
   ChatRecordHeadStamp,
   ChatRecordRemovalReason,
   ChatRecordSummaryV12,
+  ChatRecordSummaryV15,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   EMPTY_CHAT_RECORD_HEADS,
   applyChatRecordHeadRows,
-  dropChatRecordHeadsForChat,
+  dropChatRecordEntriesForChat,
 } from "./chat-record-head";
+import {
+  EMPTY_CHAT_RECORD_STARTERS,
+  applyChatRecordStarterRows,
+} from "./chat-record-starters";
+import {
+  EMPTY_EVICTED_CHAT_IDS,
+  evictedChatIdsOfSnapshot,
+  type ChatRecordEvictionRow,
+} from "./chat-record-evictions";
 import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
@@ -379,6 +390,16 @@ export interface OpenEpicState {
    * it). Read through `useEpicChatRecordHead`.
    */
   readonly chatRecordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
+  /** Main-thread, like {@link OpenEpicState.chatRecordHeads}. */
+  readonly chatRecordStarters: Readonly<Record<string, string>>;
+  /**
+   * The chats whose records the serving host has dropped (cold eviction), by
+   * `chatId`, as its last `epic.listChatRecords@1.4` snapshot listed them.
+   * Main-thread and list-only, like {@link OpenEpicState.chatRecordHeads}:
+   * see `./chat-record-evictions`. Nothing is drawn from it; it decides only
+   * which peer serves the chat's tile.
+   */
+  readonly evictedChatIds: ReadonlySet<string>;
   /**
    * Whether `epic.listChatRecords` has produced an answer this session.
    * Missing rows are not deletion evidence until this is true. Transient
@@ -586,6 +607,11 @@ export interface OpenEpicState {
    */
   readonly cloudFreshness: EpicCloudFreshness | null;
   /**
+   * Whether this task's artifacts are reaching the cloud
+   * (`epic.status.subscribe@1.2`). `null` means the host did not say.
+   */
+  readonly artifactSync: EpicArtifactSync | null;
+  /**
    * Whether the peer serving this stream negotiated the `@1.6` minor that
    * carries the three legs above - `s5-status-truthfulness`. Every one of
    * those legs is optional on the wire, so `null` alone cannot say WHICH
@@ -704,7 +730,8 @@ export interface OpenEpicState {
    * `chats` identical to the doc projection.
    */
   applyChatRecords: (
-    records: readonly ChatRecordSummaryV12[],
+    records: readonly (ChatRecordSummaryV12 &
+      Pick<ChatRecordSummaryV15, "starterUserId">)[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -723,6 +750,12 @@ export interface OpenEpicState {
    * take part in.
    */
   applyChatRecordTouches: (patches: readonly RecordListRecencyPatch[]) => void;
+  /**
+   * Restates {@link OpenEpicState.evictedChatIds} from the rows of an
+   * `epic.listChatRecords` SNAPSHOT. Never called for the `unchanged` arm,
+   * which carries no rows and so keeps the set as it stands.
+   */
+  applyChatRecordEvictions: (rows: readonly ChatRecordEvictionRow[]) => void;
   /**
    * The chat-record ingest counter as it stands now - the value a list
    * request captures at dispatch and passes back to
@@ -2047,6 +2080,9 @@ export function createOpenEpicStore(
           // field's own note on why the head is a main-thread plane. Empty
           // until a list answer or a delta carries one.
           chatRecordHeads: EMPTY_CHAT_RECORD_HEADS,
+          chatRecordStarters: EMPTY_CHAT_RECORD_STARTERS,
+          // List-only, like the head: restated by each snapshot.
+          evictedChatIds: EMPTY_EVICTED_CHAT_IDS,
           tuiAgentRecordListFailed: false,
           ingestFenceIdentity: mintedIngestFenceIdentity,
           lastFocusedArtifactId: null,
@@ -2175,10 +2211,21 @@ export function createOpenEpicStore(
             );
             if (heads !== get().chatRecordHeads)
               set({ chatRecordHeads: heads });
+            const starters = applyChatRecordStarterRows(
+              get().chatRecordStarters,
+              records,
+            );
+            if (starters !== get().chatRecordStarters)
+              set({ chatRecordStarters: starters });
             runtime.command({
               kind: "apply-chat-records",
               payload: { records, issuedAtSeq },
             });
+          },
+          applyChatRecordEvictions: (rows) => {
+            const held = get().evictedChatIds;
+            const next = evictedChatIdsOfSnapshot(held, rows);
+            if (next !== held) set({ evictedChatIds: next });
           },
           applyChatRecordTouches: (patches) => {
             // No head plane to fold in, unlike the rows path above: a recency
@@ -2227,8 +2274,15 @@ export function createOpenEpicStore(
             const heads =
               delta.kind === "upsert"
                 ? applyChatRecordHeadRows(held, [delta.record])
-                : dropChatRecordHeadsForChat(held, delta.chatId);
+                : dropChatRecordEntriesForChat(held, delta.chatId);
             if (heads !== held) set({ chatRecordHeads: heads });
+            const heldStarters = get().chatRecordStarters;
+            const starters =
+              delta.kind === "upsert"
+                ? applyChatRecordStarterRows(heldStarters, [delta.record])
+                : dropChatRecordEntriesForChat(heldStarters, delta.chatId);
+            if (starters !== heldStarters)
+              set({ chatRecordStarters: starters });
             runtime.command({
               kind: "apply-chat-record-delta",
               payload: { delta },

@@ -3,11 +3,12 @@ vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
-// The page names its environment through the surface's client and the viewer.
-const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+// The page names its environment through the surface's client and the viewer;
+// its secrets are read and written through the sign-in's own calls.
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => hostBoundary.client,
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -30,7 +31,7 @@ vi.mock(
   }),
 );
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -42,6 +43,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type {
   EnvironmentSecretV12,
   EnvironmentSecretsCreateRequest,
@@ -50,19 +52,30 @@ import type {
   SecretVerifyResult,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
+import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
-import { SecretsPage } from "@/components/settings/secrets/secrets-page";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
-import type { HostRpcRegistry } from "@/lib/host";
-import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
+import { reachableHost } from "@/components/settings/environment/__tests__/mcp-skills-test-support";
 import {
-  SECRET_REVOKED_LABEL,
-  SECRETS_EMPTY_TEXT,
-} from "@/lib/sandboxes/secrets-page-copy";
-import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
+  mountTeamPage,
+  personalPoolSource,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { SecretsPage } from "@/components/settings/secrets/secrets-page";
+import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { HostRpcRegistry } from "@/lib/host";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_CREATE_FIELDS,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-secrets";
 const TYPED_VALUE = "sk_live_TYPED_VALUE_9f3a7c";
@@ -89,8 +102,7 @@ interface SecretsHostState {
   environmentsError: Error | null;
   verifyAnswer: SecretVerifyResult;
   createAnswer: EnvironmentSecretsCreateResponse;
-  /** The create rejects with this. */
-  createError: Error | null;
+  createRefusal: string | null;
   /** The create waits for this to settle before it answers. */
   createHold: Promise<void> | null;
 }
@@ -98,6 +110,7 @@ interface SecretsHostState {
 interface SecretsHost {
   readonly state: SecretsHostState;
   readonly client: HostClient<HostRpcRegistry>;
+  readonly harness: TeamPageHarness;
   readonly reads: { list: number };
   readonly verifyRequests: EnvironmentSecretsVerifyRequest[];
   readonly createRequests: EnvironmentSecretsCreateRequest[];
@@ -107,23 +120,25 @@ function secretFixture(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",
     protocol: "https",
     destinations: ["api.stripe.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
 
-function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
+function mountSecretsHost(
+  overrides: Partial<SecretsHostState>,
+  source: ConfigurationSource,
+): SecretsHost {
   const state: SecretsHostState = {
     secrets: [],
     versions: [
@@ -145,89 +160,130 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
       outcome: "created",
       secret: secretFixture({ secretId: "sec-new" }),
     },
-    createError: null,
+    createRefusal: null,
     createHold: null,
     ...overrides,
   };
   const reads = { list: 0 };
   const verifyRequests: EnvironmentSecretsVerifyRequest[] = [];
   const createRequests: EnvironmentSecretsCreateRequest[] = [];
-  const { client } = buildEnvironmentClient({
-    hostId: HOST_ID,
-    handlers: {
-      "environment.list": () => {
-        if (state.environmentsError !== null) throw state.environmentsError;
-        return {
-          environments: [
-            {
-              environmentId: PERSONAL_ENV,
-              ownerKind: "user" as const,
-              ownerId: "user-me",
-              roomId: "room-personal",
-              label: "Personal",
-              effectiveRole: "owner" as const,
-              kind: "personal" as const,
-              hostCount: 1,
-              providerHandle: null,
-            },
-          ],
-        };
-      },
-      "environment.secrets.versions": () => ({
-        versions: [...state.versions],
-        removal: null,
-      }),
-      "environment.secrets.rotation": () => ({
-        rotation: null,
-        lastVerify: null,
-      }),
-      "environment.history": () => ({
-        readerScope: "full" as const,
-        entries: [],
-        hostStates: [],
-      }),
-      "environment.secrets.list": async () => {
-        reads.list += 1;
-        if (state.listHold !== null) await state.listHold;
-        if (state.listError !== null) throw state.listError;
-        return { removed: [], secrets: [...state.secrets] };
-      },
-      "environment.secrets.verify": (request) => {
-        verifyRequests.push(request);
-        return state.verifyAnswer;
-      },
-      "environment.secrets.create": async (request) => {
-        createRequests.push(request);
-        if (state.createHold !== null) await state.createHold;
-        if (state.createError !== null) throw state.createError;
-        return state.createAnswer;
-      },
+  if (source.kind === "host") {
+    recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
+      "environment.status",
+    ]);
+  }
+  const harness = mountTeamPage(source, {
+    "environment.status": () => environmentStatusFixture({ principal: null }),
+    "environment.list": () => {
+      if (state.environmentsError !== null) throw state.environmentsError;
+      return {
+        environments: [
+          {
+            environmentId: PERSONAL_ENV,
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Personal",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 1,
+            providerHandle: null,
+          },
+        ],
+      };
+    },
+    "environment.host.list": () => ({
+      hosts: [
+        {
+          ...reachableHost,
+          hostId: HOST_ID,
+          hostLabel: "dev-box",
+          enrolledByUserId: "user-me",
+        },
+      ],
+    }),
+    "environment.secrets.versions": () => ({
+      versions: [...state.versions],
+      removal: null,
+    }),
+    "environment.secrets.rotation": () => ({
+      rotation: null,
+      lastVerify: null,
+    }),
+    "environment.history": () => ({
+      readerScope: "full" as const,
+      entries: [],
+      hostStates: [],
+    }),
+    "environment.secrets.list": async () => {
+      reads.list += 1;
+      if (state.listHold !== null) await state.listHold;
+      if (state.listError !== null) throw state.listError;
+      return { removed: [], secrets: [...state.secrets] };
+    },
+    "environment.secrets.verify": (request) => {
+      verifyRequests.push(request);
+      return state.verifyAnswer;
+    },
+    "environment.secrets.create": async (request) => {
+      createRequests.push(request);
+      if (state.createHold !== null) await state.createHold;
+      return state.createAnswer;
     },
   });
-  return { state, client, reads, verifyRequests, createRequests };
+  const baseCloud = harness.auth.environmentCloud.bind(harness.auth);
+  harness.auth.environmentCloud = () => {
+    const cloud = baseCloud();
+    return {
+      ...cloud,
+      transport: async (request) => {
+        if (
+          state.createRefusal !== null &&
+          request.method === "POST" &&
+          new URL(request.url).pathname.endsWith("/secrets")
+        ) {
+          return {
+            status: 409,
+            text: JSON.stringify({ message: state.createRefusal }),
+          };
+        }
+        return cloud.transport(request);
+      },
+    };
+  };
+  return {
+    state,
+    client: requireTeamHostClient(),
+    harness,
+    reads,
+    verifyRequests,
+    createRequests,
+  };
+}
+
+function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
+  return mountSecretsHost(overrides, personalPoolSource());
 }
 
 function renderPage(host: SecretsHost): QueryClient {
-  hostBoundary.client = host.client;
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
   render(
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostContext.Provider value={dashboardRunnerHost()}>
-        <SecretsPage
-          client={host.client}
-          hostId={HOST_ID}
-          emptyText={SECRETS_EMPTY_TEXT}
-          hostName={() => "dev-box"}
-        />
-      </RunnerHostContext.Provider>
-    </QueryClientProvider>,
+    <RunnerHostContext.Provider value={dashboardRunnerHost()}>
+      <SecretsPage
+        client={host.client}
+        hostId={HOST_ID}
+        emptyText={SECRETS_EMPTY_TEXT}
+        hostName={() => "dev-box"}
+      />
+    </RunnerHostContext.Provider>,
+    { wrapper: host.harness.Wrapper },
   );
-  return queryClient;
+  return host.harness.queryClient;
 }
 
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   useAuthStore.setState({ status: "signed-in" });
@@ -237,7 +293,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
-  hostBoundary.client = null;
+  resetTeamPageHarness();
   navigateToSettingsSectionMock.mockReset();
   useAuthStore.setState({ status: "signed-out" });
 });
@@ -330,6 +386,23 @@ describe("the secrets list", () => {
         .map((button) => button.textContent),
     ).toEqual(["Replace", "Remove", "Details"]);
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    const details = await openRowDetails(rows[1]);
+    const recovery = within(details).getByTestId("secret-recovery");
+    expect(within(recovery).queryByText("Secret leaked?")).toBeNull();
+    expect(
+      within(recovery)
+        .getAllByRole("listitem")
+        .map((step) => step.textContent),
+    ).toEqual([
+      "Remove it first: every sandbox stops using the old value.",
+      "Rotate the credential at the service it belongs to.",
+      "Replace the value here.",
+      "Grant it again.",
+    ]);
+    expect(recovery.textContent).toContain("If this secret leaked");
+    expect(recovery.textContent).toContain(
+      "If Traycer can't be reached, finish or stop running agent turns and shells before stopping the sandbox to end its sessions.",
+    );
   });
 
   it("says replaced, not added, once the current version is a replacement", async () => {
@@ -367,40 +440,11 @@ describe("the secrets list", () => {
     expect(line.textContent).toBe("STRIPE_KEY · Set · sent to api.stripe.com");
   });
 
-  it("marks a revoked secret, and its Details offers no Verify", async () => {
-    const host = buildSecretsHost({
-      secrets: [
-        secretFixture({ secretId: "sec-1", name: "STRIPE_KEY" }),
-        secretFixture({ secretId: "sec-3", name: "OLD_KEY", revoked: true }),
-      ],
-    });
-    renderPage(host);
-
-    const rows = await screen.findAllByTestId("secret-row");
-    const live = rows[0];
-    const revoked = rows[1];
-    expect(revoked.textContent).toContain(SECRET_REVOKED_LABEL);
-    expect(live.textContent).not.toContain(SECRET_REVOKED_LABEL);
-
-    const liveControls = await openRowDetails(live);
-    expect(within(liveControls).getByTestId("secret-row-verify")).toBeTruthy();
-    cleanup();
-
-    renderPage(host);
-    const again = await screen.findAllByTestId("secret-row");
-    const revokedControls = await openRowDetails(again[1]);
-    expect(
-      within(revokedControls).queryByTestId("secret-row-verify"),
-    ).toBeNull();
-  });
-
   it("says what secrets are when there are none", async () => {
     renderPage(buildSecretsHost({ secrets: [] }));
 
     const empty = await screen.findByTestId("secrets-empty");
-    expect(empty.textContent).toBe(
-      "Values and logins your agents use. On your computers they are set as values; on sandboxes agents use them without seeing them.",
-    );
+    expect(empty.textContent).toBe(SECRETS_EMPTY_TEXT);
     expect(screen.queryByTestId("secret-row")).toBeNull();
     expect(screen.getByTestId("secrets-add")).toBeTruthy();
   });
@@ -517,31 +561,42 @@ describe("a row's Verify", () => {
   });
 });
 
-describe("a row's Details on a Local pick", () => {
-  it("keeps Verify and the versions when the environment list cannot be read", async () => {
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
-    });
-    const host = buildSecretsHost({
-      secrets: [secretFixture({ secretId: "sec-1" })],
-      environmentsError: new Error("environment list unavailable"),
-    });
+describe("Personal secrets when the environment cannot be named", () => {
+  it("leaves secrets unresolved when a cold environment list cannot be read", async () => {
+    const host = mountSecretsHost(
+      {
+        secrets: [secretFixture({ secretId: "sec-1" })],
+        environmentsError: new Error("environment list unavailable"),
+      },
+      { kind: "host" },
+    );
     renderPage(host);
 
-    const row = await screen.findByTestId("secret-row");
-    fireEvent.click(
-      await within(row).findByRole("button", { name: "Details" }),
-    );
-    const controls = await screen.findByTestId("secret-details-controls");
-    expect(await within(controls).findByTestId("secret-versions")).toBeTruthy();
-    fireEvent.click(within(controls).getByTestId("secret-row-verify"));
-
-    expect((await screen.findByTestId("secret-verify-line")).textContent).toBe(
-      "Reached the destination. The key is checked the first time an agent uses it.",
-    );
-    expect(host.verifyRequests).toEqual([
-      { target: "secret", secretId: "sec-1", environmentId: null },
-    ]);
+    await waitFor(() => {
+      expect(
+        host.harness.queryClient
+          .getQueryCache()
+          .findAll({
+            predicate: (query) =>
+              query.meta?.hostRpcMethod === "environment.list",
+          })
+          .some(
+            (query) =>
+              query.state.status === "error" &&
+              query.state.fetchStatus === "idle",
+          ),
+      ).toBe(true);
+    });
+    expect(host.harness.paramsOf("environment.list")).toHaveLength(1);
+    expect(screen.queryByTestId("secret-row")).toBeNull();
+    expect(screen.queryByTestId("secrets-add")).toBeNull();
+    expect(host.reads.list).toBe(0);
+    expect(host.verifyRequests).toEqual([]);
+    expect(
+      host.harness.messenger.calls.filter((call) =>
+        call.method.startsWith("environment.secrets."),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -566,7 +621,7 @@ describe("the add dialog's kind picker", () => {
       ).toBeNull();
     }
     expect(screen.getByTestId("secret-provider-keys-line").textContent).toBe(
-      "Provider keys are set on each provider's Account tab, under Providers.",
+      "Provider keys are set on each provider's page, under Providers.",
     );
   });
 
@@ -588,7 +643,7 @@ describe("the add dialog's kind picker", () => {
     await openApiKeyForm();
 
     expect(screen.getByTestId("secret-custody-sentence").textContent).toBe(
-      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
+      "Stored encrypted in Traycer's cloud. Sandboxes use it without seeing it.",
     );
     expect(screen.getByTestId("add-secret-dialog").textContent).not.toMatch(
       /on the web|dashboard/i,
@@ -685,7 +740,7 @@ describe("saving a secret", () => {
     const confirmation = await screen.findByTestId("secret-save-confirmation");
     // The custody sentence and its disclosure, and nothing else before Save.
     expect(confirmation.textContent).toBe(
-      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.How Traycer handles this",
+      "Stored encrypted in Traycer's cloud. Sandboxes use it without seeing it.How Traycer handles this",
     );
     expect(confirmation.textContent).not.toContain("plain value");
     expect(host.createRequests).toEqual([]);
@@ -711,11 +766,12 @@ describe("saving a secret", () => {
         connectorId: null,
         confirmedAddresses: null,
         value: TYPED_VALUE,
-        mode: "brokered",
+        // The two fields a released host still reads off this request, with
+        // the only values this tree sends.
+        ...RETIRED_SECRET_CREATE_FIELDS,
         portOverride: false,
         swapSites: ["header"],
         variables: [],
-        exportPolicy: null,
         sandboxesByDefault: true,
         plaintextConsent: null,
         environmentId: PERSONAL_ENV,
@@ -774,10 +830,10 @@ describe("saving a secret", () => {
     expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
   });
 
-  it("shows the host's own words when the create is rejected, and keeps the dialog", async () => {
+  it("shows the refusal's own words when the create is rejected, and keeps the dialog", async () => {
     const host = buildSecretsHost({
       secrets: [],
-      createError: new Error("A secret named STRIPE_KEY already exists."),
+      createRefusal: "A secret named STRIPE_KEY already exists.",
     });
     renderPage(host);
 
@@ -789,84 +845,6 @@ describe("saving a secret", () => {
     expect(screen.getByTestId("secret-save")).toBeTruthy();
     expect(screen.queryByTestId("secret-save-done")).toBeNull();
     expect(host.reads.list).toBe(1);
-  });
-
-  it("says why a team's secret is refused, with the refusal line", async () => {
-    const host = buildSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "refused", code: "team_secrets_are_brokered" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    const line = secretChangeRefusalLine("create", "team_secrets_are_brokered");
-    expect(line).not.toBeNull();
-    const note = await screen.findByTestId("secret-save-note");
-    expect(note.textContent).toBe(line);
-    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
-    // A refusal saved nothing, so there is nothing to re-read.
-    expect(host.reads.list).toBe(1);
-  });
-
-  it("says to use the provider's key variable when the name is not a provider's", async () => {
-    const host = buildSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "refused", code: "provider_name_unknown" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    const note = await screen.findByTestId("secret-save-note");
-    expect(note.textContent).toBe(
-      "Use its provider's key variable as the name.",
-    );
-    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
-    expect(host.reads.list).toBe(1);
-  });
-
-  it("says a code it has no line for with a plain failure line", async () => {
-    const host = buildSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "refused", code: "a_code_from_a_newer_host" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    expect((await screen.findByTestId("secret-save-note")).textContent).toBe(
-      "Couldn't save this secret.",
-    );
-  });
-
-  it("offers only Done once a save is waiting to reach the account, and re-reads the list", async () => {
-    const host = buildSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "pending", uploadId: "u1" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    const note = await screen.findByTestId("secret-save-note");
-    expect(note.textContent).toBe(
-      "Saved. It reaches your account when this computer is connected.",
-    );
-    // One more Save would be a second secret.
-    expect(screen.queryByTestId("secret-save")).toBeNull();
-    const done = await screen.findByTestId("secret-save-done");
-    expect(host.createRequests).toHaveLength(1);
-    await waitFor(() => {
-      expect(host.reads.list).toBe(2);
-    });
-
-    fireEvent.click(done);
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
-    });
-    expect(host.createRequests).toHaveLength(1);
   });
 });
 
@@ -894,20 +872,19 @@ describe("the add form's words", () => {
     expect(screen.queryByText(/Where this key is sent/)).toBeNull();
   });
 
-  it("says in plain words what each mode does, and warns only on the one that exposes the value", async () => {
+  it("says in plain words what a sandbox holds, and offers no way to hand over the value", async () => {
     renderPage(buildSecretsHost({ secrets: [] }));
     await openApiKeyForm();
 
     const dialog = screen.getByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByLabelText(
-        "Agents use it without seeing it (recommended)",
-      ),
-    ).toBeTruthy();
-    expect(within(dialog).getByLabelText("Agents can read it")).toBeTruthy();
     expect(dialog.textContent).toContain(
-      "On a sandbox, any process can read it, and revoking it does not stop a copy already made.",
+      "Agents use it without seeing it: the sandbox holds a stand-in and the real value is attached as a request leaves it.",
     );
+    // No mode to choose: the radio is gone with the mode that fed it.
+    expect(
+      within(dialog).queryByTestId("secret-form-mode-brokered"),
+    ).toBeNull();
+    expect(dialog.textContent).not.toContain("Agents can read it");
     expect(dialog.textContent).not.toContain(
       "agents can use it and never read it",
     );
@@ -921,7 +898,7 @@ describe("the add form's words", () => {
 
     fireEvent.click(screen.getByTestId("members-data-handling-trigger"));
     expect(screen.getByTestId("members-data-handling-notice").textContent).toBe(
-      dataHandlingNoticeText(),
+      "Traycer's cloud stores the value encrypted. Sandboxes running Personal or a team use the value without seeing it. Share a work credential only if you have the authority to share it. Removing a value stops access from then on. It cannot take back copies a computer already made, task data already published, or exports already shared. Where Traycer processes this data is not yet stated. How long backups keep this data is not yet stated.",
     );
 
     fireEvent.click(buttonOf("secret-form-continue"));

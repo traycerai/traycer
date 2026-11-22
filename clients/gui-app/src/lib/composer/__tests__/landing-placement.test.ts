@@ -61,6 +61,7 @@ function remoteClientAddressing(
     version: "0.0.0-test",
     transportDialability: "not-dialable",
     publicKey: "public-key",
+    owner: null,
     relayFuseGrace: false,
     sandbox: null,
     remoteStatus: {

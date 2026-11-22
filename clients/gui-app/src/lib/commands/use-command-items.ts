@@ -13,6 +13,7 @@
 import { useMemo } from "react";
 import { getAllItems } from "@/lib/commands/registry";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
+import { botsSource } from "@/lib/commands/sources/bots.source";
 import { composerSource } from "@/lib/commands/sources/composer.source";
 import { customizeSource } from "@/lib/commands/sources/customize.source";
 import { epicsSource } from "@/lib/commands/sources/epics.source";
@@ -32,6 +33,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
   const navItems = navigationSource.useItems(ctx);
   const historyNavItems = historyNavigationSource.useItems(ctx);
   const epicItems = epicsSource.useItems(ctx);
+  const botItems = botsSource.useItems(ctx);
   const composerItems = composerSource.useItems(ctx);
   const helpItems = helpSource.useItems(ctx);
   const customizeItems = customizeSource.useItems(ctx);
@@ -43,6 +45,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
       ...navItems,
       ...historyNavItems,
       ...epicItems,
+      ...botItems,
       ...composerItems,
       ...helpItems,
       ...customizeItems,
@@ -53,6 +56,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
       navItems,
       historyNavItems,
       epicItems,
+      botItems,
       composerItems,
       helpItems,
       customizeItems,

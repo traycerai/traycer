@@ -20,7 +20,8 @@ import { type JsonContent } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
+import { usePersonIdentity } from "@/hooks/identity/use-person-identity";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -43,7 +44,6 @@ import {
   type CommentComposerHandle,
 } from "./comment-composer";
 import { CommentContent } from "./comment-content-renderer";
-import { deriveInitials } from "./mention-utils";
 import "@/lib/composer/tiptap-json-content";
 
 function sharedComposerDraft(
@@ -524,14 +524,21 @@ function CommentEntry(props: CommentEntryProps) {
 
   const isCommentAuthor =
     currentUserId !== null && currentUserId === comment.author.userId;
-  const authorLabel = comment.author.fallbackHandle ?? comment.author.userId;
+  const author = usePersonIdentity(comment.author.userId);
+  const authorLabel =
+    author?.displayName ??
+    comment.author.fallbackHandle ??
+    comment.author.userId;
 
   return (
     <li className="flex flex-col gap-1.5" data-slot="comment-entry">
       <header className="flex items-center gap-2">
-        <Avatar size="sm">
-          <AvatarFallback>{deriveInitials(authorLabel)}</AvatarFallback>
-        </Avatar>
+        <PersonAvatar
+          userId={comment.author.userId}
+          name={authorLabel}
+          avatarUrl={author?.avatarUrl ?? null}
+          size="sm"
+        />
         <span className="truncate text-ui-sm font-medium">{authorLabel}</span>
         <time
           className="text-ui-xs text-muted-foreground"

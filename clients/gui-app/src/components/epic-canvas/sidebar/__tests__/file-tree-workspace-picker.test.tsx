@@ -222,9 +222,9 @@ describe("<FileTreeWorkspacePicker />", () => {
     // list - its rows are one click away, not asserted here.
     const hostTrigger = screen.getByTestId("settings-host-switcher");
     expect(hostTrigger.getAttribute("aria-label")).toBe("Host: MacBook");
-    const workspacesHeader = screen.getByText("Workspaces");
+    const workspacesHeader = screen.getByText("Folders");
     const search = screen.getByRole("combobox");
-    expect(screen.getAllByText("Workspaces")).toHaveLength(1);
+    expect(screen.getAllByText("Folders")).toHaveLength(1);
     expect(
       workspacesHeader.compareDocumentPosition(search) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -277,6 +277,21 @@ describe("<FileTreeWorkspacePicker />", () => {
     expect(trigger.textContent).toContain("traycer · redesign");
     expect(trigger.textContent).toContain("/work/traycer");
     expect(trigger.textContent).not.toContain("changed");
+  });
+
+  it("says Select folder when nothing is selected", () => {
+    renderWithClient(
+      <FileTreeWorkspacePicker
+        epicId="epic-1"
+        hostId="host-1"
+        selectedPath={null}
+        onSelectPath={() => undefined}
+        surfaceKey="file-tree-test"
+      />,
+    );
+
+    expect(screen.getByText("Select folder")).toBeTruthy();
+    expect(screen.getByText("Choose a folder")).toBeTruthy();
   });
 
   it("left-truncates the selected workspace path in the trigger", () => {
@@ -481,6 +496,6 @@ describe("<FileTreeWorkspacePicker />", () => {
     listQuery.current = { data: undefined, isPending: false, isError: true };
     openPicker(null, () => undefined);
 
-    expect(screen.getByText("Failed to load workspaces.")).toBeDefined();
+    expect(screen.getByText("Failed to load folders.")).toBeDefined();
   });
 });

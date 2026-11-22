@@ -205,6 +205,7 @@ function renderSend(error: string, variant: "card" | "row"): void {
         managedCommand={null}
         artifact={null}
         mcpApp={null}
+        feedbackDraft={null}
         agentMessageReceipt={null}
         agentMessageDelivery={null}
         botSendReceipt={null}

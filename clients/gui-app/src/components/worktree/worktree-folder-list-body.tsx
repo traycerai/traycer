@@ -28,20 +28,20 @@ export function WorktreeFolderListBody(props: WorktreeFolderListBodyProps) {
     return (
       <div className="flex items-center gap-2 p-2.5 text-ui-sm text-muted-foreground">
         <MutedAgentSpinner />
-        <span>Loading workspaces…</span>
+        <span>Loading folders…</span>
       </div>
     );
   }
   if (props.isError) {
     return (
       <div className="flex items-center gap-2 p-2.5 text-ui-sm text-destructive">
-        <span className="min-w-0 flex-1">Failed to load workspaces.</span>
+        <span className="min-w-0 flex-1">Failed to load folders.</span>
         <ReportIssueAction
           context={createReportIssueContext({
-            title: "Failed to load workspaces",
+            title: "Failed to load folders",
             message: null,
             code: null,
-            source: "Workspaces",
+            source: "Folders",
           })}
           presentation="icon"
           className={undefined}

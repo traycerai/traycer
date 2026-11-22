@@ -1,16 +1,10 @@
-import {
-  useId,
-  type KeyboardEvent,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   Popover,
   PopoverAnchor,
   PopoverContent,
 } from "@/components/ui/popover";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { useGroupEditor } from "@/stores/tabs/group-editor-store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
 import { TabGroupEditor } from "./tab-group-editor";
@@ -35,8 +29,6 @@ export function GroupEditorAnchor(props: {
   const { groupId, group } = props;
   const placement = useColumnOverlayPlacement("row");
   const { open, setOpen } = useGroupEditor(groupId);
-  // The editor can open over the strip's drag spacer.
-  useTitleBarDragSuppression(`group-editor:${useId()}`, open);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor

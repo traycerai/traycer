@@ -295,6 +295,11 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
     expect(await screen.findByText("Host")).toBeTruthy();
     expect(await screen.findByText("CLI")).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Log verbosity and recent log output for the host selected above/,
+      ),
+    ).toBeTruthy();
 
     // The old local-only gate is gone entirely - not just hidden for this
     // scope.
@@ -359,10 +364,39 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(
       await screen.findByRole("heading", { name: "Log detail" }),
     ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Log verbosity and recent log output for the host selected above. Both levels default to Info - raise one to Debug when capturing a problem for support, then set it back. This app's own log and memory capture live under Application - Diagnostics.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/reproduce the problem/)).toBeNull();
+    expect(screen.queryByText(/set it back to Info/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "How to capture a problem" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        "Verbosity of the Traycer CLI's logs. Applies to every Traycer host on this computer.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Verbosity of the background host process's logs. Applies to every Traycer host on this computer.",
+      ),
+    ).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-cli")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
     expect(screen.getByText("CLI log level")).toBeTruthy();
     expect(screen.getByText("Host log level")).toBeTruthy();
+    const scopeNotes = screen.getAllByText(
+      /Applies to every Traycer host on this computer\./,
+    );
+    expect(scopeNotes).toHaveLength(2);
+    for (const note of scopeNotes) {
+      expect(note.textContent).not.toBe(
+        "Applies to every Traycer host on this computer.",
+      );
+    }
   });
 
   it("hides the non-default reminder when all levels are Info", async () => {

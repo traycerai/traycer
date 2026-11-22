@@ -473,6 +473,8 @@ function shouldPromoteToolSegment(
   if (segment.artifact !== null) return true;
   // An app is the call's result, rendered where the call was made.
   if (isMcpAppToolCall(segment)) return true;
+  // A feedback draft waits on the reader: its card stands on its own.
+  if (segment.feedbackDraft !== null) return true;
   if (segment.agentMessageSend !== null) return true;
   // A bot's reply, question or announcement is what its
   // session said to people: a send, drawn as its own card. Keyed on the name,

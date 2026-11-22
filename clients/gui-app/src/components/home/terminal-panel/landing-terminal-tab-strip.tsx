@@ -432,6 +432,7 @@ function LandingPanelTab(props: {
           )}
           <LandingPanelTabLabel
             instanceId={tab.instanceId}
+            kind={tab.kind}
             displayName={displayName}
             isEditing={isEditing}
             inputProps={rename.inputProps}
@@ -472,6 +473,7 @@ function LandingPanelTab(props: {
 
 function LandingPanelTabLabel(props: {
   readonly instanceId: string;
+  readonly kind: LandingPanelTabRef["kind"];
   readonly displayName: string;
   readonly isEditing: boolean;
   readonly inputProps: InlineRenameInputProps;
@@ -510,7 +512,7 @@ function LandingPanelTabLabel(props: {
           className="text-ui-xs text-muted-foreground"
           data-testid={`landing-terminal-dormant-${props.instanceId}`}
         >
-          · dormant
+          · {props.kind === "browser" ? "Browser asleep" : "No running shell"}
         </span>
       ) : null}
       {props.row.isRuntimeUnknown ? (

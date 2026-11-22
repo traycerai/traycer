@@ -29,7 +29,7 @@ import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-records";
 import type {
   TuiAgentRecordSummaryV11,
   TuiAgentRecordSummaryV12,
@@ -86,8 +86,8 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 
 function chatRow(
-  overrides: Partial<ChatRecordSummaryV11>,
-): ChatRecordSummaryV11 {
+  overrides: Partial<ChatRecordSummaryV14>,
+): ChatRecordSummaryV14 {
   return {
     chatId: "chat-1",
     ownerUserId: VIEWER_ID,
@@ -104,6 +104,7 @@ function chatRow(
     visibility: "private",
     origin: "own",
     docResident: false,
+    evicted: false,
     ...overrides,
   };
 }
@@ -215,7 +216,7 @@ interface Fixture {
   readonly handle: OpenedStoreForTest;
   readonly chatListCalls: { value: number };
   readonly tuiListCalls: { value: number };
-  readonly chatRows: ChatRecordSummaryV11[];
+  readonly chatRows: ChatRecordSummaryV14[];
   readonly tuiRows: Array<
     Extract<TuiAgentRecordSummaryV12, { origin: "registry" | "doc" }>
   >;
@@ -244,7 +245,7 @@ function wrapperFor(
 }
 
 function createFixture(): Fixture {
-  const chatRows: ChatRecordSummaryV11[] = [];
+  const chatRows: ChatRecordSummaryV14[] = [];
   const tuiRows: Array<
     Extract<TuiAgentRecordSummaryV12, { origin: "registry" | "doc" }>
   > = [];

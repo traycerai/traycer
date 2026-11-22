@@ -13,11 +13,9 @@
 export {
   createPoolHostTransport,
   createRemoteHostTransport,
-  remoteOpenAuthFor,
   type CreatePoolTransportOptions,
   type CreateRemoteTransportOptions,
   type RemoteHostTransport,
-  type RemoteOpenAuth,
 } from "./create-remote-transport";
 export {
   RemoteSession,

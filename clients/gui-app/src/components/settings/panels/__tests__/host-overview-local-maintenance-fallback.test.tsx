@@ -483,13 +483,19 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         expectedHostId: HOST_ID,
       });
     });
-    // The Install record is shown open: no disclosure to expand first.
+    // The bridge record has no runtime, so Version is that install id and
+    // there is no Build row. The RPC sentinel stays off the page, which is
+    // what proves the bridge record rendered.
     await selectHostOverviewTab("installation");
     const installVersion = await screen.findByTestId(
       "settings-host-install-version",
     );
-    expect(installVersion.textContent).toContain(`v${BRIDGE_INSTALL_VERSION}`);
+    expect(installVersion.textContent).toBe(`v${BRIDGE_INSTALL_VERSION}`);
     expect(installVersion.textContent).not.toContain(RPC_INSTALL_VERSION);
+    expect(screen.queryByTestId("settings-host-install-build")).toBeNull();
+    expect(
+      screen.getByTestId("host-overview-tab-panel-installation").textContent,
+    ).not.toContain(RPC_INSTALL_VERSION);
 
     const pencil = await screen.findByTestId("host-overview-edit-name");
     expect(pencil.getAttribute("data-degraded")).toBe("unsupported");

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Default branch: `main`. Bun 1.3.14 workspaces + Nx.
+Default branch: `main`. Bun 1.4.4 workspaces + Nx.
 
 Open-source **clients, CLI, and protocol**. The Traycer Host and cloud backends
 are **not** here — the CLI provisions a signed host from GitHub Releases; see
@@ -103,10 +103,11 @@ No workflow filters its own push trigger by path. Narrowing is always a
 job-level skip inside a run that happened, because the internal repository's
 release gate refuses a commit whose own push started no run.
 
-`trunk-red.yml` re-runs failed jobs once; a failed `trunk-red` run means `main`
-is really red, a break to fix or revert, not a flake. A red merge stays red
-until a run covering it passes, and a red `main` blocks the internal
-repository's staging train and promotion.
+No test may need a retry: a test passes on its first attempt (owner ruling,
+3 Nov 2026). `trunk-red.yml` re-runs nothing, so a failed `trunk-red` run means
+a merge run failed on attempt 1 and `main` is red, to be fixed forward. A red
+merge stays red until a run covering it passes, and a red `main` blocks the
+internal repository's staging train and promotion.
 
 How the gate works and how a new workflow carries it:
 [`.github/AGENTS.md`](.github/AGENTS.md).
@@ -161,6 +162,7 @@ ReturnType<typeof fn>          // name the concrete type
 | Let a test inherit mutable fixture state from another test.     | Reset shared fixture state for every test and restore temporary overrides in cleanup. |
 | Leave A's contract above newly inserted B.                      | Keep each contract comment attached to the declaration or operation it describes.     |
 | Assert only a constant or two aliases.                          | Assert its effect through the real consumer.                                          |
+| Let a fixture bypass the mechanism its test names.              | Reach the intended mechanism and make its effect determine the result.                |
 | Ticket BEGIN/END or review-round markers in source.             | Remove workflow markers; retain durable invariants.                                   |
 | Carry state that no consumer reads.                             | Remove unused fields and the work that populates them.                                |
 | Wrap one call or expression without a distinct contract.        | Keep the expression at its caller.                                                    |
@@ -169,13 +171,12 @@ ReturnType<typeof fn>          // name the concrete type
 | Require port members that no consumer reads or calls.           | Keep only the members consumers use; remove fixture no-ops.                           |
 | Repeat an assertion implied by an exact result check.           | Keep the exact check and assertions for distinct effects.                             |
 | Assert only that a required field exists.                       | Exercise its effect through the real consumer.                                        |
-| Keep comments that describe a retired contract.                 | Update or remove stale claims when the contract changes.                              |
+| Keep comments or test titles that describe a retired contract.  | Update or remove stale claims when the contract changes.                              |
 | Assert only a test double's implementation.                     | Assert production behavior through the real consumer.                                 |
 | Treat a sleep or fixed microtask count as operation completion. | Await the operation's completion or its observable outcome before asserting.          |
 | Keep runtime declarations with no production consumer.          | Remove unused declarations and tests that exercise only them.                         |
 | Check for a result the private implementation cannot return.    | Make its return type exact and remove the unreachable branch.                         |
 | Cast a partial fixture to a constructible browser type.         | Use the real constructor to create the fixture.                                       |
-
-## Skills
-
-Use when the task matches. GUI skills: see `clients/gui-app/AGENTS.md`.
+| Write a comment that restates the code or comment beside it.    | Remove it; comment only a reason or invariant the code cannot show.                   |
+| Copy a fixture another test file already builds.                | Import or spread the shared fixture; override only the fields that differ.            |
+| Reassign a fixture to the value its setup already gave it.      | Keep the shared setup; override only what the test changes.                           |

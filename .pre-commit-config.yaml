@@ -15,7 +15,9 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: \.gen\.(ts|tsx)$
+        # A dependency patch reproduces the upstream source byte for byte,
+        # trailing whitespace included, or it no longer applies.
+        exclude: \.gen\.(ts|tsx)$|^patches/
       - id: end-of-file-fixer
         exclude: \.gen\.(ts|tsx)$
       - id: check-added-large-files

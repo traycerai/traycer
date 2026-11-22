@@ -1,5 +1,6 @@
 import {
   TRAYCER_AGENT_TAG,
+  TRAYCER_ARTIFACT_PATH_TAG,
   TRAYCER_CHAT_TAG,
   TRAYCER_EPIC_TAG,
   TRAYCER_MENTION_TAG,
@@ -26,6 +27,7 @@ const DRIVE_LETTER_SCHEMES = Array.from({ length: 26 }, (_, index) => [
 const TRAYCER_TAG_NAMES = [
   TRAYCER_CHAT_TAG,
   TRAYCER_AGENT_TAG,
+  TRAYCER_ARTIFACT_PATH_TAG,
   TRAYCER_EPIC_TAG,
   TRAYCER_SPEC_TAG,
   TRAYCER_TICKET_TAG,
@@ -35,6 +37,7 @@ const TRAYCER_TAG_NAMES = [
 ] as const;
 
 const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
+  [TRAYCER_ARTIFACT_PATH_TAG]: ["data-artifact-path", "data-line", "data-col"],
   [TRAYCER_CHAT_TAG]: ["data-epic-id", "data-chat-id", "data-title"],
   [TRAYCER_AGENT_TAG]: ["data-agent-id", "data-display"],
   [TRAYCER_EPIC_TAG]: ["data-epic-id", "data-title"],
@@ -42,7 +45,7 @@ const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
   [TRAYCER_TICKET_TAG]: ["data-epic-id", "data-ticket-id", "data-title"],
   [TRAYCER_MERMAID_TAG]: ["data-code"],
   [TRAYCER_WIREFRAME_TAG]: ["data-code"],
-  [TRAYCER_MENTION_TAG]: ["data-user-id"],
+  [TRAYCER_MENTION_TAG]: ["data-user-id", "data-bot-id", "data-task-id"],
 };
 
 /**

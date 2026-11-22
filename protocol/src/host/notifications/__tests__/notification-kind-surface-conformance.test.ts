@@ -62,6 +62,18 @@ const ENTRY_BASE = {
 const REPRESENTATIVE_ENTRIES: Readonly<
   Record<HostNotificationKind, Record<string, unknown>>
 > = {
+  "access.readonly.retired": {
+    ...ENTRY_BASE,
+    kind: "access.readonly.retired",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "readonly_access_retired",
+      scope: "task",
+      taskId: "task-1",
+      taskTitle: "Design review",
+    },
+  },
   "agent.stopped": {
     ...ENTRY_BASE,
     kind: "agent.stopped",
@@ -315,6 +327,21 @@ const REPRESENTATIVE_ENTRIES: Readonly<
       hostId: "host-1",
       hostName: "Work laptop",
       count: 2,
+    },
+  },
+  "feedback.drafted": {
+    ...ENTRY_BASE,
+    kind: "feedback.drafted",
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    payload: {
+      kind: "feedback_draft",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Chat",
+      taskTitle: "Task",
+      blockId: "block-1",
     },
   },
   "host.operation.finished": {

@@ -28,20 +28,7 @@ export function describeTaskInterval(task: BotTaskEntry): string | null {
   return `every ${describeSeconds(task.cadence.seconds)}`;
 }
 
-/** One of the bot's chats watching the person's notifications (T84), in words. */
-export function describeNotificationWatch(watch: {
-  readonly attentionOnly: boolean;
-  readonly everySeconds: number | null;
-}): string {
-  const what = watch.attentionOnly ? "attention only" : "everything";
-  const when =
-    watch.everySeconds === null
-      ? "on event"
-      : `every ${describeSeconds(watch.everySeconds)}`;
-  return `Watching your notifications (${what}, ${when})`;
-}
-
-function describeSeconds(seconds: number): string {
+export function describeSeconds(seconds: number): string {
   if (seconds % DAY_S === 0) return plural(seconds / DAY_S, "day");
   if (seconds % HOUR_S === 0) return plural(seconds / HOUR_S, "hour");
   if (seconds % MINUTE_S === 0) return `${seconds / MINUTE_S} min`;
@@ -117,7 +104,7 @@ export function taskRequestPost(
 
 /**
  * How the channel opens the thread hung off `row` (decision 114), as its
- * own row's "Reply in thread" does: a member's post opens its own thread,
+ * own row's "Create thread" does: a member's post opens its own thread,
  * and a direct post the box whose first reply starts one; a question or a
  * proposal opens its thread through that box too, and every other row of
  * the bot as well, marked with the thread anchor its thread takes a
@@ -151,11 +138,7 @@ export function botRowThreadAnchorKind(input: {
   readonly repliesToPost: boolean;
 }): string | null {
   const { announcementKind, asksQuestion, repliesToPost } = input;
-  if (
-    announcementKind === "question" ||
-    announcementKind === "proposal" ||
-    asksQuestion
-  ) {
+  if (announcementKind === "proposal" || asksQuestion) {
     return null;
   }
   return announcementKind === null && repliesToPost

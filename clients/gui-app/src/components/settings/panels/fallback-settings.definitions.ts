@@ -2,12 +2,15 @@ import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 /**
- * What the master switch does, in three sentences - and the third is the one
- * that is not obvious.
+ * What the master switch does, in four sentences - and the last is the one that
+ * is not obvious.
  *
  * Fixed copy, agreed as written. Each sentence answers a question the previous
  * wording left open:
  *
+ *  - **what it can cost** - the switch is on without anyone having turned it on,
+ *    so the row has to say that a blocked chat can land on another account or
+ *    model, and that this uses that account's plan or credits;
  *  - **what stops** - NEW recovery, not the feature's effects;
  *  - **what does not** - work already in progress runs to its end, and the
  *    place to stop THAT is the chat's own card, which has the stop action. A
@@ -20,17 +23,13 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  *    their coding agent's own. That belief is the expensive one, because the
  *    remedy for it is in a different product.
  *
- * "Traycer recovery" rather than "fallback" as the subject of the first
- * sentence, for the same reason: the noun has to be ours specifically, or the
- * third sentence has nothing to contrast with.
- *
  * It lives in this module because it is the row's static description, and a
  * row's description is one value read by both the panel that renders it and
  * the index that searches it. The count that follows it while chats are in
  * flight is live, so it goes in the row's `status` at the call site instead.
  */
 export const MASTER_TOGGLE_DESCRIPTION =
-  "Turning this off stops Traycer starting new switches or waits. Chats already switching or waiting carry on - stop those from the chat. Your coding agent's own retries are separate and unaffected.";
+  "When a limit or provider problem blocks a chat, this can move it to another account or model, which uses that account's plan or credits. Turning this off stops Traycer starting new switches or waits. Chats already switching or waiting carry on - stop those from the chat. Your coding agent's own retries are separate and unaffected.";
 
 /**
  * Host-scoped, so nothing below the page owns an anchor: the page's scope gate

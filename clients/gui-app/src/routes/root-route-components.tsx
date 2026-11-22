@@ -18,7 +18,10 @@ import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
-import { SoundtrackSignalsBridge } from "@/components/layout/bridges/soundtrack-signals-bridge";
+import {
+  SoundtrackSignalsBridge,
+  SoundtrackWarmupBridge,
+} from "@/components/layout/bridges/soundtrack-signals-bridge";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
@@ -32,6 +35,7 @@ import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-b
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { TeamRemovalTileCloser } from "@/providers/team-removal-tile-closer";
+import { ClaimedComputerNotifier } from "@/providers/claimed-computer-notifier";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { FirstTaskImportBridge } from "@/components/onboarding/first-task-guide";
 import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
@@ -159,10 +163,12 @@ export function RootComponent() {
           <HostScopeReady scope="default-host">
             <PreventSleepController />
             <SoundtrackSignalsBridge />
+            <SoundtrackWarmupBridge />
             <TrayOpenEpicBridge />
             <NotificationFocusBridge />
             <EpicAccessCoordinator />
             <TeamRemovalTileCloser />
+            <ClaimedComputerNotifier />
             <ProviderProfileAddFlowHost />
           </HostScopeReady>
           <RootSurface
@@ -178,7 +184,7 @@ export function RootComponent() {
               {/* The retrospective and move sheets. Here rather than in
                   Settings: the retrospective sheet opens by itself once on
                   the first launch after the update, whatever the window
-                  shows, and the Start toast opens it too. */}
+                  shows. */}
               <EnvironmentSheetsHost />
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}

@@ -9,6 +9,10 @@ import {
 } from "@testing-library/react";
 import { StrictMode } from "react";
 import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
+import {
   afterEach,
   beforeEach,
   describe,
@@ -396,6 +400,7 @@ function respond(
     policy: policyValue,
     storedPolicyUnreadable: false,
     inFlightCount: 0,
+    source: "own",
   };
 }
 
@@ -1130,7 +1135,9 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
     // fails, so the cache still holds what it held before - TanStack's error
     // reducer keeps the previous data.
     fallbackMocks.resetMutateAsync.mockImplementationOnce(() =>
-      Promise.resolve({ policy: createDefaultFallbackPolicy() }),
+      Promise.resolve({
+        policy: { ...createDefaultFallbackPolicy(), enabled: false },
+      }),
     );
     // The post-reset read fails. `isSuccess: false` WITH data present is the
     // production shape, the same one R1 turns on.
@@ -1176,7 +1183,10 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
 
     // Recovery: the read succeeds this time and returns what the host actually
     // holds after the reset.
-    fallbackMocks.queryData = respond(createDefaultFallbackPolicy());
+    fallbackMocks.queryData = respond({
+      ...createDefaultFallbackPolicy(),
+      enabled: false,
+    });
     fallbackMocks.refetchMock.mockResolvedValueOnce({
       isSuccess: true,
       data: fallbackMocks.queryData,
@@ -1190,7 +1200,7 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
       expect(screen.queryByTestId("fallback-reset-unrefreshed")).toBeNull();
     });
     // VALUES, not just the banner: the editor is now seeded from the read, so
-    // the default policy's automation-off and 15-second window are what render.
+    // the reset policy's automation-off and 15-second window are what render.
     expect(
       screen
         .getByRole("switch", { name: "Route automatically" })
@@ -5395,4 +5405,118 @@ describe("FallbackSettingsPanel - R5: the populated-list footer restore is gated
       screen.getByRole("button", { name: "Restore the default tiers" }),
     ).not.toBeNull();
   });
+});
+
+describe("FallbackSettingsPanel - a save abandoned before it was sent", () => {
+  it("leaves the control on its new value, draws no line, and sends the draft again with the next edit", async () => {
+    fallbackMocks.queryData = respond(
+      policy({ graceWindowSeconds: 15, maxWaitMinutes: 360 }),
+    );
+    const abandoned = Promise.reject<ProvidersFallbackPolicySetResponse>(
+      abandonedSaveError("providers.fallbackPolicy.set"),
+    );
+    fallbackMocks.setMutateAsync.mockReturnValueOnce(abandoned);
+    fallbackMocks.setMutateAsync.mockResolvedValue({ policy: policy({}) });
+    renderPanel();
+
+    openCombobox("Time to cancel a switch");
+    chooseOption("11 seconds");
+    await waitFor(() =>
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(1),
+    );
+    // The panel's own handler on the rejection was attached first, so it has
+    // run once this one does.
+    await act(async () => {
+      await abandoned.catch(() => undefined);
+    });
+
+    expect(screen.queryByTestId("fallback-host-error")).toBeNull();
+    expect(
+      screen.queryByText(ABANDONED_SAVE_MESSAGE, { exact: false }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("combobox", { name: "Time to cancel a switch" })
+        .textContent,
+    ).toContain("11 seconds");
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Route automatically" }),
+    );
+    await waitFor(() =>
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2),
+    );
+    expect(
+      fallbackMocks.setMutateAsync.mock.calls[1][0].policy.graceWindowSeconds,
+    ).toBe(11);
+  });
+  // Restore and Reset are not followed saves; their only abort is the transport's own.
+  const unsentRestoreAndReset = [
+    {
+      name: "restore",
+      method: "providers.fallbackPolicy.restoreTierGroups",
+      line: "Lost contact with this host before it answered. We couldn't confirm whether the default tiers were restored. This page still shows the settings it loaded.Check saved settings",
+    },
+    {
+      name: "reset",
+      method: "providers.fallbackPolicy.reset",
+      line: "Lost contact with this host before it answered. We couldn't confirm whether model routing was reset. This page still shows the settings it loaded.Check saved settings",
+    },
+  ] as const;
+
+  function pressUnsent(name: "restore" | "reset", method: string): void {
+    fallbackMocks.queryData = respond(
+      name === "restore"
+        ? policy({ graceWindowSeconds: 15, tierGroups: [] })
+        : policy({ graceWindowSeconds: 15 }),
+    );
+    const refused = abandonedSaveError(method);
+    if (name === "restore") {
+      fallbackMocks.restoreMutateAsync.mockRejectedValueOnce(refused);
+      renderPanel();
+      openFallbackTab("equivalentModels");
+      fireEvent.click(
+        screen.getByRole("button", { name: "Restore the default tiers" }),
+      );
+      return;
+    }
+    fallbackMocks.resetMutateAsync.mockRejectedValueOnce(refused);
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+  }
+
+  it.each(unsentRestoreAndReset)(
+    "draws no line for a $name that was never sent once the host's policy reads back",
+    async ({ name, method }) => {
+      let readBack: Promise<FallbackRefetchResult> | null = null;
+      fallbackMocks.refetchMock.mockImplementation(() => {
+        readBack = Promise.resolve({
+          isSuccess: true,
+          data: fallbackMocks.queryData,
+        });
+        return readBack;
+      });
+      pressUnsent(name, method);
+      await waitFor(() => expect(fallbackMocks.refetchMock).toHaveBeenCalled());
+      await act(async () => {
+        await readBack;
+      });
+
+      expect(screen.queryByTestId("fallback-host-error")).toBeNull();
+    },
+  );
+
+  it.each(unsentRestoreAndReset)(
+    "draws the lost-contact line for a $name that was never sent while the read-back fails",
+    async ({ name, method, line }) => {
+      fallbackMocks.refetchMock.mockResolvedValue({
+        isSuccess: false,
+        data: fallbackMocks.queryData,
+      });
+      pressUnsent(name, method);
+
+      const notice = await screen.findByTestId("fallback-host-error");
+      expect(notice.textContent).toBe(line);
+    },
+  );
 });

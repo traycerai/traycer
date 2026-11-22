@@ -359,11 +359,7 @@ describe("breaking a dead settings lock", () => {
       onAcquired: aAcquired.markParked,
       beforeRename: aMidWrite.gate,
     });
-    const aFired = await Promise.race([
-      aAcquired.parked.then(() => true),
-      delay(1000).then(() => false),
-    ]);
-    expect(aFired).toBe(true);
+    await aAcquired.parked;
 
     // B now wins generation 0, which A freed. The lock it judged dead is gone:
     // what it finds there is A's live record, and it must leave that alone.

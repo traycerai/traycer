@@ -89,6 +89,7 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     hostId: host?.hostId ?? null,
     hostLabel: host?.name ?? "No host",
     vanishedHostId: null,
+    vanishedSelection: null,
     returnToActive: () => undefined,
     activeHostId: host?.hostId ?? null,
     activeHost: host,
@@ -104,11 +105,12 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     // the plain-RPC branches production takes on a current host.
     localMaintenanceFallback: false,
     setHostId: () => undefined,
-    makeActive: () => undefined,
+    makeActive: () => Promise.resolve(false),
     isActivating: false,
     isLoading: false,
     listsFailed: false,
     retryLists: () => undefined,
+    retryEntryStatus: null,
     nowMs: 0,
     ...overrides,
   };
@@ -166,5 +168,19 @@ export function hostOptionsFixture(
     retryLists: () => undefined,
     nowMs: 0,
     ...overrides,
+  };
+}
+
+export function noHostsScopeModule() {
+  const scope = hostScopeFixture({ host: null });
+  const useHostScope = () => scope;
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
   };
 }

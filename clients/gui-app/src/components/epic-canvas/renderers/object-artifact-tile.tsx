@@ -5,12 +5,14 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
 import { CanvasArtifactSurface } from "@/components/canvas-artifact/canvas-artifact-surface";
 import { HtmlArtifactDownloadMenuItem } from "@/components/html-artifact/html-artifact-download-button";
-import { FrameCommentsUnavailable } from "@/components/comments/frame-comments";
-import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
 import { HtmlArtifactVersionPicker } from "@/components/html-artifact/html-artifact-version-picker";
 import { useEpicHtmlArtifactVersion } from "@/hooks/epic/use-epic-html-artifact-version";
 import { HtmlArtifactFrame } from "@/components/html-artifact/html-artifact-frame";
-import { HtmlArtifactCommentSurface } from "@/components/html-artifact/html-artifact-comment-surface";
+import {
+  HtmlArtifactCommentSurface,
+  HtmlArtifactOlderVersionComments,
+} from "@/components/html-artifact/html-artifact-comment-surface";
+import { HtmlArtifactLinks } from "@/components/html-artifact/html-artifact-links";
 import { isMobileApp } from "@/lib/mobile-app";
 import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -28,6 +30,8 @@ import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-ou
 import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
 import { NO_OUTSIDE_REFERENCE } from "@/lib/sandbox/artifact-serving";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
+
+const noop = (): void => undefined;
 
 export function ObjectArtifactTile(props: {
   readonly node: EpicArtifactRef;
@@ -132,48 +136,48 @@ export function ObjectArtifactTile(props: {
       />
     );
     // Comments anchor to the live page: an older version is read-only here.
+    // Its links still open what they name in the tree as it is now.
     if (viewTabId === null || !latest)
       return (
-        <HtmlArtifactFrame
-          key={artifact.id}
-          source={source}
-          title={artifact.title}
-          toolbarControls={
-            <>
-              {toolbarControls}
-              <OlderVersionComments viewTabId={viewTabId} />
-            </>
-          }
-          menuItems={menuItems}
-        />
+        <HtmlArtifactLinks epicId={props.epicId} viewTabId={viewTabId}>
+          <HtmlArtifactFrame
+            key={artifact.id}
+            source={source}
+            title={artifact.title}
+            toolbarControls={
+              <>
+                {toolbarControls}
+                <HtmlArtifactOlderVersionComments viewTabId={viewTabId} />
+              </>
+            }
+            menuItems={menuItems}
+          />
+        </HtmlArtifactLinks>
       );
     return (
-      <HtmlArtifactCommentSurface
-        key={artifact.id}
-        epicId={props.epicId}
-        artifactId={artifact.id}
-        artifactTitle={artifact.title}
-        hostId={hostId}
-        viewTabId={viewTabId}
-        source={source}
-        toolbarControls={toolbarControls}
-        menuItems={menuItems}
-      />
+      <HtmlArtifactLinks epicId={props.epicId} viewTabId={viewTabId}>
+        <HtmlArtifactCommentSurface
+          key={artifact.id}
+          epicId={props.epicId}
+          artifactId={artifact.id}
+          artifactTitle={artifact.title}
+          hostId={hostId}
+          viewTabId={viewTabId}
+          source={source}
+          caption={null}
+          height={null}
+          className="h-full w-full"
+          onSize={noop}
+          onStatus={noop}
+          toolbarControls={toolbarControls}
+          menuItems={menuItems}
+          raiseToComment={false}
+          commentable
+        />
+      </HtmlArtifactLinks>
     );
   }
   return <ArtifactMetadata artifact={artifact} />;
-}
-
-/**
- * Comments anchor to the live page, so an older version cannot take one. The
- * toggle stays in its place, unavailable, so the controls around it hold still.
- */
-function OlderVersionComments(props: { readonly viewTabId: string | null }) {
-  const commentsEnabled = useFrameCommentsEnabled();
-  if (props.viewTabId === null || !commentsEnabled) return null;
-  return (
-    <FrameCommentsUnavailable reason="Comments are on the latest version" />
-  );
 }
 
 function ArtifactMetadata({

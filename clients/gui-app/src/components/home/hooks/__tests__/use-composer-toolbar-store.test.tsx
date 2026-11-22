@@ -22,6 +22,16 @@ const harnessesData: {
       }
     | undefined;
 } = { value: undefined };
+const providerListData: {
+  value:
+    | {
+        providers: ReadonlyArray<{
+          providerId: string;
+          hiddenModelProviders?: ReadonlyArray<string>;
+        }>;
+      }
+    | undefined;
+} = { value: undefined };
 const modelsData: {
   // `undefined` models the models query still LOADING (no data yet); a `models`
   // object models it RESOLVED. The store now distinguishes the two via the
@@ -54,6 +64,9 @@ const modelsData: {
       }
     | undefined;
 } = { value: undefined };
+type ToolbarModelsData = NonNullable<typeof modelsData.value>;
+const modelsDataByProfile = new Map<string, ToolbarModelsData | undefined>();
+const failedModelProfiles = new Set<string>();
 const harnessQueryCalls: Array<{
   readonly enabled: boolean;
   readonly subscribed: boolean;
@@ -61,6 +74,7 @@ const harnessQueryCalls: Array<{
 const modelQueryCalls: Array<{
   readonly harnessId: string;
   readonly workingDirectory: string | null;
+  readonly profileId?: string | null;
   readonly enabled: boolean;
   readonly subscribed: boolean;
 }> = [];
@@ -72,6 +86,11 @@ const modelQueryCalls: Array<{
 const harnessClientCalls: Array<HostClient<HostRpcRegistry> | null> = [];
 const modelClientCalls: Array<HostClient<HostRpcRegistry> | null> = [];
 const registeredComposerKinds: Array<FocusedComposerKind | null> = [];
+const registeredComposerControls: ComposerControls[] = [];
+const registeredComposerCatalogSelections: Array<{
+  readonly harnessId: string;
+  readonly profileId: string | null;
+}> = [];
 // Records the `hostClient` each registration was made with, so a test can
 // assert the store registers the palette's composer subpages against the
 // SAME client its own catalog reads through (`catalog.hostClient`), and
@@ -82,6 +101,12 @@ const registeredComposerHostClients: Array<HostClient<HostRpcRegistry> | null> =
 // The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: providerListData.value,
+    isError: false,
+  }),
 }));
 
 // `data` is returned regardless of `enabled`, because that is what TanStack
@@ -107,27 +132,45 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     client: HostClient<HostRpcRegistry> | null,
     harnessId: string,
     workingDirectory: string | null,
-    activity: { enabled: boolean; subscribed: boolean },
+    activity: {
+      enabled: boolean;
+      subscribed: boolean;
+      profileId?: string | null;
+    },
   ) => {
     modelClientCalls.push(client);
     modelQueryCalls.push({
       harnessId,
       workingDirectory,
+      profileId: activity.profileId,
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    return { data: client === null ? undefined : modelsData.value };
+    const profileKey = activity.profileId ?? "<ambient>";
+    const scopedData = modelsDataByProfile.has(profileKey)
+      ? modelsDataByProfile.get(profileKey)
+      : modelsData.value;
+    return {
+      data: client === null ? undefined : scopedData,
+      isError: client !== null && failedModelProfiles.has(profileKey),
+    };
   },
 }));
 
 vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
   useRegisterFocusedComposerControls: (
     kind: FocusedComposerKind | null,
-    _controls: ComposerControls,
+    controls: ComposerControls,
     hostClient: HostClient<HostRpcRegistry> | null,
+    catalogSelection: {
+      readonly harnessId: string;
+      readonly profileId: string | null;
+    },
   ) => {
     registeredComposerKinds.push(kind);
+    registeredComposerControls.push(controls);
     registeredComposerHostClients.push(hostClient);
+    registeredComposerCatalogSelections.push(catalogSelection);
   },
 }));
 
@@ -158,6 +201,7 @@ import {
   plainHostEntry,
   resetHostDirectoryRows,
   sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 
 /**
@@ -261,14 +305,19 @@ function inactiveWrapper(props: { children: ReactNode }) {
 describe("useComposerToolbarStore selection reconciliation", () => {
   beforeEach(() => {
     harnessesData.value = undefined;
+    providerListData.value = undefined;
     // Default to the LOADING window (no model data yet); tests that need a
     // resolved catalog assign `modelsData.value = { models: [...] }` explicitly.
     modelsData.value = undefined;
+    modelsDataByProfile.clear();
+    failedModelProfiles.clear();
     harnessQueryCalls.length = 0;
     modelQueryCalls.length = 0;
     harnessClientCalls.length = 0;
     modelClientCalls.length = 0;
     registeredComposerKinds.length = 0;
+    registeredComposerControls.length = 0;
+    registeredComposerCatalogSelections.length = 0;
     registeredComposerHostClients.length = 0;
     // Reset the sticky tier default so a tier-normalization test can't leak its
     // preference into a later test's seeded values.
@@ -287,6 +336,311 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   // re-render a lingering store against the next test's mock catalog.
   afterEach(() => {
     cleanup();
+  });
+
+  it("uses the visible catalog for a new composer and preserves a chat-authoritative hidden model", async () => {
+    seedDefault("opencode");
+    harnessesData.value = { harnesses: [{ id: "opencode", available: true }] };
+    providerListData.value = {
+      providers: [
+        { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
+      ],
+    };
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        {
+          ...modelOption("opencode", "visible-model"),
+          metadata: { openCodeProviderId: "anthropic" },
+        },
+      ],
+    };
+
+    const newComposer = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() =>
+      expect(newComposer.result.current.getState().selection.modelSlug).toBe(
+        "visible-model",
+      ),
+    );
+    newComposer.unmount();
+
+    const chatComposer = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        {
+          kind: "authoritative",
+          settings: runSettings("opencode", "hidden-model"),
+        },
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() =>
+      expect(chatComposer.result.current.getState().selection.modelSlug).toBe(
+        "hidden-model",
+      ),
+    );
+  });
+
+  it("waits for providers.list on 10.10 before confirming or recording a hidden default", async () => {
+    seedDefault("opencode");
+    useSettingsStore.setState({
+      defaultSelection: {
+        harnessId: "opencode",
+        modelSlug: "hidden-model",
+        profileId: null,
+      },
+    });
+    harnessesData.value = { harnesses: [{ id: "opencode", available: true }] };
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        {
+          ...modelOption("opencode", "visible-model"),
+          metadata: { openCodeProviderId: "anthropic" },
+        },
+      ],
+    };
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.list": { major: 10, minor: 10 },
+    });
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "hidden-model",
+      ),
+    );
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+    act(() => result.current.getState().setReasoning("high"));
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch(TEST_HOST_ID, "opencode").modelSlug,
+    ).toBe("");
+
+    providerListData.value = {
+      providers: [
+        { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
+      ],
+    };
+    rerender();
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "visible-model",
+      ),
+    );
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: {
+          harnessId: "opencode",
+          modelSlug: "visible-model",
+          profileId: null,
+        },
+        reasoning: "medium",
+        serviceTier: "",
+      });
+    });
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: "visible-model" }),
+      false,
+    );
+    expect(
+      useComposerHarnessMemoryStore.getState().byHost[TEST_HOST_ID]
+        ?.lastModelByHarness.opencode,
+    ).toBe("visible-model");
+  });
+
+  it("defers a provider switch until providers.list resolves on 10.10", async () => {
+    seedDefault("claude");
+    harnessesData.value = {
+      harnesses: [
+        { id: "claude", available: true },
+        { id: "opencode", available: true },
+      ],
+    };
+    modelsData.value = {
+      models: [modelOption("claude", "saved-model")],
+    };
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.list": { major: 10, minor: 10 },
+    });
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe("saved-model"),
+    );
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        {
+          ...modelOption("opencode", "visible-model"),
+          metadata: { openCodeProviderId: "anthropic" },
+        },
+      ],
+    };
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "opencode", modelSlug: "", profileId: null },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+    expect(onSettingsChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ model: "hidden-model" }),
+      false,
+    );
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch(TEST_HOST_ID, "opencode").modelSlug,
+    ).toBe("");
+
+    providerListData.value = {
+      providers: [
+        { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
+      ],
+    };
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "visible-model",
+      ),
+    );
+    expect(onSettingsChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harnessId: "opencode",
+        model: "visible-model",
+      }),
+      false,
+    );
+    expect(
+      useComposerHarnessMemoryStore.getState().byHost[TEST_HOST_ID]
+        ?.lastModelByHarness.opencode,
+    ).toBe("visible-model");
+  });
+
+  it("does not wait for providers.list on a host below 10.10", async () => {
+    seedDefault("opencode");
+    harnessesData.value = { harnesses: [{ id: "opencode", available: true }] };
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        modelOption("opencode", "visible-model"),
+      ],
+    };
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.list": { major: 10, minor: 9 },
+    });
+
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "hidden-model",
+      ),
+    );
+  });
+
+  it("switches an authoritative chat with no OpenCode slug to a shown model", async () => {
+    harnessesData.value = {
+      harnesses: [
+        { id: "claude", available: true },
+        { id: "opencode", available: true },
+      ],
+    };
+    providerListData.value = {
+      providers: [
+        { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
+      ],
+    };
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        {
+          ...modelOption("opencode", "visible-model"),
+          metadata: { openCodeProviderId: "anthropic" },
+        },
+      ],
+    };
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.list": { major: 10, minor: 10 },
+    });
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        {
+          kind: "authoritative",
+          settings: runSettings("claude", "claude-model"),
+        },
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() =>
+      expect(result.current.getState().catalog.models).toHaveLength(2),
+    );
+
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "opencode", modelSlug: "", profileId: null },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "visible-model",
+      ),
+    );
   });
 
   it("falls back by provider order when the default is unavailable", async () => {
@@ -563,6 +917,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ reasoningEffort: "high" }),
+      false,
     );
   });
 
@@ -616,6 +971,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           model: "resolved-haiku",
           reasoningEffort: "high",
         }),
+        false,
       ),
     );
     expect(result.current.getState().pendingSettingsEmit).toBe(false);
@@ -758,6 +1114,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         model: "low-only",
         reasoningEffort: "low",
       }),
+      false,
     );
   });
 
@@ -808,6 +1165,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(result.current.getState().serviceTier).toBe("");
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ model: "fast-only", serviceTier: null }),
+      false,
     );
     // ...but the raw preference survives for a later model that honors it.
     expect(result.current.getState().values.serviceTier).toBe("priority");
@@ -860,8 +1218,252 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         model: "priority-capable",
         serviceTier: "priority",
       }),
+      false,
     );
   });
+
+  it("defers account-switch tier normalization until that profile catalog loads and keeps the profile on palette picks", async () => {
+    const modelSlug = "gpt-shared-model";
+    const profileAModel = {
+      ...modelOption("codex", modelSlug),
+      supportedServiceTiers: [
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+    };
+    const profileBModel = {
+      ...modelOption("codex", modelSlug),
+      supportedServiceTiers: [
+        { id: "priority", label: "Priority", description: null },
+      ],
+    };
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    useSettingsStore.setState({
+      defaultSelection: {
+        harnessId: "codex",
+        modelSlug,
+        profileId: "profile-a",
+      },
+      defaultServiceTier: "ultrafast",
+    });
+    modelsDataByProfile.set("profile-a", { models: [profileAModel] });
+    // The newly selected profile has no warm catalog yet.
+    modelsDataByProfile.set("profile-b", undefined);
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        "landing",
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(result.current.getState().catalog.modelsProfileId).toBe(
+        "profile-a",
+      );
+      expect(result.current.getState().serviceTier).toBe("ultrafast");
+    });
+    expect(onSettingsChange).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "codex", modelSlug, profileId: "profile-b" },
+        reasoning: "",
+        serviceTier: "priority",
+      });
+    });
+    expect(result.current.getState().pendingSettingsEmit).toBe(true);
+    expect(onSettingsChange).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(
+        modelQueryCalls.some((call) => call.profileId === "profile-b"),
+      ).toBe(true);
+    });
+    expect(onSettingsChange).not.toHaveBeenCalled();
+
+    modelsDataByProfile.set("profile-b", { models: [profileBModel] });
+    rerender();
+
+    await waitFor(() => {
+      expect(onSettingsChange).toHaveBeenCalledTimes(1);
+    });
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: modelSlug,
+        profileId: "profile-b",
+        serviceTier: "priority",
+      }),
+      false,
+    );
+    expect(result.current.getState().serviceTier).toBe("priority");
+    expect(registeredComposerCatalogSelections.at(-1)).toEqual({
+      harnessId: "codex",
+      profileId: "profile-b",
+    });
+
+    act(() => {
+      registeredComposerControls.at(-1)?.selectModel("codex", modelSlug);
+    });
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: modelSlug,
+        profileId: "profile-b",
+      }),
+      false,
+    );
+  });
+
+  it("releases a failed account switch without carrying its prior tier into recovery", async () => {
+    const modelSlug = "gpt-shared-model";
+    const profileAModel = {
+      ...modelOption("codex", modelSlug),
+      supportedServiceTiers: [
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+    };
+    const recoveredProfileBModel = {
+      ...modelOption("codex", modelSlug),
+      supportedServiceTiers: [
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+    };
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    useSettingsStore.setState({
+      defaultSelection: {
+        harnessId: "codex",
+        modelSlug,
+        profileId: "profile-a",
+      },
+      defaultServiceTier: "ultrafast",
+    });
+    modelsDataByProfile.set("profile-a", { models: [profileAModel] });
+    modelsDataByProfile.set("profile-b", undefined);
+    failedModelProfiles.add("profile-b");
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        "landing",
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(result.current.getState().catalog.modelsProfileId).toBe(
+        "profile-a",
+      );
+      expect(result.current.getState().serviceTier).toBe("ultrafast");
+    });
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "codex", modelSlug, profileId: "profile-b" },
+        reasoning: "",
+        serviceTier: "priority",
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.getState().pendingSettingsEmit).toBe(false);
+      expect(onSettingsChange).toHaveBeenCalledTimes(1);
+    });
+    expect(result.current.getState().catalog.modelsFailed).toBe(true);
+    expect(result.current.getState().selection.profileId).toBe("profile-b");
+    expect(result.current.getState().values.serviceTier).toBe("");
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: modelSlug,
+        profileId: "profile-b",
+        serviceTier: null,
+      }),
+      false,
+    );
+
+    failedModelProfiles.delete("profile-b");
+    modelsDataByProfile.set("profile-b", { models: [recoveredProfileBModel] });
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current.getState().catalog.modelsLoaded).toBe(true);
+      expect(result.current.getState().selectedModel?.slug).toBe(modelSlug);
+    });
+    expect(result.current.getState().values.serviceTier).toBe("");
+    expect(result.current.getState().serviceTier).toBe("");
+    expect(onSettingsChange).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.getState().setPermission("auto_accept_edits");
+    });
+    expect(onSettingsChange).toHaveBeenCalledTimes(2);
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: modelSlug,
+        profileId: "profile-b",
+        serviceTier: null,
+        permissionMode: "auto_accept_edits",
+      }),
+      false,
+    );
+  });
+
+  it.each([
+    { account: "ambient", profileId: null, profileKey: "<ambient>" },
+    { account: "managed", profileId: "profile-a", profileKey: "profile-a" },
+  ])(
+    "preserves a seeded $account tier after a cold catalog failure and a permission edit",
+    async ({ profileId, profileKey }) => {
+      useSettingsStore.setState({
+        defaultSelection: {
+          harnessId: "codex",
+          modelSlug: "saved-model",
+          profileId,
+        },
+        defaultServiceTier: "ultrafast",
+      });
+      modelsDataByProfile.set(profileKey, undefined);
+      failedModelProfiles.add(profileKey);
+      const onSettingsChange = vi.fn();
+      const { result } = renderHook(() =>
+        useComposerToolbarStore(
+          "landing",
+          { kind: "none" },
+          onSettingsChange,
+          catalogScope(false),
+        ),
+      );
+
+      await waitFor(() => {
+        expect(result.current.getState().catalog.modelsFailed).toBe(true);
+        expect(result.current.getState().catalog.modelsProfileId).toBe(
+          profileId,
+        );
+      });
+      expect(result.current.getState().values.serviceTier).toBe("ultrafast");
+      expect(result.current.getState().serviceTier).toBe("ultrafast");
+      expect(onSettingsChange).not.toHaveBeenCalled();
+
+      act(() => {
+        result.current.getState().setPermission("auto_accept_edits");
+      });
+
+      expect(result.current.getState().values.serviceTier).toBe("ultrafast");
+      expect(result.current.getState().serviceTier).toBe("ultrafast");
+      expect(onSettingsChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          model: "saved-model",
+          profileId,
+          serviceTier: "ultrafast",
+          permissionMode: "auto_accept_edits",
+        }),
+        false,
+      );
+    },
+  );
 
   it("commits a (harness,model) selection in a single emit", async () => {
     // The combined action must patch selection + reasoning + tier in one
@@ -927,6 +1529,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ model: "multi", reasoningEffort: "high" }),
+      false,
     );
   });
 
@@ -1054,6 +1657,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         reasoningEffort: "medium",
         serviceTier: null,
       }),
+      false,
     );
   });
 
@@ -1153,6 +1757,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ model: "survivor", reasoningEffort: "medium" }),
+      false,
     );
     expect(result.current.getState().selectionCatalogConfirmed).toBe(true);
   });
@@ -1200,6 +1805,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ model: "remembered", reasoningEffort: "high" }),
+      false,
     );
     // ...but it is NOT catalog-confirmed yet, so the record write skips it.
     expect(result.current.getState().pendingSettingsEmit).toBe(false);
@@ -1633,6 +2239,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     });
     expect(modelQueryCalls.at(-1)).toEqual({
       harnessId: "codex",
+      profileId: null,
       workingDirectory: null,
       enabled: false,
       subscribed: false,
@@ -1846,6 +2453,23 @@ describe("useComposerToolbarStore on a sandbox host", () => {
     );
     expect(result.current.getState().selection.harnessId).toBe("codex");
     expect(result.current.getState().values.selection.harnessId).toBe("codex");
+  });
+
+  it("keeps the person's pick on a sandbox whose directory row names no owner: whose it is does not change that it is a sandbox", async () => {
+    installHostDirectoryRows([sandboxHostEntryWithoutOwner(SANDBOX_HOST_ID)]);
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        fallbackSeedSource(null, null),
+        null,
+        scopeOn(SANDBOX_HOST_ID),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().catalog.harnesses).toBeDefined(),
+    );
+    expect(result.current.getState().selection.harnessId).toBe("codex");
   });
 
   it("still reroutes the same pick to the first runnable harness on a host that is not a sandbox", async () => {

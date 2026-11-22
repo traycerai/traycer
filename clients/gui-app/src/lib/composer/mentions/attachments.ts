@@ -1,4 +1,5 @@
 import type {
+  BotMentionEntry,
   BrowserTabMentionAttachment,
   BrowserTabMentionEntry,
   EntityMentionAttachment,
@@ -23,6 +24,7 @@ export function mentionAttachmentFromSuggestion(
   if (entry.kind === "browser-tab") {
     return browserTabMentionAttachmentFromSuggestion(entry);
   }
+  if (entry.kind === "bot") return botMentionAttachmentFromSuggestion(entry);
   if (
     entry.kind === "epic" ||
     entry.kind === "epic-artifact" ||
@@ -75,6 +77,8 @@ function entityMentionAttachmentFromSuggestion(
       chatId: null,
       terminalAgentId: null,
       terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
       status: entry.status,
     };
   }
@@ -96,6 +100,8 @@ function entityMentionAttachmentFromSuggestion(
       chatId: entry.chatId,
       terminalAgentId: null,
       terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
       status: null,
     };
   }
@@ -117,6 +123,8 @@ function entityMentionAttachmentFromSuggestion(
       chatId: null,
       terminalAgentId: entry.terminalAgentId,
       terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
       status: null,
     };
   }
@@ -138,6 +146,8 @@ function entityMentionAttachmentFromSuggestion(
       chatId: null,
       terminalAgentId: null,
       terminalId: entry.terminalId,
+      botId: null,
+      botTrunkChatId: null,
       status: null,
     };
   }
@@ -158,7 +168,35 @@ function entityMentionAttachmentFromSuggestion(
     chatId: null,
     terminalAgentId: null,
     terminalId: null,
+    botId: null,
+    botTrunkChatId: null,
     status: entry.status,
+  };
+}
+
+/** A bot's id is its task id, so it is the chip's `epicId` too. */
+function botMentionAttachmentFromSuggestion(
+  entry: BotMentionEntry,
+): EntityMentionAttachment {
+  return {
+    kind: "mention",
+    contextType: "bot",
+    path: `bot:${entry.botId}`,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: entry.label,
+    description: entry.description,
+    epicId: entry.botId,
+    artifactId: null,
+    artifactType: null,
+    chatId: null,
+    terminalAgentId: null,
+    terminalId: null,
+    botId: entry.botId,
+    botTrunkChatId: entry.trunkChatId,
+    status: null,
   };
 }
 

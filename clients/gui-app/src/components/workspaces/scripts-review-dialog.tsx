@@ -301,10 +301,10 @@ function ScriptsErrorNote(props: {
       <span>{props.note}</span>
       <ReportIssueAction
         context={createReportIssueContext({
-          title: "Could not load workspace scripts",
+          title: "Could not load folder scripts",
           message: null,
           code: null,
-          source: "Workspace scripts",
+          source: "Folder scripts",
         })}
         presentation="link"
         className="ml-1"

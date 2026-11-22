@@ -6,9 +6,11 @@ import {
   type HostStartAdoptionConsumeResult,
 } from "@traycer-clients/shared/host-start-adoption";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import { SpawnAcknowledgementTimeoutError } from "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error";
 import type { Environment } from "../runner/environment";
 import { hostHomeDir } from "../store/paths";
 import type { HostStartOrigin } from "./lifecycle-origin";
+import { attachCliSpawnAckEvidence } from "./spawn-ack-evidence";
 import type { WithCliUpdateContenderOptions } from "./update-contender";
 
 export {
@@ -26,12 +28,32 @@ export async function publishHostStartAdoption(
   serviceLabel: string,
   origin: HostStartOrigin,
 ): Promise<HostStartAdoptionLease> {
-  return publishAtHome(
+  const publishedAtMs = Date.now();
+  const lease = await publishAtHome(
     capability,
     options.hostHomeDir ?? hostHomeDir(options.environment),
     serviceLabel,
     origin,
   );
+  return {
+    // A timeout leaves this lease exactly as it was; the service's own records
+    // are read into the same error for the tags its capture carries.
+    waitForSpawn: async (): Promise<void> => {
+      try {
+        await lease.waitForSpawn();
+      } catch (error) {
+        if (error instanceof SpawnAcknowledgementTimeoutError) {
+          await attachCliSpawnAckEvidence(
+            error,
+            options.environment,
+            publishedAtMs,
+          );
+        }
+        throw error;
+      }
+    },
+    cancel: () => lease.cancel(),
+  };
 }
 
 export async function consumeHostStartAdoption(

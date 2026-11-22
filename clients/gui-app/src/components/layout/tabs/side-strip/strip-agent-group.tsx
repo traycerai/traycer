@@ -214,7 +214,7 @@ function OpenAgentRow(props: {
         }
         const node = openRef();
         if (active) {
-          openTile(tileIntent(node, { tabId }, "single", "direct_ui"));
+          openTile(tileIntent(node, { tabId }, "single", "direct_ui"), "user");
         } else {
           // Tile placement alone does not activate another task's header tab.
           activateTabIntent(

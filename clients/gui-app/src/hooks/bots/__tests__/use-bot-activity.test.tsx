@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
+  botExpressionOn,
   botWorkingOf,
   failedOn,
   failedOnRequest,
@@ -307,6 +308,51 @@ describe("replyingSessionOf and botWorkingOf", () => {
     expect(botWorkingOf({ trunk: null, threads: {} })).toBeNull();
     expect(botWorkingOf(null)).toBeNull();
   });
+});
+
+describe("botExpressionOn", () => {
+  const IDLE: BotSessionActivity = {
+    state: "idle",
+    startedAt: null,
+    step: null,
+    requestId: null,
+    reason: null,
+  };
+  const PARKED: BotSessionActivity = { ...IDLE, state: "parked" };
+
+  it.each([
+    ["a replying trunk", { trunk: REPLYING, threads: {} }, "working", "idle"],
+    [
+      "a replying thread under an idle trunk",
+      { trunk: IDLE, threads: { a: REPLYING } },
+      "working",
+      "idle",
+    ],
+    ["a parked trunk", { trunk: PARKED, threads: { a: IDLE } }, "idle", "away"],
+    [
+      "a parked trunk with a replying thread",
+      { trunk: PARKED, threads: { a: REPLYING } },
+      "working",
+      "away",
+    ],
+    ["an idle trunk", { trunk: IDLE, threads: { a: IDLE } }, "idle", "idle"],
+    ["a failed trunk", { trunk: FAILED, threads: {} }, "idle", "idle"],
+    [
+      "a trunk no host has written",
+      { trunk: null, threads: {} },
+      "idle",
+      "idle",
+    ],
+    ["no activity", null, "idle", "idle"],
+  ] satisfies ReadonlyArray<
+    readonly [string, BotActivity | null, string, string]
+  >)(
+    "shows %s as %s on a row and %s on the title",
+    (_name, activity, row, title) => {
+      expect(botExpressionOn("row", activity)).toBe(row);
+      expect(botExpressionOn("title", activity)).toBe(title);
+    },
+  );
 });
 
 describe("failedOn and failedOnRequest", () => {

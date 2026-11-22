@@ -49,6 +49,8 @@ describe("terminal reference tokens", () => {
       chatId: null,
       terminalAgentId: null,
       terminalId: "term-9",
+      botId: null,
+      botTrunkChatId: null,
       status: null,
     });
   });
@@ -104,6 +106,8 @@ describe("terminal reference tokens", () => {
       contextType: "terminal-agent",
       terminalAgentId: "tui-9",
       terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
     });
   });
 

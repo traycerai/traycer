@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { normalizeTracyPlaceSearch } from "@/lib/bots/tracy-place";
 import { requireSignedIn } from "@/lib/router-auth";
+import { TracySurfacePlaceRoute } from "./tracy-route-components";
 
 /**
  * The Tracy surface with no channel selected (decision 150): the pane says
@@ -7,8 +9,10 @@ import { requireSignedIn } from "@/lib/router-auth";
  * once inside `TopLevelTabHost`, as for `/bot/$botId`.
  */
 export const Route = createFileRoute("/bot/")({
+  validateSearch: (search: Record<string, unknown>) =>
+    normalizeTracyPlaceSearch(search),
   beforeLoad: ({ context }) => {
     requireSignedIn(context);
   },
-  component: () => null,
+  component: TracySurfacePlaceRoute,
 });

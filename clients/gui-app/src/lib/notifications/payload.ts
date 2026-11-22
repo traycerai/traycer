@@ -43,6 +43,7 @@ export type NotificationPayloadKind =
   | "epic"
   | "approval"
   | "interview"
+  | "feedbackDraft"
   | "chat"
   | "terminal"
   | "browserSession"
@@ -79,6 +80,14 @@ export interface InterviewNotificationPayload {
   readonly epicId: string;
   readonly chatId: string;
   readonly interviewBlockId: string | undefined;
+}
+
+/** A feedback draft an agent wrote, waiting on its `tool_call` block. */
+export interface FeedbackDraftNotificationPayload {
+  readonly kind: "feedbackDraft";
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly blockId: string;
 }
 
 /**
@@ -165,7 +174,7 @@ export type HostSurfaceNotificationPayload = {
     }
   | {
       readonly surface: "notificationSettings";
-      /** A removal notice always opens its affected computer, including offline. */
+      /** The computer whose hooks were removed. Still required on the wire; the row opens Alerts, which no host scopes. */
       readonly hostId: string;
     }
 );
@@ -176,6 +185,7 @@ export type NotificationPayload =
   | EpicNotificationPayload
   | ApprovalNotificationPayload
   | InterviewNotificationPayload
+  | FeedbackDraftNotificationPayload
   | ChatNotificationPayload
   | TerminalNotificationPayload
   | BrowserSessionNotificationPayload
@@ -226,6 +236,49 @@ function parseEpicPayload(
   return { kind: "epic", epicId };
 }
 
+/** A present bot target is never discarded in favour of generic chat routing. */
+function readBotNotificationTarget(
+  value: Record<string, unknown>,
+  nested: boolean,
+): BotNotificationTarget | null {
+  const botId = readString(value.botId);
+  if (botId === null) return null;
+  const threadId = readString(value.threadId);
+  const messageId = readString(value.messageId);
+  if (
+    threadId === null &&
+    value.threadId !== null &&
+    (nested || Object.hasOwn(value, "threadId"))
+  )
+    return null;
+  if (
+    messageId === null &&
+    value.messageId !== null &&
+    (nested || Object.hasOwn(value, "messageId"))
+  )
+    return null;
+  if (threadId !== null && messageId === null) return null;
+  return { botId, threadId, messageId };
+}
+
+/** Native envelopes carry a nested target; mobile and older callers carry flat fields. */
+function parseBotNotificationTarget(
+  value: Record<string, unknown>,
+): BotNotificationTarget | null | undefined {
+  if (!Object.hasOwn(value, "bot")) {
+    return Object.hasOwn(value, "botId")
+      ? readBotNotificationTarget(value, false)
+      : undefined;
+  }
+  if (!isRecord(value.bot) || Array.isArray(value.bot)) return null;
+  const nested = readBotNotificationTarget(value.bot, true);
+  if (nested === null) return null;
+  for (const key of ["botId", "threadId", "messageId"] as const) {
+    if (Object.hasOwn(value, key) && value[key] !== nested[key]) return null;
+  }
+  return nested;
+}
+
 function parseChatPayload(
   value: Record<string, unknown>,
 ): ChatNotificationPayload | null {
@@ -237,7 +290,8 @@ function parseChatPayload(
   const hostId = readString(value.hostId);
   const messageId = readString(value.messageId);
   const eventId = readString(value.eventId);
-  const botId = readString(value.botId);
+  const bot = parseBotNotificationTarget(value);
+  if (bot === null) return null;
   const scrollToEnd =
     value.outcome === "completed" && value.backgroundWorkRunning !== true;
   const includeTranscriptAnchor = !scrollToEnd;
@@ -245,15 +299,7 @@ function parseChatPayload(
     kind: "chat",
     epicId,
     chatId: chatId === null ? undefined : chatId,
-    ...(botId === null
-      ? {}
-      : {
-          bot: {
-            botId,
-            threadId: readString(value.threadId),
-            messageId,
-          },
-        }),
+    ...(bot === undefined ? {} : { bot }),
     ...(hostId === null ? {} : { hostId }),
     messageId:
       includeTranscriptAnchor && messageId !== null ? messageId : undefined,
@@ -363,6 +409,18 @@ function parseInterviewPayload(
   };
 }
 
+function parseFeedbackDraftPayload(
+  value: Record<string, unknown>,
+): FeedbackDraftNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const chatId = readString(value.chatId);
+  const blockId = readString(value.blockId);
+  if (epicId === null || chatId === null || blockId === null) {
+    return null;
+  }
+  return { kind: "feedbackDraft", epicId, chatId, blockId };
+}
+
 /**
  * Total parse of a host-surface destination. An unknown `surface` yields
  * `null` (degrade to opening the centre) rather than a payload the router
@@ -433,6 +491,9 @@ export function parseNotificationPayload(
       return parseApprovalPayload(value);
     case "interview":
       return parseInterviewPayload(value);
+    case "feedback_draft":
+    case "feedbackDraft":
+      return parseFeedbackDraftPayload(value);
     default:
       return null;
   }
@@ -482,6 +543,7 @@ export function isNotificationPayloadRoutable(
     case "epic":
     case "chat":
     case "interview":
+    case "feedbackDraft":
     case "terminal":
     case "browserSession":
     case "hostSurface":
@@ -603,6 +665,25 @@ export function routeNotificationForHost(
             payload.interviewBlockId === undefined
               ? null
               : { kind: "block", blockId: payload.interviewBlockId },
+        },
+      );
+    // The draft's card is the block itself: open the chat, scroll to it and
+    // expand it, on the host that holds the draft.
+    case "feedbackDraft":
+      return routeEpicChatNotification(
+        navigate,
+        {
+          kind: "chat",
+          epicId: payload.epicId,
+          chatId: payload.chatId,
+          messageId: undefined,
+          eventId: undefined,
+        },
+        receivedAt,
+        {
+          targetHostId: originHostId,
+          effectiveHostId,
+          transcriptTarget: { kind: "block", blockId: payload.blockId },
         },
       );
     case "artifact": {
@@ -734,8 +815,8 @@ function routeHostSurfaceNotification(
   navigate: NotificationNavigate,
   payload: HostSurfaceNotificationPayload,
 ): void {
-  carryViewedHostIntoSettingsScope(payload.hostId ?? null);
   if (payload.surface === "worktreeSettings") {
+    carryViewedHostIntoSettingsScope(payload.hostId ?? null);
     selectWorktreeCleanupView(
       payload.view === "cleanupHistory" ? "cleanupHistory" : "settings",
       payload.focus?.resourceId ?? null,
@@ -765,7 +846,11 @@ const HOST_SURFACE_SETTINGS_SECTION: Record<
   SettingsSectionId
 > = {
   worktreeSettings: "worktrees",
-  notificationSettings: "notifications",
+  // A "hooks removed" row. Notification hooks are gone from the app, and with
+  // them the host page that listed them, so it opens Alerts, where what is
+  // left to set about notifications lives; that page is not the host's, so
+  // the row's host is not carried into the Settings scope.
+  notificationSettings: "alerts",
 };
 
 function routeTerminalNotification(
@@ -899,6 +984,7 @@ function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
       kind: "chat",
       chatId: payload.chatId,
       messageId: payload.messageId ?? null,
+      sendPostId: null,
     },
   };
 }
@@ -918,6 +1004,21 @@ export function isBotChatWithoutDevice(
     botTargetOf(payload) !== null &&
     (tracySurfaceHostId() ?? effectiveHostId) === null
   );
+}
+
+/**
+ * The bot a chat row opens and the host its Tracy surface reads through: the
+ * open surface's own, else the effective host a closed one would bind to.
+ * `null` for any other row, or while the window has no such host.
+ */
+export function botNotificationDestination(
+  payload: NotificationPayload,
+  effectiveHostId: string | null,
+): { readonly botId: string; readonly hostId: string } | null {
+  if (payload.kind !== "chat") return null;
+  const bot = botTargetOf(payload);
+  const hostId = tracySurfaceHostId() ?? effectiveHostId;
+  return bot === null || hostId === null ? null : { botId: bot.botId, hostId };
 }
 
 /**

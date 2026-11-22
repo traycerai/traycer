@@ -92,15 +92,18 @@ function PrOpenDiffButton(props: {
   const { viewTabId } = props;
   const openDiff = useCallback(
     (event: MouseEvent<HTMLButtonElement>): void => {
-      openTile({
-        node: tile,
-        target: { tabId: viewTabId },
-        gesture: "explicit",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: tile,
+          target: { tabId: viewTabId },
+          gesture: "explicit",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openTile, tile, viewTabId],
   );

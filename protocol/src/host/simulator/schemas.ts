@@ -20,13 +20,33 @@ export const simulatorPlatformSchema = lazySchema(() =>
 );
 export type SimulatorPlatform = z.infer<typeof simulatorPlatformSchema>;
 
-/** Whether this host's machine can run one simulator platform, and why not. */
-export const simulatorPlatformAvailabilitySchema = lazySchema(() =>
+/**
+ * Whether this host's machine can run one simulator platform, and why not:
+ * the shape every released line carries (`simulator.list`, the
+ * `simulator.sessions` frames and `simulator.status@1.0`). Frozen; a key
+ * added here would grow onto those lines.
+ */
+export const simulatorPlatformAvailabilitySchemaV10 = lazySchema(() =>
   z.object({
     platform: simulatorPlatformSchema,
     available: z.boolean(),
     /** User-facing reason when `available` is false; null when available. */
     reason: z.string().nullable(),
+  }),
+);
+export type SimulatorPlatformAvailabilityV10 = z.infer<
+  typeof simulatorPlatformAvailabilitySchemaV10
+>;
+
+/**
+ * `simulator.status@1.1`'s platform: the released shape, plus whether
+ * setting up the platform's missing prerequisites on this machine can make
+ * it runnable. Absent from a `@1.0` host, which reads as "not known", never
+ * as "can be set up".
+ */
+export const simulatorPlatformAvailabilitySchema = lazySchema(() =>
+  simulatorPlatformAvailabilitySchemaV10.extend({
+    setupSupported: z.boolean().optional(),
   }),
 );
 export type SimulatorPlatformAvailability = z.infer<
@@ -188,7 +208,7 @@ export const simulatorStateSchemaV10 = lazySchema(() =>
   z.object({
     revision: z.number().int().nonnegative(),
     hostId: z.string().min(1),
-    platforms: z.array(simulatorPlatformAvailabilitySchema),
+    platforms: z.array(simulatorPlatformAvailabilitySchemaV10),
     packState: simulatorPackStateSchema,
     hubState: simulatorHubStateSchema,
     simulators: z.array(simulatorSummarySchemaV10),
@@ -377,14 +397,21 @@ export const simulatorInstalledToolsSchema = lazySchema(() =>
 export type SimulatorInstalledTools = z.infer<
   typeof simulatorInstalledToolsSchema
 >;
-export const simulatorStatusResponseSchema = lazySchema(() =>
+export const simulatorStatusResponseSchemaV10 = lazySchema(() =>
   z.object({
-    platforms: z.array(simulatorPlatformAvailabilitySchema),
+    platforms: z.array(simulatorPlatformAvailabilitySchemaV10),
     packState: simulatorPackStateSchema,
     /** The installed pack's version while `ready`; null otherwise. */
     packVersion: z.string().min(1).nullable(),
     /** The pack's bytes in this host's managed store; see the schema. */
     installed: simulatorInstalledToolsSchema.nullable(),
+  }),
+);
+
+/** `@1.1`: each platform says whether its prerequisites can be set up here. */
+export const simulatorStatusResponseSchema = lazySchema(() =>
+  simulatorStatusResponseSchemaV10.extend({
+    platforms: z.array(simulatorPlatformAvailabilitySchema),
   }),
 );
 export type SimulatorStatusResponse = z.infer<

@@ -77,6 +77,7 @@ import {
 } from "@/components/epic-canvas/surface-host/tile-surface-membership";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { MobileTileOpenTarget } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import type { PaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -143,6 +144,12 @@ export interface TileSurfaceServices {
    * a retained `true`/`false` as the tile's live focus state.
    */
   readonly isPaneFocusedNow: () => boolean;
+  /**
+   * Where an open from the publishing slot's location lands in the phone shell:
+   * a hosted chat renders outside the pane that decides it. `null` everywhere but
+   * the phone shell's two tiles.
+   */
+  readonly mobileOpenTarget: MobileTileOpenTarget | null;
 }
 
 export interface ReadyTileSurfaceEnvironment {

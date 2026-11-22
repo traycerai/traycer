@@ -1,5 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { createMemoryHistory } from "@tanstack/react-router";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
 import {
@@ -16,6 +17,7 @@ import {
   settleMatchesLatch,
 } from "@/components/browser-tile/agent-browser-tile";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { isMac } from "@/lib/keybindings/platform";
@@ -29,6 +31,7 @@ import type {
 } from "@/lib/browser-view/sessions/electron-tab-directory";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import type {
   BrowserViewViewportPresetId,
   BrowserViewTileCommand,
@@ -42,12 +45,19 @@ import {
 } from "@/lib/focus/primary-focus-coordinator";
 
 const state = vi.hoisted(() => ({
+  hostLabel: null as string | null,
   visible: true,
   bridge: null as TestBridge | null,
   chromeInputs: [] as Array<Record<string, unknown>>,
   sessions: null as BrowserSessionsState | null,
   onOpenLinkInNewTile:
-    vi.fn<(url: string, disposition: "foreground" | "background") => void>(),
+    vi.fn<
+      (
+        url: string,
+        disposition: "foreground" | "background",
+        provenance: NestedFocusProvenance,
+      ) => void
+    >(),
   onNativeTileFocused: vi.fn<() => void>(),
   /** Attach/detach in the order they actually happened. */
   events: [] as string[],
@@ -71,6 +81,11 @@ const state = vi.hoisted(() => ({
   /** Every `useBrowserAnnotationSession` call, newest last. */
   annotationInputs: [] as Array<{ readonly browserView: unknown }>,
   persistViewportPreset: vi.fn<(preset: BrowserViewViewportPresetId) => void>(),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) =>
+    state.hostLabel === null ? null : { hostId, label: state.hostLabel },
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -164,6 +179,8 @@ interface OpenTileRequest {
   readonly pageSessionId: string;
   readonly url: string;
   readonly disposition: "foreground" | "background";
+  /** Omitted entirely to simulate a main process older than this field. */
+  readonly openerHadUserGesture?: boolean;
 }
 
 interface NativeStatusChange {
@@ -367,7 +384,7 @@ function renderWithQueryClient(ui: ReactElement): RenderResult {
   });
   const wrapper = (props: { readonly children: ReactNode }): ReactElement => (
     <QueryClientProvider client={queryClient}>
-      {props.children}
+      <TooltipProvider>{props.children}</TooltipProvider>
     </QueryClientProvider>
   );
   return render(ui, { wrapper });
@@ -424,6 +441,7 @@ function queryTileGuestWrapper(): HTMLElement {
 
 describe("ElectronTabSurface", () => {
   beforeEach(() => {
+    state.hostLabel = "Studio Mac";
     state.visible = true;
     state.bridge = new TestBridge();
     state.chromeInputs = [];
@@ -627,31 +645,50 @@ describe("ElectronTabSurface", () => {
     expect(wrapper.inert).toBe(true);
   });
 
-  it("forwards an in-page popup open request to onOpenLinkInNewTile untouched", async () => {
-    const bridge = state.bridge;
-    if (bridge === null) throw new Error("bridge missing");
-    renderTile(
-      createBinding(() => Promise.resolve({ detach: () => Promise.resolve() })),
-    );
-
-    act(() => {
-      bridge.emitOpenTileRequest({
-        viewTabId: "view-1",
-        paneId: "pane-1",
-        tileInstanceId: "tile-1",
-        pageSessionId: "browser-session:session-1:tab-1",
-        url: "https://popup.example/",
-        disposition: "background",
-      });
-    });
-
-    await waitFor(() => {
-      expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
-        "https://popup.example/",
-        "background",
+  it.each<[string, boolean | undefined, NestedFocusProvenance]>([
+    ["openerHadUserGesture: true", true, "user"],
+    ["openerHadUserGesture: false", false, "automatic"],
+    // The important case: an older main process sends no field at all, and
+    // its absence must never be read as a person having clicked.
+    [
+      "openerHadUserGesture absent (older main process)",
+      undefined,
+      "automatic",
+    ],
+  ])(
+    "forwards an in-page popup open request to onOpenLinkInNewTile with %s",
+    async (_label, openerHadUserGesture, expectedProvenance) => {
+      const bridge = state.bridge;
+      if (bridge === null) throw new Error("bridge missing");
+      renderTile(
+        createBinding(() =>
+          Promise.resolve({ detach: () => Promise.resolve() }),
+        ),
       );
-    });
-  });
+
+      act(() => {
+        bridge.emitOpenTileRequest({
+          viewTabId: "view-1",
+          paneId: "pane-1",
+          tileInstanceId: "tile-1",
+          pageSessionId: "browser-session:session-1:tab-1",
+          url: "https://popup.example/",
+          disposition: "background",
+          ...(openerHadUserGesture === undefined
+            ? {}
+            : { openerHadUserGesture }),
+        });
+      });
+
+      await waitFor(() => {
+        expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
+          "https://popup.example/",
+          "background",
+          expectedProvenance,
+        );
+      });
+    },
+  );
 
   it("accepts status only for the exact host, session, and tab", async () => {
     const bridge = state.bridge;
@@ -704,6 +741,50 @@ describe("ElectronTabSurface", () => {
     });
     expect(screen.getByText("native guest crashed")).toBeTruthy();
   });
+
+  it.each<[string, string | null, string]>([
+    ["named computer", "Studio Mac", "Studio Mac"],
+    ["missing name", null, "the host"],
+    ["blank name", "   ", "the host"],
+    ["id-valued name", "host-1", "the host"],
+  ])(
+    "keeps the Host details tooltip readable for a %s",
+    async (_state, hostLabel, expected) => {
+      state.hostLabel = hostLabel;
+      mountGuestForTile();
+      const bridge = state.bridge;
+      if (bridge === null) throw new Error("bridge missing");
+      renderTile(
+        createBinding(() =>
+          Promise.resolve({ detach: () => Promise.resolve() }),
+        ),
+      );
+      await waitFor(() => expect(state.chromeInputs.length).toBeGreaterThan(0));
+
+      act(() => {
+        bridge.emitStatus({
+          hostId: "host-1",
+          sessionId: "session-1",
+          tabId: "tab-1",
+          registrationId: "registration-1",
+          url: "https://example.com/",
+          title: null,
+          status: "dead",
+          reason: "native guest crashed",
+          canGoBack: false,
+          canGoForward: false,
+          zoomPercent: 100,
+          navigationAttempt: 0,
+        });
+      });
+
+      const tooltip = tooltipTextNear(
+        screen.getByRole("button", { name: "Host details" }),
+      );
+      expect(tooltip).toContain(expected);
+      expect(tooltip).not.toContain("host-1");
+    },
+  );
 });
 
 /**
@@ -799,6 +880,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
       "about:blank",
       "foreground",
+      "user",
     );
     expect(state.closeTab).not.toHaveBeenCalled();
   });
@@ -815,6 +897,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
     expect(state.onOpenLinkInNewTile).toHaveBeenCalledExactlyOnceWith(
       "about:blank",
       "foreground",
+      "user",
     );
   });
 

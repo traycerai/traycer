@@ -13,6 +13,7 @@ import { formatDistanceToNow } from "date-fns";
 import { displayTitle } from "@/lib/display-title";
 import { taskOwningTeamId } from "@/lib/epics/team-task-owner";
 import { isEditableRole } from "@/lib/epic-permissions";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 
 export type HistoryRecencyBucket = "today" | "yesterday" | "earlier";
 export type HistoryItemTaskType = "epic" | "phase";
@@ -22,6 +23,7 @@ export type HistoryWorkspaceRef = TaskWorkspaceIdentifier;
 export type HistorySortOption =
   | "recent"
   | "last-viewed"
+  | "created-desc"
   | "oldest"
   | "title-asc"
   | "title-desc"
@@ -44,6 +46,7 @@ export interface HistoryItem {
   // Raw user prompt (empty for phases); render sites derive the display-title
   // fallback from it via `epicDisplayTitle`.
   initialUserPrompt: string;
+  createdAtMs: number;
   updatedAtMs: number;
   updatedLabel: string;
   updatedBucket: HistoryRecencyBucket;
@@ -95,7 +98,20 @@ export function historyRowTimeLabel(
   sort: HistorySortOption,
 ): string {
   if (sort === "oldest") return `updated ${item.updatedLabel}`;
+  if (sort === "created-desc") {
+    return `created ${formatUpdatedLabel(item.createdAtMs)}`;
+  }
   return `activity ${item.recentLabel ?? item.updatedLabel}`;
+}
+
+/** The instant {@link historyRowTimeLabel} describes, for compact formatters. */
+export function historyRowTimeMs(
+  item: HistoryItem,
+  sort: HistorySortOption,
+): number {
+  if (sort === "oldest") return item.updatedAtMs;
+  if (sort === "created-desc") return item.createdAtMs;
+  return item.recentAtMs ?? item.updatedAtMs;
 }
 
 export interface HistoryFilters {
@@ -176,7 +192,7 @@ export function buildHistoryItemsFromTasks(
           index,
           userId,
           nowMs,
-          role: task.epic?.permission?.role ?? null,
+          role: grantedRole(task.epic?.permission?.role ?? null),
           isPinned: task.pinned ?? false,
           isLocalHome: isLocalHomedRow(task, epic.id, localHomedTaskIds),
           isPreservedOrphan: isPreservedOrphanRow(task),
@@ -199,7 +215,7 @@ export function buildHistoryItemsFromTasks(
         index,
         userId,
         nowMs,
-        role: task.phase?.permission?.role ?? null,
+        role: grantedRole(task.phase?.permission?.role ?? null),
         isPinned: false,
         isLocalHome: false,
         isPreservedOrphan: false,
@@ -223,7 +239,13 @@ export function formatUpdatedLabel(updatedAtMs: number): string {
 }
 
 function buildHistoryItem(args: {
-  light: { id: string; title: string; updatedAt: number; createdBy: string };
+  light: {
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+    createdBy: string;
+  };
   taskType: "epic" | "phase";
   initialUserPrompt: string;
   task: ListTaskLight;
@@ -266,6 +288,7 @@ function buildHistoryItem(args: {
     title:
       taskType === "epic" ? light.title : displayTitle(light.title, "phase"),
     initialUserPrompt,
+    createdAtMs: light.createdAt,
     updatedAtMs: light.updatedAt,
     updatedLabel: formatUpdatedLabel(light.updatedAt),
     updatedBucket: toHistoryRecencyBucket(light.updatedAt, nowMs),
@@ -634,6 +657,15 @@ export function sortHistoryItems(
       // last-viewed order. Preserve that order while still projecting an
       // optimistic pin bit into its pinned-first partition.
       return prioritizePinnedHistoryItems(items);
+    case "created-desc":
+      return items
+        .slice()
+        .sort(
+          (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
+            right.createdAtMs - left.createdAtMs ||
+            compareRecentEpicIds(left.epicId, right.epicId),
+        );
     case "oldest":
       return items
         .slice()

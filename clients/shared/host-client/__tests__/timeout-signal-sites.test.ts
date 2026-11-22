@@ -57,6 +57,7 @@ const SITES: readonly Site[] = [
         authnBaseUrl: AUTHN,
         token: "token",
         refreshToken: "refresh",
+        rotationCode: null,
         clientKind: null,
         signal: null,
       }),

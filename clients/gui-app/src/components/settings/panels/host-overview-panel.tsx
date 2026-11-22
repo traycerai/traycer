@@ -1,6 +1,10 @@
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
-import { SandboxCard } from "@/components/hosts/sandbox-card";
+import {
+  SandboxHeaderActions,
+  SandboxHeaderCost,
+  SandboxHeaderNotices,
+} from "@/components/hosts/sandbox-card";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -13,8 +17,18 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
-import { hostOptionCanActivate } from "@/components/settings/host-scope/host-option-model";
+import {
+  hostOptionCanActivate,
+  hostOptionTeamOwner,
+} from "@/components/settings/host-scope/host-option-model";
 import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { hostAppVersionFromDirectoryEntry } from "@/lib/host/version-skew-copy";
+import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
@@ -25,16 +39,15 @@ import {
   HostOverviewHeaderActions,
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
-import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
   type HostOverviewSelectTab,
 } from "@/components/settings/panels/host-overview-tab-state";
+import { HostOverviewUpdateAction } from "@/components/settings/panels/host-overview-updates";
 import { HostOverviewNotices } from "@/components/settings/panels/host-overview-notices";
 import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
-import { HostOverviewSettingsCardSlot } from "@/components/settings/panels/host-overview-settings-card";
-import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
+import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 import {
   describeHostOfflineNotice,
   inFlightUpdateKind,
@@ -52,7 +65,9 @@ import { useHostPortForwards } from "@/components/settings/panels/host-port-forw
 import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
 import { HostOverviewSimulatorsCount } from "@/components/settings/panels/host-overview-simulator-instances";
 import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
+import { HostOverviewCostsTab } from "@/components/settings/panels/host-overview-costs-tab";
 import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
+import { HostOverviewSecretsTab } from "@/components/settings/panels/host-overview-secrets-tab";
 import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
@@ -64,7 +79,6 @@ import {
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import {
-  formatLastSeen,
   liveBusyBreakdown,
   liveBusySessionCount,
   liveHostBusy,
@@ -73,7 +87,6 @@ import {
   settledHostBusy,
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
-import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerReinstallTraycer } from "@/hooks/runner/use-runner-reinstall-traycer-mutation";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -1605,15 +1618,6 @@ export function HostOverviewPanel(props: {
     !(parkForceControl !== null && offersForceRestart(operationView)) &&
     updates.cliFloorForVersion(operationView.targetVersion) !== null;
 
-  // The two facts the window modal's own update gate reduces to, asked once
-  // here rather than inside the JSX. Force-provisioning is the BUNDLED host's
-  // lifecycle on this computer: `hostManagement` is the bridge that can run it,
-  // and `isLocalMachine` is whether this row is the machine it would run
-  // against. Either one false means there is no update this app can perform,
-  // and the row falls back to naming the problem without offering a control
-  // that cannot reach it.
-  const canManageHost = host.isLocalMachine && management !== null;
-
   // The header cluster, withheld entirely when there is no route rather than
   // rendered and disabled. Every one of its verbs needs a live host to answer,
   // so on an unreachable host they would be dead controls under a card that
@@ -1623,6 +1627,64 @@ export function HostOverviewPanel(props: {
   // needs no route at all. The ONE exception is this computer's own down
   // host, whose doctor (and, after a removal, Reinstall) run over the CLI
   // bridge and need no route by construction.
+  const updateAction = HostOverviewUpdateAction(
+    {
+      summary: updates.summary,
+      degrade: updates.degrade,
+      desktopBridge: desktopUpdates.bridge,
+      onInstallationHelp: () => setDoctorOpen(true),
+      foregroundUpdateLine: localForegroundUpdateLine,
+    },
+    inFlightUpdateKind(operationView) !== null,
+    host.sandbox !== null,
+  );
+  const renderHeaderActions = (
+    primaryAction: ReactNode,
+    menuItems: ReactNode,
+  ): ReactNode => (
+    <HostOverviewHeaderActions
+      hostName={displayName}
+      primaryAction={primaryAction}
+      menuItems={
+        <>
+          {menuItems}
+          {host.sandbox === null ? null : updateAction}
+        </>
+      }
+      restartDegrade={restartDegrade}
+      doctorDegrade={doctorDegrade}
+      restartPending={restartDialogOwnDispatch}
+      anyPending={anyPending}
+      isActive={host.isActive}
+      connectable={host.connectable}
+      // Only offered when there is an override to clear. A host running
+      // under its own default name has nothing to reset, and the write
+      // would be the no-op `submitRename` already guards.
+      onResetName={
+        (identity?.customName ?? null) === null
+          ? null
+          : () => submitRename(null)
+      }
+      resetNameDegrade={renameDegrade}
+      onRestart={() => openRestartConfirm()}
+      onOpenDoctor={() => setDoctorOpen(true)}
+      // None on a management-only row (the Automations pod, a burst or
+      // unconfirmed sandbox): the list shows it, no picker offers it.
+      onMakeActive={
+        hostOptionCanActivate(host)
+          ? () => {
+              void scope.makeActive(host.hostId);
+            }
+          : null
+      }
+      teamOwned={host.sandbox?.teamOwned === true}
+      activateBusy={scope.isActivating}
+      onCopyHostId={() => hostIdCopy.copy(host.hostId)}
+      // A sandbox's lifecycle owns the inline slot, so its binding stays in
+      // More. A computer keeps Active or Activate inline, beside Update now.
+      activateInMenu={host.sandbox !== null}
+    />
+  );
   let headerActions: ReactNode = null;
   if (localDown) {
     headerActions = (
@@ -1632,45 +1694,19 @@ export function HostOverviewPanel(props: {
         onOpenDoctor={() => setDoctorOpen(true)}
       />
     );
-  } else if (usable) {
+  } else if (host.sandbox !== null) {
     headerActions = (
-      <HostOverviewHeaderActions
+      <SandboxHeaderActions
         hostName={displayName}
-        // Nothing extra: this page only renders for a host that has
-        // already answered, so there is never an Install to offer.
-        primaryAction={null}
-        restartDegrade={restartDegrade}
-        doctorDegrade={doctorDegrade}
-        restartPending={restartDialogOwnDispatch}
-        anyPending={anyPending}
-        isActive={host.isActive}
-        connectable={host.connectable}
-        // Only offered when there is an override to clear. A host running
-        // under its own default name has nothing to reset, and the write
-        // would be the no-op `submitRename` already guards.
-        onResetName={
-          (identity?.customName ?? null) === null
-            ? null
-            : () => submitRename(null)
+        sandbox={host.sandbox}
+        onDestroyed={
+          isUnenrolledSandboxOption(host) ? scope.returnToActive : null
         }
-        resetNameDegrade={renameDegrade}
-        onRestart={() => openRestartConfirm()}
-        onOpenDoctor={() => setDoctorOpen(true)}
-        // None on a management-only row (the Automations pod, a burst or
-        // unconfirmed sandbox): the list shows it, no picker offers it.
-        onMakeActive={
-          hostOptionCanActivate(host)
-            ? () => scope.makeActive(host.hostId)
-            : null
-        }
-        teamOwned={host.sandbox?.teamOwned === true}
-        activateBusy={scope.isActivating}
-        onCopyHostId={() => hostIdCopy.copy(host.hostId)}
-        // A phone's name row never wraps: Activate becomes the menu's first
-        // item there.
-        activateInMenu={isMobile}
+        renderActions={usable ? renderHeaderActions : null}
       />
     );
+  } else if (usable) {
+    headerActions = renderHeaderActions(updateAction, null);
   }
 
   // THE NOTICES STRIP, top to bottom: the offline notice, the update card, the
@@ -1701,10 +1737,6 @@ export function HostOverviewPanel(props: {
         offline
           ? describeHostOfflineNotice({
               hostName: displayName,
-              lastSeen: formatLastSeen(
-                registryItem?.status.lastSeenAt ?? null,
-                nowMs,
-              ),
               view: operationView,
               accountKnowsHost: registryItem !== null,
             })
@@ -1890,6 +1922,7 @@ export function HostOverviewPanel(props: {
   );
   const simulatorsTab = (
     <HostOverviewSimulatorsTab
+      usable={usable}
       client={client}
       hostId={host.hostId}
       hostName={displayName}
@@ -1921,9 +1954,8 @@ export function HostOverviewPanel(props: {
     <HostOverviewInstallationTab
       usable={usable}
       hostName={displayName}
-      // The account's record, so it reads with or without a route. "Online
-      // now" is the account's own reach, derived from that record; the
-      // timestamp is worded on the scope's clock.
+      // The account's record, so it reads with or without a route. Last seen
+      // is the account's stamp, worded on the scope's clock.
       about={
         registryItem === null
           ? null
@@ -1946,29 +1978,27 @@ export function HostOverviewPanel(props: {
       // feeds - so the override happens here, where both are in hand.
       service={usable ? { ...service, busy: anyPending } : null}
       showPackageManagerHint={props.hasLocalBridge}
+      sandbox={host.sandbox}
       scope={scope}
     />
   );
+  const secretsTab =
+    host.sandbox === null ? null : (
+      <HostOverviewSecretsTab
+        hostState={host.health.state}
+        sandbox={host.sandbox}
+      />
+    );
+  const costsTab =
+    host.sandbox === null ? null : (
+      <HostOverviewCostsTab sandbox={host.sandbox} />
+    );
 
   return (
     <>
-      {host.sandbox === null ? null : (
-        <SandboxCard
-          hostName={displayName}
-          hostState={host.health.state}
-          sandbox={host.sandbox}
-          // Destroying a sandbox no host row stands for removes its row, so
-          // Settings returns to the active host instead of calling it vanished.
-          onDestroyed={
-            isUnenrolledSandboxOption(host) ? scope.returnToActive : null
-          }
-        />
-      )}
       <HostIdentityCard
         host={host}
         displayName={displayName}
-        // Same two-layer rule as the name: the process's own answer when there
-        // is a route, the registry copy when there is not.
         version={view.hostVersion ?? host.version}
         // What the HOST says about its own work, which is the fact that decides
         // whether Restart is safe to press. `null` until it answers.
@@ -2021,36 +2051,27 @@ export function HostOverviewPanel(props: {
             />
           )
         }
-        // A phone's name row stays one line, the name truncating.
-        nameRowWraps={!isMobile}
         actions={headerActions}
-        healthAction={
-          <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
+        costLine={
+          host.sandbox === null ? null : (
+            <SandboxHeaderCost sandbox={host.sandbox} />
+          )
         }
+        healthAction={<HostUpdateRequiredSlot host={host} />}
         lifecycleLine={host.isLocalMachine ? <HostLifecycleModeLine /> : null}
       >
         {notices}
-        {/* The one-time Remote access question, on every tab like the
-            strip above it (it draws nothing once answered on this desktop);
-            which configuration this host runs, for the host the picker names;
-            and the settings card on every tab like the lines above it: whether
-            this computer's settings are its own, moving, moved, shared by an
-            earlier version or stopped. */}
-        <RemoteAccessQuestion
-          client={client}
-          hostId={scope.hostId}
-          enabled={usable}
-        />
-        <HostEnvironmentSection scope={scope} />
-        <HostOverviewSettingsCardSlot
-          client={client}
-          hostId={scope.hostId}
-          hostName={displayName}
-          usable={usable}
-        />
+        {host.sandbox === null ? null : (
+          <SandboxHeaderNotices
+            sandbox={host.sandbox}
+            teamName={hostOptionTeamOwner(host)?.teamName ?? null}
+          />
+        )}
+        <HostEnvironmentSection scope={scope} hostName={displayName} />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
+          sandbox={host.sandbox !== null}
           tab={props.tab}
           onSelectTab={props.onSelectTab}
           isMobile={isMobile}
@@ -2078,6 +2099,8 @@ export function HostOverviewPanel(props: {
             access: accessTab,
             data: dataTab,
             ports: portsTab,
+            secrets: secretsTab,
+            costs: costsTab,
             simulators: simulatorsTab,
           }}
         />
@@ -2639,56 +2662,32 @@ function describeBlockingWork(blockingSessionCount: number | null): string {
   return `${String(blockingSessionCount)} sessions`;
 }
 
-/**
- * The "Update host" remedy, mounted beside the health word that names the
- * problem (rider 1: Settings renders `dead(incompatible)` with its affordance).
- *
- * GATED ON BOTH the rendered health state and the lease, and the conjunction is
- * the point rather than belt-and-braces. `health.state` respects the derivation
- * precedence — this machine's own stopped service outranks the authority's
- * verdict — so a local host that is BOTH incompatible and not running reads
- * "Stopped", and offering "Update host" beside that word would answer a
- * question the card is not asking. The lease is then what carries the
- * structured skew the action needs, which `health` deliberately does not.
- *
- * The lane is `convergeReady({ force: true })` — the SAME mutation and the same
- * `runnerMutationKeys.hostConvergeReady()` key the window modal's "Update host"
- * drives through `forceProvisioning`, and the same one `LocalHostDownActions`
- * below drives (with `force: false`) for a Reinstall. So a click here is
- * narrated by the existing
- * actor-agnostic progress lane ("Applying the host update…") with no second
- * observer and no new key; nothing about this surface needed a mechanism of its
- * own, which is why it does not have one.
- */
+/** An incompatible host can be updated without its RPC connection. */
 export function HostUpdateRequiredSlot(props: {
   readonly host: HostScopeOption;
-  readonly canManageHost: boolean;
 }): ReactNode {
   const lease = useHostLease(props.host.hostId);
-  const convergeReady = useRunnerConvergeReady();
-  if (props.host.health.state !== "update-required") return null;
-  if (lease === null || lease.status !== "dead") return null;
-  if (lease.dead.reason !== "incompatible") return null;
+  const entry = useHostDirectoryEntry(props.host.hostId);
+  let detail =
+    lease?.dead?.reason === "incompatible" ? lease.dead.detail : null;
+  if (
+    entry !== null &&
+    hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION)
+  ) {
+    detail = olderHostUpdateVariant(
+      props.host.hostId,
+      true,
+      hostAppVersionFromDirectoryEntry(entry),
+    ).detail;
+  } else if (props.host.health.state !== "update-required") {
+    return null;
+  }
+  if (detail === null) return null;
   return (
     <HostUpdateRequiredAction
-      detail={lease.dead.detail}
-      canManageHost={props.canManageHost}
-      pending={convergeReady.isPending}
-      onUpdateHost={() => {
-        convergeReady.mutate(
-          { force: true },
-          {
-            onSuccess: () => {
-              toast.success(`Updating ${props.host.name}…`);
-            },
-            onError: (error) =>
-              toastFromRunnerError(
-                error,
-                `Couldn't update ${props.host.name}.`,
-              ),
-          },
-        );
-      }}
+      hostId={props.host.hostId}
+      detail={detail}
+      testId="host-scope-update-host"
     />
   );
 }

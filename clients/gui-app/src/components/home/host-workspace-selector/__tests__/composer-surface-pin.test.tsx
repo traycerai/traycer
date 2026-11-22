@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
@@ -197,14 +203,6 @@ function renderComposerPicker(
 
 function pinnedHostId(): string | undefined {
   return useSurfaceHostSelectionStore.getState().selections[COMPOSER_KEY];
-}
-
-function chipLabel(): string {
-  const label = screen
-    .getByRole("button", { name: /^Host:/ })
-    .querySelector(".truncate");
-  if (label === null) throw new Error("host switcher label is missing");
-  return label.textContent;
 }
 
 function pickBuildHost(): void {
@@ -407,27 +405,37 @@ describe("composer host picker writes a surface pin", () => {
 
   it("follows the effective host until a pick, then holds the pin through a failover", () => {
     renderComposerPicker({ kind: "active" }, null);
-    expect(chipLabel()).toBe("Home Mac");
+    expect(
+      screen.getByRole("button", { name: "Host: Home Mac" }).textContent,
+    ).toBe("Home Mac");
 
     pickBuildHost();
-    expect(chipLabel()).toBe("Build Box");
+    expect(
+      screen.getByRole("button", { name: "Host: Build Box" }).textContent,
+    ).toBe("Build Box");
 
     // Derivation moves the effective host; a PINNED surface keeps its own.
     cleanup();
     mocks.effectiveHostId.current = "host-home";
     renderComposerPicker({ kind: "active" }, null);
-    expect(chipLabel()).toBe("Build Box");
+    expect(
+      screen.getByRole("button", { name: "Host: Build Box" }).textContent,
+    ).toBe("Build Box");
   });
 
   it("re-points a FOLLOWING chip when the effective host moves", () => {
     renderComposerPicker({ kind: "active" }, null);
-    expect(chipLabel()).toBe("Home Mac");
+    expect(
+      screen.getByRole("button", { name: "Host: Home Mac" }).textContent,
+    ).toBe("Home Mac");
 
     cleanup();
     mocks.effectiveHostId.current = "host-build";
     renderComposerPicker({ kind: "active" }, null);
 
-    expect(chipLabel()).toBe("Build Box");
+    expect(
+      screen.getByRole("button", { name: "Host: Build Box" }).textContent,
+    ).toBe("Build Box");
     expect(pinnedHostId()).toBeUndefined();
   });
 
@@ -440,7 +448,11 @@ describe("composer host picker writes a surface pin", () => {
     // "Local" is the pre-directory default for a FOLLOWING surface. The
     // shared picker keeps identity and status separate, then combines both in
     // the accessible name.
-    expect(chipLabel()).toBe("Unavailable");
+    expect(
+      within(screen.getByRole("button", { name: /^Host:/ })).getByText(
+        "Unavailable",
+      ),
+    ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Host: Unavailable, offline" }),
     ).toBeTruthy();

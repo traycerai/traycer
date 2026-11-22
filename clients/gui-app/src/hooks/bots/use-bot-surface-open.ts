@@ -57,6 +57,7 @@ export function useBotSurfaceOpen(
         "explicit",
         "direct_ui",
       ),
+      "user",
     );
   };
   return () => {
@@ -123,6 +124,7 @@ export function useBotSurfaceOpen(
             "explicit",
             "direct_ui",
           ),
+          "user",
         );
         return;
       }

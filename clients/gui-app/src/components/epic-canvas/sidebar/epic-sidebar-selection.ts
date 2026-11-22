@@ -308,7 +308,7 @@ const EMPTY_ARCHIVE_HIDDEN_IDS: ReadonlySet<string> = new Set<string>();
  * in their own right, which stay in `archivedIds` and keep hiding their own
  * subtrees. `hidden` doubles as the cycle guard.
  */
-function collectArchiveHiddenIds(
+export function collectArchiveHiddenIds(
   archivedIds: ReadonlyArray<string>,
   tree: EpicTreeIndex,
 ): ReadonlySet<string> {

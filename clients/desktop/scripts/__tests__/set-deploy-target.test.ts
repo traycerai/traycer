@@ -293,10 +293,32 @@ describe("set-deploy-target scripts", () => {
   it("stamps and restores the CLI registry coordinates and host version", () => {
     const fixture = createFixture("cli");
     const original = readFileSync(fixture.configPath, "utf8");
+    const missingHostFloor = run(fixture, [
+      "--target=staging",
+      `--target-input=${fixture.targetInputPath}`,
+      "--supported-host-version=2.3.4",
+      "--cli-feed-floor=23",
+    ]);
+    expect(missingHostFloor.status).toBe(2);
+    expect(missingHostFloor.stderr).toContain(
+      "--host-feed-floor=<policyRevision>",
+    );
+    const missingCliFloor = run(fixture, [
+      "--target=staging",
+      `--target-input=${fixture.targetInputPath}`,
+      "--supported-host-version=2.3.4",
+      "--host-feed-floor=17",
+    ]);
+    expect(missingCliFloor.status).toBe(2);
+    expect(missingCliFloor.stderr).toContain(
+      "--cli-feed-floor=<policyRevision>",
+    );
     const staged = run(fixture, [
       "--target=staging",
       `--target-input=${fixture.targetInputPath}`,
       "--supported-host-version=2.3.4",
+      "--host-feed-floor=17",
+      "--cli-feed-floor=23",
     ]);
     expect(staged.status).toBe(0);
     const source = readFileSync(fixture.configPath, "utf8");
@@ -309,6 +331,11 @@ describe("set-deploy-target scripts", () => {
     );
     expect(source).toContain('cliFeedTag: "cli-manifest-staging"');
     expect(source).toContain('supportedHostVersion: "2.3.4"');
+    expect(source).toContain('hostFeedFloor: "17"');
+    expect(source).toContain('cliFeedFloor: "23"');
+    expect(source).toContain(
+      'releaseCdnBaseUrl: "https://releases.dev.traycer.ai"',
+    );
     // The CLI has no packaging step that reads a stamp, so its stamper never
     // writes one; the input file is the caller's to keep.
     expect(existsSync(fixture.stampPath)).toBe(false);

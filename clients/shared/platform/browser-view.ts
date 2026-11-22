@@ -241,6 +241,24 @@ export interface BrowserViewOpenTileRequest extends BrowserViewTileKey {
   /** Chromium's disposition for the in-page open: `background-tab` is the
    * only one that maps to `background` (middle/ctrl/cmd-click). */
   readonly disposition: "foreground" | "background";
+  /**
+   * Whether a real user gesture had landed on the OPENER page recently when
+   * it called `window.open`. Electron reports a featureless scripted
+   * `window.open` identically to a `_blank` link click, so the page itself
+   * cannot be asked: main is the only side that holds this, and a reader that
+   * assumes a person clicked lets a page's own script commit a focus with the
+   * authority of a human gesture.
+   *
+   * `undefined` from a main process older than this field. Absence is not
+   * evidence of a gesture, so a reader must treat it exactly as `false` -
+   * test for `=== true` rather than falling back to a default.
+   *
+   * Read WITHOUT consuming the gesture (`hadRecentGuestGesture`, not
+   * `consume()`): the native-popup path spends the same budget to decide
+   * whether a real popup may open, and spending it here would deny that
+   * popup.
+   */
+  readonly openerHadUserGesture: boolean | undefined;
 }
 
 /**

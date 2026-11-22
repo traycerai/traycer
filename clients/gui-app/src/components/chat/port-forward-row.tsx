@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Cable, ChevronRight, ExternalLink, Square, X } from "lucide-react";
 import type { ChatPortForward } from "@traycer/protocol/host/port-forward";
+import { HOST_KIND_WORDS } from "@traycer/protocol/host/host-status";
+import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   Collapsible,
   CollapsibleContent,
@@ -206,7 +208,8 @@ function PortForwardDetail(props: { readonly forward: ChatPortForward }) {
   const machine = (hostId: string): string => {
     const entry = directory?.find((candidate) => candidate.hostId === hostId);
     if (entry === undefined) return "another computer";
-    return entry.kind === "local" ? "this computer" : entry.label;
+    const kind = isSandboxHostDirectoryEntry(entry) ? "sandbox" : "personal";
+    return `${entry.label} · ${HOST_KIND_WORDS[kind]}`;
   };
   const events = keyedPortForwardEventsNewestFirst(forward.recentEvents);
 

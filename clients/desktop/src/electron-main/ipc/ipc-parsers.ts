@@ -50,9 +50,19 @@ import {
 } from "@traycer/protocol/host/sandbox-control";
 import {
   slackAppBotRequestSchema,
+  slackAppDmsRequestSchema,
   slackAppRegisterRequestSchema,
+  type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
+import {
+  botDeleteRequestSchema,
+  botUpdateReplyModeRequestSchema,
+  botUpdateRunSettingsRequestSchema,
+  type BotDeleteRequest,
+  type BotUpdateReplyModeRequest,
+  type BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import {
   SECRET_REQUEST_DECISIONS,
   type SecretRequestDecision,
@@ -699,6 +709,54 @@ export function parseSlackAppRegisterRequest(
     const issue = checked.error.issues[0];
     throw new Error(
       `registerSlackApp.request.${issue.path.join(".")}: ${issue.message}`,
+    );
+  }
+  return checked.data;
+}
+
+/** The renderer-supplied DM setting, against the protocol's own schema. */
+export function parseSlackAppDmsRequest(value: unknown): SlackAppDmsRequest {
+  const checked = slackAppDmsRequestSchema.safeParse(value);
+  if (!checked.success) {
+    throw new Error(
+      `setSlackAppDms.request: ${checked.error.issues[0].message}`,
+    );
+  }
+  return checked.data;
+}
+
+export function parseBotUpdateRunSettingsRequest(
+  value: unknown,
+): BotUpdateRunSettingsRequest {
+  const checked = botUpdateRunSettingsRequestSchema.safeParse(value);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `updateBotRunSettings.request.${issue.path.join(".")}: ${issue.message}`,
+    );
+  }
+  return checked.data;
+}
+
+export function parseBotUpdateReplyModeRequest(
+  value: unknown,
+): BotUpdateReplyModeRequest {
+  const checked = botUpdateReplyModeRequestSchema.safeParse(value);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `updateBotReplyMode.request.${issue.path.join(".")}: ${issue.message}`,
+    );
+  }
+  return checked.data;
+}
+
+export function parseBotDeleteRequest(value: unknown): BotDeleteRequest {
+  const checked = botDeleteRequestSchema.safeParse(value);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `deleteBot.request.${issue.path.join(".")}: ${issue.message}`,
     );
   }
   return checked.data;

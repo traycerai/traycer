@@ -681,7 +681,8 @@ describe("<EpicShell />", () => {
   });
 
   describe("the canvas frame's border (flush surface)", () => {
-    it("draws a 1px canvas-border frame around the canvas, on every side by default", () => {
+    it("draws a 1px canvas-border frame around the canvas, on every side while the tabs run across the top", () => {
+      placeArrangement({ tabStripPlacement: "top", sidebarSide: "right" });
       render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
 
       const frame = canvasFrame();

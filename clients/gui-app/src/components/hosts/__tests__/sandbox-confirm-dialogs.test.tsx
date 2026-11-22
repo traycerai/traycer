@@ -30,10 +30,11 @@ import {
   sandboxSummaryFixture,
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   report: { kind: "unknown" } as SandboxSessionReport,
-  configuration: { kind: "personal" } as SandboxPageConfiguration,
+  configuration: { kind: "personal" } as SandboxPageConfiguration | null,
   focusModel: null as FocusModel | null,
   handles: [] as TerminalSessionStoreHandle[],
   handleHosts: new WeakMap<TerminalSessionStoreHandle, string>(),
@@ -57,15 +58,34 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
   useSandboxSessionReport: () => ({ report: mocks.report, failed: false }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
-  useSandboxConfigurations: () => ({
-    configurations: [mocks.configuration],
-    teamEnvironmentIds: new Set<string>(),
-    complete: true,
-  }),
-  sandboxConfigurationOf: () => mocks.configuration,
-  useSandboxWakeString: () => null,
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+      >();
+    return {
+      ...actual,
+      useSandboxConfigurations: () => ({
+        configurations:
+          mocks.configuration === null
+            ? [{ kind: "personal" as const }]
+            : [{ kind: "personal" as const }, mocks.configuration],
+        teamEnvironmentIds: new Set(
+          mocks.configuration?.kind === "team" &&
+            mocks.configuration.environmentId !== null
+            ? [mocks.configuration.environmentId]
+            : [],
+        ),
+        complete: true,
+        personalEnvironmentId:
+          mocks.configuration?.kind === "personal" ? "env-personal" : null,
+      }),
+      useSandboxWakeString: () => null,
+    };
+  },
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ isPending: false, mutate: vi.fn() }),
 }));
@@ -115,7 +135,18 @@ import {
 } from "@/components/hosts/sandbox-confirm-dialogs";
 
 const NAME = "build-box";
-const SANDBOX = sandboxSummaryFixture({ displayName: NAME, state: "awake" });
+const SANDBOX = sandboxSummaryFixture({
+  displayName: NAME,
+  state: "awake",
+  environmentId: "env-personal",
+});
+// The configuration and the row share this id, or the resolver reads the row as Personal.
+const TEAM_ENVIRONMENT_ID = "env-team-1";
+const TEAM_SANDBOX = sandboxSummaryFixture({
+  displayName: NAME,
+  state: "awake",
+  environmentId: TEAM_ENVIRONMENT_ID,
+});
 
 function render(element: ReactElement) {
   const client = new QueryClient();
@@ -145,6 +176,7 @@ describe("sandbox confirm dialogs", () => {
   afterEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   });
 
   it("says how many sessions are running, with the caption", () => {
@@ -166,9 +198,24 @@ describe("sandbox confirm dialogs", () => {
     expect(
       screen.getByTestId("sandbox-confirm-sessions").textContent,
     ).toContain(
-      "Known running agents and Task terminals. Other sessions may also be interrupted.",
+      "Known running agents and Task terminals. Other sessions may also keep this sandbox awake.",
     );
   });
+
+  it.each([
+    ["Suspend", SandboxSuspendDialog, "sandbox-confirm-suspend"],
+    ["Stop", SandboxStopDialog, "sandbox-confirm-stop"],
+  ])(
+    "%s requires running agent turns and shells to finish or be stopped first",
+    (_name, Dialog, testId) => {
+      render(<Dialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />);
+
+      const copy = screen.getByTestId(testId).textContent;
+      expect(copy).toContain("Finish or stop running agent turns and shells");
+      expect(copy).not.toContain("interrupted");
+      expect(copy).not.toContain("ends every process");
+    },
+  );
 
   describe("the named sessions", () => {
     const HOST_ID = SANDBOX.hostId;
@@ -339,7 +386,7 @@ describe("sandbox confirm dialogs", () => {
         );
         expect(
           screen.getByText(
-            "Known running agents and Task terminals. Other sessions may also be interrupted.",
+            "Known running agents and Task terminals. Other sessions may also keep this sandbox awake.",
           ),
         ).toBeDefined();
       });
@@ -429,26 +476,40 @@ describe("sandbox confirm dialogs", () => {
     });
 
     it.each([
-      ["Suspend", SandboxSuspendDialog],
-      ["Stop", SandboxStopDialog],
+      [
+        "Suspend",
+        SandboxSuspendDialog,
+        "sandbox-confirm-suspend",
+        "Storage uses acme's credits.",
+      ],
+      [
+        "Stop",
+        SandboxStopDialog,
+        "sandbox-confirm-stop",
+        "The disk is kept at the lower storage rate on acme's credits.",
+      ],
     ])(
       "ends a team %s dialog's sessions block at the caption, with no sentence about who is told",
-      (_name, Dialog) => {
+      (_name, Dialog, dialogTestId, teamStorageLine) => {
         mocks.configuration = {
           kind: "team",
           teamId: "team-1",
           teamName: "acme",
-          environmentId: null,
+          environmentId: TEAM_ENVIRONMENT_ID,
         };
         mocks.report = liveSessionReport(
           { agents: [agentSessionFixture({})], terminals: [] },
           true,
         );
-        render(<Dialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />);
+        render(<Dialog sandbox={TEAM_SANDBOX} open onOpenChange={vi.fn()} />);
+
+        expect(screen.getByTestId(dialogTestId).textContent).toContain(
+          teamStorageLine,
+        );
 
         expect(
           screen.getByText(
-            "Known running agents and Task terminals. Other sessions may also be interrupted.",
+            "Known running agents and Task terminals. Other sessions may also keep this sandbox awake.",
           ),
         ).toBeDefined();
         expect(
@@ -457,13 +518,7 @@ describe("sandbox confirm dialogs", () => {
       },
     );
 
-    it("ends a team Destroy dialog's sessions block at the caption, with no sentence about who is told", () => {
-      mocks.configuration = {
-        kind: "team",
-        teamId: "team-1",
-        teamName: "acme",
-        environmentId: null,
-      };
+    it("ends the Destroy dialog's sessions block at the caption, with no sentence about who is told", () => {
       mocks.report = liveSessionReport(
         { agents: [agentSessionFixture({})], terminals: [] },
         true,
@@ -653,6 +708,92 @@ describe("sandbox confirm dialogs", () => {
     expect(screen.getByTestId("sandbox-confirm-sessions")).toBeDefined();
   });
 
+  it.each([null, { userId: "priya", displayName: "Priya" }] as const)(
+    "names Acme's storage credits in Suspend and Stop when wakePayer is %s",
+    (wakePayer) => {
+      mocks.configuration = {
+        kind: "team",
+        teamId: "team-a",
+        teamName: "Acme",
+        environmentId: "team-a",
+      };
+      const sandbox = sandboxSummaryFixture({
+        displayName: NAME,
+        state: "awake",
+        environmentId: "team-a",
+        wakePayer,
+      });
+      render(
+        <SandboxSuspendDialog sandbox={sandbox} open onOpenChange={vi.fn()} />,
+      );
+      const suspend = screen.getByTestId("sandbox-confirm-suspend").textContent;
+      expect(suspend).toContain("Storage uses Acme's credits.");
+      expect(suspend).not.toContain("until another member wakes it");
+      cleanup();
+
+      render(
+        <SandboxStopDialog sandbox={sandbox} open onOpenChange={vi.fn()} />,
+      );
+      expect(screen.getByTestId("sandbox-confirm-stop").textContent).toContain(
+        "The disk is kept at the lower storage rate on Acme's credits.",
+      );
+    },
+  );
+
+  it("leaves payer wording out of Suspend, Stop and Keep while ownership is unknown", () => {
+    mocks.configuration = null;
+    const unknownSandbox = sandboxSummaryFixture({
+      displayName: NAME,
+      state: "awake",
+      environmentId: null,
+    });
+    render(
+      <SandboxSuspendDialog
+        sandbox={unknownSandbox}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    const suspend = screen.getByTestId("sandbox-confirm-suspend").textContent;
+    expect(suspend).not.toContain("Storage uses your credits.");
+    expect(suspend).not.toContain("Storage uses");
+    cleanup();
+
+    render(
+      <SandboxStopDialog
+        sandbox={unknownSandbox}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    const stop = screen.getByTestId("sandbox-confirm-stop").textContent;
+    expect(stop).toContain("The disk is kept at the lower storage rate.");
+    expect(stop).not.toContain("on your credits");
+    cleanup();
+
+    render(
+      <SandboxKeepDialog
+        sandbox={unknownSandbox}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    const keep = screen.getByTestId("sandbox-confirm-keep").textContent;
+    expect(keep).not.toContain("Paid by you while awake.");
+    expect(keep).not.toContain(
+      "'s defaults; change them on the row afterwards.",
+    );
+  });
+
+  it("keeps Personal's payer sentence when its environment is known", () => {
+    mocks.configuration = { kind: "personal" };
+    render(<SandboxKeepDialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId("sandbox-confirm-keep").textContent).toContain(
+      "Paid by you while awake.",
+    );
+  });
+
   describe("dates, counted from a pinned now", () => {
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -691,17 +832,143 @@ describe("sandbox confirm dialogs", () => {
       },
     );
 
+    it("gives the Stop dialog no destroy date for a withdrawn row, even one with a resting period that would otherwise show one", () => {
+      render(
+        <SandboxStopDialog
+          sandbox={sandboxSummaryFixture({
+            displayName: NAME,
+            destroyAfterRestingMinutes: 60,
+            withdrawalEndsAt: Date.UTC(2026, 11, 1),
+          })}
+          open
+          onOpenChange={vi.fn()}
+        />,
+      );
+      const text = screen.getByTestId("sandbox-confirm-stop").textContent;
+      expect(text).not.toContain("Destroyed on");
+    });
+
     it("gives the Keep preview its date with a time", () => {
       render(
         <SandboxKeepDialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />,
       );
       expect(screen.getByTestId("sandbox-confirm-keep").textContent).toContain(
-        "on Nov 1 at 10:36 if it rests from now.",
+        "Destroyed after 7 days instead, on Nov 1 at 10:36 if it's suspended or stopped from now on.",
       );
+    });
+
+    it("names the team paying for an awake sandbox regardless of its wake payer", () => {
+      mocks.configuration = {
+        kind: "team",
+        teamId: "team-a",
+        teamName: "Acme",
+        environmentId: "team-a",
+      };
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "viewer", username: "viewer" },
+      });
+      const sandbox = sandboxSummaryFixture({
+        displayName: NAME,
+        state: "awake",
+        environmentId: "team-a",
+        wakePayer: { userId: "priya", displayName: "Priya" },
+      });
+      render(
+        <SandboxKeepDialog sandbox={sandbox} open onOpenChange={vi.fn()} />,
+      );
+
+      const dialog = screen.getByTestId("sandbox-confirm-keep");
+      expect(
+        within(dialog).getAllByText("Paid by Acme while awake."),
+      ).toHaveLength(1);
+      expect(dialog.textContent).not.toContain("who pays are unchanged");
+      expect(dialog.textContent).not.toContain("Paid by Priya while awake.");
+      expect(dialog.textContent).not.toContain("Paid by you while awake.");
+    });
+
+    it("names the team rather than the viewer when the viewer woke it", () => {
+      mocks.configuration = {
+        kind: "team",
+        teamId: "team-a",
+        teamName: "Acme",
+        environmentId: "team-a",
+      };
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "viewer", username: "viewer" },
+      });
+      const sandbox = sandboxSummaryFixture({
+        displayName: NAME,
+        state: "awake",
+        environmentId: "team-a",
+        wakePayer: { userId: "viewer", displayName: "Viewer" },
+      });
+      render(
+        <SandboxKeepDialog sandbox={sandbox} open onOpenChange={vi.fn()} />,
+      );
+
+      expect(
+        within(screen.getByTestId("sandbox-confirm-keep")).getAllByText(
+          "Paid by Acme while awake.",
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("counts a changed resting period from the pinned now and names the suspended or stopped state", () => {
+      render(
+        <SandboxIdleSettingsDialog
+          sandbox={sandboxSummaryFixture({
+            displayName: NAME,
+            state: "awake",
+            destroyAfterRestingMinutes: 10_080,
+          })}
+          open
+          onOpenChange={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByText(
+          "Destroy after suspended or stopped for (empty: never)",
+        ),
+      ).toBeDefined();
+      fireEvent.change(
+        screen.getByTestId("sandbox-idle-settings-resting-value"),
+        { target: { value: "2" } },
+      );
+
+      expect(
+        screen.getByTestId("sandbox-idle-settings-preview").textContent,
+      ).toBe(
+        "Destroyed on Oct 27 at 10:36 if it's suspended or stopped from now on.",
+      );
+    });
+
+    it("drops payer wording from a withdrawn row whose owner is unknown", () => {
+      mocks.configuration = null;
+      render(
+        <SandboxKeepDialog
+          sandbox={sandboxSummaryFixture({
+            displayName: NAME,
+            withdrawalEndsAt: Date.UTC(2026, 11, 1),
+            environmentId: null,
+          })}
+          open
+          onOpenChange={vi.fn()}
+        />,
+      );
+      const text = screen.getByTestId("sandbox-confirm-keep").textContent;
+      expect(text).toContain("Stops deleting itself when idle.");
+      expect(text).not.toContain("Paid by you while awake.");
+      expect(text).not.toContain(
+        "'s defaults; change them on the row afterwards.",
+      );
+      expect(text).not.toContain("idle days");
+      expect(text).not.toContain("Destroyed after");
     });
   });
 
-  it("previews a resting period of Never as three whole sentences", () => {
+  it("previews an idle period of Never as three whole sentences", () => {
     render(
       <SandboxIdleSettingsDialog
         sandbox={sandboxSummaryFixture({
@@ -721,8 +988,29 @@ describe("sandbox confirm dialogs", () => {
     expect(
       screen.getByTestId("sandbox-idle-settings-preview").textContent,
     ).toBe(
-      "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days frozen.",
+      "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days.",
     );
+  });
+
+  it("gives a withdrawn row's idle settings form no resting preview at all, even once the resting value is changed", () => {
+    render(
+      <SandboxIdleSettingsDialog
+        sandbox={sandboxSummaryFixture({
+          displayName: NAME,
+          destroyAfterRestingMinutes: 10_080,
+          withdrawalEndsAt: Date.UTC(2026, 11, 1),
+        })}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    fireEvent.change(
+      screen.getByTestId("sandbox-idle-settings-resting-value"),
+      {
+        target: { value: "" },
+      },
+    );
+    expect(screen.queryByTestId("sandbox-idle-settings-preview")).toBeNull();
   });
 
   it("keeps the confirmed set in Destroy all idle once the list drops the destroyed rows", () => {

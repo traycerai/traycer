@@ -180,6 +180,7 @@ describe("the macOS job's filter", () => {
         "clients/mobile/package.json",
         "clients/traycer-cli/src/index.ts",
         "protocol/src/host/rpc/registry.ts",
+        "protocol/src/config/__tests__/adversarial-store-fuzz.test.ts",
         "patches/@tiptap%2Fcore@3.30.1.patch",
         "nx.json",
         "AGENTS.md",

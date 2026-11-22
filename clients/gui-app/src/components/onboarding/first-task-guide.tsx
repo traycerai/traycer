@@ -9,6 +9,7 @@ import {
   ONBOARDING_REMINDER_TOAST_ID,
 } from "@/lib/toast/onboarding-reminder-toast";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import { ActionToastContent } from "@/components/layout/bridges/action-toast-content";
 import {
   useOnboardingStore,
   onboardingCompletedCount,
@@ -18,14 +19,9 @@ import { readShortLandscape } from "@/hooks/ui/use-short-landscape";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
-import { heldReviewEntries } from "@/components/settings/move/held-from-review";
-import {
-  useThisComputer,
-  type ThisComputer,
-} from "@/components/settings/move/this-computer";
+import { useThisComputer } from "@/components/settings/move/this-computer";
 import { useThisComputersMove } from "@/components/settings/move/use-this-computers-move";
-import { useEnvironmentReviewRead } from "@/hooks/environment/use-environment-reads";
-import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import {
   useMoveSheetStore,
   type MoveSheetTarget,
@@ -103,23 +99,25 @@ export function FirstTaskChatGuide(props: {
 }
 
 /**
- * The Start toast. While anything an earlier version shared from this
- * computer is on hold it reads `An earlier version shared this computer's
- * settings · Review` and opens the retrospective sheet, instead of the setup
- * reminder; it retires by itself once nothing is on hold.
+ * The Start toast. The move's invitation is asked once on a computer that
+ * runs its own settings, worded as the Getting started card is: on a fresh
+ * install Home is hidden, so this is where a new person first meets the move.
+ * Once answered, the card is the only place it waits. A computer that runs a
+ * team's settings (`team`) or has moved is never asked.
  */
 function GettingStartedToast() {
   const computer = useThisComputer();
   const completedAt = useOnboardingStore((state) => state.completedAt);
+  const invitationAnswered = useOnboardingStore(
+    (state) => state.moveInvitationAnswered,
+  );
   const remindersOn = completedAt !== null;
-  const held = useHeldOnThisComputer(computer, remindersOn);
   const move = useThisComputersMove(computer, remindersOn);
-  // No toast until the review and the status answer, so none shows for a
-  // moment before another replaces it.
-  if (held === "pending" || move === "pending") return null;
-  if (held === "held") return <HeldOnThisComputerToast computer={computer} />;
+  // No toast until the status answers, so none shows for a moment before
+  // another replaces it.
+  if (move === "pending") return null;
   const moveTarget =
-    move === "not_moved" && computer.hostId !== null
+    move === "not_moved" && !invitationAnswered && computer.hostId !== null
       ? { hostId: computer.hostId, hostName: computer.hostName }
       : null;
   return <StartToast completedAt={completedAt} moveTarget={moveTarget} />;
@@ -127,14 +125,16 @@ function GettingStartedToast() {
 
 /**
  * The Start page's two toasts, under two ids: the move's invitation while
- * this computer's settings are not in Personal, and the setup reminder
- * otherwise. The invitation wins while there is one - two things asking for
+ * this computer runs its own settings and the person has not answered it,
+ * and the setup reminder otherwise. The invitation wins while there is one - two things asking for
  * the next move at once is noise - and the reminder is held back for as long
  * as one has been shown and not answered.
  *
- * Once shown, the invitation stands until the person presses it, answers Not
- * now, or ×s it, or on a phone on its side until its time runs out, which is
- * no answer: it asks again the next time the Start page opens. A status that stops naming a move - a host swap, a version
+ * Once shown, the invitation stands until the person presses it, answers
+ * Later, or ×s it, or on a phone on its side until its time runs out, which is
+ * no answer: it asks again the next time the Start page opens. An answer is
+ * kept on this desktop (`moveInvitationAnswered`) and settles the reminder
+ * too, so nothing new appears after it. A status that stops naming a move - a host swap, a version
  * without the planes, a move accepted elsewhere - is not an answer from the
  * person: it neither withdraws the invitation nor lets the reminder take its
  * place. Both effects live here, the invitation's first, so the reminder's
@@ -152,6 +152,9 @@ function StartToast(props: {
   const hostName = props.moveTarget?.hostName ?? null;
   const dismissed = useOnboardingStore((state) => state.setupReminderDismissed);
   const dismiss = useOnboardingStore((state) => state.dismissSetupReminder);
+  const answerInvitation = useOnboardingStore(
+    (state) => state.answerMoveInvitation,
+  );
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   // Availability, not just completion: a guide this build cannot offer would
   // otherwise leave a nudge that can never be satisfied, pointing at a card
@@ -163,50 +166,51 @@ function StartToast(props: {
   );
   const remaining = onboardingGuideCount(shell) - complete;
   useEffect(() => {
-    if (dismissed || hostId === null || hostName === null) return;
+    if (hostId === null || hostName === null) return;
     markMoveInvitationShown();
     const identityIsCurrent = captureOnboardingReminderIdentity();
-    // The invitation's shape is the import announcement's
-    // (`session-import-announcement-controller.tsx`): outside a phone on its
-    // side it does not time out, and only the person takes it down - which is
-    // why there is nothing to undo here. ×, Not now and the action each dismiss
-    // it themselves, and a sign-out retires it (`retireOnboardingReminder`).
-    toast("This computer's settings aren't in Personal.", {
-      id: MOVE_INVITATION_TOAST_ID,
-      description: (
-        <span className="text-pretty">Move them to use them everywhere</span>
-      ),
-      duration: startToastDuration(),
-      closeButton: true,
-      onDismiss: () => {
-        if (!identityIsCurrent()) return;
-        markMoveInvitationAnswered();
-        dismiss();
-      },
-      // Off the screen, so it no longer holds the reminder back, and nothing
-      // the person said is recorded.
-      onAutoClose: () => {
-        if (identityIsCurrent()) markMoveInvitationAnswered();
-      },
-      action: {
-        label: "Show me what moves",
-        onClick: () => {
+    const answer = (): void => {
+      markMoveInvitationAnswered();
+      answerInvitation();
+      dismiss();
+    };
+    // The import announcement's component and call shape
+    // (`session-import-announcement-controller.tsx`): the action, its own
+    // Later and sonner's ×, each of which records the answer. Outside a phone
+    // on its side it does not time out, and a sign-out retires it
+    // (`retireOnboardingReminder`).
+    toast(
+      <ActionToastContent
+        toastId={MOVE_INVITATION_TOAST_ID}
+        eyebrow={null}
+        title={GETTING_STARTED.definitions.move.label}
+        description={GETTING_STARTED.definitions.move.description ?? ""}
+        actionLabel="Move to Personal"
+        onAction={() => {
           if (!identityIsCurrent()) return;
-          markMoveInvitationAnswered();
-          dismiss();
+          answer();
           openMoveSheet({ hostId, hostName });
+        }}
+        onLater={() => {
+          if (identityIsCurrent()) answer();
+        }}
+      />,
+      {
+        id: MOVE_INVITATION_TOAST_ID,
+        description: null,
+        duration: startToastDuration(),
+        cancel: null,
+        onDismiss: () => {
+          if (identityIsCurrent()) answer();
+        },
+        // Off the screen, so it no longer holds the reminder back, and
+        // nothing the person said is recorded.
+        onAutoClose: () => {
+          if (identityIsCurrent()) markMoveInvitationAnswered();
         },
       },
-      cancel: {
-        label: "Not now",
-        onClick: () => {
-          if (!identityIsCurrent()) return;
-          markMoveInvitationAnswered();
-          dismiss();
-        },
-      },
-    });
-  }, [dismissed, dismiss, hostId, hostName, openMoveSheet]);
+    );
+  }, [answerInvitation, dismiss, hostId, hostName, openMoveSheet]);
   useEffect(() => {
     if (completedAt === null || dismissed) return;
     if (remaining === 0) return;
@@ -245,64 +249,5 @@ function StartToast(props: {
       toast.dismiss(id);
     };
   }, [completedAt, remaining, dismissed, dismiss, hostId]);
-  return null;
-}
-
-/**
- * Whether anything this computer's earlier upload held waits on a choice:
- * `pending` while its review is still being read, `clear` with no local host,
- * a host without the method, a first read that failed, or nothing held.
- */
-function useHeldOnThisComputer(
-  computer: ThisComputer,
-  enabled: boolean,
-): "held" | "clear" | "pending" {
-  const review = useEnvironmentReviewRead(
-    computer.client,
-    computer.hostId,
-    enabled,
-  );
-  if (!enabled || computer.hostId === null) return "clear";
-  if (review.supported === false) return "clear";
-  // A re-read that fails keeps the last answer, as the status does.
-  if (review.data === null) return review.isError ? "clear" : "pending";
-  return heldReviewEntries(review.data.entries).length > 0 ? "held" : "clear";
-}
-
-const HELD_TOAST_ID = "traycer-held-on-this-computer";
-
-function HeldOnThisComputerToast(props: { readonly computer: ThisComputer }) {
-  const dismissed = useRetrospectiveSheetStore(
-    (state) => state.heldToastDismissed,
-  );
-  const dismiss = useRetrospectiveSheetStore((state) => state.dismissHeldToast);
-  const openSheet = useRetrospectiveSheetStore((state) => state.openSheet);
-  const { hostId, hostName } = props.computer;
-  useEffect(() => {
-    if (dismissed || hostId === null) return;
-    let mounted = true;
-    toast("An earlier version shared this computer's settings", {
-      id: HELD_TOAST_ID,
-      // The verb is the toast's own action - `… · Review` - so there is no
-      // line under it repeating the word it is already pressing.
-      description: null,
-      duration: Infinity,
-      closeButton: true,
-      onDismiss: () => {
-        if (mounted) dismiss();
-      },
-      action: {
-        label: "Review",
-        onClick: () => {
-          dismiss();
-          openSheet({ hostId, hostName });
-        },
-      },
-    });
-    return () => {
-      mounted = false;
-      toast.dismiss(HELD_TOAST_ID);
-    };
-  }, [dismissed, hostId, hostName, dismiss, openSheet]);
   return null;
 }

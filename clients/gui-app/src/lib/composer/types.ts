@@ -195,11 +195,32 @@ export interface BrowserTabMentionEntry {
   readonly dormant: boolean;
 }
 
+/**
+ * A bot the person can see, as the agent composer's Tracy category lists it.
+ * Not an entity of the open Task: it is read from the standalone bots
+ * directory Home and the palette read, so its name agrees with theirs. The
+ * trunk agent's id rides along because the chip hands both ids to the agent,
+ * which cannot list bots.
+ */
+export interface BotMentionEntry {
+  readonly kind: "bot";
+  readonly id: string;
+  readonly botId: string;
+  readonly trunkChatId: string;
+  /** The bot's name where it stands alone (`standaloneBotName`). */
+  readonly label: string;
+  /** The name of the bot's environment. */
+  readonly description: string;
+  /** What else the root search finds the row by. */
+  readonly keywords: ReadonlyArray<string>;
+}
+
 export type MentionSuggestionEntry =
   | WorkspaceEntry
   | EpicMentionEntry
   | EpicTerminalMentionEntry
-  | BrowserTabMentionEntry;
+  | BrowserTabMentionEntry
+  | BotMentionEntry;
 
 export type ImageAttachment = {
   kind: "image";

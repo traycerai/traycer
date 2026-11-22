@@ -1704,8 +1704,10 @@ describe("the pick through the run toolbar store, as a sandbox's catalog answers
         harnessRow("claude", { available: true }),
       ],
       modelsHarnessId: "claude",
+      modelsProfileId: null,
       models: [model("claude", "claude-sonnet")],
       modelsLoaded: true,
+      modelsFailed: false,
       tuiOnly: false,
     });
 

@@ -1,4 +1,3 @@
-import { hostRowTitle } from "@/components/settings/host-scope/host-option-model";
 import { findHostOption } from "@/components/settings/host-scope/host-scope-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
@@ -11,6 +10,6 @@ import { stageFallbackHostLine } from "@/lib/sandboxes/sandbox-strings";
 export function useStageFallbackHostLine(hostId: string | null): string {
   const { hosts } = useHostOptions();
   const host = findHostOption(hosts, hostId);
-  const title = host === null ? null : hostRowTitle(host, true);
+  const title = host?.name ?? null;
   return stageFallbackHostLine(title === UNNAMED_HOST_LABEL ? null : title);
 }

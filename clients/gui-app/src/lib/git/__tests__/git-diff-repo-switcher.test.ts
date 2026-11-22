@@ -329,12 +329,30 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     });
 
     expect(model.trigger).toMatchObject({
-      label: "Workspace unavailable",
+      label: "Folder unavailable",
       secondaryLabel: "/missing",
       fileChangeCount: null,
       moduleChangeCount: null,
       unavailable: true,
       openTarget: { workspacePath: "/missing", hostId: "host-1" },
+    });
+  });
+
+  it("asks for a folder when nothing is selected", () => {
+    const model = buildGitDiffRepoSwitcherModel({
+      roots: [],
+      activeRootSubmodules: [],
+      selected: null,
+      searchQuery: "",
+    });
+
+    expect(model.trigger).toMatchObject({
+      label: "Select folder",
+      secondaryLabel: "Choose a bound folder",
+      fileChangeCount: null,
+      moduleChangeCount: null,
+      unavailable: false,
+      openTarget: null,
     });
   });
 

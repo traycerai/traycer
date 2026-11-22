@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -36,6 +37,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () => hostScopeFixture(scopeMocks.scope),
+    useHostScopeFor: () => hostScopeFixture(scopeMocks.scope),
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
   };
 });
 
@@ -49,6 +55,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useAddHostDialogStore.getState().closeDialog();
+  useSettingsHostScopeStore.getState().reset();
   scopeMocks.scope = {};
 });
 
@@ -247,8 +254,7 @@ describe("<AddHostDialog /> arrival", () => {
     expect(screen.getByRole("button", { name: "Set up host" })).not.toBeNull();
   });
 
-  it("opens the arrived host's Overview page", async () => {
-    const setHostId = vi.fn();
+  it("requests the arrived host before opening its Overview page", async () => {
     const newcomer = await hostOption({
       hostId: "host-new",
       name: "Office Linux",
@@ -259,14 +265,13 @@ describe("<AddHostDialog /> arrival", () => {
       hosts: [newcomer],
       isLoading: false,
       listsFailed: false,
-      setHostId,
     };
     useAddHostDialogStore.getState().openDialog([]);
 
     render(<AddHostDialog />);
     fireEvent.click(screen.getByRole("button", { name: "Set up host" }));
 
-    expect(setHostId).toHaveBeenCalledWith("host-new");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-new");
     expect(navigationMocks.navigateToSettingsSection).toHaveBeenCalledWith(
       "host",
     );
@@ -325,6 +330,13 @@ describe("<AddHostDialog /> setup instructions", () => {
     expect(steps[1].textContent).toContain("traycer login");
     // The step whose absence made the whole dialog unreachable.
     expect(steps[2].textContent).toContain("traycer host ensure");
+  });
+
+  it("states the CLI package's minimum Node version", () => {
+    render(<AddHostDialog />);
+
+    const prerequisite = screen.getByText(/Requires Node/).textContent;
+    expect(prerequisite).toBe("Requires Node 22.13.0 or newer.");
   });
 
   it("shows one installer command and switches it in place", async () => {

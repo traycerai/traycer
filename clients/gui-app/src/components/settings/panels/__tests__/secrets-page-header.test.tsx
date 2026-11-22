@@ -1,4 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentSecretV12,
@@ -7,6 +13,7 @@ import type {
 import {
   mountTeamPage,
   poolSource,
+  requireTeamCloudAuth,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -15,21 +22,27 @@ import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-setti
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => requireTeamHostClient(),
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => requireTeamHostClient(),
+    useHostBinding: () => ({
+      ...actual.useHostBinding(),
+      auth: requireTeamCloudAuth(),
+    }),
+  };
+});
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
   >()),
   useCloudChatViewerId: () => "user-me",
-}));
-// The configuration status chip reads the host runtime this suite does not
-// mount, and none of these cases is about it.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => <span data-testid="page-chip" />,
 }));
 
 afterEach(() => {
@@ -42,21 +55,30 @@ afterEach(() => {
 const TEAM_SUBTITLE =
   "Values and logins Acme's agents use, on its sandboxes without being seen.";
 
+async function expectTeamSubtitle(): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+  });
+}
+
 function secret(name: string): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: `sec-${name}`,
     name,
     kind: "api_key",
     protocol: null,
     destinations: ["api.example.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
   };
+}
+
+function providerSecret(name: string): EnvironmentSecretV12 {
+  return { ...secret(name), kind: "provider" };
 }
 
 /**
@@ -91,7 +113,7 @@ function renderPanel(options: {
           effectiveRole: role,
           kind: "team" as const,
           hostCount: 1,
-          providerHandle: null,
+          providerHandle: "handle-a",
         },
       ],
     }),
@@ -116,10 +138,55 @@ describe("the Secrets page header", () => {
       removed: [],
     });
 
-    const empty = await screen.findByTestId("secrets-empty");
-    expect(empty.textContent).toBe(TEAM_SUBTITLE);
-    expect(empty.textContent).not.toContain("On your computers");
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await screen.findByTestId("secrets-empty");
+    await waitFor(() => {
+      expect(screen.getByTestId("secrets-empty").textContent).toBe(
+        TEAM_SUBTITLE,
+      );
+    });
+    expect(screen.getByTestId("secrets-empty").textContent).not.toContain(
+      "On your computers",
+    );
+    await expectTeamSubtitle();
+  });
+
+  it("lists no provider key, and says what secrets are when only provider keys are stored", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
+
+    await screen.findByTestId("secrets-empty");
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
+    expect(screen.queryByTestId("secret-row")).toBeNull();
+    await expectTeamSubtitle();
+  });
+
+  it("lists the other secrets beside a provider key it leaves out", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY"), secret("STRIPE_KEY")],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
+
+    await screen.findByText("STRIPE_KEY");
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
+    expect(screen.getAllByTestId("secret-row")).toHaveLength(1);
+  });
+
+  it("names no provider key to a viewer, who reads None", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "viewer",
+      removed: [],
+    });
+
+    expect(await screen.findByText("No secrets.")).toBeTruthy();
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
   });
 
   it("shows the subtitle once there are secrets", async () => {
@@ -131,7 +198,7 @@ describe("the Secrets page header", () => {
     });
 
     await screen.findByText("OPENAI_API_KEY");
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await expectTeamSubtitle();
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
   });
 
@@ -147,7 +214,7 @@ describe("the Secrets page header", () => {
     // No authoritative answer yet: not "no secrets", and the failure line
     // does not say the subtitle, so the header does.
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await expectTeamSubtitle();
   });
 
   it("keeps an empty answer it already had, and the subtitle once, when a later read of the list fails", async () => {
@@ -164,8 +231,12 @@ describe("the Secrets page header", () => {
     await harness.queryClient.invalidateQueries();
 
     await screen.findByTestId("secrets-page-error");
-    expect(screen.getByTestId("secrets-empty").textContent).toBe(TEAM_SUBTITLE);
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await waitFor(() => {
+      expect(screen.getByTestId("secrets-empty").textContent).toBe(
+        TEAM_SUBTITLE,
+      );
+    });
+    await expectTeamSubtitle();
   });
 
   // NEW-154-24: a viewer read "Read-only" top right with the subtitle twice,
@@ -185,7 +256,7 @@ describe("the Secrets page header", () => {
     expect(
       screen.getAllByText("You can see Acme's settings but not change them."),
     ).toHaveLength(1);
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await expectTeamSubtitle();
   });
 
   it("lists a viewer's secrets and their states, and says None rather than the subtitle", async () => {
@@ -198,7 +269,7 @@ describe("the Secrets page header", () => {
 
     expect(await screen.findByText("No secrets.")).toBeTruthy();
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await expectTeamSubtitle();
   });
 
   it("shows a viewer a removal that is still waiting", async () => {
@@ -240,7 +311,7 @@ describe("the Secrets page header", () => {
     expect(document.body.textContent).not.toContain("does not resolve");
   });
 
-  it("puts Details in the header beside the chip, not in the page body", async () => {
+  it("puts Details in the header, not in the page body", async () => {
     renderPanel({
       secrets: [secret("OPENAI_API_KEY")],
       listError: { current: null },
@@ -249,13 +320,12 @@ describe("the Secrets page header", () => {
     });
 
     const page = await screen.findByTestId("secrets-page");
-    const details = await screen.findByRole("button", { name: "Details" });
+    const details = (
+      await screen.findAllByRole("button", { name: "Details" })
+    ).find((button) => button.closest("li") === null);
+    if (details === undefined) throw new Error("the page has no Details");
     const header = details.closest("header");
     if (header === null) throw new Error("Details is not inside a header");
-    expect(within(header).getByTestId("page-chip")).toBeTruthy();
-    expect(details.parentElement).toBe(
-      within(header).getByTestId("page-chip").parentElement,
-    );
     // Each secret row carries its own Details; what the body must not repeat
     // is the page's own, which belongs to the header.
     expect(

@@ -22,6 +22,7 @@ import {
 } from "@/lib/themes/theme-definition";
 import { cn } from "@/lib/utils";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { ThemeInspector } from "./theme-inspector";
 
 // The recovery controls stay readable even when a draft makes the application's text invisible.
@@ -198,6 +199,7 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
   const setDraft = useThemeLibraryStore((state) => state.setDraft);
   const cancelDraft = useThemeLibraryStore((state) => state.cancelDraft);
   const error = useThemeLibraryStore((state) => state.error);
+  const signOutQuestionOpen = useSignOutConfirmStore((state) => state.open);
   const [advanced, setAdvanced] = useState(false);
   const [query, setQuery] = useState("");
   const [minimized, setMinimized] = useState(false);
@@ -406,11 +408,13 @@ export function ThemeEditorPanel({ draft }: { draft: ThemeDefinition }) {
       <div
         ref={panel}
         data-theme-editor
+        inert={signOutQuestionOpen}
         role="dialog"
         aria-modal={false}
         aria-label="Theme editor"
         className={cn(
           "fixed right-safe-right-gutter bottom-safe-bottom-gutter z-110 flex w-[min(90vw,var(--container-sm))] max-w-safe-dvw flex-col overflow-hidden rounded-xl border shadow-xl",
+          { invisible: signOutQuestionOpen },
           minimized
             ? "h-auto"
             : "max-h-[min(75svh,calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem))]",

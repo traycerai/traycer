@@ -140,6 +140,7 @@ export interface PlatformBridgeSurface {
   featureSettings: {
     get(): Promise<FeatureSettingsSnapshot>;
     setAgentRolesEnabled(enabled: boolean): Promise<FeatureSettingsSnapshot>;
+    setAgentFeedbackEnabled(enabled: boolean): Promise<FeatureSettingsSnapshot>;
   };
   fonts: {
     list(): Promise<readonly InstalledFont[]>;
@@ -366,6 +367,11 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
       setAgentRolesEnabled: (enabled) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.agentRolesEnabledSet,
+          enabled,
+        ) as Promise<FeatureSettingsSnapshot>,
+      setAgentFeedbackEnabled: (enabled) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.agentFeedbackEnabledSet,
           enabled,
         ) as Promise<FeatureSettingsSnapshot>,
     },

@@ -12,8 +12,10 @@ import { RPC_ERROR_CODES } from "@traycer/protocol/framework/versioned-rpc-types
 import {
   hostInventorySubscribeServerFrameSchemaV10,
   hostInventorySubscribeServerFrameSchemaV11,
+  hostInventorySubscribeServerFrameSchemaV12,
   hostInventorySubscribeV10,
   hostInventorySubscribeV11,
+  hostInventorySubscribeV12,
 } from "../host-inventory";
 import { hostStreamRpcRegistry } from "../registry";
 import { HOST_LIST_ITEM_GOLDEN_FIXTURE } from "../__fixtures__/host-status-golden-fixture";
@@ -27,6 +29,14 @@ const SANDBOX_ROW = {
   profile: "agent",
 } as const;
 
+/** A team's own computer (T141): a team-owned row of kind `machine`. */
+const MACHINE_ROW = {
+  ...HOST_LIST_ITEM_GOLDEN_FIXTURE,
+  hostId: "machine-host-id",
+  kind: "machine",
+  owner: { kind: "team", id: "team-1", name: "Acme" },
+} as const;
+
 function snapshot(hosts: readonly object[]) {
   return {
     kind: "snapshot",
@@ -38,11 +48,31 @@ function snapshot(hosts: readonly object[]) {
 }
 
 describe("host.hostInventory.subscribe minors", () => {
-  it("registers 1.1 as the latest minor with 1.0 still installed", () => {
+  it("registers 1.2 as the latest minor with 1.0 and 1.1 still installed", () => {
     const line = hostStreamRpcRegistry["host.hostInventory.subscribe"][1];
-    expect(line.latestMinor).toBe(1);
+    expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(hostInventorySubscribeV10);
     expect(line.versions[1].contract).toBe(hostInventorySubscribeV11);
+    expect(line.versions[2].contract).toBe(hostInventorySubscribeV12);
+  });
+
+  it("only 1.2 carries a team's own computer: 1.0 and 1.1 refuse a machine row", () => {
+    const frame = snapshot([
+      HOST_LIST_ITEM_GOLDEN_FIXTURE,
+      SANDBOX_ROW,
+      MACHINE_ROW,
+    ]);
+    expect(hostInventorySubscribeServerFrameSchemaV12.parse(frame)).toEqual(
+      frame,
+    );
+    expect(
+      hostInventorySubscribeServerFrameSchemaV11.safeParse(frame).success,
+    ).toBe(false);
+    expect(
+      hostInventorySubscribeServerFrameSchemaV10.safeParse(
+        snapshot([{ ...HOST_LIST_ITEM_GOLDEN_FIXTURE, kind: "machine" }]),
+      ).success,
+    ).toBe(false);
   });
 
   it("1.0 stays frozen: a personal row parses, a row carrying any sandbox field does not", () => {
@@ -126,14 +156,14 @@ describe("host.hostInventory.subscribe against the released baseline", () => {
     expect(current.schemas["1.0"]).toEqual(released.schemas["1.0"]);
   });
 
-  it("stays on major 1 and adds 1.1 as a new installed minor", () => {
+  it("stays on major 1 and adds 1.1 and 1.2 as new installed minors", () => {
     const current = live.stream[METHOD];
     expect(current.canonical.major).toBe(
       baseline.stream[METHOD].canonical.major,
     );
     expect(baseline.stream[METHOD].majors["1"].installedMinors).toEqual([0]);
-    expect(current.majors["1"].installedMinors).toEqual([0, 1]);
-    expect(current.majors["1"].latestMinor).toBe(1);
+    expect(current.majors["1"].installedMinors).toEqual([0, 1, 2]);
+    expect(current.majors["1"].latestMinor).toBe(2);
   });
 
   it("does not let the 1.1 row leak into the 1.0 frame schema", () => {
@@ -142,5 +172,12 @@ describe("host.hostInventory.subscribe against the released baseline", () => {
       "sandboxState",
     );
     expect(JSON.stringify(current.schemas["1.1"])).toContain("sandboxState");
+  });
+
+  it("does not let the machine kind leak into the 1.0 or 1.1 frame schemas", () => {
+    const current = live.stream[METHOD];
+    expect(JSON.stringify(current.schemas["1.0"])).not.toContain('"machine"');
+    expect(JSON.stringify(current.schemas["1.1"])).not.toContain('"machine"');
+    expect(JSON.stringify(current.schemas["1.2"])).toContain('"machine"');
   });
 });

@@ -1,6 +1,12 @@
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { describe, expect, it } from "vitest";
-import { profileEligibilityToggleDisabledReason } from "@/components/providers/provider-profile-model";
+import {
+  profileEligibilityToggleDisabledReason,
+  profileInventorySummary,
+} from "@/components/providers/provider-profile-model";
+
+type CredentialHome = NonNullable<ProviderProfile["credentialHome"]>;
+type Standing = NonNullable<CredentialHome["standing"]>;
 
 function buildProfile(overrides: Partial<ProviderProfile>): ProviderProfile {
   return {
@@ -25,6 +31,142 @@ function buildProfile(overrides: Partial<ProviderProfile>): ProviderProfile {
     ...overrides,
   };
 }
+
+function credentialHome(standing: Partial<Standing>): CredentialHome {
+  return {
+    homeAddress: "synthetic-home",
+    bindingVersion: 1,
+    materialRevision: 1,
+    custodyVersion: 1,
+    custodyClass: "self-sufficient",
+    environmentPresence: null,
+    handoffEnvironmentId: null,
+    materialFingerprint: "synthetic-material",
+    observation: null,
+    materialMatchesBinding: "yes",
+    standing: {
+      material: "usable",
+      repairDeadline: null,
+      familyVersion: null,
+      authority: null,
+      cause: null,
+      observation: { source: "custodian", status: "answered", capturedAt: 1 },
+      ...standing,
+    },
+  };
+}
+
+function profileWithStanding(
+  standing: Partial<Standing>,
+  overrides: Partial<ProviderProfile>,
+): ProviderProfile {
+  return buildProfile({
+    credentialHome: credentialHome(standing),
+    ...overrides,
+  });
+}
+
+describe("profileInventorySummary", () => {
+  it.each([
+    ["stale", "Stale"],
+    ["rejected", "Credential rejected"],
+    ["refused-by-provider", "Refused by provider"],
+  ] as const)(
+    "badges %s standing and moves its cause to the detail",
+    (material, badge) => {
+      expect(
+        profileInventorySummary(
+          profileWithStanding({ material, cause: "plan lapsed" }, {}),
+        ),
+      ).toEqual({ badge, detail: "plan lapsed" });
+    },
+  );
+
+  it("badges Unknown with the cause when the observation is unknown or the material is null", () => {
+    const unknownObservation = profileWithStanding(
+      {
+        cause: "probe timed out",
+        observation: { source: "custodian", status: "unknown", capturedAt: 1 },
+      },
+      {},
+    );
+    expect(profileInventorySummary(unknownObservation)).toEqual({
+      badge: "Unknown",
+      detail: "probe timed out",
+    });
+    expect(
+      profileInventorySummary(
+        profileWithStanding({ material: null, cause: null }, {}),
+      ),
+    ).toEqual({ badge: "Unknown", detail: null });
+  });
+
+  it("does not repeat the standing head word when there is no cause", () => {
+    expect(
+      profileInventorySummary(
+        profileWithStanding({ material: "signed-out", cause: null }, {}),
+      ),
+    ).toEqual({ badge: "Signed out", detail: null });
+  });
+
+  it("uses the auth vocabulary and no detail for a usable standing", () => {
+    expect(profileInventorySummary(profileWithStanding({}, {}))).toEqual({
+      badge: "Signed in",
+      detail: null,
+    });
+  });
+
+  it("falls back to the auth vocabulary without a credential standing", () => {
+    expect(
+      profileInventorySummary(
+        buildProfile({
+          auth: {
+            status: "unauthenticated",
+            badgeText: null,
+            label: null,
+            detail: null,
+          },
+        }),
+      ),
+    ).toEqual({ badge: "Signed out", detail: null });
+  });
+
+  it("keeps the revoking and unreadable notices whole", () => {
+    expect(
+      profileInventorySummary(
+        buildProfile({
+          presence: { kind: "revoking", cause: "signed-out-by-person" },
+        }),
+      ),
+    ).toEqual({ badge: "Signed in", detail: "Disconnecting: signed out." });
+    expect(
+      profileInventorySummary(
+        buildProfile({
+          readability: { kind: "unreadable", reason: "bad row" },
+        }),
+      ),
+    ).toEqual({ badge: "Signed in", detail: "Unreadable profile: bad row" });
+  });
+
+  it("adds no copy for an absent environment presence", () => {
+    expect(
+      profileInventorySummary(
+        buildProfile({
+          credentialHome: {
+            ...credentialHome({}),
+            environmentPresence: {
+              scope: "environment",
+              environmentId: "env-1",
+              state: "absent",
+              retainedReason: null,
+              cause: null,
+            },
+          },
+        }),
+      ),
+    ).toEqual({ badge: "Signed in", detail: null });
+  });
+});
 
 /**
  * The host-gating redesign: a provider that is off holds every profile

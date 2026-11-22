@@ -255,7 +255,7 @@ export function SimulatorCreatePickerBody(props: {
   const { openTile } = useEpicTileNavigation();
   const place = useCallback(
     (ref: SimulatorTileRef) => {
-      openTile(tileIntent(ref, { tabId }, "explicit", "direct_ui"));
+      openTile(tileIntent(ref, { tabId }, "explicit", "direct_ui"), "user");
     },
     [openTile, tabId],
   );

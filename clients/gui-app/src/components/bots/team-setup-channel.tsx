@@ -1,3 +1,5 @@
+import { TeamComputerUnattendedSetup } from "@/components/settings/team/team-computer-unattended-setup";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -27,6 +29,7 @@ import { ChatBotAppPost } from "@/components/chat/chat-bot-message";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import type { BotOnboardingArrival } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   SandboxCreateError,
@@ -37,6 +40,9 @@ import {
   type SandboxDefaultsRead,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useEnvironmentBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
+import { usePickedTeamHandle } from "@/components/settings/environment/team-pick-label";
+import { AddComputerDialog } from "@/components/settings/team/add-computer-dialog";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import {
   configurationStageShape,
@@ -61,10 +67,12 @@ export function TeamSetupChannel(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   /** The surface's host, whose bots the title's picker lists. */
   readonly hostId: string;
+  /** The surface's level-2 form, which the title follows. */
+  readonly level2: MobileLevel2Form | null;
   /** The surface's Threads, a row of the title's picker as of its column. */
   readonly threadsView: BotThreadsViewState;
 }): ReactNode {
-  const { setup, hostId, threadsView } = props;
+  const { setup, hostId, level2, threadsView } = props;
   // Re-read on the shared on-screen cadence while the person can see the
   // setup and it still needs a host. The team's host creating the bot rings
   // the team's room, which reaches this channel's bot list only while this
@@ -82,10 +90,12 @@ export function TeamSetupChannel(props: {
     cacheKeyIdentity: undefined,
     options: { poll: paneVisible && !settled },
   });
+  const setupState = read.data?.setup?.state;
   if (
     !settled &&
     read.data !== undefined &&
-    read.data.setup?.state !== "needs_host"
+    setupState !== "needs_host" &&
+    setupState !== "host_joining"
   ) {
     setSettled(true);
   }
@@ -104,15 +114,20 @@ export function TeamSetupChannel(props: {
         data-testid="team-setup-channel"
         className="flex min-h-0 min-w-0 flex-1 flex-col md:bg-canvas"
       >
-        <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
+        <header
+          data-testid="team-setup-header"
+          className="@container/title-strip flex shrink-0 items-center gap-2 px-4 pt-3 pb-2"
+        >
           <BotAvatar size="sm" />
           <BotChannelTitle
+            level2={level2}
             title={setup.title}
             activeBotId={setup.botId}
             hostId={hostId}
             threadsView={threadsView}
           />
           <MainBotBadge testId="bot-tab-main" tone="muted" />
+          <TracyPlaybackSlot />
         </header>
         {/* The post sits at the bottom, as a channel's newest row does; its
               top margin, not the column's end alignment, puts it there, so a
@@ -128,6 +143,7 @@ export function TeamSetupChannel(props: {
                 live={{
                   environmentId: setup.environmentId,
                   teamName: setup.teamName,
+                  machineJoining: setupState === "host_joining",
                 }}
               />
             </ChatBotAppPost>
@@ -136,7 +152,7 @@ export function TeamSetupChannel(props: {
         <BotMessageComposerUnavailable
           placeholder={`Message ${setup.title}`}
           label={`Message ${setup.title}`}
-          reason={`${setup.title} can reply once the team has a host.`}
+          reason={`${setup.title} can reply once the team has a computer.`}
           testId="team-setup-composer"
         />
       </section>
@@ -148,7 +164,16 @@ export function TeamSetupChannel(props: {
 interface TeamSetupLive {
   readonly environmentId: string;
   readonly teamName: string;
+  /**
+   * A computer of the team's own holds the team's host (T141): its token is
+   * out, or it joined and its bot is not created yet. The onboarding read
+   * says so for every member, so no one adds a second host meanwhile.
+   */
+  readonly machineJoining: boolean;
 }
+
+/** The line under a host button while the team's own computer is joining. */
+const MACHINE_JOINING_NOTE = "A computer is joining the team.";
 
 /**
  * The setup post: what the team's main bot is, that the team needs a host,
@@ -165,10 +190,7 @@ function TeamSetupPostBody(props: {
         set up bots for each area: a channel per bot, with the work and its
         reports in it.
       </p>
-      <p>
-        Before I can run, the team needs a host: a machine where its bots
-        execute.
-      </p>
+      <p>Before I can run, the team needs a computer for its bots.</p>
       <TeamHostOptionsCard live={props.live} />
     </div>
   );
@@ -177,12 +199,12 @@ function TeamSetupPostBody(props: {
 /**
  * The ways a team gets a host its bots can run on (decision 127): cloud for
  * the team, which starts the team's kept sandbox (decision 130), or a team
- * host on a machine, which cannot run a team's bots yet, so its button is
- * drawn and does nothing, with a line saying so.
+ * computer a member adds at the keyboard.
  */
 function TeamHostOptionsCard(props: {
   readonly live: TeamSetupLive | null;
 }): ReactNode {
+  const teamHandle = usePickedTeamHandle(props.live?.environmentId ?? "");
   const { live } = props;
   return (
     <div
@@ -190,7 +212,7 @@ function TeamHostOptionsCard(props: {
       data-testid="team-host-options"
     >
       <h2 className="text-ui-sm font-semibold text-foreground">
-        Give the team a host
+        Give the team a computer
       </h2>
       <TeamHostOption
         title="Enable cloud for the team"
@@ -200,6 +222,7 @@ function TeamHostOptionsCard(props: {
             <EnableTeamCloudAction
               environmentId={live.environmentId}
               teamName={live.teamName}
+              machineJoining={live.machineJoining}
               testId="team-host-option-cloud"
             />
           )
@@ -207,12 +230,18 @@ function TeamHostOptionsCard(props: {
         testId="team-host-option-cloud"
       />
       <TeamHostOption
-        title="Create a team host on a machine"
-        description="A machine the team keeps running, signed in as the team."
+        title="Add a computer"
+        description="A computer the team can open and run agents on."
         action={
-          live === null ? null : (
-            <TeamHostOptionUnavailable
-              action="Create team host"
+          live === null || teamHandle === null ? null : (
+            <AddComputerDialog
+              teamName={live.teamName}
+              teamSelector={teamHandle}
+              unattended={
+                <TeamComputerUnattendedSetup
+                  environmentId={live.environmentId}
+                />
+              }
               testId="team-host-option-machine"
             />
           )
@@ -239,36 +268,6 @@ function TeamHostOption(props: {
         <p className="text-ui-xs text-muted-foreground">{props.description}</p>
       </div>
       {props.action}
-    </div>
-  );
-}
-
-/** An option with nothing behind it yet: its button, disabled, and why. */
-function TeamHostOptionUnavailable(props: {
-  readonly action: string;
-  readonly testId: string;
-}): ReactNode {
-  const { testId } = props;
-  const noteId = useId();
-  return (
-    <div className="flex min-w-0 flex-col items-start gap-1">
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled
-        aria-describedby={noteId}
-        data-testid={`${testId}-action`}
-      >
-        {props.action}
-      </Button>
-      <p
-        id={noteId}
-        className="text-ui-xs text-muted-foreground"
-        data-testid={`${testId}-unavailable`}
-      >
-        Not available yet.
-      </p>
     </div>
   );
 }
@@ -331,6 +330,7 @@ function teamStageShape(
  */
 function enableTeamCloudBlocked(input: {
   readonly environmentId: string;
+  readonly machineJoining: boolean;
   readonly models: UseQueryResult<ReadonlyArray<GuiAgentModelOption>>;
   readonly sandboxes: UseQueryResult<SandboxListResponse | null>;
   readonly unlisted: string | null;
@@ -338,6 +338,7 @@ function enableTeamCloudBlocked(input: {
   readonly shape: StageShape | null | undefined;
 }): EnableTeamCloudBlocked | null {
   const { models, sandboxes, catalogue, shape } = input;
+  if (input.machineJoining) return { note: MACHINE_JOINING_NOTE };
   if (models.status === "error") return { note: models.error.message };
   if (models.data === undefined) return { note: null };
   if (models.data.length === 0) {
@@ -379,6 +380,7 @@ function enableTeamCloudBlocked(input: {
 function EnableTeamCloudAction(props: {
   readonly environmentId: string;
   readonly teamName: string;
+  readonly machineJoining: boolean;
   readonly testId: string;
 }): ReactNode {
   const { environmentId, testId } = props;
@@ -387,16 +389,19 @@ function EnableTeamCloudAction(props: {
   const catalogue = useSandboxCatalogue(true);
   const defaults = useSandboxDefaults([environmentId]).get(environmentId);
   const sandboxes = useSandboxList();
-  const create = useSandboxCreate("inline");
+  const create = useSandboxCreate(
+    "inline",
+    useEnvironmentBillingAdmin(environmentId),
+  );
   // Held outside the card: a create outlives the card that sent it, and the
   // list's refresh answers after the create settles, so a card mounted in
   // between must still know the team's sandbox is coming.
   const pressed = useTeamCloudCreate(environmentId, sandboxes.data);
   const pending = pressed?.pending === true;
-
   const shape = teamStageShape(catalogue.data, defaults);
   const blocked = enableTeamCloudBlocked({
     environmentId,
+    machineJoining: props.machineJoining,
     models,
     sandboxes,
     unlisted: pressed?.acceptedSandboxId ?? null,
@@ -536,4 +541,5 @@ const TEAM_SETUP_ARRIVAL_LINES: Readonly<
   Record<BotOnboardingArrival["kind"], (teamName: string) => string>
 > = {
   cloud: (teamName) => `Cloud enabled for ${teamName} · bots run on sandboxes`,
+  machine: (teamName) => `${teamName}'s computer joined · bots run on it`,
 };

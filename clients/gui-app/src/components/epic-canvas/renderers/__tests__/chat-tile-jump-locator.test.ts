@@ -132,6 +132,7 @@ function toolSegment(input: {
     imageResults: [],
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
   };
 }
 

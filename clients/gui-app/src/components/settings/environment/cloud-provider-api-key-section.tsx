@@ -1,0 +1,229 @@
+import { useId, useRef, useState, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import { providerApiKeyRefusal } from "@traycer/protocol/host/provider-api-key-issuer";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  isProviderKeyProviderId,
+  type ProviderKeyProviderId,
+} from "@traycer-clients/shared/host-client/provider-api-key-change";
+import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { useCloudProviderApiKeyMutation } from "@/hooks/providers/use-cloud-provider-api-key-mutation";
+import type { CloudProviderKeyScope } from "@/hooks/providers/use-cloud-provider-api-key-query";
+import { recordKeyCustodyLine } from "@/lib/providers/provider-key-custody";
+import { ConfigurationReadFailed } from "./team-read-failed";
+import { useConfigurationSource } from "./configuration-source";
+
+/**
+ * Where a saved key goes, only when the window's computer runs this
+ * environment and keeps the provider's key in its record: the computer's own
+ * `recordEnvironmentId`, absent on an older computer.
+ */
+function useRecordKeyCustodyLine(
+  environmentId: string,
+  providerId: ProviderKeyProviderId,
+): string | null {
+  const source = useConfigurationSource();
+  const providers = useProvidersList({ enabled: true, subscribed: true });
+  const environments = useEnvironmentListQuery(true);
+  const row = providers.data?.providers.find(
+    (provider) => provider.providerId === providerId,
+  );
+  if (row?.apiKey.recordEnvironmentId !== environmentId) return null;
+  const teamLabel = environments.data?.environments.find(
+    (environment) => environment.environmentId === environmentId,
+  )?.label;
+  const personal =
+    source.kind === "pool" && source.configuration === "personal";
+  return recordKeyCustodyLine(
+    providerId,
+    personal ? "Personal" : (teamLabel ?? null),
+  );
+}
+
+export function CloudProviderApiKeySection(props: {
+  readonly scope: CloudProviderKeyScope;
+  readonly providerId: ProviderId;
+  readonly query: UseQueryResult<EnvironmentProfileRecords, HostRpcError>;
+}): ReactNode {
+  if (
+    props.scope.environmentId === "" ||
+    !isProviderKeyProviderId(props.providerId)
+  )
+    return null;
+  return (
+    <CloudProviderApiKeyField
+      key={`${props.scope.viewerId}:${props.scope.identityGeneration}:${props.scope.environmentId}:${props.providerId}`}
+      scope={props.scope}
+      providerId={props.providerId}
+      query={props.query}
+    />
+  );
+}
+
+function CloudProviderApiKeyField(props: {
+  readonly scope: CloudProviderKeyScope;
+  readonly providerId: ProviderKeyProviderId;
+  readonly query: UseQueryResult<EnvironmentProfileRecords, HostRpcError>;
+}): ReactNode {
+  const inputId = useId();
+  const [draft, setDraft] = useState("");
+  const submitted = useSubmittedSecretInput<string>(
+    "Couldn't save the API key.",
+  );
+  const outstanding = useRef(false);
+  const mutation = useCloudProviderApiKeyMutation(
+    props.scope,
+    props.providerId,
+    submitted.read,
+    () => {
+      submitted.clear();
+      outstanding.current = false;
+      setDraft("");
+    },
+  );
+  const custodyLine = useRecordKeyCustodyLine(
+    props.scope.environmentId,
+    props.providerId,
+  );
+  const read = useBoundedRead(props.query);
+  const list = props.query.isError ? undefined : props.query.data;
+  if (list?.profileSyncEnabled === false) return null;
+  if (read.failed)
+    return <ConfigurationReadFailed page="keys" onRetry={read.retry} />;
+  if (list === undefined) return <MutedAgentSpinner />;
+  const configured = list.providerKeys.some(
+    (record) =>
+      record.providerId === props.providerId && record.state === "live",
+  );
+  const refusal = providerApiKeyRefusal(props.providerId, draft);
+  const disabled = !props.scope.canEdit || mutation.isPending;
+  const pendingAction = mutation.isPending ? mutation.variables.action : null;
+  const change = (action: "set" | "clear"): void => {
+    if (
+      outstanding.current ||
+      disabled ||
+      (action === "set" && (draft.trim() === "" || refusal !== null))
+    )
+      return;
+    outstanding.current = true;
+    if (action === "set") submitted.set(draft.trim());
+    mutation.mutate({ action });
+  };
+  return (
+    <CloudProviderApiKeyControls
+      inputId={inputId}
+      providerId={props.providerId}
+      configured={configured}
+      draft={draft}
+      onDraft={setDraft}
+      refusal={refusal}
+      disabled={disabled}
+      pendingAction={pendingAction}
+      onChange={change}
+      custodyLine={custodyLine}
+    />
+  );
+}
+
+/** The field's markup: what the field above decided, drawn. */
+function CloudProviderApiKeyControls(props: {
+  readonly inputId: string;
+  readonly providerId: ProviderKeyProviderId;
+  readonly configured: boolean;
+  readonly draft: string;
+  readonly onDraft: (draft: string) => void;
+  readonly refusal: string | null;
+  readonly disabled: boolean;
+  readonly pendingAction: "set" | "clear" | null;
+  readonly onChange: (action: "set" | "clear") => void;
+  readonly custodyLine: string | null;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <label
+          htmlFor={props.inputId}
+          className="text-ui-sm font-medium text-foreground"
+        >
+          API key
+        </label>
+        <span className="text-ui-xs text-muted-foreground">
+          {props.configured ? "Key set" : "Not set"}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          id={props.inputId}
+          type="password"
+          autoComplete="off"
+          className="w-full"
+          placeholder={
+            props.configured
+              ? "Replace stored key…"
+              : `Paste your ${PROVIDER_DISPLAY_NAMES[props.providerId]} API key`
+          }
+          value={props.draft}
+          onChange={(event) => props.onDraft(event.target.value)}
+          disabled={props.disabled}
+          aria-invalid={props.refusal !== null}
+          aria-describedby={
+            props.refusal === null ? undefined : `${props.inputId}-refusal`
+          }
+          onKeyDown={(event) => {
+            if (event.key === "Enter") props.onChange("set");
+          }}
+          font="mono"
+          size="sm"
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => props.onChange("set")}
+          disabled={
+            props.disabled ||
+            props.draft.trim() === "" ||
+            props.refusal !== null
+          }
+        >
+          {props.pendingAction === "set" ? <MutedAgentSpinner /> : null}
+          Save
+        </Button>
+        {props.configured ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => props.onChange("clear")}
+            disabled={props.disabled}
+          >
+            {props.pendingAction === "clear" ? <MutedAgentSpinner /> : null}
+            Clear
+          </Button>
+        ) : null}
+      </div>
+      <p
+        id={`${props.inputId}-refusal`}
+        role="alert"
+        hidden={props.refusal === null}
+        className="text-ui-xs text-destructive"
+      >
+        {props.refusal}
+      </p>
+      {props.custodyLine === null ? null : (
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {props.custodyLine}
+        </p>
+      )}
+    </div>
+  );
+}

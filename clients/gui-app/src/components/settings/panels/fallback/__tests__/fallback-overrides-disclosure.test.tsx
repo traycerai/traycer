@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("FallbackOverridesMatrix disclosure", () => {
-  it("no longer carries the global all-off paragraph or the chip legend; that guidance is contextual to an open row", () => {
+  it("shows the problem summaries at rest without Customize or a chip legend", () => {
     render(
       <FallbackOverridesMatrix
         policy={createDefaultFallbackPolicy()}
@@ -37,7 +37,8 @@ describe("FallbackOverridesMatrix disclosure", () => {
     expect(
       screen.queryByRole("button", { name: /Per-failure overrides/i }),
     ).toBeNull();
-    // Overview is visible with no click: every problem is listed.
+    expect(screen.getByText("5 problems follow the main plan")).toBeTruthy();
     expect(screen.getAllByTestId(/^fallback-override-row-/)).toHaveLength(5);
+    expect(screen.queryByRole("button", { name: "Customize" })).toBeNull();
   });
 });

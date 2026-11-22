@@ -8,23 +8,12 @@ import {
   type HostPidMetadata,
 } from "../host/pid-metadata";
 
-// Bounded, purely-local health probe `commands/host-update.ts` runs after
-// the install-dir swap + service restart to decide whether the new host
-// is actually alive before it deletes the update-progress marker - and,
-// on failure, whether to roll back to the previous version.
-//
-// Deliberately narrower than Doctor's `probeHostRpc` (`doctor/engine.ts`):
-// it never resolves auth credentials, never opens an authenticated RPC
-// round-trip, and never talks to anything but 127.0.0.1. That is the
-// binary-health / coordination-server(CS)-reachability separation the
-// rollback decision depends on - a CS blip (or an auth/token-refresh
-// hiccup, which would otherwise dial `authnBaseUrl` on an UNAUTHORIZED
-// retry) must never look like "the new binary is broken" and trigger an
-// unnecessary rollback. This module makes ZERO network calls beyond a
-// loopback TCP dial: it reads local pid metadata, checks the pid is
-// alive, and opens a raw TCP connection to the host's own loopback port.
-// It does not import `internal/host-rpc.ts`, `internal/host-auth.ts`, or
-// anything that could reach `authnBaseUrl` / the coordination server.
+// Bounded local process/endpoint readiness. Binary-health callers pass null
+// for checkReadiness: a cloud or credential failure must never be mistaken
+// for a broken binary. Those calls read pid metadata, check process identity
+// and dial only the loopback port, without authenticated RPC or cloud reads.
+// A transfer can additionally require its binding on the replacement host;
+// its supplied predicate shares this probe's existing budget and retry slot.
 
 export interface HealthProbeResult {
   readonly healthy: boolean;
@@ -44,6 +33,9 @@ export interface HealthProbeOptions {
   readonly checkProcessAlive: ((pid: number) => boolean) | null;
   readonly checkTcpReachable:
     | ((host: string, port: number) => Promise<boolean>)
+    | null;
+  readonly checkReadiness:
+    | ((metadata: HostPidMetadata, remainingMs: number) => Promise<boolean>)
     | null;
   // Total wall-clock budget across all retries. `null` uses the default
   // (45s, inside the ticket's suggested 30-60s window).
@@ -79,6 +71,8 @@ export async function probeHostHealth(
       opts.environment,
       checkProcessAlive,
       checkTcpReachable,
+      opts.checkReadiness,
+      deadline,
     );
     if (lastResult.healthy) {
       logger.info("Host update health probe succeeded", {
@@ -108,6 +102,8 @@ async function attemptOnce(
   environment: Environment,
   checkProcessAlive: (metadata: HostPidMetadata) => boolean,
   checkTcpReachable: (host: string, port: number) => Promise<boolean>,
+  checkReadiness: HealthProbeOptions["checkReadiness"],
+  deadline: number,
 ): Promise<HealthProbeResult> {
   const metadata = await readHostPidMetadata(environment);
   if (metadata === null) {
@@ -137,6 +133,12 @@ async function attemptOnce(
       healthy: false,
       detail: `host loopback port ${port} did not accept a TCP connection`,
     };
+  }
+  if (
+    checkReadiness !== null &&
+    !(await checkReadiness(metadata, Math.max(0, deadline - Date.now())))
+  ) {
+    return { healthy: false, detail: "host has not confirmed readiness" };
   }
   return {
     healthy: true,

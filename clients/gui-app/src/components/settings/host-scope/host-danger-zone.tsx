@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import type { TraycerRemoved } from "@traycer-clients/shared/platform/runner-host";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { toast } from "sonner";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -35,6 +36,12 @@ export function HostDangerZone(props: {
   if (scope.host === null) return null;
   if (scope.host.isLocalMachine && hostManagement === null) return null;
   if (!scope.host.isLocalMachine && !scope.host.registered) return null;
+  if (
+    !scope.host.isLocalMachine &&
+    scope.host.sandbox === null &&
+    isTeamOwnedHost(scope.host)
+  )
+    return null;
   // Both removal paths stay available when the host cannot answer RPCs.
   // Local uninstall uses the CLI bridge; remote account removal writes to the
   // account. File edit snapshots are host RPC and now live in the Data tab.
@@ -51,6 +58,16 @@ export function HostDangerZone(props: {
   );
 }
 
+function isTeamOwnedHost(host: HostScopeOption): boolean {
+  const entry = host.entry;
+  const owner =
+    host.item?.owner ??
+    (entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.owner : null);
+  // Ownership is independent of lifecycle; explicit owners take precedence.
+  // The machine kind identifies a team computer when owner details are absent.
+  return owner === null ? host.kind === "machine" : owner.kind === "team";
+}
+
 /**
  * Whichever removal verb this host actually has.
  *
@@ -64,8 +81,8 @@ export function HostDangerZone(props: {
  * end, so the row would be a destructive control with nothing behind it.
  *
  * A sandbox is never removed here: its membership follows its lifecycle, and
- * the account refuses the removal. The row keeps its label, so a search for
- * "remove" still lands on it, and says where the sandbox is removed instead.
+ * the account refuses the removal. A short instruction points to the header
+ * menu that owns sandbox destruction.
  */
 function HostRemovalRow(props: {
   readonly host: HostScopeOption;
@@ -76,15 +93,12 @@ function HostRemovalRow(props: {
   if (!host.registered) return null;
   if (host.sandbox !== null) {
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.removeFromAccount}
-        status={
-          <span data-testid="settings-remove-host-sandbox-managed">
-            Managed from its sandbox card.
-          </span>
-        }
-        control={null}
-      />
+      <p
+        className="px-5 py-4 text-ui-sm text-muted-foreground"
+        data-testid="settings-remove-host-sandbox-managed"
+      >
+        To destroy this sandbox, use More in the header.
+      </p>
     );
   }
   // Keyed by host id so a scope change REMOUNTS the row. Passing the new id

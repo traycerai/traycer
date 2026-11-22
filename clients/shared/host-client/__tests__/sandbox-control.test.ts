@@ -19,6 +19,7 @@ import {
   ensureSandboxAwake,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   isSandboxAsleep,
   isSandboxFrozenInEffect,
@@ -33,6 +34,7 @@ import {
   type SandboxVerbFetchResult,
   type SandboxWakeBudget,
 } from "../sandbox-control";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
@@ -61,7 +63,7 @@ const OLDER_SUMMARY_BODY = {
   id: "sbx_1",
   hostId: "host-1",
   kind: "agent",
-  provider: "tensorlake",
+  provider: "firecracker",
   region: "us-east",
   os: "linux",
   cpus: 2,
@@ -322,21 +324,68 @@ describe("runSandboxVerbViaHttp", () => {
     });
   });
 
-  it("reads 401 and 403 as unauthorized, whatever the body says", async () => {
-    for (const status of [401, 403]) {
-      stubFetch(async () => jsonResponse(status, { code: "sandbox_busy" }));
-      expect(
-        await runSandboxVerbViaHttp(
-          BASE,
-          BEARER,
-          null,
-          "sbx_1",
-          "stop",
-          null,
-          VERB_TIMEOUT_MS,
-        ),
-      ).toEqual({ kind: "unauthorized" });
-    }
+  it("reads 401 as unauthorized", async () => {
+    stubFetch(async () => jsonResponse(401, { code: "sandbox_busy" }));
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "sbx_1",
+        "stop",
+        null,
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({ kind: "unauthorized" });
+  });
+
+  it.each([
+    [
+      "pod_add_admin_only",
+      "Only a team admin can add an Automations sandbox for this team.",
+    ],
+    [
+      "create_principal_mismatch",
+      "This sandbox can't be created for the selected owner.",
+    ],
+  ])("preserves typed 403 refusal %s", async (code, message) => {
+    stubFetch(async () => jsonResponse(403, { code, message }));
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "sbx_1",
+        "stop",
+        null,
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({
+      kind: "refused",
+      status: 403,
+      code,
+      reason: null,
+      shortfallMc: null,
+      creditSource: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message,
+    });
+  });
+
+  it("keeps an unrecognized typed 403 as unauthorized", async () => {
+    stubFetch(async () => jsonResponse(403, { code: "future_refusal" }));
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "sbx_1",
+        "stop",
+        null,
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({ kind: "unauthorized" });
   });
 
   it("collapses an untyped 5xx and an HTML body into a network error without echoing the body", async () => {
@@ -847,6 +896,26 @@ describe("fetchSandboxCostsViaHttp", () => {
   });
 });
 
+describe("fetchTraycerModelsViaHttp", () => {
+  it("groups a row under its maker and keeps the provider for the rest", async () => {
+    stubFetch(async () =>
+      jsonResponse(200, [
+        { id: "kimi-k3", provider: "openrouter", vendor: "Moonshot AI" },
+        { id: "glm-5.2", provider: "openrouter", vendor: null },
+      ]),
+    );
+    const result = await fetchTraycerModelsViaHttp(BASE, BEARER, null);
+    if (result.kind !== "ok") throw new Error("expected ok");
+    expect(result.models.map((model) => model.metadata)).toEqual([
+      {
+        openCodeProviderId: "moonshot-ai",
+        openCodeProviderLabel: "Moonshot AI",
+      },
+      { openCodeProviderId: "openrouter", openCodeProviderLabel: "OpenRouter" },
+    ]);
+  });
+});
+
 describe("the other sandbox routes parse or fail the same way", () => {
   it("list: a body that is not the contract is a network error", async () => {
     stubFetch(async () => jsonResponse(200, { sandboxes: [{ id: "" }] }));
@@ -867,9 +936,53 @@ describe("the other sandbox routes parse or fail the same way", () => {
     }
   });
 
+  it.each([
+    {
+      environmentId: null,
+      diskMb: null,
+      expectedEnvironment: "",
+      expectedDisk: "",
+    },
+    {
+      environmentId: "env-team",
+      diskMb: 40960,
+      expectedEnvironment: "env-team",
+      expectedDisk: "40960",
+    },
+  ])(
+    "catalogue: sends the exact contextual GET dimensions",
+    async ({ environmentId, diskMb, expectedEnvironment, expectedDisk }) => {
+      let sent: URL | null = null;
+      stubFetch(async (url) => {
+        sent = new URL(url);
+        return jsonResponse(200, { providers: [] });
+      });
+      await fetchSandboxCatalogueViaHttp(BASE, BEARER, null, {
+        environmentId,
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb,
+        region: "us-east",
+      });
+      expect(
+        sent === null ? null : Object.fromEntries(new URL(sent).searchParams),
+      ).toEqual({
+        environmentId: expectedEnvironment,
+        os: "linux",
+        cpus: "2",
+        memoryMb: "4096",
+        diskMb: expectedDisk,
+        region: "us-east",
+      });
+    },
+  );
+
   it("catalogue: a body that is not the contract is a network error", async () => {
     stubFetch(async () => jsonResponse(200, { providers: "none" }));
-    expect(await fetchSandboxCatalogueViaHttp(BASE, BEARER, null)).toEqual({
+    expect(
+      await fetchSandboxCatalogueViaHttp(BASE, BEARER, null, null),
+    ).toEqual({
       kind: "network-error",
       detail: "the sandbox catalogue did not match the contract",
     });
@@ -1762,4 +1875,36 @@ describe("the IAP proxy credential", () => {
       Accept: "application/json",
     });
   });
+});
+
+describe("a redirect answered to a sandbox control call", () => {
+  it.each([
+    {
+      name: "a 302 with a Location",
+      answer: () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://elsewhere.test/sandboxes" },
+        }),
+      status: 302,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: createOpaqueRedirectResponse,
+      status: 0,
+    },
+  ])(
+    "reads $name as a network error and follows nothing",
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(async () => answer());
+
+      await expect(listSandboxesViaHttp(BASE, BEARER, null)).resolves.toEqual({
+        kind: "network-error",
+        detail: `the control plane answered HTTP ${status} without a typed refusal`,
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][1]?.redirect).toBe("manual");
+    },
+  );
 });

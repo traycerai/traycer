@@ -362,6 +362,26 @@ describe("<SessionImportRunController />", () => {
     expect(probe.close).toHaveBeenCalledTimes(1);
   });
 
+  it("asks the host's status again, and shows no empty summary, when the run ended while the connection was down", () => {
+    render(<SessionImportRunController />);
+    const probe = requireInstance(0);
+    act(() => {
+      probe.callbacks.onStarted({ attached: true, runId: "run-1", total: 4 });
+    });
+    invalidateQueriesMock.mockClear();
+
+    act(() => {
+      probe.callbacks.onRunEndedUnseen("run-1");
+    });
+
+    expect(probe.close).toHaveBeenCalledTimes(1);
+    expect(currentRun().status).toBe("idle");
+    expect(currentRun().finalCounts).toBeNull();
+    expect(invalidateQueriesMock).toHaveBeenCalledWith({
+      queryKey: sessionImportQueryKeys.status("host-a"),
+    });
+  });
+
   it("does not open a second client when start() is called after the probe attached", () => {
     render(<SessionImportRunController />);
     const probe = requireInstance(0);

@@ -1,8 +1,14 @@
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  HOST_KIND_WORDS,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  isRemoteHostDirectoryEntry,
+  isSandboxHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
   formatPlatform,
@@ -15,7 +21,6 @@ import {
   COMPUTER_ACTIVE,
   computerOfflineLine,
   computerSubLine,
-  THIS_COMPUTER,
 } from "@/lib/sandboxes/sandbox-strings";
 import type {
   FleetUpdateView,
@@ -43,14 +48,6 @@ import type {
  * clicking differs.
  */
 export type HostPickIntent = "view" | "bind" | "pin";
-
-/**
- * What an Activate does, said where it is offered (Settings' Activate button
- * and the account menu's Host rows). Not "tabs stay on the host they started
- * on" - the active-host switch still reloads open tabs today, so
- * that promise would be false. This only says what IS true.
- */
-export const ACTIVATE_HOST_HINT = "Switching changes where new work starts.";
 
 /**
  * A refusal the SURFACE holds against a host, keyed by `hostId` and carrying
@@ -217,7 +214,12 @@ export function hostOptionStatusWord(
   // that is fine.
   const sandboxWord =
     host.sandbox === null ? null : sandboxStateWord(host.sandbox);
-  if (sandboxWord !== null && sandboxWord !== "awake") return sandboxWord;
+  if (
+    host.sandbox !== null &&
+    (host.sandbox.state !== "awake" || host.sandbox.frozen)
+  ) {
+    return sandboxWord;
+  }
   const statusWord = STATUS_WORD[host.health.state];
   if (statusWord !== null) return statusWord;
   if (surfaceState.kind === "refused") return surfaceState.word;
@@ -226,19 +228,15 @@ export function hostOptionStatusWord(
 
 /**
  * A computer's sub-line in the composer and in-task pickers: the machine's
- * name under a `This computer` title, its OS, and whether it answers
- * (`windows-test-machine · Windows · Active`, `Linux · Active`). `pickable`
+ * OS and whether it answers (`Windows · Active`, `Linux · Active`). `pickable`
  * is the row's own {@link isHostOptionSelectable}, so the offline line
  * promises a wait only on a row that can be picked.
  */
 export function composerComputerSubLine(
   host: HostScopeOption,
   pickable: boolean,
-  /** The row's title is `This computer`, so the machine's name goes here. */
-  nameBelow: boolean,
 ): string {
   return computerSubLine([
-    nameBelow && host.isLocalMachine ? host.name : null,
     formatPlatform(host.platform),
     composerComputerStatus(host, pickable),
   ]);
@@ -299,7 +297,7 @@ function lastSeenLabel(lastSeenAt: string | null): string | null {
  */
 export function sandboxWordYieldsToHealth(host: HostScopeOption): boolean {
   if (host.sandbox === null) return false;
-  if (sandboxStateWord(host.sandbox) !== "awake") return false;
+  if (host.sandbox.state !== "awake" || host.sandbox.frozen) return false;
   return STATUS_WORD[host.health.state] !== null;
 }
 
@@ -459,16 +457,6 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
 }
 
 /**
- * What a host is called on the chip and its row. The composer and in-task
- * pickers call the machine this app runs on `This computer`, its own name
- * moving to the row's sub-line, so it reads beside the sandbox rows; every
- * other list names it.
- */
-export function hostRowTitle(host: HostScopeOption, composer: boolean): string {
-  return composer && host.isLocalMachine ? THIS_COMPUTER : host.name;
-}
-
-/**
  * What KIND of host this is, in words.
  *
  * The row draws this as a glyph, which is `aria-hidden` — so when the Select
@@ -479,11 +467,7 @@ export function hostRowTitle(host: HostScopeOption, composer: boolean): string {
  * icon they cannot see.
  */
 export function hostOptionKindLabel(host: HostScopeOption): string {
-  if (host.isLocalMachine) return "This computer";
-  if (host.sandbox !== null) return "Sandbox";
-  if (host.entry?.kind === "remote") return "Remote host";
-  if (host.entry?.kind === "mock") return "Mock host";
-  return "Host";
+  return host.kind === null ? "Host" : HOST_KIND_WORDS[host.kind];
 }
 
 /**
@@ -491,34 +475,17 @@ export function hostOptionKindLabel(host: HostScopeOption): string {
  * connectivity it would otherwise show. Every state has a word, `awake`
  * included: a sandbox is billed by state, so "awake" is information a person
  * scanning the list acts on, where a personal host's "online" is not.
- * `frozen` leads, because it is why a suspended or stopped sandbox will not
- * wake; a destroyed or failed row never reads frozen (the flag is folded with
- * the state upstream, `isSandboxFrozenInEffect`).
+ * Frozen is a condition shown beside the lifecycle, never in its place.
  */
-const SANDBOX_STATE_WORD: Record<HostSandboxState, string> = {
-  creating: "creating",
-  awake: "awake",
-  suspending: "suspending",
-  suspended: "suspended",
-  resuming: "resuming",
-  stopping: "stopping",
-  stopped: "stopped",
-  starting: "starting",
-  destroying: "destroying",
-  destroyed: "destroyed",
-  failed: "failed",
-  released: "released",
-};
-
-export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
-  if (sandbox.frozen) return "frozen";
-  return sandbox.state === null ? null : SANDBOX_STATE_WORD[sandbox.state];
+export function sandboxStateWord(sandbox: HostScopeSandbox): string {
+  return hostSandboxStateWord(sandbox.state);
 }
 
 /**
  * Where a row sits in a host list:
  *
  * - `personal`: the user's own machines, the list's first group.
+ * - `team-computer`: a physical computer under its owning team.
  * - `sandbox`: a sandbox the user created, in a collapsible group below them.
  * - `agent-sandbox`: a burst sandbox an agent created for one task. Shown ONLY
  *   by the host list, in a collapsed sub-group; never offered by a picker,
@@ -541,6 +508,7 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  */
 export type HostPickerGroup =
   | "personal"
+  | "team-computer"
   | "sandbox"
   | "agent-sandbox"
   | "hidden";
@@ -556,7 +524,9 @@ export function hostOptionPickerGroup(
   composerViewer: ComposerPickerViewer | null,
 ): HostPickerGroup {
   if (host.entry?.kind === "pool") return "hidden";
-  if (host.sandbox === null) return "personal";
+  if (host.sandbox === null) {
+    return hostOptionTeamOwner(host) === null ? "personal" : "team-computer";
+  }
   // A sandbox no host row stands for yet: never offered as a
   // host. The host list groups it by the rules below, like any sandbox.
   if (!listsAgentSandboxes && isUnenrolledSandboxOption(host)) return "hidden";
@@ -614,15 +584,17 @@ export function hostOptionCanActivate(host: HostScopeOption): boolean {
  * Why a team's host is never this window's host. Shown on its disabled
  * Activate and as the refusal when a switch to one is asked for anyway.
  */
-export const TEAM_HOST_ACTIVATE_REASON = "Team hosts can't be made active.";
+export const TEAM_HOST_ACTIVATE_REASON =
+  "A team's machine can't be the app's default.";
 
 /**
- * One team's hosts in a list: its sandboxes and pods, and the
- * burst ones an agent made, under the team's name.
+ * One team's computers and sandboxes, with agent-created burst sandboxes
+ * kept separately, under the team's name.
  */
 export interface HostTeamGroup {
   readonly teamId: string;
   readonly teamName: string;
+  readonly computers: readonly HostScopeOption[];
   readonly sandboxes: readonly HostScopeOption[];
   readonly agentSandboxes: readonly HostScopeOption[];
 }
@@ -636,15 +608,17 @@ export interface HostPickerGroups {
 }
 
 /**
- * The team that owns a sandbox row, from its registry `owner`, or `null`: a
- * personal host, a sandbox the person owns, and a row whose registry carries
- * no `owner` (an authn from before it) all stay in the person's own groups.
+ * The known team owner of a computer or sandbox. Prefer the registry row,
+ * then the directory owner; absent metadata never invents a team name.
  */
 export function hostOptionTeamOwner(
   host: HostScopeOption,
 ): { readonly teamId: string; readonly teamName: string } | null {
-  if (host.sandbox === null) return null;
-  const owner = host.item?.owner ?? null;
+  const owner =
+    host.item?.owner ??
+    (host.entry !== null && isRemoteHostDirectoryEntry(host.entry)
+      ? (host.entry.owner ?? null)
+      : null);
   if (owner === null || owner.kind !== "team") return null;
   return { teamId: owner.id, teamName: owner.name };
 }
@@ -652,6 +626,7 @@ export function hostOptionTeamOwner(
 interface MutableTeamGroup {
   readonly teamId: string;
   readonly teamName: string;
+  readonly computers: HostScopeOption[];
   readonly sandboxes: HostScopeOption[];
   readonly agentSandboxes: HostScopeOption[];
 }
@@ -679,18 +654,20 @@ export function groupHostOptions(
       composerViewer,
     );
     const owner = hostOptionTeamOwner(host);
-    let target = { sandboxes, agentSandboxes };
+    let target = { computers: personal, sandboxes, agentSandboxes };
     if (owner !== null) {
       const team = teams.get(owner.teamId) ?? {
         teamId: owner.teamId,
         teamName: owner.teamName,
+        computers: [],
         sandboxes: [],
         agentSandboxes: [],
       };
       teams.set(owner.teamId, team);
       target = team;
     }
-    if (group === "personal") personal.push(host);
+    if (group === "personal" || group === "team-computer")
+      target.computers.push(host);
     else if (group === "sandbox") target.sandboxes.push(host);
     else if (group === "agent-sandbox") target.agentSandboxes.push(host);
     else if (host.hostId === keepHostId) target.sandboxes.push(host);
@@ -701,7 +678,10 @@ export function groupHostOptions(
     agentSandboxes,
     teams: [...teams.values()]
       .filter(
-        (team) => team.sandboxes.length > 0 || team.agentSandboxes.length > 0,
+        (team) =>
+          team.computers.length > 0 ||
+          team.sandboxes.length > 0 ||
+          team.agentSandboxes.length > 0,
       )
       .sort(
         (a, b) =>
@@ -712,8 +692,8 @@ export function groupHostOptions(
 }
 
 /**
- * A composer picker's host groups: `Yours` (the person's computers) and
- * `Sandboxes you started` (every configuration together, the viewer's own
+ * A composer picker's host groups: `Yours` (the person's computers), team
+ * computers under their team names, and `Sandboxes you started` (the viewer's own
  * and the team sandboxes they started or kept, never an agent's), in the
  * list's order. `keepHostId` is the row the composer is pointed at, which is
  * never dropped (see {@link groupHostOptions}).
@@ -721,6 +701,7 @@ export function groupHostOptions(
 export interface ComposerHostGroups {
   readonly yours: readonly HostScopeOption[];
   readonly started: readonly HostScopeOption[];
+  readonly teams: readonly HostTeamGroup[];
 }
 
 export function groupComposerHostOptions(
@@ -735,6 +716,7 @@ export function groupComposerHostOptions(
       ...groups.sandboxes,
       ...groups.teams.flatMap((team) => team.sandboxes),
     ],
+    teams: groups.teams.filter((team) => team.computers.length > 0),
   };
 }
 
@@ -806,7 +788,7 @@ export function pickableHostOptions(
   return [
     ...groups.personal,
     ...groups.sandboxes,
-    ...groups.teams.flatMap((team) => team.sandboxes),
+    ...groups.teams.flatMap((team) => [...team.computers, ...team.sandboxes]),
   ];
 }
 
@@ -825,6 +807,7 @@ export function appWideHostOptions(
   const groups = groupHostOptions(hosts, false, null, keepHostId);
   return [
     ...groups.personal,
+    ...groups.teams.flatMap((team) => team.computers),
     ...groups.sandboxes.filter(
       (host) => host.sandbox === null || !host.sandbox.teamOwned,
     ),

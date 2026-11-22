@@ -13,6 +13,7 @@
  * `IStreamSession` without a real socket.
  */
 import { describe, expect, it, vi } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -53,6 +54,9 @@ class StubSession implements IStreamSession {
     return this.negotiatedSchemaVersion;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   emitFrame(frame: Parameters<ServerFrameHandler>[0]): void {
@@ -76,6 +80,7 @@ function makeWsStreamClient(
     endpoint: () => null,
     hostId: null,
     bearer: () => null,
+    userId: AUTHENTICATED_USER_FIXTURE_ID,
     auth: null,
     clock: null,
     hostCredentialMint: null,
@@ -386,5 +391,53 @@ describe("includesSandboxRows says whether the rows can be the whole registry", 
 
   it("is false before the handshake has negotiated anything", () => {
     expect(snapshotAt(null).includesSandboxRows).toBe(false);
+  });
+});
+
+describe("the 1.2 arm carries a team's own computer, the 1.1 arm refuses it", () => {
+  function machineRow(hostId: string): HostListItem {
+    return {
+      ...buildRow(hostId),
+      kind: "machine",
+      owner: { kind: "team", id: "team-1", name: "Acme" },
+    };
+  }
+
+  function emitSnapshot(h: Harness, hosts: readonly HostListItem[]): void {
+    h.session.emitFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      hosts,
+      fetchedAtMs: 8_000,
+      stale: false,
+    });
+  }
+
+  it("delivers a machine row verbatim, beside a personal row, when the session negotiated 1.2", () => {
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 2 };
+    const hosts = [buildRow("host-1"), machineRow("machine-1")];
+    emitSnapshot(h, hosts);
+
+    expect(h.snapshots).toEqual([
+      { hosts, fetchedAtMs: 8_000, stale: false, includesSandboxRows: true },
+    ]);
+    h.client.close();
+  });
+
+  it("DROPS a frame carrying a machine row when the session negotiated only 1.1, and delivers the same frame without it", () => {
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+    emitSnapshot(h, [buildRow("host-1"), machineRow("machine-1")]);
+    expect(h.snapshots).toEqual([]);
+
+    // The same frame minus the machine row parses on 1.1, so the drop above
+    // is the machine row's doing and nothing else's.
+    const hosts = [buildRow("host-1")];
+    emitSnapshot(h, hosts);
+    expect(h.snapshots).toEqual([
+      { hosts, fetchedAtMs: 8_000, stale: false, includesSandboxRows: true },
+    ]);
+    h.client.close();
   });
 });

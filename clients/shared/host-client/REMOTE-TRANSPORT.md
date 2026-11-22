@@ -10,7 +10,7 @@ machine-checkable form of everything here lives in
 
 Governs Architecture **§3** (mux/transport), **§9** (client rows). Carries
 **R4-E3** (full attach as the fallback recovery path), **R4-A2** (bridging-never-identity), **R4-D1**
-(reserved authz slot), **R4-D2** (peer-enforce host standing).
+(authz slot), **R4-D2** (peer-enforce host standing).
 
 > Status: client transport implemented in T12. The host responder (T11) is
 > dispatched after this and MUST match the framing below. Points still to
@@ -88,20 +88,20 @@ Fixed 15-byte header, big-endian:
 
 ### Frame types (`type`)
 
-| Value | Name                | streamId | Payload (json)                                                                                                                          |
-| ----- | ------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | `OPEN`              | 0        | `{muxVersion, bearer, manifest, authz, resume}`                                                                                         |
-| 2     | `OPEN_ACK`          | 0        | `{manifest, capabilities}`                                                                                                              |
-| 3     | `REQUEST`           | ≥1       | `{requestId, method, schemaVersion, params, idempotencyKey}`                                                                            |
-| 4     | `RESPONSE`          | ≥1       | `{requestId, method, result, error}`                                                                                                    |
-| 5     | `SUBSCRIBE`         | ≥1       | `{method, schemaVersion, params}`                                                                                                       |
-| 6     | `STREAM_FRAME`      | ≥1       | the stream envelope `{kind, hasBinaryPayload, …}` + binary                                                                              |
-| 7     | `CLOSE`             | ≥1       | `{reason}`                                                                                                                              |
-| 8     | `FATAL`             | 0 or ≥1  | `{details}` (`FatalErrorDetails`; streamId 0 = whole session)                                                                           |
-| 9     | `CREDIT`            | 0        | `{credits}` (bulk send-window replenish)                                                                                                |
-| 10    | `REAUTH_NOTICE`     | 0        | `{standingUntil}` — host-standing evidence (R4-D2)                                                                                      |
-| 11    | `RESUME`            | 0        | `{received, attempt}` — always `seq` 0, unchunked and uncompressed; see §9                                                              |
-| 12    | `CREDENTIAL_UPDATE` | 0        | `{bearer, memberCredential}` — in-place bearer rotation, or a team host's member credential with `bearer: null` (each capability-gated) |
+| Value | Name                | streamId | Payload (json)                                                             |
+| ----- | ------------------- | -------- | -------------------------------------------------------------------------- |
+| 1     | `OPEN`              | 0        | `{muxVersion, bearer, manifest, authz, resume}`                            |
+| 2     | `OPEN_ACK`          | 0        | `{manifest, capabilities}`                                                 |
+| 3     | `REQUEST`           | ≥1       | `{requestId, method, schemaVersion, params, idempotencyKey}`               |
+| 4     | `RESPONSE`          | ≥1       | `{requestId, method, result, error}`                                       |
+| 5     | `SUBSCRIBE`         | ≥1       | `{method, schemaVersion, params}`                                          |
+| 6     | `STREAM_FRAME`      | ≥1       | the stream envelope `{kind, hasBinaryPayload, …}` + binary                 |
+| 7     | `CLOSE`             | ≥1       | `{reason}`                                                                 |
+| 8     | `FATAL`             | 0 or ≥1  | `{details}` (`FatalErrorDetails`; streamId 0 = whole session)              |
+| 9     | `CREDIT`            | 0        | `{credits}` (bulk send-window replenish)                                   |
+| 10    | `REAUTH_NOTICE`     | 0        | `{standingUntil}` — host-standing evidence (R4-D2)                         |
+| 11    | `RESUME`            | 0        | `{received, attempt}` — always `seq` 0, unchunked and uncompressed; see §9 |
+| 12    | `CREDENTIAL_UPDATE` | 0        | `{bearer}` — in-place bearer rotation (capability-gated)                   |
 
 `streamId` allocation: the client allocates monotonically from 1. A **subscribe
 streamId is stable for the subscription's life across full attaches**; a **unary
@@ -119,27 +119,26 @@ already authenticated:
 ```jsonc
 {
   "muxVersion": 1,
-  "bearer": "<user JWS>",          // R4-A2: re-presented on every full attach
+  "bearer": "",                     // empty on a relay open; a pool open carries the user JWS
   "manifest": {                     // see "Manifest shape" below - all three keys REQUIRED
     "rpc": { …ConnectionManifest… },         // released floor ONLY
     "optionalRpc": { …ConnectionManifest… }, // every non-floor method
     "stream": { …ConnectionManifest… }
   },
-  "authz": null,                    // R4-D1 RESERVED: versioned session-grant slot (team hosts, v3)
+  "authz": { "v": 2, "grant": "<host-only token>" }, // R4-D1; null on a pool open
   "resume": null                    // R4-E3 RESERVED: always null (the RESUME frame is §9, not this slot)
 }
 ```
 
 - **Bridging-never-identity (R4-A2).** The attach grant authorizes relay
   _bridging_ only. A fresh Noise session is **not** an authenticated session
-  until `OPEN` re-presents the `bearer`. The host MUST verify the bearer
-  (JWKS + `token.id == ownerUserId`) on **every** `OPEN` — a grant, a ticket or
-  a relay resume key MUST NEVER restore identity. A key only moves a relay `sid`
-  to a new socket; what proves the session is the Noise channel it still holds.
-- **Reserved authz slot (R4-D1).** `authz` is always `null` in v1. The host MUST
-  accept `null` and ignore any populated slot. It exists so a future
-  `session-grant` (own `typ`/`aud`/signing key) enables team hosts without a
-  breaking `OPEN` change.
+  until `OPEN` presents the host-only token, which the host verifies on
+  **every** `OPEN` — a grant, a ticket or a relay resume key MUST NEVER restore
+  identity. A key only moves a relay `sid` to a new socket; what proves the
+  session is the Noise channel it still holds.
+- **Authz slot (R4-D1).** A relay `OPEN` carries the host-only token as
+  `{ v: 2, grant }` with an empty `bearer`; a pool `OPEN` carries the user
+  bearer and `authz: null`.
 - **Reserved resume descriptor (R4-E3).** `resume` is always `null`. Continuing
   a session does not use it: see `RESUME` in §9.
 
@@ -155,15 +154,6 @@ already authenticated:
 `SESSION_CAPABILITY_RESUME` (`"session.resume"`) in both peers' capabilities
 turns on §9's session continuity; a session without it recovers by full attach
 only.
-
-A team host's session-grant session offers `memberCredential` in place of
-`credentialUpdate`. The host spends only a member credential the client hands
-it after `OPEN_ACK`, so the client mints the member's credential and sends
-`CREDENTIAL_UPDATE {bearer: null, memberCredential}` as the first frame after
-the ack; the session is not ready, and carries no request or subscription,
-until that frame is enqueued. It does the same on every re-attach. A mint that
-fails is logged and the session goes on, so the host's own refusal names the
-cause.
 
 ### Manifest shape (floor / optional split)
 
@@ -292,7 +282,7 @@ sequenceDiagram
   C->>CS: POST /hosts/:id/attach-grant (fresh, one-time)
   C->>R: attach(grant, park=1) → attach_ack{sid, resumeKey}
   C->>H: Noise-NK (new ephemerals → new session keys)
-  C->>H: OPEN{bearer, manifest, authz:null, resume:null}   // re-presents bearer (A2)
+  C->>H: OPEN{bearer:"", manifest, authz:{v:2, grant}, resume:null}   // host-only token (A2)
   H-->>C: OPEN_ACK
   C->>H: re-SUBSCRIBE every live stream (stable streamIds)
   Note over C,H: reconcile in-flight terminal input via the action-protocol ack watermark (T13)
@@ -588,7 +578,7 @@ one waiting for its host to come back (§9): that silence has an owner already.
 
 | Field / type                   | Reserve  | Why                                                      |
 | ------------------------------ | -------- | -------------------------------------------------------- |
-| `OPEN.authz`                   | R4-D1    | versioned session-grant slot for team hosts (v3)         |
+| `OPEN.authz`                   | R4-D1    | in use: the host-only token on a relay `OPEN` (§4)       |
 | `OPEN.resume`                  | R4-E3    | always `null`; session continuity uses `RESUME` (§9)     |
 | `REQUEST.idempotencyKey`       | audit C3 | later per-method opt-in dedup                            |
 | `CREDENTIAL_UPDATE` capability | —        | in-place bearer rotation; capability-gated on `OPEN_ACK` |

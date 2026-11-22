@@ -1,4 +1,5 @@
 import type { UseNavigateResult } from "@tanstack/react-router";
+import { readConnectablePersonalHost } from "@/hooks/host/use-connectable-host-ids";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
 import {
   activateTabIntent,
@@ -22,7 +23,7 @@ export interface OpenBotChannelOptions {
   readonly landing: BotTabLanding | null;
   /**
    * Whether this client can dial a host, `null` while the directory has not
-   * answered; an open surface on a host it cannot dial moves to the window's.
+   * answered; an open surface on a host it cannot dial moves to a serving host.
    */
   readonly isConnectable: ((hostId: string) => boolean) | null;
   /** The navigation was refused before it ran. */
@@ -36,7 +37,8 @@ export interface OpenBotChannelOptions {
  * surface on that channel, never a tab of its own.
  *
  * The surface keeps its host (a channel switch never moves it), or binds
- * to this window's when it is closed. Any landing is asked for before the
+ * to this window's when it is closed. If that host cannot be dialed, a
+ * dialable personal machine may serve it instead. Any landing is asked for before the
  * navigation, so the channel finds it when it shows. The selection is
  * committed when the navigation is acknowledged (`TabNavigationController`),
  * so a refused one leaves the previous channel; a surface this call opened is
@@ -73,21 +75,32 @@ export function openTracyEntry(
   );
 }
 
+function servingHostFor(
+  windowHostId: string | null,
+  isConnectable: ((hostId: string) => boolean) | null,
+): string | null {
+  if (windowHostId === null || isConnectable?.(windowHostId) !== false) {
+    return windowHostId;
+  }
+  return readConnectablePersonalHost() ?? windowHostId;
+}
+
 function openTracySurface(
   navigate: UseNavigateResult<string>,
   intent: Extract<TabNavigationIntent, { kind: "tracy" }>,
   options: OpenBotChannelOptions,
 ): boolean {
   const windowHostId = activeHostIdOrNull();
+  const servingHostId = servingHostFor(windowHostId, options.isConnectable);
   const surface = useTracySurfaceStore.getState();
   const wasOpen = surface.open;
   if (wasOpen) {
-    if (windowHostId !== null) {
-      rebindUnreachableTracySurface(windowHostId, options.isConnectable);
+    if (servingHostId !== null) {
+      rebindUnreachableTracySurface(servingHostId, options.isConnectable);
     }
   } else {
-    if (windowHostId === null) return false;
-    surface.openSurface(windowHostId);
+    if (servingHostId === null) return false;
+    surface.openSurface(servingHostId);
   }
   const { botId } = intent;
   const landing = botId === null ? null : options.landing;

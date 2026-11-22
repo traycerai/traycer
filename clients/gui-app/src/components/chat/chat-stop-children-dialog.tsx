@@ -28,7 +28,7 @@ export function StopChildrenDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         layout="banded"
-        className="w-full min-w-0 overflow-hidden"
+        className="flex w-full min-w-0 flex-col overflow-hidden"
         style={{ maxWidth: "min(92vw, 34rem)" }}
         showCloseButton={false}
         data-testid="stop-children-dialog"
@@ -45,7 +45,7 @@ export function StopChildrenDialog(props: {
 
         <ul
           data-native-scrollbar="true"
-          className="m-0 flex max-h-[min(40vh,16rem)] list-none flex-col gap-0.5 overflow-y-auto px-6 py-2"
+          className="m-0 flex max-h-[min(40vh,16rem)] min-h-0 list-none flex-col gap-0.5 overflow-y-auto px-6 py-2"
         >
           {props.agents.map((agent) => (
             <li

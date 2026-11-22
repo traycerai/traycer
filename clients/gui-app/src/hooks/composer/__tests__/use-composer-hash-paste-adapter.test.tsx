@@ -71,6 +71,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
   },
   mentionRoots: [],
   beginPathInsertion: () => null,
+  pathsReachTarget: true,
 };
 
 function pngFile(name: string, bytes: ReadonlyArray<number>): File {
@@ -129,10 +130,14 @@ function makeFileTransfer(files: ReadonlyArray<File>): FileTransferLike {
 }
 
 function PasteHarness(props: { readonly inserted: ImageAttachmentAttrs[][] }) {
-  const handlers = useComposerHashPasteAdapter((attrs) => {
-    props.inserted.push([...attrs]);
-    return attrs.length;
-  }, NOOP_FILE_PATHS);
+  const handlers = useComposerHashPasteAdapter(
+    (attrs) => {
+      props.inserted.push([...attrs]);
+      return attrs.length;
+    },
+    NOOP_FILE_PATHS,
+    null,
+  );
   return (
     <div
       data-testid="paste-zone"
@@ -208,10 +213,14 @@ describe("useComposerHashPasteAdapter - real file paste", () => {
   it("a picker-selected PNG (attachImageFiles) becomes a hash-only node", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { result } = renderHook(() =>
-      useComposerHashPasteAdapter((attrs) => {
-        inserted.push([...attrs]);
-        return attrs.length;
-      }, NOOP_FILE_PATHS),
+      useComposerHashPasteAdapter(
+        (attrs) => {
+          inserted.push([...attrs]);
+          return attrs.length;
+        },
+        NOOP_FILE_PATHS,
+        null,
+      ),
     );
 
     act(() => {

@@ -43,12 +43,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: { client: null },
 }));
+const globalScopeOverrides = vi.hoisted(
+  (): { current: Record<string, unknown> } => ({
+    current: { client: null },
+  }),
+);
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
+
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
+  const useHostScopeFor = () => hostScopeFixture(globalScopeOverrides.current);
   return {
     useHostScope,
+    useHostScopeFor,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
     usePersonalHostScope: useHostScope,
   };
 });
@@ -213,6 +231,10 @@ function buildRouter(initialPath: string) {
   });
 }
 
+afterEach(() => {
+  soundtrackOfferedMock.value = false;
+});
+
 describe("<SettingsSidebar /> leader hints", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -306,6 +328,42 @@ describe("<SettingsSidebar /> leader hints", () => {
     ).toBeDefined();
   });
 
+  // Application Diagnostics needs a desktop bridge. The host group's
+  // Diagnostics row is a different section and stays; the two links share
+  // the accessible name, so the row is the app-diagnostics test id.
+  it("omits the Application Diagnostics entry in the installed mobile app", async () => {
+    setMobileApp(true);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    const diagnostics = screen.getAllByRole("link", { name: "Diagnostics" });
+    expect(diagnostics.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/diagnostics",
+    ]);
+  });
+
+  it("renders the Application Diagnostics entry on other builds", async () => {
+    setMobileApp(false);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    const diagnostics = screen.getAllByRole("link", { name: "Diagnostics" });
+    expect(diagnostics.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/app-diagnostics",
+      "/settings/diagnostics",
+    ]);
+  });
+
   // The machine console is labelled "Overview" now - it sits under the host
   // switcher, which supplies the machine's name, so repeating "Host" in the
   // entry would name the container twice. Its `id` and route are unchanged.
@@ -358,19 +416,15 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(section?.label).toBe("Agents");
   });
 
-  it("labels application sounds and alerts apart from host notification events", () => {
+  it("labels application sounds and alerts apart", () => {
     const sounds = SETTINGS_SECTIONS.find(
       (section) => section.id === "app-notifications",
     );
     const alerts = SETTINGS_SECTIONS.find((section) => section.id === "alerts");
-    const host = SETTINGS_SECTIONS.find(
-      (section) => section.id === "notifications",
-    );
     expect(sounds?.label).toBe("Sounds");
     expect(alerts?.label).toBe("Alerts");
-    expect(host?.label).toBe("Notifications");
     // Different controls, so different icons too (the rail-table rule).
-    expect(new Set([sounds?.icon, alerts?.icon, host?.icon]).size).toBe(3);
+    expect(sounds?.icon).not.toBe(alerts?.icon);
   });
 
   it("puts Getting started before General in the application settings order", () => {
@@ -656,24 +710,14 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
   });
 
-  it("says why on a build that cannot reach the control plane", async () => {
+  it("keeps the Sandboxes availability message off the rail", async () => {
     sandboxControl.reason = SANDBOXES_UNAVAILABLE_IN_STAGING;
-    useAuthStore.setState({ status: "signed-in" });
-    renderSidebar();
-
-    const line = await screen.findByTestId("settings-sandboxes-unavailable");
-    expect(line.textContent).toBe(
-      "Sandboxes aren't available in staging builds.",
-    );
-    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
-  });
-
-  it("shows no unavailable line when the control plane is reachable", async () => {
     useAuthStore.setState({ status: "signed-in" });
     renderSidebar();
 
     expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
     expect(screen.queryByTestId("settings-sandboxes-unavailable")).toBeNull();
+    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
   });
 
   it("shows neither the entry nor the line when signed out, whatever the build", async () => {
@@ -737,12 +781,14 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["mcp-servers", "personal"],
   ["skills", "personal"],
   ["permissions", "personal"],
+  ["agent-memories", "personal"],
   ["agents", "personal"],
   ["fallback", "personal"],
   ["shell", "personal"],
   ["browser-agent-access", "personal"],
   ["secrets", "personal"],
   ["sandboxes", "personal"],
+  ["storage", "personal"],
   ["members", "personal"],
   ["agent-definitions", "personal"],
   ["machine-setup", "personal"],
@@ -760,7 +806,7 @@ const GROUP_HEADING_BY_ID: Readonly<Record<SettingsSectionGroupId, string>> = {
   app: "Application",
   personal: "Environment",
   account: "Account",
-  host: "Host",
+  host: "Hosts",
 };
 
 describe("<SettingsSidebar /> scope groups", () => {
@@ -774,6 +820,7 @@ describe("<SettingsSidebar /> scope groups", () => {
   afterEach(() => {
     cleanup();
     scopeOverrides.current = { client: null };
+    globalScopeOverrides.current = { client: null };
     setMobileApp(false);
   });
 
@@ -792,7 +839,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     return aside;
   }
 
-  it("orders the groups Guide, Application, Account, Environment, Host", () => {
+  it("orders the groups Guide, Application, Account, Environment, Hosts", () => {
     expect(SETTINGS_SECTION_GROUPS.map((group) => group.id)).toEqual([
       "guide",
       "app",
@@ -830,52 +877,73 @@ describe("<SettingsSidebar /> scope groups", () => {
     const headings = Array.from(aside.querySelectorAll("h2")).map(
       (heading) => heading.textContent,
     );
-    expect(headings).toEqual(["Application", "Account", "Environment", "Host"]);
+    expect(headings).toEqual([
+      "Application",
+      "Account",
+      "Environment",
+      "Hosts",
+    ]);
   });
 
-  it("files each rendered row under its group's heading", async () => {
-    const aside = await renderRail();
+  it.each([true, false])(
+    "files each rendered row under its group's heading (soundtrack offered: %s)",
+    async (soundtrackOffered) => {
+      soundtrackOfferedMock.value = soundtrackOffered;
+      const aside = await renderRail();
 
-    // Walk the rail in document order, filing every row under the heading
-    // above it. Guide has no heading, so its rows are the ones before the
-    // first.
-    const filed = new Map<string, Array<string>>();
-    let current = GROUP_HEADING_BY_ID.guide;
-    filed.set(current, []);
-    for (const node of aside.querySelectorAll<HTMLElement>(
-      "h2, [data-testid^='settings-sidebar-item-']",
-    )) {
-      if (node.tagName === "H2") {
-        current = node.textContent;
-        filed.set(current, []);
-        continue;
+      // Walk the rail in document order, filing every row under the heading
+      // above it. Guide has no heading, so its rows are the ones before the
+      // first.
+      const filed = new Map<string, Array<string>>();
+      let current = GROUP_HEADING_BY_ID.guide;
+      filed.set(current, []);
+      for (const node of aside.querySelectorAll<HTMLElement>(
+        "h2, [data-testid^='settings-sidebar-item-']",
+      )) {
+        if (node.tagName === "H2") {
+          current = node.textContent;
+          filed.set(current, []);
+          continue;
+        }
+        filed
+          .get(current)
+          ?.push(
+            node.dataset.testid?.replace("settings-sidebar-item-", "") ?? "",
+          );
       }
-      filed
-        .get(current)
-        ?.push(
-          node.dataset.testid?.replace("settings-sidebar-item-", "") ?? "",
-        );
-    }
 
-    // Desktop: Delete account is offered by the installed mobile app only.
-    const expected = new Map<string, Array<string>>();
-    for (const [id, group] of EXPECTED_SECTION_GROUPS) {
-      if (id === "delete-account") continue;
-      // Machine setup, Agent definitions and Browser agent access are retired
-      // from navigation; Members is a team's page, and the default pick is
-      // Personal.
-      if (
-        id === "machine-setup" ||
-        id === "agent-definitions" ||
-        id === "browser-agent-access" ||
-        id === "members"
-      ) {
-        continue;
+      // Desktop: Delete account is offered by the installed mobile app only.
+      const expected = new Map<string, Array<string>>();
+      for (const [id, group] of EXPECTED_SECTION_GROUPS) {
+        if (id === "delete-account") continue;
+        // Sounds holds only the soundtrack, so a build without one has no row.
+        if (id === "app-notifications" && !soundtrackOffered) continue;
+        // Machine setup, Agent definitions, Browser agent access and
+        // Notifications are retired from navigation; Members is a team's page, and the default pick is
+        // Personal.
+        if (
+          id === "machine-setup" ||
+          id === "agent-definitions" ||
+          id === "browser-agent-access" ||
+          id === "notifications" ||
+          id === "members"
+        ) {
+          continue;
+        }
+        const heading = GROUP_HEADING_BY_ID[group];
+        expected.set(heading, [...(expected.get(heading) ?? []), id]);
       }
-      const heading = GROUP_HEADING_BY_ID[group];
-      expected.set(heading, [...(expected.get(heading) ?? []), id]);
-    }
-    expect(Object.fromEntries(filed)).toEqual(Object.fromEntries(expected));
+      expect(Object.fromEntries(filed)).toEqual(Object.fromEntries(expected));
+    },
+  );
+
+  it("does not list the retired Notifications page, on any build", async () => {
+    await renderRail();
+
+    expect(
+      screen.queryByTestId("settings-sidebar-item-notifications"),
+    ).toBeNull();
+    expect(screen.getByTestId("settings-sidebar-item-alerts")).toBeTruthy();
   });
 
   it("renders the host picker once, after Account and Environment and before the host rows", async () => {
@@ -884,12 +952,13 @@ describe("<SettingsSidebar /> scope groups", () => {
     const pickers = screen.getAllByTestId("settings-host-switcher");
     expect(pickers).toHaveLength(1);
     const picker = pickers[0];
+    expect(picker.textContent).toBe("host-a");
     const follows = (earlier: HTMLElement, later: HTMLElement): boolean =>
       (earlier.compareDocumentPosition(later) &
         Node.DOCUMENT_POSITION_FOLLOWING) !==
       0;
 
-    for (const id of ["providers", "secrets", "devices", "notifications"]) {
+    for (const id of ["providers", "secrets", "devices"]) {
       expect(
         follows(screen.getByTestId(`settings-sidebar-item-${id}`), picker),
         id,
@@ -902,6 +971,48 @@ describe("<SettingsSidebar /> scope groups", () => {
       ).toBe(true);
     }
     expect(aside.contains(picker)).toBe(true);
+  });
+
+  it("keeps the Hosts group and introduces the rail picker", async () => {
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    const member = hostScopeOptionFixture({
+      hostId: "host-member",
+      name: "Member computer",
+      isLocalMachine: false,
+      isActive: true,
+    });
+    const outside = hostScopeOptionFixture({
+      hostId: "host-outside",
+      name: "Other environment",
+      isLocalMachine: false,
+      isActive: false,
+    });
+    scopeOverrides.current = {
+      hosts: [member],
+      host: member,
+      hostId: member.hostId,
+    };
+    globalScopeOverrides.current = {
+      hosts: [member, outside],
+      host: member,
+      hostId: member.hostId,
+    };
+    await renderRail();
+
+    expect(screen.getByRole("heading", { name: "Hosts" })).not.toBeNull();
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    expect(screen.getByText("Look at another host")).not.toBeNull();
+    expect(
+      screen.getByText("Changes what this window shows. Nothing is created."),
+    ).not.toBeNull();
+    expect(screen.queryByText("View host")).toBeNull();
+    expect(
+      screen.getByTestId("settings-host-switcher-option-host-member"),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-host-outside"),
+    ).toBeNull();
   });
 
   it("indents only the host rows under the picker, never Environment or Account", async () => {
@@ -932,8 +1043,8 @@ describe("<SettingsSidebar /> scope groups", () => {
       "usage",
       "credits",
       "permissions",
+      "agent-memories",
       "sandboxes",
-      "notifications",
     ]) {
       expect(columnOf(id).className, id).not.toContain("ml-4");
     }
@@ -984,7 +1095,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
       (node) => node.textContent === "Environment",
     );
     const next = Array.from(document.querySelectorAll("h2")).find(
-      (node) => node.textContent === "Host",
+      (node) => node.textContent === "Hosts",
     );
     if (heading === undefined || next === undefined) {
       throw new Error("the Environment group did not render");
@@ -1011,11 +1122,13 @@ describe("<SettingsSidebar /> Environment pick", () => {
     "MCP servers",
     "Skills",
     "Permissions",
+    "Memories",
     "Agents",
     "Model routing",
     "Variables & shells",
     "Secrets",
     "Sandboxes",
+    "Storage",
   ];
 
   it("lists Personal's Environment rows exactly, with no retired page and no Members", async () => {
@@ -1028,21 +1141,14 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("credits")).toBe(true);
   });
 
-  it("hides MCP servers, Skills, Sandboxes and Members while a Local row is picked", async () => {
+  it("keeps MCP servers, Skills, Sandboxes and Storage visible under a Local pick, and hides Members", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
     });
 
     await renderRail();
 
-    expect(environmentRows()).toEqual([
-      "Providers",
-      "Permissions",
-      "Agents",
-      "Model routing",
-      "Variables & shells",
-      "Secrets",
-    ]);
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
   });
 
   it("shows Members when a team is picked", async () => {

@@ -14,6 +14,7 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { MobileStripFormContext } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
@@ -333,6 +334,8 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           reasoning: "high",
           serviceTier: "",
           permission: "supervised",
+          accountChosen: false,
+          showsDefaultAccount: false,
         },
       });
     };
@@ -692,6 +695,27 @@ describe("<HomePage />", () => {
     // Same drawer the header hamburger opens - that is where "Recent tasks"
     // lives once the Current tasks section is dropped at this width.
     expect(useMobileNavStore.getState().open).toBe(true);
+    queryClient.clear();
+  });
+
+  it("opens History itself from the View history link where the strip replaces the drawer", () => {
+    homeMocks.isMobile = true;
+    useMobileNavStore.setState({ open: false });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MobileStripFormContext.Provider value="rail">
+          <HomePage />
+        </MobileStripFormContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("home-view-history"));
+
+    expect(homeMocks.openHistory).toHaveBeenCalledTimes(1);
+    expect(useMobileNavStore.getState().open).toBe(false);
     queryClient.clear();
   });
 
@@ -1069,6 +1093,11 @@ describe("<HomePage />", () => {
       expect(
         screen.getByTestId("landing-draft-surface").contains(terminal),
       ).toBe(true);
+      const landingBody = document.querySelector(".landing-appearance-surface");
+      expect(landingBody?.classList.contains("overflow-hidden")).toBe(true);
+      expect(landingBody?.classList.contains("max-md:overflow-y-auto")).toBe(
+        true,
+      );
       terminal.focus();
       expect(document.activeElement).toBe(terminal);
 
@@ -1464,6 +1493,8 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

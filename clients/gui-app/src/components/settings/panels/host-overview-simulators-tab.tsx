@@ -35,9 +35,11 @@ import {
   useSimulatorStatusQuery,
 } from "@/hooks/simulator/use-simulator-mutations";
 import { useSimulatorRecheck } from "@/hooks/simulator/use-simulator-recheck";
+import { useStartSimulatorSetupAgent } from "@/hooks/simulator/use-start-simulator-setup-agent";
 import type { HostRpcRegistry } from "@/lib/host";
 import { formatHostProgressBytes } from "@/lib/host/host-progress-copy";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
+import { simulatorSetupPlatforms } from "@/lib/simulator-view/simulator-setup-agent";
 import {
   SimulatorIdleWindowRow,
   SimulatorRunningNowRow,
@@ -56,6 +58,7 @@ import {
  * whose every flip fails is worse than no switch.
  */
 export function HostOverviewSimulatorsTab(props: {
+  readonly usable: boolean;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly hostName: string;
@@ -72,6 +75,7 @@ export function HostOverviewSimulatorsTab(props: {
     getSupported === null || setSupported === null
       ? null
       : getSupported && setSupported;
+  if (!props.usable) return null;
   return (
     <HostOverviewTabSections>
       <SettingsGroup
@@ -118,21 +122,42 @@ function SimulatorSettingsRows(props: {
   const remove = useSimulatorRemoveToolsMutation(client, hostId);
   const switches = simulatorSwitch(config, mutation, remove.mutation.isPending);
   const installed = status.data?.installed ?? null;
-  // What the rows say about the platforms: nothing from a host that does not
-  // advertise the read.
-  const statusRead = statusSupported ? (status.data ?? null) : null;
+  const { phase: statusPhase, read: statusRead } = simulatorStatusRead(
+    statusSupported,
+    status,
+  );
   // Wherever the platforms are shown: on the switch's row while off, where
   // its description carries them, and on Platforms while on.
   const checkAgain = (
-    <SimulatorCheckAgain client={client} hostId={hostId} status={statusRead} />
+    <SimulatorCheckAgain
+      client={client}
+      hostId={hostId}
+      status={statusRead}
+      failed={statusPhase === "failed"}
+    />
   );
+  const setupAgent =
+    statusRead === null ? null : (
+      <SimulatorSetupAgent
+        hostId={hostId}
+        hostName={props.hostName}
+        status={statusRead}
+      />
+    );
 
   return (
     <>
       <SimulatorEnabledRow
         switches={switches}
         status={statusRead}
-        checkAgain={checkAgain}
+        statusPhase={statusPhase}
+        hostName={props.hostName}
+        actions={
+          <>
+            {setupAgent}
+            {checkAgain}
+          </>
+        }
       />
       {/* Platforms only while on; the switch's description carries the
           platform status while off. The tools row while on, and while off
@@ -141,7 +166,12 @@ function SimulatorSettingsRows(props: {
         <SettingsRow
           row={HOST_OVERVIEW.definitions.simulatorPlatforms}
           status={status.isError ? "Couldn't ask this host." : undefined}
-          control={checkAgain}
+          control={
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {setupAgent}
+              {checkAgain}
+            </div>
+          }
           details={
             status.data === undefined ? null : (
               <SimulatorPlatformList platforms={status.data.platforms} />
@@ -236,41 +266,79 @@ function simulatorSwitch(
   };
 }
 
+/**
+ * Where the `simulator.status` read stands: not advertised by this host,
+ * in flight, failed, or answered (the answer itself travels beside it).
+ */
+type SimulatorStatusPhase = "unadvertised" | "checking" | "failed" | "read";
+
+/**
+ * The status read's phase, and its answer for the rows - none from a host
+ * that does not advertise the read.
+ */
+function simulatorStatusRead(
+  statusSupported: boolean,
+  status: UseQueryResult<SimulatorStatusResponse, HostRpcError>,
+): {
+  readonly phase: SimulatorStatusPhase;
+  readonly read: SimulatorStatusResponse | null;
+} {
+  if (!statusSupported) return { phase: "unadvertised", read: null };
+  const read = status.data ?? null;
+  if (status.isError) return { phase: "failed", read };
+  return { phase: read === null ? "checking" : "read", read };
+}
+
 function SimulatorEnabledRow(props: {
   readonly switches: SimulatorSwitch;
   /** The host's status read, or null while it is unavailable or not advertised. */
   readonly status: SimulatorStatusResponse | null;
+  readonly statusPhase: SimulatorStatusPhase;
+  readonly hostName: string;
   /** Drawn beside the switch while it is off. */
-  readonly checkAgain: ReactNode;
+  readonly actions: ReactNode;
 }): ReactNode {
-  const { switches, status } = props;
+  const { switches, status, statusPhase, hostName } = props;
   const row = HOST_OVERVIEW.definitions.mobileSimulatorsEnabled;
   const noPlatform = status?.packState.kind === "unsupported";
-  // The definition always carries a description; the type allows null for
-  // rows that have none.
-  const rowDescription = row.description ?? "";
-  let description: string;
-  if (switches.unreadable) {
-    description =
-      "Couldn't read this host's mobile simulators setting. Repair Traycer's config.json on that computer, or back it up before resetting it, then reopen Settings.";
-  } else if (!switches.enabled && status !== null) {
-    // Off: the Platforms row is not drawn, so its answer rides here.
-    description = `${rowDescription} ${platformSummary(status.platforms)}`;
-  } else {
-    description = rowDescription;
+  // Turning on waits for a status read that says the machine can run
+  // something. A host that never advertises the read keeps the switch it
+  // always had, and one already on can always be turned off.
+  const blocked =
+    !switches.enabled &&
+    (statusPhase === "checking" || statusPhase === "failed" || noPlatform);
+  let hint: ReactNode = null;
+  if (!switches.enabled && status !== null && noPlatform) {
+    hint =
+      simulatorSetupPlatforms(status).length > 0 ? (
+        <span data-testid="settings-simulators-setup-needed">
+          Set up a platform on {hostName} to turn this on.
+        </span>
+      ) : (
+        <span data-testid="settings-simulators-unsupported">
+          {hostName} can't run mobile simulators.
+        </span>
+      );
   }
   return (
     <SettingsRow
       row={row}
-      status={description}
+      status={enabledRowDescription({
+        // The definition always carries a description; the type allows null
+        // for rows that have none.
+        rowDescription: row.description ?? "",
+        switches,
+        status,
+        statusPhase,
+        hostName,
+      })}
+      hint={hint}
       control={
-        <div className="flex items-center gap-3">
-          {switches.enabled ? null : props.checkAgain}
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {switches.enabled ? null : props.actions}
           <Switch
             checked={switches.enabled}
-            // A machine that can run neither platform has nothing to turn on;
-            // one already on can still be turned off.
-            disabled={switches.locked || (noPlatform && !switches.enabled)}
+            disabled={switches.locked || blocked}
             aria-label="Use mobile simulators"
             data-testid="settings-simulators-enabled"
             onCheckedChange={(next) => {
@@ -281,6 +349,38 @@ function SimulatorEnabledRow(props: {
       }
     />
   );
+}
+
+/** The switch row's description: what it does, then what the host said. */
+function enabledRowDescription(input: {
+  readonly rowDescription: string;
+  readonly switches: SimulatorSwitch;
+  readonly status: SimulatorStatusResponse | null;
+  readonly statusPhase: SimulatorStatusPhase;
+  readonly hostName: string;
+}): string {
+  const { rowDescription, status, statusPhase, hostName } = input;
+  if (input.switches.unreadable) {
+    return "Couldn't read this host's mobile simulators setting. Repair Traycer's config.json on that computer, or back it up before resetting it, then reopen Settings.";
+  }
+  if (input.switches.enabled) return rowDescription;
+  if (statusPhase === "checking") {
+    return `${rowDescription} Checking what ${hostName} can run.`;
+  }
+  if (statusPhase === "failed") {
+    return `${rowDescription} Couldn't check what ${hostName} can run.`;
+  }
+  if (status === null) return rowDescription;
+  if (
+    status.packState.kind === "unsupported" &&
+    status.platforms.some((platform) => platform.available)
+  ) {
+    // Unsupported for a reason no platform names (the processor, the tools
+    // registry): "iOS available." beside a disabled switch would contradict it.
+    return `${rowDescription} ${status.packState.reason ?? ""}`.trim();
+  }
+  // Off: the Platforms row is not drawn, so its answer rides here.
+  return `${rowDescription} ${platformSummary(status.platforms)}`;
 }
 
 const PLATFORM_LABELS = { ios: "iOS", android: "Android" } as const;
@@ -420,19 +520,59 @@ function SimulatorToolsControl(props: {
 
 /**
  * Asks the host to look for the missing platforms again; drawn only while
- * the status read names one it cannot run.
+ * the status read names one it cannot run, or failed.
  */
 function SimulatorCheckAgain(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   /** The host's status read, or null while it is unavailable or not advertised. */
   readonly status: SimulatorStatusResponse | null;
+  readonly failed: boolean;
 }): ReactNode {
   const missing =
     props.status?.platforms.some((platform) => !platform.available) === true;
-  if (!missing) return null;
+  if (!missing && !props.failed) return null;
   return (
     <SimulatorCheckAgainButton client={props.client} hostId={props.hostId} />
+  );
+}
+
+/**
+ * "Set up with an agent", drawn only while the host names a platform it
+ * could set up: opens a new task draft on this page's host, seeded with what
+ * the host reported. Disabled, with the reason beside it, while that host is
+ * offline: the draft is never placed on another one.
+ */
+function SimulatorSetupAgent(props: {
+  readonly hostId: string | null;
+  readonly hostName: string;
+  readonly status: SimulatorStatusResponse;
+}): ReactNode {
+  const { hostReachable, start } = useStartSimulatorSetupAgent(props.hostId);
+  if (simulatorSetupPlatforms(props.status).length === 0) return null;
+  return (
+    <span className="flex flex-col items-end gap-1">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={!hostReachable}
+        data-testid="settings-simulators-setup-agent"
+        onClick={() =>
+          start({ hostName: props.hostName, status: props.status })
+        }
+      >
+        Set up with an agent
+      </Button>
+      {hostReachable ? null : (
+        <span
+          className="text-ui-sm text-muted-foreground"
+          data-testid="settings-simulators-setup-agent-offline"
+        >
+          {props.hostName} is offline. Reconnect it to set up with an agent.
+        </span>
+      )}
+    </span>
   );
 }
 

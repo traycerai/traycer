@@ -89,7 +89,10 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   railArtifacts: { shown: "shown" },
   railGitDiff: { shown: "shown" },
   railPullRequests: { shown: "auto" },
-  railFileTree: { shown: "shown" },
+  // Off for a new install: most people never open it, and every panel on the
+  // rail costs the others attention. An install from before that default
+  // carries it as shown (`layout-store.ts`).
+  railFileTree: { shown: "hidden" },
   railSharing: { shown: "shown" },
   railComments: { shown: "auto" },
 };
@@ -104,8 +107,8 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
  * hides the two elements that have a full route elsewhere: the dictation chord
  * starts voice input, and the palette and `/compact` compact a conversation.
  *
- * Attach image stays shown, alone among the composer's buttons: paste and
- * drag-drop both need the image already in hand, so hiding the button would
+ * Attach stays shown, alone among the composer's buttons: paste and
+ * drag-drop both need the file already in hand, so hiding the button would
  * remove the only way to attach a file from disk. Density shortens a reading;
  * it does not cost a gesture.
  */

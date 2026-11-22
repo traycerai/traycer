@@ -185,7 +185,7 @@ export function useCommGraphJump(
       if (target === null) return;
       const agent = agentById.get(commGraphJumpAgentId(target));
       if (agent === undefined) return;
-      openTile(openAgentIntent(epicId, agent));
+      openTile(openAgentIntent(epicId, agent), "user");
       if (target.kind === "chat-block") {
         requestJump(event.hostId, target.chatId, {
           kind: "block",
@@ -229,7 +229,7 @@ export function useCommGraphJump(
       }
       const sender = agentById.get(event.senderAgentId);
       if (sender === undefined || sender.kind !== "chat") return;
-      openTile(openAgentIntent(epicId, sender));
+      openTile(openAgentIntent(epicId, sender), "user");
       requestJump(event.hostId, event.senderAgentId, {
         kind: "sent-message",
         receiverAgentId: event.receiverAgentId,
@@ -258,7 +258,7 @@ export function useCommGraphJump(
       }
       const created = agentById.get(event.receiverAgentId);
       if (created === undefined || created.kind !== "chat") return;
-      openTile(openAgentIntent(epicId, created));
+      openTile(openAgentIntent(epicId, created), "user");
       requestJump(event.hostId, event.receiverAgentId, {
         kind: "first-message",
       });
@@ -268,7 +268,7 @@ export function useCommGraphJump(
 
   const openAgent = useCallback(
     (agent: CommGraphAgentNode): void => {
-      openTile(openAgentIntent(epicId, agent));
+      openTile(openAgentIntent(epicId, agent), "user");
     },
     [epicId, openTile],
   );

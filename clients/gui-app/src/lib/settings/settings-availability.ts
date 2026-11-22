@@ -57,6 +57,20 @@ export interface SettingsAvailabilityContext {
    * the surface it describes must agree), and search has to agree with both.
    */
   readonly phoneLayout: boolean;
+  /**
+   * `soundtrackOffered()`, read by the caller at call time: whether this build
+   * has anything to play, which is a fact of the build and not a preference.
+   */
+  readonly soundtrackOffered: boolean;
+  /**
+   * `desktopRecordingChannel() !== null`, read by the caller at call time:
+   * whether this shell can save a recording of the music.
+   */
+  readonly soundtrackRecordingOffered: boolean;
+  /** Whether this staging desktop can read the private track catalog. */
+  readonly soundtrackSetPiecesOffered: boolean;
+  /** `soundtrackEnabled`, subscribed: a row that needs Music on follows it. */
+  readonly soundtrackOn: boolean;
 }
 
 /** Rendered in every shell. */
@@ -76,13 +90,16 @@ export function neverOffered(_context: SettingsAvailabilityContext): boolean {
 }
 
 /**
- * Voice input — the mobile app refuses dictation outright
- * (`useDictationAvailability`), so the toggle would control nothing.
+ * Voice input — the mobile app dictates through its own recognizer or not at
+ * all (`useDictationAvailability`), so without one the toggle would control
+ * nothing.
  */
 export function isVoiceInputRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
-  return !context.mobileApp;
+  return (
+    !context.mobileApp || (context.runnerHost?.deviceDictation ?? null) !== null
+  );
 }
 
 /**
@@ -96,6 +113,39 @@ export function isLinkOpenRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return !context.mobileApp;
+}
+
+/**
+ * Sounds › Soundtrack — a build with nothing to play has nothing to set, and on
+ * the phone its background audio and autoplay are still to be settled.
+ */
+export function isSoundtrackRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp && context.soundtrackOffered;
+}
+
+/**
+ * Sounds › Soundtrack › Record session — only a dev or staging desktop build
+ * can save one, and says so through its bridge.
+ */
+export function isSoundtrackRecordingRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    isSoundtrackRowAvailable(context) && context.soundtrackRecordingOffered
+  );
+}
+
+/**
+ * Sounds › Soundtrack › Playback controls, and the buttons it turns on: they
+ * move music, so with Music off there is nothing for them to do. Their setting
+ * stays as it was.
+ */
+export function isPlaybackControlsRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return isSoundtrackRowAvailable(context) && context.soundtrackOn;
 }
 
 /**
@@ -181,7 +231,7 @@ export function isZoomRowAvailable(
   );
 }
 
-/** Sounds › OS notifications — the OS notification-settings pointer. */
+/** Alerts › System › OS notifications — the OS notification-settings pointer. */
 export function isSystemNotificationsRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
@@ -191,11 +241,30 @@ export function isSystemNotificationsRowAvailable(
   );
 }
 
-/** Sounds › Push notifications — the OS push permission of a phone shell. */
+/** Alerts › System › Push notifications — the OS push permission of a phone shell. */
 export function isPushPermissionRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (
     context.runnerHost !== null && context.runnerHost.pushPermission !== null
+  );
+}
+
+/** Alerts › System — drawn where either of its rows is. */
+export function isAlertsSystemGroupAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    isSystemNotificationsRowAvailable(context) ||
+    isPushPermissionRowAvailable(context)
+  );
+}
+
+/** Complete-track listening controls exist only on the staging source bridge. */
+export function isSetPiecesRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    isSoundtrackRowAvailable(context) && context.soundtrackSetPiecesOffered
   );
 }

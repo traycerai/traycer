@@ -1,104 +1,399 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  isUtteranceOpen,
-  joinSegments,
-  sameFocus,
+  callToggleAction,
   useVoiceSessionStore,
-  type VoiceFocus,
+  type CallFocus,
   type VoiceSessionDriver,
+  type VoiceSessionRecord,
 } from "../voice-session-store";
+import type { VoiceEngine } from "@/lib/voice/engine";
 
-const FOCUS: VoiceFocus = {
+const FOCUS: CallFocus = {
   botId: "bot-1",
   hostId: "host-1",
   threadId: null,
-  anchorMessageId: null,
-  anchorThread: null,
-};
-const THREAD_FOCUS: VoiceFocus = {
-  ...FOCUS,
-  threadId: "thread-1",
-  anchorMessageId: "msg-1",
 };
 const DRIVER: VoiceSessionDriver = {
   start: () => undefined,
   end: () => undefined,
   setMuted: () => undefined,
 };
+const ENGINE: VoiceEngine = {
+  connect: () => Promise.resolve(),
+  appendCommentary: () => undefined,
+  appendThinking: () => undefined,
+  close: () => Promise.resolve(),
+};
+const RECORD: VoiceSessionRecord = {
+  id: "session-1",
+  expiresAt: 0,
+  engine: ENGINE,
+};
 
 beforeEach(() => {
   useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
 });
 
-describe("focus and selection generation", () => {
-  it("selectionChanged bumps the generation and setFocus does not", () => {
+describe("sessionConnecting", () => {
+  it("begins a call with its focus and title, clears the last end's line, and opens the phone view", () => {
     const store = useVoiceSessionStore.getState();
-    store.setFocus(FOCUS);
-    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(0);
+    store.sessionEnded("credits");
+    store.appendInput("stale");
 
-    store.selectionChanged(THREAD_FOCUS);
-    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(1);
-    expect(useVoiceSessionStore.getState().focus).toEqual(THREAD_FOCUS);
+    store.sessionConnecting(FOCUS, "Tracy");
+
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      phase: "connecting",
+      focus: FOCUS,
+      callTitle: "Tracy",
+      endReason: null,
+      refusal: null,
+      openSpan: "",
+      phoneViewOpen: true,
+    });
+  });
+
+  it("takes the dial down: the call replaces it", () => {
+    const store = useVoiceSessionStore.getState();
+    store.openDial({ botId: "bot-1", threadId: null }, "Tracy");
+    store.sessionConnecting(FOCUS, "Tracy");
+    expect(useVoiceSessionStore.getState().dial).toBeNull();
+  });
+
+  it("moves the session token on connecting and on ended", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting(FOCUS, "Tracy");
+    const connecting = useVoiceSessionStore.getState().sessionToken;
+    store.sessionEnded(null);
+    expect(useVoiceSessionStore.getState().sessionToken).toBe(connecting + 1);
   });
 });
 
 describe("sessionEnded", () => {
-  it("forgets the session's state but keeps availability and the driver", () => {
+  it("forgets the call's state but keeps availability, the driver, the title, and the phone view for the ended line", () => {
     const store = useVoiceSessionStore.getState();
     store.setAvailability("live");
     store.setDriver(DRIVER);
-    store.setFocus(FOCUS);
-    store.appendInputSegment("hello", 1);
-    store.setPendingDelegation("d-1");
+    store.sessionConnecting(FOCUS, "Tracy");
+    store.sessionLive(RECORD);
+    store.appendInput("hello");
+    store.setCaptions(true);
+    store.pushCaptionLine({ direction: "input", text: "hello" });
 
     store.sessionEnded("ended");
 
-    const state = useVoiceSessionStore.getState();
-    expect(state.focus).toBeNull();
-    expect(state.segments).toEqual([]);
-    expect(state.pendingDelegationId).toBeNull();
-    expect(state.endReason).toBe("ended");
-    expect(state.availability).toBe("live");
-    expect(state.driver).toBe(DRIVER);
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      phase: "idle",
+      focus: null,
+      session: null,
+      openSpan: "",
+      captionLines: [],
+      endReason: "ended",
+      callTitle: "Tracy",
+      availability: "live",
+      driver: DRIVER,
+      phoneViewOpen: true,
+    });
+  });
+
+  it("keeps the phone view up with the reason until the line is dismissed, which puts the view down", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting(FOCUS, "Tracy");
+    store.sessionEnded("unreachable");
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      endReason: "unreachable",
+      phoneViewOpen: true,
+    });
+
+    store.clearEndReason();
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      endReason: null,
+      phoneViewOpen: false,
+    });
+  });
+
+  it("leaves the view alone when there is no line to clear", () => {
+    const store = useVoiceSessionStore.getState();
+    store.openDial({ botId: "bot-1", threadId: null }, "Tracy");
+    store.clearEndReason();
+    expect(useVoiceSessionStore.getState().phoneViewOpen).toBe(true);
+  });
+
+  it("resets push-to-talk and the held button", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting(FOCUS, "Tracy");
+    store.setPushToTalk(true);
+    store.setTalkHeld(true);
+    store.sessionEnded("background");
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      endReason: "background",
+      pushToTalk: false,
+      talkHeld: false,
+    });
   });
 });
 
 describe("sessionRefused", () => {
-  it("resets the session like an end but says a refusal, leaving endReason null, until it is cleared", () => {
+  it("resets the call like an end but says a refusal, leaving endReason null, until it is cleared", () => {
     const store = useVoiceSessionStore.getState();
     store.setAvailability("live");
     store.setDriver(DRIVER);
-    store.sessionConnecting();
-    store.setFocus(FOCUS);
+    store.sessionConnecting(FOCUS, "Tracy");
 
-    store.sessionRefused("credits");
+    store.sessionRefused("credits", null);
 
     expect(useVoiceSessionStore.getState()).toMatchObject({
       phase: "idle",
       refusal: "credits",
       endReason: null,
       focus: null,
-      phoneViewOpen: false,
+      phoneViewOpen: true,
       availability: "live",
       driver: DRIVER,
     });
 
     store.clearRefusal();
-    expect(useVoiceSessionStore.getState().refusal).toBeNull();
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      refusal: null,
+      phoneViewOpen: false,
+    });
+  });
+
+  it("keeps a paused bot's copy until the refusal is cleared", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionRefused("paused", "Tracy is paused until Friday.");
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      refusal: "paused",
+      pausedCopy: "Tracy is paused until Friday.",
+    });
+
+    store.clearRefusal();
+    expect(useVoiceSessionStore.getState().pausedCopy).toBeNull();
   });
 
   it("is replaced by the next start, and an end replaces a refusal rather than joining it", () => {
     const store = useVoiceSessionStore.getState();
-    store.sessionRefused("unavailable");
-    store.sessionConnecting();
-    expect(useVoiceSessionStore.getState().refusal).toBeNull();
+    store.sessionRefused("paused", "paused");
+    store.sessionConnecting(FOCUS, "Tracy");
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      refusal: null,
+      pausedCopy: null,
+    });
 
-    store.sessionRefused("microphone");
+    store.sessionRefused("microphone", null);
     store.sessionEnded("ended");
     expect(useVoiceSessionStore.getState()).toMatchObject({
       refusal: null,
       endReason: "ended",
     });
+  });
+});
+
+describe("placedFrom", () => {
+  it("is the bot and thread of the message box that placed the call, with no host", () => {
+    useVoiceSessionStore
+      .getState()
+      .sessionConnecting({ ...FOCUS, threadId: "thread-1" }, "Tracy");
+
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual({
+      botId: "bot-1",
+      threadId: "thread-1",
+    });
+  });
+
+  it("stays with the channel when the call's first send opens a thread", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting(FOCUS, "Tracy");
+
+    store.bindThread("thread-1");
+
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual({
+      botId: "bot-1",
+      threadId: null,
+    });
+  });
+
+  it.each([
+    {
+      how: "ends",
+      finish: () => useVoiceSessionStore.getState().sessionEnded("ended"),
+    },
+    {
+      how: "is refused",
+      finish: () =>
+        useVoiceSessionStore.getState().sessionRefused("credits", null),
+    },
+  ])("is kept after the call $how, for the line about it", ({ finish }) => {
+    useVoiceSessionStore
+      .getState()
+      .sessionConnecting({ ...FOCUS, threadId: "thread-1" }, "Tracy");
+
+    finish();
+
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual({
+      botId: "bot-1",
+      threadId: "thread-1",
+    });
+  });
+
+  it("is replaced by the next call", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting({ ...FOCUS, threadId: "thread-1" }, "Tracy");
+    store.sessionEnded("ended");
+
+    store.sessionConnecting(
+      { botId: "bot-2", hostId: "host-1", threadId: null },
+      "Scout",
+    );
+
+    expect(useVoiceSessionStore.getState().placedFrom).toEqual({
+      botId: "bot-2",
+      threadId: null,
+    });
+  });
+});
+
+describe("bindThread", () => {
+  it("binds the call's thread once it opens, keeping the rest of the focus", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting(FOCUS, "Tracy");
+    store.bindThread("thread-1");
+    expect(useVoiceSessionStore.getState().focus).toEqual({
+      ...FOCUS,
+      threadId: "thread-1",
+    });
+  });
+
+  it("does nothing with no call running", () => {
+    useVoiceSessionStore.getState().bindThread("thread-1");
+    expect(useVoiceSessionStore.getState().focus).toBeNull();
+  });
+
+  it("keeps the same focus object when the thread is already bound", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting({ ...FOCUS, threadId: "thread-1" }, "Tracy");
+    const before = useVoiceSessionStore.getState().focus;
+    store.bindThread("thread-1");
+    expect(useVoiceSessionStore.getState().focus).toBe(before);
+  });
+});
+
+describe("the dial", () => {
+  it("openDial raises the phone view with the target and title, and closeDial lowers it", () => {
+    const store = useVoiceSessionStore.getState();
+    store.openDial({ botId: "bot-2", threadId: "thread-9" }, "Scout");
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      dial: { botId: "bot-2", threadId: "thread-9" },
+      callTitle: "Scout",
+      phoneViewOpen: true,
+    });
+
+    store.closeDial();
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      dial: null,
+      phoneViewOpen: false,
+    });
+  });
+
+  it("openDial replaces the last call's line", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionRefused("paused", "Paused.");
+    store.openDial({ botId: "bot-1", threadId: null }, "Tracy");
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      refusal: null,
+      pausedCopy: null,
+      endReason: null,
+    });
+  });
+
+  it("closeDial leaves a running call's view alone", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting(FOCUS, "Tracy");
+    store.closeDial();
+    expect(useVoiceSessionStore.getState().phoneViewOpen).toBe(true);
+  });
+});
+
+describe("what the person said", () => {
+  it("takeOpenSpanTo joins the deltas as they arrived and trims only the ends", () => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInput(" Check ");
+    store.appendInput("/src/");
+    store.appendInput("voice.ts now. ");
+
+    expect(
+      store.takeOpenSpanTo(useVoiceSessionStore.getState().inputHeard),
+    ).toBe("Check /src/voice.ts now.");
+    expect(useVoiceSessionStore.getState().openSpan).toBe("");
+  });
+
+  it("takeOpenSpanTo takes what was said before the position only and leaves the rest for the next take", () => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInput("First request.");
+    const acknowledged = useVoiceSessionStore.getState().inputHeard;
+    store.appendInput(" Then more.");
+
+    expect(store.takeOpenSpanTo(acknowledged)).toBe("First request.");
+    expect(useVoiceSessionStore.getState().openSpan).toBe(" Then more.");
+    expect(
+      store.takeOpenSpanTo(useVoiceSessionStore.getState().inputHeard),
+    ).toBe("Then more.");
+  });
+
+  it("takeOpenSpanTo returns null, taking nothing, when nothing was said before the position", () => {
+    const store = useVoiceSessionStore.getState();
+    expect(store.takeOpenSpanTo(0)).toBeNull();
+
+    store.appendInput("abc");
+    expect(store.takeOpenSpanTo(0)).toBeNull();
+    expect(useVoiceSessionStore.getState().openSpan).toBe("abc");
+  });
+
+  it("takeOpenSpanTo returns null for only blanks, and lets the blanks go", () => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInput("   ");
+
+    expect(store.takeOpenSpanTo(3)).toBeNull();
+    expect(useVoiceSessionStore.getState().openSpan).toBe("");
+  });
+
+  it("keeps counting positions across a take", () => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInput("one two");
+    expect(store.takeOpenSpanTo(7)).toBe("one two");
+
+    store.appendInput(" three four");
+    expect(store.takeOpenSpanTo(13)).toBe("three");
+    expect(store.takeOpenSpanTo(18)).toBe("four");
+  });
+
+  it("dropOpenSpan lets what was said go, and a later take is not shifted by it", () => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInput("never mind");
+    store.dropOpenSpan();
+    expect(useVoiceSessionStore.getState().openSpan).toBe("");
+
+    store.appendInput("go ahead now");
+
+    expect(store.takeOpenSpanTo(18)).toBe("go ahead");
+  });
+
+  it.each([
+    [
+      "a new call begins",
+      () => useVoiceSessionStore.getState().sessionConnecting(FOCUS, "Tracy"),
+    ],
+    ["the call ends", () => useVoiceSessionStore.getState().sessionEnded(null)],
+  ])("starts counting positions from nothing again when %s", (_when, reset) => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInput("stale words");
+    expect(store.takeOpenSpanTo(5)).toBe("stale");
+
+    reset();
+    expect(useVoiceSessionStore.getState().openSpan).toBe("");
+    store.appendInput("fresh");
+
+    expect(store.takeOpenSpanTo(5)).toBe("fresh");
   });
 });
 
@@ -132,32 +427,9 @@ describe("the phone's talk mode and view", () => {
     });
   });
 
-  it("opens the phone view when a session connects, and a session's end clears it with push-to-talk and the held button", () => {
-    const store = useVoiceSessionStore.getState();
-    expect(useVoiceSessionStore.getState().phoneViewOpen).toBe(false);
-
-    store.sessionConnecting();
-    expect(useVoiceSessionStore.getState().phoneViewOpen).toBe(true);
-
-    store.setPhoneViewOpen(false);
-    store.setPushToTalk(true);
-    store.setTalkHeld(true);
-    store.setPhoneViewOpen(true);
-    store.sessionEnded("background");
-
-    expect(useVoiceSessionStore.getState()).toMatchObject({
-      endReason: "background",
-      pushToTalk: false,
-      talkHeld: false,
-      phoneViewOpen: false,
-    });
-  });
-});
-
-describe("the phone view and a held talk button", () => {
   it("hiding the view releases the hold but nothing else, and reopening it preserves a hold set while hidden", () => {
     const store = useVoiceSessionStore.getState();
-    store.sessionConnecting();
+    store.sessionConnecting(FOCUS, "Tracy");
     store.setPushToTalk(true);
     store.setTalkHeld(true);
 
@@ -175,18 +447,33 @@ describe("the phone view and a held talk button", () => {
       talkHeld: true,
     });
   });
+
+  it("leavePushToTalkMuted closes the microphone only while push-to-talk is on", () => {
+    const store = useVoiceSessionStore.getState();
+    store.leavePushToTalkMuted();
+    expect(useVoiceSessionStore.getState().muted).toBe(false);
+
+    store.setPushToTalk(true);
+    store.setTalkHeld(true);
+    store.leavePushToTalkMuted();
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      pushToTalk: false,
+      talkHeld: false,
+      muted: true,
+    });
+  });
 });
 
 describe("the dictation pause", () => {
-  it("is held per owner: it outlives the session, and ends only when every owner has released its own hold", () => {
+  it("is held per owner: it outlives the call, and ends only when every owner has released its own hold", () => {
     const store = useVoiceSessionStore.getState();
     store.acquireDictationHold("composer-a");
-    store.sessionConnecting();
+    store.sessionConnecting(FOCUS, "Tracy");
     store.engineReplacing();
     store.sessionEnded("ended");
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
 
-    store.sessionConnecting();
+    store.sessionConnecting(FOCUS, "Tracy");
     store.acquireDictationHold("composer-b");
     // An owner that never acquired releases nothing; one that did releases
     // only its own.
@@ -195,15 +482,15 @@ describe("the dictation pause", () => {
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
     store.releaseDictationHold("composer-b");
     expect(useVoiceSessionStore.getState().dictationHolds.size).toBe(0);
-    // The session started under a hold: it stays paused for the Resume.
+    // The call started under a hold: it stays paused for the Resume.
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
     store.resumeFromDictation();
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
   });
 
-  it("outlives dictation while a session runs: only Resume ends it, and Resume waits for the microphone", () => {
+  it("outlives dictation while a call runs: only Resume ends it, and Resume waits for the microphone", () => {
     const store = useVoiceSessionStore.getState();
-    store.sessionConnecting();
+    store.sessionConnecting(FOCUS, "Tracy");
     store.acquireDictationHold("composer");
     store.resumeFromDictation();
     // Dictation still records: Resume is refused.
@@ -214,7 +501,7 @@ describe("the dictation pause", () => {
     store.resumeFromDictation();
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
 
-    // Paused again, then the session ends: the pause goes with it.
+    // Paused again, then the call ends: the pause goes with it.
     store.acquireDictationHold("composer");
     store.releaseDictationHold("composer");
     store.sessionEnded("ended");
@@ -222,44 +509,12 @@ describe("the dictation pause", () => {
     expect(useVoiceSessionStore.getState().dictationPauseLatched).toBe(false);
   });
 
-  it("is dictation's alone with no session: a hold taken and released while idle leaves nothing to resume", () => {
+  it("is dictation's alone with no call: a hold taken and released while idle leaves nothing to resume", () => {
     const store = useVoiceSessionStore.getState();
     store.acquireDictationHold("composer");
     store.releaseDictationHold("composer");
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
     expect(useVoiceSessionStore.getState().dictationPauseLatched).toBe(false);
-  });
-});
-
-describe("reservations", () => {
-  it("reserves every open segment, consumes only its own and releases in order", () => {
-    const store = useVoiceSessionStore.getState();
-    store.appendInputSegment("Check build A.", 1);
-    const a = store.reserveOpenSpan("a");
-    store.appendInputSegment(" Then check build B.", 2);
-    const b = useVoiceSessionStore.getState().reserveOpenSpan("b");
-
-    expect(a?.text).toBe("Check build A.");
-    expect(b?.text).toBe("Then check build B.");
-    expect(useVoiceSessionStore.getState().reserveOpenSpan("c")).toBeNull();
-
-    useVoiceSessionStore.getState().consumeReservation(a?.seqs ?? []);
-    expect(
-      useVoiceSessionStore.getState().segments.map((s) => s.reservedBy),
-    ).toEqual(["b"]);
-
-    useVoiceSessionStore.getState().releaseReservation(b?.seqs ?? []);
-    expect(useVoiceSessionStore.getState().openSpan()).toBe(
-      "Then check build B.",
-    );
-  });
-
-  it("moves the session token on connecting and on ended", () => {
-    const store = useVoiceSessionStore.getState();
-    store.sessionConnecting();
-    const connecting = useVoiceSessionStore.getState().sessionToken;
-    store.sessionEnded(null);
-    expect(useVoiceSessionStore.getState().sessionToken).toBe(connecting + 1);
   });
 });
 
@@ -295,45 +550,45 @@ describe("pushCaptionLine", () => {
   });
 });
 
-describe("joinSegments", () => {
-  const seg = (text: string) => ({ seq: 0, text, at: 0, reservedBy: null });
-
-  it("joins a word split across deltas without inventing a space", () => {
-    expect(joinSegments([seg("hel"), seg("lo")])).toBe("hello");
+describe("callToggleAction", () => {
+  it("is nothing without a call owner mounted, whatever else is true", () => {
+    const store = useVoiceSessionStore.getState();
+    store.setAvailability("live");
+    expect(callToggleAction(useVoiceSessionStore.getState())).toBeNull();
+    store.sessionConnecting(FOCUS, "Tracy");
+    expect(callToggleAction(useVoiceSessionStore.getState())).toBeNull();
   });
 
-  it("joins a path split across deltas without inventing a space", () => {
-    expect(joinSegments([seg("/src/"), seg("voice.ts")])).toBe("/src/voice.ts");
+  it("ends a call that is connecting or live", () => {
+    const store = useVoiceSessionStore.getState();
+    store.setDriver(DRIVER);
+    store.sessionConnecting(FOCUS, "Tracy");
+    expect(callToggleAction(useVoiceSessionStore.getState())).toBe("end");
+    store.sessionLive(RECORD);
+    expect(callToggleAction(useVoiceSessionStore.getState())).toBe("end");
   });
 
-  it("keeps the vendor's own spacing and trims only the ends", () => {
-    expect(joinSegments([seg(" Check "), seg("build. ")])).toBe("Check build.");
+  it("starts a call when none runs and voice is offered", () => {
+    const store = useVoiceSessionStore.getState();
+    store.setDriver(DRIVER);
+    store.setAvailability("live");
+    expect(callToggleAction(useVoiceSessionStore.getState())).toBe("start");
   });
-});
 
-describe("isUtteranceOpen and sameFocus", () => {
-  it("is open with segments, a pending delegation or a pending action, closed otherwise", () => {
-    expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(false);
-    useVoiceSessionStore.getState().setPendingDelegation("d-1");
-    expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(true);
-    useVoiceSessionStore.getState().setPendingDelegation(null);
-    useVoiceSessionStore.getState().appendInputSegment("hi", 1);
-    expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(true);
-    useVoiceSessionStore.getState().dropOpenSpan();
-    expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(false);
-    useVoiceSessionStore.getState().setPendingAction({
-      kind: "interrupted",
-      text: "x",
-      delegationId: null,
-      selectionGeneration: 0,
-      askState: "asking",
+  it("does nothing while the server has not said, or offers no voice", () => {
+    const store = useVoiceSessionStore.getState();
+    store.setDriver(DRIVER);
+    expect(callToggleAction(useVoiceSessionStore.getState())).toBeNull();
+    store.setAvailability("dormant");
+    expect(callToggleAction(useVoiceSessionStore.getState())).toBeNull();
+  });
+
+  it("does nothing while a call is ending", () => {
+    useVoiceSessionStore.setState({
+      driver: DRIVER,
+      availability: "live",
+      phase: "ending",
     });
-    expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(true);
-  });
-
-  it("compares foci by value", () => {
-    expect(sameFocus(FOCUS, { ...FOCUS })).toBe(true);
-    expect(sameFocus(FOCUS, THREAD_FOCUS)).toBe(false);
-    expect(sameFocus(null, FOCUS)).toBe(false);
+    expect(callToggleAction(useVoiceSessionStore.getState())).toBeNull();
   });
 });

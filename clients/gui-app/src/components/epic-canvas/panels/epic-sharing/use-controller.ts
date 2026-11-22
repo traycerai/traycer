@@ -29,7 +29,10 @@ import type {
   SharingAccessLoadState,
   SharingPendingAction,
 } from "./types";
-import type { AssignableCollaboratorRole } from "@/lib/epic-collaborator-roles";
+import {
+  DEFAULT_COLLABORATOR_ROLE,
+  type AssignableCollaboratorRole,
+} from "@/lib/epic-collaborator-roles";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import {
@@ -72,29 +75,18 @@ function readCloudAuthorizedNow(): boolean {
 
 interface SharingPanelState {
   readonly inviteInput: string;
-  readonly selectedRole: AssignableCollaboratorRole;
   readonly queuedInvites: ReadonlyArray<QueuedInvite>;
-  readonly teamRolesById: Readonly<Record<string, AssignableCollaboratorRole>>;
   readonly revokeTarget: RevokeTarget | null;
   readonly pendingAction: SharingPendingAction | null;
 }
 
 type SharingPanelAction =
   | { readonly type: "set-invite-input"; readonly value: string }
-  | {
-      readonly type: "set-selected-role";
-      readonly role: AssignableCollaboratorRole;
-    }
   | { readonly type: "queue-invite"; readonly invite: ParsedInviteIdentifier }
   | { readonly type: "remove-queued-invite"; readonly inviteKey: string }
   | {
       readonly type: "drop-succeeded-invites";
       readonly succeededInviteKeys: ReadonlySet<string>;
-    }
-  | {
-      readonly type: "set-team-role";
-      readonly teamId: string;
-      readonly role: AssignableCollaboratorRole;
     }
   | {
       readonly type: "set-revoke-target";
@@ -107,9 +99,7 @@ type SharingPanelAction =
 
 const INITIAL_SHARING_PANEL_STATE: SharingPanelState = {
   inviteInput: "",
-  selectedRole: "editor",
   queuedInvites: [],
-  teamRolesById: {},
   revokeTarget: null,
   pendingAction: null,
 };
@@ -304,43 +294,10 @@ export function useEpicSharingPanelController(
     );
   };
 
-  const handleTeamRoleChange = (
-    team: TeamRow,
-    newRole: AssignableCollaboratorRole,
-  ) => {
-    if (!isOwner) return;
-    if (!readCloudAuthorizedNow()) return;
-    if (team.kind !== "shared") return;
-    dispatch({
-      type: "set-pending-action",
-      pendingAction: {
-        kind: "role-team",
-        teamId: team.teamId,
-      },
-    });
-    batchUpdateRoles.mutate(
-      {
-        epicId,
-        input: {
-          changes: [{ teamId: team.teamId, newRole }],
-        },
-      },
-      {
-        onSuccess: () => {
-          toast.success("Team role updated");
-        },
-        onSettled: () => {
-          dispatch({ type: "set-pending-action", pendingAction: null });
-        },
-      },
-    );
-  };
-
   const handleShareTeam = (team: TeamRow) => {
     if (!isOwner) return;
     if (!readCloudAuthorizedNow()) return;
     if (team.kind !== "unshared") return;
-    const role = state.teamRolesById[team.teamId] ?? "editor";
     dispatch({
       type: "set-pending-action",
       pendingAction: {
@@ -354,7 +311,7 @@ export function useEpicSharingPanelController(
         input: {
           kind: "team",
           teamId: team.teamId,
-          role,
+          role: DEFAULT_COLLABORATOR_ROLE,
         },
       },
       {
@@ -439,15 +396,11 @@ export function useEpicSharingPanelController(
     inviteCardProps: {
       inviteInput: state.inviteInput,
       inputError,
-      selectedRole: state.selectedRole,
       queuedInvites: state.queuedInvites,
       isPending: isInvitePending,
       canAddInvite,
       onInputChange: (value) => {
         dispatch({ type: "set-invite-input", value });
-      },
-      onRoleChange: (role) => {
-        dispatch({ type: "set-selected-role", role });
       },
       onAddToQueue: handleAddToQueue,
       onRemoveFromQueue: (invite) => {
@@ -497,12 +450,7 @@ export function useEpicSharingPanelController(
       rows: teamRows,
       accessPermission: isOwner ? "owner" : "read_only",
       pending: teamPending,
-      teamRolesById: state.teamRolesById,
-      onPendingTeamRoleChange: (teamId, role) => {
-        dispatch({ type: "set-team-role", teamId, role });
-      },
       onShareTeam: handleShareTeam,
-      onRoleChange: handleTeamRoleChange,
       onRevokeRequest: (team) => {
         if (team.kind !== "shared") return;
         dispatch({
@@ -545,15 +493,13 @@ function sharingPanelReducer(
   switch (action.type) {
     case "set-invite-input":
       return { ...state, inviteInput: action.value };
-    case "set-selected-role":
-      return { ...state, selectedRole: action.role };
     case "queue-invite":
       return {
         ...state,
         inviteInput: "",
         queuedInvites: [
           ...state.queuedInvites,
-          { ...action.invite, role: state.selectedRole },
+          { ...action.invite, role: DEFAULT_COLLABORATOR_ROLE },
         ],
       };
     case "remove-queued-invite":
@@ -569,14 +515,6 @@ function sharingPanelReducer(
         queuedInvites: state.queuedInvites.filter(
           (invite) => !action.succeededInviteKeys.has(inviteKey(invite)),
         ),
-      };
-    case "set-team-role":
-      return {
-        ...state,
-        teamRolesById: {
-          ...state.teamRolesById,
-          [action.teamId]: action.role,
-        },
       };
     case "set-revoke-target":
       return { ...state, revokeTarget: action.target };
@@ -793,8 +731,6 @@ function buildTeamPendingState(input: {
     anyMutation: input.anyMutation,
     shareTeamId:
       pendingAction?.kind === "share-team" ? pendingAction.teamId : null,
-    roleTeamId:
-      pendingAction?.kind === "role-team" ? pendingAction.teamId : null,
     revokeTeamId:
       pendingAction?.kind === "revoke-team" ? pendingAction.teamId : null,
   };

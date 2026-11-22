@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hostStreamRpcRegistry,
@@ -6,7 +7,7 @@ import {
 } from "@traycer/protocol/host/registry";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  type HostNotificationCloudEntryV26,
+  type HostNotificationCloudEntryV28,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsSubscribeClientFrame,
@@ -21,6 +22,8 @@ import type {
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
+import { setAppSuspended } from "@/lib/notifications/notification-presence";
 import {
   WsStreamClient,
   type ParamsOf,
@@ -53,7 +56,7 @@ function entry(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationCloudEntryV26 {
+): HostNotificationCloudEntryV28 {
   return {
     id,
     updatedAt,
@@ -72,14 +75,14 @@ function entry(
   };
 }
 
-function promptEntry(id: string): HostNotificationCloudEntryV26 {
+function promptEntry(id: string): HostNotificationCloudEntryV28 {
   return promptOccurrence(id, 10);
 }
 
 function promptOccurrence(
   id: string,
   updatedAt: number,
-): HostNotificationCloudEntryV26 {
+): HostNotificationCloudEntryV28 {
   return {
     id,
     updatedAt,
@@ -110,7 +113,7 @@ function attentionCursor(
 }
 
 function defaultSummaryFor(
-  entries: ReadonlyArray<HostNotificationCloudEntryV26>,
+  entries: ReadonlyArray<HostNotificationCloudEntryV28>,
 ): HostNotificationsSummary {
   return {
     unreadCount: entries.filter((item) => item.readAt === null).length,
@@ -123,7 +126,7 @@ function defaultSummaryFor(
 }
 
 function applySimpleSnapshot(input: {
-  readonly entries: ReadonlyArray<HostNotificationCloudEntryV26>;
+  readonly entries: ReadonlyArray<HostNotificationCloudEntryV28>;
   readonly summary: HostNotificationsSummary;
   readonly recentCursor: HostNotificationsChronologicalCursor | null;
   readonly attentionNext: HostNotificationsAttentionCursor | null;
@@ -168,6 +171,9 @@ class MockStreamSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     this.requestReconnectCount += 1;
   }
@@ -227,6 +233,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,
@@ -1618,7 +1625,7 @@ describe("host notifications store", () => {
 
   it("uses channelEmission as the only host-source display path", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV26>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV28>> = [];
     const liveEntry = entry("live", 200, null);
 
     const close = openHostNotificationsStream(reconnectEngine, client, null, {
@@ -1662,12 +1669,12 @@ describe("host notifications store", () => {
 
   it("uses the latest feed copy for renderer channel emissions", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV26>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV28>> = [];
     const staleEmissionEntry = entry("live", 200, null);
     if (staleEmissionEntry.kind !== "agent.stopped") {
       throw new Error("Expected an agent-stopped notification fixture");
     }
-    const richFeedEntry: HostNotificationCloudEntryV26 = {
+    const richFeedEntry: HostNotificationCloudEntryV28 = {
       ...staleEmissionEntry,
       updatedAt: 201,
       payload: {
@@ -1712,7 +1719,7 @@ describe("host notifications store", () => {
 
   it("ignores non-renderer channelEmission frames for in-app display", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV26>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationCloudEntryV28>> = [];
     const liveEntry = entry("webhook-live", 240, null);
 
     const close = openHostNotificationsStream(reconnectEngine, client, null, {
@@ -1813,6 +1820,50 @@ describe("host notifications store", () => {
       expect(client.session.clientFrames).toHaveLength(3);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("sends a not-focused presence frame at once when the document becomes hidden or the app backgrounded", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const client = new MockWsStreamClient();
+    const close = openHostNotificationsStream(reconnectEngine, client, null, {
+      windowId: "window-1",
+      now: () => 456,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+      cloudLane: null,
+    });
+    try {
+      client.session.emitOpen();
+      const focusedOf = (index: number): boolean | null => {
+        const frame = client.session.clientFrames.at(index);
+        return frame !== undefined && frame.kind === "presence"
+          ? frame.focused
+          : null;
+      };
+      expect(focusedOf(0)).toBe(true);
+
+      __setBrowserDocumentHiddenForTests(true);
+      expect(client.session.clientFrames).toHaveLength(2);
+      expect(focusedOf(1)).toBe(false);
+
+      __setBrowserDocumentHiddenForTests(false);
+      expect(client.session.clientFrames).toHaveLength(3);
+      expect(focusedOf(2)).toBe(true);
+
+      setAppSuspended(true);
+      expect(client.session.clientFrames).toHaveLength(4);
+      expect(focusedOf(3)).toBe(false);
+
+      setAppSuspended(false);
+      expect(client.session.clientFrames).toHaveLength(5);
+      expect(focusedOf(4)).toBe(true);
+    } finally {
+      close();
+      __setBrowserDocumentHiddenForTests(false);
+      setAppSuspended(false);
     }
   });
 

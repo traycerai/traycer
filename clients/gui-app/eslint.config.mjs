@@ -2885,6 +2885,10 @@ export default tseslint.config(
             "onboarding-*", // a <style> element inside onboarding-page.tsx
             "diorama-*", // src/components/onboarding/onboarding-diorama.css
             "session-import-*", // src/components/onboarding/onboarding-import.css
+            // src/components/share-on-x/share-image.css - the share
+            // pictures, drawn in pixels and in the social palette.
+            "share-image",
+            "share-image__*",
             // src/components/settings/panels/getting-started-settings.css - a
             // card whose `scroll-margin-top` lives behind a media query.
             "settings-setup-card",
@@ -3196,6 +3200,20 @@ export default tseslint.config(
       "shadcn/no-arbitrary-values": [
         "error",
         { allow: [...sanctionedArbitraryValues, "min-h-[44px]"] },
+      ],
+    },
+  },
+  {
+    // Button touch targets need a CSS-pixel floor independent of the user's
+    // root font size; rem-based min-h-11/min-w-11 fall below 44px at the
+    // default 15px font and at smaller supported font sizes.
+    files: ["src/components/ui/button.tsx"],
+    rules: {
+      "shadcn/no-arbitrary-values": [
+        "error",
+        {
+          allow: [...sanctionedArbitraryValues, "min-h-[44px]", "min-w-[44px]"],
+        },
       ],
     },
   },

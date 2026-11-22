@@ -94,7 +94,9 @@ function treeWithoutTranscript(node: ReactNode): ReactNode {
 
 function tree(node: ReactNode): ReactNode {
   return (
-    <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: "host-1" }}>
+    <ChatTranscriptProvider
+      value={{ chatId: CHAT_ID, hostId: "host-1", payerHostId: "host-1" }}
+    >
       {treeWithoutTranscript(node)}
     </ChatTranscriptProvider>
   );
@@ -137,6 +139,7 @@ function startCallElement(input: {
       imageResults={[]}
       artifact={null}
       mcpApp={null}
+      feedbackDraft={null}
       variant={input.variant}
       headerFindUnitId={null}
     />
@@ -194,6 +197,7 @@ describe("the run_shell start card", () => {
   it("names the shell and reads its status live, updating the SAME card in place", () => {
     renderCall({ variant: "card", correlated: true });
     act(() => {
+      session.setConnectionStatus("open");
       session.setCommands([shell({})]);
     });
 
@@ -418,6 +422,40 @@ describe("the run_shell start card", () => {
     ).toBe("true");
   });
 
+  it("uses the source chat freshness for a same-host fork's shell", () => {
+    const source = installManagedCommandChatSession({
+      epicId: EPIC_ID,
+      chatId: "chat-source",
+      hostId: "host-1",
+    });
+    const command = shell({ chatId: "chat-source" });
+    renderCall({ variant: "card", correlated: true });
+    act(() => {
+      session.setCommands([]);
+      session.setConnectionStatus("closed");
+      source.setCommands([command]);
+      source.setConnectionStatus("open");
+    });
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByLabelText("Shell running")).toBeTruthy();
+
+    act(() => {
+      session.setConnectionStatus("open");
+      session.sendSnapshot([]);
+      source.setConnectionStatus("reconnecting");
+    });
+    expect(screen.getByText("Status unavailable")).toBeTruthy();
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.queryByLabelText("Shell running")).toBeNull();
+    act(() => source.setConnectionStatus("open"));
+    expect(screen.getByText("Status unavailable")).toBeTruthy();
+    expect(screen.queryByText("Running")).toBeNull();
+    act(() => source.sendSnapshot([command]));
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByLabelText("Shell running")).toBeTruthy();
+    expect(screen.queryByText("Status unavailable")).toBeNull();
+  });
+
   it("claims no deletion when there is no chat transcript identity to attribute absence to", () => {
     // The stream is open and the shell is absent - but with no chat identity
     // in scope there is no OWNER for that absence to be authoritative for, so
@@ -487,6 +525,7 @@ describe("the run_shell start card", () => {
           imageResults={[]}
           artifact={null}
           mcpApp={null}
+          feedbackDraft={null}
           variant="card"
           headerFindUnitId={null}
         />
@@ -503,6 +542,7 @@ describe("the run_shell start card", () => {
   it("renders as a row inside an activity group too", () => {
     renderCall({ variant: "row", correlated: true });
     act(() => {
+      session.setConnectionStatus("open");
       session.setCommands([shell({})]);
     });
 

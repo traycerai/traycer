@@ -7,6 +7,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   BotSettingsRefusal,
   SettingsGroup,
@@ -21,9 +22,11 @@ import {
 } from "@/hooks/bots/use-bot-slack-app-query";
 import {
   useBotSlackDisconnectMutation,
+  useBotSlackDmsMutation,
   useBotSlackInstallUrlMutation,
   useBotSlackRegisterMutation,
 } from "@/hooks/bots/use-bot-slack-mutations";
+import { useBotMayChange } from "@/hooks/bots/use-bot-may-change";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useOpenLink } from "@/lib/links/open-link";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
@@ -38,13 +41,20 @@ const COPIED_RESET_MS = 2_000;
  *   credentials;
  * - registered (or uninstalled, which keeps the credentials): install it to a
  *   workspace, or register other credentials;
- * - installed: the workspace and app, install again, disconnect.
+ * - installed: the workspace and app, whether it takes DMs, install again,
+ *   disconnect.
  *
  * Rendered from the server's app read alone; every write refreshes that read.
- * Each refusal is shown in place, under the control that made it.
+ * Each refusal is shown in place, under the control that made it. The
+ * registration form is drawn only where the role may change the bot's
+ * environment (`useBotMayChange`), and not while that role is unknown.
  */
-export function BotSlackSettings(props: { readonly botId: string }): ReactNode {
+export function BotSlackSettings(props: {
+  readonly botId: string;
+  readonly environmentId: string;
+}): ReactNode {
   const { botId } = props;
+  const mayRegister = useBotMayChange(props.environmentId);
   const appQuery = useBotSlackAppQuery(botId);
   const app = appQuery.data;
   const error = appQuery.error;
@@ -61,11 +71,11 @@ export function BotSlackSettings(props: { readonly botId: string }): ReactNode {
       />
     );
   } else if (app === null) {
-    body = <BotSlackNotConnected botId={botId} />;
+    body = <BotSlackNotConnected botId={botId} mayRegister={mayRegister} />;
   } else if (app.installState === "installed") {
     body = <BotSlackConnected app={app} />;
   } else {
-    body = <BotSlackRegistered app={app} />;
+    body = <BotSlackRegistered app={app} mayRegister={mayRegister} />;
   }
   // A read that failed after one succeeded keeps the app the last one read,
   // and says so under it.
@@ -115,7 +125,10 @@ function BotSlackUnavailable(props: { readonly line: string }): ReactNode {
   );
 }
 
-function BotSlackNotConnected(props: { readonly botId: string }): ReactNode {
+function BotSlackNotConnected(props: {
+  readonly botId: string;
+  readonly mayRegister: boolean;
+}): ReactNode {
   const { botId } = props;
   const manifest = useBotSlackManifestQuery(botId);
   const openLink = useOpenLink();
@@ -170,7 +183,7 @@ function BotSlackNotConnected(props: { readonly botId: string }): ReactNode {
           Open api.slack.com/apps
         </Button>
       </div>
-      <BotSlackRegisterForm botId={botId} />
+      {props.mayRegister ? <BotSlackRegisterForm botId={botId} /> : null}
     </div>
   );
 }
@@ -269,7 +282,10 @@ function BotSlackRegisterForm(props: { readonly botId: string }): ReactNode {
 }
 
 /** Registered and not installed: never installed, or removed from its workspace since. */
-function BotSlackRegistered(props: { readonly app: SlackAppView }): ReactNode {
+function BotSlackRegistered(props: {
+  readonly app: SlackAppView;
+  readonly mayRegister: boolean;
+}): ReactNode {
   const { app } = props;
   return (
     <div
@@ -286,7 +302,7 @@ function BotSlackRegistered(props: { readonly app: SlackAppView }): ReactNode {
         {registeredNextStepLine(app)}
       </p>
       <BotSlackInstall app={app} label="Install to workspace" />
-      <BotSlackRegisterForm botId={app.botId} />
+      {props.mayRegister ? <BotSlackRegisterForm botId={app.botId} /> : null}
     </div>
   );
 }
@@ -336,6 +352,7 @@ function BotSlackConnected(props: { readonly app: SlackAppView }): ReactNode {
       <p className="text-ui-xs text-muted-foreground">
         Mention the app in a channel it is in to ask the bot something.
       </p>
+      <BotSlackDirectMessages app={app} />
       <div className="flex flex-wrap items-start gap-2">
         <BotSlackInstall app={app} label="Install again" />
         <Button
@@ -357,6 +374,41 @@ function BotSlackConnected(props: { readonly app: SlackAppView }): ReactNode {
       </div>
       <BotSettingsRefusal
         message={disconnect.error === null ? null : disconnect.error.message}
+      />
+    </div>
+  );
+}
+
+/** Whether a person's DM to the bot is admitted, as the app read says. */
+function BotSlackDirectMessages(props: {
+  readonly app: SlackAppView;
+}): ReactNode {
+  const { app } = props;
+  const update = useBotSlackDmsMutation(app.botId);
+  const id = useId();
+  const descriptionId = `${id}-description`;
+  return (
+    <div className="flex flex-col gap-2">
+      <div
+        className="flex items-start gap-3 py-1"
+        data-testid="bot-settings-slack-dms"
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <Label htmlFor={id}>Direct messages</Label>
+          <p id={descriptionId} className="text-ui-xs text-muted-foreground">
+            Anyone in the workspace can message this bot directly.
+          </p>
+        </div>
+        <Switch
+          id={id}
+          checked={app.dmsEnabled}
+          disabled={update.isPending}
+          aria-describedby={descriptionId}
+          onCheckedChange={(dmsEnabled) => update.mutate(dmsEnabled)}
+        />
+      </div>
+      <BotSettingsRefusal
+        message={update.error === null ? null : update.error.message}
       />
     </div>
   );
@@ -389,7 +441,9 @@ function BotSlackInstall(props: {
             install.mutate(
               { baselineInstalledAt: app.installedAt },
               {
-                onSuccess: (minted) => void openLink(minted.url, "auth", event),
+                onSuccess: (minted) => {
+                  if (minted !== null) void openLink(minted.url, "auth", event);
+                },
               },
             )
           }

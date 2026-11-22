@@ -91,7 +91,6 @@ function mergedResults(
     messageMatches: [],
     chatNextCursor: null,
     messageNextCursor: null,
-    indexState: "complete",
     ...input,
   };
 }
@@ -242,13 +241,12 @@ describe("useChatSearchMessageHits: pass-through statuses", () => {
 });
 
 describe("useChatSearchMessageHits: ready shape", () => {
-  it("carries the merged messages, index state and loading-more flag, with showMore a function", () => {
+  it("carries the merged messages and loading-more flag, with showMore a function", () => {
     useChatSearchResultsMock.mockReturnValue({
       kind: "ready",
       results: mergedResults({
         messageMatches: [messageMatch({ chatId: "c1" })],
         messageNextCursor: "c1",
-        indexState: "partial",
       }),
       loadingMore: false,
       loadMoreError: null,
@@ -264,7 +262,6 @@ describe("useChatSearchMessageHits: ready shape", () => {
       throw new Error("expected a ready status");
     }
     expect(result.current.messages).toHaveLength(1);
-    expect(result.current.indexState).toBe("partial");
     expect(result.current.loadingMore).toBe(false);
     expect(typeof result.current.showMore).toBe("function");
     // The base a chat-scoped expansion re-asks with is the one these rows were

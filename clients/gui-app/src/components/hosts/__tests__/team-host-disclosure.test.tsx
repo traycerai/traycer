@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   HostListItem,
@@ -143,28 +149,6 @@ const VIEWER = "user-viewer";
 const HOST_ID = "host-sbx-1";
 const TEAM_ID = "team-a";
 const TEAM_NAME = "Alpha";
-
-describe("teamHostDisclosureSentences", () => {
-  it("names the team in the first and third sentences, word for word", () => {
-    expect(teamHostDisclosureSentences("Alpha")).toEqual([
-      "Agents here run as the host. Anything another member's agent does on it can read what yours can, browser sign-ins included. Agents here work with Alpha's hosts only. A browser-using agent here runs its browser in the sandbox, never on your computer.",
-      "Another member's agent here can act and be charged as you while you are attached.",
-      "A copy of your sign-in to this host, taken by anyone who was root here, keeps working against Alpha's hosts until this host sleeps.",
-    ]);
-  });
-
-  it("carries the team name it is given, not a fixed one", () => {
-    const [first, , third] = teamHostDisclosureSentences("Platform Crew");
-    expect(first).toContain("Platform Crew's hosts only");
-    expect(third).toContain("against Platform Crew's hosts until");
-  });
-
-  it("names the outside readers line", () => {
-    expect(teamHostOutsideReadersLine("Alpha")).toBe(
-      "People outside Alpha can read chats in this task.",
-    );
-  });
-});
 
 function person(
   userId: string | null,
@@ -439,6 +423,19 @@ function renderDisclosure(hostId: string): void {
   );
 }
 
+function expectSentencesAtRest(card: HTMLElement): void {
+  expect(card.className).toContain("absolute");
+  expect(card.querySelector("svg")).not.toBeNull();
+  expect(card.querySelector("details")).toBeNull();
+  expect(screen.queryByText("How access works")).toBeNull();
+  for (const sentence of teamHostDisclosureSentences(TEAM_NAME)) {
+    expect(within(card).getByText(sentence).tagName).toBe("P");
+  }
+  expect(card.textContent).not.toContain(
+    "other members' agents can read your data",
+  );
+}
+
 describe("<TeamHostDisclosure />", () => {
   beforeEach(() => {
     resetSeenStore();
@@ -453,14 +450,15 @@ describe("<TeamHostDisclosure />", () => {
     resetSeenStore();
   });
 
-  it("shows the three sentences verbatim as a status", () => {
+  it("shows the three access paragraphs at rest, with no disclosure", () => {
     renderDisclosure("host-1");
 
     const card = screen.getByTestId("team-host-disclosure");
     expect(card.getAttribute("role")).toBe("status");
-    for (const sentence of teamHostDisclosureSentences(TEAM_NAME)) {
-      expect(card.textContent).toContain(sentence);
-    }
+    expectSentencesAtRest(card);
+    expect(screen.getByTestId("team-host-disclosure-dismiss").textContent).toBe(
+      "Got it",
+    );
   });
 
   it("omits the outside-readers line when no one outside the team reads the task", () => {
@@ -485,6 +483,26 @@ describe("<TeamHostDisclosure />", () => {
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
       teamHostOutsideReadersLine(TEAM_NAME),
     );
+  });
+
+  it("keeps the three paragraphs, Got it, and outside readers visible at rest", () => {
+    mocks.collaborators.current = view({
+      ownerTeam: null,
+      direct: [VIEWER, "user-stranger"],
+      teams: [team(TEAM_ID, [VIEWER])],
+    });
+    renderDisclosure("host-1");
+
+    const card = screen.getByTestId("team-host-disclosure");
+    expectSentencesAtRest(card);
+    const dismiss = screen.getByTestId("team-host-disclosure-dismiss");
+    const outside = screen.getByTestId("team-host-disclosure-outside");
+    expect(dismiss.textContent).toBe("Got it");
+    expect(dismiss.closest("details")).toBeNull();
+    expect(outside.closest("details")).toBeNull();
+    expect(outside.textContent).toBe(teamHostOutsideReadersLine(TEAM_NAME));
+    expect(card.contains(dismiss)).toBe(true);
+    expect(card.contains(outside)).toBe(true);
   });
 
   it("treats collaborators as null without an open task", () => {
@@ -679,10 +697,15 @@ function registryItem(input: {
 }
 
 function renderFrame(): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
   render(
-    <SandboxTileStateFrame chat={null}>
-      <textarea data-testid="tile-body" />
-    </SandboxTileStateFrame>,
+    <QueryClientProvider client={queryClient}>
+      <SandboxTileStateFrame chat={null}>
+        <textarea data-testid="tile-body" />
+      </SandboxTileStateFrame>
+    </QueryClientProvider>,
   );
 }
 
@@ -766,7 +789,7 @@ describe("<SandboxTileStateFrame /> team host disclosure", () => {
     renderFrame();
 
     const card = screen.getByTestId("team-host-disclosure");
-    expect(card.textContent).toContain("Alpha's hosts only");
+    expectSentencesAtRest(card);
     expect(screen.getByTestId("tile-body")).toBeTruthy();
   });
 
@@ -816,8 +839,7 @@ describe("<SandboxTileStateFrame /> team host disclosure", () => {
 
     const cards = screen.getAllByTestId("team-host-disclosure");
     expect(cards).toHaveLength(1);
-    const [first] = teamHostDisclosureSentences(TEAM_NAME);
-    expect(cards[0]?.textContent).toContain(first);
+    expectSentencesAtRest(cards[0]);
     expectChatTileLive();
   });
 

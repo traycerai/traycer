@@ -24,7 +24,10 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
-import { cloudChatSummarySchema } from "@traycer/protocol/host/epic/cloud-chat";
+import {
+  cloudChatSummarySchema,
+  cloudChatSummaryV10Schema,
+} from "@traycer/protocol/host/epic/cloud-chat";
 import {
   hostCommunicationGraphCloudFeedCursorSchema,
   hostCommunicationGraphCloudFeedEventSchema,
@@ -59,6 +62,27 @@ export const environmentChatsSubscribeOpenRequestSchema = lazySchema(() =>
  * row's `identity.ownerUserId` is the environment id, so a client unites
  * them with the host's arm by the identity triple.
  */
+export const environmentChatsSubscribeServerFrameV10Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      generation: generationSchema,
+      chats: z.array(cloudChatSummaryV10Schema),
+    }),
+    pongFrameSchema,
+  ]),
+);
+
+export const environmentChatsSubscribeV10 = defineStreamRpcContract({
+  method: "environment.chats.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: environmentChatsSubscribeOpenRequestSchema,
+  serverFrameSchema: environmentChatsSubscribeServerFrameV10Schema,
+  clientFrameSchema: pingFrameSchema,
+});
+
+/** The 1.1 snapshot adds the cloud row's optional creator comparison. */
 export const environmentChatsSubscribeServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -71,9 +95,9 @@ export const environmentChatsSubscribeServerFrameSchema = lazySchema(() =>
   ]),
 );
 
-export const environmentChatsSubscribeV10 = defineStreamRpcContract({
+export const environmentChatsSubscribeV11 = defineStreamRpcContract({
   method: "environment.chats.subscribe",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: environmentChatsSubscribeOpenRequestSchema,
   serverFrameSchema: environmentChatsSubscribeServerFrameSchema,
   clientFrameSchema: pingFrameSchema,

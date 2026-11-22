@@ -32,6 +32,7 @@ import {
 } from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
 
 import {
+  NO_FILE_ROUTE,
   makeHandle,
   NO_MENTION_ROOTS,
   NOOP_FILE_DROPS,
@@ -242,6 +243,8 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -281,6 +284,11 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -304,6 +312,8 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -326,6 +336,11 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
+        getJSON: () => ({ type: "doc", content: [] }),
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -343,6 +358,8 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 

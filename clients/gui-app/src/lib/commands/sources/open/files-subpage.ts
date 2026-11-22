@@ -129,7 +129,7 @@ function codeFileLeaves(args: CodeFileLeavesArgs): ReadonlyArray<CommandItem> {
     return [
       openerNotice(
         `open:files:ws:${workspacePath}:unavailable`,
-        "This workspace is unavailable",
+        "This folder is unavailable",
       ),
     ];
   }

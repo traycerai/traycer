@@ -1,3 +1,21 @@
+import type { HostOwnershipResult } from "../host-client/host-ownership";
+import type { EnvironmentTransport } from "../environment/environment-cloud";
+import type { AutoPolicySaveResult } from "../host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "../host-client/task-environment-attachment";
+import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
+import type { HostTokenSource } from "../auth/host-token-source";
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "../host-client/team-chat-auto-archive";
+import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
+import type { TeamComputersResult } from "../host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxArtifactBridge } from "./sandbox-artifacts";
 import type {
   NotificationFeedDeliveryResult,
@@ -27,6 +45,7 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
+import type { TeamComputerReleaseResult } from "../host-client/team-computer-release";
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
 import type {
   SandboxAutomationFetchResult,
@@ -47,22 +66,34 @@ import type {
   VoiceSessionMintRequest,
   VoiceTrayAction,
 } from "../host-client/voice-sessions";
-import type { VoiceRouteFetchResult } from "../host-client/voice-router";
 import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "../host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "../host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
   SecretRequestDecideFetchResult,
 } from "../host-client/sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
-import type { ExecutableWriteGrantFetchResult } from "../host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
@@ -125,7 +156,65 @@ export type SystemResumeEvent = {
    * conservative desktop-calibrated behavior.
    */
   readonly backgroundedForMs: number | null;
+  /**
+   * The machine woke behind its lock screen: the shell is running again, but
+   * the person is not back until the unlock, which the shell reports as a wake
+   * of its own. Only the desktop sees a lock screen; a mobile app is not in
+   * the foreground behind one.
+   */
+  readonly screenLocked: boolean;
 };
+
+/** What a device dictation session tells its caller. */
+export interface DeviceDictationCallbacks {
+  /** The recognizer accepts audio from now on. */
+  readonly onReady: () => void;
+  /**
+   * A transcript of audio sent so far that no earlier call has covered. A
+   * recognizer may raise one at each pause; the last comes after `flush`.
+   */
+  readonly onTranscript: (text: string) => void;
+  /** Everything sent before `flush` has been transcribed; the session is over. */
+  readonly onFlushed: () => void;
+  /**
+   * The session failed and is over. `permissionDenied` is true when the OS
+   * refuses this app speech recognition, which the person repairs on the
+   * page `openMicrophoneSettings` opens.
+   */
+  readonly onError: (error: {
+    readonly message: string;
+    readonly permissionDenied: boolean;
+  }) => void;
+}
+
+export interface DeviceDictationSession {
+  /** PCM16 mono, little endian, at the rate the session was opened with. */
+  sendAudio(pcm: Uint8Array): void;
+  /** No more audio: transcribe what was sent, then `onTranscript` and `onFlushed`. */
+  flush(): void;
+  /** Ends the session and discards what was not transcribed. */
+  close(): void;
+}
+
+/**
+ * Dictation transcribed by the device's own recognizer. The renderer captures
+ * the microphone itself and hands the audio over, so the native side opens no
+ * microphone. Audio is never sent anywhere: a language the device cannot
+ * transcribe by itself is reported unavailable, not transcribed elsewhere.
+ */
+export interface IDeviceDictationHost {
+  /**
+   * Whether the device can transcribe `language` by itself right now.
+   * `"auto"` is the device's own language.
+   */
+  isAvailable(language: string): Promise<boolean>;
+  /** No callback is raised before `open` returns. */
+  open(options: {
+    readonly language: string;
+    readonly sampleRate: number;
+    readonly callbacks: DeviceDictationCallbacks;
+  }): DeviceDictationSession;
+}
 
 /**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
@@ -189,6 +278,12 @@ export interface IRunnerHost {
    * for which one is reached and when).
    */
   readonly authnBaseUrl: string;
+
+  /**
+   * Each request sent once, never following a redirect. The shell owns it: a phone's
+   * patched `fetch` ignores `redirect`.
+   */
+  readonly environmentTransport: EnvironmentTransport;
 
   /**
    * Browser-safe WebSocket attach endpoint for the Remote Host Support relay
@@ -380,6 +475,25 @@ export interface IRunnerHost {
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
 
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult>;
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult>;
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult>;
+
   /**
    * "Remove from account" — `POST /api/v3/hosts/:hostId/deregister` with the
    * user bearer. Desktop shells run this in Electron main for the same CORS
@@ -412,9 +526,22 @@ export interface IRunnerHost {
    * failures collapse into the discriminated results.
    */
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  /** Read from traycer-server so the list needs no computer awake. Never throws. */
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  /** Never throws. */
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  /** Never throws. */
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult>;
   /** `GET /api/traycer/models`: the Traycer models every sandbox runs. */
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
@@ -437,17 +564,6 @@ export interface IRunnerHost {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
-  /**
-   * The voice router's one model call (traycer-server's inference
-   * passthrough, `host-client/voice-router.ts`) with the user bearer, billed
-   * to the person's own account. `requestBody` is the JSON the app built; the
-   * answer comes back opaque for the app's structured-output parser. Same
-   * placement as the voice session routes above. Never throws.
-   */
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult>;
   /**
    * Tells the shell whether this window holds a live voice session. A
    * desktop window whose voice is live is hidden rather than destroyed when
@@ -500,10 +616,10 @@ export interface IRunnerHost {
   /**
    * A bot's Slack app (traycer-server `/api/slack/apps/*`) with the person's
    * bearer, for its members: the app as they see it, the manifest it is
-   * created from, the credentials' registration, Slack's install URL and the
-   * disconnect. Same placement as the sandbox control plane above: desktop in
-   * Electron main, mobile through the native HTTP layer. See
-   * `host-client/slack-app.ts`. Never throw.
+   * created from, the credentials' registration, Slack's install URL, the
+   * disconnect and the DM setting. Same placement as the sandbox control
+   * plane above: desktop in Electron main, mobile through the native HTTP
+   * layer. See `host-client/slack-app.ts`. Never throw.
    */
   readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
   getSlackAppManifest(
@@ -522,6 +638,26 @@ export interface IRunnerHost {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  /**
+   * No host in the path. Never throws. Never
+   * throw.
+   */
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See
@@ -540,6 +676,10 @@ export interface IRunnerHost {
     bearerToken: string,
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult>;
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult>;
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -550,16 +690,6 @@ export interface IRunnerHost {
     requestId: string,
     decision: SecretRequestDecision,
   ): Promise<SecretRequestDecideFetchResult>;
-  /**
-   * An executable-write grant for one host, minted by authn on the user's
-   * session (`host-client/executable-write-grant.ts`). Sent with a write that
-   * can reach an execution sink on that host.
-   */
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult>;
-
   openExternalLink(url: string): Promise<void>;
 
   /**
@@ -668,6 +798,12 @@ export interface IRunnerHost {
    * implementations (dev runner, tests) keep a single round-trippable entry.
    */
   readonly tokenStore: ITokenStore;
+
+  /**
+   * The only credential this app ever puts in a frame to a host. Desktop backs it
+   * with main's file, mobile with the secure store.
+   */
+  readonly hostTokens: HostTokenSource;
 
   /**
    * Declares whether this shell actually exposes a local-host stream.
@@ -907,9 +1043,14 @@ export interface IRunnerHost {
    * Idempotent and unscoped by design: it asserts nothing about membership -
    * only that the authority's copy is stale - so a duplicate or late call
    * costs one refetch and can never publish something false. Callers are the
-   * membership mutations themselves, not surfaces reacting to them.
+   * membership mutations themselves, and the host directory, which reads the
+   * outcome to decide whether discovery may conclude over the fleet.
+   *
+   * Never rejects: a thrown or refused read is `unavailable`, mapped at the
+   * shell boundary by every implementer, so no caller needs a catch to learn
+   * what happened.
    */
-  refreshHostFleet(): Promise<void>;
+  refreshHostFleet(): Promise<FleetRefreshOutcome>;
 
   /**
    * Subscribes to the shell's own registry reads, when the shell OWNS the
@@ -959,6 +1100,14 @@ export interface IRunnerHost {
   readonly hostLifecycle: IHostLifecycleHost | null;
 
   /**
+   * Speech recognition that runs on the device this renderer is on, or `null`
+   * where the shell has none (desktop, web, tests): dictation then
+   * goes to the person's own host or is not offered. See
+   * {@link IDeviceDictationHost}.
+   */
+  readonly deviceDictation: IDeviceDictationHost | null;
+
+  /**
    * OS push permission of the DEVICE running this renderer - the phone's own
    * notification switch, not anything host-scoped. Present on shells where OS
    * push exists (the native mobile shells) and `null` everywhere else
@@ -990,6 +1139,18 @@ export interface IRunnerHost {
    * shell; `null` everywhere else, since no other platform has the gesture.
    */
   readonly statusBarTap: IStatusBarTapHost | null;
+
+  /** Follows no redirect. Never throws. */
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 /**
@@ -1260,6 +1421,9 @@ export interface IStatusBarTapHost {
  */
 export type PushPermissionState = "prompt" | "granted" | "denied";
 
+/** Last registration attempt; an accepted registration does not prove delivery. */
+export type PushRegistrationState = "pending" | "registered" | "failed";
+
 /**
  * A severity a phone can stop being pushed for: the host's own notification
  * severity, so the vocabulary has one owner.
@@ -1267,13 +1431,17 @@ export type PushPermissionState = "prompt" | "granted" | "denied";
 export type PushSeverity = HostNotificationSeverity;
 
 /**
- * Read/repair surface for the device's OS push permission, backing the
- * Settings → Alerts push rows, plus which severities this phone is pushed
+ * Read/repair surface for this app's OS permission and push registration,
+ * backing Settings → Alerts, plus which severities this app is pushed
  * for. Only reachable where `IRunnerHost.pushPermission` is non-null.
  */
 export interface IPushPermissionHost {
   /** Local OS read; never prompts. */
   get(): Promise<PushPermissionState>;
+  /** Local registration status, independent of OS permission. */
+  getRegistrationState(): PushRegistrationState;
+  /** Retry registration without raising the OS prompt. */
+  retryRegistration(): Promise<void>;
   /**
    * Raises the OS prompt if the OS still allows one (before the first ask, or
    * Android's single rationale retry) and resolves the resulting state. A
@@ -1301,12 +1469,30 @@ export interface IPushPermissionHost {
   /**
    * Fires when the state MAY have changed - a foreground resume (the person
    * may have just changed it in OS Settings), a completed `request()`, a
-   * completed `setMutedSeverities()`, or a change of login session (the muted
-   * set is kept per account). Subscribers re-read via `get()` and
-   * `getMutedSeverities()`; the signal carries no state itself.
+   * completed `setMutedSeverities()`, a registration transition, or a change of
+   * login session (the muted set is kept per account). Subscribers re-read
+   * permission, registration and muted severities; the signal carries no state.
    */
   onChange(handler: () => void): Disposable;
 }
+
+/**
+ * What one {@link IRunnerHost.refreshHostFleet} call did to the selection
+ * authority's fleet.
+ *
+ * - `published`: a fleet snapshot read for the current identity reached the
+ *   authority (a signed-out empty fleet included - that is an answer).
+ * - `unavailable`: the read failed or was refused, and nothing was published.
+ *   The authority keeps whatever fleet it had, possibly none.
+ * - `superseded`: the read finished but nothing current came of it - the
+ *   identity moved during it, or the source was disposed. A read that lost
+ *   only to a newer read of the same identity is `published`: the authority
+ *   already holds that newer fleet.
+ */
+export type FleetRefreshOutcome =
+  | { readonly kind: "published" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "superseded" };
 
 /**
  * One shell-owned registry read, delivered to a consumer that would otherwise
@@ -1939,6 +2125,7 @@ export type TokenRotateOutcome =
   | "user-mismatch"
   | "tombstoned"
   | "lock-busy"
+  | "disk-full"
   | "spend-pending"
   | "refresh-rejected-credential"
   | "refresh-rejected-account"
@@ -1946,10 +2133,11 @@ export type TokenRotateOutcome =
   | "commit-failed";
 
 export interface TokenRotateResult {
+  readonly diskPressure: DiskPressure | null;
   readonly outcome: TokenRotateOutcome;
   // The credentials the caller should act on: the committed/adopted/minted pair
   // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
-  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
+  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/`disk-full`/
   // `spend-pending`/`refresh-rejected-credential`/`refresh-rejected-account`/
   // `refresh-network`).
   readonly pair: StoredCredentials | null;
@@ -2032,6 +2220,8 @@ export function shouldWipeLegacyCredentials(
   return outcome !== "retryable" && outcome !== "commit-failed";
 }
 
+export type SignInSaveResult = "saved" | "disk-full";
+
 /**
  * Typed credential store owned by the shell, backed by the single machine-local
  * `~/.traycer/cli/<env>/credentials` file (tech plan §3). It carries the FULL
@@ -2056,10 +2246,12 @@ export function shouldWipeLegacyCredentials(
  */
 export interface ITokenStore {
   get(): Promise<StoredCredentials | null>;
+  getSignInStorageLow(): Promise<boolean>;
+  subscribeSignInStorageLow(listener: (low: boolean) => void): Disposable;
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void>;
+  ): Promise<SignInSaveResult>;
   rotate(expected: {
     readonly userId: string;
     readonly token: string;
@@ -2157,6 +2349,13 @@ export interface INotificationSystemSettingsHost {
 export interface NotificationForegroundAppLocal {
   readonly userId: string;
   readonly entry: unknown;
+  /**
+   * The row's kind does not interrupt on this device (Settings → Alerts), so
+   * the request exists only to reach a focused sibling window's inbox: the
+   * shell relays it there and never raises an OS notification for it, and
+   * the window that receives it lists the row without a toast or a chime.
+   */
+  readonly inboxOnly: boolean;
 }
 
 /** Plain-data main -> renderer relay used instead of an OS notification while

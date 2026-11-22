@@ -64,6 +64,7 @@ import {
   HarnessModelPickerPanelBody,
   type HarnessModelPickerPanelBodyProps,
 } from "@/components/home/pickers/harness-model-picker-panel";
+import { EMPTY_REMOVED_PROFILES_BY_HARNESS_ID } from "@/components/home/pickers/harness-rail-providers";
 import {
   TEAM_SANDBOX_HARNESS_UNAVAILABLE,
   teamSandboxHarnessBlocked,
@@ -81,11 +82,9 @@ describe("teamSandboxHarnessBlocked", () => {
 
   it.each([
     ["placeholder", true, false],
-    ["process-scoped", true, true],
     ["unsupported", true, true],
     [null, true, true],
     ["placeholder", false, false],
-    ["process-scoped", false, false],
     ["unsupported", false, false],
     [null, false, false],
   ] as const)(
@@ -200,7 +199,7 @@ function rowOf(harnessId: GuiHarnessId): HarnessModelRow {
 
 const CATALOG: ReadonlyArray<GuiHarnessCatalogEntry> = [
   catalogEntry("codex", "placeholder"),
-  catalogEntry("claude", "process-scoped"),
+  catalogEntry("claude", null),
   catalogEntry("cursor", "unsupported"),
 ];
 
@@ -229,6 +228,7 @@ function renderPanel(input: {
       GuiHarnessId,
       ReadonlyArray<ProviderProfile>
     >(),
+    removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
     resolvedActiveProviderId: input.browsed,
     activeProfileId: null,
     activeProfileIdByHarnessId: new Map<GuiHarnessId, string | null>(),
@@ -245,10 +245,12 @@ function renderPanel(input: {
     onRefreshCatalog: () => Promise.resolve(),
     hostUnavailableLabel: null,
     onOpenProviderSettings: noop,
+    onOpenHostUpdates: noop,
     onClosePicker: noop,
     listRef,
     listKey: "list",
     visibleRows: [rowOf(input.browsed)],
+    hiddenModelProviders: new Set(),
     selectedRowId: "",
     effectiveActiveRowId: "",
     hoveredRowId: "",
@@ -333,7 +335,7 @@ describe("harness picker off a team sandbox", () => {
     ["a personal host", hostEntry({ kind: "personal", owner: undefined })],
     ["a host with no directory entry", null],
   ] as const)(
-    "changes nothing on %s: a process-scoped harness stays selectable",
+    "changes nothing on %s: a harness with no mode stays selectable",
     (_label, entry) => {
       mocks.entry.current = entry;
       const onSelectRow = vi.fn();

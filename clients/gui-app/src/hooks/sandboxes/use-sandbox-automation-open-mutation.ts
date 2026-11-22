@@ -87,8 +87,8 @@ export function useSandboxAutomationOpen(
         !settledForStartingAccount(context)
       )
         return;
-      if (opened.settled) toast.success("The team pod is open");
-      else toast.info("Opening the team pod…");
+      if (opened.settled) toast.success("The team sandbox is open");
+      else toast.info("Opening the team sandbox…");
     },
     onError: (error, target, context) => {
       if (feedback === "inline" || !settledForStartingAccount(context)) return;
@@ -96,7 +96,7 @@ export function useSandboxAutomationOpen(
         error,
         target === null
           ? "Couldn't start Automations. Retry it from Settings ▸ Sandboxes."
-          : "Couldn't open this team pod.",
+          : "Couldn't open this team sandbox.",
       );
     },
   });

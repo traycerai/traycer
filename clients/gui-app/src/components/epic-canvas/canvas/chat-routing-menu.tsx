@@ -85,7 +85,12 @@ export function ChatRoutingTabMenu(props: ChatRoutingTabMenuProps) {
   const client = useHostClientForHostId(hostId);
   const configure = useAgentConfigure(client);
   const version = useHostMethodSchemaVersion(hostId, "agent.configure");
-  if (chat === null || !agentConfigureCarriesRouting(version)) return null;
+  if (
+    chat === null ||
+    !agentConfigureCarriesRouting(version, chat.settings?.serviceTier ?? null)
+  ) {
+    return null;
+  }
   const settings: ChatRunSettings | null = chat.settings;
   return (
     <ChatRoutingContextMenuGroup

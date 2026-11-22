@@ -5,12 +5,14 @@ import type {
   EpicTerminalRef,
   GitDiffTileRef,
   ManagedCommandOutputTileRef,
+  SimulatorTileRef,
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import {
   isBrowserSessionTileRef,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
+  isSimulatorTileRef,
   isWorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
@@ -45,6 +47,7 @@ export const ARTIFACT_TAB_DND_TYPE = "artifact-tab";
 export const SIDEBAR_NODE_DND_TYPE = "sidebar-node";
 export const TERMINAL_TILE_DND_TYPE = "terminal-tile";
 export const BROWSER_TILE_DND_TYPE = "browser-tile";
+export const SIMULATOR_TILE_DND_TYPE = "simulator-tile";
 export const GIT_DIFF_TILE_DND_TYPE = "git-diff-tile";
 export const WORKSPACE_FILE_DND_TYPE = "workspace-file";
 export const WORKSPACE_FOLDER_DND_TYPE = "workspace-folder";
@@ -59,6 +62,7 @@ export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   SIDEBAR_NODE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
   BROWSER_TILE_DND_TYPE,
+  SIMULATOR_TILE_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
@@ -113,6 +117,18 @@ export interface EpicCanvasBrowserTileDragData {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly tile: BrowserSessionTileRef;
+}
+
+/**
+ * A Simulators-panel row dragged out. The ref names the row's instance, and
+ * the drop files a connect request for it: the placed tile attaches to the
+ * person's session, or opens one, as a row click's tile does.
+ */
+export interface EpicCanvasSimulatorTileDragData {
+  readonly kind: typeof SIMULATOR_TILE_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly tile: SimulatorTileRef;
 }
 
 export interface EpicCanvasGitDiffTileDragData {
@@ -219,6 +235,7 @@ export type EpicCanvasDragSourceData =
   | EpicCanvasSidebarNodeDragData
   | EpicCanvasTerminalTileDragData
   | EpicCanvasBrowserTileDragData
+  | EpicCanvasSimulatorTileDragData
   | EpicCanvasGitDiffTileDragData
   | EpicCanvasWorkspaceFileDragData
   | EpicCanvasWorkspaceFolderDragData
@@ -257,16 +274,10 @@ export type LeftPanelRailDropPosition = "before" | "after" | "combine";
 export type LeftPanelRailOrientation = "horizontal" | "vertical";
 
 /**
- * Canvas drop targets carry the view-tab (and, for the empty shell, the
- * epic) that owns them so the root-level commit can address the right
- * canvas without React context.
+ * Canvas drop targets carry the view-tab that owns them so the root-level
+ * commit can address the right canvas without React context.
  */
 export type EpicCanvasDropTargetData =
-  | {
-      readonly kind: "empty-shell";
-      readonly epicId: string;
-      readonly viewTabId: string;
-    }
   | {
       readonly kind: "artifact-tab";
       readonly viewTabId: string;
@@ -349,10 +360,6 @@ export type EpicCanvasDropPreview =
       readonly kind: "artifact-tab-group-body";
       readonly groupId: string;
       readonly position: DropPosition;
-    }
-  | {
-      readonly kind: "empty-shell";
-      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-rail";
@@ -478,6 +485,13 @@ export function getBrowserTileDragId(
   return `browser-tile:${JSON.stringify([hostId, sessionId, tabId])}`;
 }
 
+export function getSimulatorTileDragId(
+  hostId: string,
+  instanceKey: string,
+): string {
+  return `simulator-tile:${JSON.stringify([hostId, instanceKey])}`;
+}
+
 export function getGitDiffTileDragId(tileId: string): string {
   return `git-diff-tile:${tileId}`;
 }
@@ -526,10 +540,6 @@ export function getLeftPanelBodyDropId(
   panelId: string,
 ): string {
   return `left-panel-body-target:${epicId}:${panelId}`;
-}
-
-export function getEmptyShellDropId(epicId: string, tabId: string): string {
-  return `empty-shell:${epicId}:${tabId}`;
 }
 
 export function getSidebarReparentRowDropId(nodeId: string): string {
@@ -651,6 +661,15 @@ function readBrowserTileSource(
     return null;
   }
   return { kind: BROWSER_TILE_DND_TYPE, ...scope, tile: ref };
+}
+
+function readSimulatorTileSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  const ref = parseTileRef(value.tile);
+  if (scope === null || ref === null || !isSimulatorTileRef(ref)) return null;
+  return { kind: SIMULATOR_TILE_DND_TYPE, ...scope, tile: ref };
 }
 
 function readManagedCommandOutputSource(
@@ -790,6 +809,8 @@ export function readEpicCanvasDragSourceData(
   if (value.kind === TERMINAL_TILE_DND_TYPE)
     return readTerminalTileSource(value);
   if (value.kind === BROWSER_TILE_DND_TYPE) return readBrowserTileSource(value);
+  if (value.kind === SIMULATOR_TILE_DND_TYPE)
+    return readSimulatorTileSource(value);
   if (value.kind === GIT_DIFF_TILE_DND_TYPE)
     return readGitDiffTileSource(value);
   if (value.kind === WORKSPACE_FILE_DND_TYPE)
@@ -828,16 +849,6 @@ export function readEpicCanvasDropTargetData(
   value: unknown,
 ): EpicCanvasDropTargetData | null {
   if (!isRecord(value)) return null;
-  if (value.kind === "empty-shell") {
-    if (!isNonEmptyString(value.epicId) || !isNonEmptyString(value.viewTabId)) {
-      return null;
-    }
-    return {
-      kind: "empty-shell",
-      epicId: value.epicId,
-      viewTabId: value.viewTabId,
-    };
-  }
   const sidebarReparentTarget = readSidebarReparentDropTargetData(value);
   if (sidebarReparentTarget !== null) return sidebarReparentTarget;
   const leftPanelTarget = readLeftPanelDropTargetData(value);
@@ -1005,7 +1016,6 @@ export function getArtifactTabDropIndexFromPoint(
   rect: RectLike | null,
   pointerX: number,
 ): number | null {
-  if (target.kind === "empty-shell") return null;
   if (target.kind === "artifact-tab-group-body") return null;
   if (target.kind === "left-panel-rail-item") return null;
   if (target.kind === "left-panel-rail-list") return null;
@@ -1055,12 +1065,6 @@ export function getEpicCanvasDropPreview(
    */
   useNeutralCorridor: boolean,
 ): EpicCanvasDropPreview {
-  if (target.kind === "empty-shell") {
-    return {
-      kind: "empty-shell",
-      viewTabId: target.viewTabId,
-    };
-  }
   if (target.kind === "artifact-tab-group-body") {
     if (rect === null) {
       return {

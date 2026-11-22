@@ -72,6 +72,7 @@ function renderTimeline(messages: ReadonlyArray<ChatMessageModel>) {
         getMessageActions={() => null}
         nextStepActions={null}
         listRef={listRef}
+        isTranscriptWindowInvalidated={false}
         className="h-full"
         initialScrollAtEnd={false}
         initialScrollIndex={{

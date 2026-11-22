@@ -9,10 +9,10 @@ import { cn } from "@/lib/utils";
 const GIT_ROOTS_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * Shown when EVERY Git workspace bound to the chat probes unavailable (all
+ * Shown when EVERY Git folder bound to the chat probes unavailable (all
  * worktrees deleted or broken while their bindings still list them). Distinct
- * from `NoGitWorktrees`: there the chat has no Git workspaces at all, so "add
- * workspaces" is the right nudge; here the user HAS workspaces that simply could
+ * from `NoGitWorktrees`: there the chat has no Git folders at all, so "add
+ * folders" is the right nudge; here the user HAS folders that simply could
  * not be read, and that same nudge would be wrong. A visible degrade with a
  * retry that clears the probed-unavailable set and re-probes each root, never an
  * indefinite loading skeleton (which would read as "still loading" forever).
@@ -40,11 +40,11 @@ export function GitRootsUnavailable(props: {
         <TriangleAlert className="size-8 text-warning/70" aria-hidden />
         <div className="space-y-1">
           <p className="text-ui-sm text-muted-foreground/70">
-            Git workspaces unavailable
+            Git folders unavailable
           </p>
           <p className="text-ui-xs text-muted-foreground/50">
-            None of the workspaces in this agent could be read. They may have
-            been moved or deleted.
+            None of the folders in this agent could be read. They may have been
+            moved or deleted.
           </p>
         </div>
       </div>
@@ -68,8 +68,8 @@ export function GitRootsUnavailable(props: {
         </Button>
         <ReportIssueAction
           context={createReportIssueContext({
-            title: "Git workspaces unavailable",
-            message: "The Git workspaces in this agent could not be read.",
+            title: "Git folders unavailable",
+            message: "The Git folders in this agent could not be read.",
             code: null,
             source: "Git changes",
           })}

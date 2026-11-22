@@ -1,3 +1,4 @@
+import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type {
   EpicCloudFreshness,
   EpicCloudSyncStatus,
@@ -301,6 +302,12 @@ export interface EpicSyncPillInputs {
    * record of - and a pre-`@1.6` peer cannot send it at all.
    */
   readonly cloudFreshness: EpicCloudFreshness | undefined;
+  /**
+   * Input 10 - whether this task's artifacts are reaching the cloud
+   * (`epic.status.subscribe@1.2`). `undefined` is a host that did not say, and
+   * keeps today's behaviour.
+   */
+  readonly artifactSync: EpicArtifactSync | undefined;
 }
 
 /**
@@ -388,6 +395,10 @@ function cloudUpState(inputs: EpicSyncPillInputs): EpicSyncPillState {
       ? "synced"
       : "connected";
   }
+  // The quiet state a held-back artifact warning sits in. Past its grace the
+  // warning takes the light as its own plane; this only stops the ladder
+  // claiming `connected` or `storedLocally` over rooms it knows are behind.
+  if (artifactSyncOutstanding(inputs.artifactSync)) return "hostPending";
   // Not synced anywhere in the cloud. Say which, when the host said which,
   // and otherwise claim nothing - `connected` is the neutral state that
   // exists for exactly this.
@@ -429,6 +440,23 @@ function cloudDownState(inputs: EpicSyncPillInputs): EpicSyncPillState {
   return linkComingUpState(inputs.hasConnectedOnce);
 }
 
+/** What the artifact sync surfaces read for an epic. */
+export interface ArtifactSyncReading {
+  readonly rooms: EpicArtifactSync["rooms"] | null;
+  readonly waitingNewArtifacts: number;
+  readonly pillState: EpicSyncPillState;
+}
+
+/** Whether the host stated an artifact that has not reached the cloud. */
+export function artifactSyncOutstanding(
+  artifactSync: EpicArtifactSync | undefined,
+): boolean {
+  return (
+    artifactSync !== undefined &&
+    (artifactSync.rooms !== "current" || artifactSync.waitingNewArtifacts > 0)
+  );
+}
+
 /**
  * Whether "All changes synced" is a true statement right now.
  *
@@ -456,6 +484,8 @@ function cloudDownState(inputs: EpicSyncPillInputs): EpicSyncPillState {
  *   the other way. "All changes synced" over a document the host is still
  *   revalidating is the same false calm as the original defect, arriving
  *   through the axis `s5-mirror-first-serving` opened up.
+ * - A stated `artifactSync` other than current rooms and nothing waiting says
+ *   an artifact has not reached the cloud. Unstated keeps the older reading.
  */
 function syncedClaimIsHonest(inputs: EpicSyncPillInputs): boolean {
   if (
@@ -464,6 +494,7 @@ function syncedClaimIsHonest(inputs: EpicSyncPillInputs): boolean {
   ) {
     return false;
   }
+  if (artifactSyncOutstanding(inputs.artifactSync)) return false;
   if (
     inputs.localProtection === undefined &&
     !inputs.durabilityLegsNegotiated

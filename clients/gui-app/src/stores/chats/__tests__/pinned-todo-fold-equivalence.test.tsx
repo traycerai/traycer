@@ -124,6 +124,7 @@ function taskCreateBlock(
     botSendReceipt: null,
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
     progress: null,
     backgroundOutput: null,
     startedAt: null,

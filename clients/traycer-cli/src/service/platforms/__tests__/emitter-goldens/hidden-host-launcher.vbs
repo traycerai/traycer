@@ -4,7 +4,10 @@ Dim exitCode
 Dim commandLine
 Dim probeStatus
 Dim adoptionCapabilityStatus
-Dim nonceProbe
+Dim fileSystem
+Dim nonceFile
+Dim nonceStatus
+Dim nonceStream
 Dim adoptionNonce
 Dim noncePattern
 Set shell = CreateObject("WScript.Shell")
@@ -21,13 +24,15 @@ If probeStatus = 0 Then
   If Err.Number <> 0 Then adoptionCapabilityStatus = 1
   Err.Clear
   If adoptionCapabilityStatus = 0 Then
-    Set nonceProbe = shell.Exec("""C:\Users\golden-user\.traycer\cli\bin\traycer.exe"" ""host"" ""adoption-nonce"" ""--service-label"" ""ai.traycer.host""")
-    If Err.Number = 0 Then
-      Do While nonceProbe.Status = 0
-        WScript.Sleep 10
-      Loop
-      If nonceProbe.ExitCode = 0 Then adoptionNonce = Trim(Replace(Replace(nonceProbe.StdOut.ReadAll, vbCr, ""), vbLf, ""))
+    Set fileSystem = CreateObject("Scripting.FileSystemObject")
+    nonceFile = fileSystem.BuildPath(fileSystem.GetParentFolderName(WScript.ScriptFullName), "host-start-nonce-" & fileSystem.GetTempName)
+    nonceStatus = shell.Run("""C:\Windows\System32\cmd.exe"" /d /s /c """"C:\Users\golden-user\.traycer\cli\bin\traycer.exe"" ""host"" ""adoption-nonce"" ""--service-label"" ""ai.traycer.host"" > " & Chr(34) & nonceFile & Chr(34) & " 2>NUL" & Chr(34), 0, True)
+    If Err.Number = 0 And nonceStatus = 0 Then
+      Set nonceStream = fileSystem.OpenTextFile(nonceFile, 1)
+      adoptionNonce = Trim(Replace(Replace(nonceStream.ReadAll, vbCr, ""), vbLf, ""))
+      nonceStream.Close
     End If
+    fileSystem.DeleteFile nonceFile, True
   End If
   Err.Clear
   On Error Goto 0

@@ -173,8 +173,9 @@ export function revertedRegionRow(
   snapshot: LayoutSnapshot,
   regionId: RegionId,
 ): LayoutSnapshot {
-  const reverted = layoutChanges(snapshot)
-    .styles.filter(
+  const { styles, panels } = layoutChanges(snapshot);
+  const reverted = [...styles, ...panels]
+    .filter(
       (change) =>
         change.region === regionId && !isOffRegionValue(regionId, change.key),
     )

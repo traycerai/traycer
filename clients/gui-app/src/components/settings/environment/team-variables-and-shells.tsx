@@ -8,14 +8,10 @@ import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
-import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { configurationShellValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
-import {
-  useCanEditConfiguration,
-  useConfigurationSource,
-  useConfigurationIsPersonal,
-} from "./configuration-source";
+import { useCanEditConfiguration } from "./configuration-source";
+import { VariablesIntroduction } from "./configuration-introduction";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
 import {
@@ -25,32 +21,39 @@ import {
 import { TeamVariableLiveFacts } from "./team-variable-live-facts";
 import { TeamTextItems } from "./team-text-items";
 import { ConfigurationReadFailed } from "./team-read-failed";
-import { usePickedTeamLabel } from "./team-pick-label";
+import {
+  useConfigurationItemWrites,
+  sameConfigurationItemAddress,
+  configurationItemDraft,
+  failureInScope,
+  pendingWriteInScope,
+  shellWriteScope,
+  type ConfigurationItemWrites,
+  type ConfigurationItemWrite,
+} from "./configuration-item-writes";
+import {
+  ConfigurationItemWriteStatus,
+  ConfigurationItemWriteError,
+  ConfigurationPendingWriteStatus,
+} from "./configuration-item-write-status";
 
 export function TeamVariablesAndShells(): ReactNode {
-  const personal = useConfigurationIsPersonal();
-  const source = useConfigurationSource();
-  const teamName =
-    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
-    "this team";
   const query = useConfigurationVariablesQuery();
   const read = useBoundedRead(query);
+  const items = query.data;
   const [os, setOs] = useState<EnvironmentOs>("any");
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   const outcome = (result: EnvironmentConfigurationItemWriteResponse): void =>
     setIssue(configurationWriteIssue(result));
+  const writes = useConfigurationItemWrites(query, outcome);
   const shell =
-    query.data?.find(
+    items?.find(
       (item) => item.kind === "shell" && item.key === "shell" && item.os === os,
     ) ?? null;
   return (
     <SettingsPanelShell
       title="Variables & shells"
-      description={
-        personal
-          ? "Plain values every computer and sandbox running Personal gets, and the shell agents run in."
-          : `Plain values every host running ${teamName} gets, and the shell agents run in.`
-      }
+      description={<VariablesIntroduction />}
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationOsPicker value={os} onChange={setOs} />
@@ -62,24 +65,23 @@ export function TeamVariablesAndShells(): ReactNode {
         />
       ) : null}
       {read.pending ? <MutedAgentSpinner /> : null}
-      {query.data === undefined ? null : (
+      {items === undefined ? null : (
         <>
           <h2 className="text-ui-sm font-medium">Variables</h2>
           <TeamTextItems
-            key={os}
-            items={query.data}
+            items={items}
             kind="variable"
             os={os}
             providerId={null}
-            onOutcome={outcome}
+            writes={writes}
             renderDetails={() => null}
           />
           <h2 className="text-ui-sm font-medium">Shell</h2>
           <TeamShellEditor
-            key={`${os}:${shell?.revision ?? "new"}`}
+            key={`${os}:${shell?.revision ?? "new"}:${acceptedShell(writes, os) !== null}:${shellDraft(writes, os) !== null}`}
             item={shell}
             os={os}
-            onOutcome={outcome}
+            writes={writes}
           />
           <TeamVariableLiveFacts />
         </>
@@ -88,97 +90,217 @@ export function TeamVariablesAndShells(): ReactNode {
   );
 }
 
+interface ShellValue {
+  readonly path: string;
+  readonly args: string[];
+}
+
+/**
+ * The shell the editor shows: an accepted write's value (none after an
+ * accepted remove), else the stored item's.
+ */
+function shownShell(
+  item: ConfigurationItem | null,
+  accepted: ConfigurationItemWrite | null,
+): ShellValue {
+  if (accepted?.action === "remove") return { path: "", args: [] };
+  if (accepted !== null)
+    return configurationShellValueSchema.parse(accepted.value);
+  return item === null
+    ? { path: "", args: [] }
+    : configurationShellValueSchema.parse(item.value);
+}
+
+function acceptedShell(
+  writes: ConfigurationItemWrites,
+  os: EnvironmentOs,
+): ConfigurationItemWrite | null {
+  const pending = writes.pending;
+  if (
+    pending === null ||
+    pending.accepted === null ||
+    !sameConfigurationItemAddress(pending.write, {
+      kind: "shell",
+      key: "shell",
+      os,
+    })
+  )
+    return null;
+  return pending.write;
+}
+
+function shellDraft(
+  writes: ConfigurationItemWrites,
+  os: EnvironmentOs,
+): ConfigurationItemWrite | null {
+  return configurationItemDraft(writes, { kind: "shell", key: "shell", os });
+}
+
 function TeamShellEditor(props: {
   readonly item: ConfigurationItem | null;
   readonly os: EnvironmentOs;
-  readonly onOutcome: (
-    result: EnvironmentConfigurationItemWriteResponse,
-  ) => void;
+  readonly writes: ConfigurationItemWrites;
 }): ReactNode {
-  const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
-  const { put, remove } = useConfigurationItemMutations();
-  const saved =
-    props.item === null
-      ? { path: "", args: [] }
-      : configurationShellValueSchema.parse(props.item.value);
-  const [path, setPath] = useState(saved.path);
-  const [args, setArgs] = useState(saved.args);
+  const pending = pendingWriteInScope(props.writes, shellWriteScope(props.os));
+  const saved = shownShell(props.item, acceptedShell(props.writes, props.os));
+  const draft = shellDraft(props.writes, props.os);
+  const initial =
+    draft === null ? saved : configurationShellValueSchema.parse(draft.value);
+  const [path, setPath] = useState(initial.path);
+  const [args, setArgs] = useState(initial.args);
+  const updateValue = (value: ShellValue): void => {
+    setPath(value.path);
+    setArgs(value.args);
+    if (draft !== null)
+      props.writes.updateDraft({
+        ...draft,
+        value: { path: value.path, args: value.args },
+      });
+  };
+  const busy = props.writes.pending !== null;
   const changed =
     path !== saved.path || JSON.stringify(args) !== JSON.stringify(saved.args);
-  if (!canEdit)
-    return (
-      <p className="font-mono text-ui-sm">
-        {props.item === null
-          ? "No shell set."
-          : [saved.path, ...saved.args].join(" ")}
-      </p>
-    );
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
-      <Input
-        aria-label="Shell path"
-        placeholder="/bin/zsh"
-        value={path}
-        onChange={(event) => setPath(event.target.value)}
+    <section className="flex min-w-0 flex-col gap-3 rounded-lg border border-border/60 p-3">
+      {canEdit ? (
+        <>
+          <Input
+            aria-label="Shell path"
+            placeholder="/bin/zsh"
+            value={path}
+            disabled={busy}
+            onChange={(event) =>
+              updateValue({ path: event.target.value, args })
+            }
+          />
+          <ShellFlagChips
+            args={args}
+            disabled={busy}
+            onAdd={(flag) => updateValue({ path, args: [...args, flag] })}
+            onRemove={(index) =>
+              updateValue({ path, args: args.filter((_, i) => i !== index) })
+            }
+          />
+          <ShellRemoveButton
+            item={props.item}
+            os={props.os}
+            writes={props.writes}
+            busy={busy}
+          />
+        </>
+      ) : (
+        <p className="wrap-anywhere font-mono text-ui-sm">
+          {props.item === null ? "No shell set." : [path, ...args].join(" ")}
+        </p>
+      )}
+      <ShellWriteStatus writes={props.writes} os={props.os} />
+      <ShellEditActions
+        visible={canEdit}
+        changed={changed}
+        path={path}
+        busy={busy}
+        saving={pending?.accepted === null}
+        onCancel={() => {
+          if (draft !== null) props.writes.discardDraft(draft);
+          setPath(saved.path);
+          setArgs(saved.args);
+        }}
+        onSave={() => {
+          void props.writes.write({
+            kind: "shell",
+            key: "shell",
+            os: props.os,
+            action: "put",
+            value: { path, args },
+            original: props.item,
+          });
+        }}
       />
-      <ShellFlagChips
-        args={args}
-        disabled={put.isPending || remove.isPending}
-        onAdd={(flag) => setArgs([...args, flag])}
-        onRemove={(index) => setArgs(args.filter((_, i) => i !== index))}
-      />
-      <div className="flex justify-end gap-2">
-        {props.item === null ? null : (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={put.isPending || remove.isPending}
-            onClick={() => {
-              if (source.kind === "pool" && props.item !== null)
-                remove.mutate(
-                  {
-                    environmentId: source.environmentId,
-                    kind: "shell",
-                    key: "shell",
-                    os: props.os,
-                    revision: props.item.revision,
-                  },
-                  { onSuccess: props.onOutcome },
-                );
-            }}
-          >
-            Remove
-          </Button>
-        )}
-        <Button
-          type="button"
-          size="sm"
-          disabled={
-            !changed ||
-            path.trim().length === 0 ||
-            put.isPending ||
-            remove.isPending
-          }
-          onClick={() => {
-            if (source.kind === "pool")
-              put.mutate(
-                {
-                  environmentId: source.environmentId,
-                  kind: "shell",
-                  key: "shell",
-                  os: props.os,
-                  value: { path, args },
-                  revision: props.item?.revision ?? null,
-                },
-                { onSuccess: props.onOutcome },
-              );
-          }}
-        >
-          Save{put.isPending ? <MutedAgentSpinner /> : null}
-        </Button>
-      </div>
     </section>
+  );
+}
+
+function ShellRemoveButton(props: {
+  readonly item: ConfigurationItem | null;
+  readonly os: EnvironmentOs;
+  readonly writes: ConfigurationItemWrites;
+  readonly busy: boolean;
+}): ReactNode {
+  const item = props.item;
+  if (item === null) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      disabled={props.busy}
+      onClick={() => {
+        void props.writes.write({
+          kind: "shell",
+          key: "shell",
+          os: props.os,
+          action: "remove",
+          value: { path: "", args: [] },
+          original: item,
+        });
+      }}
+    >
+      Remove
+    </Button>
+  );
+}
+
+function ShellWriteStatus(props: {
+  readonly writes: ConfigurationItemWrites;
+  readonly os: EnvironmentOs;
+}): ReactNode {
+  const scope = shellWriteScope(props.os);
+  const pending = pendingWriteInScope(props.writes, scope);
+  return (
+    <>
+      <ConfigurationPendingWriteStatus
+        write={pending?.accepted === null ? pending.write : null}
+      />
+      <ConfigurationItemWriteStatus writes={props.writes} scope={scope} />
+      <ConfigurationItemWriteError
+        failure={failureInScope(props.writes, scope)}
+      />
+    </>
+  );
+}
+
+function ShellEditActions(props: {
+  readonly visible: boolean;
+  readonly changed: boolean;
+  readonly path: string;
+  readonly busy: boolean;
+  readonly saving: boolean;
+  readonly onCancel: () => void;
+  readonly onSave: () => void;
+}): ReactNode {
+  if (!props.visible) return null;
+  return (
+    <div className="flex flex-wrap justify-end gap-2">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={props.busy}
+        onClick={props.onCancel}
+      >
+        Reset
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        disabled={
+          !props.changed || props.path.trim().length === 0 || props.busy
+        }
+        onClick={props.onSave}
+      >
+        Save{props.saving ? <MutedAgentSpinner /> : null}
+      </Button>
+    </div>
   );
 }

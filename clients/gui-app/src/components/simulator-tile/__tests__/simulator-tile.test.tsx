@@ -726,6 +726,7 @@ describe("SimulatorTile", () => {
     expect(other.textContent).toContain("iPad Air");
     fireEvent.click(other);
     expect(fakes.openTile).toHaveBeenCalledTimes(1);
+    expect(fakes.openTile.mock.calls[0]?.[1]).toBe("user");
     expect(fakes.openTile.mock.calls[0][0]).toMatchObject({
       node: { type: "simulator", hostId: HOST, simulatorId: "udid-2" },
       target: { tabId: "tab-1" },
@@ -1175,45 +1176,64 @@ describe("SimulatorTile on a @1.1 host", () => {
     fakes.negotiated = { major: 1, minor: 1 };
   });
 
-  it("opens the new serial, with no instance, for an Android tile whose AVD re-booted under another serial", async () => {
-    const avd = "Pixel_8_API_35";
-    const rebooted = {
-      simulatorId: "emulator-5556",
-      platform: "android",
-      name: avd,
-      version: "Android 15.0",
-      booted: true,
-      physical: false,
-    } as const;
-    fakes.sessions = sessions({
-      state: {
-        ...READY_STATE,
-        simulators: [...READY_STATE.simulators, rebooted],
-      },
-    });
-    renderTileFor(
-      makeSimulatorTileRef({
+  it.each(["automatic", "user"] as const)(
+    "opens a rebooted Android serial with %s provenance from its connect invocation",
+    async (provenance) => {
+      const avd = "Pixel_8_API_35";
+      const rebooted = {
+        simulatorId: "emulator-5556",
+        platform: "android",
+        name: avd,
+        version: "Android 15.0",
+        booted: true,
+        physical: false,
+      } as const;
+      fakes.sessions = sessions({
+        state: {
+          ...READY_STATE,
+          simulators: [...READY_STATE.simulators, rebooted],
+        },
+      });
+      fakes.open.mockResolvedValueOnce({
+        ...OPENED,
+        simulator: rebooted,
+        session: {
+          ...OPENED.session,
+          simulatorId: rebooted.simulatorId,
+          platform: "android",
+        },
+      });
+      const node = makeSimulatorTileRef({
         hostId: HOST,
         simulatorId: "emulator-5554",
         platform: "android",
         name: avd,
         instanceKey: null,
-      }),
-    );
+      });
+      if (provenance === "user") requestSimulatorConnect(node.id);
+      renderTileFor(node);
 
-    await waitFor(() => {
-      expect(fakes.open).toHaveBeenCalledTimes(1);
-    });
-    const sent = fakes.open.mock.calls[0][0];
-    expect(sent).toEqual({
-      epicId: EPIC,
-      simulatorId: "emulator-5556",
-      platform: "android",
-      boot: true,
-    });
-    expect("instance" in sent).toBe(false);
-    expect("requestId" in sent).toBe(false);
-  });
+      await waitFor(() => {
+        expect(fakes.open).toHaveBeenCalledTimes(1);
+      });
+      const sent = fakes.open.mock.calls[0][0];
+      expect(sent).toEqual({
+        epicId: EPIC,
+        simulatorId: "emulator-5556",
+        platform: "android",
+        boot: true,
+      });
+      expect("instance" in sent).toBe(false);
+      expect("requestId" in sent).toBe(false);
+      await waitFor(() => {
+        expect(fakes.openTile).toHaveBeenCalledTimes(1);
+      });
+      expect(fakes.openTile.mock.calls[0]?.[0]).toMatchObject({
+        node: { simulatorId: rebooted.simulatorId },
+      });
+      expect(fakes.openTile.mock.calls[0]?.[1]).toBe(provenance);
+    },
+  );
 
   it("gets its own session beside an agent's reopened one: the agent's does not make the tile live", async () => {
     fakes.sessions = sessions({
@@ -1563,6 +1583,10 @@ describe("SimulatorTile on a @1.1 host", () => {
     fireEvent.click(await screen.findByTestId("simulator-connect"));
     await flush();
 
+    await waitFor(() => {
+      expect(fakes.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(fakes.openTile.mock.calls[0]?.[1]).toBe("user");
     expect(fakes.openTile.mock.calls.at(-1)?.at(0)).toMatchObject({
       node: {
         type: "simulator",

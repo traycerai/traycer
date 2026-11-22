@@ -112,6 +112,7 @@ export function BrowserCreatePicker(props: {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
           props.onOpened?.();
           return;
@@ -128,6 +129,7 @@ export function BrowserCreatePicker(props: {
               "explicit",
               "direct_ui",
             ),
+            "user",
           ),
         );
         if (!pending.observe()) return;

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import {
   getArtifactTabDropIndexFromPoint,
   getEdgeDropPositionFromPoint,
-  getEmptyShellDropId,
   getEpicCanvasDropPreview,
   getLeftPanelRailDropPositionOnAxis,
   getSidebarReparentPanelDropId,
@@ -38,17 +38,6 @@ describe("getEdgeDropPositionFromPoint", () => {
     // Relative (50, 75): nearest edge is bottom.
     expect(getEdgeDropPositionFromPoint({ x: 70, y: 105 }, rect)).toBe(
       "bottom",
-    );
-  });
-});
-
-describe("empty shell drop ids", () => {
-  it("scopes empty-shell droppables by epic and tab", () => {
-    expect(getEmptyShellDropId("epic-1", "tab-1")).toBe(
-      "empty-shell:epic-1:tab-1",
-    );
-    expect(getEmptyShellDropId("epic-1", "tab-1")).not.toBe(
-      getEmptyShellDropId("epic-1", "tab-2"),
     );
   });
 });
@@ -228,6 +217,34 @@ describe("epic canvas dnd-kit data guards", () => {
     ).toBeNull();
   });
 
+  it("reads simulator tile drag source data and rejects a payload whose tile is not a simulator", () => {
+    const tile = makeSimulatorTileRef({
+      hostId: "host-1",
+      simulatorId: "udid-1",
+      platform: "ios",
+      name: "iPhone 16",
+      instanceKey: "udid-1",
+    });
+    const scope = { epicId: "epic-1", viewTabId: "view-1" };
+    expect(
+      readEpicCanvasDragSourceData({ kind: "simulator-tile", ...scope, tile }),
+    ).toEqual({ kind: "simulator-tile", ...scope, tile });
+    expect(
+      readEpicCanvasDragSourceData({
+        kind: "simulator-tile",
+        ...scope,
+        tile: {
+          id: "term-1",
+          instanceId: "inst-term-1",
+          type: "terminal",
+          name: "Terminal",
+          hostId: "host-1",
+          cwd: "/repo",
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("accepts workspace file drag source data", () => {
     const ref = {
       id: "workspace-file:host-1:/ws:src/a.ts",
@@ -341,17 +358,6 @@ describe("epic canvas dnd-kit data guards", () => {
   });
 
   it("accepts artifact tab drop target data", () => {
-    expect(
-      readEpicCanvasDropTargetData({
-        kind: "empty-shell",
-        epicId: "epic-1",
-        viewTabId: "view-1",
-      }),
-    ).toEqual({
-      kind: "empty-shell",
-      epicId: "epic-1",
-      viewTabId: "view-1",
-    });
     expect(
       readEpicCanvasDropTargetData({
         kind: "artifact-tab",
@@ -550,11 +556,6 @@ describe("epic canvas dnd-kit data guards", () => {
     ).toBeNull();
     expect(
       readEpicCanvasDropTargetData({
-        kind: "empty-shell",
-      }),
-    ).toBeNull();
-    expect(
-      readEpicCanvasDropTargetData({
         kind: "artifact-tab-strip-end",
         viewTabId: "view-1",
         groupId: "group-1",
@@ -749,13 +750,6 @@ describe("getArtifactTabDropIndexFromPoint", () => {
         20,
       ),
     ).toBeNull();
-    expect(
-      getArtifactTabDropIndexFromPoint(
-        { kind: "empty-shell", epicId: "epic-1", viewTabId: "view-1" },
-        rect,
-        20,
-      ),
-    ).toBeNull();
   });
 });
 
@@ -805,20 +799,6 @@ describe("getEpicCanvasDropPreview", () => {
       kind: "artifact-tab-group-body",
       groupId: "group-1",
       position: "left",
-    });
-  });
-
-  it("resolves empty shell preview", () => {
-    expect(
-      getEpicCanvasDropPreview(
-        { kind: "empty-shell", epicId: "epic-1", viewTabId: "view-1" },
-        null,
-        { x: 0, y: 0 },
-        false,
-      ),
-    ).toEqual({
-      kind: "empty-shell",
-      viewTabId: "view-1",
     });
   });
 

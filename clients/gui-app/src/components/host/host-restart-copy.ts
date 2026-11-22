@@ -49,6 +49,13 @@ export interface DescribeHostBusyInput {
 
 export interface HostBusyCopy {
   /**
+   * What the copy claims, so a caller branches on this and never on the
+   * wording: `named` is a typed breakdown with work, `count` a session count,
+   * `idle` a reported zero, `busy` a busy host that named nothing, and `none`
+   * no claim at all.
+   */
+  readonly kind: "named" | "count" | "idle" | "busy" | "none";
+  /**
    * Chip label, or `null` when the host has not said enough to claim
    * anything — the caller renders nothing / the hedged sentence.
    */
@@ -93,7 +100,7 @@ export function describeHostBusy(input: DescribeHostBusyInput): HostBusyCopy {
   }
   if (busy) return unknownBusyCopy();
   if (busySessionCount === 0) return idleCopy();
-  return { label: null, sentence: null };
+  return { kind: "none", label: null, sentence: null };
 }
 
 /**
@@ -213,6 +220,7 @@ function namedCopy(subjects: readonly BusySubject[]): HostBusyCopy {
   const phrase = joinSubjectPhrases(subjects);
   const pronoun = endPronoun(subjects);
   return {
+    kind: "named",
     label: `${subjects.map((subject) => subject.phrase).join(" · ")} working`,
     sentence: `It reports ${phrase}, and re-registering will end ${pronoun}.`,
   };
@@ -222,6 +230,7 @@ function countFallbackCopy(count: number): HostBusyCopy {
   const phrase = count === 1 ? "1 session" : `${count} sessions`;
   const pronoun = count === 1 ? "it" : "them";
   return {
+    kind: "count",
     label: phrase,
     sentence: `It reports ${phrase}, and re-registering will end ${pronoun}.`,
   };
@@ -229,6 +238,7 @@ function countFallbackCopy(count: number): HostBusyCopy {
 
 function idleCopy(): HostBusyCopy {
   return {
+    kind: "idle",
     label: "Idle",
     sentence: "It reports no work, so nothing should be interrupted.",
   };
@@ -236,6 +246,7 @@ function idleCopy(): HostBusyCopy {
 
 function unknownBusyCopy(): HostBusyCopy {
   return {
+    kind: "busy",
     label: "Busy",
     sentence: "It reports it is busy, and re-registering will end that work.",
   };

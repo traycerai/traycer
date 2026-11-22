@@ -1,18 +1,26 @@
 import { useState, type ReactNode } from "react";
-import type {
-  ProviderCliState,
-  ProviderId,
-} from "@traycer/protocol/host/provider-schemas";
-import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
-import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
+import { isProviderKeyProviderId } from "@traycer-clients/shared/host-client/provider-api-key-change";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
+  useCloudProviderApiKeyQuery,
+  useCloudProviderKeyScope,
+  type CloudProviderKeyScope,
+} from "@/hooks/providers/use-cloud-provider-api-key-query";
+import { CloudProviderApiKeySection } from "./cloud-provider-api-key-section";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type {
+  EnvironmentOs,
+  EnvironmentSecret,
+} from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentConfigurationItemWriteResponse,
+  EnvironmentPlan,
+} from "@traycer/protocol/host/environment/configuration-contracts";
+import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { SettingsMasterSelect } from "@/components/settings/settings-master-detail";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
@@ -24,72 +32,104 @@ import {
   providerDisplayName,
   providerIdToGuiHarnessId,
 } from "@/lib/provider-ordering";
-import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import { useConfigurationProviderItemsQuery } from "@/hooks/environment/team/use-provider-items-query";
 import { useConfigurationPlansQuery } from "@/hooks/environment/team/use-plans-query";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import { useHostClient } from "@/lib/host";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
+import { cn } from "@/lib/utils";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
-import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
+import { TeamProviderWriteFeedback } from "./configuration-write-feedback";
 import {
   configurationWriteIssue,
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
 import { TeamTextItems } from "./team-text-items";
-import { TeamProfileItem, TeamPackItem } from "./team-provider-items";
+import {
+  useConfigurationItemWrites,
+  type ConfigurationItemWrites,
+} from "./configuration-item-writes";
+import { TeamPackItem } from "./team-provider-items";
 import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
-import { TeamPlans } from "./team-plans";
-import { TeamProviderKeys } from "./team-provider-keys";
+import { ConfigurationProfiles } from "./team-configuration-profiles";
+import {
+  TeamProviderRecordsContext,
+  useTeamProviderRecordsRead,
+} from "./team-provider-records";
+import { TeamSyncedProviderProfiles } from "./team-synced-provider-profiles";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
-import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { EnvironmentProviderSkillsTab } from "./environment-skills";
-import { teamProviderStateWord } from "./team-provider-state-word";
+import {
+  cloudProviderStanding,
+  teamProviderStateWord,
+  type CloudProviderStanding,
+} from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
-import { usePickedTeamLabel } from "./team-pick-label";
-import {
-  providerEnvSubtitle,
-  providerEnvSubtitleUnknownScope,
-  providerNativeConfigOnlyEnvSubtitle,
-} from "@/components/settings/panels/provider-env-subtitle";
-import {
-  useConfigurationIsPersonal,
-  useConfigurationSource,
-} from "./configuration-source";
+import { PROVIDER_ENV_TAB_SUBTITLE } from "@/components/settings/panels/provider-env-subtitle";
+import { useConfigurationSource } from "./configuration-source";
+
+type RailClass = "configured" | "unconfigured" | "unknown";
+
+interface ProviderRailRow {
+  readonly providerId: ProviderId;
+  readonly harnessId: string;
+  readonly railClass: RailClass;
+  readonly subtitle: string | null;
+}
 
 export function TeamProviders(): ReactNode {
-  const personal = useConfigurationIsPersonal();
-  const source = useConfigurationSource();
-  const teamName =
-    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
-    "this team";
+  const keyScope = useCloudProviderKeyScope();
+  const keyQuery = useCloudProviderApiKeyQuery(keyScope);
   const query = useConfigurationProviderItemsQuery();
   const read = useBoundedRead(query);
-  const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
+  const records = useTeamProviderRecordsRead();
   const catalog = useProvidersListForClient(scope.client, {
     enabled: scope.client !== null,
     subscribed: true,
   });
   const plansQuery = useConfigurationPlansQuery();
   const secretsQuery = useEnvironmentSecretsQuery(useHostClient());
-  const railWord = (provider: {
-    readonly providerId: ProviderId;
-    readonly harnessId: string;
-  }): string | null =>
-    personal
-      ? providerState(items, provider.harnessId)
-      : teamProviderStateWord({
-          providerId: provider.providerId,
-          harnessId: provider.harnessId,
-          plans: plansQuery.data?.plans ?? null,
-          secrets: secretsQuery.data?.secrets ?? null,
-        });
+  const items = query.data ?? [];
   const [providerId, setProviderId] = useState<ProviderId>("claude-code");
   const [os, setOs] = useState<EnvironmentOs>("any");
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
-  const items = query.data ?? [];
+  const writes = useConfigurationItemWrites(query, (result) =>
+    setIssue(configurationWriteIssue(result)),
+  );
+  const [userPicked, setUserPicked] = useState(false);
+  const [seenRailKey, setSeenRailKey] = useState<string | null>(null);
+  const rows = providerRailRows({
+    items: query.data,
+    plans: plansQuery.data?.plans ?? null,
+    secrets: secretsQuery.data?.secrets ?? null,
+    keyRecords: keyQuery.isError ? null : (keyQuery.data ?? null),
+  });
+  const railKey = rows
+    .map((row) => `${row.providerId}:${row.railClass}`)
+    .join("|");
+  // Latch the first configured provider once the reads settle, during render
+  // rather than an effect: the selection is derived from those reads, and a
+  // later explicit pick stays put.
+  const adjustment = providerRailAdjustment({
+    picked: userPicked,
+    ready: query.data !== undefined,
+    seenRailKey,
+    railKey,
+    rows,
+    providerId,
+  });
+  if (adjustment !== null) {
+    setSeenRailKey(adjustment.railKey);
+    if (adjustment.providerId !== providerId) {
+      setProviderId(adjustment.providerId);
+    }
+  }
+  const selectProvider = (next: ProviderId): void => {
+    setUserPicked(true);
+    setProviderId(next);
+  };
   const harness = providerIdToGuiHarnessId(providerId);
   const profiles = items.filter(
     (item) =>
@@ -110,84 +150,124 @@ export function TeamProviders(): ReactNode {
       ...(packId === null ? [] : [packId]),
     ]),
   ];
-  const envSubtitleScope = providerEnvSubtitleScope(
-    catalog.data?.providers,
-    providerId,
+  return (
+    <TeamProviderRecordsContext.Provider value={records}>
+      <TeamProvidersView
+        providerId={providerId}
+        keyScope={keyScope}
+        keyQuery={keyQuery}
+        os={os}
+        onOsChange={setOs}
+        issue={issue}
+        readPending={read.pending}
+        readFailed={read.failed}
+        onRetry={read.retry}
+        ready={query.data !== undefined}
+        rows={rows}
+        onSelect={selectProvider}
+        profiles={profiles}
+        packIds={packIds}
+        packs={packs}
+        items={items}
+        writes={writes}
+        harness={harness}
+        onOutcome={(result) => setIssue(configurationWriteIssue(result))}
+      />
+    </TeamProviderRecordsContext.Provider>
   );
+}
+
+function TeamProvidersView(props: {
+  readonly keyScope: CloudProviderKeyScope;
+  readonly keyQuery: UseQueryResult<EnvironmentProfileRecords, HostRpcError>;
+  readonly providerId: ProviderId;
+  readonly os: EnvironmentOs;
+  readonly onOsChange: (os: EnvironmentOs) => void;
+  readonly issue: ConfigurationWriteIssue;
+  readonly readPending: boolean;
+  readonly readFailed: boolean;
+  readonly onRetry: () => void;
+  readonly ready: boolean;
+  readonly rows: readonly ProviderRailRow[];
+  readonly onSelect: (providerId: ProviderId) => void;
+  readonly profiles: readonly ConfigurationItem[];
+  readonly packIds: readonly string[];
+  readonly packs: readonly ConfigurationItem[];
+  readonly items: readonly ConfigurationItem[];
+  readonly writes: ConfigurationItemWrites;
+  readonly harness: string;
+  readonly onOutcome: (
+    result: EnvironmentConfigurationItemWriteResponse,
+  ) => void;
+}): ReactNode {
+  const {
+    providerId,
+    os,
+    onOsChange,
+    issue,
+    readPending,
+    readFailed,
+    onRetry,
+    ready,
+    rows,
+    onSelect,
+    profiles,
+    packIds,
+    packs,
+    items,
+    writes,
+    harness,
+    onOutcome,
+  } = props;
+  const source = useConfigurationSource();
   return (
     <SettingsPanelShell
       title="Providers"
-      description={
-        personal
-          ? "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal."
-          : `Plans, keys and settings for each coding agent, on every host running ${teamName}.`
-      }
+      description="Sign-ins, keys and tools for each coding agent."
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
-      <ConfigurationWriteFeedback issue={issue} />
-      {read.pending ? <MutedAgentSpinner /> : null}
-      {read.failed ? (
-        <ConfigurationReadFailed page="providers" onRetry={read.retry} />
+      <TeamProviderWriteFeedback issue={issue} />
+      {readPending ? <MutedAgentSpinner /> : null}
+      {readFailed ? (
+        <ConfigurationReadFailed page="providers" onRetry={onRetry} />
       ) : null}
-      {query.data === undefined ? null : (
+      {ready ? (
         <>
-          <TeamProviderKeys />
-          <Select
-            value={providerId}
-            onValueChange={(value) => {
-              const parsed = providerIdSchema.safeParse(value);
-              if (parsed.success) setProviderId(parsed.data);
-            }}
-          >
-            <SelectTrigger aria-label="Provider" className="max-w-sm lg:hidden">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ORDERED_PROVIDERS.map((provider) => {
-                const word = railWord(provider);
-                return (
-                  <SelectItem
-                    key={provider.providerId}
-                    value={provider.providerId}
-                  >
-                    {providerDisplayName(provider.providerId)}
-                    {word === null ? null : ` · ${word}`}
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
+          <div className="lg:hidden">
+            <SettingsMasterSelect
+              label="Provider"
+              value={providerId}
+              options={rows.map((row) => ({
+                value: row.providerId,
+                label: providerDisplayName(row.providerId),
+                icon: <HarnessIcon harnessId={row.harnessId} />,
+                trailing: null,
+              }))}
+              onSelect={onSelect}
+            />
+          </div>
           <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
             <nav
               aria-label="Providers"
-              className="hidden flex-col gap-1 lg:flex"
+              className="hidden min-w-0 flex-col gap-1 lg:flex"
             >
-              {ORDERED_PROVIDERS.map((provider) => (
-                <Button
-                  key={provider.providerId}
-                  type="button"
-                  variant={
-                    providerId === provider.providerId ? "secondary" : "ghost"
-                  }
-                  className="justify-between"
-                  onClick={() => setProviderId(provider.providerId)}
-                  aria-current={
-                    providerId === provider.providerId ? "true" : undefined
-                  }
-                >
-                  <span className="truncate">
-                    {providerDisplayName(provider.providerId)}
-                  </span>
-                  <span className="text-ui-xs text-muted-foreground">
-                    {railWord(provider)}
-                  </span>
-                </Button>
+              {rows.map((row) => (
+                <ProviderRailButton
+                  key={row.providerId}
+                  row={row}
+                  selected={providerId === row.providerId}
+                  onSelect={onSelect}
+                />
               ))}
             </nav>
-            <Tabs defaultValue="plans" className="min-w-0 gap-3">
+            <Tabs
+              key={providerId}
+              defaultValue="plans"
+              className="min-w-0 gap-3"
+            >
               <TabsList
                 variant="line"
-                className="h-auto w-full flex-wrap justify-start"
+                className="h-auto w-full max-w-full flex-wrap justify-start"
               >
                 <TabsTrigger value="plans">Plans & limits</TabsTrigger>
                 <TabsTrigger value="env">Env</TabsTrigger>
@@ -198,28 +278,35 @@ export function TeamProviders(): ReactNode {
                 ) : null}
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
-                <TeamPlans
-                  providerId={providerId}
-                  adminNames={members.adminNames}
-                />
-                {profiles.map((item) => (
-                  <TeamProfileItem
-                    key={`${item.key}:${item.revision}`}
-                    item={item}
-                    onOutcome={(result) =>
-                      setIssue(configurationWriteIssue(result))
-                    }
-                    details={
-                      <ProviderRowDetails
-                        kind={item.kind}
-                        itemKey={item.key}
-                        title={
-                          configurationProfileValueSchema.parse(item.value).name
-                        }
+                {source.kind === "pool" && source.configuration === "team" ? (
+                  <TeamSyncedProviderProfiles
+                    providerId={providerId}
+                    onOutcome={onOutcome}
+                    fallback={
+                      <ConfigurationProfiles
+                        providerLabel={providerDisplayName(providerId)}
+                        profiles={profiles}
+                        onOutcome={onOutcome}
                       />
                     }
                   />
-                ))}
+                ) : (
+                  <ConfigurationProfiles
+                    providerLabel={providerDisplayName(providerId)}
+                    profiles={profiles}
+                    onOutcome={onOutcome}
+                  />
+                )}
+                {/* A team's Viewer, or a role the app does not know, sees no key field. */}
+                {source.kind === "pool" &&
+                source.configuration === "team" &&
+                !props.keyScope.canEdit ? null : (
+                  <CloudProviderApiKeySection
+                    scope={props.keyScope}
+                    providerId={providerId}
+                    query={props.keyQuery}
+                  />
+                )}
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">
@@ -227,23 +314,15 @@ export function TeamProviders(): ReactNode {
                   className="text-ui-xs text-muted-foreground"
                   data-testid="team-provider-env-subtitle"
                 >
-                  {providerEnvSubtitleFor(envSubtitleScope)(
-                    providerDisplayName(providerId),
-                    personal
-                      ? { kind: "personal" }
-                      : { kind: "team", teamName },
-                  )}
+                  {PROVIDER_ENV_TAB_SUBTITLE}
                 </p>
-                <ConfigurationOsPicker value={os} onChange={setOs} />
+                <ConfigurationOsPicker value={os} onChange={onOsChange} />
                 <TeamTextItems
-                  key={JSON.stringify([os, harness])}
                   items={items}
                   kind="env_override"
                   os={os}
                   providerId={harness}
-                  onOutcome={(result) =>
-                    setIssue(configurationWriteIssue(result))
-                  }
+                  writes={writes}
                   renderDetails={(item) => (
                     <ProviderRowDetails
                       kind={item.kind}
@@ -265,64 +344,178 @@ export function TeamProviders(): ReactNode {
                     key={`${id}:${packs.find((item) => item.key === id)?.revision ?? "new"}`}
                     packId={id}
                     item={packs.find((item) => item.key === id) ?? null}
-                    onOutcome={(result) =>
-                      setIssue(configurationWriteIssue(result))
-                    }
+                    onOutcome={onOutcome}
                   />
                 ))}
               </TabsContent>
             </Tabs>
           </div>
         </>
-      )}
+      ) : null}
     </SettingsPanelShell>
   );
 }
 
-type EnvSubtitleScope = "config-only" | "normal" | "unknown";
-
-/**
- * Whether the selected provider's Env override reaches its conversations,
- * per its row in the team's own `providers.list` catalog read - "unknown"
- * without a row to read (the catalog hasn't resolved, or there is no
- * reachable viewing host to read it from at all), never a guess either way.
- */
-function providerEnvSubtitleScope(
-  providers: readonly ProviderCliState[] | undefined,
-  providerId: ProviderId,
-): EnvSubtitleScope {
-  const row = providers?.find((provider) => provider.providerId === providerId);
-  if (row === undefined) return "unknown";
-  return row.nativeCapabilities.envOverrideScope === "native-config-only"
-    ? "config-only"
-    : "normal";
+function ProviderRailButton(props: {
+  readonly row: ProviderRailRow;
+  readonly selected: boolean;
+  readonly onSelect: (providerId: ProviderId) => void;
+}): ReactNode {
+  const name = providerDisplayName(props.row.providerId);
+  return (
+    <button
+      type="button"
+      aria-current={props.selected ? "true" : undefined}
+      onClick={() => props.onSelect(props.row.providerId)}
+      className={railButtonClass(props.selected)}
+    >
+      <span className="min-w-0 whitespace-normal break-words">{name}</span>
+      {props.row.subtitle === null ? null : (
+        <span className="min-w-0 whitespace-normal break-words text-ui-xs text-muted-foreground">
+          {props.row.subtitle}
+        </span>
+      )}
+    </button>
+  );
 }
 
-/** `providerEnvSubtitle`, or one of its siblings for a confirmed
- *  native-config-only provider or an unconfirmed scope. */
-function providerEnvSubtitleFor(
-  scope: EnvSubtitleScope,
-): typeof providerEnvSubtitle {
-  switch (scope) {
-    case "config-only":
-      return providerNativeConfigOnlyEnvSubtitle;
+function railButtonClass(selected: boolean): string {
+  return cn(
+    "flex h-auto w-full min-w-0 flex-col items-start gap-0.5 rounded-md px-2.5 py-2 text-left text-ui-sm whitespace-normal break-words transition-colors focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring",
+    selected
+      ? "bg-accent text-accent-foreground"
+      : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
+  );
+}
+
+/**
+ * While the user has not picked a provider, follow the first configured one
+ * once each classification is known. Returns null when nothing should move.
+ */
+function providerRailAdjustment(input: {
+  readonly picked: boolean;
+  readonly ready: boolean;
+  readonly seenRailKey: string | null;
+  readonly railKey: string;
+  readonly rows: readonly ProviderRailRow[];
+  readonly providerId: ProviderId;
+}): { readonly railKey: string; readonly providerId: ProviderId } | null {
+  if (input.picked || !input.ready || input.seenRailKey === input.railKey) {
+    return null;
+  }
+  const current = input.rows.find((row) => row.providerId === input.providerId);
+  const firstConfigured = input.rows.find(
+    (row) => row.railClass === "configured",
+  );
+  if (
+    current !== undefined &&
+    current.railClass === "unconfigured" &&
+    firstConfigured !== undefined
+  ) {
+    return { railKey: input.railKey, providerId: firstConfigured.providerId };
+  }
+  return { railKey: input.railKey, providerId: input.providerId };
+}
+
+function providerRailRows(input: {
+  readonly keyRecords: EnvironmentProfileRecords | null;
+  readonly items: readonly ConfigurationItem[] | undefined;
+  readonly plans: readonly EnvironmentPlan[] | null;
+  readonly secrets: readonly EnvironmentSecret[] | null;
+}): readonly ProviderRailRow[] {
+  return ORDERED_PROVIDERS.map((provider) => {
+    const count =
+      input.items === undefined
+        ? null
+        : managedProfileCount(input.items, provider.harnessId);
+    const usesKeyRecords =
+      isProviderKeyProviderId(provider.providerId) &&
+      input.keyRecords?.profileSyncEnabled !== false;
+    const linkedPlan =
+      input.plans?.some(
+        (plan) =>
+          plan.harness === provider.harnessId && plan.status === "linked",
+      ) === true;
+    const recordKey =
+      input.keyRecords?.providerKeys.some(
+        (record) =>
+          record.providerId === provider.providerId && record.state === "live",
+      ) === true;
+    let standing: CloudProviderStanding;
+    let word: string | null;
+    if (usesKeyRecords) {
+      // Enabled record mode owns absence too: a removed key cannot be revived by a stale legacy secret.
+      standing = recordProviderStanding({
+        profileCount: count,
+        linkedPlan,
+        recordKey,
+        plansKnown: input.plans !== null,
+        recordsKnown: input.keyRecords !== null,
+      });
+      if (linkedPlan) word = "plan";
+      else if (recordKey) word = "key";
+      else word = null;
+    } else {
+      word = teamProviderStateWord({
+        providerId: provider.providerId,
+        harnessId: provider.harnessId,
+        plans: input.plans,
+        secrets: input.secrets,
+      });
+      standing = cloudProviderStanding({
+        providerId: provider.providerId,
+        harnessId: provider.harnessId,
+        profileCount: count,
+        plans: input.plans,
+        secrets: input.secrets,
+      });
+    }
+    return {
+      providerId: provider.providerId,
+      harnessId: provider.harnessId,
+      railClass: providerRailClass(standing),
+      subtitle: word === "key" ? "key" : null,
+    };
+  });
+}
+
+/** A broker key read owns both presence and absence, after known profiles/plans. */
+function recordProviderStanding(input: {
+  readonly profileCount: number | null;
+  readonly linkedPlan: boolean;
+  readonly recordKey: boolean;
+  readonly plansKnown: boolean;
+  readonly recordsKnown: boolean;
+}): CloudProviderStanding {
+  if (
+    (input.profileCount !== null && input.profileCount > 0) ||
+    input.linkedPlan ||
+    input.recordKey
+  )
+    return "configured";
+  if (input.profileCount === null || !input.plansKnown || !input.recordsKnown)
+    return "unknown";
+  return "absent";
+}
+
+function providerRailClass(standing: CloudProviderStanding): RailClass {
+  switch (standing) {
+    case "configured":
+      return "configured";
+    case "absent":
+      return "unconfigured";
     case "unknown":
-      return providerEnvSubtitleUnknownScope;
-    case "normal":
-      return providerEnvSubtitle;
+      return "unknown";
   }
 }
 
-function providerState(
+function managedProfileCount(
   items: readonly ConfigurationItem[],
   harnessId: string,
-): string {
-  const count = items.filter((item) => {
+): number {
+  return items.filter((item) => {
     if (item.kind !== "managed_profile") return false;
     const profile = configurationProfileValueSchema.parse(item.value);
     return profile.harnessId === harnessId;
   }).length;
-  return count === 0
-    ? "No profiles"
-    : `${count} ${count === 1 ? "profile" : "profiles"}`;
 }

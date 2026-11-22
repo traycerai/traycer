@@ -8,7 +8,8 @@ export interface UseIsTextTruncatedResult<T extends HTMLElement> {
 
 /**
  * Measures whether an element's text is actually ellipsized (`scrollWidth >
- * clientWidth`), so a tooltip can be gated on real overflow instead of
+ * clientWidth` on one line, `scrollHeight > clientHeight` under a line clamp),
+ * so a tooltip can be gated on real overflow instead of
  * unconditionally repeating already-visible text. Re-measures whenever
  * `content` changes and whenever the element itself resizes.
  *
@@ -29,7 +30,9 @@ export function useIsTextTruncated<T extends HTMLElement>(
     if (element === null) return;
     const el = element;
     function measure(): void {
-      setIsTruncated(el.scrollWidth > el.clientWidth);
+      setIsTruncated(
+        el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight,
+      );
     }
     measure();
     const observer = new ResizeObserver(measure);

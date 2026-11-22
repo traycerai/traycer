@@ -1,0 +1,112 @@
+diff --git a/ios/Sources/KeyboardPlugin/Keyboard.m b/ios/Sources/KeyboardPlugin/Keyboard.m
+index 54a6694fabed1c5ba430ea2514fd26e86a5e933f..c5b80cdb6e6b5bc5773eb450b28d456d8645d592 100644
+--- a/ios/Sources/KeyboardPlugin/Keyboard.m
++++ b/ios/Sources/KeyboardPlugin/Keyboard.m
+@@ -53,7 +53,6 @@ NSTimer *hideTimer;
+ NSString* UIClassString;
+ NSString* WKClassString;
+ NSString* UITraitsClassString;
+-double stageManagerOffset;
+ 
+ #pragma mark - Helpers
+ 
+@@ -83,11 +82,26 @@ double stageManagerOffset;
+   return ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad);
+ }
+ 
+-- (BOOL)shouldIgnoreResizeForHeight:(double)height {
+-  if (![self isIPad]) return NO;
+-  if (height <= 0.0) return NO;
+-  CGFloat screenHeight = UIScreen.mainScreen.bounds.size.height;
+-  return (height / screenHeight) < 0.20;
++// The height the keyboard takes from the web view, in points: on a phone the
++// keyboard's own height, on an iPad the band of the web view the keyboard's
++// end frame covers. Measured afresh from every notification, because the
++// frame moves with rotation, with a Stage Manager window, and between a
++// hardware keyboard's shortcut bar and the software keyboard the person brings
++// up from it, so a height remembered from an earlier show describes a
++// different keyboard. Two iPad keyboards cover nothing the page should give
++// up: the shortcut bar shown with a hardware keyboard (under 100pt tall) and a
++// floating keyboard (narrower than half the web view), which the person drags
++// clear of what it hides.
++- (double)keyboardHeightForNotification:(NSNotification *)notification {
++  CGRect endFrame = [[notification.userInfo valueForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
++  if (![self isIPad]) return endFrame.size.height;
++  UIWindow *window = self.webView.window;
++  if (window == nil) return 0;
++  CGRect keyboardInWindow = [window convertRect:endFrame fromCoordinateSpace:window.screen.coordinateSpace];
++  CGRect webViewInWindow = [self.webView convertRect:self.webView.bounds toView:window];
++  if (endFrame.size.height < 100 || keyboardInWindow.size.width < webViewInWindow.size.width / 2) return 0;
++  CGRect overlap = CGRectIntersection(keyboardInWindow, webViewInWindow);
++  return CGRectIsNull(overlap) ? 0 : overlap.size.height;
+ }
+ 
+ #pragma mark - Lifecycle
+@@ -229,29 +243,7 @@ double stageManagerOffset;
+   // Force DOM color whenever keyboard shows
+   [self updateBackdropColor];
+ 
+-  CGRect rect = [[notification.userInfo valueForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
+-
+-  double height = rect.size.height;
+-    
+-  if ([self isIPad]) {
+-    if (stageManagerOffset > 0) {
+-      height = stageManagerOffset;
+-    } else {
+-      CGRect webViewAbsolute = [self.webView convertRect:self.webView.frame toCoordinateSpace:self.webView.window.screen.coordinateSpace];
+-      height = (webViewAbsolute.size.height + webViewAbsolute.origin.y) - (UIScreen.mainScreen.bounds.size.height - rect.size.height);
+-      if (height < 0) {
+-        height = 0;
+-      }
+-        
+-      stageManagerOffset = height;
+-    }
+-  }
+-
+-  BOOL ignored = [self shouldIgnoreResizeForHeight:height];
+-  if (ignored) {
+-    NSLog(@"KeyboardPlugin: Ignoring QuickType Bar (%.1f) -> treat as 0.", height);
+-    height = 0.0;
+-  }
++  double height = [self keyboardHeightForNotification:notification];
+ 
+   double duration = [[notification.userInfo valueForKey:UIKeyboardAnimationDurationUserInfoKey] doubleValue]+0.2;
+   [self setKeyboardHeight:(int)height delay:duration];
+@@ -265,26 +257,7 @@ double stageManagerOffset;
+ 
+ - (void)onKeyboardDidShow:(NSNotification *)notification
+ {
+-  CGRect rect = [[notification.userInfo valueForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
+-  double height = rect.size.height;
+-
+-  if ([self isIPad]) {
+-    if (stageManagerOffset > 0) {
+-      height = stageManagerOffset;
+-    } else {
+-      CGRect webViewAbsolute = [self.webView convertRect:self.webView.frame toCoordinateSpace:self.webView.window.screen.coordinateSpace];
+-      height = (webViewAbsolute.size.height + webViewAbsolute.origin.y) - (UIScreen.mainScreen.bounds.size.height - rect.size.height);
+-      if (height < 0) {
+-        height = 0;
+-      }
+-    }
+-  }
+-
+-  BOOL ignored = [self shouldIgnoreResizeForHeight:height];
+-  if (ignored) {
+-    NSLog(@"KeyboardPlugin: (didShow) Ignoring QuickType Bar (%.1f) -> report 0.", height);
+-    height = 0.0;
+-  }
++  double height = [self keyboardHeightForNotification:notification];
+ 
+   [self resetScrollView];
+ 
+@@ -299,8 +272,6 @@ double stageManagerOffset;
+   [self.bridge triggerWindowJSEventWithEventName:@"keyboardDidHide"];
+   [self notifyListeners:@"keyboardDidHide" data:nil];
+   [self resetScrollView];
+-
+-  stageManagerOffset = 0;
+ }
+ 
+ - (void)setKeyboardHeight:(int)height delay:(NSTimeInterval)delay

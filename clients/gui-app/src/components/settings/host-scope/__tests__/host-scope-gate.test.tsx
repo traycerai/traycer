@@ -1,6 +1,36 @@
+const updateAction = vi.hoisted(() => ({ update: vi.fn() }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+vi.mock("@/hooks/host/use-older-host-update", () => ({
+  useOlderHostUpdate: () => ({
+    update: updateAction.update,
+    pending: false,
+    remotePending: false,
+    failure: null,
+  }),
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
+  useHostProvisioningProgress: () => null,
+}));
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { within } from "@testing-library/react";
 import { useEffect, useState, type ReactNode } from "react";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   hostScopeFixture,
@@ -18,6 +48,28 @@ function expectHiddenFromView(node: Element | null): void {
   expect(node === null || isConcealed(node)).toBe(true);
 }
 
+const HOST_SCOPE_WRAPPING_ACTION_TOKENS = [
+  "h-auto",
+  "max-w-full",
+  "min-w-0",
+  "shrink",
+  "whitespace-normal",
+  "wrap-anywhere",
+] as const;
+
+function classTokens(element: Element): ReadonlySet<string> {
+  return new Set(
+    element.className.split(/\s+/).filter((token) => token.length > 0),
+  );
+}
+
+function expectClassTokens(element: Element, tokens: readonly string[]): void {
+  const present = classTokens(element);
+  for (const token of tokens) {
+    expect(present.has(token), token).toBe(true);
+  }
+}
+
 /**
  * The gate is where "no hosts in hand" is turned into a sentence a person
  * reads, and the two ways of having none are not the same claim:
@@ -28,7 +80,66 @@ function expectHiddenFromView(node: Element | null): void {
  * Collapsing them told people with hosts to go install a host.
  */
 describe("<HostScopeGate /> empty and failed states", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    updateAction.update.mockClear();
+  });
+
+  it.each(["local", "remote"] as const)(
+    "shows the update notice and working outline action for a picked %s host below the minimum",
+    (kind) => {
+      const entry =
+        kind === "local"
+          ? {
+              ...mockLocalHostEntry,
+              hostId: "picked-old-host",
+              version: "1.5.4",
+            }
+          : (() => {
+              const base = remoteEntry("picked-old-host", null);
+              return {
+                ...base,
+                version: "2.0.0",
+                remoteStatus: {
+                  ...base.remoteStatus,
+                  appVersion: "1.5.4",
+                },
+              };
+            })();
+      const host = hostScopeOptionFixture({
+        hostId: entry.hostId,
+        name: "Build Mac",
+        isLocalMachine: kind === "local",
+        entry,
+      });
+
+      render(
+        <HostScopeGate
+          scope={hostScopeFixture({ host, status: "following" })}
+          skeleton={<div data-testid="skeleton" />}
+        >
+          <div data-testid="body" />
+        </HostScopeGate>,
+      );
+
+      const notice = screen.getByTestId("host-scope-update-needed");
+      expect(within(notice).getByText("Host update needed").textContent).toBe(
+        "Host update needed",
+      );
+      expect(
+        within(notice).getByText(
+          "This host is running an older version than this app supports.",
+        ).textContent,
+      ).toBe("This host is running an older version than this app supports.");
+      const update = screen.getByRole("button", { name: "Update now" });
+      expect(update.textContent).toBe("Update now");
+      expect(update.getAttribute("data-variant")).toBe("outline");
+      expectHiddenFromView(screen.queryByTestId("body"));
+
+      fireEvent.click(update);
+      expect(updateAction.update).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("renders the panel body once the scope is ready", () => {
     render(
@@ -67,8 +178,13 @@ describe("<HostScopeGate /> empty and failed states", () => {
 
     const notice = screen.getByTestId("host-scope-unreachable");
     expect(notice.textContent).toContain("Can't reach Office Linux from here");
+    expect(notice.textContent).toContain(
+      "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link.",
+    );
+    expectClassTokens(notice, ["w-full", "min-w-0"]);
     expect(notice.textContent).not.toContain("plan");
     expect(screen.queryByRole("button", { name: "Upgrade plan" })).toBeNull();
+    expect(screen.queryByTestId("host-scope-return-to-active")).toBeNull();
     expectHiddenFromView(screen.queryByTestId("body"));
   });
 
@@ -152,7 +268,14 @@ describe("<HostScopeGate /> empty and failed states", () => {
       </HostScopeGate>,
     );
 
-    expect(screen.getByTestId("host-scope-return-to-active")).not.toBeNull();
+    const back = screen.getByTestId("host-scope-return-to-active");
+    expect(back.textContent).toBe("Back to This Mac");
+    expectClassTokens(back, HOST_SCOPE_WRAPPING_ACTION_TOKENS);
+    const notice = screen.getByTestId("host-scope-unreachable");
+    expectClassTokens(notice, ["w-full", "min-w-0"]);
+    expect(notice.textContent).toContain(
+      "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link.",
+    );
   });
 
   it("says the list failed, and offers a retry, rather than claiming an empty account", () => {
@@ -216,8 +339,53 @@ describe("<HostScopeGate /> empty and failed states", () => {
       </HostScopeGate>,
     );
 
-    expect(screen.getByTestId("host-scope-vanished")).not.toBeNull();
+    const notice = screen.getByTestId("host-scope-vanished");
     expect(screen.queryByTestId("host-scope-lists-failed")).toBeNull();
+    const back = screen.getByRole("button", {
+      name: "Back to your active host",
+    });
+    expect(back.getAttribute("data-testid")).toBe(
+      "host-scope-return-to-active",
+    );
+    expectClassTokens(back, HOST_SCOPE_WRAPPING_ACTION_TOKENS);
+    expectClassTokens(notice, ["w-full", "min-w-0"]);
+    expect(notice.textContent).toContain(
+      "It was removed from your account, or signed out. Nothing here can act on it.",
+    );
+  });
+
+  it("wraps Forget when the vanished host is one this screen still remembers", () => {
+    const forget = vi.fn();
+    render(
+      <HostScopeGate
+        scope={hostScopeFixture({
+          host: null,
+          status: "vanished",
+          vanishedHostId: "host-gone",
+          vanishedSelection: { name: "Old workstation", forget },
+        })}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        <div data-testid="body" />
+      </HostScopeGate>,
+    );
+
+    const notice = screen.getByTestId("host-scope-vanished");
+    expect(notice.textContent).toContain("Old workstation is no longer here.");
+    expect(notice.textContent).not.toContain(
+      "It was removed from your account, or signed out.",
+    );
+    expectClassTokens(notice, ["w-full", "min-w-0"]);
+    const forgetButton = screen.getByRole("button", {
+      name: "Forget Old workstation",
+    });
+    expect(forgetButton.getAttribute("data-testid")).toBe(
+      "host-scope-forget-vanished",
+    );
+    expectClassTokens(forgetButton, HOST_SCOPE_WRAPPING_ACTION_TOKENS);
+    fireEvent.click(forgetButton);
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("body")).toBeNull();
   });
 });
 
@@ -249,7 +417,10 @@ function EffectProbe(props: { readonly log: string[] }) {
  * by a REAL host switch — never by a transient same-host flap.
  */
 describe("<HostScopeGate /> concealment and preservation", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    updateAction.update.mockClear();
+  });
 
   function gateAt(
     status: "ready" | "unreachable",
@@ -344,5 +515,65 @@ describe("<HostScopeGate /> concealment and preservation", () => {
 
     rerender(gateAt("ready", surface, "host-a"));
     expect(screen.getByTestId("portal-surface")).not.toBeNull();
+  });
+
+  it("hides a below-minimum host's controls and effects while preserving its draft for recovery", () => {
+    const log: string[] = [];
+    const localHost = (version: string) =>
+      hostScopeOptionFixture({
+        hostId: "host-floor-transition",
+        entry: {
+          ...mockLocalHostEntry,
+          hostId: "host-floor-transition",
+          version,
+        },
+      });
+    const scopeAt = (version: string) =>
+      hostScopeFixture({
+        host: localHost(version),
+        status: "following",
+      });
+    const surface = (
+      <>
+        <TypedProbe />
+        <EffectProbe log={log} />
+        <Popover open>
+          <PopoverTrigger>anchor</PopoverTrigger>
+          <PopoverContent>
+            <button type="button" data-testid="portal-control">
+              Change setting
+            </button>
+          </PopoverContent>
+        </Popover>
+      </>
+    );
+    const renderAt = (version: string) => (
+      <HostScopeGate
+        scope={scopeAt(version)}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        {surface}
+      </HostScopeGate>
+    );
+    const { rerender } = render(renderAt("2.0.0"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Typed probe" }), {
+      target: { value: "keep this draft" },
+    });
+    expect(screen.getByTestId("portal-control")).not.toBeNull();
+    expect(log).toEqual(["mount"]);
+
+    rerender(renderAt("1.5.4"));
+
+    expect(screen.getByText("Host update needed")).not.toBeNull();
+    expectHiddenFromView(screen.queryByDisplayValue("keep this draft"));
+    expect(screen.queryByRole("button", { name: "Change setting" })).toBeNull();
+    expect(screen.queryByTestId("portal-control")).toBeNull();
+    expect(log).toEqual(["mount", "cleanup"]);
+
+    rerender(renderAt("2.0.1"));
+
+    expect(screen.getByDisplayValue("keep this draft")).not.toBeNull();
+    expect(screen.getByTestId("portal-control")).not.toBeNull();
+    expect(log).toEqual(["mount", "cleanup", "mount"]);
   });
 });

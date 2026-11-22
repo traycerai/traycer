@@ -37,7 +37,7 @@ export function TrayOpenEpicBridge(): null {
       navigate,
       openRequest.epicId,
       router.state.location.pathname,
-      { title: epic?.title, source: "system_tray" },
+      { title: epic?.title, source: "system_tray", tracyOrigin: null },
     );
   }, [openRequest, navigate, router, isEpicDeleteInFlight]);
 

@@ -22,6 +22,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { EpicAttachment } from "@/hooks/epic/use-epic-attach-environment-mutation";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -70,6 +71,7 @@ const dialogMocks = vi.hoisted(() => ({
     readonly onSuccess: () => void;
   }>,
   stagingSeen: [] as Array<unknown>,
+  layout: "inline" as "inline" | "stacked",
   /** The dialog's own host pick, as its workspace controls call it. */
   selectHost: null as ((hostId: string) => void) | null,
   /** Whether the forked harness is available on the selected host. */
@@ -197,21 +199,33 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 
 // The attachment before a fork onto a team's host: passed straight through,
 // so every fork here goes on to `epic.createChat` as it did before.
-vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
-  isAttachEnvironmentUnsupported: () => false,
-  toastAttachEnvironmentNeedsOwnHost: dialogMocks.needsOwnHostToast,
-  useEpicAttachEnvironment: () => ({
-    isPending: false,
-    mutate: (
-      input: { readonly epicId: string; readonly teamId: string },
-      options: { readonly onSuccess: () => void },
-    ) => {
-      dialogMocks.attachCalls.push(input);
-      dialogMocks.attachRequests.push({ input, onSuccess: options.onSuccess });
-      if (dialogMocks.attachAnswers) options.onSuccess();
-    },
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    isAttachEnvironmentUnsupported: () => false,
+    toastAttachEnvironmentNeedsOwnHost: dialogMocks.needsOwnHostToast,
+    useEpicAttachEnvironment: () => ({
+      isPending: false,
+      mutate: (
+        input: EpicAttachment,
+        options: { readonly onSuccess: () => void },
+      ) => {
+        dialogMocks.attachCalls.push({
+          epicId: input.epicId,
+          teamId: input.teamId,
+        });
+        dialogMocks.attachRequests.push({
+          input,
+          onSuccess: options.onSuccess,
+        });
+        if (dialogMocks.attachAnswers) options.onSuccess();
+      },
+    }),
   }),
-}));
+);
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: { readonly method?: string }) => {
@@ -316,9 +330,11 @@ vi.mock(
   () => ({
     ActiveHostWorkspaceControls: (props: {
       readonly sandboxStaging: unknown;
+      readonly layout: "inline" | "stacked";
       readonly hostScope: { readonly onSelect?: (hostId: string) => void };
     }) => {
       dialogMocks.stagingSeen.push(props.sandboxStaging);
+      dialogMocks.layout = props.layout;
       dialogMocks.selectHost = props.hostScope.onSelect ?? null;
       return <div data-testid="fork-workspace" />;
     },
@@ -547,10 +563,14 @@ function stagedForkTarget(
 function renderStaged(
   stagedSandbox: Extract<StagedSandboxTarget, { kind: "new" }>,
 ): void {
+  renderStagedTarget(stagedForkTarget(stagedSandbox));
+}
+
+function renderStagedTarget(target: ChatForkDialogTarget): void {
   render(
     <ChatForkDialog
       open
-      target={stagedForkTarget(stagedSandbox)}
+      target={target}
       epicId="epic-test"
       tabId="tab-test"
       onOpenChange={dialogMocks.onOpenChange}
@@ -654,6 +674,74 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
 
     expect(readStagedSandbox(FORK_SURFACE)?.target).toEqual(NEW_SANDBOX);
     expect(dialogMocks.stagingSeen.at(-1)).not.toBeNull();
+  });
+
+  it("describes a new sandbox fork with its saved transcript and no files", () => {
+    dialogMocks.directoryHosts = [
+      directoryEntry(TAB_HOST_ID, "Tab host"),
+      directoryEntry(OLD_HOST_ID, "Old host"),
+    ];
+    dialogMocks.clientsByHostId.set(OLD_HOST_ID, buildHostClient(OLD_HOST_ID));
+    recordNegotiatedHostManifest(TAB_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 1 },
+    });
+    recordNegotiatedHostManifest(OLD_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 1 },
+    });
+    renderStagedTarget({
+      ...forkTarget(),
+      assistantMessageId: null,
+      stagedSandbox: NEW_SANDBOX,
+    });
+
+    act(() => {
+      dialogMocks.selectHost?.(OLD_HOST_ID);
+    });
+
+    expect(
+      screen.getByText(/uses the latest usable cloud backup available/),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(/Work still in progress may not be included/),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(/The original agent continues working/),
+    ).not.toBeNull();
+    const secondChat = screen.getByText(
+      "Makes a second chat there. This one stays where it is.",
+    );
+    const controls = screen.getByTestId("fork-workspace");
+    expect(secondChat.nextElementSibling).toBe(controls);
+    expect(dialogMocks.layout).toBe("stacked");
+    expect(screen.queryByLabelText("Run location")).toBeNull();
+    const empty = screen.getByTestId("chat-fork-empty-sandbox");
+    expect(empty.tagName).toBe("P");
+    expect(empty.textContent).toBe(
+      "This fork starts in an empty sandbox, with no files.",
+    );
+    expect(
+      controls.compareDocumentPosition(empty) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const lead = screen.getByText(
+      /uses the latest usable cloud backup available/,
+    );
+    expect(lead.contains(empty)).toBe(false);
+    expect(lead.textContent).not.toContain("empty sandbox");
+    const session = screen.getByTestId("chat-fork-provider-session");
+    expect(session.tagName).toBe("P");
+    expect(session.textContent).toBe(
+      "The fork copies the transcript; the provider session stays on the source computer.",
+    );
+    expect(lead.contains(session)).toBe(false);
+    expect(empty.contains(session)).toBe(false);
+    expect(
+      screen.getByText(
+        "Makes a second chat there. This one stays where it is.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/pick this host's folder/)).toBeNull();
+    expect(screen.queryByText(/latest saved checkpoint/)).toBeNull();
   });
 
   it("stages nothing and skips the publication read for a single-host fork", () => {

@@ -46,6 +46,7 @@ import {
   useMergedNotificationRow,
   useMergedNotificationUnreadCount,
   useNotificationBellState,
+  useBlockingAttentionCount,
   useNotificationCenterHostState,
   useRecentNotificationIds,
   type NotificationBellState,
@@ -253,6 +254,37 @@ function hostBotAnswer(
   };
 }
 
+function hostBotConversation(
+  id: string,
+  updatedAt: number,
+  authorUserId: string,
+): HostNotificationFeedEntry {
+  return {
+    id,
+    updatedAt,
+    readAt: null,
+    kind: "host.operation.finished",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "bot-1",
+    chatId: "thread-1",
+    payload: {
+      kind: "bot_conversation",
+      event: "bot.conversation.post",
+      operation: "bot.conversation.post",
+      title: "Tracy",
+      message: "A question for Tracy",
+      botId: "bot-1",
+      conversationId: "conversation-1",
+      threadId: "thread-1",
+      messageId: id,
+      authorUserId,
+      mention: false,
+    },
+  };
+}
+
 function cloudDone(
   entryId: string,
   createdAt: number,
@@ -331,7 +363,29 @@ function appLocalEntry(
   };
 }
 
+/** An informational collaboration row: news about a task the person has. */
 function globalEntry(
+  id: string,
+  createdAt: number,
+  readAt: number | null,
+): NotificationEntry {
+  return {
+    id,
+    createdAt,
+    readAt,
+    event: {
+      kind: NOTIFICATION_EVENT_TYPES.COMMENT_ADDED,
+      epicId: "epic-1",
+      artifactType: "spec",
+      artifactId: "artifact-1",
+      threadId: "thread-1",
+      actorName: "Alice",
+    },
+  };
+}
+
+/** The collaboration row that counts on the bell: a task shared with them. */
+function invitedEntry(
   id: string,
   createdAt: number,
   readAt: number | null,
@@ -533,7 +587,7 @@ describe("merged notification projection (Attention / Recent)", () => {
     ]);
   });
 
-  it("keeps global rows in Recent only", () => {
+  it("keeps informational collaboration rows in Recent only", () => {
     seedGlobal([
       globalEntry("g-unread", 50, null),
       globalEntry("g-read", 40, 10),
@@ -549,6 +603,40 @@ describe("merged notification projection (Attention / Recent)", () => {
       globalFeedId("g-unread"),
       globalFeedId("g-read"),
     ]);
+  });
+
+  it("places an unread task invitation in Attention and moves it to Recent once read", () => {
+    seedGlobal([
+      invitedEntry("invite-unread", 50, null),
+      invitedEntry("invite-read", 40, 10),
+    ]);
+
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+
+    expect(attention.current).toEqual([globalFeedId("invite-unread")]);
+    expect(recent.current).toEqual([globalFeedId("invite-read")]);
+  });
+
+  it("keeps an unread task invitation out of the blocking count: no agent is waiting", () => {
+    applyHostSnapshot([hostPrompt("prompt", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    seedGlobal([invitedEntry("invite", 50, null)]);
+
+    const { result } = renderHook(() => ({
+      attention: useAttentionNotificationIds(),
+      blocking: useBlockingAttentionCount(),
+    }));
+
+    expect(result.current.attention).toEqual([
+      hostFeedId("prompt"),
+      globalFeedId("invite"),
+    ]);
+    expect(result.current.blocking).toBe(1);
   });
 
   it("keeps resolved prompts in Attention until their notification is read", () => {
@@ -1168,6 +1256,42 @@ describe("useNotificationBellState", () => {
     expect(result.current).toEqual({ kind: "attention", count: 150 });
   });
 
+  it("counts an unread task invitation as attention until it is read", () => {
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 0 });
+    seedGlobal([
+      invitedEntry("invite", 20, null),
+      globalEntry("comment", 10, null),
+    ]);
+
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "attention", count: 1 });
+
+    act(() => {
+      useNotificationsStore.getState().markAsRead("invite");
+    });
+    // The comment is still unread: activity, not attention.
+    expect(result.current).toEqual({ kind: "quietDot" });
+  });
+
+  it("adds an unread task invitation to both partitions' attention in mixed mode", () => {
+    notificationFeedModeRef.value = "cloud";
+    try {
+      applyHostSnapshot([], { unreadCount: 0, attentionCount: 1 });
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [],
+        summary: { totalCount: 0, unreadCount: 0, attentionCount: 1 },
+        version: 1,
+      });
+      seedGlobal([invitedEntry("invite", 20, null)]);
+
+      const { result } = renderHook(() => useNotificationBellState());
+      expect(result.current).toEqual({ kind: "attention", count: 3 });
+    } finally {
+      notificationFeedModeRef.value = "local";
+      useCloudNotificationsStore.getState().reset();
+    }
+  });
+
   it("draws a bot's unread answer as attention once the host's summary counts it", () => {
     applyHostSnapshot([hostBotAnswer("answer", 10, null)], {
       unreadCount: 1,
@@ -1379,6 +1503,26 @@ describe("row category and resolvedAt projection fields", () => {
       expect(item.row?.category).toBe(item.category);
       expect(item.row?.resolvedAt).toBe(item.resolvedAt);
     }
+  });
+
+  it("projects the member who wrote a bot conversation row, and none on the bot's own verdict", () => {
+    applyHostSnapshot(
+      [
+        hostBotConversation("post", 30, "user-2"),
+        hostBotAnswer("verdict", 20, null),
+      ],
+      { unreadCount: 2, attentionCount: 0 },
+    );
+
+    const { result: post } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("post")),
+    );
+    const { result: verdict } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("verdict")),
+    );
+
+    expect(post.current?.botAuthorUserId).toBe("user-2");
+    expect(verdict.current?.botAuthorUserId).toBeNull();
   });
 
   it("hides all seeded local sources while upgrade is required", () => {

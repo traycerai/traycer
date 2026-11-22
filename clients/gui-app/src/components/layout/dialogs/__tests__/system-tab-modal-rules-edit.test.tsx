@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 /**
  * The Rules editor's unsaved text across the SYSTEM-TAB MODAL's real shell
  * (`SystemTabModalHost`): the modal flipping to non-modal while the theme
@@ -62,7 +63,7 @@ import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host"
 import { ThemeProvider } from "@/providers/theme-provider";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -97,6 +98,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
     hostScopeFixture({ status: "following", hostId: "host-a" });
   return {
     useHostScope,
+    useHostScopeFor: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
     usePersonalHostScope: useHostScope,
   };
 });
@@ -254,7 +260,7 @@ function resetStores(): void {
     draft: null,
     error: null,
   });
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
   // host-a's own Permissions page, through its Local row: Personal waits on
   // the window host's environment status, which this harness never answers.
   useSettingsEnvironmentPickStore.setState({

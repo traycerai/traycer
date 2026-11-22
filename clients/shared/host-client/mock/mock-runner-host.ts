@@ -1,3 +1,34 @@
+import { fetchEnvironmentTransport } from "../../environment/environment-cloud";
+import {
+  saveAutoPolicyViaHttp,
+  type AutoPolicySaveResult,
+} from "../auto-policy-save";
+import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+  type TaskEnvironmentAttachmentResult,
+} from "../task-environment-attachment";
+import {
+  listEnvironmentsViaHttp,
+  type EnvironmentDirectoryResult,
+} from "../environment-directory";
+import {
+  readHostOwnershipViaHttp,
+  type HostOwnershipResult,
+} from "../host-ownership";
+import {
+  listTeamComputersViaHttp,
+  type TeamComputersResult,
+} from "../team-computers";
+import {
+  mintTeamComputerInstallTokenViaHttp,
+  type TeamComputerInstallTokenResult,
+} from "../team-computer-install";
+import {
+  releaseTeamComputerViaHttp,
+  type TeamComputerReleaseResult,
+} from "../team-computer-release";
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
@@ -20,6 +51,13 @@ import {
   type SandboxVerbFetchResult,
   type TraycerModelsFetchResult,
 } from "../sandbox-control";
+import {
+  fetchTeamChatAutoArchiveViaHttp,
+  putTeamChatAutoArchiveViaHttp,
+  type TeamChatAutoArchiveReadResult,
+  type TeamChatAutoArchiveSetRequest,
+  type TeamChatAutoArchiveWriteResult,
+} from "../team-chat-auto-archive";
 import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
@@ -29,9 +67,22 @@ import type {
 import {
   SLACK_APP_REFUSAL_APP_NOT_FOUND,
   SLACK_APP_REFUSAL_APP_TAKEN,
+  type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
+import {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+  type BotDeleteResult,
+  type BotSetupWriteResult,
+} from "../bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import {
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
@@ -43,9 +94,11 @@ import {
   type VoiceSessionMintRequest,
   type VoiceTrayAction,
 } from "../voice-sessions";
-import { voiceRouteViaHttp, type VoiceRouteFetchResult } from "../voice-router";
 import {
   decideSecretRequestViaHttp,
+  replaceEnvironmentApiKeyViaHttp,
+  type EnvironmentApiKeyReplaceRequest,
+  type EnvironmentApiKeyReplaceResult,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
@@ -55,10 +108,6 @@ import {
   type SecretRequestDecideFetchResult,
 } from "../sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
-import {
-  mintExecutableWriteGrantViaHttp,
-  type ExecutableWriteGrantFetchResult,
-} from "../executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
@@ -73,6 +122,7 @@ import type {
   DeviceFlowAuthorization,
   DeviceFlowResult,
   DeviceFlowSession,
+  FleetRefreshOutcome,
   HostRestartRequestResult,
   IDeviceFlowHost,
   IHostManagement,
@@ -98,6 +148,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
   TraycerEnvOverride,
@@ -164,6 +215,12 @@ import {
   type UpdateHostVersionPolicyFetchResult,
   type UpdateHostVersionPolicyInput,
 } from "../host-version-policy-fetcher";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "../../auth/host-token-source";
+import { mintHostTokenViaHttp } from "../../host-transport/remote/grant-client";
 import {
   deregisterHostViaHttp,
   type DeregisterHostFetchResult,
@@ -237,6 +294,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly sandboxArtifacts = null;
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly environmentTransport = fetchEnvironmentTransport;
   // Fixed test-only value: no test constructs a real remote transport against
   // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
   // instead), so this never needs to vary per test the way `authnBaseUrl` does.
@@ -357,14 +415,14 @@ export class MockRunnerHost implements IRunnerHost {
     return null;
   }
 
-  refreshHostFleet(): Promise<void> {
+  refreshHostFleet(): Promise<FleetRefreshOutcome> {
     const current = this.selectionFleet.snapshot();
     this.selectionFleet.publish(
       current.identityGeneration,
       current.localHostId,
       current.hosts,
     );
-    return Promise.resolve();
+    return Promise.resolve({ kind: "published" });
   }
 
   readonly tray: MockTrayState = new MockTrayState();
@@ -400,6 +458,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly hostTray: null = null;
   readonly hostLifecycle: null = null;
   readonly zoom: null = null;
+  readonly deviceDictation: null = null;
   readonly pushPermission: null = null;
   readonly systemBack: null = null;
   readonly statusBarTap: null = null;
@@ -676,6 +735,43 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult> {
+    return readHostOwnershipViaHttp(this.authnBaseUrl, bearer, hostId);
+  }
+
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult> {
+    return listTeamComputersViaHttp(this.authnBaseUrl, bearer, environmentId);
+  }
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    return mintTeamComputerInstallTokenViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      environmentId,
+    );
+  }
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    return releaseTeamComputerViaHttp(
+      this.authnBaseUrl,
+      bearer,
+      hostId,
+      environmentId,
+    );
+  }
+
   deregisterHostFromAccount(
     bearerToken: string,
     hostId: string,
@@ -689,14 +785,55 @@ export class MockRunnerHost implements IRunnerHost {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult> {
+    return listEnvironmentsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+    );
+  }
+
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult> {
+    return saveAutoPolicyViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      body,
+    );
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return attachTaskEnvironmentViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+  }
+
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
     return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult> {
-    return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken, null);
+    return fetchSandboxCatalogueViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      context,
+    );
   }
 
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
@@ -734,18 +871,6 @@ export class MockRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       voiceSessionId,
-    );
-  }
-
-  routeVoiceUtterance(
-    bearerToken: string,
-    requestBody: string,
-  ): Promise<VoiceRouteFetchResult> {
-    return voiceRouteViaHttp(
-      this.serverBaseUrl,
-      bearerToken,
-      null,
-      requestBody,
     );
   }
 
@@ -903,6 +1028,7 @@ export class MockRunnerHost implements IRunnerHost {
       teamName: null,
       botUserId: null,
       installedAt: null,
+      dmsEnabled: this.slackApps.get(request.botId)?.dmsEnabled ?? true,
     };
     this.slackApps.set(request.botId, app);
     this.slackInstallStates.delete(request.botId);
@@ -947,6 +1073,62 @@ export class MockRunnerHost implements IRunnerHost {
         : app;
     this.slackApps.set(botId, next);
     return { kind: "ok", app: next };
+  }
+
+  async setSlackAppDms(
+    _bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    const app = this.slackApps.get(request.botId);
+    if (app === undefined) {
+      return {
+        kind: "refused",
+        status: 404,
+        code: SLACK_APP_REFUSAL_APP_NOT_FOUND,
+      };
+    }
+    const next: SlackAppView = { ...app, dmsEnabled: request.dmsEnabled };
+    this.slackApps.set(request.botId, next);
+    return { kind: "ok", app: next };
+  }
+
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotRunSettingsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotReplyModeViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return deleteBotViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
   }
 
   /** Test/dev hook: Slack removed the bot's app (`app_uninstalled`). */
@@ -998,6 +1180,17 @@ export class MockRunnerHost implements IRunnerHost {
     return fetchTeamEnvironmentViaHttp(this.authnBaseUrl, bearerToken, teamId);
   }
 
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult> {
+    return replaceEnvironmentApiKeyViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      request,
+    );
+  }
+
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -1006,17 +1199,6 @@ export class MockRunnerHost implements IRunnerHost {
       this.authnBaseUrl,
       bearerToken,
       environmentId,
-    );
-  }
-
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult> {
-    return mintExecutableWriteGrantViaHttp(
-      this.authnBaseUrl,
-      bearerToken,
-      hostId,
     );
   }
 
@@ -1081,7 +1263,17 @@ export class MockRunnerHost implements IRunnerHost {
     },
   };
 
+  readonly hostTokens: HostTokenSource = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: (hostId, signInToken, signal) =>
+      mintHostTokenViaHttp(this.authnBaseUrl, hostId, signInToken, signal),
+    signIn: null,
+    now: Date.now,
+  });
+
   readonly tokenStore: ITokenStore = {
+    getSignInStorageLow: async () => false,
+    subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
     get: async (): Promise<StoredCredentials | null> => {
       const value = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
       if (value === undefined) return null;
@@ -1092,7 +1284,7 @@ export class MockRunnerHost implements IRunnerHost {
     signIn: async (
       tokens: StoredAuthTokens,
       identity: StoredCredentialsIdentity,
-    ): Promise<void> => {
+    ): Promise<SignInSaveResult> => {
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
@@ -1100,6 +1292,7 @@ export class MockRunnerHost implements IRunnerHost {
         user: identity,
       });
       this.notifyTokenStoreChangedAfterMutation();
+      return "saved";
     },
     rotate: async (expected: {
       readonly userId: string;
@@ -1117,23 +1310,44 @@ export class MockRunnerHost implements IRunnerHost {
           ? null
           : raw;
       if (stored === null) {
-        return { outcome: "deleted", pair: null, rejection: null };
+        return {
+          outcome: "deleted",
+          pair: null,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (stored.user.id !== expected.userId) {
-        return { outcome: "user-mismatch", pair: stored, rejection: null };
+        return {
+          outcome: "user-mismatch",
+          pair: stored,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (stored.token !== expected.token) {
-        return { outcome: "superseded", pair: stored, rejection: null };
+        return {
+          outcome: "superseded",
+          pair: stored,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       const refreshed = await refreshOnceAbortable({
         authnBaseUrl: this.authnBaseUrl,
         token: stored.token,
         refreshToken: stored.refreshToken,
+        rotationCode: null,
         clientKind: "desktop",
         signal: null,
       });
       if (refreshed.kind === "network-error") {
-        return { outcome: "refresh-network", pair: null, rejection: null };
+        return {
+          outcome: "refresh-network",
+          pair: null,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (refreshed.kind === "rejected") {
         return {
@@ -1142,6 +1356,7 @@ export class MockRunnerHost implements IRunnerHost {
               ? "refresh-rejected-account"
               : "refresh-rejected-credential",
           pair: null,
+          diskPressure: null,
           rejection: refreshed.rejection,
         };
       }
@@ -1153,7 +1368,12 @@ export class MockRunnerHost implements IRunnerHost {
       };
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, next);
       this.notifyTokenStoreChangedAfterMutation();
-      return { outcome: "applied", pair: next, rejection: null };
+      return {
+        outcome: "applied",
+        pair: next,
+        diskPressure: null,
+        rejection: null,
+      };
     },
     delete: async (): Promise<void> => {
       this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);
@@ -1211,6 +1431,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: legacy.token,
         refreshToken: legacy.refreshToken,
+        rotationCode: null,
         clientKind: "desktop",
         signal: null,
       });
@@ -1513,6 +1734,34 @@ export class MockRunnerHost implements IRunnerHost {
     for (const handler of this.notificationClickHandlers) {
       handler(payload);
     }
+  }
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    return fetchTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      teamId,
+    );
+  }
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    return putTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      teamId,
+      request,
+    );
   }
 }
 

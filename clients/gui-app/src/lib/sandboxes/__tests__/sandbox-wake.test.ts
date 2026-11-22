@@ -8,6 +8,7 @@ import {
   type MockInstance,
 } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
@@ -16,7 +17,10 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import type { SandboxCreditSource } from "@traycer/protocol/host/sandbox-control";
 import type {
   SandboxListFetchResult,
@@ -69,6 +73,7 @@ function sandboxOption(
       state,
       frozen,
       summary: sandboxSummaryFixture({ id: "sbx_1", hostId: HOST_ID, state }),
+      ownerKind: "unknown",
       teamOwned: false,
     },
   });
@@ -238,7 +243,6 @@ describe("wakeSandboxOnPick", () => {
     expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
     expect(mocks.toastWarning).toHaveBeenCalledWith(
       "Not enough credits to wake this sandbox",
-      expect.anything(),
     );
     // Only the starter refreshed the directory.
     expect(binding.directory.refresh).toHaveBeenCalledTimes(1);
@@ -247,6 +251,7 @@ describe("wakeSandboxOnPick", () => {
   it("names the credit shortfall rounded up, and none when the gate sent none", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
+    binding.directory.findById.mockReturnValue(sandboxHostEntry(HOST_ID, null));
     binding.auth.listSandboxes.mockImplementation(
       listOf({ state: "suspended" }),
     );
@@ -272,6 +277,33 @@ describe("wakeSandboxOnPick", () => {
       { description: "Add credits, then try again." },
     );
   });
+
+  it.each<readonly [string, HostDirectoryEntry | null]>([
+    ["no directory row for the host", null],
+    ["a directory row with no owner", sandboxHostEntryWithoutOwner(HOST_ID)],
+  ])(
+    "does not offer a personal top-up in the wake toast with %s",
+    async (_state, row) => {
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      binding.directory.findById.mockReturnValue(row);
+      binding.auth.listSandboxes.mockImplementation(
+        listOf({ state: "suspended" }),
+      );
+      binding.auth.runSandboxVerb.mockResolvedValueOnce({
+        ...refusal(402, "insufficient_credit"),
+        shortfallMc: 10_100,
+        creditSource: "personal",
+      });
+
+      wakeSandboxOnPick(sandboxOption("suspended", false), null);
+      await settleWake();
+
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        "Not enough credits to wake this sandbox",
+      );
+    },
+  );
 
   it("names the pot a team sandbox's refused wake was checked against, in the line a row shows", async () => {
     const binding = createFakeSandboxBinding();
@@ -307,12 +339,12 @@ describe("wakeSandboxOnPick", () => {
       "Not enough credits to wake this sandbox",
       {
         description:
-          "Your Acme credits are short $0.12. $0.12 more wakes it for an hour.",
+          "Acme's credits are short $0.12. $0.12 more wakes it for an hour.",
       },
     );
   });
 
-  it("says the team's pot, nameless, when the directory has no row for the sandbox", async () => {
+  it("keeps a wake with no known owner to the title when the directory has no row", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
     binding.auth.listSandboxes.mockImplementation(
@@ -328,10 +360,6 @@ describe("wakeSandboxOnPick", () => {
     await settleWake();
     expect(mocks.toastWarning).toHaveBeenLastCalledWith(
       "Not enough credits to wake this sandbox",
-      {
-        description:
-          "Your team allowance is short $0.12. $0.12 more wakes it for an hour.",
-      },
     );
 
     binding.auth.runSandboxVerb.mockResolvedValueOnce({
@@ -343,13 +371,10 @@ describe("wakeSandboxOnPick", () => {
     await settleWake();
     expect(mocks.toastWarning).toHaveBeenLastCalledWith(
       "Not enough credits to wake this sandbox",
-      {
-        description: "Your team's credits don't cover an hour of this sandbox.",
-      },
     );
   });
 
-  it("keeps the add-credits wording for a refusal from the person's own balance, and for one that named no pot", async () => {
+  it("keeps personal and generic add-credits wording for known balances", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
     binding.directory.findById.mockReturnValue(
@@ -494,6 +519,24 @@ describe("wakeSandboxOnPick", () => {
     // no observer is left, after its gc window.
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
     expect(findWakes()).toEqual([]);
+  });
+
+  it("keeps a wake pending beyond 120 seconds until the row provider's 300 second budget", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended", wakeBudgetMs: 300_000 }),
+    );
+    hangVerbUntilItsTimeout(binding, 0);
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(wakeMutations()).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(179_999);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.toastError).toHaveBeenCalledTimes(1);
+    expect(wakeMutations()).toBe(0);
   });
 
   it("fails a wake whose lifecycle verb never answers once the 120 s budget is spent, then lets the next pick start afresh", async () => {
@@ -882,6 +925,7 @@ describe("wakeSandboxOnPick across accounts", () => {
   it("control: with the same account throughout, the outcome is toasted and the directory and host list are refreshed", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
+    binding.directory.findById.mockReturnValue(sandboxHostEntry(HOST_ID, null));
     binding.auth.listSandboxes.mockImplementation(
       listOf({ state: "suspended" }),
     );

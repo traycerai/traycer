@@ -1,7 +1,9 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
+  toolCallFeedbackDraftStampSchema,
   contentBlockSchema,
+  contentBlockSchemaPreFeedbackOrigin,
   contentBlockSchemaPreHtml,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
@@ -272,6 +274,62 @@ export const agentUserMessageSchema = lazySchema(() =>
   }),
 );
 
+/** How a Slack message reached its bot: a mention, a reply in a thread the bot is in, a DM. */
+export const slackMessageTriggerSchema = lazySchema(() =>
+  z.enum(["mention", "thread", "dm"]),
+);
+export type SlackMessageTrigger = z.infer<typeof slackMessageTriggerSchema>;
+
+/** Why a file a Slack message carried did not reach the session. */
+export const slackFileOmissionReasonSchema = lazySchema(() =>
+  z.enum([
+    "unsupported_type",
+    "too_large",
+    "missing_scope",
+    "download_failed",
+    "not_retrieved",
+  ]),
+);
+export type SlackFileOmissionReason = z.infer<
+  typeof slackFileOmissionReasonSchema
+>;
+
+/**
+ * A Slack message, delivered to the bot session running its thread or DM
+ * (Tracy Bots, Slack attachments). `content` is the person's text as Slack
+ * sent it, then one `imageAttachment` node per image the message carried, in
+ * the bot's attachment store. The rest is what the session and the
+ * transcript read about it: who wrote it (Slack's display name, the Slack
+ * user, and the Traycer member that user maps to, when one does), its Slack
+ * `ts`, how it reached the bot, and each file it did not carry with the
+ * reason. `followUp` is a message's images that arrived after its text was
+ * delivered: the same `ts`, no text of its own.
+ *
+ * Its row's sender is the bot's own `user` sender: the person is Slack's,
+ * not a Traycer sender, and is named here.
+ */
+export const slackUserMessageSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("slack"),
+    content: jsonContentSchema,
+    author: z.object({
+      displayName: z.string().nullable(),
+      slackUserId: z.string().min(1),
+      traycerUserId: z.string().min(1).nullable(),
+    }),
+    ts: z.string().min(1),
+    trigger: slackMessageTriggerSchema,
+    followUp: z.boolean(),
+    omitted: z.array(
+      z.object({
+        fileName: z.string(),
+        reason: slackFileOmissionReasonSchema,
+      }),
+    ),
+  }),
+);
+export type SlackUserMessage = z.infer<typeof slackUserMessageSchema>;
+
 const userAuthoredMessagePreTicket13Fields = {
   kind: lazySchema(() => z.literal("user")),
   content: jsonContentSchema,
@@ -329,20 +387,42 @@ export const userMessagePayloadSchemaPreAnnotation = lazySchema(() =>
   ]),
 );
 
-export const userMessagePayloadSchema = lazySchema(() =>
+/**
+ * The payload union every `chat.subscribe` line through `1.42` ships, which
+ * the `1.43` `slack` arm must not reach: their decoders reject a kind they do
+ * not name.
+ */
+export const userMessagePayloadSchemaPreSlack = lazySchema(() =>
   z.discriminatedUnion("kind", [
     userAuthoredMessageSchema,
     agentUserMessageSchema,
   ]),
 );
+
+export const userMessagePayloadSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    userAuthoredMessageSchema,
+    agentUserMessageSchema,
+    slackUserMessageSchema,
+  ]),
+);
 export type UserMessagePayload = z.infer<typeof userMessagePayloadSchema>;
 export type AgentUserMessage = z.infer<typeof agentUserMessageSchema>;
+
+/**
+ * A user row's sender names its message's kind, except a Slack message's,
+ * which the bot's own `user` sender carries (see `slackUserMessageSchema`).
+ */
+export function userMessageSenderTypeFor(kind: string): string {
+  return kind === "slack" ? "user" : kind;
+}
 
 const userMessageSenderKindRefine = (
   message: { sender: { type: string }; message: { kind: string } },
   ctx: z.RefinementCtx,
 ): void => {
-  if (message.sender.type === message.message.kind) return;
+  if (message.sender.type === userMessageSenderTypeFor(message.message.kind))
+    return;
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: ["message", "kind"],
@@ -435,11 +515,10 @@ export const botQuestionSettlerSchema = lazySchema(() =>
 export type BotQuestionSettler = z.infer<typeof botQuestionSettlerSchema>;
 
 /**
- * How one of a bot's questions was settled, once: the answer (`null` for a
- * Skip), who settled it and when. The host writes it with the first answer
- * that lands and refuses every later one.
+ * A settlement as `chat.subscribe` lines through `1.42` and the epic records
+ * carry it: without `requestId`.
  */
-export const botQuestionSettlementSchema = lazySchema(() =>
+const botQuestionSettlementSchemaPreAnswerSet = lazySchema(() =>
   z.object({
     answer: z.string().min(1).nullable(),
     skipped: z.boolean(),
@@ -447,14 +526,51 @@ export const botQuestionSettlementSchema = lazySchema(() =>
     at: z.number(),
   }),
 );
+/**
+ * How one of a bot's questions was settled, once: the answer (`null` for a
+ * Skip), who settled it and when. The host writes it with the first answer
+ * that lands and refuses every later one.
+ */
+export const botQuestionSettlementSchema = lazySchema(() =>
+  botQuestionSettlementSchemaPreAnswerSet.extend({
+    /**
+     * The request of the member's message that settled this question with
+     * the row's other open questions, as one set (`chat.subscribe@1.43`,
+     * T167); that message's id is `conversationRequestMessageId` of it.
+     * Absent for an answer sent alone and for the bot's own, and on a
+     * settlement read by a peer below `1.43`, which strips it on decode.
+     */
+    requestId: z.string().min(1).optional(),
+  }),
+);
 export type BotQuestionSettlement = z.infer<typeof botQuestionSettlementSchema>;
 
-export const botQuestionItemSchema = lazySchema(() =>
+/**
+ * One of a bot's questions as `chat.subscribe` lines through `1.42` and the
+ * epic records carry it: without `multiSelect`, its settlement without
+ * `requestId`.
+ */
+const botQuestionItemSchemaPreMultiSelect = lazySchema(() =>
   z.object({
     text: z.string().min(1),
     /** Choices shown as buttons; empty for a question answered in words only. */
     options: z.array(z.string().min(1)),
+    /** Whether the person may answer in their own words. */
     allowFreeText: z.boolean(),
+    /** `null` while the question is open. */
+    settlement: botQuestionSettlementSchemaPreAnswerSet.nullable(),
+  }),
+);
+export const botQuestionItemSchema = lazySchema(() =>
+  botQuestionItemSchemaPreMultiSelect.extend({
+    /**
+     * Whether several of the options may be picked (`chat.subscribe@1.43`),
+     * the answer then naming each one picked, joined with commas. Absent or
+     * `false` means one: a question written before the key, or read by a
+     * peer below `1.43`, which strips it on decode. Independent of
+     * `allowFreeText`. Optional for `turnProfile`'s reason.
+     */
+    multiSelect: z.boolean().optional(),
     /** `null` while the question is open. */
     settlement: botQuestionSettlementSchema.nullable(),
   }),
@@ -475,6 +591,25 @@ export const botQuestionSchema = lazySchema(() =>
   }),
 );
 export type BotQuestion = z.infer<typeof botQuestionSchema>;
+/** {@link botQuestionSchema} as the lines and records without `multiSelect` carry it. */
+const botQuestionSchemaPreMultiSelect = lazySchema(() =>
+  botQuestionSchema.extend({
+    questions: z.array(botQuestionItemSchemaPreMultiSelect).min(1),
+  }),
+);
+
+/**
+ * The text a question row carries when the asker wrote nothing above its
+ * questions: a reader that draws the card shows any other text above it.
+ */
+export function botQuestionsText(
+  questions: ReadonlyArray<{ readonly text: string }>,
+): string {
+  if (questions.length === 1) return questions[0]?.text ?? "";
+  return questions
+    .map((question, index) => `${index + 1}. ${question.text}`)
+    .join("\n");
+}
 
 /**
  * Which question a member's message answers: the bot's row by its message
@@ -489,6 +624,48 @@ export const botQuestionAnswerSchema = lazySchema(() =>
   }),
 );
 export type BotQuestionAnswer = z.infer<typeof botQuestionAnswerSchema>;
+
+/**
+ * The bot's questions a member's message answers together (T167): the row
+ * that asks them, by its message id, and each of its questions that was open
+ * when the message settled it, with the question as the row asked it and
+ * what it was settled with (`answer: null` for a Skip).
+ */
+export const botQuestionAnswerSetSchema = lazySchema(() =>
+  z.object({
+    questionMessageId: z.string().min(1),
+    answers: z
+      .array(
+        z.object({
+          questionIndex: z.number().int().nonnegative(),
+          question: z.string().min(1),
+          answer: z.string().min(1).nullable(),
+          skipped: z.boolean(),
+        }),
+      )
+      .min(1),
+  }),
+);
+export type BotQuestionAnswerSet = z.infer<typeof botQuestionAnswerSetSchema>;
+
+/** The line a member's message carries for a question they skipped. */
+export const BOT_QUESTION_SKIPPED_TEXT = "Skipped";
+
+/**
+ * The text of a member's message that answers several of a bot's questions
+ * at once: each question, and under it the answer or that it was skipped. A
+ * reader that draws the list shows the list instead.
+ */
+export function botQuestionAnswersText(
+  answers: BotQuestionAnswerSet["answers"],
+): string {
+  return answers
+    .map(
+      (entry) =>
+        `${entry.question}\n${entry.answer ?? BOT_QUESTION_SKIPPED_TEXT}`,
+    )
+    .join("\n\n");
+}
 
 /**
  * How a surface a bot's post points at stopped waiting, once its task's host
@@ -593,11 +770,42 @@ export const userMessageSchemaPreCanvas = lazySchema(() =>
     questionAnswer: botQuestionAnswerSchema.optional(),
   }),
 );
+/** The user row every `chat.subscribe` line through `1.42` ships: no `slack` payload. */
+export const userMessageSchemaPreSlack = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreCanvas.shape,
+      message: userMessagePayloadSchemaPreSlack,
+    })
+    .superRefine(userMessageSenderKindRefine),
+);
 export const userMessageSchema = lazySchema(() =>
   z
     .object({
       ...userMessageSchemaPreCanvas.shape,
       message: userMessagePayloadSchema,
+      /**
+       * `true` on a member's message whose words were spoken on a call
+       * (`chat.subscribe@1.43`). Absent on every other row, and optional for
+       * `conversationRequest`'s reason.
+       */
+      spoken: z.literal(true).optional(),
+      /**
+       * The bot's questions this message answers together, from the card's
+       * one Submit (`chat.subscribe@1.43`, T167). Absent on every other row,
+       * and optional for `conversationRequest`'s reason; a peer below `1.43`
+       * strips it on decode and draws the row's text.
+       */
+      questionAnswers: botQuestionAnswerSetSchema.optional(),
+      /**
+       * The message of the same conversation a member chose to reply to, by
+       * its message id (`chat.subscribe@1.43`, T166): written from the send's
+       * `replyTo`. Absent on every other row, and optional for
+       * `conversationRequest`'s reason; a peer below `1.43` strips it on
+       * decode and draws the row without its badge. Not a bot row's
+       * `repliesTo`, which names the member's message the bot answers.
+       */
+      repliesTo: z.string().min(1).max(255).optional(),
     })
     .superRefine(userMessageSenderKindRefine),
 );
@@ -716,8 +924,11 @@ export type AssistantTurnProfile = z.infer<typeof assistantTurnProfileSchema>;
 
 /**
  * What a bot announces at its channel's top level (Tracy Bots, decision 41).
- * `question` is the trunk's ask of a person (decisions 55, 56): an
- * automation's question the trunk could not settle itself.
+ * An announcement only informs: a bot asks a person with a question card
+ * (`traycer_ask`), never an announcement. `question` stays a member the
+ * reader accepts because released lines carry it (cli-v1.5.2 serves it on
+ * `chat.subscribe` 1.23 to 1.32, and a released host may still send such a
+ * row); no current host writes it and no tool offers it.
  */
 export const botAnnouncementKindSchema = lazySchema(() =>
   z.enum(["proposal", "automation", "bot-created", "policy", "question"]),
@@ -807,9 +1018,13 @@ export const assistantMessageSchemaV18 = lazySchema(() =>
     imageResolutions: z.array(imageResolutionEntrySchema).default([]),
   }),
 );
-export const assistantMessageSchema = lazySchema(() =>
+/**
+ * The assistant row `chat.subscribe` lines through `1.42` and the epic
+ * records carry: the live row with its questions saying no `multiSelect`.
+ */
+export const assistantMessageSchemaPreMultiSelect = lazySchema(() =>
   assistantMessageSchemaV18.extend({
-    blocks: z.array(contentBlockSchema),
+    blocks: z.array(contentBlockSchemaPreFeedbackOrigin),
     /**
      * This attempt's own profile snapshot - see {@link assistantTurnProfileSchema}
      * for what it records and why it is stamped at row creation.
@@ -852,11 +1067,13 @@ export const assistantMessageSchema = lazySchema(() =>
      */
     options: z.array(z.string().min(1)).min(1).optional(),
     /**
-     * The member's post a bot's direct reply answers, by its message id
-     * (Tracy Bots, reply mode `direct`). Present only on a bot reply at a
-     * channel's top level; absent everywhere else. Optional and live line
-     * only, as `turnProfile`. Not the agent sender's `inReplyTo`, which
-     * names an agent-to-agent message.
+     * The member's message a bot's reply answers, by its message id: at a
+     * channel's top level the post a direct reply answers (Tracy Bots,
+     * reply mode `direct`); in a thread the latest message the reply
+     * resolves, else the post the thread opens on (T165). Absent on a reply
+     * that answers none, which an older host writes in a thread, and on
+     * every other row. Optional and live line only, as `turnProfile`. Not
+     * the agent sender's `inReplyTo`, which names an agent-to-agent message.
      */
     repliesTo: z.string().min(1).optional(),
     /**
@@ -866,7 +1083,7 @@ export const assistantMessageSchema = lazySchema(() =>
      * reader that does not draw the card. Optional and live line only, as
      * `turnProfile`.
      */
-    question: botQuestionSchema.optional(),
+    question: botQuestionSchemaPreMultiSelect.optional(),
     /**
      * What in a task this bot post points at (Tracy Bots T89), drawn as a
      * card under the post's text; the bound host rewrites its `resolution`
@@ -877,14 +1094,61 @@ export const assistantMessageSchema = lazySchema(() =>
     surface: botSurfaceReferenceSchema.optional(),
   }),
 );
+export const assistantMessageSchemaPreFeedbackOrigin = lazySchema(() =>
+  assistantMessageSchemaPreMultiSelect.extend({
+    /** The row's questions, each of which may say `multiSelect` (`chat.subscribe@1.43`). */
+    question: botQuestionSchema.optional(),
+  }),
+);
+/** A bot post mirrors its original draft; decisions still address the source block. */
+export const botFeedbackDraftProjectionSchema = lazySchema(() =>
+  z.object({
+    source: z.object({
+      hostId: z.string().min(1).max(255),
+      epicId: z.string().min(1).max(255),
+      chatId: z.string().min(1).max(255),
+      blockId: z.string().min(1).max(255),
+    }),
+    draft: toolCallFeedbackDraftStampSchema,
+  }),
+);
+export type BotFeedbackDraftProjection = z.infer<
+  typeof botFeedbackDraftProjectionSchema
+>;
+
+export const assistantMessageSchema = lazySchema(() =>
+  assistantMessageSchemaPreFeedbackOrigin.extend({
+    blocks: z.array(contentBlockSchema),
+    feedbackDraft: botFeedbackDraftProjectionSchema.optional(),
+  }),
+);
+export const messageSchemaPreFeedbackOrigin = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchema,
+    assistantMessageSchemaPreFeedbackOrigin,
+  ]),
+);
+
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
 export const messageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [userMessageSchema, assistantMessageSchema]),
 );
+/**
+ * The message union of `chat.subscribe` lines through `1.42`: the user arm
+ * without `slack`, the assistant arm without `multiSelect`.
+ */
+export const messageSchemaPreSlack = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchemaPreSlack,
+    assistantMessageSchemaPreMultiSelect,
+  ]),
+);
 /** Epic records and released chat lines retain the four-kind operation block. */
 export const assistantMessageSchemaPreHtml = lazySchema(() =>
-  assistantMessageSchema.extend({ blocks: z.array(contentBlockSchemaPreHtml) }),
+  assistantMessageSchemaPreMultiSelect.extend({
+    blocks: z.array(contentBlockSchemaPreHtml),
+  }),
 );
 export const messageSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("role", [
@@ -1127,9 +1391,8 @@ export const messageSchemaPreSettlement = lazySchema(() =>
 // `contentBlockSchemaPreFallback`, so that line can observe neither a
 // `providerNotice.noticeKind` nor an error `failure` that `1.10` added. `1.7`
 // and `1.8` bind `messageSchemaV18` below instead, which also holds back
-// delivery placement. The user branch needs no freeze - user messages carry
-// no provider notice - so the union binds the LIVE `userMessageSchema`, which
-// is what `1.9` actually ships (browser annotations included).
+// delivery placement. The user branch binds `userMessageSchemaV18`, retaining
+// the published shape independently of additions to the current user row.
 //
 // Field-for-field hand copy, NOT `.extend()`: see
 // `assistantMessageSchemaPreImage` for why a released line must not follow the
@@ -1163,8 +1426,8 @@ export const messageSchemaPreFallback = lazySchema(() =>
 // Hand-frozen copy of `assistantMessageSchema` as the frozen `1.10` line ships
 // it: the complete live shape - `turnProfile` included - with `blocks` swapped
 // for `contentBlockSchemaPreShellHost`, so that line never observes the host a
-// resume trigger's shell runs on, which `1.11` added. The user branch needs no
-// freeze for the same reason `1.9`'s does not.
+// resume trigger's shell runs on, which `1.11` added. The user branch retains
+// `userMessageSchemaV18`, as the frozen `1.9` union does.
 //
 // Field-for-field hand copy, NOT `.extend()`: see
 // `assistantMessageSchemaPreImage` for why a released line must not follow the

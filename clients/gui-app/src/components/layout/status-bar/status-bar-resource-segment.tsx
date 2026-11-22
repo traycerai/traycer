@@ -130,10 +130,15 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
     if (compact) {
       // Compact is the CPU icon alone, as in the top strip: the number is one
       // hover away, and the icon takes the warning color when CPU runs hot.
-      const { value, unavailableReason } = views[0];
+      const { value, unavailableReason, cpuCoresLabel } = views[0];
       return (
         <TooltipWrapper
-          label={unavailableReason ?? (value === null ? null : `CPU ${value}`)}
+          label={
+            unavailableReason ??
+            (value === null
+              ? null
+              : `CPU ${value}${cpuCoresLabel === null ? "" : ` (${cpuCoresLabel})`}`)
+          }
           side="top"
           sideOffset={6}
           align={undefined}
@@ -199,9 +204,8 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
 }
 
 /**
- * `TooltipWrapper` degrades to a transparent `Slot` when its label is null, so
- * a metric with a number costs no tooltip machinery while an unavailable one
- * always carries its sentence — the dash alone cannot distinguish "no data
+ * CPU carries its cores figure on hover; an unavailable metric always
+ * carries its sentence — the dash alone cannot distinguish "no data
  * yet" from "not on this build" from "this host is too old".
  *
  * The dash is `aria-hidden` with a visually-hidden sentence beside it, the
@@ -216,7 +220,7 @@ export function StatusBarMetric(props: {
   const { view, warning } = props;
   return (
     <TooltipWrapper
-      label={view.unavailableReason}
+      label={view.unavailableReason ?? view.cpuCoresLabel}
       side="top"
       sideOffset={6}
       align={undefined}

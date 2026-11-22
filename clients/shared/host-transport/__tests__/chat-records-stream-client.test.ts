@@ -11,6 +11,7 @@
  * a tab that silently renders nothing instead of falling back to the poll.
  */
 import { describe, expect, it, vi } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   ChatRecordHeadStamp,
@@ -60,6 +61,9 @@ class StubSession implements IStreamSession {
     return this.negotiatedSchemaVersion;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   emitFrame(frame: Parameters<ServerFrameHandler>[0]): void {
@@ -83,6 +87,7 @@ function makeWsStreamClient(
     endpoint: () => null,
     hostId: null,
     bearer: () => null,
+    userId: AUTHENTICATED_USER_FIXTURE_ID,
     auth: null,
     clock: null,
     hostCredentialMint: null,
@@ -787,6 +792,47 @@ describe("ChatRecordsStreamClient", () => {
       expect(CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING).toBe(
         hostStreamRpcRegistry["host.chatRecords.subscribe"][1].latestMinor,
       );
+    });
+  });
+
+  describe("the @1.5 chat row - who started the chat", () => {
+    function upsertWithStarter(): Parameters<ServerFrameHandler>[0] {
+      return {
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        listRevision: listRevision({ revision: 12 }),
+        record: {
+          ...rowStreamV13({ chatId: "chat-a", revision: 7 }),
+          starterUserId: "starter-1",
+        },
+      };
+    }
+
+    it("delivers `starterUserId` on a chat upsert at @1.5", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 5 };
+      h.session.emitFrame(upsertWithStarter());
+
+      expect(h.deltas).toHaveLength(1);
+      const delta = h.deltas[0];
+      if (delta.kind !== "upsert") throw new Error("expected upsert");
+      expect(delta.record.starterUserId).toBe("starter-1");
+      h.client.close();
+    });
+
+    it("strips `starterUserId` at @1.4 - the older schema has no field for it", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
+      h.session.emitFrame(upsertWithStarter());
+
+      expect(h.deltas).toHaveLength(1);
+      const delta = h.deltas[0];
+      if (delta.kind !== "upsert") throw new Error("expected upsert");
+      expect(delta.record).not.toHaveProperty("starterUserId");
+      h.client.close();
     });
   });
 

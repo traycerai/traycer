@@ -4,7 +4,6 @@ import {
   ChevronUp,
   Copy,
   ImagePlus,
-  Inbox,
   MoreHorizontal,
   Pencil,
   SendHorizontal,
@@ -28,6 +27,7 @@ import {
   type ComposerPromptEditorHandle,
 } from "@/components/chat/composer/composer-prompt-editor";
 import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-composer-attachments-strip";
+import { REFUSING_DROP_ZONE_PROPS } from "@/components/chat/composer/composer-drop-scope";
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
@@ -63,6 +63,7 @@ import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { cn } from "@/lib/utils";
+import { SlackMark } from "@/components/icons/slack-mark";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { moveChatTimelineScroller } from "@/components/chat/chat-timeline-follow-latch";
@@ -97,6 +98,7 @@ import { BrowserReferenceChips } from "./browser-reference-chips";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { A2APeerPicture } from "./segments/a2a-peer-picture";
 import { AgentHeaderLink } from "./segments/agent-header-link";
 import { AgentMessageBody } from "./segments/agent-message-body";
 import {
@@ -110,9 +112,11 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
-  isAttachmentIngestPending,
+  composerAttachmentsHoldSend,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
+import { containsPendingFileAttachment } from "@/lib/composer/file-attachments";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
@@ -192,6 +196,24 @@ export function UserMessageBody({
     return <InlineUserMessageEditor editing={editing} />;
   }
 
+  if (message.slackMessage !== undefined) {
+    return (
+      <>
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
+          align="end"
+        />
+        <SlackMessageDisplayView
+          messageId={message.id}
+          messageText={message.content}
+          slackMessage={message.slackMessage}
+          sentAt={message.sentAt ?? message.createdAt}
+        />
+      </>
+    );
+  }
+
   if (message.agentSenderInfo !== null) {
     return (
       <>
@@ -262,10 +284,8 @@ function AgentMessageDisplayView({
     agentMessage?.senderTitle ??
     agentSenderInfo.senderTitle ??
     `${agentSenderInfo.agentId.slice(0, 8)}…`;
-  const senderChipName = useStandaloneBotName(
-    sender?.bot?.botId ?? null,
-    senderName,
-  );
+  const senderBotId = sender?.bot?.botId ?? null;
+  const senderChipName = useStandaloneBotName(senderBotId, senderName);
   const expectReply =
     agentMessage?.reply.expectsReply ?? agentSenderInfo.expectReply;
 
@@ -289,8 +309,9 @@ function AgentMessageDisplayView({
 
   // Same shape as the sent card's header (`A2ASendToolSegment`): the sender
   // name is the only element allowed to shrink, so the direction words are
-  // for assistive tech only and reply-expected is an icon. The icon plus
-  // "from" carry the meaning for sighted users.
+  // for assistive tech only and reply-expected is an icon. "from" carries
+  // the direction for sighted users, and the picture after it says whether
+  // the sender is a bot or an agent.
   //
   // The arrival stamp trails the row, past the `flex-1` name cell, so it lands
   // at the header's right edge. Agent-to-agent traffic is where a timeline is
@@ -298,10 +319,10 @@ function AgentMessageDisplayView({
   // is the one place the stamp is load-bearing rather than a convenience.
   const header = (
     <>
-      <Inbox className="size-3.5 shrink-0 text-primary" aria-hidden />
       <span className="sr-only">Received message</span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
         <span className="shrink-0 text-muted-foreground">from</span>
+        <A2APeerPicture botId={senderBotId} glyphClassName="text-primary" />
         <AgentHeaderLink
           name={senderChipName}
           onOpen={sender !== null ? openSenderTab : null}
@@ -352,6 +373,56 @@ function AgentMessageDisplayView({
         bodyFindUnitId={null}
         className={undefined}
       />
+    </div>
+  );
+}
+
+/**
+ * Display variant for a Slack message delivered to a bot's session: who wrote
+ * it in Slack, when, its text, and the files it did not carry. The images it
+ * did carry sit above it like any user row's.
+ */
+function SlackMessageDisplayView({
+  messageId,
+  messageText,
+  slackMessage,
+  sentAt,
+}: {
+  messageId: string;
+  messageText: string;
+  slackMessage: NonNullable<ChatMessageModel["slackMessage"]>;
+  sentAt: number;
+}): ReactNode {
+  const displayName = slackMessage.author.displayName?.trim() ?? "";
+  const name = displayName.length > 0 ? displayName : "Slack user";
+  return (
+    <div className="flex w-full flex-col gap-1.5 rounded-lg border border-border/40 px-4 py-3">
+      <div className="flex min-w-0 items-center gap-1.5 text-ui-sm">
+        <SlackMark className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="sr-only">Slack message from</span>
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+          {name}
+        </span>
+        <ChatMessageTimestamp
+          timestamp={sentAt}
+          separated={false}
+          instanceId={messageId}
+        />
+      </div>
+      {messageText.length > 0 ? (
+        <div
+          data-chat-find-unit={chatFindMessageContentUnitId(messageId)}
+          className="text-ui leading-7 break-words whitespace-pre-wrap"
+        >
+          {messageText}
+        </div>
+      ) : null}
+      {slackMessage.omitted.length > 0 ? (
+        <p className="m-0 text-ui-sm text-muted-foreground">
+          Not carried:{" "}
+          {slackMessage.omitted.map((file) => file.fileName).join(", ")}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -718,6 +789,7 @@ function InlineUserMessageEditor({
   const focusFrameRef = useRef<number | null>(null);
   const visibilityFrameRef = useRef<number | null>(null);
   const runnerHost = useRunnerHost();
+  const pathsReachTarget = useTypedPathsReach(tabHostId);
   const {
     onPaste,
     onDrop,
@@ -725,12 +797,15 @@ function InlineUserMessageEditor({
     attachImageFiles,
     isIngestingImages,
     isResolvingFilePaths,
+    isAttachingFiles,
     runPendingImageJob,
-  } = useComposerHashPaste(
-    editorRef,
-    runnerHost.fileDrops,
-    resolvedMentionRoots,
-  );
+  } = useComposerHashPaste(editorRef, {
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots: resolvedMentionRoots,
+    // An edit keeps the files its message already carries; it attaches none.
+    fileRoute: null,
+    pathsReachTarget,
+  });
   const {
     ingestPastedComposerImages,
     reingestPendingImages,
@@ -740,10 +815,12 @@ function InlineUserMessageEditor({
     runPendingImageJob,
     draftId: null,
   });
-  const attachmentPending = isAttachmentIngestPending({
-    isIngestingImages,
-    isResolvingFilePaths,
-  });
+  // An edit attaches no files, but the message it edits can carry one that a
+  // rich paste brought in unconfirmed; it holds the send as on any composer.
+  const attachmentPending = composerAttachmentsHoldSend(
+    { isIngestingImages, isResolvingFilePaths, isAttachingFiles },
+    containsPendingFileAttachment(editing.currentContent),
+  );
 
   // Without this, the picker opens empty - nothing writes items into the store.
   useComposerPickerItems({
@@ -980,7 +1057,7 @@ function InlineUserMessageEditor({
   );
 
   return (
-    <div ref={containerRef} className="w-full">
+    <div ref={containerRef} className="w-full" {...REFUSING_DROP_ZONE_PROPS}>
       <ComposerArea
         pickerStore={pickerStore}
         overlay={null}

@@ -20,9 +20,9 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * Secrets page held-items line (`1 value and 1 command from MacBook Pro are
- * on hold until you choose · Review them`). Self-retiring: omitted when no held row is left. Opens the
- * retrospective sheet for that host's held rows.
+ * Secrets page held-items line (`1 command from MacBook Pro is on hold until
+ * you choose · Review it`). Self-retiring: omitted when no held row is left.
+ * Opens the retrospective sheet for that host's held rows.
  */
 export interface HeldItemsLineProps {
   readonly client: HostClient<HostRpcRegistry>;
@@ -77,17 +77,7 @@ function HeldItemsGroupLine(props: {
         data-testid={`held-items-line-${stopHostId ?? "none"}`}
         onClick={() => setOpen(true)}
       >
-        {heldItemsLineText(
-          {
-            values: props.group.entries.filter(
-              (entry) => entry.reason !== "executable_entry",
-            ).length,
-            commands: props.group.entries.filter(
-              (entry) => entry.reason === "executable_entry",
-            ).length,
-          },
-          hostName,
-        )}
+        {heldItemsLineText(props.group.entries.length, hostName)}
       </Button>
       <RetrospectiveSession
         client={props.client}

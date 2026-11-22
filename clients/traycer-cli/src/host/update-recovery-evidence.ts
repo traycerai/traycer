@@ -14,6 +14,7 @@ import type { InstallGenerationIdentity } from "@traycer-clients/shared/host-ver
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
+import { isRefusalAfterRejectedSignIn } from "../internal/sign-in-rejection";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { readHostStagedRecord } from "../manifest/host-staged";
 import { reportBoundedWait } from "../runner/bounded-wait-progress";
@@ -91,6 +92,13 @@ export type RunningEvidenceDiagnosis =
    * HTTP - 45 s of polling to learn what the first answer said.
    */
   | "host-refuses-authenticated-rpc"
+  /**
+   * The host refused this client's call and the refresh of this client's own
+   * stored sign-in was rejected too, so the refusal is about the sign-in, not
+   * the host. Durable like the refusal above, and it ends the leg the same way;
+   * only the remedy differs.
+   */
+  | "sign-in-rejected"
   /** The host answered, and said it is not ready. */
   | "host-not-ready"
   /** The host answered with a version its own pid record disagrees with. */
@@ -533,7 +541,10 @@ async function readRunningObservation(
     const refusal = authenticatedRefusalReason(err);
     return refusal === null
       ? unreadableRunning("host-rpc-unreachable")
-      : refusedRunning(refusal);
+      : refusedRunning(
+          refusal,
+          isRefusalAfterRejectedSignIn(finalRefusalOf(err)),
+        );
   }
   if (!status.ready) return unreadableRunning("host-not-ready");
   if (status.hostVersion !== metadata.version) {
@@ -881,11 +892,16 @@ function unreadableRunning(
  * other refusal site keeps a `null` it cannot forget to pass and this one
  * cannot be reached without a reason to carry.
  */
-function refusedRunning(reason: string): RunningObservation {
+function refusedRunning(
+  reason: string,
+  signInRejected: boolean,
+): RunningObservation {
   return {
     evidence: { kind: "unreadable" },
     fingerprint: "unreadable",
-    diagnosis: "host-refuses-authenticated-rpc",
+    diagnosis: signInRejected
+      ? "sign-in-rejected"
+      : "host-refuses-authenticated-rpc",
     refusal: reason,
     identityCompared: false,
   };

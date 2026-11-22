@@ -69,6 +69,7 @@ import {
 import { evictTileFindUi } from "@/stores/tile-find/tile-find-store";
 import { promoteChatTabPersistenceToDurable } from "@/stores/chats/chat-tab-persistence-eviction";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import {
   closeAllTabs,
   closeOtherTabs as closeOtherTileTabs,
@@ -81,6 +82,8 @@ import {
   openBlankTabInPane as openBlankTabInPaneCanvas,
   ensureEmptyCanvasPane,
   openTile,
+  evictTileWithoutClosing,
+  promotePreviewTile,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
   findPaneTabForRef,
@@ -128,6 +131,7 @@ import {
   makeOpenableNodeRef,
   type EdgeDropPosition,
   type EpicCanvasTileRef,
+  type MobileSecondaryTile,
   type EpicCanvasState,
   type CommGraphTileCamera,
   type CommGraphTileViewState,
@@ -347,6 +351,26 @@ export interface EpicCanvasStore {
     Record<string, ReadonlyArray<EpicNodeRecord> | undefined>
   >;
   readonly selfDeletedArtifactIds: ReadonlySet<string>;
+  /**
+   * The tile the phone shell shows beside its current one, per tab. The first
+   * slot is the canvas's own activation (`selectMobileTile`); this is the second,
+   * kept off `canvasByTabId` so a phone's pair never reaches the persisted
+   * desktop layout. Session-only (not in `partialize`).
+   */
+  readonly mobileSecondaryTileByTabId: Readonly<
+    Record<string, MobileSecondaryTile | undefined>
+  >;
+  /**
+   * The empty opener pane this session seeded for a tab that had no layout,
+   * per tab. A landing may still fill that pane once the task's records
+   * arrive; an empty pane from anywhere else (a closed last tile, a restored
+   * layout) is one the person left empty. Session-only (not in `partialize`),
+   * so a restored empty pane is never read as seeded, and removed for good by
+   * `retireSeededOpenerPane`.
+   */
+  readonly seededOpenerPaneIdByTabId: Readonly<
+    Record<string, string | undefined>
+  >;
   readonly pendingCreateArtifactIds: ReadonlySet<string>;
   /**
    * Terminal pending-create identities, keyed by canonical
@@ -512,6 +536,15 @@ export interface EpicCanvasStore {
    * stealing focus). Idempotent.
    */
   openTileInBackgroundTab: (tabId: string, node: EpicCanvasTileRef) => void;
+  /**
+   * Fill the phone shell's second slot, or empty it with `null`. A `transient`
+   * tile it held leaves the canvas, unless it is what the slot still names or
+   * the current tile by now.
+   */
+  setMobileSecondaryTile: (
+    tabId: string,
+    next: MobileSecondaryTile | null,
+  ) => void;
   prepareOpenTileInBackgroundTabFocusTargetFromSource: (
     tabId: string,
     node: EpicCanvasTileRef,
@@ -538,6 +571,8 @@ export interface EpicCanvasStore {
   ) => NestedFocusTarget | null;
   /** Create an empty root pane when no saved layout exists. */
   ensureEmptyPaneInTab: (tabId: string) => void;
+  /** Stop treating a tab's seeded opener pane as an unanswered landing. */
+  retireSeededOpenerPane: (tabId: string) => void;
   /** Open the pane picker, reusing any blank tab in a populated pane. */
   openBlankTabInPane: (tabId: string, paneId: string) => void;
   prepareOpenBlankTabInPaneFocusTarget: (
@@ -1504,6 +1539,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         mostRecentTabIdByEpicId: {},
         artifactTreeByEpicId: EMPTY_TREES,
         selfDeletedArtifactIds: new Set<string>(),
+        mobileSecondaryTileByTabId: {},
+        seededOpenerPaneIdByTabId: {},
         pendingCreateArtifactIds: new Set<string>(),
         pendingCreateTerminalIdentities: new Set<string>(),
         preAckRootCreatesByEpic: {},
@@ -2140,6 +2177,35 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           );
         },
 
+        setMobileSecondaryTile: (tabId, next) => {
+          set((state) => {
+            const held = state.mobileSecondaryTileByTabId[tabId];
+            const { [tabId]: _replaced, ...others } =
+              state.mobileSecondaryTileByTabId;
+            const slots = next === null ? others : { ...others, [tabId]: next };
+            const canvas = state.canvasByTabId[tabId];
+            const evicted =
+              canvas !== undefined &&
+              held?.transient === true &&
+              held.instanceId !== next?.instanceId &&
+              held.instanceId !== selectMobileTile(canvas)?.ref.instanceId
+                ? held.instanceId
+                : null;
+            return {
+              ...updateTabCanvas(state, tabId, (current) => {
+                const without =
+                  evicted === null
+                    ? current
+                    : evictTileWithoutClosing(current, evicted);
+                return next === null
+                  ? without
+                  : promotePreviewTile(without, next.instanceId);
+              }),
+              mobileSecondaryTileByTabId: slots,
+            };
+          });
+        },
+
         prepareOpenTileInBackgroundTabFocusTargetFromSource: (
           tabId,
           node,
@@ -2179,7 +2245,39 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         ensureEmptyPaneInTab: (tabId) => {
-          set((state) => updateTabCanvas(state, tabId, ensureEmptyCanvasPane));
+          set((state) => {
+            const updated = updateTabCanvas(
+              state,
+              tabId,
+              ensureEmptyCanvasPane,
+            );
+            const seeded = updated.canvasByTabId?.[tabId]?.activePaneId;
+            if (updated === state || seeded === undefined || seeded === null) {
+              return updated;
+            }
+            return {
+              ...updated,
+              seededOpenerPaneIdByTabId: {
+                ...state.seededOpenerPaneIdByTabId,
+                [tabId]: seeded,
+              },
+            };
+          });
+        },
+
+        retireSeededOpenerPane: (tabId) => {
+          set((state) => {
+            if (state.seededOpenerPaneIdByTabId[tabId] === undefined) {
+              return state;
+            }
+            return {
+              seededOpenerPaneIdByTabId: Object.fromEntries(
+                Object.entries(state.seededOpenerPaneIdByTabId).filter(
+                  ([seededTabId]) => seededTabId !== tabId,
+                ),
+              ),
+            };
+          });
         },
 
         openBlankTabInPane: (tabId, paneId) => {

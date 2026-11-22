@@ -4,7 +4,9 @@ import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-t
 import type {
   BotAnnouncement,
   BotQuestion,
+  BotQuestionAnswerSet,
   BotSurfaceReference,
+  BotFeedbackDraftProjection,
   ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
 import type {
@@ -25,6 +27,7 @@ import type {
   TodoItem,
   AgentUserMessage,
   BrowserAnnotationRecord,
+  SlackUserMessage,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AgentMessageDelivery,
@@ -49,6 +52,7 @@ import type {
   ProviderNoticeTone,
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
+  ToolCallFeedbackDraftStamp,
   ToolCallArtifactStamp,
   ToolInputDetail,
   WorkflowMeta,
@@ -69,6 +73,7 @@ import type {
   TurnCheckpointManifest,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
+import type { ArtifactFolderGrouping } from "@/lib/chat/artifact-folder-bundles";
 import type { SetupCardViewModel } from "@/components/chat/segments/setup-card-segment";
 
 import type {
@@ -206,6 +211,9 @@ export interface ToolSegment {
   // The MCP App the call rendered, stamped by the host (`chat.subscribe@1.22`).
   // Null for every other call, and on a harness without app support.
   mcpApp: ToolCallMcpAppStamp | null;
+  // Feedback the call drafted for the reader to send or skip (null for every
+  // other call). Routes the call to the draft's card.
+  feedbackDraft: ToolCallFeedbackDraftStamp | null;
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
@@ -440,6 +448,12 @@ export interface ArtifactChangeRow {
   afterHash: string | null;
 }
 
+/**
+ * One row of the "Changes" group's artifact list: a single artifact change, or
+ * every changed file of one html / canvas artifact.
+ */
+export type ArtifactChangeEntry = ArtifactFolderGrouping<ArtifactChangeRow>;
+
 export type MessageSegment =
   | {
       id: string;
@@ -461,7 +475,7 @@ export type MessageSegment =
       files: ReadonlyArray<FileChangeSegment>;
       // Artifact changes in the same turn, rendered as titled rows alongside
       // the file rows. Derived from the checkpoint manifest's artifact entries.
-      artifacts: ReadonlyArray<ArtifactChangeRow>;
+      artifacts: ReadonlyArray<ArtifactChangeEntry>;
       checkpointManifest: TurnCheckpointManifest | null;
       hasLaterOverlappingChanges: boolean;
     }
@@ -558,6 +572,23 @@ export type MessageSegment =
        */
       marker: AutoJudgeNoticeMarker;
       message: string;
+    }
+  | {
+      id: string;
+      kind: "bot-exchanges";
+      /**
+       * A run of a bot's messages with other bots, drawn as one line between
+       * a bot channel's rows (Tracy Bots, decision 174). Synthesized by
+       * `createBotExchangeLineCollator` from the bot's Communication Graph feed, never
+       * persisted: one entry per other bot, in the order the run first
+       * reached it, with how many messages of the run it took part in.
+       */
+      pairs: ReadonlyArray<{
+        readonly peerBotId: string;
+        readonly count: number;
+      }>;
+      /** When the run's last message was sent. */
+      lastAt: number;
     }
   | {
       id: string;
@@ -786,6 +817,18 @@ export interface ChatMessage {
    */
   conversationRequest?: ConversationRequest;
   /**
+   * A member's answers to a bot's question card sent together (T167): each
+   * question with its answer, or Skipped, drawn in place of the row's text.
+   * Absent on every other row.
+   */
+  questionAnswers?: BotQuestionAnswerSet;
+  /**
+   * The Slack message this user row is, in a bot session that runs a Slack
+   * thread or DM: who wrote it in Slack, and the files it did not carry.
+   * Absent on every other row.
+   */
+  slackMessage?: SlackUserMessage;
+  /**
    * The announcement this assistant row is, on a bot channel (Tracy Bots):
    * its kind and the one thing it points at. Absent on every other row.
    */
@@ -810,10 +853,12 @@ export interface ChatMessage {
    * client. Absent on every other row.
    */
   surface?: BotSurfaceReference;
+  feedbackDraft?: BotFeedbackDraftProjection;
   /**
-   * The member's post a bot's direct reply answers, by its message id (Tracy
-   * Bots, reply mode `direct`), on the bot's row in its channel. Absent on
-   * every other row.
+   * The message a row answers, by its message id: on a bot's row, the
+   * member's post its direct reply answers (Tracy Bots, reply mode
+   * `direct`); on a member's row, the message they chose to reply to (T166).
+   * Absent on every other row.
    */
   repliesTo?: string;
   /**

@@ -7,6 +7,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -36,7 +37,11 @@ import {
   currentLayoutArrangement,
   setRailVisibilityOverride,
 } from "@/lib/layout/rail-view";
-import { panelVisibilityOverridesFromValues } from "@/lib/layout/rail";
+import {
+  BROWSERS_SIMULATORS_STACK_ID,
+  DEFAULT_RAIL,
+  panelVisibilityOverridesFromValues,
+} from "@/lib/layout/rail";
 import {
   moveRailPanelBeside,
   stackRailPanels,
@@ -254,11 +259,31 @@ const testQueryClient = new QueryClient({
 });
 const HOST_ID = "epic-sidebar-host";
 
+/**
+ * The layout the rail cases are written against: every panel listed, with
+ * Agents stacked on Artifacts as the only stack. The shipped rail also stacks
+ * Git Diff on Pull Requests and leaves File Tree off, which the shipped-rail
+ * case below seeds for itself.
+ */
+const RAIL_CASES_LAYOUT: LayoutSnapshot = {
+  ...DEFAULT_LAYOUT_SNAPSHOT,
+  overrides: {
+    ...DEFAULT_LAYOUT_SNAPSHOT.overrides,
+    railFileTree: { shown: "shown" },
+  },
+  arrangement: {
+    ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+    rail: DEFAULT_LAYOUT_SNAPSHOT.arrangement.rail.filter(
+      (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+    ),
+  },
+};
+
 function resetLeftPanelStore(): void {
   window.localStorage.clear();
   canvasHostState.id = HOST_ID;
   useSurfaceHostSelectionStore.setState({ selections: {} });
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.setState({ ...RAIL_CASES_LAYOUT });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
     mainCollapsedByTabId: {},
@@ -383,7 +408,8 @@ describe("<EpicLeftPanelRail />", () => {
     ).not.toBeUndefined();
   });
 
-  it("draws the shipped rail as eight direct children - the chats/artifacts capsule plus seven icons - with no dividers", () => {
+  it("draws the shipped rail as six direct children - two capsules plus four icons, File Tree off - with no dividers", () => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     // "Every panel available": comments needs its own reveal + a commentable
     // artifact, same as `revealCommentsPanel` below.
     testState.activeArtifactId = "artifact-1";
@@ -399,9 +425,9 @@ describe("<EpicLeftPanelRail />", () => {
     );
 
     const rail = screen.getByTestId("epic-sidebar-rail");
-    // The shipped pair (chats + artifacts) draws as ONE capsule (L-166,
-    // L-167), so the rail's direct children are eight rather than nine: the
-    // capsule and the remaining seven panels.
+    // The two shipped pairs (chats + artifacts, git diff + pull requests) draw
+    // as ONE capsule each (L-166, L-167), and File Tree is off, so the rail's
+    // direct children are the two capsules and the remaining four panels.
     expect(
       Array.from(rail.children).map((child) =>
         child.getAttribute("data-testid"),
@@ -410,9 +436,7 @@ describe("<EpicLeftPanelRail />", () => {
       "epic-rail-stack",
       "epic-rail-terminals",
       "epic-rail-browsers",
-      "epic-rail-git-diff",
-      "epic-rail-pull-requests",
-      "epic-rail-file-tree",
+      "epic-rail-stack",
       "epic-rail-sharing",
       "epic-rail-comments",
     ]);
@@ -424,12 +448,18 @@ describe("<EpicLeftPanelRail />", () => {
     for (const child of Array.from(rail.children)) {
       expect(child.className).not.toMatch(/\bm[xytrbl]?-\d/);
     }
-    // The capsule holds exactly the shipped pair, and draws ONE button for
-    // it - the top's; Artifacts (the bottom, G3) draws none of its own.
-    const stack = screen.getByTestId("epic-rail-stack");
-    expect(stack.getAttribute("data-rail-stack")).toBe(
+    // The first capsule holds exactly the Agents and Artifacts pair, and draws
+    // ONE button for it - the top's; Artifacts (the bottom, G3) draws none of
+    // its own.
+    expect(
+      screen
+        .getAllByTestId("epic-rail-stack")
+        .map((capsule) => capsule.getAttribute("data-rail-stack")),
+    ).toEqual([
       "stack:railAgents+railArtifacts",
-    );
+      "stack:railGitDiff+railPullRequests",
+    ]);
+    const stack = screen.getAllByTestId("epic-rail-stack")[0];
     expect(
       Array.from(stack.querySelectorAll("button")).map((button) =>
         button.getAttribute("data-testid"),
@@ -1294,6 +1324,25 @@ describe("<EpicLeftPanelRail />", () => {
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
     });
 
+    it("reveals a panel the layout ships hidden, and hides it again", () => {
+      // As a new install has it: no choice stored, so File Tree is off.
+      useLayoutStore.setState({ overrides: {} });
+      renderRail();
+      expect(screen.queryByTestId("epic-rail-file-tree")).toBeNull();
+
+      openRailMenu();
+      fireEvent.click(screen.getByTestId("epic-rail-toggle-file-tree"));
+
+      expect(screen.getByTestId("epic-rail-file-tree")).not.toBeNull();
+
+      // Back to what the layout says without a choice, so nothing is stored.
+      openRailMenu();
+      fireEvent.click(screen.getByTestId("epic-rail-toggle-file-tree"));
+
+      expect(screen.queryByTestId("epic-rail-file-tree")).toBeNull();
+      expect(useLayoutStore.getState().overrides).toEqual({});
+    });
+
     it("stores nothing when the checked value already matches the panel's rule", () => {
       renderRail();
       openRailMenu();
@@ -1544,6 +1593,15 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
     resetDndStore();
     resetTestState();
     setPullRequestPresence(false);
+    // The cases below stack Browsers themselves, so they start from a rail
+    // where it stands alone.
+    act(() => {
+      applyRail(
+        DEFAULT_RAIL.filter(
+          (entry) => entry.id !== BROWSERS_SIMULATORS_STACK_ID,
+        ),
+      );
+    });
   });
 
   afterEach(() => {

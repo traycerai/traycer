@@ -108,6 +108,7 @@ function TranscriptTimeline({
       getMessageActions={() => null}
       nextStepActions={null}
       listRef={listRef}
+      isTranscriptWindowInvalidated={false}
       className="h-full"
       onItemSizeChanged={onItemSizeChanged}
     />

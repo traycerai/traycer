@@ -126,7 +126,9 @@ import { resolveCliVersion } from "../cli-version";
 import {
   actionableStopIntentReason,
   readStopIntentIdentity,
+  stopIntentState,
   type StopIntentIdentity,
+  type StopIntentState,
   type StopIntentReason,
 } from "../host/stop-intent";
 import {
@@ -676,6 +678,8 @@ function describeHostStartAdmission(
 }
 
 export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
+  /** Advisory work beside supervision, after the first admitted spawn. */
+  readonly onHostStarted: (() => Promise<void>) | null;
   readonly admitHostStartSpawn: AdmitHostStartSpawn;
   readonly spawn: SpawnImpl;
   // Injected so tests can drive the "another host already owns this data
@@ -764,6 +768,13 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly readStopIntentIdentity: (
     environment: Environment,
   ) => Promise<StopIntentIdentity | null>;
+  // What the stop-intent file says, as a closed set, for the crash event's
+  // `stop_intent_state` tag. Evidence only: nothing decides from it.
+  readonly stopIntentState: (
+    environment: Environment,
+    nowMs: number,
+    servedAtStartup: StopIntentIdentity | null,
+  ) => Promise<StopIntentState>;
   // Liveness of the pid a child's Layer 0 decline named. Injected so the
   // yielded-incumbent wait can be scripted without a real process to watch.
   readonly isProcessAlive: (pid: number) => boolean;
@@ -822,6 +833,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
 }
 
 const defaultRunDeps: RunHostStartDeps = {
+  onHostStarted: null,
   ...defaultDeps,
   admitHostStartSpawn: async (options, run, onAdmittedBeside, handoff) => {
     // A service controller that already owns the outer attempt capability
@@ -969,6 +981,7 @@ const defaultRunDeps: RunHostStartDeps = {
   },
   hasStopIntent: actionableStopIntentReason,
   readStopIntentIdentity,
+  stopIntentState,
   isProcessAlive,
   // On Windows `process.kill` with either name is TerminateProcess; the grace
   // between the two then costs a wait and nothing else.
@@ -1077,6 +1090,7 @@ export async function runHostStart(
   // `supervisor.json`'s `startedAt`: when this supervisor began, not when its
   // records were published or its current child spawned.
   const supervisorStartedAt = deps.now();
+  let startObserved = false;
   // Read before any other await, because it defines what "already served" means
   // for this whole invocation: whatever record is on disk NOW is one our own
   // existence answers - something asked for a start after asking for a stop, and
@@ -2942,6 +2956,31 @@ export async function runHostStart(
       void childEnding.finally(escalation);
     }
 
+    // Client-side authorization must not delay readiness or supervision.
+    if (
+      !shuttingDown &&
+      child.pid !== undefined &&
+      recordedEnding === null &&
+      !startObserved &&
+      deps.onHostStarted !== null
+    ) {
+      startObserved = true;
+      void Promise.resolve()
+        .then(deps.onHostStarted)
+        .catch((cause: unknown) => {
+          logger.warn(
+            "Host credential provisioning threw; the command itself was unaffected",
+            {
+              kind: "error",
+            },
+          );
+          logger.debug(
+            "Host credential provisioning threw; the command itself was unaffected",
+            { errorMessage: errorFromUnknown(cause).message },
+          );
+        });
+    }
+
     const ending = await childEnding;
     // Stamped HERE, at the child's death, not where uptime is finally compared.
     // Everything between the two is diagnostics - the stderr end wait (2s), the
@@ -3132,6 +3171,16 @@ export async function runHostStart(
       signal: ending.signal,
       platform: deps.lifecycle.teardown.platform,
       stopRequested,
+      // A second read of the same file, right after the one above: the two can
+      // straddle a change to the record, so the tag can disagree with
+      // `stopRequested` once in a blue moon. Accepted: the tag is evidence
+      // only and nothing decides from it, and a rare pair that disagrees
+      // reads as noise in a fleet query, not as a cell.
+      stopIntentState: await readStopIntentStateBestEffort(
+        deps,
+        opts.environment,
+        servedStopIntentAtStartup,
+      ),
       deps,
       logger,
       environment: opts.environment,
@@ -4216,6 +4265,9 @@ async function persistChildExit(input: {
    * stop intent. Only the Windows requested-kill arm reads it.
    */
   readonly stopRequested: boolean;
+  // What the stop-intent file said when the child ended; evidence for the
+  // crash event only (`stopRequested` above is what decides).
+  readonly stopIntentState: StopIntentState;
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
   readonly environment: Environment;
@@ -4397,6 +4449,8 @@ async function persistChildExit(input: {
         stderrFatal: input.stderrTee.capture.classifyFatal(
           input.stderrSettle.drained === true,
         ),
+        ...stderrEvidence(input.stderrTee.capture),
+        stopIntentState: input.stopIntentState,
       });
     }
     return outcome;
@@ -4633,8 +4687,37 @@ async function persistChildExit(input: {
     stderrFatal: input.stderrTee.capture.classifyFatal(
       input.stderrSettle.drained === true,
     ),
+    ...stderrEvidence(input.stderrTee.capture),
+    stopIntentState: input.stopIntentState,
   });
   return outcome;
+}
+
+/** The closed-set stderr evidence of a capture, for the crash event's tags. */
+function stderrEvidence(
+  capture: StderrCaptureBuffer,
+): Pick<HostCrashTelemetry, "hostLastLine" | "errorClass" | "errorCode"> {
+  return {
+    hostLastLine: capture.lastHostLine(),
+    errorClass: capture.uncaughtErrorClass(),
+    errorCode: capture.uncaughtErrorCode(),
+  };
+}
+
+/**
+ * The stop-intent state for the crash event. Evidence only, so a read that
+ * fails is `none` and never delays or fails the exit handling.
+ */
+async function readStopIntentStateBestEffort(
+  deps: RunHostStartDeps,
+  environment: Environment,
+  servedAtStartup: StopIntentIdentity | null,
+): Promise<StopIntentState> {
+  try {
+    return await deps.stopIntentState(environment, Date.now(), servedAtStartup);
+  } catch {
+    return "none";
+  }
 }
 
 /**

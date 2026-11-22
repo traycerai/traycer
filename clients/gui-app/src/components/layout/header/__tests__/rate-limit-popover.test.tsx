@@ -1,3 +1,6 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import {
   afterEach,
   beforeEach,
@@ -26,7 +29,12 @@ import type {
   RateLimitChatCredential,
 } from "@traycer/protocol/host";
 import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderAuthStatus,
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type {
   AuthenticatedUser,
   SubscriptionStatus,
@@ -37,11 +45,12 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import type {
   AvailableProviderRateLimits,
@@ -85,11 +94,15 @@ type MockAuthUser = {
 type MockState = {
   configured: ReadonlyArray<{
     providerId: string;
-    lane: string;
+    lane: string | null;
+    authStatus?: ProviderAuthStatus;
+    usageReportingConfirmed?: boolean;
     profiles: ReadonlyArray<ProviderProfile> | undefined;
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
   results: Record<string, QueryResult>;
+  providersList: { data: { providers: ProviderCliState[] } | undefined };
+  selectedProviders: { data: { providers: ProviderCliState[] } | undefined };
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -114,6 +127,10 @@ type MockState = {
   // a test can assert the button subscribes to EVERY configured httpFetch
   // provider's query state, not just the first.
   lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
+  activeProviderUsageRequestIds: ReadonlyArray<string>;
+  settingsHost: HostScopeOption | null;
+  settingsOverlayActive: boolean;
+  routerPathname: string;
   profileSelection: {
     shownProfiles: Readonly<Record<string, ReadonlyArray<string | null>>>;
     lastProfileByHarness: Readonly<Record<string, string | null>>;
@@ -134,6 +151,8 @@ function coldAuthUser(): MockAuthUser {
 const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
+  providersList: { data: undefined },
+  selectedProviders: { data: undefined },
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
@@ -142,6 +161,10 @@ const mocks = vi.hoisted<MockState>(() => ({
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
+  activeProviderUsageRequestIds: [],
+  settingsHost: null,
+  settingsOverlayActive: false,
+  routerPathname: "/",
   profileSelection: {
     shownProfiles: {},
     lastProfileByHarness: {},
@@ -182,6 +205,7 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      authStatus: provider.authStatus ?? "authenticated",
       fetchEligibility: provider.fetchEligibility ?? {
         ambient: true,
         managedProfiles: true,
@@ -191,6 +215,8 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useVisibleRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      authStatus: provider.authStatus ?? "authenticated",
+      usageReportingConfirmed: provider.usageReportingConfirmed ?? true,
       fetchEligibility: provider.fetchEligibility ?? {
         ambient: true,
         managedProfiles: true,
@@ -234,6 +260,15 @@ function mockUseHostQueriesImpl(args: {
     mocks.lastUseHostQueriesProviderIds = providerRequests.map(
       (request) => request.params.providerId,
     );
+    const queryIsEnabled =
+      args.options === null ||
+      !("enabled" in args.options) ||
+      args.options.enabled;
+    if (queryIsEnabled) {
+      mocks.activeProviderUsageRequestIds = providerRequests.map(
+        (request) => request.params.providerId,
+      );
+    }
   }
   return args.requests.map((request) => {
     if (!("providerId" in request.params)) {
@@ -259,7 +294,14 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => null };
+  return {
+    ...actual,
+    useHostClient: () => null,
+    useAuthService: () => ({
+      setProfileRecordEnabled: () =>
+        Promise.reject(new Error("Unexpected profile availability write")),
+    }),
+  };
 });
 vi.mock(
   "@/hooks/providers/use-providers-refresh-profile-status-mutation",
@@ -294,12 +336,47 @@ vi.mock("@/lib/rate-limits/provider-rate-limit-fetch", () => ({
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
+  useSystemOverlayActive: () => mocks.settingsOverlayActive,
 }));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    useRouterState: (args: {
+      select: (state: { location: { pathname: string } }) => unknown;
+    }) => args.select({ location: { pathname: mocks.routerPathname } }),
+  };
+});
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >();
+    return {
+      ...actual,
+      useHostScope: () => ({ host: mocks.settingsHost }),
+    };
+  },
+);
 // The Traycer tab reads the signed-in user's subscription (AuthService), not a
 // host RPC. Default is a signed-out/cold user -> no Traycer tab, so the
 // host-RPC-provider tests below behave exactly as before.
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => mocks.authUser,
+}));
+// `useTraycerSubscription` also gates the Traycer tab on this provider row's
+// `enabled` flag (independent of the host-RPC providers mocked above via
+// `useConfiguredRateLimitProviders`), so it gets its own fixture seam.
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => mocks.providersList,
+  useProvidersListForClient: (client: string | null) =>
+    client === "host-b" ? mocks.selectedProviders : mocks.providersList,
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => hostId,
 }));
 // The aperture usage query + its turn-refresh only mount inside the shared
 // RateLimitView (rate-limit-based Traycer plans). Stub them so no real host
@@ -316,6 +393,7 @@ import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popove
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import type { StatusBarShownProfiles } from "@/lib/layout/layout-arrangement";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import type { VisibleRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 
 const NOW = Date.now();
 
@@ -529,6 +607,39 @@ function unauthenticatedAmbientProfile(): ProviderProfile {
       label: null,
       detail: null,
     },
+  };
+}
+
+/**
+ * The `providers.list` row `useTraycerSubscription` reads to gate the
+ * synthetic Traycer rail entry: a disabled row drops the tab regardless of
+ * subscription eligibility.
+ */
+function traycerProviderFixture(enabled: boolean): ProviderCliState {
+  return {
+    providerId: "traycer",
+    enabled,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
   };
 }
 
@@ -770,6 +881,45 @@ function twoHostScope(overrides: Partial<HostScope>): HostScope {
   });
 }
 
+const USAGE_MISMATCH_WRAP = [
+  "h-auto",
+  "w-full",
+  "max-w-full",
+  "min-w-0",
+  "shrink",
+  "justify-start",
+  "text-start",
+  "whitespace-normal",
+  "break-words",
+] as const;
+
+function classTokens(element: HTMLElement): readonly string[] {
+  return element.className.split(/\s+/).filter((token) => token.length > 0);
+}
+
+function expectUsageMismatchWrap(button: HTMLElement): void {
+  const tokens = classTokens(button);
+  for (const token of USAGE_MISMATCH_WRAP) {
+    expect(tokens).toContain(token);
+  }
+  expect(tokens).not.toContain("whitespace-nowrap");
+}
+
+function expectMismatchSentence(
+  mismatch: HTMLElement,
+  usageName: string,
+  settingsName: string,
+): void {
+  const sentence = within(mismatch).getByText(
+    `Showing ${usageName}. Settings is showing ${settingsName}.`,
+  );
+  expect(sentence.tagName).toBe("P");
+  expect(classTokens(sentence)).toEqual(
+    expect.arrayContaining(["rounded-md", "border", "p-2"]),
+  );
+  expect(mismatch.getAttribute("role")).not.toBe("status");
+}
+
 function pointerEvent(
   type:
     | "pointerdown"
@@ -956,6 +1106,8 @@ beforeEach(() => {
   segmentsState.cluster = { kind: "hidden" };
   mocks.configured = [];
   mocks.results = {};
+  mocks.providersList = { data: { providers: [traycerProviderFixture(true)] } };
+  mocks.selectedProviders = { data: undefined };
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
@@ -968,6 +1120,7 @@ beforeEach(() => {
   mocks.consumeReset = vi.fn();
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
+  mocks.activeProviderUsageRequestIds = [];
   mocks.profileSelection = {
     shownProfiles: {},
     lastProfileByHarness: {},
@@ -988,7 +1141,11 @@ beforeEach(() => {
   // per-provider links carry across. Neither is reset by the render, so a
   // leftover from the previous case would let an assertion pass on it.
   useSettingsSearchStore.getState().clearReveal();
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
+  mocks.settingsHost = null;
+  mocks.settingsOverlayActive = false;
+  mocks.routerPathname = "/";
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
   onClose = vi.fn();
 });
 
@@ -1913,6 +2070,154 @@ describe("<RateLimitPopover /> rail", () => {
     }
   });
 
+  function configureAliasedCodex(): void {
+    const withoutIdentity = (
+      profile: ProviderProfile,
+      aliases: readonly string[],
+    ): ProviderProfile => ({
+      ...profile,
+      identity: null,
+      aliases: [...aliases],
+    });
+    const codexProfiles = [
+      withoutIdentity(
+        providerProfile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Default Codex",
+          tier: "Terminal",
+          usageUpdatedAt: NOW - 10_000,
+        }),
+        [],
+      ),
+      withoutIdentity(
+        providerProfile({
+          profileId: "work-profile",
+          kind: "managed",
+          label: "Work",
+          tier: "Pro 5x",
+          usageUpdatedAt: NOW - 10_000,
+        }),
+        ["alias-work"],
+      ),
+    ];
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: codexProfiles,
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+  }
+
+  it("scrolls the canonical card when the deep link names an alias of that account", () => {
+    configureAliasedCodex();
+    const scrolled: Element[] = [];
+    const scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+    try {
+      useRateLimitPopoverStore.getState().requestRevealProfile({
+        providerId: "codex",
+        profileId: "alias-work",
+      });
+      renderPopover();
+
+      expect(scrolled).toEqual([
+        screen.getByTestId("rate-limit-profile-card-codex-work-profile"),
+      ]);
+      expect(useRateLimitPopoverStore.getState().revealProfile).toBeNull();
+    } finally {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      } else {
+        Object.defineProperty(Element.prototype, "scrollIntoView", descriptor);
+      }
+    }
+  });
+
+  it("scrolls neither card when the deep link is one row's id and another's alias", () => {
+    const withoutIdentity = (
+      profileId: string,
+      label: string,
+      aliases: readonly string[],
+    ): ProviderProfile => ({
+      ...providerProfile({
+        profileId,
+        kind: "managed",
+        label,
+        tier: null,
+        usageUpdatedAt: NOW - 10_000,
+      }),
+      identity: null,
+      aliases: [...aliases],
+    });
+    const first = withoutIdentity("pin-x", "First", []);
+    const second = withoutIdentity("second-row", "Second", ["pin-x"]);
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [first, second],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "pin-x")]: readyResult(codexReady()),
+      [resultKey("codex", "second-row")]: readyResult(codexReady()),
+    };
+    const scrolled: Element[] = [];
+    const scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+    try {
+      useRateLimitPopoverStore.getState().requestRevealProfile({
+        providerId: "codex",
+        profileId: "pin-x",
+      });
+      renderPopover();
+
+      expect(
+        screen.getByTestId("rate-limit-profile-card-codex-pin-x"),
+      ).toBeDefined();
+      expect(
+        screen.getByTestId("rate-limit-profile-card-codex-second-row"),
+      ).toBeDefined();
+      expect(scrolled).toEqual([]);
+      expect(useRateLimitPopoverStore.getState().revealProfile).toEqual({
+        providerId: "codex",
+        profileId: "pin-x",
+      });
+    } finally {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      } else {
+        Object.defineProperty(Element.prototype, "scrollIntoView", descriptor);
+      }
+    }
+  });
+
   it("still consumes a deep-link request where scrollIntoView does not exist", () => {
     configureTwoAccountProviders();
     // The suite setup stubs `scrollIntoView`; take it away for this case so
@@ -1966,10 +2271,48 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Pro 5x")).toBeTruthy();
+    expect(screen.getByText("Pro 5x").getAttribute("data-wrap")).toBe("");
     const profileSwitch = screen.getByRole("switch", {
       name: "Allow agents to use Work",
     });
     expect(profileSwitch.dataset.state).toBe("checked");
+  });
+
+  it("wraps a long profile label and its plan on the profile card", () => {
+    const longLabel =
+      "work-profile-name-that-is-long-enough-to-wrap-without-truncation";
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: longLabel,
+            tier: "Professional plan 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+
+    renderPopover();
+
+    const label = screen.getByText(longLabel);
+    expect(label.textContent).toBe(longLabel);
+    expect(classTokens(label)).toContain("whitespace-normal");
+    expect(classTokens(label)).toContain("wrap-anywhere");
+    expect(classTokens(label)).not.toContain("truncate");
+    expect(label.closest(".truncate")).toBeNull();
+    const plan = screen.getByText("Professional plan 5x");
+    expect(plan.getAttribute("data-wrap")).toBe("");
+    // A fixed height on a wrapping badge clips its second line.
+    expect(classTokens(plan)).toContain("h-auto");
+    expect(classTokens(plan)).not.toContain("h-5");
   });
 
   it("keeps an unauthenticated ambient row with cached lastGood data visible without a refresh action", () => {
@@ -2477,7 +2820,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     );
   }
 
-  it("shows one centered loading indicator, no per-provider sections, while nothing has resolved yet", () => {
+  it("shows all reporting inventory rows while usage is not yet reported", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
       {
@@ -2489,10 +2832,13 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     mocks.results = { codex: coldResult(), "claude-code": coldResult() };
     renderPopover();
 
-    expect(screen.getByText("Fetching usage limits")).toBeTruthy();
-    // Neither provider's own reading is visible yet - only the combined loader.
-    expect(screen.queryByText("Current session")).toBeNull();
-    expect(screen.queryByText("4% used")).toBeNull();
+    expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.getByText("Claude Code")).toBeTruthy();
+    for (const providerName of ["Codex", "Claude Code"]) {
+      expect(
+        screen.getByText(providerName).closest('[class*="gap-4"]')?.className,
+      ).not.toContain("hidden");
+    }
   });
 
   it("reveals an uncached signed-out provider with its signed-out message instead of leaving Overview loading forever", async () => {
@@ -2506,6 +2852,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: undefined,
+        authStatus: "unauthenticated",
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ];
@@ -2534,7 +2881,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     expect(screen.queryByTestId("rate-limit-detail-skeleton")).toBeNull();
   });
 
-  it("reveals a provider in place as it resolves, hiding still-cold siblings, and drops the combined loader", () => {
+  it("keeps a cold sibling visible when another provider reports usage", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
       {
@@ -2561,11 +2908,11 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     ).not.toContain("hidden");
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("4% used")).toBeTruthy();
-    // ...but Claude Code's still-cold section is hidden, not painted as its
-    // own blank/loading block.
+    // Claude Code's still-cold section remains in the popover inventory.
+    expect(screen.getByText("Claude Code")).toBeTruthy();
     expect(
       screen.getByText("Claude Code").closest('[class*="gap-4"]')?.className,
-    ).toContain("hidden");
+    ).not.toContain("hidden");
 
     // Claude Code resolves next - both sections are now visible.
     mocks.results = {
@@ -2580,6 +2927,44 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 });
 
 describe("<RateLimitPopover /> per-provider states", () => {
+  it("keeps every reporting account visible for an unmapped provider without requesting usage", () => {
+    const profiles = [
+      providerProfile({
+        profileId: "qwen-account-one",
+        kind: "managed",
+        label: "Qwen One",
+        tier: null,
+        usageUpdatedAt: null,
+      }),
+      providerProfile({
+        profileId: "qwen-account-two",
+        kind: "managed",
+        label: "Qwen Two",
+        tier: null,
+        usageUpdatedAt: null,
+      }),
+    ];
+    const provider: VisibleRateLimitProvider = {
+      providerId: "qwen",
+      lane: null,
+      usageReportingConfirmed: true,
+      profiles,
+      fetchEligibility: { ambient: false, managedProfiles: false },
+      authStatus: "authenticated",
+    };
+    mocks.configured = [provider];
+    mocks.fetchProviderRateLimits.mockClear();
+    mocks.lastUseHostQueriesProviderIds = null;
+
+    renderPopover();
+
+    expect(screen.getByText("Qwen One")).toBeTruthy();
+    expect(screen.getByText("Qwen Two")).toBeTruthy();
+    expect(screen.getAllByText("Not reporting usage yet.")).toHaveLength(2);
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
+    expect(mocks.activeProviderUsageRequestIds).not.toContain("qwen");
+  });
+
   it("closes before opening Model Providers for an OpenCode permission failure", () => {
     const events: string[] = [];
     onClose = vi.fn(() => {
@@ -2686,6 +3071,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
       },
     };
     renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const skeleton = screen.getByTestId("rate-limit-detail-skeleton");
     expect(skeleton).toBeTruthy();
     // Regression: every dark theme preset sets `--muted` equal to
@@ -2744,12 +3130,31 @@ describe("<RateLimitPopover /> per-provider states", () => {
   it("replaces the picture entirely (no dimmed data) for an authoritative unavailable reason, even with a lastGood on hand", () => {
     // `rate_limits_not_available` (and friends) are account-capability
     // reasons, not transient - they must never be shown alongside a stale
-    // reading the way a transient failure is.
+    // reading the way a transient failure is. The sibling keeps its own
+    // usage row while this account reports that limits are unavailable.
+    const unavailableProfile = providerProfile({
+      profileId: "unavailable-account",
+      kind: "managed",
+      label: "Unavailable account",
+      tier: null,
+      usageUpdatedAt: null,
+    });
+    const siblingProfile = providerProfile({
+      profileId: "sibling-account",
+      kind: "managed",
+      label: "Sibling account",
+      tier: null,
+      usageUpdatedAt: null,
+    });
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [unavailableProfile, siblingProfile],
+      },
     ];
     mocks.results = {
-      codex: {
+      "codex:unavailable-account": {
         data: {
           latest: {
             provider: "codex",
@@ -2768,14 +3173,22 @@ describe("<RateLimitPopover /> per-provider states", () => {
         dataUpdatedAt: NOW - 90_000,
         refetch: vi.fn(() => Promise.resolve({})),
       },
+      "codex:sibling-account": readyResult(codexReady()),
     };
     renderPopover();
+    const unavailableCard = screen.getByTestId(
+      "rate-limit-profile-card-codex-unavailable-account",
+    );
+    const siblingCard = screen.getByTestId(
+      "rate-limit-profile-card-codex-sibling-account",
+    );
     expect(
-      screen.getByText(
+      within(unavailableCard).getByText(
         "Usage limits unavailable - not available for this account",
       ),
     ).toBeTruthy();
-    expect(screen.queryByText("4% used")).toBeNull();
+    expect(within(unavailableCard).queryByText("4% used")).toBeNull();
+    expect(within(siblingCard).getByText("4% used")).toBeTruthy();
     expect(document.querySelectorAll(".opacity-60").length).toBe(0);
   });
 
@@ -2867,6 +3280,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: undefined,
+        authStatus: "unauthenticated",
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ];
@@ -3459,7 +3873,7 @@ describe("<RateLimitPopover /> manage provider links", () => {
       // No tab named: Providers resolves this provider's own first tab.
       focusTab: null,
     });
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-a");
   });
 
   it("deep-links an ambient provider from its own header", () => {
@@ -3885,7 +4299,9 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     // Plan chips live on their matching cards. The trailing "_V3"
     // pricing-generation tag remains hidden.
     expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.getByText("Pro").getAttribute("data-wrap")).toBe("");
     expect(screen.getByText("Ultra")).toBeTruthy();
+    expect(screen.getByText("Ultra").getAttribute("data-wrap")).toBe("");
   });
 
   it("renders Traycer account cards with active state on Overview", () => {
@@ -3909,6 +4325,33 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     const activeCards = document.querySelectorAll('[aria-current="true"]');
     expect(activeCards).toHaveLength(1);
     expect(activeCards[0].textContent).toContain("Personal");
+  });
+
+  it("wraps the full long Traycer account label on its real account card", () => {
+    mocks.configured = [];
+    const longLabel =
+      "a-team-account-name-that-is-long-enough-to-wrap-without-truncation";
+    const authUser = authUserFixture({ status: "PRO_V3", withTeam: true });
+    mocks.authUser = readyAuthUser({
+      ...authUser,
+      teamSubscriptions: authUser.teamSubscriptions.map((subscription) => ({
+        ...subscription,
+        team: { ...subscription.team, slug: longLabel },
+      })),
+    });
+
+    renderPopover();
+
+    const card = screen.getByRole("button", {
+      name: `Use ${longLabel} account`,
+    });
+    const label = within(card).getByText(longLabel);
+    expect(label.textContent).toBe(longLabel);
+    expect(classTokens(label)).toContain("whitespace-normal");
+    expect(classTokens(label)).toContain("wrap-anywhere");
+    expect(classTokens(label)).not.toContain("truncate");
+    expect(label.closest(".truncate")).toBeNull();
+    expect(card.getAttribute("aria-label")).toBe(`Use ${longLabel} account`);
   });
 
   it("marks the selected team card active while retaining every account's plan", () => {
@@ -3965,14 +4408,67 @@ describe("<RateLimitPopover /> Traycer tab", () => {
 });
 
 describe("<RateLimitPopover /> host picker", () => {
-  it("shows no host picker row when there is only one host", () => {
-    renderPopover();
+  it("shows one host as an identity line, not a picker", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "tgill-popos",
+      kind: "personal",
+    });
+    renderPopoverWithScope(hostScopeFixture({ host, hosts: [host] }), false);
     expect(screen.queryByTestId("rate-limit-host-picker-row")).toBeNull();
+    expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
+    const identity = screen.getByTestId("rate-limit-host-identity");
+    expect(identity.tagName).not.toBe("BUTTON");
+    expect(identity.querySelector("button")).toBeNull();
+    expect(identity.querySelector("svg")).toBeNull();
+    expect(identity.textContent).toBe("tgill-popos · Computer");
+    expect(classTokens(identity)).toContain("break-words");
+    expect(identity.textContent).not.toContain("Online");
+    expect(identity.textContent).not.toContain("Out of credits");
+    expect(screen.queryByTestId("settings-host-switcher-manage")).toBeNull();
   });
 
-  it("shows a host picker row when there is more than one host", () => {
-    renderPopoverWithScope(twoHostScope({}), false);
+  it("names a host with no kind and no separator", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "Alpha",
+      kind: null,
+    });
+    renderPopoverWithScope(hostScopeFixture({ host, hosts: [host] }), false);
+
+    const identity = screen.getByTestId("rate-limit-host-identity");
+    expect(identity.textContent).toBe("Alpha");
+    expect(identity.textContent).not.toContain("·");
+  });
+
+  it("names an empty host scope without inventing a kind", () => {
+    renderPopoverWithScope(hostScopeFixture({ host: null, hosts: [] }), false);
+
+    const identity = screen.getByTestId("rate-limit-host-identity");
+    expect(identity.textContent).toBe("No host");
+    expect(identity.textContent).not.toContain("Computer");
+    expect(identity.textContent).not.toContain("Sandbox");
+    expect(identity.textContent).not.toContain("Team machine");
+  });
+
+  it("shows the watched sandbox's name and kind in the picker when there is more than one host", () => {
+    const sandbox = hostScopeOptionFixture({
+      hostId: "host-sandbox",
+      name: "quiet-harbor",
+      kind: "sandbox",
+    });
+    renderPopoverWithScope(
+      twoHostScope({
+        host: sandbox,
+        hosts: [sandbox, hostScopeOptionFixture({ hostId: "host-a" })],
+      }),
+      false,
+    );
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(screen.queryByTestId("rate-limit-host-identity")).toBeNull();
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "quiet-harbor Sandbox",
+    );
   });
 
   // The `vanished` exception: a pick that no longer resolves is not a choice,
@@ -3993,6 +4489,231 @@ describe("<RateLimitPopover /> host picker", () => {
     });
     renderPopoverWithScope(scope, true);
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+  });
+
+  it("names a stale pin, shows active-host usage, and forgets the saved name", () => {
+    const active = hostScopeOptionFixture({ hostId: "host-a", name: "Alpha" });
+    const forget = vi.fn();
+    const activeProfile = providerProfile({
+      profileId: "active-profile",
+      kind: "managed",
+      label: "Active profile",
+      tier: "Max",
+      usageUpdatedAt: NOW - 10_000,
+    });
+    mocks.configured = [
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: [activeProfile],
+      },
+    ];
+    mocks.results = {
+      "claude-code": readyResult(claudeReady()),
+      [resultKey("claude-code", "active-profile")]: readyResult(claudeReady()),
+    };
+    const scope = hostScopeFixture({
+      host: null,
+      hosts: [active],
+      activeHostId: active.hostId,
+      activeHost: active,
+      vanishedHostId: "host-gone",
+      hostLabel: "host-gone",
+      vanishedSelection: { name: "Bright Meadow", forget },
+      status: "vanished",
+      isViewingActive: false,
+    });
+    renderPopoverWithScope(scope, true);
+
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "Alpha Computer",
+    );
+    expect(
+      screen.getByTestId("rate-limit-host-stale-pin").textContent,
+    ).toContain("Bright Meadow is no longer here. You're seeing Alpha.");
+    expect(screen.getByText("Current session")).toBeTruthy();
+    const profileEye = screen.getByRole("button", {
+      name: "Show Active profile in status bar",
+    });
+    expect(profileEye.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(profileEye);
+    expect(useLayoutStore.getState().arrangement.shownProfiles).toEqual({
+      "host-a": { "claude-code": ["active-profile"] },
+    });
+    expect(profileEye.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Forget Bright Meadow" }),
+    );
+    expect(forget).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    renderPopoverWithScope(
+      hostScopeFixture({
+        host: null,
+        hosts: [],
+        activeHost: null,
+        activeHostId: null,
+        vanishedHostId: "host-gone",
+        vanishedSelection: { name: "Bright Meadow", forget },
+        status: "vanished",
+        isViewingActive: false,
+      }),
+      true,
+    );
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(
+      screen.getByTestId("settings-host-switcher-empty").textContent,
+    ).toContain("No hosts yet");
+    expect(screen.getByTestId("rate-limit-host-stale-pin").textContent).toBe(
+      "Bright Meadow is no longer here.Forget Bright Meadow",
+    );
+    expect(screen.queryByTestId("rate-limit-popover-panes")).toBeNull();
+  });
+
+  it("shows Settings mismatch only while Settings is visible and changes usage scope alone", () => {
+    const settingsHost = hostScopeOptionFixture({
+      hostId: "host-b",
+      name: "Bravo",
+    });
+    const setUsageHost = vi.fn();
+    mocks.settingsHost = settingsHost;
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: settingsHost.hostId,
+      name: settingsHost.name,
+    });
+    const settingsSelectionBefore =
+      useSettingsHostScopeStore.getState().hostByEnvironment;
+    const usageScope = twoHostScope({ setHostId: setUsageHost });
+
+    const closed = renderPopoverWithScope(usageScope, false);
+    expect(screen.queryByTestId("rate-limit-host-mismatch")).toBeNull();
+    closed.unmount();
+
+    mocks.settingsOverlayActive = true;
+    renderPopoverWithScope(usageScope, false);
+    const mismatch = screen.getByTestId("rate-limit-host-mismatch");
+    expectMismatchSentence(mismatch, "Alpha", "Bravo");
+    expect(within(mismatch).getAllByRole("button")).toHaveLength(1);
+    const button = within(mismatch).getByRole("button", {
+      name: "Show usage for Bravo",
+    });
+    expect(button.textContent).toBe("Show usage for Bravo");
+    expectUsageMismatchWrap(button);
+
+    fireEvent.click(button);
+
+    expect(setUsageHost).toHaveBeenCalledWith("host-b");
+    expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual(
+      settingsSelectionBefore,
+    );
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+    expect(useTabsStore.getState().activeItemId).toBeNull();
+  });
+
+  it("treats a Settings surface in the active split as visible", () => {
+    const settingsHost = hostScopeOptionFixture({
+      hostId: "host-b",
+      name: "Bravo",
+    });
+    const setUsageHost = vi.fn();
+    mocks.settingsHost = settingsHost;
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: settingsHost.hostId,
+      name: settingsHost.name,
+    });
+    const settingsSelectionBefore =
+      useSettingsHostScopeStore.getState().hostByEnvironment;
+    useTabsStore.setState({
+      items: [
+        {
+          kind: "split",
+          id: "split-settings",
+          left: { kind: "tab", ref: { kind: "settings", id: "settings" } },
+          right: { kind: "tab", ref: { kind: "history", id: "history" } },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-settings",
+      systemTabs: {
+        settings: {
+          id: "settings",
+          kind: "settings",
+          name: "Settings",
+          lastPath: null,
+        },
+        history: {
+          id: "history",
+          kind: "history",
+          name: "History",
+          lastPath: null,
+        },
+      },
+    });
+
+    renderPopoverWithScope(twoHostScope({ setHostId: setUsageHost }), false);
+
+    const mismatch = screen.getByTestId("rate-limit-host-mismatch");
+    expectMismatchSentence(mismatch, "Alpha", "Bravo");
+    expect(within(mismatch).getAllByRole("button")).toHaveLength(1);
+    const button = within(mismatch).getByRole("button", {
+      name: "Show usage for Bravo",
+    });
+    expect(button.textContent).toBe("Show usage for Bravo");
+    expectUsageMismatchWrap(button);
+
+    fireEvent.click(button);
+    expect(setUsageHost).toHaveBeenCalledWith("host-b");
+    expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual(
+      settingsSelectionBefore,
+    );
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+  });
+
+  it("wraps a long host name on the mismatch button", () => {
+    const longName =
+      "Windows sandbox — autonomous acceptance and integration workload";
+    const usageHost = hostScopeOptionFixture({
+      hostId: "host-long",
+      name: longName,
+      kind: "sandbox",
+    });
+    const settingsHost = hostScopeOptionFixture({
+      hostId: "host-settings-long",
+      name: longName,
+      kind: "sandbox",
+    });
+    mocks.settingsHost = settingsHost;
+    mocks.settingsOverlayActive = true;
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: settingsHost.hostId,
+      name: settingsHost.name,
+    });
+    renderPopoverWithScope(
+      twoHostScope({
+        host: usageHost,
+        hosts: [
+          usageHost,
+          hostScopeOptionFixture({ hostId: "host-a", name: "Alpha" }),
+        ],
+        activeHostId: usageHost.hostId,
+        activeHost: usageHost,
+      }),
+      false,
+    );
+
+    expectMismatchSentence(
+      screen.getByTestId("rate-limit-host-mismatch"),
+      longName,
+      longName,
+    );
+
+    const button = screen.getByRole("button", {
+      name: `Show usage for ${longName}`,
+    });
+    expect(button.textContent).toBe(`Show usage for ${longName}`);
+    expectUsageMismatchWrap(button);
   });
 
   it("scopes the view without making the picked host active", () => {
@@ -4021,6 +4742,57 @@ describe("<RateLimitPopover /> host picker", () => {
       hostId: null,
     });
   });
+
+  it("keeps Manage hosts on the empty picker row when the pin vanished", () => {
+    renderPopoverWithScope(
+      hostScopeFixture({
+        host: null,
+        hosts: [],
+        vanishedHostId: "host-gone",
+        status: "vanished",
+        isViewingActive: false,
+      }),
+      true,
+    );
+
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(screen.queryByTestId("settings-host-switcher-manage")).toBeNull();
+    fireEvent.click(screen.getByTestId("settings-host-switcher-empty-manage"));
+
+    expect(mocks.openSettings).toHaveBeenCalledWith({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: null,
+    });
+  });
+
+  it("does not dismiss when a pointer lands in the host switcher list", () => {
+    renderPopoverWithScope(
+      hostScopeFixture({
+        host: null,
+        hosts: [],
+        vanishedHostId: "host-gone",
+        status: "vanished",
+        isViewingActive: false,
+      }),
+      true,
+    );
+    const list = document.createElement("div");
+    list.setAttribute("data-host-switcher-list", "true");
+    const inner = document.createElement("button");
+    inner.type = "button";
+    inner.textContent = "Alpha";
+    list.append(inner);
+    document.body.append(list);
+
+    fireEvent.pointerDown(inner);
+
+    expect(screen.getByRole("dialog", { name: "Usage limits" })).toBeTruthy();
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    list.remove();
+  });
 });
 
 describe("<RateLimitPopover /> unusable explicit host pick", () => {
@@ -4044,6 +4816,46 @@ describe("<RateLimitPopover /> unusable explicit host pick", () => {
 
     fireEvent.click(screen.getByTestId("rate-limit-host-return-to-active"));
     expect(returnToActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps account usage based on the unavailable selected host state", () => {
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    const selectedScope = hostScopeFixture({
+      host: hostScopeOptionFixture({ hostId: "host-b", connectable: false }),
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: "host-b", connectable: false }),
+      ],
+      hostLabel: "Office Linux",
+      status: "unreachable",
+      isViewingActive: false,
+    });
+
+    mocks.providersList = {
+      data: { providers: [traycerProviderFixture(false)] },
+    };
+    mocks.selectedProviders = { data: undefined };
+    const unknownView = renderPopoverWithScope(selectedScope, true);
+    expect(screen.getByText("Traycer Inference")).toBeTruthy();
+    unknownView.unmount();
+
+    mocks.providersList = {
+      data: { providers: [traycerProviderFixture(true)] },
+    };
+    mocks.selectedProviders = {
+      data: { providers: [traycerProviderFixture(false)] },
+    };
+    const disabledView = renderPopoverWithScope(selectedScope, true);
+    expect(screen.queryByText("Traycer Inference")).toBeNull();
+    disabledView.unmount();
+
+    mocks.selectedProviders = {
+      data: { providers: [traycerProviderFixture(true)] },
+    };
+    renderPopoverWithScope(selectedScope, true);
+    expect(screen.getByText("Traycer Inference")).toBeTruthy();
   });
 
   it("shows the unreachable notice for an explicitly picked host this client cannot dial", () => {

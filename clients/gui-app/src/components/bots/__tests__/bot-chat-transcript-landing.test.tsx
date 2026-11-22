@@ -17,7 +17,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { create, type StoreApi, type UseBoundStore } from "zustand";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
+import type { StoreApi, UseBoundStore } from "zustand";
 import {
   afterEach,
   beforeEach,
@@ -27,45 +28,18 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  AgentSender,
-  ContentBlock,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatLocateRowArgs } from "@/hooks/chats/use-chat-locate-row";
-import type {
-  ChatSessionState,
-  ChatSessionStoreHandle,
-} from "@/stores/chats/chat-session-store";
-import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
-
-type LandingState = Pick<
-  ChatSessionState,
-  | "snapshotLoaded"
-  | "messages"
-  | "events"
-  | "transcriptRowContext"
-  | "transcriptDerived"
-  | "pendingUserMessages"
-  | "queue"
-  | "turnInProgress"
-  | "messageDelivery"
-  | "liveAssistantMessage"
-  | "activeTurn"
-  | "pendingApprovals"
-  | "pendingFileEditApprovals"
-  | "pendingInterviews"
-  | "runStatus"
-  | "transcriptWindow"
-  | "transcriptBaselineEpoch"
-  | "transcriptHydrationSequence"
-  | "coldRewrittenMessageIds"
-  | "backgroundItems"
-  | "reportVisibleTranscriptRange"
-  | "requestFindReadOrdinal"
-  | "requestTranscriptOrdinal"
->;
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import {
+  BOT_ID,
+  CHAT_ID,
+  createLandingStore,
+  otherUserMessage,
+  reply,
+  resolvedUserMessage,
+  type LandingState,
+} from "@/components/bots/__tests__/bot-chat-transcript-landing-support";
 
 const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
@@ -78,6 +52,9 @@ const mocks = vi.hoisted(() => ({
   }>,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/components/chat/chat-messages", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/components/chat/chat-messages")>();
@@ -135,138 +112,22 @@ import {
   UNRESOLVED_BOT_MEMBERS,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
-
-const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const CHAT_ID = "conversation-app";
-const REPLY_ID = "reply-uuid";
-
-const ASK: JsonContent = {
-  type: "doc",
-  content: [
-    { type: "paragraph", content: [{ type: "text", text: "Please review" }] },
-  ],
-};
-
-const BOT_SENDER: AgentSender = {
-  type: "agent",
-  harnessId: "claude",
-  agentId: "claude-sonnet-4",
-  displayName: "Claude Sonnet 4",
-  reply: { expectsReply: false },
-  inReplyTo: null,
-};
-
-function resolvedUserMessage(): Extract<Message, { role: "user" }> {
-  return {
-    role: "user",
-    messageId: "ask-1",
-    sender: { type: "user", userId: "owner-1" },
-    message: { kind: "user", content: ASK, browserAnnotations: [] },
-    timestamp: 1_000,
-    sessionAnchor: null,
-    conversationRequest: {
-      requestId: "req-1",
-      resolvedAt: 1_000,
-      resolvedByMessageId: REPLY_ID,
-    },
-  };
-}
-
-/** A message between a post and its reply, so the reply is not the next row. */
-function otherUserMessage(): Extract<Message, { role: "user" }> {
-  return {
-    role: "user",
-    messageId: "other-1",
-    sender: { type: "user", userId: "owner-1" },
-    message: { kind: "user", content: ASK, browserAnnotations: [] },
-    timestamp: 1_500,
-    sessionAnchor: null,
-  };
-}
-
-function textBlock(blockId: string, text: string): ContentBlock {
-  return {
-    type: "text",
-    blockId,
-    status: "completed",
-    timestamp: 2_000,
-    text,
-    providerNotice: null,
-  };
-}
-
-function assistantMessage(input: {
-  readonly messageId: string;
-  readonly turnId: string | null;
-  readonly timestamp: number;
-  readonly text: string;
-}): Extract<Message, { role: "assistant" }> {
-  return {
-    role: "assistant",
-    messageId: input.messageId,
-    sender: BOT_SENDER,
-    blocks: [textBlock(`${input.messageId}:text`, input.text)],
-    startedAt: input.timestamp,
-    timestamp: input.timestamp,
-    turnId: input.turnId,
-    usage: null,
-    reasoningEffort: null,
-    serviceTier: null,
-    envCredentialVar: null,
-    imageResolutions: [],
-  };
-}
-
-function reply(): Extract<Message, { role: "assistant" }> {
-  return assistantMessage({
-    messageId: REPLY_ID,
-    turnId: null,
-    timestamp: 2_000,
-    text: "Here is my review",
-  });
-}
+import { useBotSearchStore } from "@/stores/bots/bot-search-store";
 
 let requestTranscriptOrdinal: Mock<(ordinal: number | null) => void>;
 let store: UseBoundStore<StoreApi<LandingState>>;
 
-function createLandingStore(
-  messages: ReadonlyArray<Message>,
-): UseBoundStore<StoreApi<LandingState>> {
-  return create<LandingState>()(() => ({
-    snapshotLoaded: true,
-    messages,
-    events: [],
-    transcriptRowContext: {},
-    transcriptDerived: null,
-    pendingUserMessages: [],
-    queue: { status: "idle", items: [] },
-    turnInProgress: undefined,
-    messageDelivery: null,
-    liveAssistantMessage: null,
-    activeTurn: null,
-    pendingApprovals: [],
-    pendingFileEditApprovals: [],
-    pendingInterviews: [],
-    runStatus: "idle",
-    transcriptWindow: emptyTranscriptWindow(),
-    transcriptBaselineEpoch: 0,
-    transcriptHydrationSequence: 0,
-    coldRewrittenMessageIds: new Set<string>(),
-    backgroundItems: undefined,
-    reportVisibleTranscriptRange: vi.fn(),
-    requestFindReadOrdinal: vi.fn(),
-    requestTranscriptOrdinal,
-  }));
-}
-
 const THREAD_SURFACE: BotTranscriptSurface = {
   kind: "thread",
   chooseOption: vi.fn(),
+  reply: null,
   answerQuestion: null,
-  discussQuestion: null,
+  answerQuestions: null,
+  questionBox: "post-1",
   failedRequest: () => null,
   openTurn: null,
   sessionChatId: null,
+  opening: { messageId: "post-1", conversationId: "channel-1", show: vi.fn() },
 };
 
 /** The member directory a mounted transcript reads; none by default. */
@@ -280,24 +141,28 @@ function mountTranscript(
 ): {
   readonly rerender: () => void;
 } {
-  store = createLandingStore(messages);
+  store = createLandingStore(messages, requestTranscriptOrdinal);
   mocks.handle = { store } as ChatSessionStoreHandle;
   const queryClient = new QueryClient();
   const tree = (): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BotChatTranscript
-          botId={BOT_ID}
-          chatId={CHAT_ID}
-          hostId="host-1"
-          title="Release Bot"
-          instanceId="bot-thread:test"
-          surface={surface}
-          resolveMember={members}
-          showConnecting
-          header={null}
-          landOn={landing}
-        />
+        <BotTestRunnerHost>
+          <BotChatTranscript
+            botId={BOT_ID}
+            chatId={CHAT_ID}
+            hostId="host-1"
+            boundHostId={null}
+            title="Release Bot"
+            instanceId="bot-thread:test"
+            surface={surface}
+            resolveMember={members}
+            showConnecting
+            header={null}
+            landOn={landing}
+            flow={null}
+          />
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -319,6 +184,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mocks.handle = null;
+  vi.unstubAllGlobals();
+  useBotSearchStore.getState().clearMarks();
 });
 
 function flashing(messageId: string): boolean {
@@ -328,6 +195,47 @@ function flashing(messageId: string): boolean {
   if (row === null) throw new Error(`no row for ${messageId}`);
   return row.dataset.navigationHighlighted === "true";
 }
+
+describe("a loaded thread transcript", () => {
+  it("keeps its replies and landing without a minimap", async () => {
+    landing = { messageId: "ask-1", sendPostId: null, visit: 1 };
+    mountTranscript(
+      [resolvedUserMessage(), otherUserMessage(), reply()],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    await waitFor(() => expect(flashing("ask-1")).toBe(true));
+    expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+  });
+
+  it("lands on the post a reply's badge names when the badge is chosen", async () => {
+    members = (userId) =>
+      userId === "owner-1"
+        ? { displayName: "Olive Owner", avatarUrl: null }
+        : null;
+    mountTranscript(
+      [
+        resolvedUserMessage(),
+        otherUserMessage(),
+        { ...reply(), repliesTo: "ask-1" },
+      ],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    expect(flashing("ask-1")).toBe(false);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Replying to Olive Owner: Please review",
+      }),
+    );
+    await settleLegendList();
+
+    expect(flashing("ask-1")).toBe(true);
+    await waitFor(() => expect(mocks.settled).toHaveLength(1));
+    expect(mocks.settled[0]?.outcome).toBe("landed");
+  });
+});
 
 describe("a transcript asked to land on a post", () => {
   it("lands on it at each visit, the same post's again once the first landing has settled and the reader has moved on", async () => {
@@ -356,5 +264,54 @@ describe("a transcript asked to land on a post", () => {
     expect(flashing("ask-1")).toBe(true);
     await waitFor(() => expect(mocks.settled).toHaveLength(2));
     expect(mocks.settled[1]?.outcome).toBe("landed");
+  });
+
+  it("marks the words a search result matched on the row it lands on, in the find colours", async () => {
+    const painted = new Map<string, { readonly ranges: readonly Range[] }>();
+    vi.stubGlobal("CSS", {
+      highlights: {
+        set: (name: string, highlight: { readonly ranges: readonly Range[] }) =>
+          painted.set(name, highlight),
+        delete: (name: string) => painted.delete(name),
+      },
+    });
+    vi.stubGlobal(
+      "Highlight",
+      class PaintedHighlight {
+        readonly ranges: readonly Range[];
+        constructor(...ranges: readonly Range[]) {
+          this.ranges = ranges;
+        }
+      },
+    );
+    useBotSearchStore.setState({
+      marks: { chatId: CHAT_ID, messageId: "ask-1", words: ["review"] },
+    });
+    const view = mountTranscript(
+      [resolvedUserMessage(), otherUserMessage(), reply()],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    landing = { messageId: "ask-1", sendPostId: null, visit: 1 };
+    view.rerender();
+    await settleLegendList();
+
+    const markedRows = [...painted.values()].flatMap((highlight) =>
+      highlight.ranges.map(
+        (range) =>
+          range.startContainer.parentElement?.closest<HTMLElement>(
+            "[data-message-id]",
+          )?.dataset.messageId,
+      ),
+    );
+    const markedWords = [...painted.values()].flatMap((highlight) =>
+      highlight.ranges.map((range) => range.toString()),
+    );
+    expect(markedWords).toEqual(["review"]);
+    expect(markedRows).toEqual(["ask-1"]);
+    expect(flashing("ask-1")).toBe(true);
+
+    cleanup();
+    expect(painted.size).toBe(0);
   });
 });

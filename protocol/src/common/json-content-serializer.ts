@@ -1,4 +1,5 @@
 import type { JsonContent } from "./registry";
+import { fileAttachmentAttrsSchema } from "./file-attachment";
 import { isDefaultGithubMentionHost } from "./github-mention-host";
 
 export enum ContextType {
@@ -58,6 +59,14 @@ export enum ContextType {
    * is never itself an Agent.
    */
   BrowserTab = "browser-tab",
+  /**
+   * A bot, mentioned from an agent chat. Not an Agent of the task, so it does
+   * not share the `@agent:` projection: the chip names the bot and its trunk
+   * agent, the two ids `traycer_send_message` needs, since an agent cannot
+   * list bots.
+   */
+  Bot = "bot",
+  Host = "host",
   Execution = "execution",
   User = "user",
 }
@@ -782,6 +791,7 @@ function getValidationMarker(nodeId: string, ctx: SerializerContext): string {
 
 export interface MentionAttrs {
   contextType: string;
+  hostId?: string;
   id?: string;
   label?: string;
   relPath?: string;
@@ -799,6 +809,8 @@ export interface MentionAttrs {
   reviewCommentId?: string;
   terminalId?: string;
   tabId?: string;
+  botId?: string;
+  botTrunkChatId?: string;
   commandName?: string;
   workflowId?: string;
   b64content?: string;
@@ -809,6 +821,8 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
   if (!attrs) return "";
 
   switch (attrs.contextType) {
+    case ContextType.Host:
+      return `host:${attrs.label || attrs.hostId || attrs.id || ""}`;
     case ContextType.File:
     case ContextType.Folder:
       return attrs.relPath || attrs.id || "";
@@ -894,6 +908,10 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
     case ContextType.BrowserTab: {
       const title = attrs.label || attrs.tabId || attrs.id || "";
       return `browser-tab:${title}`;
+    }
+    case ContextType.Bot: {
+      const title = attrs.label || attrs.botId || attrs.epicId || "";
+      return `bot:${title}`;
     }
     case ContextType.Execution: {
       const title = attrs.label || attrs.id || "";
@@ -1055,6 +1073,25 @@ function formatMentionForLLMQuery(
         ? `@browser-tab:${title} [tabId is unavailable]`
         : `@browser-tab:${title} [tabId=${tabId}]`;
     }
+    case ContextType.Host: {
+      const hostId = attrs.hostId || attrs.id || "";
+      const title = attrs.label || hostId;
+      return hostId.length === 0
+        ? `@host:${title} [hostId is unavailable]`
+        : `@host:${title} [hostId=${hostId}]`;
+    }
+    // The ids travel in the text, as a GitHub mention carries its URL: an
+    // agent cannot list bots, and messages one with the bot id as `taskId`
+    // and the trunk agent id as `toAgentId`.
+    case ContextType.Bot: {
+      const botId = attrs.botId || attrs.epicId || "";
+      const trunkChatId = attrs.botTrunkChatId || "";
+      const title = attrs.label || "untitled";
+      if (botId.length === 0) return `@bot:${title} (bot id is unavailable)`;
+      return trunkChatId.length === 0
+        ? `@bot:${title} (bot ${botId})`
+        : `@bot:${title} (bot ${botId}, trunk agent ${trunkChatId})`;
+    }
     case ContextType.Execution: {
       const epicPart = attrs.epicId ? `${attrs.epicId}/` : "";
       return `execution:${epicPart}${attrs.id}${marker}`;
@@ -1143,6 +1180,14 @@ function serializeSlashCommand(
   }
   const commandName = readStringAttr(node.attrs, "commandName");
   return `/${commandName}`;
+}
+
+// The file's name in place, in both mention formats. A node whose attrs are
+// not a file attachment's renders as an unknown node would.
+function serializeFileAttachment(node: JsonContent): string {
+  const attrs = fileAttachmentAttrsSchema.safeParse(node.attrs);
+  if (!attrs.success) return extractTextFromNode(node);
+  return `[file: ${attrs.data.fileName}]`;
 }
 
 function serializeText(node: JsonContent): string {
@@ -2102,6 +2147,8 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
       return serializeMention(node, ctx);
     case "slashCommand":
       return serializeSlashCommand(node, ctx);
+    case "fileAttachment":
+      return serializeFileAttachment(node);
     default:
       return extractTextFromNode(node);
   }

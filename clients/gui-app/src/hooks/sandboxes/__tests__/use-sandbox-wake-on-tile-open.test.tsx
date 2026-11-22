@@ -14,6 +14,7 @@ import {
   type FakeSandboxBinding,
 } from "./sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "./sandbox-fixtures";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 
 const HOST_ID = "host-sbx-1";
 
@@ -222,7 +223,7 @@ describe("useSandboxWakeForOpenedTile", () => {
 
       expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
       expect(mocks.toastWarning.mock.calls[0][0]).toBe(
-        "This sandbox is frozen",
+        "This sandbox is out of credits.",
       );
       cleanup();
     }
@@ -402,12 +403,16 @@ describe("useSandboxWakeForOpenedTile", () => {
     expect(mocks.toastWarning.mock.calls[0][0]).toBe(
       "This sandbox can't be woken from here yet",
     );
+    expect(mocks.toastWarning.mock.calls[0][1]).toBeUndefined();
   });
 
   it("names the shortfall when the credit gate refuses the wake", async () => {
     mocks.entry = entryFor("sandbox", "suspended", false);
     const auth = mocks.binding?.auth;
     auth?.listSandboxes.mockImplementation(listOf({ state: "suspended" }));
+    mocks.binding?.directory.findById.mockReturnValue(
+      sandboxHostEntry(HOST_ID, null),
+    );
     auth?.runSandboxVerb.mockResolvedValue({
       ...refusal(402, "insufficient_credit"),
       shortfallMc: 7_000,

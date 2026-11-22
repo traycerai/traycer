@@ -56,10 +56,13 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  openHostOverviewMenu,
+  updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -117,6 +120,43 @@ function makeRunnerHost(): IRunnerHost {
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
+}
+
+function mountInactiveWithUpdate(input: {
+  readonly hostId: string;
+  readonly isLocalMachine: boolean;
+  readonly kind: "personal" | "sandbox";
+  readonly sandbox: HostScopeSandbox | null;
+}): void {
+  const fixture = buildOverviewHostFixture({
+    hostId: input.hostId,
+    isLocalMachine: input.isLocalMachine,
+    hostVersion: "1.5.0",
+    overrideHandlers: {
+      "host.update.check": () => ({
+        outcome: "ok" as const,
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default" as const,
+        manifest: updateCheckManifest("1.6.0"),
+      }),
+    },
+  });
+  recordNegotiatedHostMethods(input.hostId, ALL_OVERVIEW_METHODS);
+  hostBindingMock.current = { hostClient: fixture.client };
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId: input.hostId,
+      isLocalMachine: input.isLocalMachine,
+      connectable: true,
+      isActive: false,
+      kind: input.kind,
+      sandbox: input.sandbox,
+    }),
+    hostId: input.hostId,
+    status: "ready",
+    client: fixture.client,
+  };
+  renderPanel(undefined);
 }
 
 function renderPanel(queryClient: QueryClient | undefined): void {
@@ -190,7 +230,7 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
   });
 });
 
-describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
+describe("<HostSettingsPanel /> Overview identity card — Busy/Idle status", () => {
   it("reads 'Idle' with no live tone when the host reports no work", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -217,7 +257,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     expect(chip.className).not.toMatch(/emerald/);
   });
 
-  it("reads '1 agent working' for a {1,0,0} breakdown", async () => {
+  it("shows Busy for a working agent without exposing a session breakdown", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -240,11 +280,11 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("1");
     expect(chip.getAttribute("data-live")).toBe("true");
-    expect(chip.textContent).toBe("1 agent working");
+    expect(chip.textContent).toBe("1 agent");
     expect(chip.textContent).not.toMatch(/session/i);
   });
 
-  it("falls back to '2 sessions' for a @1.1 host with a count and no breakdown", async () => {
+  it("shows Busy when an older host reports only a session count", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -314,7 +354,9 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
       await gate;
     });
 
-    expect(await screen.findByTestId("host-active-sessions")).toBeTruthy();
+    expect(
+      (await screen.findByTestId("host-active-sessions")).textContent,
+    ).toBe("1 session");
   });
 
   it("keeps the busy chip on screen while host.status is refetching", async () => {
@@ -369,7 +411,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     renderPanel(queryClient);
 
     const chip = await screen.findByTestId("host-active-sessions");
-    expect(chip.textContent).toBe("2 terminals working");
+    expect(chip.textContent).toBe("2 terminals");
 
     act(() => {
       void queryClient.invalidateQueries({
@@ -386,7 +428,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     });
 
     expect(screen.getByTestId("host-active-sessions").textContent).toBe(
-      "2 terminals working",
+      "2 terminals",
     );
 
     await act(async () => {
@@ -395,7 +437,26 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     });
 
     expect(screen.getByTestId("host-active-sessions").textContent).toBe(
-      "2 terminals working",
+      "2 terminals",
+    );
+  });
+
+  it("puts Computer on the name row and the running version on the fact line", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Studio Mac",
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel(undefined);
+
+    const row = await screen.findByTestId("host-identity-name-row");
+    expect(within(row).getByText("Computer")).toBeTruthy();
+    const health = await screen.findByTestId("host-identity-health");
+    expect(health.parentElement?.parentElement?.textContent).toContain(
+      "macOS · arm64 · v1.5.0",
     );
   });
 });
@@ -432,6 +493,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     // one boolean, which is what made the badge and the button read as
     // unrelated controls.
     expect(button.textContent).toBe("Activate");
+    expect(screen.queryByTestId("host-active-in-window")).toBeNull();
     fireEvent.click(button);
     expect(makeActive).toHaveBeenCalledWith("host-a");
   });
@@ -459,6 +521,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
             state: "awake",
             frozen: false,
             summary: sandboxSummaryFixture({ hostId: "host-sbx", ...summary }),
+            ownerKind: "unknown",
             teamOwned: false,
           },
         }),
@@ -468,7 +531,10 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
       };
       renderPanel(undefined);
 
-      await screen.findByTestId("host-overview-menu");
+      fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+        button: 0,
+      });
+      await screen.findByRole("menu");
       expect(screen.queryByTestId("host-make-active")).toBeNull();
     },
   );
@@ -491,6 +557,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
           state: "awake",
           frozen: false,
           summary: null,
+          ownerKind: "unknown",
           teamOwned: false,
         },
       }),
@@ -500,11 +567,14 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     };
     renderPanel(undefined);
 
-    await screen.findByTestId("host-overview-menu");
+    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    await screen.findByRole("menu");
     expect(screen.queryByTestId("host-make-active")).toBeNull();
   });
 
-  it("offers Activate on an ordinary confirmed sandbox", async () => {
+  it("offers Activate in More on an ordinary confirmed sandbox", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-sbx",
       isLocalMachine: false,
@@ -526,6 +596,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
             kind: "agent",
             burst: false,
           }),
+          ownerKind: "unknown",
           teamOwned: false,
         },
       }),
@@ -535,10 +606,14 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     };
     renderPanel(undefined);
 
-    expect(await screen.findByTestId("host-make-active")).not.toBeNull();
+    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByTestId("host-make-active")).not.toBeNull();
   });
 
-  it("host.isActive: true renders no Activate button", async () => {
+  it("host.isActive: true shows Active in the header row and More has no Active item", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -550,8 +625,72 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
-    await screen.findByText("Studio Mac");
+    const card = await screen.findByTestId("host-identity-card");
+    const active = within(card).getByTestId("host-active-in-window");
+    expect(active.textContent).toBe("Active");
+    expect(active.getAttribute("data-slot")).toBe("badge");
+    expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
     expect(screen.queryByTestId("host-make-active")).toBeNull();
+
+    fireEvent.pointerDown(within(card).getByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).queryByText("Active")).toBeNull();
+    expect(within(menu).queryByTestId("host-active-in-window")).toBeNull();
+    expect(within(menu).getByTestId("host-overview-restart")).not.toBeNull();
+  });
+
+  it("keeps Activate inline beside Update now on an inactive computer, and a sandbox's binding in More", async () => {
+    mountInactiveWithUpdate({
+      hostId: "host-a",
+      isLocalMachine: true,
+      kind: "personal",
+      sandbox: null,
+    });
+
+    const row = await screen.findByTestId("host-identity-name-row");
+    const line = row.parentElement;
+    if (line === null) throw new Error("the name row sits in no line");
+    await within(line).findByRole("button", { name: "Update now" });
+    const activate = within(line).getByRole("button", { name: "Activate" });
+    expect(activate.getAttribute("data-testid")).toBe("host-make-active");
+
+    await openHostOverviewMenu();
+    const menu = screen.getByRole("menu");
+    expect(within(menu).queryByTestId("host-make-active")).toBeNull();
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Activate" }),
+    ).toBeNull();
+
+    cleanup();
+    resetNegotiatedManifests();
+    mountInactiveWithUpdate({
+      hostId: "host-sbx",
+      isLocalMachine: false,
+      kind: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: sandboxSummaryFixture({
+          hostId: "host-sbx",
+          kind: "agent",
+          burst: false,
+        }),
+        ownerKind: "unknown",
+        teamOwned: false,
+      },
+    });
+
+    const sandboxRow = await screen.findByTestId("host-identity-name-row");
+    const sandboxLine = sandboxRow.parentElement;
+    if (sandboxLine === null) throw new Error("the name row sits in no line");
+    expect(
+      within(sandboxLine).queryByRole("button", { name: "Activate" }),
+    ).toBeNull();
+    await openHostOverviewMenu();
+    const sandboxMenu = screen.getByRole("menu");
+    expect(within(sandboxMenu).getByTestId("host-make-active")).not.toBeNull();
   });
 });
 

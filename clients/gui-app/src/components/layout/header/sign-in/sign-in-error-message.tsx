@@ -7,7 +7,9 @@ import {
   AUTH_ERROR_SIGNED_OUT_EVERYWHERE,
   AUTH_ERROR_SIGN_IN_FAILED,
   AUTH_ERROR_STORE_UNAVAILABLE,
+  AUTH_ERROR_DISK_FULL,
 } from "@/lib/auth/auth-service";
+import { DISK_FULL_SIGN_IN_MESSAGE } from "@traycer-clients/shared/auth/sign-in-storage";
 import { cn } from "@/lib/utils";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -50,7 +52,10 @@ export function SignInErrorMessage(props: {
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-x-1 text-destructive",
+        "flex flex-wrap items-center gap-x-1",
+        props.lastError === AUTH_ERROR_DISK_FULL
+          ? "text-warning-foreground"
+          : "text-destructive",
         props.isHero ? "text-ui-sm leading-6" : "text-ui-xs",
       )}
       data-testid="signin-error"
@@ -79,6 +84,7 @@ export function SignInErrorMessage(props: {
 }
 
 function messageForError(error: string): string {
+  if (error === AUTH_ERROR_DISK_FULL) return DISK_FULL_SIGN_IN_MESSAGE;
   if (error === AUTH_ERROR_LAUNCH_FAILED) {
     return "Could not start sign-in. Please try again.";
   }

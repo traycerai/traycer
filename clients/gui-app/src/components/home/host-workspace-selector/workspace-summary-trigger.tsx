@@ -109,7 +109,7 @@ export function WorkspaceSummaryTrigger(
             <span
               className="size-1.5 shrink-0 rounded-full bg-foreground"
               data-testid="workspace-summary-draft"
-              aria-label="Uncommitted workspace draft"
+              aria-label="Uncommitted folder draft"
             />
           ) : null}
         </>
@@ -143,7 +143,7 @@ export function WorkspaceSummaryTrigger(
             }
             content={<WorkspaceFolderHoverList items={items} />}
             appearance="preview"
-            semantics={{ role: "dialog", label: "Workspace folders" }}
+            semantics={{ role: "dialog", label: "Folders" }}
             side="bottom"
             sideOffset={4}
             align="start"

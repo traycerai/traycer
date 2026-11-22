@@ -246,21 +246,24 @@ export function AgentStopList(props: {
   const { openTile } = useEpicTileNavigation();
   const openAgent = useCallback(
     (agent: AgentRow, event: MouseEvent<HTMLButtonElement>) => {
-      openTile({
-        node: {
-          id: agent.id,
-          instanceId: uuidv4(),
-          type: nodeKindForSurface(agent.surface),
-          name: agent.title,
-          hostId: agent.hostId,
+      openTile(
+        {
+          node: {
+            id: agent.id,
+            instanceId: uuidv4(),
+            type: nodeKindForSurface(agent.surface),
+            name: agent.title,
+            hostId: agent.hostId,
+          },
+          target: { tabId: props.viewTabId },
+          gesture: "explicit",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
         },
-        target: { tabId: props.viewTabId },
-        gesture: "explicit",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+        "user",
+      );
     },
     [props.viewTabId, openTile],
   );

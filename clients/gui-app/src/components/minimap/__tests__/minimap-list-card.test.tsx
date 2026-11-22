@@ -182,4 +182,44 @@ describe("MinimapListCard", () => {
       restore();
     }
   });
+
+  it("keeps the list position while navigation changes the current row", () => {
+    const { restore, scrollIntoView } = installOpeningZoomGeometry();
+    try {
+      const items = Array.from({ length: ITEM_COUNT }, (_unused, index) => ({
+        key: `item-${String(index)}`,
+        label: `Item ${String(index)}`,
+        level: 1 as const,
+      }));
+      const props = {
+        cursorIndex: 0,
+        items,
+        onCursorIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        side: "right" as const,
+        title: "Turns",
+      };
+      const { rerender } = render(
+        <MinimapListCard {...props} currentIndex={0} />,
+      );
+      const list = minimapListFor(
+        screen.getByRole("button", { name: "Item 0" }),
+      );
+      if (list === null) throw new Error("missing minimap list scroller");
+      list.scrollTop = 80;
+      scrollIntoView.mockClear();
+
+      rerender(<MinimapListCard {...props} currentIndex={CURRENT_INDEX} />);
+
+      expect(list.scrollTop).toBe(80);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      expect(
+        screen
+          .getByRole("button", { name: `Item ${String(CURRENT_INDEX)}` })
+          .getAttribute("aria-current"),
+      ).toBe("location");
+    } finally {
+      restore();
+    }
+  });
 });

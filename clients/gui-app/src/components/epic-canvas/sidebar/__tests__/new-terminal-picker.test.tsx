@@ -385,6 +385,12 @@ describe("<NewTerminalPicker />", () => {
     openPicker();
 
     expect(screen.getByTestId("new-terminal-picker-popover")).toBeDefined();
+    expect(screen.getByText("Open a terminal")).toBeDefined();
+    expect(
+      screen.getByText(
+        "The terminal lives on the machine you pick, for its lifetime.",
+      ),
+    ).toBeDefined();
     expect(
       screen.getByTestId("host-workspace-selector-host-section"),
     ).toBeDefined();
@@ -392,9 +398,9 @@ describe("<NewTerminalPicker />", () => {
     // list - its rows are one click away, not asserted here.
     const hostTrigger = screen.getByTestId("settings-host-switcher");
     expect(hostTrigger.getAttribute("aria-label")).toBe("Host: MacBook");
-    const workspacesHeader = screen.getByText("Workspaces");
+    const workspacesHeader = screen.getByText("Folders");
     const search = screen.getByRole("combobox");
-    expect(screen.getAllByText("Workspaces")).toHaveLength(1);
+    expect(screen.getAllByText("Folders")).toHaveLength(1);
     expect(
       workspacesHeader.compareDocumentPosition(search) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -762,7 +768,7 @@ describe("<NewTerminalPicker />", () => {
 
     expect(
       screen.getByText(
-        "No directories available. Open a workspace in the epic first.",
+        "No folders available. Add a folder to this task first.",
       ),
     ).toBeDefined();
     expect(
@@ -885,7 +891,7 @@ describe("<NewTerminalPicker />", () => {
     };
     const tabId = openPicker();
 
-    expect(screen.getByText("Failed to load workspaces.")).toBeDefined();
+    expect(screen.getByText("Failed to load folders.")).toBeDefined();
 
     const tiles = tabTiles(tabId);
     expect(tiles.filter((tile) => tile.type === "terminal")).toHaveLength(0);

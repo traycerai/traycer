@@ -7,7 +7,7 @@
  * Real hook over two hosts' mock messengers sharing one query client.
  */
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -23,15 +23,33 @@ import {
   MockHostMessenger,
   type MockHandlerMap,
 } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { FloorEnforcingMessenger } from "@/hooks/config/__tests__/floor-enforcing-messenger";
-import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import {
+  useBotCallSendMutation,
+  useBotConversationSendMutation,
+} from "@/hooks/bots/use-bot-mutations";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { hostQueryKeys } from "@/lib/query-keys";
+
+// The app's binding, which a call's send resolves its named host through.
+const binding = vi.hoisted(
+  (): {
+    current: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
+  } => ({ current: null }),
+);
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostBinding: () => binding.current,
+}));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: HostRequester<HostRpcRegistry> | null) => {
@@ -61,6 +79,8 @@ const SEND: BotConversationSendRequest = {
   answer: null,
 };
 
+const REPLY: BotConversationSendRequest = { ...SEND, replyTo: "message-1" };
+
 function hostOver(
   entry: HostDirectoryEntry,
   queryClient: QueryClient,
@@ -87,11 +107,12 @@ function hostOver(
 /** A send through host B with `bot.thread.list` cached under both hosts. */
 function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
   readonly send: () => Promise<void>;
+  readonly sendRequest: (request: BotConversationSendRequest) => Promise<void>;
   readonly isStale: (hostId: string, method: string) => boolean;
 } {
   const queryClient = new QueryClient();
   const sendingHost = hostOver(mockRemoteHostEntry, queryClient, handlers);
-  const params = { botId: BOT_ID };
+  const params = botThreadListParams(BOT_ID);
   for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
     queryClient.setQueryData(
       hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
@@ -99,7 +120,7 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
         "bot.thread.list",
         params,
       ),
-      { threads: [] },
+      { threads: [], nextCursor: null, total: 0 },
     );
   }
   queryClient.setQueryData(
@@ -128,12 +149,16 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
     () => useBotConversationSendMutation(sendingHost),
     { wrapper },
   );
+  const sendRequest = async (
+    request: BotConversationSendRequest,
+  ): Promise<void> => {
+    await act(async () => {
+      await result.current.mutateAsync(request).catch(() => undefined);
+    });
+  };
   return {
-    send: async () => {
-      await act(async () => {
-        await result.current.mutateAsync(SEND).catch(() => undefined);
-      });
-    },
+    send: () => sendRequest(SEND),
+    sendRequest,
     isStale: (hostId, method) =>
       queryClient
         .getQueryCache()
@@ -201,6 +226,161 @@ describe("useBotConversationSendMutation", () => {
     await mounted.send();
 
     expect(mounted.isStale(SENDING_HOST_ID, "bot.thread.list")).toBe(false);
+  });
+
+  it("makes the thread list stale on the host the send went through, and on no other host, when the bot's host does not take replies", async () => {
+    const mounted = mountSend({
+      "bot.conversation.send": () => {
+        throw new HostRpcError({
+          code: "E_BOT_REPLIES_UNSUPPORTED",
+          message: "The bot's host does not take replies",
+          requestId: "request-refused",
+          method: "bot.conversation.send",
+          fatalDetails: null,
+        });
+      },
+    });
+
+    await mounted.sendRequest(REPLY);
+
+    expect(mounted.isStale(SENDING_HOST_ID, "bot.thread.list")).toBe(true);
+    expect(mounted.isStale(OTHER_HOST_ID, "bot.thread.list")).toBe(false);
+  });
+});
+
+const CALL: BotConversationSendRequest = {
+  ...SEND,
+  spoken: true,
+  origin: "call",
+};
+
+/** The call-send hook over two hosts of one spine, signed in as `user-alice`. */
+function mountCallSend(): {
+  readonly send: (
+    hostId: string,
+    account: string | null,
+    text: string,
+  ) => Promise<void>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly isStale: (hostId: string) => boolean;
+} {
+  const queryClient = new QueryClient();
+  let seq = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `call-${String(++seq)}`,
+    handlers: {
+      "bot.conversation.send": () => ({
+        messageId: "message-1",
+        requestId: "request-1",
+        delivery: "written",
+        threadId: "thread-1",
+      }),
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      [mockRemoteHostEntry, mockLocalHostEntry].find(
+        (entry) => entry.hostId === hostId,
+      ) ?? null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      identity: {
+        userId: "user-alice",
+        username: "alice",
+        providerHandle: null,
+      },
+      bearerToken: "tok-1",
+    }),
+  );
+  binding.current = { hostClient: spine };
+  for (const hostId of [SENDING_HOST_ID, OTHER_HOST_ID]) {
+    queryClient.setQueryData(
+      hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+        hostId,
+        "bot.thread.list",
+        botThreadListParams(BOT_ID),
+      ),
+      { threads: [], nextCursor: null, total: 0 },
+    );
+  }
+  const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  const { result } = renderHook(() => useBotCallSendMutation(), { wrapper });
+  return {
+    send: async (hostId, account, text) => {
+      await act(async () => {
+        await result.current.mutateAsync({
+          hostId,
+          account,
+          // These cases hold a send to its account and host; none names a
+          // call's sign-in session.
+          authority: null,
+          request: { ...CALL, text },
+        });
+      });
+    },
+    messenger,
+    isStale: (hostId) =>
+      queryClient
+        .getQueryCache()
+        .findAll({
+          queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
+        })
+        .some((query) => query.state.isInvalidated),
+  };
+}
+
+describe("useBotCallSendMutation", () => {
+  afterEach(() => {
+    binding.current = null;
+  });
+
+  it("sends each of a call's words to the host named with it, and makes only that host's thread list stale", async () => {
+    const mounted = mountCallSend();
+
+    await mounted.send(
+      SENDING_HOST_ID,
+      "user-alice",
+      "First call's last words",
+    );
+    expect(mounted.isStale(SENDING_HOST_ID)).toBe(true);
+    expect(mounted.isStale(OTHER_HOST_ID)).toBe(false);
+
+    await mounted.send(OTHER_HOST_ID, "user-alice", "Second call's words");
+
+    expect(
+      mounted.messenger.calls.map((sent) => [
+        sent.authority.endpoint.hostId,
+        sent.params,
+      ]),
+    ).toEqual([
+      [SENDING_HOST_ID, { ...CALL, text: "First call's last words" }],
+      [OTHER_HOST_ID, { ...CALL, text: "Second call's words" }],
+    ]);
+    expect(mounted.isStale(OTHER_HOST_ID)).toBe(true);
+  });
+
+  it("refuses, before it reaches the host, a send whose call is another account's or no account's", async () => {
+    const mounted = mountCallSend();
+
+    await expect(
+      mounted.send(SENDING_HOST_ID, "user-bob", "Bob's words"),
+    ).rejects.toThrow("The call's account is no longer signed in.");
+    await expect(
+      mounted.send(SENDING_HOST_ID, null, "Nobody's words"),
+    ).rejects.toThrow("The call's account is no longer signed in.");
+
+    expect(mounted.messenger.calls).toEqual([]);
+    expect(mounted.isStale(SENDING_HOST_ID)).toBe(false);
   });
 });
 
@@ -356,6 +536,119 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
     expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
       method: "bot.conversation.send",
       version: { major: 1, minor: 2 },
+    });
+  });
+
+  const V13: SchemaVersion = { major: 1, minor: 3 };
+  const CALL_OPENING: BotConversationSendRequest = {
+    ...SEND,
+    spoken: true,
+    origin: "call",
+  };
+  const CALL_IN_THREAD: BotConversationSendRequest = {
+    ...SEND,
+    threadId: "thread-1",
+    spoken: true,
+  };
+
+  it.each([
+    ["a call's opening words", CALL_OPENING],
+    ["words spoken into a thread", CALL_IN_THREAD],
+  ])(
+    "refuses %s on a host that negotiated 1.2 before they leave, so they are never taken as a typed post",
+    async (_name, variables) => {
+      const f = floorFixture(V12);
+
+      const failure = await act(() => f.send(variables));
+
+      expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+      expect(f.handled).toEqual([]);
+      expect(f.messenger.dispatched).toEqual([]);
+      expect(f.messenger.calls).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["a call's opening words", CALL_OPENING],
+    ["words spoken into a thread", CALL_IN_THREAD],
+  ])(
+    "sends %s, floor attached, to a host that negotiated 1.3",
+    async (_name, variables) => {
+      const f = floorFixture(V13);
+
+      const failure = await act(() => f.send(variables));
+
+      expect(failure).toBeNull();
+      expect(f.handled).toEqual([variables]);
+      expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+        method: "bot.conversation.send",
+        version: { major: 1, minor: 3 },
+      });
+    },
+  );
+
+  const V14: SchemaVersion = { major: 1, minor: 4 };
+  const V15: SchemaVersion = { major: 1, minor: 5 };
+  const ANSWER_SET: BotConversationSendRequest = {
+    ...SEND,
+    text: "Now",
+    answer: null,
+    answers: {
+      questionMessageId: "bot-question:req-q",
+      entries: [
+        { questionIndex: 0, skipped: false, selected: ["Now"], text: null },
+        { questionIndex: 1, skipped: true, selected: [], text: null },
+      ],
+    },
+  };
+
+  it("refuses a card's answers sent together on a host that negotiated 1.4 before they leave, so they are never taken as a plain post", async () => {
+    const f = floorFixture(V14);
+
+    const failure = await act(() => f.send(ANSWER_SET));
+
+    expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(f.handled).toEqual([]);
+    expect(f.messenger.dispatched).toEqual([]);
+    expect(f.messenger.calls).toEqual([]);
+  });
+
+  it("sends a card's answers sent together, floor attached, to a host that negotiated 1.5", async () => {
+    const f = floorFixture(V15);
+
+    const failure = await act(() => f.send(ANSWER_SET));
+
+    expect(failure).toBeNull();
+    expect(f.handled).toEqual([ANSWER_SET]);
+    expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "bot.conversation.send",
+      version: { major: 1, minor: 5 },
+    });
+  });
+
+  const V16: SchemaVersion = { major: 1, minor: 6 };
+
+  it("refuses a reply on a host that negotiated 1.5 before it leaves, so it is never taken as a plain post", async () => {
+    const f = floorFixture(V15);
+
+    const failure = await act(() => f.send(REPLY));
+
+    expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(f.handled).toEqual([]);
+    expect(f.messenger.dispatched).toEqual([]);
+    expect(f.messenger.calls).toEqual([]);
+  });
+
+  it("sends a reply, floor attached, to a host that negotiated 1.6", async () => {
+    const f = floorFixture(V16);
+
+    const failure = await act(() => f.send(REPLY));
+
+    expect(failure).toBeNull();
+    expect(f.handled).toEqual([REPLY]);
+    expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "bot.conversation.send",
+      version: { major: 1, minor: 6 },
     });
   });
 

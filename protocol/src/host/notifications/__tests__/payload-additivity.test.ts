@@ -27,10 +27,12 @@ import {
   hostNotificationEnvironmentMoveStalledPayloadSchema,
   hostNotificationEnvironmentApplyFailedPayloadSchema,
   hostNotificationTeamRoleChangedPayloadSchema,
+  hostNotificationReadonlyAccessRetiredPayloadSchema,
   hostNotificationTeamHostReturnedPayloadSchema,
   hostNotificationSecretRemovedPayloadSchema,
   hostNotificationSandboxNoticePayloadSchema,
   hostNotificationHooksRemovedPayloadSchema,
+  hostNotificationFeedbackDraftPayloadSchema,
   hostNotificationTeamPolicyAuthorityExpiredPayloadSchema,
   hostNotificationTeamPolicyUnappliedPayloadSchema,
   hostNotificationWorkspaceOperationFailedPayloadSchema,
@@ -80,10 +82,12 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
   environment_move_stalled: hostNotificationEnvironmentMoveStalledPayloadSchema,
   environment_apply_failed: hostNotificationEnvironmentApplyFailedPayloadSchema,
   team_role_changed: hostNotificationTeamRoleChangedPayloadSchema,
+  readonly_access_retired: hostNotificationReadonlyAccessRetiredPayloadSchema,
   team_host_returned: hostNotificationTeamHostReturnedPayloadSchema,
   secret_removed: hostNotificationSecretRemovedPayloadSchema,
   sandbox_notice: hostNotificationSandboxNoticePayloadSchema,
   notification_hooks_removed: hostNotificationHooksRemovedPayloadSchema,
+  feedback_draft: hostNotificationFeedbackDraftPayloadSchema,
 };
 
 const KINDS = [
@@ -112,17 +116,25 @@ const KINDS = [
   "environment_move_stalled",
   "environment_apply_failed",
   "team_role_changed",
+  "readonly_access_retired",
   "team_host_returned",
   "secret_removed",
   "sandbox_notice",
   "notification_hooks_removed",
+  "feedback_draft",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 
 describe("host notification payload additivity", () => {
   it("baselines every payload kind (a new kind must add its fingerprint to the baseline)", () => {
-    const unionKinds = hostNotificationKnownPayloadSchema.options
-      .map((option) => option.shape.kind.value)
-      .sort();
+    const unionKinds = [
+      ...new Set(
+        hostNotificationKnownPayloadSchema.options.flatMap((option) =>
+          option instanceof z.ZodObject
+            ? [option.shape.kind.value]
+            : option.options.map((scoped) => scoped.shape.kind.value),
+        ),
+      ),
+    ].sort();
     expect([...KINDS].sort()).toEqual(unionKinds);
     expect(Object.keys(PAYLOAD_FINGERPRINT_BASELINE).sort()).toEqual(
       unionKinds,

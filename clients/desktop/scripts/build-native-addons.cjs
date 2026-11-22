@@ -24,6 +24,19 @@ function main() {
     return;
   }
   const nodeGypEntry = require.resolve("node-gyp/bin/node-gyp.js");
+  // node-gyp downloads this Node's headers from nodejs.org unless it is told
+  // where they are, and that download is the build's only network step. A Node
+  // install that ships its headers is used as is; one without them keeps the
+  // download.
+  const nodePrefix = path.resolve(
+    path.dirname(fs.realpathSync(process.execPath)),
+    "..",
+  );
+  const headerArgs = fs.existsSync(
+    path.join(nodePrefix, "include", "node", "node.h"),
+  )
+    ? [`--nodedir=${nodePrefix}`]
+    : [];
   // `rebuild` wipes the addon's build/ each time, so per-arch slices are
   // parked outside it until lipo has both.
   const sliceDir = fs.mkdtempSync(path.join(os.tmpdir(), "traycer-native-"));
@@ -31,7 +44,14 @@ function main() {
   for (const arch of ["arm64", "x64"]) {
     execFileSync(
       process.execPath,
-      [nodeGypEntry, "rebuild", "--directory", addonDir, `--arch=${arch}`],
+      [
+        nodeGypEntry,
+        "rebuild",
+        "--directory",
+        addonDir,
+        `--arch=${arch}`,
+        ...headerArgs,
+      ],
       { cwd: desktopRoot, stdio: "inherit" },
     );
     const built = path.join(addonDir, "build", "Release", `${addonName}.node`);

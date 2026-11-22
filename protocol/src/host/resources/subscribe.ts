@@ -651,6 +651,55 @@ export const resourcesSubscribeV15 = defineStreamRpcContract({
   clientFrameSchema: resourcesSubscribeClientFrameSchemaV15,
 });
 
+/**
+ * `@1.6` carries the host's logical processor count so clients can display a
+ * share of the machine. `cpuPercent` keeps its per-core meaning and may exceed
+ * 100. Earlier negotiated minors have no count; their app schemas stay frozen
+ * and strip it when decoding a newer frame.
+ */
+export const appResourceSnapshotSchemaV16 = lazySchema(() =>
+  z.object({
+    ...appResourceSnapshotSchemaV15.shape,
+    hostCpuCount: z.number().int().positive(),
+  }),
+);
+export type AppResourceSnapshotWireV16 = z.infer<
+  typeof appResourceSnapshotSchemaV16
+>;
+
+const resourcesProjectionFieldsV16 = {
+  ...resourcesProjectionFieldsV15,
+  app: lazySchema(() => appResourceSnapshotSchemaV16.nullable()),
+} as const;
+
+export const resourcesSubscribeServerFrameSchemaV16 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...resourcesProjectionFieldsV16,
+    }),
+    z.object({
+      kind: z.literal("update"),
+      ...resourcesProjectionFieldsV16,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type ResourcesSubscribeServerFrameV16 = z.infer<
+  typeof resourcesSubscribeServerFrameSchemaV16
+>;
+
+export const resourcesSubscribeV16 = defineStreamRpcContract({
+  method: "resources.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
+  serverFrameSchema: resourcesSubscribeServerFrameSchemaV16,
+  clientFrameSchema: resourcesSubscribeClientFrameSchemaV15,
+});
+
 // ── `resources.kill@1.0` — unary ────────────────────────────────────────────
 // Terminates the entire process subtree beneath each requested pid (graceful
 // SIGTERM, then SIGKILL escalation for survivors). Brand-new method, NOT on the

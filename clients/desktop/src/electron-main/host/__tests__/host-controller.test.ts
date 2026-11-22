@@ -3403,11 +3403,12 @@ describe("yank/apply ordering", () => {
   });
 
   it("leaves an unpinned legacy stage alone while following, without attempting a purge", async () => {
-    // A legacy (fingerprint-less) stage plus a line with nothing to replace it:
-    // the repair must not run `--automatic` (that would stage another line's
-    // build), and the reconcile must stop there rather than fall into the purge
-    // branch - which needs a fingerprint this stage has never had, and would
-    // warn about "registry invalidation" that did not happen, on every pass.
+    // A legacy (fingerprint-less) stage with nothing a follower may take: no
+    // newer stable on any line, and only another line's RC. The repair must not
+    // run `--automatic` (that would stage whatever `latest` names), and the
+    // reconcile must stop there rather than fall into the purge branch - which
+    // needs a fingerprint this stage has never had, and would warn about
+    // "registry invalidation" that did not happen, on every pass.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -3425,7 +3426,7 @@ describe("yank/apply ordering", () => {
       }),
     );
     vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("2.1.0", ["2.0.0-rc.1", "2.1.0"]),
+      availableSnapshotFixture("1.9.0", ["1.9.0", "2.0.0-rc.1", "2.1.0-rc.1"]),
     );
     const cliCommands: string[] = [];
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
@@ -3448,10 +3449,10 @@ describe("yank/apply ordering", () => {
     expect((await controller.getStatus()).updateReady).toBe(false);
   });
 
-  it("still repairs an unpinned legacy stage from its own line when one exists", async () => {
+  it("still repairs an unpinned legacy stage when a newer stable exists", async () => {
     // The control: the same legacy state, but the line has published its
-    // stable. The repair runs, pinned to that exact version rather than to
-    // `--automatic`.
+    // stable while `latest` still lags. The repair runs, pinned to that exact
+    // version rather than to `--automatic`.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -8213,15 +8214,12 @@ describe("HostControllerStatus.lastEnsureFailure", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Windows bundled-host `--from` fallback (a fixup): on Windows the per-user
-// slot CLI is a COPY outside the app bundle (symlinks need elevated
-// privilege there), so the CLI's own sibling-archive resolution can't see
-// the bundled host archive and would fall back to the registry - which
-// publishes no win32 asset for dogfood/unsigned builds. `convergeReadyCliOwned`
-// must pass `--from <archive>` explicitly when running on win32 with a
-// bundled archive present beside the CLI binary.
+// Windows bundled-host `--bundled`: the per-user slot CLI is a copy outside
+// the app bundle, so the CLI's sibling-archive resolution cannot see the
+// archive. `convergeReadyCliOwned` passes `--bundled <archive>` when one is
+// beside the bundled CLI. `--from` would record the install as unsigned.
 // ---------------------------------------------------------------------------
-describe("Windows bundled-host --from fallback", () => {
+describe("Windows bundled-host --bundled", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
     process,
     "platform",
@@ -8248,7 +8246,7 @@ describe("Windows bundled-host --from fallback", () => {
     Object.defineProperty(process, "arch", { configurable: true, value });
   }
 
-  it("passes --from the bundled host archive on win32 when it exists beside the CLI binary", async () => {
+  it("passes --bundled the host archive on win32 when it exists beside the CLI binary", async () => {
     setPlatform("win32");
     setArch("x64");
     const cliDir = join(workHome, "cli");
@@ -8274,16 +8272,98 @@ describe("Windows bundled-host --from fallback", () => {
       "keep-installed",
     );
 
-    // A background converge is liveness-only (the mid-session revert guard),
-    // so `--keep-installed` accompanies `--from` here - the archive is only
-    // the first-install source, never a reason to move a viable install.
+    // A background converge is liveness-only, so `--keep-installed`
+    // accompanies `--bundled`. The archive is only the first-install source.
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
         args: [
           "host",
           "ensure",
           "--keep-installed",
-          "--from",
+          "--bundled",
+          archive,
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      }),
+    );
+  });
+
+  it("passes --bundled the zip when that is the only archive beside the CLI", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    const cliDir = join(workHome, "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const bundledCli = join(cliDir, "traycer.exe");
+    writeFileSync(bundledCli, "");
+    const archive = join(cliDir, "host-runtime-win32-x64.zip");
+    writeFileSync(archive, "");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "host",
+          "ensure",
+          "--keep-installed",
+          "--bundled",
+          archive,
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      }),
+    );
+  });
+
+  it("prefers the tar.gz archive over a zip beside the same CLI", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    const cliDir = join(workHome, "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const bundledCli = join(cliDir, "traycer.exe");
+    writeFileSync(bundledCli, "");
+    const archive = join(cliDir, "host-runtime-win32-x64.tar.gz");
+    writeFileSync(archive, "");
+    writeFileSync(join(cliDir, "host-runtime-win32-x64.zip"), "");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "host",
+          "ensure",
+          "--keep-installed",
+          "--bundled",
           archive,
           "--lifecycle-origin",
           "desktop",
@@ -8324,7 +8404,7 @@ describe("Windows bundled-host --from fallback", () => {
           "host",
           "ensure",
           "--keep-installed",
-          "--from",
+          "--bundled",
           archive,
           "--lifecycle-origin",
           "desktop",
@@ -8333,7 +8413,7 @@ describe("Windows bundled-host --from fallback", () => {
     );
   });
 
-  it("omits --from on win32 when no bundled archive is present (dev/CLI-only install)", async () => {
+  it("omits --bundled on win32 when no bundled archive is present (dev/CLI-only install)", async () => {
     setPlatform("win32");
     setArch("x64");
     vi.mocked(resolveBundledCliPath).mockResolvedValue(null);
@@ -8365,7 +8445,7 @@ describe("Windows bundled-host --from fallback", () => {
       }),
     );
   });
-  it("omits --from on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
+  it("omits --bundled on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
     setPlatform("darwin");
     const cliDir = join(workHome, "cli");
     mkdirSync(cliDir, { recursive: true });
@@ -15193,5 +15273,186 @@ describe("host start over a terminal-started host", () => {
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
     expect((await controller.getStatus()).mutation).toBeNull();
+  });
+});
+
+describe("manual Update now selects the carried archive", () => {
+  function writeCarriedDescriptor(version: string): void {
+    const cliDir = join(workHome, "bundled-cli");
+    mkdirSync(cliDir, { recursive: true });
+    const cliPath = join(cliDir, "traycer");
+    writeFileSync(cliPath, "");
+    const arch =
+      process.platform === "win32" && process.arch === "arm64"
+        ? "x64"
+        : process.arch;
+    writeFileSync(
+      join(cliDir, `host-runtime-${process.platform}-${arch}.descriptor.json`),
+      JSON.stringify({ version }),
+    );
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(cliPath);
+  }
+
+  function ready(version: string) {
+    return {
+      ready: true as const,
+      version,
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready" as const,
+    };
+  }
+
+  function streamed() {
+    return vi.mocked(streamBundledTraycerCliJson).mock.calls;
+  }
+
+  function commands(name: "ensure" | "apply" | "download") {
+    return streamed().filter(
+      (call) => call[0].args[0] === "host" && call[0].args[1] === name,
+    );
+  }
+
+  function assertNoHostDial(): void {
+    for (const call of streamed()) {
+      expect(call[0].args.join(" ")).not.toMatch(/wss?:\/\//);
+      expect(call[0].env).toBeNull();
+    }
+    for (const call of vi.mocked(runBundledTraycerCliJson).mock.calls) {
+      expect(call[0].join(" ")).not.toMatch(/wss?:\/\//);
+    }
+  }
+
+  const ENSURE_1_6 = {
+    installed: true,
+    running: true,
+    version: "1.6.0",
+    runtimeVersion: "1.6.0",
+    action: "installed" as const,
+  };
+
+  it("installs the carried 1.6.0 while the registry latest is still 1.5.4, and launch does not", async () => {
+    writeInstallRecord("production", {
+      version: "1.5.4",
+      runtimeVersion: "1.5.4",
+    });
+    writeCarriedDescriptor("1.6.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.5.4", ["1.5.4"]),
+    );
+    vi.mocked(waitForHostReady).mockResolvedValue(ready("1.6.0"));
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args[1] === "download") return { data: {} };
+      if (opts.args[1] === "ensure") return { data: ENSURE_1_6 };
+      throw new Error(`unexpected CLI stream: ${opts.args.join(" ")}`);
+    });
+
+    const outcome = await newController("production").applyStaged(
+      "manual",
+      false,
+    );
+
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: {
+        applied: true,
+        appliedVersion: "1.6.0",
+        runningActivated: true,
+      },
+    });
+    expect(commands("ensure")).toHaveLength(1);
+    expect(commands("ensure")[0]?.[0].args).toEqual([
+      "host",
+      "ensure",
+      "--lifecycle-origin",
+      "desktop",
+    ]);
+    expect(commands("apply")).toHaveLength(0);
+    assertNoHostDial();
+
+    vi.mocked(streamBundledTraycerCliJson).mockClear();
+    vi.mocked(runBundledTraycerCliJson).mockClear();
+    writePidMetadata("production", { version: "1.5.4", pid: process.pid });
+    const launch = await newController("production").applyStaged(
+      "launch",
+      false,
+    );
+
+    expect(launch).toEqual({
+      kind: "ok",
+      value: {
+        appliedVersion: "1.5.4",
+        runningActivated: true,
+        applied: false,
+      },
+    });
+    expect(commands("ensure")).toHaveLength(0);
+    expect(commands("apply")).toHaveLength(0);
+    assertNoHostDial();
+  });
+
+  it("installs the carried archive when an older stage exists, and launch still applies with --respect-hold", async () => {
+    writeInstallRecord("production", {
+      version: "1.5.4",
+      runtimeVersion: "1.5.4",
+    });
+    writeStagedRecord("production", "1.5.4", "1.5.4");
+    writeCarriedDescriptor("1.6.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.5.4", ["1.5.4"]),
+    );
+    vi.mocked(waitForHostReady).mockResolvedValue(ready("1.6.0"));
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args[1] === "download") return { data: {} };
+      if (opts.args[1] === "ensure") return { data: ENSURE_1_6 };
+      throw new Error(`unexpected CLI stream: ${opts.args.join(" ")}`);
+    });
+
+    const outcome = await newController("production").applyStaged(
+      "manual",
+      false,
+    );
+
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: {
+        applied: true,
+        appliedVersion: "1.6.0",
+        runningActivated: true,
+      },
+    });
+    expect(commands("ensure")).toHaveLength(1);
+    expect(commands("ensure")[0]?.[0].args).not.toContain("--keep-installed");
+    expect(commands("ensure")[0]?.[0].args).not.toContain("--respect-hold");
+    expect(commands("ensure")[0]?.[0].args).toContain("--lifecycle-origin");
+    expect(commands("apply")).toHaveLength(0);
+    assertNoHostDial();
+
+    vi.mocked(streamBundledTraycerCliJson).mockClear();
+    vi.mocked(waitForHostReady).mockResolvedValue(ready("1.5.4"));
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args[1] === "download") return { data: {} };
+      if (opts.args[1] === "apply") {
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.5.4", runtimeVersion: "1.5.4" },
+            runningActivated: true,
+            installGeneration: null,
+          },
+        };
+      }
+      throw new Error(`unexpected CLI stream: ${opts.args.join(" ")}`);
+    });
+    const launch = await newController("production").applyStaged(
+      "launch",
+      false,
+    );
+
+    expect(launch.kind).toBe("ok");
+    expect(commands("ensure")).toHaveLength(0);
+    expect(commands("apply")).toHaveLength(1);
+    expect(commands("apply")[0]?.[0].args).toContain("--respect-hold");
+    assertNoHostDial();
   });
 });

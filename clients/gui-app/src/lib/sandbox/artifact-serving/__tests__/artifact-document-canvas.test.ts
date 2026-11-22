@@ -1,6 +1,7 @@
 import { JSDOM, VirtualConsole, type DOMWindow } from "jsdom";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseCanvasBox, parseCanvasElement } from "../../canvas-bridge";
+import { buildHtmlSelectionPrelude } from "../../canvas-bootstrap";
 import type { SandboxTheme } from "../../theme-map";
 import {
   buildArtifactDocument,
@@ -167,6 +168,30 @@ describe("an ordinary document is untouched by the canvas option", () => {
     const html = "<p   class=x >spaced</p>";
     const composed = buildArtifactDocument(html, optionsFor(false));
     expect(composed.endsWith(`</script>${html}`)).toBe(true);
+  });
+});
+
+describe("a commentable html page", () => {
+  const html =
+    "<main><p id='deep'>Deep</p><a href='other.html'>away</a></main>";
+
+  it("is the plain page plus position stamps and the selection script, with the plain bootstrap", () => {
+    const plain = buildArtifactDocument(html, optionsFor(false));
+    const page = buildArtifactDocument(html, {
+      ...optionsFor(true),
+      canvasLinks: "native",
+    });
+    const selection = buildHtmlSelectionPrelude(NONCE);
+
+    // A board would swap the viewer prelude for the canvas channel and set
+    // the bootstrap's canvas flag. A commentable page adds to the plain one.
+    expect(page).not.toBe(plain);
+    expect(page).toContain(selection);
+    // The zoom script's touch listeners must come first; see documentParts.
+    expect(page.indexOf(buildHtmlViewerPrelude())).toBeLessThan(
+      page.indexOf(selection),
+    );
+    expect(page.replace(STAMP_PATTERN, "").replace(selection, "")).toBe(plain);
   });
 });
 
@@ -573,6 +598,34 @@ describe("the canvas bootstrap in a running page", () => {
 
     page.deliver(request(9, "set-mode", { mode: "edit" }));
     click();
+    expect(clicks).toBe(1);
+  });
+
+  it("blocks a board control inside the html scrollbar marker while editing", () => {
+    const page = runCanvasPage(
+      "<div data-traycer-html-scrollbars><button>authored control</button></div>",
+    );
+    loaded(page);
+    let clicks = 0;
+    const button = page.window.document.querySelector("button");
+    button?.addEventListener("click", () => {
+      clicks += 1;
+    });
+    const click = () =>
+      button?.dispatchEvent(
+        new page.window.MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          detail: 1,
+        }),
+      );
+
+    expect(click()).toBe(false);
+    expect(clicks).toBe(0);
+
+    page.deliver(request(10, "set-mode", { mode: "play" }));
+    expect(click()).toBe(true);
     expect(clicks).toBe(1);
   });
 

@@ -5,9 +5,17 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  registerFocusedComposerControls,
+  providerCliStateSchema,
+  type ProviderAuthStatus,
+  type ProviderCliState,
+  type ProviderId,
+  type ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  registerFocusedComposerControls as registerFocusedComposerControlsWithCatalog,
   resetFocusedComposerControlsForTests,
   type ComposerControls,
+  type FocusedComposerEntry,
 } from "@/lib/commands/composer-controls-registry";
 import {
   registerActiveModelPicker,
@@ -68,38 +76,40 @@ interface ComposerCatalogHarnessFixture {
   readonly modelsError: null;
 }
 
-const catalogMock: { harnesses: ComposerCatalogHarnessFixture[] } = vi.hoisted(
-  () => ({
-    harnesses: [
-      {
-        id: "codex",
-        label: "Codex",
-        available: true,
-        error: null,
-        models: [
-          {
-            harnessId: "codex",
-            slug: "gpt-live",
-            label: "GPT Live",
-            description: null,
-            isDefault: true,
-            contextWindow: null,
-            maxOutputTokens: null,
-            defaultReasoningEffort: "high",
-            supportedReasoningEfforts: [
-              { id: "high", label: "High", description: null },
-            ],
-            defaultServiceTier: null,
-            supportedServiceTiers: [],
-            metadata: {},
-          },
-        ],
-        modelsLoading: false,
-        modelsError: null,
-      },
-    ],
-  }),
-);
+const catalogMock: {
+  harnesses: ComposerCatalogHarnessFixture[];
+  profileCatalogs: Map<string, ComposerCatalogHarnessFixture[]>;
+} = vi.hoisted(() => ({
+  harnesses: [
+    {
+      id: "codex",
+      label: "Codex",
+      available: true,
+      error: null,
+      models: [
+        {
+          harnessId: "codex",
+          slug: "gpt-live",
+          label: "GPT Live",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: "high",
+          supportedReasoningEfforts: [
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+      modelsLoading: false,
+      modelsError: null,
+    },
+  ],
+  profileCatalogs: new Map(),
+}));
 
 /**
  * Minimal shape the mocked binding / `useGuiHarnessCatalogForClient`
@@ -114,10 +124,23 @@ const focusedComposerCatalogMock = vi.hoisted(() => ({
   defaultClient: { getActiveHostId: () => "default-host" },
   clientCalls: [] as Array<{ getActiveHostId: () => string | null } | null>,
   lineCalls: [] as Array<1 | 2 | null>,
+  modelProfileCalls: [] as Array<{
+    readonly harnessId: string;
+    readonly profileId: string | null;
+  } | null>,
 }));
 
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
   seed: null as { readonly intent: WorktreeIntent | null } | null,
+}));
+
+const providersListMock = vi.hoisted(() => ({
+  providers: [] as ProviderCliState[],
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: { providers: providersListMock.providers },
+  }),
 }));
 
 // The app-wide client the palette falls back to with no focused composer. It
@@ -154,11 +177,23 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     client: FakeCatalogHostClient | null,
     _workingDirectory: string | null,
     opencodeLine: 1 | 2 | null,
+    activity: {
+      readonly modelProfile?: {
+        readonly harnessId: string;
+        readonly profileId: string | null;
+      };
+    },
   ) => {
     focusedComposerCatalogMock.clientCalls.push(client);
     focusedComposerCatalogMock.lineCalls.push(opencodeLine);
+    const modelProfile = activity.modelProfile ?? null;
+    focusedComposerCatalogMock.modelProfileCalls.push(modelProfile);
+    const profileCatalog =
+      modelProfile?.profileId === null || modelProfile === null
+        ? catalogMock.harnesses
+        : (catalogMock.profileCatalogs.get(modelProfile.profileId) ?? []);
     return {
-      harnesses: catalogMock.harnesses,
+      harnesses: profileCatalog,
       harnessesLoading: false,
       harnessesError: null,
       modelsLoading: false,
@@ -264,6 +299,26 @@ function stubControls(overrides: Partial<ComposerControls>): ComposerControls {
   };
 }
 
+const DEFAULT_CATALOG_SELECTION: FocusedComposerEntry["catalogSelection"] = {
+  harnessId: "codex",
+  profileId: null,
+};
+
+function registerFocusedComposerControls(
+  kind: FocusedComposerKind,
+  controls: ComposerControls,
+  hostClient: HostClient<HostRpcRegistry> | null,
+  opencodeLine: 1 | 2 | null,
+): () => void {
+  return registerFocusedComposerControlsWithCatalog({
+    kind,
+    controls,
+    hostClient,
+    opencodeLine,
+    catalogSelection: DEFAULT_CATALOG_SELECTION,
+  });
+}
+
 /**
  * A real, distinct `HostClient` instance (never a cast) so identity
  * assertions on `FocusedComposerEntry.hostClient` compare the exact object a
@@ -313,11 +368,85 @@ function resetCanvasStore(): void {
   });
 }
 
+/** A Claude Code catalog row whose Terminal login reads signed out. */
+function signedOutClaude(): ComposerCatalogHarnessFixture {
+  return {
+    id: "claude",
+    label: "Claude Code",
+    available: true,
+    authStatus: "unauthenticated",
+    error: null,
+    models: [
+      {
+        harnessId: "claude",
+        slug: "opus",
+        label: "Opus",
+        description: null,
+        isDefault: true,
+        contextWindow: null,
+        maxOutputTokens: null,
+        defaultReasoningEffort: "high",
+        supportedReasoningEfforts: [
+          { id: "high", label: "High", description: null },
+        ],
+        defaultServiceTier: null,
+        supportedServiceTiers: [],
+        metadata: {},
+      },
+    ],
+    modelsLoading: false,
+    modelsError: null,
+  };
+}
+
+function profileRow(
+  profileId: string,
+  kind: "ambient" | "managed",
+  status: ProviderAuthStatus,
+): ProviderProfile {
+  return {
+    profileId,
+    enabled: true,
+    kind,
+    authType: "oauth",
+    label: profileId,
+    auth: { status, badgeText: null, label: null, detail: null },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+function providerRow(
+  providerId: ProviderId,
+  hiddenModelProviders: ReadonlyArray<string>,
+): ProviderCliState {
+  return providerCliStateSchema.parse({
+    providerId,
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    hiddenModelProviders,
+  });
+}
+
 describe("composerSource", () => {
   beforeEach(() => {
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
     focusedComposerCatalogMock.lineCalls.length = 0;
+    focusedComposerCatalogMock.modelProfileCalls.length = 0;
+    catalogMock.profileCatalogs.clear();
+    providersListMock.providers = [];
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -332,6 +461,9 @@ describe("composerSource", () => {
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
     focusedComposerCatalogMock.lineCalls.length = 0;
+    focusedComposerCatalogMock.modelProfileCalls.length = 0;
+    catalogMock.profileCatalogs.clear();
+    providersListMock.providers = [];
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -636,6 +768,110 @@ describe("composerSource", () => {
     expect(picks).toEqual([{ harnessId: "codex", modelSlug: "gpt-live" }]);
   });
 
+  it("omits models from hidden providers only in the matching harness", () => {
+    const original = catalogMock.harnesses;
+    const codex = original[0];
+    const hiddenOpenCodeModel = {
+      ...codex.models[0],
+      harnessId: "opencode",
+      slug: "hidden-provider-model",
+      label: "Hidden Provider Model",
+      metadata: { openCodeProviderId: "openrouter" },
+    };
+    const visibleOpenCodeModel = {
+      ...hiddenOpenCodeModel,
+      slug: "visible-provider-model",
+      label: "Visible Provider Model",
+      metadata: { openCodeProviderId: "anthropic" },
+    };
+    catalogMock.harnesses = [
+      codex,
+      {
+        ...codex,
+        id: "opencode",
+        label: "OpenCode",
+        models: [hiddenOpenCodeModel, visibleOpenCodeModel],
+      },
+    ];
+    providersListMock.providers = [providerRow("opencode", ["openrouter"])];
+
+    try {
+      registerFocusedComposerControls(
+        "landing",
+        stubControls({}),
+        TEST_HOST_CLIENT,
+        null,
+      );
+      const modelSubpage = captureItems(null, "landing").find(
+        (item) => item.id === "composer:switch-model",
+      )?.subpage;
+      if (modelSubpage === null || modelSubpage === undefined) {
+        throw new Error("expected a model subpage");
+      }
+      const modelIds = collectSubpageItems(modelSubpage, "landing").map(
+        (item) => item.id,
+      );
+
+      expect(modelIds).toContain(
+        "composer:model:opencode:visible-provider-model",
+      );
+      expect(modelIds).not.toContain(
+        "composer:model:opencode:hidden-provider-model",
+      );
+      expect(modelIds).toContain("composer:model:codex:gpt-live");
+    } finally {
+      catalogMock.harnesses = original;
+    }
+  });
+
+  it("lists only the focused managed profile's cached models and dispatches its row", () => {
+    const ambientCodex = catalogMock.harnesses.find(
+      (harness) => harness.id === "codex",
+    );
+    if (ambientCodex === undefined) {
+      throw new Error("expected the ambient Codex fixture");
+    }
+    const profileOnlyModel = {
+      ...ambientCodex.models[0],
+      slug: "profile-b-only",
+      label: "Profile B Only",
+    };
+    catalogMock.profileCatalogs.set("profile-b", [
+      { ...ambientCodex, models: [profileOnlyModel] },
+    ]);
+    const picks: Array<{ harnessId: string; modelSlug: string }> = [];
+    registerFocusedComposerControlsWithCatalog({
+      kind: "landing",
+      controls: stubControls({
+        selectModel: (harnessId, modelSlug) =>
+          picks.push({ harnessId, modelSlug }),
+      }),
+      hostClient: TEST_HOST_CLIENT,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: "profile-b" },
+    });
+
+    const modelSubpage = captureItems(null, "landing").find(
+      (item) => item.id === "composer:switch-model",
+    )?.subpage;
+    if (modelSubpage === null || modelSubpage === undefined) {
+      throw new Error("expected a model subpage");
+    }
+    const modelItems = collectSubpageItems(modelSubpage, "landing");
+
+    expect(focusedComposerCatalogMock.modelProfileCalls.at(-1)).toEqual({
+      harnessId: "codex",
+      profileId: "profile-b",
+    });
+    expect(modelItems.map((item) => item.id)).toEqual([
+      "composer:model:codex:profile-b-only",
+    ]);
+    void modelItems[0]?.run(ctx(null, "landing"));
+    expect(picks).toEqual([
+      { harnessId: "codex", modelSlug: "profile-b-only" },
+    ]);
+  });
+
   it("provider leaf item dispatches the memory-aware switchHarness control", () => {
     const switches: Array<string> = [];
     registerFocusedComposerControls(
@@ -724,36 +960,7 @@ describe("composerSource", () => {
 
   it("demotes a signed-out provider to the end of both subpages and badges it, but never removes it - the ambient verdict is not the send gate's verdict", () => {
     const original = catalogMock.harnesses;
-    catalogMock.harnesses = [
-      ...original,
-      {
-        id: "claude",
-        label: "Claude Code",
-        available: true,
-        authStatus: "unauthenticated",
-        error: null,
-        models: [
-          {
-            harnessId: "claude",
-            slug: "opus",
-            label: "Opus",
-            description: null,
-            isDefault: true,
-            contextWindow: null,
-            maxOutputTokens: null,
-            defaultReasoningEffort: "high",
-            supportedReasoningEfforts: [
-              { id: "high", label: "High", description: null },
-            ],
-            defaultServiceTier: null,
-            supportedServiceTiers: [],
-            metadata: {},
-          },
-        ],
-        modelsLoading: false,
-        modelsError: null,
-      },
-    ];
+    catalogMock.harnesses = [...original, signedOutClaude()];
     try {
       registerFocusedComposerControls(
         "landing",
@@ -825,6 +1032,74 @@ describe("composerSource", () => {
       catalogMock.harnesses = original;
     }
   });
+
+  it.each([
+    ["one", ["work-uuid"]],
+    ["two", ["work-uuid", "side-uuid"]],
+  ])(
+    "neither badges nor demotes a signed-out-Terminal provider with %s signed-in managed profile(s)",
+    (_count, managedIds) => {
+      const original = catalogMock.harnesses;
+      // Claude first: demotion is the only thing that could move it behind codex.
+      catalogMock.harnesses = [signedOutClaude(), ...original];
+      providersListMock.providers = [
+        {
+          ...providerRow("claude-code", []),
+          profiles: [
+            profileRow("ambient", "ambient", "unauthenticated"),
+            ...managedIds.map((id) =>
+              profileRow(id, "managed", "authenticated"),
+            ),
+          ],
+        },
+      ];
+      try {
+        registerFocusedComposerControls(
+          "landing",
+          stubControls({}),
+          TEST_HOST_CLIENT,
+          null,
+        );
+        const items = captureItems(null, "landing");
+        const providerSubpage = items.find(
+          (i) => i.id === "composer:switch-provider",
+        )?.subpage;
+        const modelSubpage = items.find(
+          (i) => i.id === "composer:switch-model",
+        )?.subpage;
+        if (providerSubpage === null || providerSubpage === undefined) {
+          throw new Error("expected a provider subpage");
+        }
+        if (modelSubpage === null || modelSubpage === undefined) {
+          throw new Error("expected a model subpage");
+        }
+
+        const providerItems = collectSubpageItems(providerSubpage, "landing");
+        expect(
+          providerItems.find((item) => item.id === "composer:provider:claude")
+            ?.statusBadge,
+        ).toBeUndefined();
+        expect(providerItems.map((item) => item.id)).toEqual([
+          "composer:provider:claude",
+          "composer:provider:codex",
+        ]);
+
+        const modelItems = collectSubpageItems(modelSubpage, "landing");
+        const claudeModels = modelItems.filter((item) =>
+          item.id.startsWith("composer:model:claude"),
+        );
+        expect(claudeModels.length).toBeGreaterThan(0);
+        expect(
+          claudeModels.every((item) => item.statusBadge === undefined),
+        ).toBe(true);
+        expect(modelItems[0]?.id.startsWith("composer:model:claude")).toBe(
+          true,
+        );
+      } finally {
+        catalogMock.harnesses = original;
+      }
+    },
+  );
 
   it("excludes a provider with available: false from both subpages regardless of authStatus", () => {
     const original = catalogMock.harnesses;

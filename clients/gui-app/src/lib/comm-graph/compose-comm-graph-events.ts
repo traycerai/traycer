@@ -24,11 +24,22 @@ export const COMM_GRAPH_COMPOSED_VIEW = defineComposedView("comm-graph", [
   },
 ]);
 
+/** What the task's environment arms have handed over so far. */
+export interface EnvironmentArmGraph {
+  readonly events: readonly HostCommunicationGraphCloudFeedEvent[];
+  /**
+   * Every arm the task reads has handed over its history up to the head the
+   * server read when it opened, or has ended. True with no arm to read.
+   */
+  readonly historySettled: boolean;
+}
+
 /**
  * The snapshot with each arm event it does not already hold, by `eventId`,
  * in the graph's own order. Only the rows move: the arm's history accounting
  * is its own, so `initialHistoryCaughtUp` and `lastArrival` stay the viewer
- * feed's.
+ * feed's. An arm that never answers must not hold the graph's own readiness;
+ * a reader that needs every source's history reads `historySettled` beside it.
  */
 export function withEnvironmentArmGraphEvents(
   snapshot: CommGraphSnapshot,

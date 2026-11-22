@@ -588,10 +588,10 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
 
     render(<ProviderPluginsTab state={projectOnly} />);
 
-    expect(screen.getByText("Select a workspace")).toBeDefined();
+    expect(screen.getByText("Select a folder")).toBeDefined();
     expect(
       screen.getByText(
-        "Choose a project workspace above to manage project-scoped plugins on this host.",
+        "Choose a project folder above to manage project-scoped plugins on this host.",
       ),
     ).toBeDefined();
     // List must not run without a root.

@@ -5,7 +5,17 @@ export interface FileTransferEntries {
   readonly fileUrlPaths: readonly string[];
 }
 
-export type FileTransferDragOverlayVariant = "images" | "paths" | "mixed";
+/**
+ * What a drop will do. `files` and `imagesAndFiles` are `paths` and `mixed`
+ * on a composer whose typed paths would name nothing where its agent reads
+ * them, so its files are attached instead.
+ */
+export type FileTransferDragOverlayVariant =
+  | "images"
+  | "paths"
+  | "mixed"
+  | "files"
+  | "imagesAndFiles";
 
 export interface FileTransferDragItem {
   readonly kind: string;
@@ -72,6 +82,32 @@ export function classifyFileTransferDrag(
   const hasPaths = fileItems.some((item) => !item.type.startsWith("image/"));
   if (hasImages && hasPaths) return "mixed";
   return hasImages ? "images" : "paths";
+}
+
+/**
+ * Which of `files` are folders, read from each item's entry while the event is
+ * live: the entries API answers only during the gesture, and a folder's `File`
+ * has no bytes to read. Items pair with `files` by position, and only where
+ * the counts and names agree; a shell without the entries API marks none.
+ */
+export function findDroppedFolders(
+  dataTransfer: DataTransfer,
+  files: readonly File[],
+): ReadonlySet<File> {
+  const folders = new Set<File>();
+  const fileItems = dataTransferItems(dataTransfer).filter(
+    (item) => item.kind === "file",
+  );
+  if (fileItems.length !== files.length) return folders;
+  fileItems.forEach((item, index) => {
+    const file = files[index];
+    if (!("webkitGetAsEntry" in item)) return;
+    const entry = item.webkitGetAsEntry();
+    if (entry?.isDirectory === true && entry.name === file.name) {
+      folders.add(file);
+    }
+  });
+  return folders;
 }
 
 export function collectDroppedFiles(

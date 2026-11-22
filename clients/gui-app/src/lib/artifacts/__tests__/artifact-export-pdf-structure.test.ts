@@ -67,6 +67,7 @@ describe("PDF artifact export", () => {
           id: "retry-pdf",
           title: "Retry PDF",
           markdown: createBody("# Retry"),
+          parentId: null,
         },
       ],
       format: "pdf" as const,
@@ -91,6 +92,7 @@ describe("PDF artifact export", () => {
         {
           id: "structured-pdf",
           title: "Structured PDF",
+          parentId: null,
           markdown: createBody(
             "# Design\n\nA **bold** and *italic* paragraph.\n\n- One\n- Two\n\n| A | B |\n| - | - |\n| 1 | 2 |",
           ),
@@ -150,6 +152,7 @@ describe("PDF artifact export", () => {
         {
           id: "visual-pdf",
           title: "Visual PDF",
+          parentId: null,
           markdown: createBody(
             `\`\`\`mermaid\n${mermaidSource}\n\`\`\`\n\n\`\`\`wireframe\n${wireframeSource}\n\`\`\``,
           ),
@@ -196,6 +199,7 @@ describe("PDF artifact export", () => {
         {
           id: "tasks-pdf",
           title: "Tasks PDF",
+          parentId: null,
           markdown: createBody(
             "- [ ] Draft copy\n- [x] Ship release\n  - [ ] Notify team",
           ),

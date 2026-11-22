@@ -886,44 +886,64 @@ function projectCanvasAnnotationPayload(value: unknown): unknown {
     : { ...value, browserAnnotations };
 }
 
-function projectCanvasAnnotationMessage(value: unknown): unknown {
+type UserPayloadProjector = (payload: unknown) => unknown;
+
+function projectRowPayload(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!isRecord(value) || value.role !== "user") return value;
-  const message = projectCanvasAnnotationPayload(value.message);
+  const message = project(value.message);
   return message === value.message ? value : { ...value, message };
 }
 
-function projectCanvasAnnotationMessages(value: unknown): unknown {
+function projectRowPayloads(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!Array.isArray(value)) return value;
-  const messages = value.map(projectCanvasAnnotationMessage);
+  const messages = value.map((row) => projectRowPayload(row, project));
   return messages.every((message, index) => message === value[index])
     ? value
     : messages;
 }
 
-function projectCanvasAnnotationQueueItem(item: unknown): unknown {
+function projectQueueItemPayload(
+  item: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!isRecord(item) || !("message" in item)) return item;
-  const message = projectCanvasAnnotationPayload(item.message);
+  const message = project(item.message);
   return message === item.message ? item : { ...item, message };
 }
 
-function projectCanvasAnnotationQueueItems(value: unknown): unknown {
+function projectQueueItemPayloads(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!Array.isArray(value)) return value;
-  const items = value.map(projectCanvasAnnotationQueueItem);
+  const items = value.map((item) => projectQueueItemPayload(item, project));
   return items.every((item, index) => item === value[index]) ? value : items;
 }
 
-function projectCanvasAnnotationQueue(value: unknown): unknown {
+function projectQueuePayloads(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!isRecord(value)) return value;
-  const items = projectCanvasAnnotationQueueItems(value.items);
+  const items = projectQueueItemPayloads(value.items, project);
   return items === value.items ? value : { ...value, items };
 }
 
-/** Queue events carry the same payload under metadata.item or metadata.items. */
-function projectCanvasAnnotationEvent(value: unknown): unknown {
+/** Queue events carry the payload under metadata.item or metadata.items. */
+function projectEventPayload(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!isRecord(value) || !isRecord(value.metadata)) return value;
   const metadata = value.metadata;
-  const item = projectCanvasAnnotationQueueItem(metadata.item);
-  const items = projectCanvasAnnotationQueueItems(metadata.items);
+  const item = projectQueueItemPayload(metadata.item, project);
+  const items = projectQueueItemPayloads(metadata.items, project);
   if (item === metadata.item && items === metadata.items) return value;
   const projected = { ...metadata };
   if (item !== metadata.item) projected.item = item;
@@ -931,36 +951,43 @@ function projectCanvasAnnotationEvent(value: unknown): unknown {
   return { ...value, metadata: projected };
 }
 
-function projectCanvasAnnotationEvents(value: unknown): unknown {
+function projectEventPayloads(
+  value: unknown,
+  project: UserPayloadProjector,
+): unknown {
   if (!Array.isArray(value)) return value;
-  const events = value.map(projectCanvasAnnotationEvent);
+  const events = value.map((event) => projectEventPayload(event, project));
   return events.every((event, index) => event === value[index])
     ? value
     : events;
 }
 
-function projectPreCanvasAnnotationFrame(
+/**
+ * `project` applied to every channel a user payload reaches a peer on: the
+ * accepted row, a queue event, the queue, a range, and the snapshot's chat,
+ * tail and queue. The frame itself comes back when nothing changed.
+ */
+function projectUserPayloadsInFrame(
   frame: ProjectedChatSubscribeServerFrame,
-  negotiated: SchemaVersion | null,
+  project: UserPayloadProjector,
 ): ProjectedChatSubscribeServerFrame {
-  if (supportsCanvasAnnotations(negotiated)) return frame;
   switch (frame.kind) {
     case "messageAccepted": {
-      const message = projectCanvasAnnotationMessage(frame.message);
+      const message = projectRowPayload(frame.message, project);
       return message === frame.message ? frame : { ...frame, message };
     }
     case "eventAppended": {
-      const event = projectCanvasAnnotationEvent(frame.event);
+      const event = projectEventPayload(frame.event, project);
       return event === frame.event ? frame : { ...frame, event };
     }
     case "queueChanged": {
-      const queue = projectCanvasAnnotationQueue(frame.queue);
+      const queue = projectQueuePayloads(frame.queue, project);
       return queue === frame.queue ? frame : { ...frame, queue };
     }
     case "range": {
       if (!isRecord(frame.range)) return frame;
-      const messages = projectCanvasAnnotationMessages(frame.range.messages);
-      const events = projectCanvasAnnotationEvents(frame.range.events);
+      const messages = projectRowPayloads(frame.range.messages, project);
+      const events = projectEventPayloads(frame.range.events, project);
       if (messages === frame.range.messages && events === frame.range.events)
         return frame;
       const range = { ...frame.range };
@@ -975,8 +1002,8 @@ function projectPreCanvasAnnotationFrame(
       for (const key of ["chat", "tail"]) {
         const container = original[key];
         if (!isRecord(container)) continue;
-        const messages = projectCanvasAnnotationMessages(container.messages);
-        const events = projectCanvasAnnotationEvents(container.events);
+        const messages = projectRowPayloads(container.messages, project);
+        const events = projectEventPayloads(container.events, project);
         if (messages === container.messages && events === container.events)
           continue;
         const projected = { ...container };
@@ -985,7 +1012,7 @@ function projectPreCanvasAnnotationFrame(
         snapshot[key] = projected;
       }
       if ("queue" in original)
-        snapshot.queue = projectCanvasAnnotationQueue(original.queue);
+        snapshot.queue = projectQueuePayloads(original.queue, project);
       return snapshot.chat === original.chat &&
         snapshot.tail === original.tail &&
         snapshot.queue === original.queue
@@ -995,6 +1022,69 @@ function projectPreCanvasAnnotationFrame(
     default:
       return frame;
   }
+}
+
+function projectPreCanvasAnnotationFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (supportsCanvasAnnotations(negotiated)) return frame;
+  return projectUserPayloadsInFrame(frame, projectCanvasAnnotationPayload);
+}
+
+/** The `slack` user message first rides 1.43 (`slackUserMessageSchema`). */
+export const CHAT_SUBSCRIBE_SLACK_MESSAGE_MINOR = 43;
+
+function supportsSlackMessages(negotiated: SchemaVersion | null): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_SLACK_MESSAGE_MINOR
+  );
+}
+
+/**
+ * A Slack message as an older peer reads it: the plain user message it
+ * degrades to, its text and images under one line naming who wrote it in
+ * Slack. Its row's sender is already the `user` sender this kind needs.
+ */
+function projectSlackPayload(value: unknown): unknown {
+  if (!isRecord(value) || value.kind !== "slack") return value;
+  const author = isRecord(value.author) ? value.author : {};
+  const name =
+    typeof author.displayName === "string" &&
+    author.displayName.trim().length > 0
+      ? author.displayName.trim()
+      : "Someone";
+  const content = isRecord(value.content) ? value.content : {};
+  const body = Array.isArray(content.content) ? content.content : [];
+  return {
+    kind: "user",
+    content: {
+      ...content,
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: `${name} in Slack:` }],
+        },
+        ...body,
+      ],
+    },
+    browserAnnotations: [],
+  };
+}
+
+/**
+ * Each Slack message in the frame degraded for a peer below 1.43, whose
+ * payload union rejects the kind.
+ */
+function projectPreSlackMessageFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (supportsSlackMessages(negotiated)) return frame;
+  return projectUserPayloadsInFrame(frame, projectSlackPayload);
 }
 
 function stripAnswerSelection(value: unknown): unknown {
@@ -1198,8 +1288,13 @@ function projectChatServerFrameBeforeUltracode(
   // an unknown member - so every pre-1.8 peer must never see the event. A
   // client that cannot render an import provenance row has nothing to do with
   // the value anyway.
+  // A Slack message degrades to a plain user row first, so every older pass
+  // below meets only the payload kinds its line names.
   const preImportSafe = projectPreCanvasAnnotationFrame(
-    projectPreImportedFrame(bridgeProjected, negotiated),
+    projectPreSlackMessageFrame(
+      projectPreImportedFrame(bridgeProjected, negotiated),
+      negotiated,
+    ),
     negotiated,
   );
   if (supportsV17(negotiated)) return preImportSafe;
@@ -1629,18 +1724,24 @@ export function chatLineCarriesUltracode(
   );
 }
 
-function stripUltracodeTuple(value: unknown): unknown {
-  if (!isRecord(value) || !("ultracode" in value)) return value;
-  const { ultracode: _ultracode, ...settings } = value;
+function stripRunSettingsField(
+  value: unknown,
+  field: "ultracode" | "profileBinding",
+): unknown {
+  if (!isRecord(value) || !(field in value)) return value;
+  const { [field]: _hidden, ...settings } = value;
   return settings;
 }
 
-function projectUltracodeQueue(value: unknown): unknown {
+function projectRunSettingsQueue(
+  value: unknown,
+  field: "ultracode" | "profileBinding",
+): unknown {
   if (!isRecord(value) || !Array.isArray(value.items)) return value;
   let changed = false;
   const items = value.items.map((item: unknown) => {
     if (!isRecord(item) || item.kind !== "prompt") return item;
-    const settings = stripUltracodeTuple(item.settings);
+    const settings = stripRunSettingsField(item.settings, field);
     if (settings === item.settings) return item;
     changed = true;
     return { ...item, settings };
@@ -1648,13 +1749,14 @@ function projectUltracodeQueue(value: unknown): unknown {
   return changed ? { ...value, items } : value;
 }
 
-function projectUltracodeTupleFields(
+function projectRunSettingsTupleFields(
   value: Record<string, unknown>,
   keys: ReadonlyArray<string>,
+  field: "ultracode" | "profileBinding",
 ): Record<string, unknown> {
   let projected = value;
   for (const key of keys) {
-    const settings = stripUltracodeTuple(value[key]);
+    const settings = stripRunSettingsField(value[key], field);
     if (settings !== value[key]) {
       projected = { ...projected, [key]: settings };
     }
@@ -1663,26 +1765,29 @@ function projectUltracodeTupleFields(
 }
 
 /** Only the declared tuple carriers, never arbitrary transcript/metadata trees. */
-function projectUltracodeContainers(
+function projectRunSettingsContainers(
   value: Record<string, unknown>,
+  field: "ultracode" | "profileBinding",
 ): Record<string, unknown> {
   let projected = value;
   if (isRecord(value.chat)) {
-    const chat = projectUltracodeTupleFields(value.chat, ["settings"]);
+    const chat = projectRunSettingsTupleFields(value.chat, ["settings"], field);
     if (chat !== value.chat) projected = { ...projected, chat };
   }
-  const queue = projectUltracodeQueue(value.queue);
+  const queue = projectRunSettingsQueue(value.queue, field);
   if (queue !== value.queue) projected = { ...projected, queue };
   if (isRecord(value.pendingFallback)) {
     const fallback = value.pendingFallback;
-    let pendingFallback = projectUltracodeTupleFields(fallback, [
-      "failedTuple",
-      "targetTuple",
-    ]);
+    let pendingFallback = projectRunSettingsTupleFields(
+      fallback,
+      ["failedTuple", "targetTuple"],
+      field,
+    );
     if (isRecord(fallback.impendingAction)) {
-      const impendingAction = projectUltracodeTupleFields(
+      const impendingAction = projectRunSettingsTupleFields(
         fallback.impendingAction,
         ["target"],
+        field,
       );
       if (impendingAction !== fallback.impendingAction) {
         pendingFallback = { ...pendingFallback, impendingAction };
@@ -1693,18 +1798,20 @@ function projectUltracodeContainers(
     }
   }
   if (isRecord(value.pendingReturn)) {
-    const pendingReturn = projectUltracodeTupleFields(value.pendingReturn, [
-      "preferredTuple",
-      "fallbackTuple",
-    ]);
+    const pendingReturn = projectRunSettingsTupleFields(
+      value.pendingReturn,
+      ["preferredTuple", "fallbackTuple"],
+      field,
+    );
     if (pendingReturn !== value.pendingReturn) {
       projected = { ...projected, pendingReturn };
     }
   }
   if (isRecord(value.lastFailedAttempt)) {
-    const lastFailedAttempt = projectUltracodeTupleFields(
+    const lastFailedAttempt = projectRunSettingsTupleFields(
       value.lastFailedAttempt,
       ["failedTuple"],
+      field,
     );
     if (lastFailedAttempt !== value.lastFailedAttempt) {
       projected = { ...projected, lastFailedAttempt };
@@ -1714,19 +1821,20 @@ function projectUltracodeContainers(
 }
 
 /** Older stream lines carry the tuple without the per-chat request. */
-function omitChatClientFrameUltracode(
+function omitChatClientFrameSettingsField(
   frame: ProjectedChatSubscribeClientFrame,
+  field: "ultracode" | "profileBinding",
 ): ProjectedChatSubscribeClientFrame {
   switch (frame.kind) {
     case "send":
     case "editUserMessage":
     case "queueSettingsUpdate":
     case "queueSettingsRestamp": {
-      const settings = stripUltracodeTuple(frame.settings);
+      const settings = stripRunSettingsField(frame.settings, field);
       return settings === frame.settings ? frame : { ...frame, settings };
     }
     case "queueSteerNow": {
-      const newSettings = stripUltracodeTuple(frame.newSettings);
+      const newSettings = stripRunSettingsField(frame.newSettings, field);
       return newSettings === frame.newSettings
         ? frame
         : { ...frame, newSettings };
@@ -1740,10 +1848,17 @@ export function projectChatClientFrameForVersion(
   frame: ChatSubscribeClientFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeClientFrame {
-  const projected = projectChatClientFrameBeforeUltracode(frame, negotiated);
+  let projected = projectChatClientFrameBeforeUltracode(frame, negotiated);
+  if (
+    negotiated === null ||
+    negotiated.major !== 1 ||
+    negotiated.minor < CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR
+  ) {
+    projected = omitChatClientFrameSettingsField(projected, "profileBinding");
+  }
   return chatLineCarriesUltracode(negotiated)
     ? projected
-    : omitChatClientFrameUltracode(projected);
+    : omitChatClientFrameSettingsField(projected, "ultracode");
 }
 
 /**
@@ -1783,29 +1898,196 @@ function projectDeliveryWorktreeIntent(
     : { ...frame, snapshot: { ...frame.snapshot, messageDelivery } };
 }
 
+/**
+ * Older peers receive an agent's tool row without the feedback it drafted
+ * (`tool_call.feedbackDraft`). It rides the unreleased `1.42`.
+ */
+export const CHAT_SUBSCRIBE_FEEDBACK_DRAFT_MINOR = 42;
+
+function supportsFeedbackDrafts(negotiated: SchemaVersion | null): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_FEEDBACK_DRAFT_MINOR
+  );
+}
+
+function projectFeedbackDraftRow(row: unknown, keepStamp: boolean): unknown {
+  if (!isRecord(row) || row.role !== "assistant" || !Array.isArray(row.blocks))
+    return row;
+  const original = row.blocks;
+  const blocks = original.map((block) => {
+    if (!isRecord(block)) return block;
+    if (!keepStamp && "feedbackDraft" in block) {
+      const {
+        feedbackDraft: _stamp,
+        feedbackDraftOrigin: _origin,
+        ...rest
+      } = block;
+      return rest;
+    }
+    if ("feedbackDraftOrigin" in block) {
+      const { feedbackDraftOrigin: _origin, ...rest } = block;
+      return rest;
+    }
+    return block;
+  });
+  if ("feedbackDraft" in row) {
+    const { feedbackDraft: _projection, ...rest } = row;
+    return { ...rest, blocks };
+  }
+  return blocks.every((block, index) => block === original[index])
+    ? row
+    : { ...row, blocks };
+}
+
+function projectFeedbackDraftContainer(
+  value: unknown,
+  keepStamp: boolean,
+): unknown {
+  if (!isRecord(value) || !Array.isArray(value.messages)) return value;
+  const original = value.messages;
+  const messages = original.map((row) =>
+    projectFeedbackDraftRow(row, keepStamp),
+  );
+  return messages.every((message, index) => message === original[index])
+    ? value
+    : { ...value, messages };
+}
+
+function projectFeedbackDraftFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor >= 45)
+    return frame;
+  const keepStamp = supportsFeedbackDrafts(negotiated);
+  if (frame.kind === "range") {
+    const range = projectFeedbackDraftContainer(frame.range, keepStamp);
+    return range === frame.range ? frame : { ...frame, range };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const original = frame.snapshot;
+  const chat = projectFeedbackDraftContainer(original.chat, keepStamp);
+  const tail = projectFeedbackDraftContainer(original.tail, keepStamp);
+  if (chat === original.chat && tail === original.tail) return frame;
+  const snapshot = { ...original };
+  if (chat !== original.chat) snapshot.chat = chat;
+  if (tail !== original.tail) snapshot.tail = tail;
+  return { ...frame, snapshot };
+}
+
+/** Dispatch provenance is served only on chat.subscribe@1.44 and newer. */
+const CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR = 44;
+
+function stripProviderSelectionFromEvent(value: unknown): unknown {
+  if (!isRecord(value) || !("providerSelection" in value)) return value;
+  const { providerSelection: _providerSelection, ...event } = value;
+  return event;
+}
+
+function stripProviderSelectionFromContainer(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.events)) return value;
+  const original = value.events;
+  const events = original.map(stripProviderSelectionFromEvent);
+  return events.every((event, index) => event === original[index])
+    ? value
+    : { ...value, events };
+}
+
+function projectProviderSelectionFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR
+  )
+    return frame;
+  if (frame.kind === "eventAppended") {
+    const event = stripProviderSelectionFromEvent(frame.event);
+    return event === frame.event ? frame : { ...frame, event };
+  }
+  if (frame.kind === "range") {
+    const range = stripProviderSelectionFromContainer(frame.range);
+    return range === frame.range ? frame : { ...frame, range };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const original = frame.snapshot;
+  const chat = stripProviderSelectionFromContainer(original.chat);
+  const tail = stripProviderSelectionFromContainer(original.tail);
+  if (chat === original.chat && tail === original.tail) return frame;
+  const snapshot = { ...original };
+  if (chat !== original.chat) snapshot.chat = chat;
+  if (tail !== original.tail) snapshot.tail = tail;
+  return { ...frame, snapshot };
+}
+
+const CHAT_SUBSCRIBE_ACCOUNT_WAIT_MINOR = 46;
+
+function projectAccountWaitFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_ACCOUNT_WAIT_MINOR
+  )
+    return frame;
+  if (frame.kind === "turnStateChanged" && "accountWait" in frame) {
+    const { accountWait: _accountWait, ...rest } = frame;
+    return rest;
+  }
+  if (
+    frame.kind === "snapshot" &&
+    isRecord(frame.snapshot) &&
+    "accountWait" in frame.snapshot
+  ) {
+    const { accountWait: _accountWait, ...snapshot } = frame.snapshot;
+    return { ...frame, snapshot };
+  }
+  return frame;
+}
+
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   const projected = projectChatServerFrameBeforeUltracode(
-    projectDeliveryWorktreeIntent(frame, negotiated),
+    projectDeliveryWorktreeIntent(
+      projectFeedbackDraftFrame(
+        projectAccountWaitFrame(
+          projectProviderSelectionFrame(frame, negotiated),
+          negotiated,
+        ),
+        negotiated,
+      ),
+      negotiated,
+    ),
     negotiated,
   );
-  if (chatLineCarriesUltracode(negotiated)) return projected;
-  if (projected.kind === "snapshot" && isRecord(projected.snapshot)) {
-    const snapshot = projectUltracodeContainers(projected.snapshot);
-    return snapshot === projected.snapshot
-      ? projected
-      : { ...projected, snapshot };
-  }
+  const hiddenFields: Array<"ultracode" | "profileBinding"> = [];
   if (
-    projected.kind === "queueChanged" ||
-    projected.kind === "turnStateChanged"
-  ) {
-    const containers = projectUltracodeContainers(projected);
-    return containers === projected
-      ? projected
-      : { ...projected, ...containers };
+    negotiated === null ||
+    negotiated.major !== 1 ||
+    negotiated.minor < CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR
+  )
+    hiddenFields.push("profileBinding");
+  if (!chatLineCarriesUltracode(negotiated)) hiddenFields.push("ultracode");
+  let result = projected;
+  for (const field of hiddenFields) {
+    if (result.kind === "snapshot" && isRecord(result.snapshot)) {
+      const snapshot = projectRunSettingsContainers(result.snapshot, field);
+      if (snapshot !== result.snapshot) result = { ...result, snapshot };
+    } else if (
+      result.kind === "queueChanged" ||
+      result.kind === "turnStateChanged"
+    ) {
+      const containers = projectRunSettingsContainers(result, field);
+      if (containers !== result) result = { ...result, ...containers };
+    }
   }
-  return projected;
+  return result;
 }

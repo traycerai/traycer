@@ -11,6 +11,7 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 /**
  * Un-presents in a background split pane by forcing the root CLOSED, not by
@@ -144,11 +145,12 @@ function SelectContent({
   const safeAreaInsets = useSafeAreaCollisionPadding();
   // Read above the early return, like the hooks above it: hook order must
   // not depend on concealment.
+  const contentRef = useOverlayDragSuppressionRef(ref);
   if (concealed) return null;
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="select-content"
         data-align-trigger={position === "item-aligned"}
         collisionPadding={collisionPadding ?? safeAreaInsets}

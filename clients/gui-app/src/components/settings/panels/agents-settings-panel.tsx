@@ -68,7 +68,7 @@ export function AgentsSettingsPanel(): ReactNode {
           className="flex min-h-0 flex-1 flex-col gap-3 pt-5"
         >
           <p
-            className="text-ui-xs text-muted-foreground"
+            className="min-w-0 text-ui-xs text-muted-foreground"
             data-testid="agents-guide-caption"
           >
             {AGENTS_GUIDE_CAPTION}

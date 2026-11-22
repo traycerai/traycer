@@ -1,3 +1,4 @@
+import { profileBindingsEqual } from "@traycer/protocol/host/provider-profile-inheritance";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -445,6 +446,7 @@ function sameChatRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
     // `null`, on an old serialized `ChatRunSettings`).
     profileId: (a.profileId ?? null) === (b.profileId ?? null),
     ultracode: a.ultracode === b.ultracode,
+    profileBinding: profileBindingsEqual(a.profileBinding, b.profileBinding),
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
 }

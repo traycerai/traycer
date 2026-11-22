@@ -10,11 +10,9 @@ export function NoGitWorktrees() {
       )}
     >
       <FolderOpen className="size-8 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">
-        No git workspaces available
-      </p>
+      <p className="text-sm text-muted-foreground">No git folders available</p>
       <p className="text-xs text-muted-foreground">
-        Add workspaces to the agent to get started
+        Add folders to the agent to get started
       </p>
     </div>
   );

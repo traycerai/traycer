@@ -79,6 +79,8 @@ function fakeEditor(content: JsonContent): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
@@ -136,7 +138,6 @@ function mountSubmit(args: {
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
       targetHostId: null,
-      restingSandbox: null,
       queueEditTargetId: null,
       // The gate is off in these fixtures: they predate it and assert the
       // inline behaviour, which is what `false` preserves exactly.

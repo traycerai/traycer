@@ -56,7 +56,7 @@ export function useMobileEpicTiles(tabId: string): MobileEpicTilesApi {
         prepare();
         return;
       }
-      navigateNested(epicId, tabId, prepare);
+      navigateNested(epicId, tabId, prepare, "user");
     },
     [epicId, navigateNested, prepareSetActiveTileTabFocusTarget, tabId],
   );

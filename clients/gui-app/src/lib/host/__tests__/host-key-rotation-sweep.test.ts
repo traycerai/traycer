@@ -39,6 +39,7 @@ function remoteEntry(overrides: {
     publicKey: overrides.publicKey,
     relayFuseGrace: false,
     sandbox: null,
+    owner: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

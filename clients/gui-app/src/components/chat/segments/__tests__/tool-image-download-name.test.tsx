@@ -142,6 +142,7 @@ function renderTool(
         imageResults={[imageResult]}
         artifact={null}
         mcpApp={null}
+        feedbackDraft={null}
         error={null}
         agentMessageSend={null}
         managedCommand={null}

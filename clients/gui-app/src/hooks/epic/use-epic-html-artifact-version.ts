@@ -39,10 +39,46 @@ export interface HtmlArtifactVersionState {
   readonly hasNewer: boolean;
 }
 
+/** A tile's version: the pin its tab holds, which a pick rewrites. */
 export function useEpicHtmlArtifactVersion(props: {
   readonly epicId: string;
   readonly node: EpicArtifactRef;
   readonly artifact: ArtifactProjection | null;
+}): HtmlArtifactVersionState {
+  const viewTabId = useEpicViewTabId();
+  const pinToTab = useCallback(
+    (selection: HtmlArtifactVersionSelection | null): void => {
+      if (viewTabId === null) return;
+      useEpicCanvasStore
+        .getState()
+        .updateHtmlArtifactVersionInTab(
+          viewTabId,
+          props.node.instanceId,
+          selection,
+        );
+    },
+    [viewTabId, props.node.instanceId],
+  );
+  return useHtmlArtifactVersion({
+    epicId: props.epicId,
+    artifactId: props.node.id,
+    artifact: props.artifact,
+    pinned: props.node.htmlVersion ?? null,
+    onSelect: pinToTab,
+  });
+}
+
+/**
+ * The version history of an html artifact on the tab's host, around a pin the
+ * caller holds: `pinned` is the version on show (`null` for Latest), and a
+ * pick hands the caller the new one to hold.
+ */
+export function useHtmlArtifactVersion(props: {
+  readonly epicId: string;
+  readonly artifactId: string;
+  readonly artifact: ArtifactProjection | null;
+  readonly pinned: HtmlArtifactVersionSelection | null;
+  readonly onSelect: (version: HtmlArtifactVersionSelection | null) => void;
 }): HtmlArtifactVersionState {
   const client = useTabHostClient();
   const hostId = useTabHostId();
@@ -52,14 +88,14 @@ export function useEpicHtmlArtifactVersion(props: {
     "epic.listHtmlArtifactVersions",
   );
   const [before, setBefore] = useState<string | undefined>(undefined);
-  const selectedVersion = props.node.htmlVersion ?? null;
   const liveSelection = liveHtmlArtifactSelection(props.artifact);
+  const selectedVersion = selectedHtmlVersion(props.pinned, props.artifact);
   const history = useHostQuery({
     client,
     method: "epic.listHtmlArtifactVersions",
     params: {
       epicId: props.epicId,
-      artifactId: props.node.id,
+      artifactId: props.artifactId,
       before,
       limit: 20,
     },
@@ -77,20 +113,16 @@ export function useEpicHtmlArtifactVersion(props: {
     selectedVersion,
     history.data?.versions ?? [],
   );
+  const { onSelect } = props;
   const selectVersion = useCallback(
     (selection: HtmlArtifactVersionSelection | null): void => {
-      if (viewTabId === null) return;
-      useEpicCanvasStore
-        .getState()
-        .updateHtmlArtifactVersionInTab(
-          viewTabId,
-          props.node.instanceId,
-          selection === null
-            ? null
-            : htmlArtifactVersionSelectionSchema.parse(selection),
-        );
+      onSelect(
+        selection === null
+          ? null
+          : htmlArtifactVersionSelectionSchema.parse(selection),
+      );
     },
-    [viewTabId, props.node.instanceId],
+    [onSelect],
   );
 
   return {
@@ -111,6 +143,32 @@ export function useEpicHtmlArtifactVersion(props: {
         setBefore(nextCursor);
     },
   };
+}
+
+/**
+ * The pin, or `null` for Latest. A pin on the bundle the artifact serves right
+ * now IS Latest, whatever put it there, so a viewer never tints the current
+ * version, locks its comments or lists it twice in the menu.
+ */
+export function selectedHtmlVersion(
+  pinned: HtmlArtifactVersionSelection | null,
+  artifact: ArtifactProjection | null,
+): HtmlArtifactVersionSelection | null {
+  if (pinned === null || isLiveHtmlArtifactVersion(pinned, artifact))
+    return null;
+  return pinned;
+}
+
+/** Whether `version` is exactly the bundle the artifact serves right now. */
+function isLiveHtmlArtifactVersion(
+  version: HtmlArtifactVersionSelection,
+  artifact: ArtifactProjection | null,
+): boolean {
+  const live = liveHtmlArtifactSelection(artifact);
+  return (
+    live !== null &&
+    htmlArtifactVersionIdentity(version) === htmlArtifactVersionIdentity(live)
+  );
 }
 
 function liveHtmlArtifactSelection(

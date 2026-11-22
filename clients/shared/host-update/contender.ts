@@ -35,6 +35,10 @@ import {
 import type { HostUpdateAttemptRecord } from "./record";
 import { attemptIdentityOf, sameAttemptIdentity } from "./record";
 import { updateAttemptLockPath } from "./paths";
+import {
+  isHostHomeBlockedByFile,
+  UpdateHostHomeUnusableError,
+} from "./host-home-unusable";
 
 /**
  * The only non-update paths allowed through the contender boundary.
@@ -1136,7 +1140,14 @@ async function withUpdateContenderInternal<T>(
   // install and Desktop activation legitimately contend before a legacy
   // installer has created that directory, so establish only this parent
   // before taking the outer lock. No install/stage record is created here.
-  await mkdir(options.hostHomeDir, { recursive: true });
+  try {
+    await mkdir(options.hostHomeDir, { recursive: true });
+  } catch (error) {
+    if (isHostHomeBlockedByFile(error)) {
+      throw new UpdateHostHomeUnusableError(error);
+    }
+    throw error;
+  }
   const acquisition = await acquireUpdateAttemptLock({
     hostHomeDir: options.hostHomeDir,
     reason: options.reason,

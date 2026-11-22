@@ -23,6 +23,9 @@ vi.mock("@/providers/use-runner-host", async (load) => {
   const actual = await load<typeof import("@/providers/use-runner-host")>();
   return { ...actual, useRunnerHost: () => ({ browserView: null }) };
 });
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
   const actual =
     await load<

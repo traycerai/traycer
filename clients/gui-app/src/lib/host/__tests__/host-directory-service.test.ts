@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
@@ -7,6 +8,10 @@ import type {
   LocalHostSnapshot,
   RegisteredHostsChange,
 } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostListItem,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostListItemToDirectoryEntry,
@@ -20,7 +25,10 @@ import {
   type HostDirectoryServiceOptions,
 } from "@/lib/host/host-directory-service";
 import { lastLocalHostIdKey } from "@/lib/persist";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  setSettingsHostSelection,
+  settingsHostSelection,
+} from "@/stores/settings/__tests__/settings-host-scope-test-support";
 import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
 
 // Matches the production constant of the same name in `host-directory-service.ts`
@@ -143,7 +151,7 @@ afterEach(() => {
     directory.dispose();
   }
   window.localStorage.removeItem(LAST_LOCAL_HOST_ID_STORAGE_KEY);
-  useSettingsHostScopeStore.getState().setScopedHostId(null);
+  useSettingsHostScopeStore.getState().reset();
   __setBrowserDocumentHiddenForTests(false);
   vi.useRealTimers();
 });
@@ -360,6 +368,135 @@ describe("HostDirectoryService", () => {
     expect(entries.map((e) => e.kind)).toEqual(["local", "remote"]);
   });
 
+  it("publishes a refresh when only a physical remote host's owner changes", async () => {
+    const host = makeHost(null);
+    const registeredHost: HostListItem = {
+      hostId: "team-host",
+      displayName: "Team host",
+      platform: "macOS",
+      kind: "personal",
+      publicKey: "a".repeat(64),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity: "connectable",
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.5.0",
+        lastSeenAt: null,
+      },
+    };
+    let owner: HostOwnerPrincipal = { kind: "user", id: "user-a" };
+    const remoteFetcher: RemoteHostFetcher = () =>
+      Promise.resolve({
+        kind: "hosts",
+        entries: [
+          hostListItemToDirectoryEntry(
+            { ...registeredHost, owner },
+            "wss://relay.test/attach",
+          ),
+        ],
+      });
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher,
+    });
+    await directory.start();
+
+    const published: HostDirectoryEntry[][] = [];
+    directory.onChange((entries) => published.push([...entries]));
+    owner = { kind: "team", id: "team-a", name: "Alpha" };
+    await directory.refresh();
+
+    expect(published).toHaveLength(1);
+    expect(published[0][0]).toMatchObject({
+      hostId: "team-host",
+      sandbox: null,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    });
+  });
+
+  it("carries the registry twin's owner through every local directory read and refresh", async () => {
+    const host = makeHost(localSnapshot);
+    const registeredHost: HostListItem = {
+      hostId: localSnapshot.hostId,
+      displayName: "Registry twin",
+      platform: "macOS",
+      kind: "personal",
+      publicKey: "a".repeat(64),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity: "connectable",
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.5.0",
+        lastSeenAt: null,
+      },
+    };
+    let owner: HostOwnerPrincipal = { kind: "user", id: "user-a" };
+    const remoteFetcher: RemoteHostFetcher = () =>
+      Promise.resolve({
+        kind: "hosts",
+        entries: [
+          hostListItemToDirectoryEntry(
+            { ...registeredHost, owner },
+            "wss://relay.test/attach",
+          ),
+        ],
+      });
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher,
+    });
+    await directory.start();
+
+    const initial = directory.getLocalEntry();
+    if (initial === null) throw new Error("the local entry should be present");
+    expect(initial).toMatchObject({
+      kind: "local",
+      owner: { kind: "user", id: "user-a" },
+      websocketUrl: localSnapshot.websocketUrl,
+    });
+    expect(directory.findById(localSnapshot.hostId)).toEqual(initial);
+    expect(
+      (await directory.list()).find(
+        (entry) => entry.hostId === localSnapshot.hostId,
+      ),
+    ).toEqual(initial);
+    expect(directory.getDefaultEntry()).toEqual(initial);
+
+    const published: HostDirectoryEntry[][] = [];
+    directory.onChange((entries) => published.push([...entries]));
+    owner = { kind: "team", id: "team-a", name: "Alpha" };
+    await directory.refresh();
+
+    const updated = directory.getLocalEntry();
+    expect(updated).toEqual({
+      ...initial,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    });
+    expect(directory.findById(localSnapshot.hostId)).toEqual(updated);
+    expect(
+      (await directory.list()).find(
+        (entry) => entry.hostId === localSnapshot.hostId,
+      ),
+    ).toEqual(updated);
+    expect(directory.getDefaultEntry()).toEqual(updated);
+    expect(published).toHaveLength(1);
+    expect(
+      published[0]?.find((entry) => entry.hostId === localSnapshot.hostId),
+    ).toEqual(updated);
+  });
+
   it("deduplicates the registered remote copy of the local host", async () => {
     const host = makeHost(localSnapshot);
     const registeredLocalHostEntry: HostDirectoryEntry = {
@@ -517,9 +654,12 @@ describe("HostDirectoryService", () => {
 
     expect(directory.getCardinality()).toBe("zero");
     // The FIRST listing changes no entry when the registry is empty, so the
-    // snapshot-equality guard would swallow the one emit that moves the
-    // readiness gate off its searching state.
-    expect(emits).toEqual([0]);
+    // snapshot-equality guard would swallow the emit that moves the readiness
+    // gate off its searching state. The second is the failed first fetch
+    // ending: that listing re-requests the fleet, and its `published` clears
+    // the failure the narrator reads.
+    expect(emits).toEqual([0, 0]);
+    expect(directory.hasFailedDiscovery()).toBe(false);
   });
 
   it("does not treat a bearer-less 'signed-out' fetch as a delivered listing", async () => {
@@ -1575,6 +1715,7 @@ describe("HostDirectoryService", () => {
         hostId: localSnapshot.hostId,
         label: "hardiks-macbook",
         kind: "local",
+        owner: null,
         websocketUrl: null,
         version: "1.2.2",
         // Not the twin's presence lease: `not-dialable` is the truth, and it
@@ -1774,9 +1915,7 @@ describe("HostDirectoryService", () => {
         LAST_LOCAL_HOST_ID_STORAGE_KEY,
         localSnapshot.hostId,
       );
-      useSettingsHostScopeStore
-        .getState()
-        .setScopedHostId(localSnapshot.hostId);
+      setSettingsHostSelection(localSnapshot.hostId);
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         authContextId: null,
@@ -1793,7 +1932,7 @@ describe("HostDirectoryService", () => {
       });
       await flushPromises();
 
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+      expect(settingsHostSelection()?.hostId ?? null).toBe(
         "re-enrolled-host-id",
       );
     });
@@ -1803,9 +1942,7 @@ describe("HostDirectoryService", () => {
         LAST_LOCAL_HOST_ID_STORAGE_KEY,
         localSnapshot.hostId,
       );
-      useSettingsHostScopeStore
-        .getState()
-        .setScopedHostId("some-other-remote-host");
+      setSettingsHostSelection("some-other-remote-host");
       const host = makeHost(localSnapshot);
       const directory = makeDirectory({
         authContextId: null,
@@ -1822,7 +1959,7 @@ describe("HostDirectoryService", () => {
       });
       await flushPromises();
 
-      expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
+      expect(settingsHostSelection()?.hostId ?? null).toBe(
         "some-other-remote-host",
       );
     });

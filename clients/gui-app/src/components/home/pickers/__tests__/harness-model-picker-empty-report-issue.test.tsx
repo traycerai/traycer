@@ -34,13 +34,17 @@ function harnessEntry(
 }
 
 function renderRowsState(
-  props: Omit<Parameters<typeof ModelRowsState>[0], "onOpenProviderSettings">,
+  props: Omit<
+    Parameters<typeof ModelRowsState>[0],
+    "onOpenProviderSettings" | "onOpenHostUpdates"
+  >,
 ): void {
   render(
     <TooltipProvider>
       {ModelRowsState({
         ...props,
         onOpenProviderSettings: () => undefined,
+        onOpenHostUpdates: () => undefined,
       })}
     </TooltipProvider>,
   );

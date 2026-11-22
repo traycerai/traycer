@@ -223,6 +223,7 @@ function SnapshotBundleFileSection(props: {
     });
     openTile(
       tileIntent(tile, { tabId: props.viewTabId }, "explicit", "direct_ui"),
+      "user",
     );
   }, [
     openTile,
@@ -320,6 +321,7 @@ function SnapshotBundleFileRow(props: {
         {props.leading}
         <FileChangeHeader
           filePath={props.entry.filePath}
+          label={props.entry.filePath}
           operation={props.entry.operation}
           additions={props.additions}
           deletions={props.deletions}

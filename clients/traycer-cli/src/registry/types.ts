@@ -19,6 +19,11 @@ export type HostPlatformKey =
   | "win32-x64";
 
 export interface HostPlatformAsset {
+  readonly mirrors?: readonly {
+    readonly url: string;
+    readonly signatureUrl: string;
+  }[];
+  readonly descriptorUrl?: string;
   readonly available: boolean;
   readonly unavailableReason: string | null;
   readonly url: string;

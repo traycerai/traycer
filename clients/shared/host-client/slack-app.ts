@@ -4,25 +4,36 @@ import {
   slackAppReadResponseSchema,
   slackAppRefusalBodySchema,
   slackAppResponseSchema,
+  SLACK_APP_REFUSAL_APP_NOT_FOUND,
+  SLACK_APP_REFUSAL_APP_TAKEN,
+  SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+  SLACK_APP_REFUSAL_NOT_CONFIGURED,
+  type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import type { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
+import type { EnvironmentTransport } from "../environment/environment-cloud";
 
 /**
  * The raw calls to traycer-server's Slack app routes (`/api/slack/apps/*`)
  * with the person's bearer: a bot's members register its app, read it, take
- * its manifest, mint an install URL and disconnect it. A sibling of
- * `sandbox-control.ts`, and it runs where that runs: desktop calls it from
- * Electron main (traycer-server's CORS allow-list is the web dashboard
- * origin, not the app renderer), mobile through the native HTTP layer.
+ * its manifest, mint an install URL, disconnect it and set whether it takes
+ * DMs. A sibling of `sandbox-control.ts`, and it runs where that runs:
+ * desktop calls it from Electron main (traycer-server's CORS allow-list is
+ * the web dashboard origin, not the app renderer), mobile through the native
+ * HTTP layer.
  *
  * Every function here never throws: transport failures, non-2xx answers and
  * malformed bodies collapse into a discriminated, structured-clone-safe result
  * so it crosses the Electron IPC boundary unchanged. Nothing here logs, and a
  * failure never echoes a body: the register request carries the app's
- * secrets.
+ * secrets, so it alone goes through the shell's `EnvironmentTransport`, sent
+ * once and following no redirect (a 3xx is an answered non-success), with a
+ * failure's body capped. The other calls carry no credential in a body, but
+ * the bearer rides along, so they follow no redirect either.
  */
 
 /**
@@ -37,8 +48,11 @@ const SLACK_APP_WRITE_TIMEOUT_MS = 70_000;
  * A non-`ok` answer:
  *  - `unauthorized`  — the bearer was rejected (401/403).
  *  - `refused`       — the server answered with its typed error body; `code`
- *                      is its word (`slack_not_configured`, `NOT_FOUND`, ...;
- *                      see `@traycer/protocol/host/slack-app`).
+ *                      is its word when this build knows it
+ *                      (`slack_not_configured`, `NOT_FOUND`, ...; see
+ *                      `@traycer/protocol/host/slack-app`), and
+ *                      `unrecognized` for any other, whose raw value is
+ *                      dropped here.
  *  - `network-error` — transport/timeout, a non-2xx without a typed body, or
  *                      a body this build cannot parse. `detail` is a stable
  *                      classification, never a raw server body.
@@ -65,7 +79,7 @@ export type SlackAppReadResult =
   | { readonly kind: "ok"; readonly app: SlackAppView | null }
   | SlackAppFailure;
 
-/** `register` and `disconnect`: the app as the write left it. */
+/** `register`, `disconnect` and `dms`: the app as the write left it. */
 export type SlackAppWriteResult =
   | { readonly kind: "ok"; readonly app: SlackAppView }
   | SlackAppFailure;
@@ -83,7 +97,8 @@ type SlackAppRoute =
   | "read"
   | "manifest"
   | "install-url"
-  | "disconnect";
+  | "disconnect"
+  | "dms";
 
 function slackAppsUrl(serverBaseUrl: string, route: SlackAppRoute): string {
   const base = serverBaseUrl.endsWith("/")
@@ -92,9 +107,42 @@ function slackAppsUrl(serverBaseUrl: string, route: SlackAppRoute): string {
   return new URL(`api/slack/apps/${route}`, base).toString();
 }
 
+/**
+ * Any other code is server text that could hold the register call's secrets, so
+ * it never leaves this file: it reads as `unrecognized`.
+ */
+const KNOWN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  SLACK_APP_REFUSAL_NOT_CONFIGURED,
+  SLACK_APP_REFUSAL_APP_NOT_FOUND,
+  SLACK_APP_REFUSAL_APP_TAKEN,
+  SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+]);
+
+const UNRECOGNIZED_REFUSAL_CODE = "unrecognized";
+
 type PostResult<T> =
   | { readonly kind: "ok"; readonly value: T }
   | SlackAppFailure;
+
+/** The bearer rides along: a redirect is a failure, never followed. */
+const manualRedirectFetchTransport: EnvironmentTransport = async (request) => {
+  const response = await fetch(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body === null ? undefined : JSON.stringify(request.body),
+    redirect: "manual",
+    signal: request.signal,
+  });
+  // A late answer to a request already given up (the phone's `fetch` ignores its
+  // signal) is never read.
+  if (request.signal.aborted) {
+    throw new Error("The request was given up before it answered.");
+  }
+  return {
+    status: response.status,
+    text: isRedirectAnswer(response.status) ? null : await response.text(),
+  };
+};
 
 /**
  * `proxyToken` is the Google IAP id-token a staging desktop's main process
@@ -109,6 +157,7 @@ async function post<T>(
   proxyToken: string | null,
   timeoutMs: number,
   schema: z.ZodType<T>,
+  transport: EnvironmentTransport,
 ): Promise<PostResult<T>> {
   const headers: Record<string, string> =
     proxyToken === null
@@ -124,19 +173,18 @@ async function post<T>(
   let status: number;
   let parsedBody: unknown;
   try {
-    const response = await untilAborted(
-      fetch(slackAppsUrl(serverBaseUrl, route), {
+    const answer = await untilAborted(
+      transport({
+        url: slackAppsUrl(serverBaseUrl, route),
         method: "POST",
         headers,
-        body: JSON.stringify(body),
+        body,
         signal: abort.signal,
       }),
       abort.signal,
     );
-    status = response.status;
-    parsedBody = parseJsonOrNull(
-      await untilAborted(response.text(), abort.signal),
-    );
+    status = answer.status;
+    parsedBody = isRedirectAnswer(status) ? null : parseJsonOrNull(answer.text);
   } catch (error: unknown) {
     return {
       kind: "network-error",
@@ -151,8 +199,15 @@ async function post<T>(
   if (status === 401 || status === 403) return { kind: "unauthorized" };
   if (status < 200 || status >= 300) {
     const refusal = slackAppRefusalBodySchema.safeParse(parsedBody);
+    // The server answered, and an answer is not asked again: `refused`, not `network-error`.
     return refusal.success
-      ? { kind: "refused", status, code: refusal.data.code }
+      ? {
+          kind: "refused",
+          status,
+          code: KNOWN_REFUSAL_CODES.has(refusal.data.code)
+            ? refusal.data.code
+            : UNRECOGNIZED_REFUSAL_CODE,
+        }
       : {
           kind: "network-error",
           detail: `the server answered HTTP ${status} without a typed refusal`,
@@ -168,9 +223,12 @@ async function post<T>(
   return { kind: "ok", value: parsed.data };
 }
 
-/** An empty or non-JSON body (a proxy's HTML page) reads as `null`. */
-function parseJsonOrNull(text: string): unknown {
-  if (text.length === 0) return null;
+/**
+ * An empty or non-JSON body (a proxy's HTML page) reads as `null`, as does a
+ * failure's body over the transport's cap.
+ */
+function parseJsonOrNull(text: string | null): unknown {
+  if (text === null || text.length === 0) return null;
   try {
     const parsed: unknown = JSON.parse(text);
     return parsed;
@@ -179,11 +237,16 @@ function parseJsonOrNull(text: string): unknown {
   }
 }
 
-/** `POST /api/slack/apps/register`: stores the app's credentials; a new registration replaces the old one. */
+/**
+ * `POST /api/slack/apps/register`: stores the app's credentials; a new
+ * registration replaces the old one. `transport` is the shell's, which never follows a redirect:
+ * the body carries two secrets.
+ */
 export async function registerSlackAppViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
   proxyToken: string | null,
+  transport: EnvironmentTransport,
   request: SlackAppRegisterRequest,
 ): Promise<SlackAppWriteResult> {
   const result = await post(
@@ -194,6 +257,7 @@ export async function registerSlackAppViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppResponseSchema,
+    transport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }
@@ -213,6 +277,7 @@ export async function readSlackAppViaHttp(
     proxyToken,
     SLACK_APP_READ_TIMEOUT_MS,
     slackAppReadResponseSchema,
+    manualRedirectFetchTransport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }
@@ -232,6 +297,7 @@ export async function fetchSlackAppManifestViaHttp(
     proxyToken,
     SLACK_APP_READ_TIMEOUT_MS,
     slackAppManifestResponseSchema,
+    manualRedirectFetchTransport,
   );
   return result.kind === "ok"
     ? { kind: "ok", manifest: result.value.manifest }
@@ -253,6 +319,7 @@ export async function mintSlackAppInstallUrlViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppInstallUrlResponseSchema,
+    manualRedirectFetchTransport,
   );
   return result.kind === "ok"
     ? { kind: "ok", url: result.value.url, expiresAt: result.value.expiresAt }
@@ -274,6 +341,27 @@ export async function disconnectSlackAppViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppResponseSchema,
+    manualRedirectFetchTransport,
+  );
+  return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
+}
+
+/** `POST /api/slack/apps/dms`: whether a person's DM to the bot is admitted. */
+export async function setSlackAppDmsViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  request: SlackAppDmsRequest,
+): Promise<SlackAppWriteResult> {
+  const result = await post(
+    serverBaseUrl,
+    "dms",
+    request,
+    bearerToken,
+    proxyToken,
+    SLACK_APP_WRITE_TIMEOUT_MS,
+    slackAppResponseSchema,
+    manualRedirectFetchTransport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }

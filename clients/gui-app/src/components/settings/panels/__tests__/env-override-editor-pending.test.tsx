@@ -78,11 +78,7 @@ function Parent(props: {
     <EnvOverrideEditor
       overrides={rows}
       disabled={false}
-      credentialRefusal={null}
       rowNotes={new Map()}
-      claimedBy={new Map()}
-      onHold={new Map()}
-      keyRefusal={null}
       staleRefusal={null}
       namePlaceholder="OPENAI_API_KEY"
       emptyLabel={EMPTY_LABEL}
@@ -144,8 +140,7 @@ function expectPendingDraft(): void {
   expect(name).toHaveProperty("disabled", true);
   expect(value).toHaveProperty("value", "one");
   expect(value).toHaveProperty("disabled", true);
-  expect(screen.getByText(/NEW_VAR/)).toBeTruthy();
-  expect(screen.getByText(/adding/i)).toBeTruthy();
+  expect(screen.queryByRole("status")).toBeNull();
   expect(screen.queryByText(EMPTY_LABEL)).toBeNull();
 }
 
@@ -154,7 +149,7 @@ afterEach(() => {
 });
 
 describe("EnvOverrideEditor left mounted across a write", () => {
-  it("keeps an added variable's draft, disabled, as Adding from Apply until the read lists it, never as an empty table", async () => {
+  it("keeps an added variable's draft, disabled, from Apply until the read lists it, never as an empty table", async () => {
     const { settle, observe } = mountEditor([]);
 
     stageAdd("NEW_VAR", "one");
@@ -172,7 +167,6 @@ describe("EnvOverrideEditor left mounted across a write", () => {
     await observe([{ key: "NEW_VAR", value: "one" }]);
     expect(screen.queryByLabelText("New variable name")).toBeNull();
     expect(screen.getByLabelText("Value for NEW_VAR")).toBeTruthy();
-    expect(screen.queryByText(/adding/i)).toBeNull();
     expect(screen.queryByText(EMPTY_LABEL)).toBeNull();
   });
 
@@ -244,7 +238,7 @@ describe("EnvOverrideEditor left mounted across a write", () => {
     ).toHaveProperty("disabled", false);
   });
 
-  it("shows a removed variable as Removing from Remove until the read drops it, not as a value still Set", async () => {
+  it("keeps a removed variable's row, disabled, from Remove until the read drops it, not as a value still Set", async () => {
     const { settle, observe, held } = mountEditor([
       { key: "OLD_VAR", value: "token" },
     ]);
@@ -253,7 +247,7 @@ describe("EnvOverrideEditor left mounted across a write", () => {
 
     // The real row stays, with its Remove disabled: a second press cannot
     // send the delete again.
-    expect(screen.getByText(/removing/i)).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
     const pendingRemove = screen.getByRole("button", {
       name: "Remove OLD_VAR",
     });
@@ -261,9 +255,9 @@ describe("EnvOverrideEditor left mounted across a write", () => {
     fireEvent.click(pendingRemove);
     expect(held.writes()).toBe(1);
 
-    // Accepted, but the read still lists it: still Removing, still disabled.
+    // Accepted, but the read still lists it: still shown, still disabled.
     await settle("ok");
-    expect(screen.getByText(/removing/i)).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Remove OLD_VAR" }),
     ).toHaveProperty("disabled", true);
@@ -271,7 +265,6 @@ describe("EnvOverrideEditor left mounted across a write", () => {
 
     await observe([]);
     expect(screen.queryByText(/OLD_VAR/)).toBeNull();
-    expect(screen.queryByText(/removing/i)).toBeNull();
     expect(screen.getByText(EMPTY_LABEL)).toBeTruthy();
   });
 
@@ -338,7 +331,7 @@ describe("EnvOverrideEditor left mounted across a write", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "The host refused this change.",
     );
-    expect(screen.queryByText(/adding/i)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
     // The draft can be corrected and sent again.
     fireEvent.change(name, { target: { value: "OTHER_VAR" } });
     expect(
@@ -357,7 +350,6 @@ describe("EnvOverrideEditor left mounted across a write", () => {
       "token",
     );
     expect(screen.getByRole("button", { name: "Remove OLD_VAR" })).toBeTruthy();
-    expect(screen.queryByText(/removing/i)).toBeNull();
     expect(screen.getByRole("alert").textContent).toContain(
       "The host refused this change.",
     );

@@ -185,7 +185,7 @@ describe("subscribeChatSessionWakeRetry", () => {
     // type (a direct narrow on the `let` collapses the else-branch to `never`).
     const fireResume = (): void => {
       if (capturedResume === null) throw new Error("Expected resume listener");
-      capturedResume({ backgroundedForMs: null });
+      capturedResume({ backgroundedForMs: null, screenLocked: false });
     };
     return { fireResume, resumeDispose };
   }

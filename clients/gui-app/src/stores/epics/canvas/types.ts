@@ -873,8 +873,8 @@ export type {
 /**
  * Per-epic canvas snapshot over the N-ary split tree (see `tile-tree.ts`).
  *
- * - `root === null` means empty-shell: the canvas surface acts as a single
- *   drop zone seeding a root pane on first drop.
+ * - `root === null` means no layout: the rendered canvas seeds an empty root
+ *   pane for it.
  * - `activePaneId` is the globally-focused pane id; sidebar opens land
  *   here, the active tab inside it gets the top accent indicator.
  * - `tilesByInstanceId` holds every open tab's payload, keyed by the tab's
@@ -888,6 +888,16 @@ export type {
 export type TilesByInstanceId = Readonly<
   Record<string, EpicCanvasTileRef | undefined>
 >;
+
+/**
+ * The tile the phone shell shows beside the current one, by its instance on the
+ * canvas. `transient` is the second tile's own preview: nobody asked to keep it,
+ * so what replaces it takes it off the canvas, as a preview's replacement does.
+ */
+export interface MobileSecondaryTile {
+  readonly instanceId: string;
+  readonly transient: boolean;
+}
 
 export interface EpicCanvasState {
   readonly root: TileLayoutNode | null;

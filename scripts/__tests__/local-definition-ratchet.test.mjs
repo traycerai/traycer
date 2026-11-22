@@ -1,8 +1,8 @@
 // Tests for scripts/local-definition-ratchet.mjs: the per-source scanner, the
-// pure ratchet/baseline helpers, and one end-to-end CLI run in a temp repo.
+// pure ratchet/baseline helpers, and CLI contracts in temp repos.
 // Every fixture is an inline source string; the real tree is never scanned.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -350,6 +350,7 @@ describe("CLI", () => {
 
   let repoDir;
   let configPath;
+  const runningChildren = new Set();
 
   function writeConfig(canonicalBySleep) {
     const rules = Object.fromEntries(
@@ -378,10 +379,28 @@ describe("CLI", () => {
     }
   }
 
-  function run(...flags) {
-    return spawnSync("bun", [SCRIPT_PATH, configPath, ...flags], {
-      cwd: repoDir,
-      encoding: "utf8",
+  function run(flags, options) {
+    return new Promise((resolve, reject) => {
+      const child = spawn("bun", [SCRIPT_PATH, configPath, ...flags], {
+        ...options,
+        cwd: repoDir,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stdout = [];
+      const stderr = [];
+      runningChildren.add(child);
+      child.stdout.on("data", (chunk) => stdout.push(chunk));
+      child.stderr.on("data", (chunk) => stderr.push(chunk));
+      child.once("error", reject);
+      child.once("close", (status, signal) => {
+        runningChildren.delete(child);
+        resolve({
+          status,
+          signal,
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+        });
+      });
     });
   }
 
@@ -395,22 +414,37 @@ describe("CLI", () => {
     git("add", "src/copy.ts");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const activeChildren = [...runningChildren];
+    for (const child of activeChildren) {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+    }
+    await Promise.all(
+      activeChildren.map(
+        (child) => new Promise((resolve) => child.once("close", resolve)),
+      ),
+    );
     rmSync(repoDir, { recursive: true, force: true });
   });
 
-  it("fails a new copy, refuses --write alone, accepts --write --accept-increase, then passes", () => {
-    const failing = run();
+  it("fails a new copy", async () => {
+    const failing = await run([], {});
     expect(failing.status).toBe(1);
     expect(failing.stderr).toContain("src/copy.ts");
     expect(failing.stderr).toContain("use the shared sleep");
+  });
 
+  it("refuses --write alone", async () => {
     const before = readFileSync(configPath, "utf8");
-    const refused = run("--write");
+    const refused = await run(["--write"], {});
     expect(refused.status).toBe(1);
     expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
 
-    const accepted = run("--write", "--accept-increase");
+  it("accepts --write --accept-increase, then passes", async () => {
+    const accepted = await run(["--write", "--accept-increase"], {});
     expect(accepted.status).toBe(0);
     expect(JSON.parse(readFileSync(configPath, "utf8")).baseline.sleep).toEqual(
       {
@@ -418,30 +452,28 @@ describe("CLI", () => {
       },
     );
 
-    expect(run().status).toBe(0);
+    expect((await run([], {})).status).toBe(0);
   });
 
-  it("still scans the repository inside a commit hook, where git sets GIT_DIR", () => {
+  it("still scans the repository inside a commit hook, where git sets GIT_DIR", async () => {
     mkdirSync(join(repoDir, "scripts"));
     configPath = join(repoDir, "scripts", "ratchet.json");
     writeConfig([]);
-    const result = spawnSync("bun", [SCRIPT_PATH, configPath], {
-      cwd: repoDir,
-      encoding: "utf8",
+    const result = await run([], {
       env: { ...process.env, GIT_DIR: join(repoDir, ".git") },
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("src/copy.ts");
   });
 
-  it("does not count a canonical file listed in the config", () => {
+  it("does not count a canonical file listed in the config", async () => {
     writeConfig(["src/copy.ts"]);
-    expect(run().status).toBe(0);
+    expect((await run([], {})).status).toBe(0);
   });
 
-  it("exits 1 when a canonical path does not exist", () => {
+  it("exits 1 when a canonical path does not exist", async () => {
     writeConfig(["src/missing.ts"]);
-    const result = run();
+    const result = await run([], {});
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("src/missing.ts");
   });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
+import { useMobileTileListForm } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 import {
   useIsMobileSwitcherOpen,
   useMobileSwitcherStore,
@@ -16,12 +17,16 @@ import {
  * screen in states no sheet is listening in. Registering the tab id while
  * mounted is what lets the trigger see that and disable itself, rather than
  * writing an open flag nothing renders.
+ *
+ * The sheet draws only in the `bar` form. In the `pane` form each tile's own
+ * header mounts its sheet, the first tile's over the same open flag.
  */
 export function MobileTabSwitcherMount(props: {
   readonly epicId: string;
   readonly tabId: string;
 }) {
   const { epicId, tabId } = props;
+  const form = useMobileTileListForm(tabId);
   const open = useIsMobileSwitcherOpen(tabId);
   const setOpen = useMobileSwitcherStore((s) => s.setOpen);
   const registerMount = useMobileSwitcherStore((s) => s.registerMount);
@@ -34,12 +39,14 @@ export function MobileTabSwitcherMount(props: {
     registerMount(tabId);
     return () => unregisterMount(tabId);
   }, [registerMount, tabId, unregisterMount]);
+  if (form !== "bar") return null;
   return (
     <TabSwitcherSheet
       epicId={epicId}
       tabId={tabId}
       open={open}
       onOpenChange={handleOpenChange}
+      target={null}
     />
   );
 }

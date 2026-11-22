@@ -691,6 +691,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(mocks.useMutate.mock.calls[0]?.[0]).toEqual({
       packId: "opencode",
       version: null,
+      policy: { pinnedVersion: null, autoDownload: false },
     });
   });
 
@@ -1156,6 +1157,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(mocks.setPolicyMutate.mock.calls[0]?.[0]).toEqual({
       packId: "opencode",
       autoDownload: true,
+      policy: { pinnedVersion: null, autoDownload: true },
     });
   });
 

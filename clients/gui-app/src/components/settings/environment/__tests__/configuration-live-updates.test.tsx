@@ -1,6 +1,7 @@
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -20,7 +21,6 @@ vi.mock(
       state: "ready",
       collisions: [],
       retry: () => undefined,
-      reread: () => undefined,
     }),
   }),
 );
@@ -32,7 +32,9 @@ import {
   render,
   screen,
   within,
+  waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentSecretRemovalV12,
@@ -40,8 +42,13 @@ import type {
   EnvironmentSecretsDestroyResponseV11,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
-import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import type {
+  EnvironmentConfigurationItem,
+  EnvironmentConfigurationItemWriteResponse,
+} from "@traycer/protocol/host/environment/configuration-contracts";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -55,19 +62,23 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "./team-configuration-test-support";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 /**
  * A configuration page left open stays current with no navigation, no
  * remount and no manual refetch: a cloud team's or Personal's page follows
- * the environment's configuration revision, which the host answers over
- * `environment.configuration.revision` and the page polls on its own
- * cadence. The pages, the query client, `useHostQuery` and the boundary that
- * mounts the poll are real; the only fake is the host behind the messenger,
- * a `world` the test changes between polls the way another machine would.
+ * the environment's configuration revision, which the app reads from authn
+ * and polls on its own cadence. The pages, query client, cloud hooks and
+ * boundary that mounts the poll are real; the fake authn reads a `world` the
+ * test changes between polls the way another person would.
  *
  * Time is faked but runs (`shouldAdvanceTime`), and each test moves it by the
  * production cadence (`POLL_MS`) and then waits on what the page shows.
@@ -76,20 +87,23 @@ import {
 const POLL_MS = 5_000;
 const HOST_ID = mockLocalHostEntry.hostId;
 
-/** The methods every host here advertises, as its handshake records them. */
 const ADVERTISED_BASE = {
   "environment.configuration.items": { major: 1, minor: 0 },
   "environment.secrets.list": { major: 1, minor: 0 },
 } as const;
 
-/** A host whose manifest lists the revision method: the page polls it. */
-function advertiseRevisionMethod(): void {
-  recordNegotiatedHostManifest(HOST_ID, {
-    ...ADVERTISED_BASE,
-    "environment.configuration.revision": { major: 1, minor: 0 },
-  });
-}
 const AT = Date.UTC(2026, 9, 20, 9, 30);
+
+type RemovedSecretRow = {
+  readonly id: string;
+  readonly name: string;
+  readonly removal: EnvironmentSecretRemovalV12;
+};
+
+type SecretList = {
+  readonly secrets: EnvironmentSecretV12[];
+  readonly removed: RemovedSecretRow[];
+};
 
 const TEAM_ENV = {
   environmentId: "env-a",
@@ -133,14 +147,13 @@ interface World {
   revision: string;
   items: EnvironmentConfigurationItem[];
   secrets: EnvironmentSecretV12[];
-  removed: {
-    id: string;
-    name: string;
-    removal: EnvironmentSecretRemovalV12;
-  }[];
+  removed: RemovedSecretRow[];
   removal: EnvironmentSecretRemovalV12 | null;
+  versions: SecretVersion[];
   /** While set, reads of the items answer when it resolves. */
   heldItems: Deferred<{ items: EnvironmentConfigurationItem[] }> | null;
+  heldSecrets: Deferred<SecretList> | null;
+  heldWrite: Deferred<EnvironmentConfigurationItemWriteResponse> | null;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
 }
 
@@ -151,9 +164,21 @@ function freshWorld(): World {
     secrets: [],
     removed: [],
     removal: null,
+    versions: versionsFixture(),
     heldItems: null,
+    heldSecrets: null,
+    heldWrite: null,
     destroyAnswer: { outcome: "revoked" },
   };
+}
+
+function nextItemWriteRevision(
+  requestRevision: unknown,
+  worldRevision: string,
+): number {
+  return typeof requestRevision === "number"
+    ? requestRevision + 1
+    : Number(worldRevision) + 1;
 }
 
 const variable = (key: string, revision: number) =>
@@ -165,20 +190,22 @@ const variable = (key: string, revision: number) =>
     revision,
   });
 
-function secretFixture(): EnvironmentSecretV12 {
+function secretFixture(
+  overrides: Partial<EnvironmentSecretV12>,
+): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",
-    protocol: null,
+    protocol: "https",
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-2",
     revoked: false,
     updatedAt: AT,
     variables: [],
-    providerVariables: [],
+    ...overrides,
   };
 }
 
@@ -191,6 +218,15 @@ function versionsFixture(): SecretVersion[] {
       supersededAt: null,
       destroyedAt: null,
       current: true,
+      rotationState: null,
+    },
+    {
+      versionId: "ver-1",
+      ordinal: 1,
+      createdAt: AT - 1_000,
+      supersededAt: AT,
+      destroyedAt: null,
+      current: false,
       rotationState: null,
     },
   ];
@@ -218,7 +254,10 @@ function removal(
 
 type EnvironmentRow = typeof TEAM_ENV | typeof PERSONAL_ENV;
 
-function handlersOf(world: World, environment: EnvironmentRow) {
+function handlersOf(
+  world: World,
+  environment: EnvironmentRow,
+): MockHandlerMap<HostRpcRegistry> {
   return {
     "environment.list": () => ({ environments: [environment] }),
     "environment.history": () => ({
@@ -234,14 +273,45 @@ function handlersOf(world: World, environment: EnvironmentRow) {
       world.heldItems === null
         ? { items: [...world.items] }
         : world.heldItems.promise,
-    "environment.secrets.list": () => ({
-      secrets: [...world.secrets],
-      removed: [...world.removed],
-    }),
+    "environment.configuration.items.put": (params) => {
+      const requestRevision: unknown = params.revision;
+      return world.heldWrite === null
+        ? {
+            outcome: "saved",
+            revision: nextItemWriteRevision(requestRevision, world.revision),
+          }
+        : world.heldWrite.promise;
+    },
+    "environment.configuration.items.delete": (params) => {
+      const requestRevision: unknown = params.revision;
+      return world.heldWrite === null
+        ? {
+            outcome: "saved",
+            revision: nextItemWriteRevision(requestRevision, world.revision),
+          }
+        : world.heldWrite.promise;
+    },
+    "environment.secrets.list": () =>
+      world.heldSecrets === null
+        ? { secrets: [...world.secrets], removed: [...world.removed] }
+        : world.heldSecrets.promise,
     "environment.secrets.versions": () => ({
-      versions: versionsFixture(),
+      versions: [...world.versions],
       removal: world.removal,
     }),
+    "environment.secrets.undo": ({ secretId, versionId }) => {
+      world.secrets = world.secrets.map((secret) =>
+        secret.secretId === secretId
+          ? { ...secret, currentVersionId: versionId, revoked: false }
+          : secret,
+      );
+      world.versions = world.versions.map((version) =>
+        version.versionId === versionId
+          ? { ...version, current: true, supersededAt: null }
+          : { ...version, current: false, supersededAt: AT },
+      );
+      return { outcome: "accepted", rotationId: "restore-rotation", versionId };
+    },
     "environment.secrets.destroy": () => world.destroyAnswer,
     "environment.secrets.rotation": () => ({
       rotation: null,
@@ -271,7 +341,6 @@ function mountVariables(
         ? { kind: "team", environmentId: environment.environmentId }
         : { kind: "personal" },
   });
-  advertiseRevisionMethod();
   const harness = mountTeamPage(
     poolSource("editor"),
     handlersOf(world, environment),
@@ -324,7 +393,6 @@ function mountSecrets(
         ? { kind: "team", environmentId: environment.environmentId }
         : { kind: "personal" },
   });
-  advertiseRevisionMethod();
   const harness = mountTeamPage(
     poolSource("editor"),
     handlersOf(world, environment),
@@ -335,11 +403,13 @@ function mountSecrets(
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetTeamPageHarness();
   resetNegotiatedManifests();
@@ -354,7 +424,9 @@ describe.each([
     const world = freshWorld();
     world.items = [variable("NODE_ENV", 1)];
     const harness = mountVariables(world, environment);
-    expect(await screen.findByLabelText("NODE_ENV value")).toBeTruthy();
+    expect(
+      await screen.findByRole("textbox", { name: "Value for NODE_ENV" }),
+    ).toBeTruthy();
     expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
       environmentId: environment.environmentId,
     });
@@ -362,25 +434,33 @@ describe.each([
     // Another computer adds LOG_LEVEL: only the revision moves on the wire.
     world.items = [variable("NODE_ENV", 1), variable("LOG_LEVEL", 2)];
     world.revision = "11";
-    expect(screen.queryByLabelText("LOG_LEVEL value")).toBeNull();
+    expect(
+      screen.queryByRole("textbox", { name: "Value for LOG_LEVEL" }),
+    ).toBeNull();
     await pollOnce();
-    expect(await screen.findByLabelText("LOG_LEVEL value")).toBeTruthy();
+    expect(
+      await screen.findByRole("textbox", { name: "Value for LOG_LEVEL" }),
+    ).toBeTruthy();
 
     // And deletes NODE_ENV.
     world.items = [variable("LOG_LEVEL", 2)];
     world.revision = "12";
     await pollOnce();
     await vi.waitFor(() => {
-      expect(screen.queryByLabelText("NODE_ENV value")).toBeNull();
+      expect(
+        screen.queryByRole("textbox", { name: "Value for NODE_ENV" }),
+      ).toBeNull();
     });
-    expect(screen.getByLabelText("LOG_LEVEL value")).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Value for LOG_LEVEL" }),
+    ).toBeTruthy();
   });
 
   it("reads the items again only when the revision has moved", async () => {
     const world = freshWorld();
     world.items = [variable("NODE_ENV", 1)];
     const harness = mountVariables(world, environment);
-    await screen.findByLabelText("NODE_ENV value");
+    await screen.findByRole("textbox", { name: "Value for NODE_ENV" });
     // The first revision answer may read the items once more, to close the
     // race between the first read and the first answer.
     await pollOnce();
@@ -412,7 +492,7 @@ describe("a Variables page whose items read is held", () => {
     const world = freshWorld();
     world.items = [variable("NODE_ENV", 1)];
     const harness = mountVariables(world, TEAM_ENV);
-    await screen.findByLabelText("NODE_ENV value");
+    await screen.findByRole("textbox", { name: "Value for NODE_ENV" });
     await pollOnce();
 
     const held = deferred<{ items: EnvironmentConfigurationItem[] }>();
@@ -428,19 +508,25 @@ describe("a Variables page whose items read is held", () => {
 
     // Prior data stays on screen: no blank page, no failure line, no spinner
     // in place of the rows.
-    expect(screen.getByLabelText("NODE_ENV value")).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Value for NODE_ENV" }),
+    ).toBeTruthy();
     expect(screen.queryByText(/Couldn't read/)).toBeNull();
 
     held.resolve({
       items: [variable("NODE_ENV", 1), variable("LOG_LEVEL", 2)],
     });
-    expect(await screen.findByLabelText("LOG_LEVEL value")).toBeTruthy();
-    expect(screen.getByLabelText("NODE_ENV value")).toBeTruthy();
+    expect(
+      await screen.findByRole("textbox", { name: "Value for LOG_LEVEL" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Value for NODE_ENV" }),
+    ).toBeTruthy();
   });
 });
 
-describe("a Variables page on a host that does not advertise the revision method", () => {
-  it("never asks for the revision and reads the items on the same cadence instead", async () => {
+describe("a Variables page whose host predates revision support", () => {
+  it("reads authn's revision without sending a revision call to the host", async () => {
     const world = freshWorld();
     world.items = [variable("NODE_ENV", 1)];
     useSettingsEnvironmentPickStore.setState({
@@ -461,13 +547,23 @@ describe("a Variables page on a host that does not advertise the revision method
       </ConfigurationSourceBoundary>,
       { wrapper: harness.Wrapper },
     );
-    await screen.findByLabelText("NODE_ENV value");
+    await screen.findByRole("textbox", { name: "Value for NODE_ENV" });
 
     world.items = [variable("NODE_ENV", 1), variable("LOG_LEVEL", 2)];
+    world.revision = "11";
     await pollOnce();
 
-    expect(await screen.findByLabelText("LOG_LEVEL value")).toBeTruthy();
-    expect(harness.paramsOf("environment.configuration.revision")).toEqual([]);
+    expect(
+      await screen.findByRole("textbox", { name: "Value for LOG_LEVEL" }),
+    ).toBeTruthy();
+    expect(
+      reads(harness, "environment.configuration.revision"),
+    ).toBeGreaterThan(1);
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "environment.configuration.revision",
+      ),
+    ).toHaveLength(0);
   });
 });
 
@@ -513,7 +609,7 @@ describe("a Secrets page left open on a removal", () => {
 
   it("drops a still-listed secret's Removing status the same way, and offers no Retry once destroyed", async () => {
     const world = freshWorld();
-    world.secrets = [secretFixture()];
+    world.secrets = [secretFixture({})];
     world.removal = removal("revoked");
     mountSecrets(world, TEAM_ENV);
     const status = await screen.findByTestId("secret-removal-status");
@@ -530,7 +626,7 @@ describe("a Secrets page left open on a removal", () => {
 
   it("sends no destroy when Retry is pressed on a removal the host has already finished", async () => {
     const world = freshWorld();
-    world.secrets = [secretFixture()];
+    world.secrets = [secretFixture({})];
     world.removal = removal("revoked");
     const harness = mountSecrets(world, TEAM_ENV);
     const status = await screen.findByTestId("secret-removal-status");
@@ -562,10 +658,7 @@ describe("a Secrets page left open on a removal", () => {
       secrets: EnvironmentSecretV12[];
       removed: World["removed"];
     }>();
-    harness.messenger.setHandlers({
-      ...handlersOf(world, PERSONAL_ENV),
-      "environment.secrets.list": () => held.promise,
-    });
+    world.heldSecrets = held;
     const before = reads(harness, "environment.secrets.list");
     await pollOnce();
     await vi.waitFor(() => {
@@ -576,6 +669,7 @@ describe("a Secrets page left open on a removal", () => {
     expect(screen.getByTestId("removed-secret-row")).toBeTruthy();
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
 
+    world.heldSecrets = null;
     held.resolve({
       secrets: [],
       removed: [
@@ -588,52 +682,75 @@ describe("a Secrets page left open on a removal", () => {
   });
 });
 
-describe("a Variables page while its own write is in flight", () => {
-  type WriteAnswer = { outcome: "saved"; revision: number };
+describe("returning to an earlier secret version", () => {
+  it("re-reads versions from authn after Undo", async () => {
+    const world = freshWorld();
+    world.secrets = [secretFixture({})];
+    const harness = mountSecrets(world, PERSONAL_ENV);
 
-  /** Holds the host's answer to the write, apart from the read that observes it. */
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    const rows = await screen.findAllByTestId("secret-version");
+    expect(rows).toHaveLength(2);
+    const versionReadsBefore = reads(harness, "environment.secrets.versions");
+
+    fireEvent.click(within(rows[1]).getByTestId("secret-version-undo"));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.undo")).toEqual([
+        {
+          environmentId: PERSONAL_ENV.environmentId,
+          secretId: "sec-1",
+          versionId: "ver-1",
+          regrant: false,
+        },
+      ]);
+      expect(reads(harness, "environment.secrets.versions")).toBeGreaterThan(
+        versionReadsBefore,
+      );
+    });
+    await waitFor(() => {
+      const updatedRows = screen.getAllByTestId("secret-version");
+      expect(updatedRows[0]?.getAttribute("data-version-state")).toBe(
+        "replaced",
+      );
+      expect(updatedRows[1]?.getAttribute("data-version-state")).toBe(
+        "current",
+      );
+    });
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "environment.secrets.versions",
+      ),
+    ).toHaveLength(0);
+  });
+});
+
+describe("a Variables page while its own write is in flight", () => {
+  /** Holds authn's answer to the write, apart from the read that observes it. */
   function holdWrite(
-    harness: TeamPageHarness,
     world: World,
-    method:
-      | "environment.configuration.items.put"
-      | "environment.configuration.items.delete",
-  ): Deferred<WriteAnswer> {
-    const answer = deferred<WriteAnswer>();
-    const handlers = handlersOf(world, TEAM_ENV);
-    harness.messenger.setHandlers(
-      method === "environment.configuration.items.put"
-        ? {
-            ...handlers,
-            "environment.configuration.items.put": () => answer.promise,
-          }
-        : {
-            ...handlers,
-            "environment.configuration.items.delete": () => answer.promise,
-          },
-    );
+  ): Deferred<EnvironmentConfigurationItemWriteResponse> {
+    const answer = deferred<EnvironmentConfigurationItemWriteResponse>();
+    world.heldWrite = answer;
     return answer;
   }
 
-  it("shows Adding on a disabled draft from Add until the read lists the variable, never 'No variables'", async () => {
+  it("keeps the Add form visible and confirms acceptance through the live revision poll before the next write", async () => {
     const world = freshWorld();
     const harness = mountVariables(world, TEAM_ENV);
     await screen.findByText("No variables.");
-    const answer = holdWrite(
-      harness,
-      world,
-      "environment.configuration.items.put",
-    );
+    const answer = holdWrite(world);
 
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
     const draft = screen.getByRole("region", { name: "New variable" });
-    fireEvent.change(within(draft).getByLabelText("Variable name"), {
+    fireEvent.change(within(draft).getByLabelText("New variable name"), {
       target: { value: "NEW_VAR" },
     });
     fireEvent.change(within(draft).getByLabelText("New variable value"), {
       target: { value: "one" },
     });
     fireEvent.click(
-      within(draft).getByRole("button", { name: "Add a variable" }),
+      within(draft).getByRole("button", { name: "Apply variable" }),
     );
 
     // In flight: the draft is kept as typed, disabled, and says Adding.
@@ -647,7 +764,7 @@ describe("a Variables page while its own write is in flight", () => {
     expect(within(pendingDraft()).getByRole("status").textContent).toContain(
       "NEW_VAR · Adding",
     );
-    for (const field of ["Variable name", "New variable value"]) {
+    for (const field of ["New variable name", "New variable value"]) {
       expect(within(pendingDraft()).getByLabelText(field)).toHaveProperty(
         "disabled",
         true,
@@ -655,46 +772,71 @@ describe("a Variables page while its own write is in flight", () => {
     }
     expect(screen.queryByText("No variables.")).toBeNull();
 
-    // Accepted, but the host's read does not list it yet: still Adding.
     await act(async () => {
+      world.heldWrite = null;
       answer.resolve({ outcome: "saved", revision: 3 });
-      await Promise.resolve();
+      await answer.promise;
     });
-    expect(within(pendingDraft()).getByRole("status").textContent).toContain(
-      "NEW_VAR · Adding",
+    const status = await screen.findByText(
+      "Saved, but latest settings haven't refreshed.",
     );
+    expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "New variable" })).toBeNull();
+    expect(
+      within(screen.getByRole("region", { name: "NEW_VAR" })).getByText("one"),
+    ).toBeTruthy();
     expect(screen.queryByText("No variables.")).toBeNull();
 
-    // Another read observes it: a real row replaces the draft, which empties.
+    // Another read observes it: a real row replaces the accepted line.
     world.items = [{ ...variable("NEW_VAR", 3), value: { value: "one" } }];
     world.revision = "11";
     await pollOnce();
-    const row = await screen.findByLabelText("NEW_VAR value");
-    expect(row).toHaveProperty("value", "one");
+    expect(
+      await screen.findByRole("textbox", { name: "Value for NEW_VAR" }),
+    ).toBeTruthy();
     await vi.waitFor(() => {
       expect(screen.queryByText(/Adding/)).toBeNull();
     });
+    expect(screen.queryByRole("region", { name: "New variable" })).toBeNull();
     expect(
-      within(
-        screen.getByRole("region", { name: "New variable" }),
-      ).getByLabelText("Variable name"),
-    ).toHaveProperty("value", "");
+      screen.getByRole("button", { name: "Add a variable" }),
+    ).toHaveProperty("disabled", false);
+    expect(screen.queryByText(/Saved[.,]/)).toBeNull();
+    world.items = [{ ...variable("NEW_VAR", 4), value: { value: "two" } }];
+    world.revision = "12";
+    fireEvent.change(screen.getByLabelText("Value for NEW_VAR"), {
+      target: { value: "two" },
+    });
+    fireEvent.blur(screen.getByLabelText("Value for NEW_VAR"));
+    await vi.waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(2);
+      expect(
+        screen.getByRole("textbox", { name: "Value for NEW_VAR" }),
+      ).toHaveProperty("disabled", false);
+    });
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[1],
+    ).toMatchObject({ revision: 3 });
+    expect(
+      screen.getByRole("textbox", { name: "Value for NEW_VAR" }),
+    ).toHaveProperty("value", "two");
   });
 
-  it("keeps a removed variable's row as Removing, its Delete disabled and sent once, until the read drops it", async () => {
+  it("keeps Remove in flight once, then confirms the accepted removal through the live revision poll", async () => {
     const world = freshWorld();
     world.items = [variable("OLD_VAR", 1)];
     const harness = mountVariables(world, TEAM_ENV);
-    await screen.findByLabelText("OLD_VAR value");
-    const answer = holdWrite(
-      harness,
-      world,
-      "environment.configuration.items.delete",
-    );
+    const user = userEvent.setup();
+    await screen.findByRole("textbox", { name: "Value for OLD_VAR" });
+    const answer = holdWrite(world);
     const row = (): HTMLElement =>
       screen.getByRole("region", { name: "OLD_VAR" });
 
-    fireEvent.click(within(row()).getByRole("button", { name: "Delete" }));
+    await user.click(
+      within(row()).getByRole("button", { name: "Remove OLD_VAR" }),
+    );
 
     await vi.waitFor(() => {
       expect(
@@ -705,30 +847,41 @@ describe("a Variables page while its own write is in flight", () => {
       "OLD_VAR · Removing",
     );
     expect(
-      within(row()).getByRole("button", { name: "Delete" }),
+      within(row()).getByRole("button", { name: "Remove OLD_VAR" }),
     ).toHaveProperty("disabled", true);
-    fireEvent.click(within(row()).getByRole("button", { name: "Delete" }));
+    fireEvent.click(
+      within(row()).getByRole("button", { name: "Remove OLD_VAR" }),
+    );
     expect(
       harness.paramsOf("environment.configuration.items.delete"),
     ).toHaveLength(1);
 
-    // Accepted, the read still lists it: the row is retained, still Removing.
     await act(async () => {
+      world.heldWrite = null;
       answer.resolve({ outcome: "saved", revision: 2 });
-      await Promise.resolve();
+      await answer.promise;
     });
-    expect(screen.getByLabelText("OLD_VAR value")).toBeTruthy();
-    expect(within(row()).getByRole("status").textContent).toContain(
-      "OLD_VAR · Removing",
+    const status = await screen.findByText(
+      "Removed, but latest settings haven't refreshed.",
     );
+    expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Value for OLD_VAR" }),
+    ).toHaveProperty("disabled", true);
     expect(screen.queryByText("No variables.")).toBeNull();
 
     world.items = [];
     world.revision = "11";
     await pollOnce();
     await vi.waitFor(() => {
-      expect(screen.queryByLabelText("OLD_VAR value")).toBeNull();
+      expect(
+        screen.queryByRole("textbox", { name: "Value for OLD_VAR" }),
+      ).toBeNull();
     });
     expect(await screen.findByText("No variables.")).toBeTruthy();
+    expect(screen.queryByText(/Removed[.,]/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Add a variable" }),
+    ).toHaveProperty("disabled", false);
   });
 });

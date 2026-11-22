@@ -56,6 +56,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
     onLongPress: startEdit,
     disabled: !editable || draft !== null,
     acceptsMouse: true,
+    acceptsPen: false,
   });
 
   const focusOnMount = useCallback((node: HTMLInputElement | null) => {

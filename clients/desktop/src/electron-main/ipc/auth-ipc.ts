@@ -1,7 +1,37 @@
+import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
+import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
+import type {
+  HostTokenMintOutcome,
+  HostTokenRenewal,
+} from "@traycer-clients/shared/auth/host-token-source";
+import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-token-sign-out";
+import { listTeamComputersViaHttp } from "@traycer-clients/shared/host-client/team-computers";
+import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
+import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
+import { saveAutoPolicyViaHttp } from "@traycer-clients/shared/host-client/auto-policy-save";
+import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import { listEnvironmentsViaHttp } from "@traycer-clients/shared/host-client/environment-directory";
+import {
+  fetchTeamChatAutoArchiveViaHttp,
+  parseTeamChatAutoArchiveSetRequest,
+  putTeamChatAutoArchiveViaHttp,
+  type TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
+import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/sandbox-control";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
+  RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
+import type {
+  HostTokenEraReply,
+  HostTokenObtainReply,
+  HostTokenRenewReply,
+} from "../../ipc-contracts/host-token-types";
 import {
   listUserSessionsViaHttp,
   mintHostCredentialViaHttp,
@@ -29,16 +59,18 @@ import {
   runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  isVoiceName,
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
+  type VoiceSelectionPolicy,
   type VoiceSessionIndicator,
   type VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import { voiceRouteViaHttp } from "@traycer-clients/shared/host-client/voice-router";
 import { voiceLiveWindows } from "../windows/voice-live-windows";
 import {
   decideSecretRequestViaHttp,
+  replaceEnvironmentApiKeyViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
@@ -49,8 +81,13 @@ import {
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
   registerSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
-import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
+import {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+} from "@traycer-clients/shared/host-client/bot-setup";
 import { config } from "../../config";
 import type {
   DesktopAuthSessionSetResult,
@@ -67,6 +104,9 @@ import {
   assertNumber,
   assertNullableString,
   assertString,
+  parseBotDeleteRequest,
+  parseBotUpdateReplyModeRequest,
+  parseBotUpdateRunSettingsRequest,
   parseDesktopAuthSession,
   parseMintHostCredentialRequest,
   parseRequiredId,
@@ -78,6 +118,7 @@ import {
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
   parseSlackAppBotId,
+  parseSlackAppDmsRequest,
   parseSlackAppRegisterRequest,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
@@ -104,6 +145,178 @@ function assertBoolean(
   }
 }
 
+function hostIdsOf(value: unknown): readonly string[] {
+  if (!Array.isArray(value))
+    throw new Error("hostTokensRenew.hostIds requires an array argument");
+  return value.map((hostId: unknown) => {
+    assertString(hostId, "hostTokensRenew.hostIds[]");
+    return hostId;
+  });
+}
+
+function hostTokenOf(value: unknown): HostToken {
+  if (typeof value !== "object" || value === null)
+    throw new Error("hostTokensAdopt.token requires an object argument");
+  const token: unknown = Reflect.get(value, "token");
+  const expiresAtMs: unknown = Reflect.get(value, "expiresAtMs");
+  assertString(token, "hostTokensAdopt.token.token");
+  assertNumber(expiresAtMs, "hostTokensAdopt.token.expiresAtMs");
+  return { token, expiresAtMs };
+}
+
+/**
+ * Main mints with its own verified copy of the sign-in, coalesced per person, host
+ * and refresh, so no channel here carries a sign-in token.
+ */
+function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
+  const tokens = bridge.hostTokens;
+  // A window may ask before its refreshed sign-in reaches main: the ask then waits for
+  // main's next sign-in change, one per person, a newer one answering the older
+  // `already-current`. One from before a sign-out answers `superseded` and never mints.
+  const waitingRenewals = new Map<string, () => void>();
+  const renewOnNextSignIn = (
+    userId: string,
+    hostIds: readonly string[],
+    era: number,
+  ): Promise<HostTokenRenewal> =>
+    new Promise((resolve) => {
+      waitingRenewals.get(userId)?.();
+      const onChange = (): void => {
+        bridge.authSession.off("change", onChange);
+        if (waitingRenewals.get(userId) === stop)
+          waitingRenewals.delete(userId);
+        if (tokens.era(userId) !== era) {
+          resolve({ kind: "superseded" });
+          return;
+        }
+        tokens.renew(userId, hostIds).then(resolve, () => {
+          resolve({ kind: "already-current" });
+        });
+      };
+      const stop = (): void => {
+        bridge.authSession.off("change", onChange);
+        if (waitingRenewals.get(userId) === stop)
+          waitingRenewals.delete(userId);
+        resolve({ kind: "already-current" });
+      };
+      bridge.authSession.on("change", onChange);
+      waitingRenewals.set(userId, stop);
+    });
+  bridge.disposeFns.push(() => {
+    for (const stop of Array.from(waitingRenewals.values())) stop();
+  });
+  // Each handler compares the era a window names and starts the source's work in one
+  // step, so nothing begun in an earlier era is kept.
+  bridge.handleSync(RunnerHostSync.hostTokensEra, (_event, userId: unknown) => {
+    assertString(userId, "hostTokensEra.userId");
+    return tokens.era(userId);
+  });
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensObtain,
+    async (
+      _event,
+      userId: unknown,
+      hostId: unknown,
+      fresh: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenObtainReply> => {
+      assertString(userId, "hostTokensObtain.userId");
+      assertString(hostId, "hostTokensObtain.hostId");
+      assertBoolean(fresh, "hostTokensObtain.fresh");
+      assertNumber(expectedEra, "hostTokensObtain.expectedEra");
+      const outcome: HostTokenMintOutcome =
+        tokens.era(userId) === expectedEra
+          ? await tokens.obtain(userId, hostId, fresh, null)
+          : { kind: "superseded" };
+      return { outcome, era: tokens.era(userId) };
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensRenew,
+    async (
+      _event,
+      userId: unknown,
+      hostIds: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenRenewReply> => {
+      assertString(userId, "hostTokensRenew.userId");
+      assertNumber(expectedEra, "hostTokensRenew.expectedEra");
+      const wanted = hostIdsOf(hostIds);
+      if (tokens.era(userId) !== expectedEra)
+        return { renewal: { kind: "superseded" }, era: tokens.era(userId) };
+      const renewal = await tokens.renew(userId, wanted);
+      return {
+        renewal:
+          renewal.kind === "already-current"
+            ? await renewOnNextSignIn(userId, wanted, expectedEra)
+            : renewal,
+        era: tokens.era(userId),
+      };
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensAdopt,
+    async (
+      _event,
+      userId: unknown,
+      hostId: unknown,
+      token: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenEraReply> => {
+      assertString(userId, "hostTokensAdopt.userId");
+      assertString(hostId, "hostTokensAdopt.hostId");
+      assertNumber(expectedEra, "hostTokensAdopt.expectedEra");
+      await tokens.adopt(userId, hostId, hostTokenOf(token), expectedEra);
+      return { era: tokens.era(userId) };
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensForgetUser,
+    async (_event, userId: unknown): Promise<HostTokenEraReply> => {
+      assertString(userId, "hostTokensForgetUser.userId");
+      await tokens.forgetUser(userId);
+      return { era: tokens.era(userId) };
+    },
+  );
+  bridge.disposeFns.push(
+    tokens.subscribe(({ userId, hostId }) => {
+      bridge.fanOut(RunnerHostEvent.hostTokensChange, {
+        userId,
+        hostId,
+        token: tokens.current(userId, hostId),
+        era: tokens.era(userId),
+      });
+    }),
+  );
+  bridge.disposeFns.push(
+    forgetHostTokensOnSignOut(
+      {
+        current: async () =>
+          (await bridge.authTokenStore.get())?.user.id ?? null,
+        onChange: (listener) =>
+          bridge.authTokenStore.subscribe((change) => {
+            listener(change.present ? change.userId : null);
+          }),
+      },
+      tokens,
+    ),
+  );
+}
+
+/** The renderer's attachment request, checked field by field before it is sent. */
+function attachmentRequestOf(value: unknown): TaskEnvironmentAttachmentRequest {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(
+      "attachTaskEnvironment.request requires an object argument",
+    );
+  }
+  const taskId: unknown = Reflect.get(value, "taskId");
+  const environmentId: unknown = Reflect.get(value, "environmentId");
+  assertString(taskId, "attachTaskEnvironment.request.taskId");
+  assertString(environmentId, "attachTaskEnvironment.request.environmentId");
+  return { taskId, environmentId };
+}
+
 /** The renderer's mint request, checked field by field before it is sent. */
 function voiceSessionMintRequestOf(value: unknown): VoiceSessionMintRequest {
   if (typeof value !== "object" || value === null) {
@@ -113,7 +326,23 @@ function voiceSessionMintRequestOf(value: unknown): VoiceSessionMintRequest {
   const input: unknown = Reflect.get(value, "input");
   assertString(offerSdp, "mintVoiceSession.request.offerSdp");
   assertString(input, "mintVoiceSession.request.input");
-  return { offerSdp, input };
+  // Absent reads as null: a renderer that names no voice sends none.
+  const voice: unknown = Reflect.get(value, "voice") ?? null;
+  const voicePolicy: unknown = Reflect.get(value, "voicePolicy") ?? null;
+  if (voice !== null && !isVoiceName(voice)) {
+    throw new Error("mintVoiceSession.request.voice is not a voice name");
+  }
+  if (voicePolicy !== null && !isVoiceSelectionPolicy(voicePolicy)) {
+    throw new Error("mintVoiceSession.request.voicePolicy is not a policy");
+  }
+  if (voicePolicy === "exact" && voice === null) {
+    throw new Error("mintVoiceSession.request: the exact policy names a voice");
+  }
+  return { offerSdp, input, voice, voicePolicy };
+}
+
+function isVoiceSelectionPolicy(value: unknown): value is VoiceSelectionPolicy {
+  return value === "fallback" || value === "exact";
 }
 
 /** The renderer's voice indicator, checked field by field. */
@@ -151,9 +380,8 @@ function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
  * happens only inside `tokenStore.rotate`, under the file lock.
  */
 /**
- * The sandbox control plane, the team environment, the secret decisions and
- * the executable-write grant: the IPC the gui-app's sandbox, environment and
- * bot surfaces call.
+ * The sandbox control plane, the team environment and the secret decisions:
+ * the IPC the gui-app's sandbox, environment and bot surfaces call.
  */
 function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
   // The sandbox control plane. traycer-server's base URL is read from the
@@ -183,6 +411,48 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.listEnvironments,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "listEnvironments.bearerToken");
+      return listEnvironmentsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.saveAutoPolicy,
+    async (_event, bearerToken: unknown, body: unknown) => {
+      assertString(bearerToken, "saveAutoPolicy.bearerToken");
+      assertString(body, "saveAutoPolicy.body");
+      return saveAutoPolicyViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        body,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.attachTaskEnvironment,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "attachTaskEnvironment.bearerToken");
+      return attachTaskEnvironmentViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        attachmentRequestOf(request),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
     RunnerHostInvoke.getSandboxCosts,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "getSandboxCosts.bearerToken");
@@ -196,12 +466,17 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.getSandboxCatalogue,
-    async (_event, bearerToken: unknown) => {
+    async (_event, bearerToken: unknown, context: unknown) => {
       assertString(bearerToken, "getSandboxCatalogue.bearerToken");
+      const request =
+        context == null
+          ? null
+          : sandboxCatalogueReadinessRequestSchema.parse(context);
       return fetchSandboxCatalogueViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+        request,
       );
     },
   );
@@ -267,22 +542,6 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  // The voice router's model call: the body is the renderer's JSON, relayed
-  // unread; the answer goes back opaque for the renderer's parser.
-  bridge.handleInvoke(
-    RunnerHostInvoke.routeVoiceUtterance,
-    async (_event, bearerToken: unknown, requestBody: unknown) => {
-      assertString(bearerToken, "routeVoiceUtterance.bearerToken");
-      assertString(requestBody, "routeVoiceUtterance.requestBody");
-      return voiceRouteViaHttp(
-        config.serverBaseUrl,
-        bearerToken,
-        await iapProxyToken(),
-        requestBody,
-      );
-    },
-  );
-
   bridge.handleInvoke(
     RunnerHostInvoke.getTraycerModels,
     async (_event, bearerToken: unknown) => {
@@ -291,6 +550,44 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getTeamChatAutoArchive,
+    async (_event, bearerToken: unknown, teamId: unknown) => {
+      assertString(bearerToken, "getTeamChatAutoArchive.bearerToken");
+      assertString(teamId, "getTeamChatAutoArchive.teamId");
+      return fetchTeamChatAutoArchiveViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        teamId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.setTeamChatAutoArchive,
+    async (
+      _event,
+      bearerToken: unknown,
+      teamId: unknown,
+      request: unknown,
+    ): Promise<TeamChatAutoArchiveWriteResult> => {
+      assertString(bearerToken, "setTeamChatAutoArchive.bearerToken");
+      assertString(teamId, "setTeamChatAutoArchive.teamId");
+      const parsedRequest = parseTeamChatAutoArchiveSetRequest(request);
+      if (parsedRequest === null) return { kind: "failed" };
+      return putTeamChatAutoArchiveViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        teamId,
+        parsedRequest,
       );
     },
   );
@@ -450,10 +747,72 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     async (_event, bearerToken: unknown, request: unknown) => {
       assertString(bearerToken, "registerSlackApp.bearerToken");
       const parsedRequest = parseSlackAppRegisterRequest(request);
+      // The app's secrets ride in the body: sent once, following no redirect.
       return registerSlackAppViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+        fetchEnvironmentTransport,
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.setSlackAppDms,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "setSlackAppDms.bearerToken");
+      const parsedRequest = parseSlackAppDmsRequest(request);
+      return setSlackAppDmsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        parsedRequest,
+      );
+    },
+  );
+
+  // The same server and proxy token, through the transport that follows no redirect.
+  bridge.handleInvoke(
+    RunnerHostInvoke.updateBotRunSettings,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "updateBotRunSettings.bearerToken");
+      const parsedRequest = parseBotUpdateRunSettingsRequest(request);
+      return updateBotRunSettingsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.updateBotReplyMode,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "updateBotReplyMode.bearerToken");
+      const parsedRequest = parseBotUpdateReplyModeRequest(request);
+      return updateBotReplyModeViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.deleteBot,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "deleteBot.bearerToken");
+      const parsedRequest = parseBotDeleteRequest(request);
+      return deleteBotViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
         parsedRequest,
       );
     },
@@ -492,6 +851,37 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.replaceEnvironmentApiKey,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      // Never throw validation details for a value that may contain a key.
+      if (
+        typeof bearerToken !== "string" ||
+        typeof request !== "object" ||
+        request === null ||
+        !("environmentId" in request) ||
+        typeof request.environmentId !== "string" ||
+        !("profileId" in request) ||
+        typeof request.profileId !== "string" ||
+        !("harnessId" in request) ||
+        typeof request.harnessId !== "string" ||
+        !("key" in request) ||
+        typeof request.key !== "string"
+      )
+        return { kind: "failed" };
+      return replaceEnvironmentApiKeyViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        {
+          environmentId: request.environmentId,
+          profileId: request.profileId,
+          harnessId: request.harnessId,
+          key: request.key,
+        },
+      );
+    },
+  );
+
+  bridge.handleInvoke(
     RunnerHostInvoke.getEnvironmentProviders,
     async (_event, bearerToken: unknown, environmentId: unknown) => {
       assertString(bearerToken, "getEnvironmentProviders.bearerToken");
@@ -499,19 +889,6 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bridge.options.authnBaseUrl,
         bearerToken,
         parseRequiredId(environmentId, "getEnvironmentProviders.environmentId"),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.mintExecutableWriteGrant,
-    async (_event, bearerToken: unknown, hostId: unknown) => {
-      assertString(bearerToken, "mintExecutableWriteGrant.bearerToken");
-      assertString(hostId, "mintExecutableWriteGrant.hostId");
-      return mintExecutableWriteGrantViaHttp(
-        bridge.options.authnBaseUrl,
-        bearerToken,
-        hostId,
       );
     },
   );
@@ -584,6 +961,13 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(RunnerHostInvoke.authTokenStoreGet, () => {
     return bridge.authTokenStore.get();
   });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.authTokenStoreGetSignInStorageLow,
+    () => {
+      return bridge.authTokenStore.getSignInStorageLow();
+    },
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.authTokenStoreSignIn,
@@ -671,7 +1055,66 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
+  bridge.handleInvoke(
+    RunnerHostInvoke.releaseTeamComputer,
+    async (
+      _event,
+      bearer: unknown,
+      hostId: unknown,
+      environmentId: unknown,
+    ) => {
+      assertString(bearer, "releaseTeamComputer.bearer");
+      assertString(hostId, "releaseTeamComputer.hostId");
+      assertString(environmentId, "releaseTeamComputer.environmentId");
+      return releaseTeamComputerViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        hostId,
+        environmentId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.listTeamComputers,
+    async (_event, bearer: unknown, environmentId: unknown) => {
+      assertString(bearer, "listTeamComputers.bearer");
+      assertString(environmentId, "listTeamComputers.environmentId");
+      return listTeamComputersViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        environmentId,
+      );
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.mintTeamComputerInstallToken,
+    async (_event, bearer: unknown, environmentId: unknown) => {
+      assertString(bearer, "mintTeamComputerInstallToken.bearer");
+      assertString(environmentId, "mintTeamComputerInstallToken.environmentId");
+      return mintTeamComputerInstallTokenViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        environmentId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.readHostOwnership,
+    async (_event, bearer: unknown, hostId: unknown) => {
+      assertString(bearer, "readHostOwnership.bearer");
+      assertString(hostId, "readHostOwnership.hostId");
+      return readHostOwnershipViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        hostId,
+      );
+    },
+  );
+
   registerSandboxControlPlaneIpc(bridge);
+  registerHostTokensIpc(bridge);
 
   // Fan the owned-watcher change events out to every window (source lands in §4;
   // a live registration that never fires until then). Torn down on dispose,
@@ -680,6 +1123,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     bridge.fanOut(RunnerHostEvent.authTokenStoreChange, change);
   });
   bridge.disposeFns.push(unsubscribeTokenStore);
+  bridge.disposeFns.push(
+    bridge.authTokenStore.subscribeSignInStorageLow((low) => {
+      bridge.fanOut(RunnerHostEvent.authSignInStorageLowChanged, { low });
+    }),
+  );
   bridge.disposeFns.push(() => bridge.authTokenStore.dispose());
 
   bridge.handleInvoke(

@@ -61,6 +61,67 @@ function focusMentionStepChrome(): boolean {
   return document.activeElement === control;
 }
 
+/**
+ * The open picker's keys, for an editor that hands it every keydown: moving
+ * the highlight, committing the highlighted row, reaching the step's chrome,
+ * and closing `sessionId`'s menu. `true` when the key was the picker's, and
+ * the editor must then not act on it.
+ */
+export function composerPickerKeyDown(
+  pickerStore: ComposerPickerStore,
+  sessionId: number,
+  event: KeyboardEvent,
+): boolean {
+  const state = pickerStore.getState();
+  if (!state.open) return false;
+
+  // Returning true has the editor preventDefault, which is what keeps a
+  // macOS Ctrl+N/P alias from also moving the caret behind the menu.
+  const navigationKey = listNavigationKey(event);
+  if (navigationKey === "ArrowDown") {
+    state.moveActive(1);
+    return true;
+  }
+  if (navigationKey === "ArrowUp") {
+    state.moveActive(-1);
+    return true;
+  }
+  if (event.key === "Enter") {
+    if (event.shiftKey) return false;
+    // The visible highlight is the selection: Enter accepts it without
+    // requiring an otherwise invisible arrow-key "engagement" state.
+    // Swallow Enter even while loading or on an inert row so the prompt
+    // cannot submit with the picker still open.
+    state.commitActiveItem();
+    return true;
+  }
+  if (event.key === "Tab") {
+    // Shift+Tab is FOCUS, not commit: it is the keyboard route to the
+    // picker's own chrome. The Filter and Refresh buttons render
+    // through a portal into `document.body` AFTER the editor, so no
+    // native traversal direction can reach them from the composer -
+    // backward traversal lands on an earlier composer control, and
+    // plain Tab commits the highlighted row. The move is therefore
+    // explicit; with no chrome on this step the browser default stands.
+    // (Under jsdom this handler was once measured as never receiving
+    // Shift+Tab, but jsdom cannot be trusted for ProseMirror key
+    // handling - the behaviour is implemented for the event actually
+    // arriving and tested by invoking the handler directly.)
+    if (event.shiftKey) return focusMentionStepChrome();
+    if (state.items.length === 0) return false;
+    if (activePickerItemDisabledReason(state) !== null) return true;
+    return state.commitActiveItem();
+  }
+  if (event.key === "Escape") {
+    // Tiptap itself dispatches the plugin exit for Escape, synchronously
+    // in its handleKeyDown - only the store needs closing here. Any other
+    // editor holds its occurrence closed once the store closes.
+    state.closeSession(sessionId);
+    return true;
+  }
+  return false;
+}
+
 export function createComposerSuggestionRender<
   TItem extends ComposerPickerItem,
 >(args: ComposerSuggestionRenderArgs): () => SuggestionRender<TItem> {
@@ -288,53 +349,7 @@ export function createComposerSuggestionRender<
       },
 
       onKeyDown({ event }) {
-        const state = args.pickerStore.getState();
-        if (!state.open) return false;
-
-        // Returning true makes ProseMirror preventDefault, which is what keeps
-        // a macOS Ctrl+N/P alias from also moving the caret behind the menu.
-        const navigationKey = listNavigationKey(event);
-        if (navigationKey === "ArrowDown") {
-          state.moveActive(1);
-          return true;
-        }
-        if (navigationKey === "ArrowUp") {
-          state.moveActive(-1);
-          return true;
-        }
-        if (event.key === "Enter") {
-          if (event.shiftKey) return false;
-          // The visible highlight is the selection: Enter accepts it without
-          // requiring an otherwise invisible arrow-key "engagement" state.
-          // Swallow Enter even while loading or on an inert row so the prompt
-          // cannot submit with the picker still open.
-          state.commitActiveItem();
-          return true;
-        }
-        if (event.key === "Tab") {
-          // Shift+Tab is FOCUS, not commit: it is the keyboard route to the
-          // picker's own chrome. The Filter and Refresh buttons render
-          // through a portal into `document.body` AFTER the editor, so no
-          // native traversal direction can reach them from the composer -
-          // backward traversal lands on an earlier composer control, and
-          // plain Tab commits the highlighted row. The move is therefore
-          // explicit; with no chrome on this step the browser default stands.
-          // (Under jsdom this handler was once measured as never receiving
-          // Shift+Tab, but jsdom cannot be trusted for ProseMirror key
-          // handling - the behaviour is implemented for the event actually
-          // arriving and tested by invoking the handler directly.)
-          if (event.shiftKey) return focusMentionStepChrome();
-          if (state.items.length === 0) return false;
-          if (activePickerItemDisabledReason(state) !== null) return true;
-          return state.commitActiveItem();
-        }
-        if (event.key === "Escape") {
-          // Tiptap itself dispatches the plugin exit for Escape, synchronously
-          // in its handleKeyDown - only the store needs closing here.
-          state.closeSession(sessionId);
-          return true;
-        }
-        return false;
+        return composerPickerKeyDown(args.pickerStore, sessionId, event);
       },
     };
   };

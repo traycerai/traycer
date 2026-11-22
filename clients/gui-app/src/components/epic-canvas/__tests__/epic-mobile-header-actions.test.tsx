@@ -22,6 +22,11 @@ import {
 } from "@/stores/layout/mobile-header-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+} from "../../../../__tests__/mobile-level2-form-harness";
 
 interface RenameVariables {
   readonly epicDelta: {
@@ -221,8 +226,25 @@ describe("<EpicMobileSwitcherTrigger />", () => {
     expect(useMobileSwitcherStore.getState().openTabId).toBe("tab-1");
   });
 
-  it("renders for a viewer role too - switching tabs is not permission-gated", () => {
-    holder.role = "viewer";
+  it("draws only where level 2 is the bottom bar with its sheet", () => {
+    mountSheetFor("tab-1");
+    const shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    try {
+      render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
+      expect(screen.queryByTestId("mobile-epic-switcher-trigger")).toBeNull();
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
+      expect(screen.queryByTestId("mobile-epic-switcher-trigger")).toBeNull();
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: true });
+      expect(
+        screen.queryByTestId("mobile-epic-switcher-trigger"),
+      ).not.toBeNull();
+    } finally {
+      shell.dispose();
+    }
+  });
+
+  it("renders for a role that grants no write access too - switching tabs is not permission-gated", () => {
+    holder.role = "supervisor";
     mountSheetFor("tab-1");
     render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
     expect(switcherTrigger().disabled).toBe(false);
@@ -487,8 +509,10 @@ describe("<MobileEpicHeaderTitle />", () => {
     expect(mutateAsyncSpy).not.toHaveBeenCalled();
   });
 
-  it("renders plain text for a viewer (no editable control)", () => {
-    holder.role = "viewer";
+  it("renders plain text for a role that grants no write access (no editable control)", () => {
+    // `"supervisor"` stands for a role nothing recognises. A `viewer` never
+    // reaches this component: it is decoded to `editor` before the store holds it.
+    holder.role = "supervisor";
     renderWithQueryClient(
       <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
     );

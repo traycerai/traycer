@@ -9,6 +9,11 @@ import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
 // `ACTION_META`); default Control+Shift+M (the Control key dodges the
 // Command-based conflicts on macOS). We read the live binding from the store at
 // event time so rebinds apply immediately and Settings stays the source of truth.
+//
+// The same chord is the call's on a bot surface (Call Tracy, P15): a bot surface
+// that owns the keyboard registers a call target instead of a composer, and the
+// one owner on top of the stack takes the press. In an agent chat it dictates;
+// on a bot's channel or thread it starts or ends a call; never both.
 export const DICTATION_ACTION_ID = "composer.dictation.toggle" as const;
 
 function boundChord(): string | null {
@@ -48,12 +53,26 @@ interface DictationHotkeyTarget {
 
 type DictationTargetGetter = () => DictationHotkeyTarget;
 
+/**
+ * A bot surface's side of the chord: a press toggles a call. `thread` is
+ * whether this target is a thread's, which wins over its channel's when both
+ * are showing.
+ */
+interface CallHotkeyTarget {
+  readonly thread: boolean;
+  readonly toggle: () => void;
+}
+
+type HotkeyOwner =
+  | { readonly kind: "dictation"; readonly get: DictationTargetGetter }
+  | { readonly kind: "call"; readonly target: () => CallHotkeyTarget };
+
 // Module-level singleton: the window listeners are installed once, and only the
-// most-recently-enabled composer (top of stack) handles a keypress. This
-// prevents two mounted composers (e.g. landing + an active chat tile) from each
-// binding the window and firing two dictations on one shortcut. On unmount a
-// composer pops and the previous owner resumes.
-const targetStack: DictationTargetGetter[] = [];
+// most-recently-enabled owner (top of stack) handles a keypress. This prevents
+// two mounted composers (e.g. landing + an active chat tile) from each binding
+// the window and firing two dictations on one shortcut. On unmount an owner pops
+// and the previous owner resumes.
+const targetStack: HotkeyOwner[] = [];
 let listenersInstalled = false;
 // A press is in progress. A hold (push-to-talk) is detected purely by OS
 // key-repeat events the held key emits - `sawRepeat`. (A timer fallback was
@@ -75,8 +94,19 @@ function resetPressState(): void {
   pressOwner = null;
 }
 
-function topGetter(): DictationTargetGetter | null {
+function topOwner(): HotkeyOwner | null {
   return targetStack.length === 0 ? null : targetStack[targetStack.length - 1];
+}
+
+/** The call target a press on a bot surface toggles: its thread's over its channel's. */
+function callTargetOf(): CallHotkeyTarget | null {
+  let found: CallHotkeyTarget | null = null;
+  for (const owner of targetStack) {
+    if (owner.kind !== "call") continue;
+    const target = owner.target();
+    if (found === null || target.thread || !found.thread) found = target;
+  }
+  return found;
 }
 
 function isActiveState(state: VoiceDictationState): boolean {
@@ -105,8 +135,13 @@ function resolveRelease(): void {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
-  const getter = topGetter();
-  if (getter === null) return;
+  const owner = topOwner();
+  if (owner === null) return;
+  if (owner.kind === "call") {
+    onCallKeyDown(event);
+    return;
+  }
+  const getter = owner.get;
   const target = getter();
   if (event.code === "Escape" && isActiveState(target.state)) {
     // Consume Escape so cancelling dictation doesn't also close a dialog/popover.
@@ -132,6 +167,16 @@ function onKeyDown(event: KeyboardEvent): void {
   wasActiveAtPress = isActiveState(target.state);
   pressOwner = getter;
   if (!wasActiveAtPress) target.start();
+}
+
+// A tap toggles the call: there is no hold, and a held chord's repeats do
+// nothing, so it never starts and ends a call once per repeat.
+function onCallKeyDown(event: KeyboardEvent): void {
+  const chord = boundChord();
+  if (chord === null || !chordMatchesStrict(chord, event)) return;
+  event.preventDefault();
+  if (event.repeat) return;
+  callTargetOf()?.toggle();
 }
 
 function onKeyUp(event: KeyboardEvent): void {
@@ -204,16 +249,52 @@ export function useDictationHotkey(args: UseDictationHotkeyArgs): void {
   useEffect(() => {
     if (!enabled) return;
     const getter: DictationTargetGetter = () => argsRef.current;
-    targetStack.push(getter);
+    const owner: HotkeyOwner = { kind: "dictation", get: getter };
+    targetStack.push(owner);
     installListeners();
     // Note: do NOT reset press state on mount - a sibling composer mounting
     // must not wipe an in-progress hold owned by another composer.
     return () => {
-      const index = targetStack.indexOf(getter);
+      const index = targetStack.indexOf(owner);
       if (index >= 0) targetStack.splice(index, 1);
       // Only clear press state if THIS composer owned the in-flight press (it's
       // unmounting/disabling), so a dangling keyup/blur can't act on it.
       if (pressOwner === getter) resetPressState();
+      if (targetStack.length === 0) removeListeners();
+    };
+  }, [enabled]);
+}
+
+/**
+ * Binds the dictation chord to a call on a bot surface (Call Tracy, P15): a
+ * tap starts the call with `toggle`'s target, and ends a live one. Only while
+ * `enabled` and the surface owns the keyboard; a thread's target wins over its
+ * channel's. While it owns the chord, no composer dictates on it.
+ */
+export function useCallHotkey(args: {
+  readonly enabled: boolean;
+  readonly thread: boolean;
+  readonly toggle: () => void;
+}): void {
+  const enabled = use(KeyboardOwnerContext) && args.enabled;
+  const argsRef = useRef(args);
+  useEffect(() => {
+    argsRef.current = args;
+  });
+  useEffect(() => {
+    if (!enabled) return;
+    const owner: HotkeyOwner = {
+      kind: "call",
+      target: () => ({
+        thread: argsRef.current.thread,
+        toggle: argsRef.current.toggle,
+      }),
+    };
+    targetStack.push(owner);
+    installListeners();
+    return () => {
+      const index = targetStack.indexOf(owner);
+      if (index >= 0) targetStack.splice(index, 1);
       if (targetStack.length === 0) removeListeners();
     };
   }, [enabled]);

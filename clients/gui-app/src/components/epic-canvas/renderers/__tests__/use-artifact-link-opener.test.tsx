@@ -275,9 +275,7 @@ describe("useArtifactLinkOpener", () => {
     result.current.openLink(link, CLICK);
 
     expect(mocks.runPolicy).not.toHaveBeenCalled();
-    expect(mocks.toast).toHaveBeenCalledWith(
-      "Workspace links are still loading",
-    );
+    expect(mocks.toast).toHaveBeenCalledWith("Folder links are still loading");
 
     mocks.worktreeQuery.data = {
       rows: [{ runningDir: "/tab/repo", disabledReason: null }],
@@ -615,6 +613,7 @@ describe("useArtifactLinkOpener", () => {
     });
     expect(mocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({ target: { tabId: "tab-1" } }),
+      "user",
     );
   });
 
@@ -841,6 +840,7 @@ describe("useArtifactLinkOpener", () => {
         gesture: "single",
         placement: null,
       }),
+      "user",
     );
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,

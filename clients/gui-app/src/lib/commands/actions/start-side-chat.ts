@@ -239,6 +239,7 @@ function openIntentForPlacement(
     hostId: args.hostId,
     placement: args.placement,
     source: "direct_ui",
+    provenance: "user",
   };
 }
 

@@ -1,37 +1,51 @@
 import type { ReactNode } from "react";
+import {
+  hostSandboxStateWord,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
+import { cn } from "@/lib/utils";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostSandboxFacts,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   sandboxFrozenLine,
-  sandboxTeamFrozenStateLine,
+  sandboxTeamFrozenLine,
   sandboxTileOverlay,
   type SandboxTileOverlay,
 } from "@/components/hosts/sandbox-card-model";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useSandboxHostPayer } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useHostBinding } from "@/lib/host";
 import { sandboxMutationKeys } from "@/lib/query-keys";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
+import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
+import { TileDoorCoverLayer } from "@/components/hosts/tile-door-cover";
+import { useTileDoorCover } from "@/hooks/host/use-tile-door-cover";
+import type { DoorStateCoverVariant } from "@/lib/host/window-narration";
 
 /**
  * Wraps a tile's body and carries its team-host disclosure. On a sandbox host
- * that is frozen, asleep or waking, a non-chat tile's last screen stays in
- * place, greyed and inert, under the state's copy:
- * the frozen line (with its destroy date when the server sends `frozenAt`),
+ * that is frozen, asleep or waking, a non-chat tile's body stays mounted,
+ * hidden and inert, while the overlay owns its status and actions:
+ * the state beside Out of credits (with its removal date when known),
  * "Suspended, resumes on your next action" with Resume, "Stopped" with Start,
  * or "Resuming" / "Starting" while it comes back.
  *
- * The greyed body is `inert` while an overlay shows: out of the tab order,
+ * The hidden body is `inert` while an overlay shows: out of the tab order,
  * deaf to keystrokes (a terminal's textarea would otherwise take them and
  * swallow Tab before it reached Resume) and hidden from assistive tech, which
  * would read the tile as live. The `contents` wrapper is there on every
@@ -40,7 +54,9 @@ import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
  *
  * Reads the tile's own host (`useTabHostId`). Live chats own their lifecycle
  * surfaces and stay interactive; their team disclosure still mounts here.
- * A personal host's tile is never greyed. With no host runtime above the tile
+ * Any tile, chat or not, on a computer that is not the window's own is hidden
+ * the same way under its door cover (`TileDoorCoverLayer`) while that computer
+ * refuses this account with a state of its own. With no host runtime above the tile
  * at all the children come back unwrapped: there is no directory to read.
  */
 export function SandboxTileStateFrame(props: {
@@ -71,16 +87,26 @@ function SandboxTileStateFrameInRuntime(props: {
   // the entry says "sandbox" would move the body under new parents and
   // remount it (a browser guest reloads, a terminal session is torn down),
   // awake sandbox or not. Only the overlay and `inert` vary.
-  const overlay =
+  const waking =
+    useIsMutatingOf({ mutationKey: sandboxMutationKeys.wake(hostId) }) > 0;
+  const stateOverlay =
     props.chat !== null || facts === null
       ? null
       : sandboxTileOverlay(facts.state, facts.frozen);
+  const overlay = wakingOverlay(stateOverlay, waking);
+  // A sandbox's own state comes first: asleep or frozen, it is not answering.
+  const doorCover = useTileDoorCover(hostId);
+  const hidden = overlay !== null || doorCover !== null;
   return (
     <div
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
       data-sandbox-tile-state={overlay === null ? "live" : overlay.kind}
     >
-      <div className="contents" inert={overlay !== null}>
+      <div
+        className={cn("contents", hidden && "invisible")}
+        inert={hidden}
+        aria-hidden={hidden ? true : undefined}
+      >
         {props.children}
       </div>
       {facts === null ||
@@ -92,40 +118,70 @@ function SandboxTileStateFrameInRuntime(props: {
           teamName={facts.ownerTeamName}
         />
       )}
-      {overlay === null ? null : (
-        <SandboxTileOverlayLayer
-          hostId={hostId}
-          overlay={overlay}
-          teamOwned={facts !== null && facts.ownerTeamName !== null}
-        />
-      )}
+      <TileOverlay
+        hostId={hostId}
+        overlay={overlay}
+        doorCover={doorCover}
+        facts={facts}
+      />
     </div>
   );
+}
+
+function TileOverlay(props: {
+  readonly hostId: string;
+  readonly overlay: SandboxTileOverlay | null;
+  readonly doorCover: DoorStateCoverVariant | null;
+  readonly facts: RemoteHostSandboxFacts | null;
+}): ReactNode {
+  const { overlay, facts } = props;
+  if (overlay === null) {
+    return props.doorCover === null ? null : (
+      <TileDoorCoverLayer hostId={props.hostId} cover={props.doorCover} />
+    );
+  }
+  return (
+    <SandboxTileOverlayLayer
+      hostId={props.hostId}
+      overlay={overlay}
+      state={facts?.state ?? null}
+    />
+  );
+}
+
+/** The Personal remedy only on the person's own sandbox; no remedy while it is not known whose. */
+function frozenCauseFor(payer: StageConfiguration | null): string {
+  if (payer?.kind === "personal") return sandboxFrozenLine(null);
+  if (payer?.kind === "team" && payer.teamName.length > 0) {
+    return sandboxTeamFrozenLine(payer.teamName);
+  }
+  return SANDBOX_OUT_OF_CREDITS;
+}
+
+/** A tab-open wake takes precedence over the directory's resting state. */
+function wakingOverlay(
+  overlay: SandboxTileOverlay | null,
+  waking: boolean,
+): SandboxTileOverlay | null {
+  if (!waking || overlay?.kind !== "asleep") return overlay;
+  return {
+    kind: "moving",
+    message: overlay.verb === "start" ? "Starting" : "Resuming",
+  };
 }
 
 function SandboxTileOverlayLayer(props: {
   readonly hostId: string;
   readonly overlay: SandboxTileOverlay;
-  /** A team's frozen sandbox says whose bundle is out, not "your credits". */
-  readonly teamOwned: boolean;
+  readonly state: HostSandboxState | null;
 }): ReactNode {
   const list = useSandboxList();
-  const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const summary =
     list.data?.sandboxes.find((s) => s.hostId === props.hostId) ?? null;
-  // The tab-open wake (`useSandboxWakeForOpenedTile`) is already bringing it
-  // up: say so, rather than offering a second Resume while the directory
-  // still reads the state it had before the wake.
-  const waking =
-    useIsMutatingOf({ mutationKey: sandboxMutationKeys.wake(props.hostId) }) >
-    0;
-  const overlay: SandboxTileOverlay =
-    waking && props.overlay.kind === "asleep"
-      ? {
-          kind: "moving",
-          message: props.overlay.verb === "start" ? "Starting" : "Resuming",
-        }
-      : props.overlay;
+  const { overlay } = props;
+  const frozenCause = frozenCauseFor(useSandboxHostPayer(props.hostId));
+  const removal =
+    summary === null ? null : sandboxFrozenClock(summary.frozenAt);
   return (
     <div
       data-testid="sandbox-tile-overlay"
@@ -137,11 +193,17 @@ function SandboxTileOverlayLayer(props: {
         className="flex max-w-sm flex-col items-center gap-2 text-center text-ui-sm"
       >
         {overlay.kind === "frozen" ? (
-          <p className="font-medium text-warning-foreground">
-            {props.teamOwned
-              ? sandboxTeamFrozenStateLine(summary, viewerUserId)
-              : sandboxFrozenLine(summary?.frozenAt ?? null)}
-          </p>
+          <>
+            <p className="font-medium text-warning-foreground">
+              {props.state === null
+                ? ""
+                : `${hostSandboxStateWord(props.state)} · `}
+              {frozenCause}
+            </p>
+            {removal === null ? null : (
+              <p className="text-muted-foreground">{removal}</p>
+            )}
+          </>
         ) : null}
         {overlay.kind === "moving" ? (
           <p className="flex items-center gap-2 font-medium text-foreground">

@@ -18,11 +18,10 @@
  * `@traycer/protocol/utils/text/sentry-scrub`. What lives here is the client
  * Sentry policy: which fields to walk and what to drop outright.
  *
- * Deliberately does NOT reach into the desktop's
- * `electron-main/app/support-scrubber.ts`. That module is the support-bundle
- * policy (path pseudonymization, no length cap, line-wise application);
- * telemetry egress must not inherit whatever it decides next, and neither the
- * renderer nor the mobile shell can import from `electron-main/` at all.
+ * Deliberately does NOT use `@traycer/protocol/utils/text/support-scrub`.
+ * That module is the support-bundle policy (path pseudonymization, no length
+ * cap, line-wise application); telemetry egress must not inherit whatever it
+ * decides next.
  */
 
 import {
@@ -54,11 +53,16 @@ function scrubClientText(value: string): string {
 export interface ClientSentryEvent {
   platform?: string | undefined;
   message?: string | undefined;
+  fingerprint?: string[] | undefined;
+  transaction?: string | undefined;
   logentry?: { message?: string | undefined; params?: unknown } | undefined;
   exception?:
     | {
         values?:
-          | ({ value?: string | undefined } & SentryStacktraceHolder)[]
+          | ({
+              type?: string | undefined;
+              value?: string | undefined;
+            } & SentryStacktraceHolder)[]
           | undefined;
       }
     | undefined;
@@ -91,6 +95,14 @@ export function scrubSentryEventInPlace(event: ClientSentryEvent): void {
   if (event.message !== undefined) {
     event.message = scrubClientText(event.message);
   }
+  // Scope fingerprints can carry caller text just like messages and extras.
+  // Deterministic redaction preserves grouping and Sentry placeholders.
+  if (event.fingerprint !== undefined) {
+    event.fingerprint = event.fingerprint.map(scrubClientText);
+  }
+  if (event.transaction !== undefined) {
+    event.transaction = scrubClientText(event.transaction);
+  }
   if (event.logentry?.message !== undefined) {
     event.logentry.message = scrubClientText(event.logentry.message);
   }
@@ -103,6 +115,9 @@ export function scrubSentryEventInPlace(event: ClientSentryEvent): void {
   // The dominant funnel: `captureException(error)` renders the thrown error's
   // message here, and `linkedErrorsIntegration` appends one entry per `cause`.
   for (const exception of event.exception?.values ?? []) {
+    if (exception.type !== undefined) {
+      exception.type = scrubClientText(exception.type);
+    }
     if (exception.value !== undefined) {
       exception.value = scrubClientText(exception.value);
     }

@@ -79,6 +79,7 @@ const HEALTHY_INPUTS: EpicSyncPillInputs = {
   localProtection: undefined,
   durabilityLegsNegotiated: false,
   cloudFreshness: undefined,
+  artifactSync: undefined,
 };
 
 const REJECTED_SUMMARY: EpicWriteCommandSummary = {
@@ -153,6 +154,7 @@ function allCombinations(): readonly EpicSyncPillInputs[] {
                 localProtection: undefined,
                 durabilityLegsNegotiated: false,
                 cloudFreshness: undefined,
+                artifactSync: undefined,
               })),
             ),
           ),
@@ -954,4 +956,38 @@ describe("cloud freshness gates the synced claim", () => {
       }),
     ).toBe("connected");
   });
+});
+
+describe("artifact sync gates the synced claim", () => {
+  it.each([
+    { artifactSync: undefined, expected: "synced" },
+    {
+      artifactSync: { rooms: "current", waitingNewArtifacts: 0 },
+      expected: "synced",
+    },
+    {
+      artifactSync: { rooms: "retrying", waitingNewArtifacts: 0 },
+      expected: "hostPending",
+    },
+    {
+      artifactSync: { rooms: "stopped", waitingNewArtifacts: 0 },
+      expected: "hostPending",
+    },
+    {
+      artifactSync: { rooms: "current", waitingNewArtifacts: 1 },
+      expected: "hostPending",
+    },
+  ] as const)(
+    "derives $expected for $artifactSync",
+    ({ artifactSync, expected }) => {
+      expect(
+        deriveEpicSyncPillState({
+          ...HEALTHY_INPUTS,
+          durability: "cloud",
+          localProtection: "armed",
+          artifactSync,
+        }),
+      ).toBe(expected);
+    },
+  );
 });

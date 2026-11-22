@@ -22,14 +22,9 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
 
 // A marker carrying the host its scope names, so the Overview case below can
 // see the section mounted for the picker's host.
-vi.mock("@/components/settings/panels/host-environment-section", () => ({
-  HostEnvironmentSection: (props: {
-    readonly scope: { readonly hostId: string | null };
-  }) => (
-    <div
-      data-testid="host-environment-section"
-      data-host-id={props.scope.hostId ?? ""}
-    />
+vi.mock("@/components/settings/panels/host-overview-settings-card", () => ({
+  HostOverviewSettingsCardSlot: (props: { readonly hostId: string | null }) => (
+    <div data-testid="host-settings-source" data-host-id={props.hostId ?? ""} />
   ),
 }));
 
@@ -2647,8 +2642,8 @@ describe("HostOverviewPanel — reason vocabularies are partitioned per wire fie
   });
 });
 
-describe("HostOverviewPanel — whose bots the host runs", () => {
-  it("mounts the environment section for the host the picker names", async () => {
+describe("HostOverviewPanel — settings source row", () => {
+  it("mounts the settings source row for the host the picker names", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -2658,7 +2653,7 @@ describe("HostOverviewPanel — whose bots the host runs", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    const section = await screen.findByTestId("host-environment-section");
+    const section = await screen.findByTestId("host-settings-source");
     expect(section.getAttribute("data-host-id")).toBe("host-a");
   });
 });

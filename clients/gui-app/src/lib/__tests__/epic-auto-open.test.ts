@@ -139,6 +139,39 @@ describe("resolveAutoOpenTarget", () => {
     expect(target?.id).toBe("chat-old");
   });
 
+  it.each(["html", "canvas", "file"] as const)(
+    "resolves an explicit focus target naming a %s artifact",
+    (type) => {
+      const records = [record({ id: "node-1", name: "Node One", type })];
+
+      const target = resolveAutoOpenTarget(records, "node-1", null, NO_RECENCY);
+
+      expect(target?.id).toBe("node-1");
+    },
+  );
+
+  it.each(["html", "canvas", "file"] as const)(
+    "does not land on a %s artifact when nothing was requested",
+    (type) => {
+      const records = [record({ id: "node-1", name: "Node One", type })];
+
+      const target = resolveAutoOpenTarget(records, null, null, NO_RECENCY);
+
+      expect(target).toBeNull();
+    },
+  );
+
+  it("lands on the chat past an html artifact that heads the tree", () => {
+    const records = [
+      record({ id: "html-1", name: "Page", type: "html" }),
+      record({ id: "chat-1", name: "Chat One", type: "chat" }),
+    ];
+
+    const target = resolveAutoOpenTarget(records, null, null, NO_RECENCY);
+
+    expect(target?.id).toBe("chat-1");
+  });
+
   it("ignores recency carried by a node that cannot be opened", () => {
     const records = [
       record({ id: "chat-1", name: "Chat One", type: "chat" }),
@@ -151,5 +184,27 @@ describe("resolveAutoOpenTarget", () => {
     });
 
     expect(target?.id).toBe("chat-1");
+  });
+
+  it("chooses nothing while the agent records are unanswered", () => {
+    const records = [
+      record({ id: "spec-1", name: "Spec", type: "spec" }),
+      record({ id: "chat-old", name: "Chat One", type: "chat" }),
+    ];
+
+    const target = resolveAutoOpenTarget(records, null, "chat-new", null);
+
+    expect(target).toBeNull();
+  });
+
+  it("restores the persisted focus while the agent records are unanswered", () => {
+    const records = [
+      record({ id: "chat-1", name: "Chat One", type: "chat" }),
+      record({ id: "spec-1", name: "Spec", type: "spec" }),
+    ];
+
+    const target = resolveAutoOpenTarget(records, null, "spec-1", null);
+
+    expect(target?.id).toBe("spec-1");
   });
 });

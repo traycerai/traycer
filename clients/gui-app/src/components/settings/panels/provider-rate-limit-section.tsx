@@ -44,14 +44,16 @@ export function ProviderRateLimitForProvider({
  * the heading carries no `Use another host`.
  */
 function RateLimitsHeading(): ReactNode {
-  const hostName = usePersonalHostName() ?? "this computer";
+  const hostName = usePersonalHostName();
   return (
     <div className="text-ui-sm text-foreground">
       <span className="font-medium">Rate limits</span>
-      <span className="text-muted-foreground">
-        {" "}
-        · as reported by {hostName}
-      </span>
+      {hostName === null ? null : (
+        <span className="text-muted-foreground">
+          {" "}
+          · as reported by {hostName}
+        </span>
+      )}
     </div>
   );
 }

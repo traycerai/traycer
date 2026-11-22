@@ -84,6 +84,7 @@ import {
   toastFromRunnerError,
   toastFromRunnerErrorWithOptions,
 } from "@/lib/runner-error-toast";
+import { ownValue } from "@/lib/own-value";
 
 // "opened" is the honest terminal state for a public-draft open when nothing
 // was ever privately delivered (no-DSN Case B, or a definite failure) - never
@@ -114,6 +115,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings": "Settings",
   "/settings/": "Settings",
   "/settings/agent-definitions": "Settings - Agent definitions",
+  "/settings/agent-memories": "Settings - Memories",
   "/settings/agents": "Settings - Agents",
   "/settings/alerts": "Settings - Alerts",
   "/settings/app-diagnostics": "Settings - App diagnostics",
@@ -145,6 +147,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/secrets": "Settings - Secrets",
   "/settings/service": "Settings - Service",
   "/settings/shell": "Settings - Variables & shells",
+  "/settings/storage": "Settings - Storage",
   "/settings/usage": "Settings - Usage",
   "/settings/credits": "Settings - Credits",
   "/settings/worktrees": "Settings - Worktrees",
@@ -168,7 +171,10 @@ const ROUTE_TEMPLATE_LABEL_LOOKUP: Readonly<
 const ROUTE_TEMPLATE_FALLBACK_LABEL = "This screen";
 
 function humanRouteLabel(template: string): string {
-  return ROUTE_TEMPLATE_LABEL_LOOKUP[template] ?? ROUTE_TEMPLATE_FALLBACK_LABEL;
+  return (
+    ownValue(ROUTE_TEMPLATE_LABEL_LOOKUP, template) ??
+    ROUTE_TEMPLATE_FALLBACK_LABEL
+  );
 }
 
 const CURRENT_LOCATION_VALUE = "__current__";

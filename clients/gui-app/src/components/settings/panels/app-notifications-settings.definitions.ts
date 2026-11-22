@@ -1,61 +1,102 @@
-import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import {
+  isSetPiecesRowAvailable,
+  isSoundtrackRecordingRowAvailable,
+  isPlaybackControlsRowAvailable,
+  isSoundtrackRowAvailable,
+} from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 // The Sounds page. Its id still says notifications because ids are a
 // compatibility surface (see the section table in `lib/settings-sections.ts`).
+// It holds only the soundtrack - the chimes are on Alerts - so the page exists
+// only where the soundtrack does.
 export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
   page: {
-    availableWhen: alwaysAvailable,
+    availableWhen: isSoundtrackRowAvailable,
     label: "Sounds",
-    description: "Which chime plays for each kind of alert.",
-    keywords: ["sound", "chime", "audio", "beep", "volume", "mute", "ding"],
+    description: "Music while you work.",
+    keywords: ["sound", "audio", "volume", "music"],
   },
-  // The chime card shows no heading — the page already names it — so it is not
-  // a destination of its own; it and its rows fold into the page.
-  chimes: {
+  soundtrack: {
     kind: "group",
-    search: { contributesTo: "page" },
-    label: "Chimes",
+    search: { anchor: "sounds-soundtrack" },
+    label: "Soundtrack",
     description: null,
     breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
+    availableWhen: isSoundtrackRowAvailable,
+    keywords: ["music", "ambient"],
   },
-  chimeNeedsAction: {
+  soundtrackEnabled: {
     kind: "row",
-    group: "chimes",
-    search: { contributesTo: "page" },
-    label: "Needs action",
-    description: "Approvals and interviews.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-music" },
+    label: "Music",
+    description: "Plays music while you work.",
+    availableWhen: isSoundtrackRowAvailable,
+    keywords: ["soundtrack", "play"],
   },
-  chimeFailure: {
+  soundtrackPlaybackControls: {
     kind: "row",
-    group: "chimes",
-    search: { contributesTo: "page" },
-    label: "Failure",
-    description: "Errored turns, stalls, crashes, and rate limits.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-playback-controls" },
+    label: "Playback controls",
+    description: "Shows previous, pause and next in a task's status bar.",
+    availableWhen: isPlaybackControlsRowAvailable,
+    keywords: ["music", "skip"],
   },
-  chimeDone: {
+  soundtrackSetPieces: {
     kind: "row",
-    group: "chimes",
-    search: { contributesTo: "page" },
-    label: "Done",
-    description: "Completed or intentionally stopped turns.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-set-pieces" },
+    label: "Set pieces",
+    description: "Turn off to hear and record only generative music.",
+    availableWhen: isSetPiecesRowAvailable,
+    keywords: ["music", "composed", "generative", "recording"],
   },
-  chimeInfo: {
+  soundtrackVolume: {
     kind: "row",
-    group: "chimes",
-    search: { contributesTo: "page" },
-    label: "Info",
-    description:
-      "Sharing, comments, access changes, and other informational notifications.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-volume" },
+    label: "Volume",
+    description: "How loud the music plays.",
+    availableWhen: isSoundtrackRowAvailable,
+    keywords: ["music", "loudness"],
+  },
+  soundtrackDirector: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-director" },
+    label: "Follows",
+    description: "What the music changes with.",
+    availableWhen: isSoundtrackRowAvailable,
+    keywords: ["music", "activity"],
+  },
+  soundtrackRecording: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-recording" },
+    label: "Record session",
+    description: "Saves the music, and why it changed, to this computer.",
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["recording", "music", "capture", "save", "audio file"],
+  },
+  // Drawn under the switch, and found through it.
+  soundtrackRecordingLimit: {
+    kind: "row",
+    group: "soundtrack",
+    search: { contributesTo: "soundtrackRecording" },
+    label: "Stop after",
+    description: null,
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["length", "duration", "limit"],
+  },
+  soundtrackRecordingQuality: {
+    kind: "row",
+    group: "soundtrack",
+    search: { contributesTo: "soundtrackRecording" },
+    label: "Quality",
+    description: "Compressed uses about 60 MB an hour, lossless about 700 MB.",
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["lossless", "compressed", "wav", "size"],
   },
 });

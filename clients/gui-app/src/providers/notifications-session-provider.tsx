@@ -22,6 +22,7 @@ import { StandaloneBotsBridge } from "@/components/layout/bridges/standalone-bot
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
+import { signInRecoveryForStream } from "@/lib/host/stream-presents-sign-in";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   openNotificationsStream,
@@ -60,6 +61,7 @@ import {
 import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
 import {
   readFocusedHostNotificationPresence,
+  setAppSuspended,
   subscribeHostNotificationPresence,
   type FocusedHostNotificationPresence,
   type HostNotificationPresenceFrame,
@@ -74,9 +76,11 @@ import { useAuthService, useHostClient } from "@/lib/host";
 import { useNotificationsServingHostEntry } from "@/hooks/host/use-notifications-serving-host-entry";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
+import { useNotificationNotifies } from "@/hooks/notifications/use-notification-notifies";
 import { useNotificationActivationWithNavigate } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   displayCloudSnapshotArrivals,
   displayHostChannelEmission,
@@ -102,7 +106,7 @@ import {
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type {
-  HostNotificationCloudEntryV26,
+  HostNotificationCloudEntryV28,
   HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -122,6 +126,11 @@ import {
   rememberNotificationFeed,
   type NotificationFeedReplicaPage,
 } from "@/lib/view-replica/notification-feed-replica";
+
+/** The pool's in a build with a server pool, else the serving host's. */
+function cloudFeedHostId(servingHostId: string): string {
+  return readProcessHostRpcTierPlan().pool?.hostId ?? servingHostId;
+}
 
 /**
  * The cloud lane a build with a server pool reads from the pool, as the
@@ -201,6 +210,26 @@ export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
   useEffect(() => installNotificationChimeAudioWarmup(), []);
+  const runnerHost = useRunnerHostOrNull();
+  // The shell's leave edge (the app backgrounded, the machine locked or
+  // asleep) withdraws this window's focus claim before the OS suspends it, so
+  // a turn that finishes after the person left still reaches their other
+  // devices; the resume edge restores it, unless the machine woke behind its
+  // lock screen. An audio interruption is not the person leaving.
+  useEffect(() => {
+    if (runnerHost === null) return undefined;
+    const suspended = runnerHost.onSystemSuspended((cause) => {
+      if (cause !== "interrupted") setAppSuspended(true);
+    });
+    const resumed = runnerHost.onSystemResumed((event) => {
+      if (!event.screenLocked) setAppSuspended(false);
+    });
+    return () => {
+      suspended.dispose();
+      resumed.dispose();
+      setAppSuspended(false);
+    };
+  }, [runnerHost]);
   const hostClient = useHostClient();
   const requestContextUserId = useRequestContextUserId(hostClient);
   const servingHostEntry = useNotificationsServingHostEntry();
@@ -390,6 +419,7 @@ function NotificationsSessionBody(
   );
   const authService = useAuthService();
   const showNotification = useNotificationShow();
+  const notifies = useNotificationNotifies();
   const { activate } = useNotificationActivationWithNavigate(props.navigate);
   const mergedActions = useMergedNotificationsActions();
   const windowsBridge = useWindowsBridge();
@@ -465,7 +495,7 @@ function NotificationsSessionBody(
   const recordCompletions = useCallback(
     (
       inputs: ReadonlyArray<{
-        readonly entry: HostNotificationCloudEntryV26;
+        readonly entry: HostNotificationCloudEntryV28;
         readonly originHostId: string;
         readonly semanticId: string;
       }>,
@@ -868,7 +898,7 @@ function NotificationsSessionBody(
         hostId: streamHostId,
         reconnectEngine: lease.reconnect,
         wsStreamClient: servingStreamClient,
-        onAuthError: onStreamAuthError,
+        onAuthError: signInRecoveryForStream(streamHostId, onStreamAuthError),
         plane: cloudAuthorized ? null : "local-only",
       });
       activityStreamHostIdRef.current = streamHostId;
@@ -1190,11 +1220,18 @@ function NotificationsSessionBody(
       ) {
         return;
       }
-      // The shared recovery contract, hoisted to `onStreamAuthError` so the
-      // activity lane's two openers hand their stream the same handler.
-      const onAuthError = onStreamAuthError;
       if (servingHostId === null) return;
       const streamHostId = servingHostId;
+      // For a stream that presented the sign-in only: the serving host's lanes present a host-only
+      // token.
+      const onAuthError = signInRecoveryForStream(
+        streamHostId,
+        onStreamAuthError,
+      );
+      const cloudFeedOnAuthError = signInRecoveryForStream(
+        cloudFeedHostId(streamHostId),
+        onStreamAuthError,
+      );
       // ONE reconnect policy for this host, handed to every stream opened
       // below (redesign P4.1). This is the single
       // wiring point for all of them, which is exactly why the acquisition
@@ -1276,7 +1313,7 @@ function NotificationsSessionBody(
           reconnect,
           cloudFeedStreamClient,
           openedAccountId,
-          onAuthError,
+          cloudFeedOnAuthError,
           ({ rows, arrivals }) => {
             const accountId =
               useAuthStore.getState().contextMetadata?.userId ?? null;
@@ -1309,6 +1346,7 @@ function NotificationsSessionBody(
               showNotification,
               playChime: playNotificationChime,
               onToastClick: (row) => onToastClickRef.current(row),
+              notifies,
             }).catch(() => {
               // The feed remains authoritative if presentation fails.
             });
@@ -1366,6 +1404,7 @@ function NotificationsSessionBody(
                   showNotification,
                   playChime: playNotificationChime,
                   onToastClick: (row) => onToastClickRef.current(row),
+                  notifies,
                 },
                 streamHostId,
               ).catch(() => {
@@ -1390,6 +1429,7 @@ function NotificationsSessionBody(
       servingHostId,
       windowId,
       showNotification,
+      notifies,
       onFeedFrame,
       onPresenceChanged,
       onHostStreamOpened,

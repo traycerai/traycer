@@ -167,7 +167,9 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 const submitCapture: {
-  onSubmitMessage: ((input: ChatComposerSubmitInput) => boolean) | null;
+  onSubmitMessage:
+    | ((input: ChatComposerSubmitInput) => boolean | Promise<boolean>)
+    | null;
   onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
 } = {
   onSubmitMessage: null,

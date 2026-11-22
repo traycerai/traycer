@@ -102,6 +102,7 @@ describe("buildHostScopeOptions sandbox facts", () => {
       state: "suspended",
       frozen: true,
       summary,
+      ownerKind: "unknown",
       teamOwned: false,
     });
     // The join is by host id: another sandbox does not inherit this summary.
@@ -169,7 +170,7 @@ describe("buildHostScopeOptions sandbox facts", () => {
       option === undefined
         ? null
         : hostOptionStatusWord(option, AVAILABLE_HOST_ROW_SURFACE_STATE),
-    ).toBe("awake");
+    ).toBe("Awake");
   });
 
   it("never reads a destroyed sandbox as frozen, whatever flag the registry kept", () => {
@@ -188,7 +189,7 @@ describe("buildHostScopeOptions sandbox facts", () => {
     expect(option?.sandbox?.state).toBe("destroyed");
     expect(option?.sandbox?.frozen).toBe(false);
     expect(option?.sandbox ? sandboxStateWord(option.sandbox) : null).toBe(
-      "destroyed",
+      "Destroyed",
     );
   });
 
@@ -203,6 +204,7 @@ describe("buildHostScopeOptions sandbox facts", () => {
       state: "awake",
       frozen: false,
       summary: null,
+      ownerKind: "unknown",
       teamOwned: false,
     });
   });
@@ -233,6 +235,7 @@ describe("sandbox grouping predicates", () => {
       state: "awake",
       frozen: false,
       summary: sandboxSummaryFixture({ hostId: "n", burst: false }),
+      ownerKind: "unknown",
       teamOwned: false,
     },
   });
@@ -243,13 +246,20 @@ describe("sandbox grouping predicates", () => {
       state: "awake",
       frozen: false,
       summary: sandboxSummaryFixture({ hostId: "b", burst: true }),
+      ownerKind: "unknown",
       teamOwned: false,
     },
   });
   const unanswered = hostScopeOptionFixture({
     hostId: "u",
     kind: "sandbox",
-    sandbox: { state: "awake", frozen: false, summary: null, teamOwned: false },
+    sandbox: {
+      state: "awake",
+      frozen: false,
+      summary: null,
+      ownerKind: "unknown",
+      teamOwned: false,
+    },
   });
 
   it("puts each row in the group the host list and the pickers agree on", () => {
@@ -269,6 +279,7 @@ describe("sandbox grouping predicates", () => {
         state: "awake",
         frozen: false,
         summary: sandboxSummaryFixture({ hostId: "a", kind: "automation" }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -320,6 +331,7 @@ describe("sleeping sandbox picks", () => {
           frozen: input.frozen,
           kind: input.kind,
         }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -398,6 +410,7 @@ describe("sleeping sandbox picks", () => {
         state: "awake",
         frozen: false,
         summary: sandboxSummaryFixture({ hostId: "b", burst: true }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -408,6 +421,7 @@ describe("sleeping sandbox picks", () => {
         state: "awake",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -452,6 +466,7 @@ describe("credentialTargetHostOptions", () => {
         state,
         frozen,
         summary: sandboxSummaryFixture({ hostId, state, frozen, burst }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -479,6 +494,7 @@ describe("credentialTargetHostOptions", () => {
         state: "awake",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -488,31 +504,34 @@ describe("credentialTargetHostOptions", () => {
 });
 
 describe("sandbox row words", () => {
-  it("leads with frozen, then the lifecycle word, and has none for a state not yet known", () => {
+  it("shows the lifecycle word and reports an unknown state directly", () => {
     expect(
       sandboxStateWord({
         state: "suspended",
         frozen: true,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       }),
-    ).toBe("frozen");
+    ).toBe("Suspended");
     expect(
       sandboxStateWord({
         state: "stopped",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       }),
-    ).toBe("stopped");
+    ).toBe("Stopped");
     expect(
       sandboxStateWord({
         state: null,
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       }),
-    ).toBeNull();
+    ).toBe("Status unknown");
   });
 
   it("labels a sandbox row Sandbox ahead of its transport kind", () => {
@@ -526,6 +545,7 @@ describe("sandbox row words", () => {
             state: "awake",
             frozen: false,
             summary: null,
+            ownerKind: "unknown",
             teamOwned: false,
           },
         }),
@@ -533,7 +553,11 @@ describe("sandbox row words", () => {
     ).toBe("Sandbox");
     expect(
       hostOptionKindLabel(
-        hostScopeOptionFixture({ hostId: "p", isLocalMachine: false }),
+        hostScopeOptionFixture({
+          hostId: "p",
+          isLocalMachine: false,
+          kind: null,
+        }),
       ),
     ).toBe("Host");
   });
@@ -557,7 +581,13 @@ describe("hostTakesCredentials", () => {
           hostScopeOptionFixture({
             hostId: "s",
             kind: "sandbox",
-            sandbox: { state, frozen, summary, teamOwned: false },
+            sandbox: {
+              state,
+              frozen,
+              summary,
+              ownerKind: "unknown",
+              teamOwned: false,
+            },
           }),
         ),
       ).toBe(false);
@@ -585,6 +615,7 @@ describe("hostTakesCredentials", () => {
           state: "awake",
           frozen: false,
           summary: null,
+          ownerKind: "unknown",
           teamOwned: false,
         },
       }),

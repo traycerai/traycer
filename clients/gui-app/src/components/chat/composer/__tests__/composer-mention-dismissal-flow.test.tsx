@@ -1,4 +1,6 @@
 import type { ReactElement } from "react";
+import { renderHook, cleanup } from "@testing-library/react";
+import { useHostMentionEntries } from "@/hooks/composer/use-host-mention-entries";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 
@@ -290,6 +292,111 @@ describe("mention menu dismissal", () => {
 });
 
 describe("mention selection", () => {
+  it.each(["hosts", "Studio", "machine-42"])(
+    "opens Hosts for %s with the appropriate query",
+    async (query) => {
+      const { editor, pickerStore } = makeFixture();
+      const source = {
+        hosts: [{ hostId: "machine-42", label: "Studio Laptop" }],
+        answered: true,
+      };
+      const empty = { entries: [], matchedCount: 0, candidates: [] };
+      const { result, rerender, unmount } = renderHook(
+        ({ step, search }) =>
+          useHostMentionEntries(step, search, empty, source),
+        { initialProps: { step: pickerStore.getState().step, search: query } },
+      );
+      editor.commands.insertContent(`@${query}`);
+      await flush();
+      const { sessionId, step } = pickerStore.getState();
+      if (sessionId === null) throw new Error("missing mention session");
+      pickerStore.getState().setItems({
+        sessionId,
+        kind: "mention",
+        query,
+        slashScope: null,
+        step,
+        items: result.current.entries.map((entry) => ({
+          id: entry.id,
+          kind: "mention",
+          entry,
+        })),
+        loading: false,
+        loadFailed: false,
+        retryLoad: null,
+      });
+      pressKey(editor, "Enter");
+      const state = pickerStore.getState();
+      expect(state.step).toMatchObject({
+        kind: "provider",
+        providerId: "hosts",
+      });
+      expect(state.query).toBe(query === "hosts" ? "" : query);
+      rerender({ step: state.step, search: state.query });
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "mention-back",
+        "host:machine-42",
+      ]);
+      unmount();
+    },
+  );
+
+  it("navigates Hosts and Back with the keyboard and inserts the host id", async () => {
+    const { editor, pickerStore } = makeFixture();
+    const source = {
+      hosts: [{ hostId: "host-42", label: "Laptop" }],
+      answered: true,
+    };
+    const empty = { entries: [], matchedCount: 0, candidates: [] };
+    const { result, rerender, unmount } = renderHook(
+      ({ step }) => useHostMentionEntries(step, "", empty, source),
+      { initialProps: { step: pickerStore.getState().step } },
+    );
+    const publish = () => {
+      const { sessionId, query, step } = pickerStore.getState();
+      if (sessionId === null) throw new Error("missing mention session");
+      pickerStore.getState().setItems({
+        sessionId,
+        kind: "mention",
+        query,
+        slashScope: null,
+        step,
+        items: result.current.entries.map((entry) => ({
+          id: entry.id,
+          kind: "mention",
+          entry,
+        })),
+        loading: false,
+        loadFailed: false,
+        retryLoad: null,
+      });
+    };
+    editor.commands.insertContent("@");
+    await flush();
+    publish();
+    pressKey(editor, "Enter");
+    expect(pickerStore.getState().step).toMatchObject({
+      kind: "provider",
+      providerId: "hosts",
+    });
+    rerender({ step: pickerStore.getState().step });
+    publish();
+    pressKey(editor, "Enter");
+    expect(pickerStore.getState().step).toEqual({ kind: "root" });
+    rerender({ step: pickerStore.getState().step });
+    publish();
+    pressKey(editor, "Enter");
+    rerender({ step: pickerStore.getState().step });
+    publish();
+    pressKey(editor, "ArrowDown");
+    pressKey(editor, "Enter");
+    expect(editor.getJSON().content[0].content?.[0]).toMatchObject({
+      attrs: { contextType: "host", id: "host-42" },
+    });
+    unmount();
+    cleanup();
+  });
+
   it("accepts the highlighted item on Enter without prior arrow navigation", async () => {
     const { editor, pickerStore, submitCalls } = makeFixture();
     editor.commands.insertContent("@src");

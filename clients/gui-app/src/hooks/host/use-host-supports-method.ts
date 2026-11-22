@@ -89,9 +89,20 @@ export function useHostMethodSchemaVersion(
   hostId: string | null,
   method: string,
 ): SchemaVersion | null {
+  return useSyncExternalStore(subscribeNegotiatedManifests, () =>
+    readHostMethodSchemaVersion(hostId, method),
+  );
+}
+
+/**
+ * The same answer read once, outside render: for a decision taken after a
+ * request to that host has answered, when its handshake is known to be done.
+ */
+export function readHostMethodSchemaVersion(
+  hostId: string | null,
+  method: string,
+): SchemaVersion | null {
   const manifestHostId = manifestHostIdFor(hostId, method);
-  return useSyncExternalStore(subscribeNegotiatedManifests, () => {
-    if (manifestHostId === null) return null;
-    return getNegotiatedHostMethodVersion(manifestHostId, method);
-  });
+  if (manifestHostId === null) return null;
+  return getNegotiatedHostMethodVersion(manifestHostId, method);
 }

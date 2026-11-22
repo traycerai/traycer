@@ -470,6 +470,8 @@ function PipWindow(props: {
         type="button"
         aria-label={meta.available ? "Restore browser tile" : "Browser preview"}
         disabled={!meta.available}
+        // A web page, even one shown passively, is never the app's to swipe.
+        data-history-gesture-owner=""
         className="relative min-h-0 flex-1 overflow-hidden bg-background p-0 text-left disabled:cursor-default"
         onClick={() => {
           if (dragMovedRef.current) {
@@ -648,23 +650,26 @@ function useOpenPipTarget(
       const session = findPipSession(items, target.hostId, target.sessionId);
       const tab = session?.tabs.find((item) => item.tabId === target.tabId);
       if (session === undefined || tab === undefined) return;
-      openTile({
-        node: makeBrowserSessionTileRef({
-          hostId: target.hostId,
-          sessionId: target.sessionId,
-          tabId: target.tabId,
-        }),
-        target: { tabId: viewTabId },
-        gesture: "explicit",
-        modifiers: null,
-        // No pane yet (an empty canvas): the executor seeds the root pane.
-        placement:
-          activePaneId === null
-            ? null
-            : { kind: "tab", paneId: activePaneId, index: null },
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: makeBrowserSessionTileRef({
+            hostId: target.hostId,
+            sessionId: target.sessionId,
+            tabId: target.tabId,
+          }),
+          target: { tabId: viewTabId },
+          gesture: "explicit",
+          modifiers: null,
+          // No pane yet (an empty canvas): the executor seeds the root pane.
+          placement:
+            activePaneId === null
+              ? null
+              : { kind: "tab", paneId: activePaneId, index: null },
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [activePaneId, items, openTile, viewTabId],
   );

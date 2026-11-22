@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { useCallback, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { EnvironmentReviewHeldApplyResponse } from "@traycer/protocol/host/environment-schemas";
+import type { ReviewChoiceOutcome } from "@traycer-clients/shared/environment/environment-review";
 import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -10,14 +11,12 @@ import {
   type EnvironmentPlanes,
 } from "@/components/settings/move/cohort-rows";
 import { heldRowsFromReview } from "@/components/settings/move/held-from-review";
-import { HeldSecretBindingDialog } from "@/components/settings/move/held-secret-binding-dialog";
 import {
   appliedOnHostNames,
   roomSharedLine,
   sharedInUseFromItems,
 } from "@/components/settings/move/review-inventory";
 import type { HeldApplyChoice } from "@/components/settings/move/retrospective-copy";
-import { reviewEvidence } from "@/components/settings/move/review-v11";
 import {
   RetrospectiveSheet,
   type HeldRow,
@@ -37,10 +36,23 @@ import {
   useEnvironmentStatusRead,
   type EnvironmentRead,
 } from "@/hooks/environment/use-environment-reads";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+
+/**
+ * One opening of the sheet, and the held rows whose Approve authn refused in
+ * it because the live value moved (`conflict`). Such a row offers no Approve
+ * again until it shows the value it would replace, which no row draws yet
+ * (board C22), so for now it keeps Discard only. A `gone` answer is not kept
+ * here.
+ */
+interface SheetOpening {
+  readonly open: boolean;
+  readonly id: number;
+  readonly conflicted: ReadonlySet<string>;
+}
+
+const NO_CONFLICTS: ReadonlySet<string> = new Set();
 
 export function RetrospectiveSession(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -62,52 +74,66 @@ export function RetrospectiveSession(props: {
     props.stopHostId,
     props.open && props.stopHostId !== null,
   );
-  const appliedOn = useAppliedOnHosts(
-    props.client,
-    props.reviewHostId,
-    props.open,
-  );
+  const appliedOn = useAppliedOnHosts(props.open);
   const record = useEnvironmentReviewRecordMutation(props.client);
-  const heldApply = useEnvironmentReviewHeldApplyMutation(props.client);
+  const entries = review.data?.entries ?? [];
+  const heldApply = useEnvironmentReviewHeldApplyMutation(entries);
   const recordMutate = record.mutate;
   const queryClient = useQueryClient();
-  const reviewHostId = props.reviewHostId;
   const retryReview = (): void => {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(reviewHostId, "environment.review"),
-    });
+    void invalidateEnvironmentReads(queryClient, ["environment.review"]);
   };
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
-  const [bindingHeld, setBindingHeld] = useState<{
-    readonly id: string;
-    readonly name: string;
-  } | null>(null);
+  const [opening, setOpening] = useState<SheetOpening>({
+    open: props.open,
+    id: 0,
+    conflicted: NO_CONFLICTS,
+  });
 
   const onShown = useCallback((): void => {
     recordMutate({ event: "shown" });
   }, [recordMutate]);
 
-  const entries = review.data?.entries ?? [];
   const held = props.held ?? heldRowsFromReview(entries);
   const planes = status.data === null ? null : planesFromStatus(status.data);
   const { stillLocal, offerStop } = planeFacts(planes);
+  // A team's computer is the team's: its local planes are not the person's
+  // settings, so the sheet offers no move (`localRowCohort` has the same rule).
+  const teamOwned = status.data?.principal?.kind === "team";
   const statusItems = status.data?.items ?? [];
   const sharedInUse = sharedInUseFromItems(statusItems);
   const roomShared = roomSharedLine(planes, statusItems);
   const evidence =
-    review.data === null
-      ? { version: null, at: null }
-      : reviewEvidence(review.data);
+    review.data === null ? { version: null, at: null } : review.data.evidence;
   const heldPendingId = heldApply.isPending ? heldApply.variables.heldId : null;
 
+  // A closed sheet starts its next opening with no row refused.
+  if (opening.open !== props.open) {
+    setOpening({
+      open: props.open,
+      id: opening.id + 1,
+      conflicted: NO_CONFLICTS,
+    });
+  }
   const onHeldApply = (heldId: string, choice: HeldApplyChoice): void => {
-    if (choice === "secret") {
-      const row = held.find((entry) => entry.heldId === heldId);
-      if (row !== undefined) setBindingHeld({ id: heldId, name: row.name });
-      return;
-    }
-    heldApply.mutate({ heldId, choice });
+    const openingId = opening.id;
+    heldApply.mutate(
+      { heldId, choice },
+      {
+        onSuccess: (answer) => {
+          if (answer.outcome !== "conflict") return;
+          setOpening((current) =>
+            current.id === openingId
+              ? {
+                  ...current,
+                  conflicted: new Set(current.conflicted).add(heldId),
+                }
+              : current,
+          );
+        },
+      },
+    );
   };
 
   return (
@@ -123,6 +149,7 @@ export function RetrospectiveSession(props: {
         held={held}
         stillLocal={stillLocal}
         heldPendingId={heldPendingId}
+        heldApproveRefused={opening.conflicted}
         heldIssue={heldApplyIssue(heldApply.data)}
         inventoryRead={inventoryReadLine(review, props.hostName, retryReview)}
         onOpenChange={props.onOpenChange}
@@ -133,14 +160,18 @@ export function RetrospectiveSession(props: {
         onHeldApply={onHeldApply}
         // Each leads elsewhere, so the sheet closes first: what it says about
         // this computer is out of date once the move or the stop is done.
-        onMoveToPersonal={() => {
-          if (props.stopHostId === null) return;
-          props.onOpenChange(false);
-          openMoveSheet({
-            hostId: props.stopHostId,
-            hostName: props.hostName,
-          });
-        }}
+        onMoveToPersonal={
+          teamOwned
+            ? null
+            : () => {
+                if (props.stopHostId === null) return;
+                props.onOpenChange(false);
+                openMoveSheet({
+                  hostId: props.stopHostId,
+                  hostName: props.hostName,
+                });
+              }
+        }
         onStopSharing={
           offerStop
             ? () => {
@@ -156,20 +187,6 @@ export function RetrospectiveSession(props: {
         hostName={props.hostName}
         open={stopOpen}
         onOpenChange={setStopOpen}
-      />
-      <HeldSecretBindingDialog
-        open={bindingHeld !== null}
-        heldId={bindingHeld?.id ?? ""}
-        heldName={bindingHeld?.name ?? ""}
-        pending={heldApply.isPending}
-        onOpenChange={(open) => {
-          if (!open) setBindingHeld(null);
-        }}
-        onApply={(request) => {
-          heldApply.mutate(request, {
-            onSuccess: () => setBindingHeld(null),
-          });
-        }}
       />
     </>
   );
@@ -197,11 +214,11 @@ function inventoryReadLine(
 }
 
 /**
- * A held-row choice's answer under the rows. `gone` was settled elsewhere,
- * and the reread drops its row.
+ * A held-row choice's answer under the rows. `gone` and `conflict` draw
+ * nothing here: the reread draws the row as it is now, or drops it.
  */
 function heldApplyIssue(
-  answer: EnvironmentReviewHeldApplyResponse | undefined,
+  answer: ReviewChoiceOutcome | undefined,
 ): ConfigurationWriteIssue {
   return answer?.outcome === "forbidden" ? { kind: "forbidden" } : null;
 }
@@ -241,28 +258,15 @@ function inventoryReady(
   );
 }
 
-function useAppliedOnHosts(
-  client: HostClient<HostRpcRegistry>,
-  reviewHostId: string | null,
-  open: boolean,
-): readonly string[] {
-  const listSupported = useHostMethodSupport(reviewHostId, "environment.list");
-  const environments = useEnvironmentListQuery(
-    client,
-    open && listSupported === true,
-  );
+function useAppliedOnHosts(open: boolean): readonly string[] {
+  const environments = useEnvironmentListQuery(open);
   const personalEnvironmentId =
     environments.data?.environments.find(
       (environment) => environment.ownerKind === "user",
     )?.environmentId ?? null;
-  const hostListSupported = useHostMethodSupport(
-    reviewHostId,
-    "environment.host.list",
-  );
   const hostLists = useEnvironmentHostLists(
-    client,
     personalEnvironmentId === null ? [] : [personalEnvironmentId],
-    open && personalEnvironmentId !== null && hostListSupported === true,
+    open && personalEnvironmentId !== null,
   );
   if (personalEnvironmentId === null) return [];
   return appliedOnHostNames(

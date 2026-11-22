@@ -19,9 +19,15 @@ import {
 } from "@/components/ui/dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { useIsLooseFileArtifact } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { useChatRestoreContext } from "@/components/chat/use-chat-restore-context";
+import {
+  distinctArtifactCount,
+  groupArtifactFolderChanges,
+  type ArtifactFolderBundle,
+} from "@/lib/chat/artifact-folder-bundles";
 import { RevertArtifactsCheckbox } from "./revert-artifacts-checkbox";
 import { useArtifactRowDisplay } from "./use-artifact-row-display";
 
@@ -67,9 +73,9 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
     (entry) => !isNoOpCheckpointEntry(entry),
   );
   const state = restoreCheckpointDialogState(manifest, entries, restore);
-  const artifactCount = entries.filter(
-    (entry) => entry.artifact && entry.undoable,
-  ).length;
+  const artifactCount = distinctArtifactCount(
+    entries.filter((entry) => entry.undoable),
+  );
   const [revertArtifacts, setRevertArtifacts] = useState(true);
 
   useEffect(() => {
@@ -93,13 +99,13 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
         // Inline `maxWidth` instead of a Tailwind arbitrary-value class:
         // the comma inside `min(92vw, 32rem)` defeats Tailwind v4's
         // class-extractor regex, so the utility silently never reaches
-        // the stylesheet. `min-w-0` neutralizes the grid's intrinsic
+        // the stylesheet. `min-w-0` neutralizes the body's intrinsic
         // `min-content` minimum so an unbreakable file path can't push
         // the modal past the cap. The default X close button is
         // suppressed - Cancel in the footer already covers dismissal
         // (alongside Esc / overlay click) without the corner-spacing
         // mismatch that comes with the corner-anchored icon.
-        className="w-full min-w-0 overflow-hidden"
+        className="flex w-full min-w-0 flex-col overflow-hidden"
         style={{ maxWidth: "min(92vw, 32rem)" }}
         showCloseButton={false}
         data-testid="restore-checkpoint-dialog"
@@ -114,14 +120,24 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-w-0 space-y-3 px-6 pb-2">
+        <div className="-m-1 min-h-0 min-w-0 space-y-3 overflow-y-auto px-7 pt-1 pb-3">
           <div className="max-h-[min(45vh,22rem)] min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-border/60 bg-foreground/3">
-            {entries.map((entry) => (
-              <RestoreFileRow
-                key={`${entry.filePath}:${entry.operation}:${entry.beforeHash ?? ""}`}
-                entry={entry}
-              />
-            ))}
+            {groupArtifactFolderChanges(
+              entries,
+              (entry) => entry.artifact ?? null,
+            ).map((row) =>
+              row.kind === "single" ? (
+                <RestoreFileRow
+                  key={`${row.item.filePath}:${row.item.operation}:${row.item.beforeHash ?? ""}`}
+                  entry={row.item}
+                />
+              ) : (
+                <RestoreArtifactBundleRow
+                  key={`artifact:${row.artifactId}`}
+                  bundle={row}
+                />
+              ),
+            )}
           </div>
 
           {hasLaterOverlappingChanges ? (
@@ -149,14 +165,7 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
           />
         </div>
 
-        <DialogFooter
-        // `mx-0 mb-0` neutralizes shadcn's default `-mx-4 -mb-4` on
-        // DialogFooter - those negatives are tuned for the primitive's
-        // `p-4` content padding, but we use `p-0` here, so they leak
-        // 16px past the bottom edge and get clipped by
-        // `overflow-hidden`. Result: buttons hug the bottom edge with
-        // no breathing room.
-        >
+        <DialogFooter>
           <Button
             type="button"
             variant="ghost"
@@ -352,6 +361,72 @@ function RestoreFileRow(props: {
       )}
       {entry.undoable ? null : <SkippedIndicator entry={entry} />}
     </div>
+  );
+}
+
+/**
+ * One html or canvas artifact's changed files as a single restore row; a
+ * loose HTML page is its own single file and reads as any artifact entry. A
+ * folder restores the files that can be undone, and each file that cannot is
+ * listed under it with its own reason.
+ */
+function RestoreArtifactBundleRow(props: {
+  readonly bundle: ArtifactFolderBundle<TurnCheckpointManifestEntry>;
+}) {
+  const { bundle } = props;
+  return useIsLooseFileArtifact(bundle.artifactId) ? (
+    <RestoreFileRow entry={bundle.members[0].item} />
+  ) : (
+    <RestoreArtifactFolderRow bundle={bundle} />
+  );
+}
+
+function RestoreArtifactFolderRow(props: {
+  readonly bundle: ArtifactFolderBundle<TurnCheckpointManifestEntry>;
+}) {
+  const { bundle } = props;
+  const anyUndoable = bundle.members.some((member) => member.item.undoable);
+  const memberCount = bundle.members.length;
+  const artifactRow = (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-2.5 border-t border-border/40 px-3 py-1.5 first:border-t-0",
+        anyUndoable ? null : "text-muted-foreground/70",
+      )}
+    >
+      <OperationDot operation={bundle.operation} />
+      <RestoreArtifactTitle
+        artifact={{
+          artifactId: bundle.artifactId,
+          kind: bundle.artifactKind,
+          title: bundle.title,
+        }}
+        operation={bundle.operation}
+      />
+      <span className="shrink-0 text-ui-xs text-muted-foreground">
+        {memberCount} {fileLabel(memberCount)}
+      </span>
+    </div>
+  );
+  return (
+    <>
+      {artifactRow}
+      {bundle.members
+        .filter((member) => !member.item.undoable)
+        .map((member) => (
+          <div
+            key={member.item.filePath}
+            className="flex min-w-0 items-center gap-2.5 border-t border-border/40 py-1.5 pr-3 pl-8 text-muted-foreground/70"
+          >
+            <FilePathTooltip content={member.item.filePath} side="bottom">
+              <StartTruncatedText className="min-w-0 flex-1 font-mono text-code-xs">
+                {member.label}
+              </StartTruncatedText>
+            </FilePathTooltip>
+            <SkippedIndicator entry={member.item} />
+          </div>
+        ))}
+    </>
   );
 }
 

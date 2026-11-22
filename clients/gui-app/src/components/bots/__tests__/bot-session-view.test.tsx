@@ -20,6 +20,8 @@ import userEvent from "@testing-library/user-event";
 import { act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import { installManagedCommandChatSession } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotQuestionSettlement,
@@ -35,6 +37,13 @@ const mocks = vi.hoisted(() => ({
   sessionReads: [] as string[],
 }));
 
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => true,
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -49,11 +58,16 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
       : null;
   },
 }));
+// The fallback announcer has no host reads to make in this transcript fixture.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
+  useGuiHarnessesQueryForClient: () => ({ data: undefined, isPending: false }),
 }));
 // A bot's own session draws no receipts: the transcript asks for none.
 vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
@@ -65,6 +79,7 @@ vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
 }));
 
 import { BotSessionView } from "@/components/bots/bot-session-view";
+import { TracyPlaybackScope } from "@/components/bots/tracy-playback-slot";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -98,6 +113,7 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { useTileFindStore } from "@/stores/tile-find";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const IDENTITY: BotIdentity = {
   botId: BOT_ID,
@@ -150,6 +166,7 @@ function sendCall(input: {
     botSendReceipt: null,
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
@@ -330,21 +347,24 @@ function mountSession(input: {
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
           <BotIdentityContext value={IDENTITY}>
-            <BotSessionView
-              botId={BOT_ID}
-              hostId={HOST_ID}
-              botTitle={botTitle}
-              session={{
-                chatId: input.chatId,
-                threadId: input.threadId,
-                landOn: input.landOn,
-              }}
-              threads={input.threads}
-              resolveMember={input.resolveMember}
-              onClose={opened.close}
-              onOpenChannel={opened.channel}
-              onOpenThread={opened.thread}
-            />
+            <TracyPlaybackScope>
+              <BotSessionView
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                boundHostId={null}
+                botTitle={botTitle}
+                session={{
+                  chatId: input.chatId,
+                  threadId: input.threadId,
+                  landOn: input.landOn,
+                }}
+                threads={input.threads}
+                resolveMember={input.resolveMember}
+                onClose={opened.close}
+                onOpenChannel={opened.channel}
+                onOpenThread={opened.thread}
+              />
+            </TracyPlaybackScope>
           </BotIdentityContext>
         </TooltipProvider>
       </QueryClientProvider>
@@ -399,9 +419,104 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mocks.sessions = {};
+  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 });
 
 describe("a bot's trunk session, read whole", () => {
+  it("renders a managed shell started in the bot transcript", async () => {
+    const call = sendCall({
+      blockId: "start-shell",
+      toolName: "mcp__traycer_a2a__traycer_run_shell",
+      fields: { command: "tail -f deploy.log" },
+      error: null,
+      at: 2_000,
+    });
+    mocks.sessions[TRUNK_ID] = scriptedSession(TRUNK_ID, [
+      checkinPrompt(),
+      botTurn({
+        messageId: "turn-shell-record",
+        turnId: "turn-shell",
+        at: 2_000,
+        blocks: [
+          {
+            ...call,
+            managedCommand: {
+              event: "started",
+              commandId: "shell-deploy",
+              description: "deploy watcher",
+              monitoring: true,
+              cwd: null,
+            },
+          },
+        ],
+      }),
+    ]).handle;
+    const session = installManagedCommandChatSession({
+      epicId: BOT_ID,
+      chatId: TRUNK_ID,
+      hostId: HOST_ID,
+    });
+    const command = managedCommandSchema.parse({
+      id: "shell-deploy",
+      monitoring: true,
+      description: "deploy watcher",
+      command: "tail -f deploy.log",
+      cwd: "/work/repo",
+      cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+      status: { state: "running", pid: 42, startedAtMs: 2_000 },
+      chatId: TRUNK_ID,
+      relaunchOnHostRestart: false,
+      createdAtMs: 2_000,
+      updatedAtMs: 2_000,
+    });
+    try {
+      session.setCommands([command]);
+      session.setConnectionStatus("open");
+      mountTrunk(null);
+      await settleLegendList();
+      expect(within(view()).getByText("Monitor · deploy watcher")).toBeTruthy();
+      expect(within(view()).getByText("Running")).toBeTruthy();
+      expect(within(view()).getByLabelText("Shell running")).toBeTruthy();
+      act(() => session.setConnectionStatus("reconnecting"));
+      expect(within(view()).queryByText("Running")).toBeNull();
+      expect(within(view()).getByText("Status unavailable")).toBeTruthy();
+      expect(within(view()).queryByLabelText("Shell running")).toBeNull();
+      expect(within(view()).getByText("Monitor · deploy watcher")).toBeTruthy();
+      act(() => session.setConnectionStatus("closed"));
+      expect(within(view()).queryByText("Running")).toBeNull();
+      expect(within(view()).getByText("Status unavailable")).toBeTruthy();
+      expect(within(view()).queryByLabelText("Shell running")).toBeNull();
+      act(() => session.setConnectionStatus("open"));
+      expect(within(view()).getByText("Status unavailable")).toBeTruthy();
+      expect(within(view()).queryByText("Running")).toBeNull();
+      expect(within(view()).queryByLabelText("Shell running")).toBeNull();
+      act(() => session.sendSnapshot([command]));
+      expect(within(view()).getByText("Running")).toBeTruthy();
+      expect(within(view()).getByLabelText("Shell running")).toBeTruthy();
+      expect(within(view()).queryByText("Status unavailable")).toBeNull();
+      act(() =>
+        session.setCommands([
+          {
+            ...command,
+            monitoring: false,
+            status: {
+              state: "exited",
+              exitCode: 1,
+              signal: null,
+              exitedAtMs: 3_000,
+            },
+          },
+        ]),
+      );
+      expect(within(view()).getByText("Shell · deploy watcher")).toBeTruthy();
+      expect(within(view()).getByText("Exited · code 1")).toBeTruthy();
+      expect(within(view()).queryByText("Running")).toBeNull();
+    } finally {
+      cleanup();
+      session.dispose();
+    }
+  });
+
   it("reads every turn and what happened between them in time order: the check-in, the reply it posted as a send, the fallback, the next prompt and the question back", async () => {
     mountTrunk(null);
     await settleLegendList();
@@ -492,6 +607,18 @@ describe("a bot's trunk session, read whole", () => {
     expect(opened.channel).toHaveBeenCalledWith(null);
     await user.click(within(view()).getByRole("button", { name: "Back" }));
     expect(opened.close).toHaveBeenCalledOnce();
+  });
+
+  it("draws the tab's one music group inside the session's header, and no row of its own", () => {
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+    mountTrunk(null);
+
+    const groups = screen.getAllByRole("group", { name: "Music playback" });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.closest("header")?.parentElement).toBe(view());
   });
 
   it("finds text in the check-in turn's activity and in what the bot posted, as the agent chat's find does", async () => {

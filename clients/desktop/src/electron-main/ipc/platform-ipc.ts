@@ -96,8 +96,10 @@ import {
   setDesktopLogLevel,
 } from "../app/desktop-log-level";
 import {
+  readAgentFeedbackConfigSync,
   readFeatureSettings,
   readLogLevels,
+  setAgentFeedbackEnabled,
   setAgentRolesEnabled,
   setLogLevel,
 } from "@traycer/protocol/config/store";
@@ -541,7 +543,7 @@ export function registerPlatformIpc(
 
   bridge.handleInvoke(
     RunnerHostInvoke.featureSettingsGet,
-    (): Promise<FeatureSettingsSnapshot> => readFeatureSettings(),
+    (): Promise<FeatureSettingsSnapshot> => readFeatureSettingsSnapshot(),
   );
 
   bridge.handleInvoke(
@@ -551,13 +553,32 @@ export function registerPlatformIpc(
         throw new Error("featureSettings:agentRoles:set requires a boolean");
       }
       await setAgentRolesEnabled(enabled);
-      return readFeatureSettings();
+      return readFeatureSettingsSnapshot();
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.agentFeedbackEnabledSet,
+    async (_event, enabled: unknown): Promise<FeatureSettingsSnapshot> => {
+      if (typeof enabled !== "boolean") {
+        throw new Error("featureSettings:agentFeedback:set requires a boolean");
+      }
+      await setAgentFeedbackEnabled(enabled);
+      return readFeatureSettingsSnapshot();
     },
   );
 
   bridge.handleInvoke(RunnerHostInvoke.fontsList, () => {
     return listInstalledFonts();
   });
+}
+
+async function readFeatureSettingsSnapshot(): Promise<FeatureSettingsSnapshot> {
+  const features = await readFeatureSettings();
+  return {
+    agentRoles: features.agentRoles,
+    agentFeedback: readAgentFeedbackConfigSync().enabled,
+  };
 }
 
 function redactNullableText(value: string | null): string | null {

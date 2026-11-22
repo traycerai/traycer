@@ -295,7 +295,7 @@ const LAST_SEEN_CLAUSE: Record<
 
 /**
  * The phase a host was last seen in, as the clause the Overview's offline
- * notice carries ("Can't reach build-box — last seen 3h ago, while downloading
+ * notice carries ("Can't reach build-box — last seen while downloading
  * update to v1.5.1."), or `null` when no update was in flight.
  *
  * Reads the RETAINED phase (`lastKnownKind`) for an `unknown` view and the

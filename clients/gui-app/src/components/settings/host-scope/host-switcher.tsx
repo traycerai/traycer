@@ -2,6 +2,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { useState, type ReactNode } from "react";
 import {
+  HOST_FROZEN_WORD,
+  HOST_KIND_WORDS,
+} from "@traycer/protocol/host/host-status";
+import {
   ChevronDown,
   ChevronRight,
   Plus,
@@ -27,6 +31,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
@@ -35,13 +41,10 @@ import {
   composerComputerSubLine,
   groupComposerHostOptions,
   groupHostOptions,
-  hostOptionKindLabel,
-  hostRowTitle,
   hostRowSurfaceState,
   hostOptionStatusWord,
   isHostOptionSelectable,
   type HostPickIntent,
-  type HostRowSurfaceState,
 } from "@/components/settings/host-scope/host-option-model";
 import { HOST_SWITCHER_LIST_ATTRIBUTE } from "@/components/settings/host-scope/host-switcher-portal";
 import {
@@ -51,6 +54,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
+import { preserveWhenNestedOverlay } from "@/components/home/host-workspace-selector/preserve-when-nested-overlay";
 import { useHostBinding } from "@/lib/host";
 import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
@@ -143,9 +147,9 @@ export interface HostSwitcherComposerMode {
    * `In this task`; `null` on the landing composer.
    */
   readonly inThisTask: readonly HostScopeOption[] | null;
-  /** Lines under a host row (the Local sub-line, the reach sentence). */
+  /** Lines under a host row (shape, rate, payer, the reach sentence). */
   readonly subLinesFor: (hostId: string) => readonly string[];
-  /** The configuration tag beside an agent sandbox's title, else `null`. */
+  /** The configuration mark below an agent sandbox's name, else `null`. */
   readonly tagFor: (hostId: string) => string | null;
   readonly newRows: readonly HostSwitcherNewRow[];
   /** The configuration that heads the New group past two configurations. */
@@ -158,7 +162,8 @@ export interface HostSwitcherComposerMode {
   readonly stagedBusy: boolean;
   /** Called with a host row's pick, before `onSelect`. */
   readonly onPickHost: (host: HostScopeOption) => void;
-  readonly onPickNew: (configurationKey: string) => void;
+  /** `false` keeps the chooser open when the pick could not be staged. */
+  readonly onPickNew: (configurationKey: string) => void | boolean;
   /** A New row's gear, or the staged chip's gear: the shape sheet. */
   readonly onOpenShape: (configurationKey: string) => void;
   readonly onManage: () => void;
@@ -169,8 +174,9 @@ export interface HostSwitcherComposerMode {
  * thing that cannot be one constant for both surfaces.
  *
  * - `rail`: a control among navigation (Settings' sidebar). The trigger is a
- *   filled, rounded row and the list floats below it at its own comfortable
- *   width, because the rail is far too narrow to read host names in.
+ *   filled, rounded row whose name stays one line; the full name is in a
+ *   tooltip. The list floats below it at its own comfortable width, because
+ *   the rail is far too narrow to read host names in.
  * - `field`: one control among other controls, inside a panel that is already
  *   open (the workspace and worktree pickers, where a search field sits right
  *   under it). A quiet fill is not enough there: everything around it is flat,
@@ -241,7 +247,7 @@ const HOST_SWITCHER_SURFACES: Record<
   },
   inline: {
     trigger:
-      "h-7 w-fit max-w-full gap-1.5 rounded-lg px-1.5 py-0 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+      "h-auto w-fit max-w-full gap-1.5 rounded-lg px-1.5 py-1 text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
     list: "",
     sideOffsetPx: 4,
   },
@@ -305,6 +311,10 @@ export function HostSwitcher(props: {
    * `HostPickIntent`.
    */
   readonly intent: HostPickIntent;
+  readonly consequence: {
+    readonly heading: string;
+    readonly hint: string;
+  } | null;
   /**
    * Per-host reasons THIS surface cannot use a host, keyed by `hostId` — the
    * fork dialog's "needs update" for a target that does not speak the fork RPC
@@ -401,182 +411,218 @@ export function HostSwitcher(props: {
   }
 
   return (
-    <>
-      <Popover open={open} onOpenChange={setOpen}>
-        <HostSwitcherTrigger
-          intent={props.intent}
-          selected={selected}
-          disabled={props.disabled}
-          keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
-          surfaceKind={props.surface}
-          surface={surface}
-          composer={props.composer}
-        />
-        <PopoverContent
-          align="start"
-          sideOffset={surface.sideOffsetPx}
-          // Never narrower than the row it drops out of. A list floating at its
-          // own width under a wider trigger reads as an unrelated panel that
-          // happened to land there — the connection between "this row" and "these
-          // choices" is carried by the shared left edge AND the shared width. The
-          // 20rem is a FLOOR for the narrow case (the rail, whose trigger is far
-          // too narrow to read host names in), not a size.
-          className={cn(
-            "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)]",
-            surface.list,
-          )}
-          data-testid="settings-host-switcher-list"
-          {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
-          ref={contentRef}
-          // Only the search input is worth declining for; below the threshold
-          // there is no input and Radix's default lands on a host row, which
-          // summons nothing.
-          onOpenAutoFocus={showSearch ? coarseOpenAutoFocus : undefined}
-          // The list is portalled, but React still bubbles its keys up the
-          // tree it was mounted from: a composer above this picker would
-          // take the search's keystrokes (an Enter that picks a row would
-          // also send the draft).
-          onKeyDown={(event) => event.stopPropagation()}
-        >
-          <Command
-            filter={props.composer === null ? undefined : composerSearchFilter}
+    <span className="flex w-full min-w-0 items-center gap-1">
+      {/* The gear keeps its size. The trigger yields width, so the row stays
+          inside its container and a long staged label truncates. */}
+      <span className="min-w-0 flex-1">
+        <Popover open={open} onOpenChange={setOpen}>
+          <HostSwitcherTrigger
+            intent={props.intent}
+            selected={selected}
+            disabled={props.disabled}
+            keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
+            surfaceKind={props.surface}
+            surface={surface}
+            composer={props.composer}
+          />
+          <PopoverContent
+            align="start"
+            sideOffset={surface.sideOffsetPx}
+            // Never narrower than the row it drops out of. A list floating at its
+            // own width under a wider trigger reads as an unrelated panel that
+            // happened to land there — the connection between "this row" and "these
+            // choices" is carried by the shared left edge AND the shared width. The
+            // 20rem is a FLOOR for the narrow case (the rail, whose trigger is far
+            // too narrow to read host names in), not a size.
+            className={cn(
+              "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)]",
+              surface.list,
+            )}
+            data-testid="settings-host-switcher-list"
+            {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
+            ref={contentRef}
+            // Only the search input is worth declining for; below the threshold
+            // there is no input and Radix's default lands on a host row, which
+            // summons nothing.
+            onOpenAutoFocus={showSearch ? coarseOpenAutoFocus : undefined}
+            onInteractOutside={(event) =>
+              preserveWhenNestedOverlay(event, contentRef.current)
+            }
+            // The list is portalled, but React still bubbles its keys up the
+            // tree it was mounted from: a composer above this picker would
+            // take the search's keystrokes (an Enter that picks a row would
+            // also send the draft).
+            onKeyDown={(event) => event.stopPropagation()}
           >
-            {showSearch ? (
-              <CommandInput
-                placeholder={SEARCH_HOSTS_PLACEHOLDER}
-                value={search}
-                onValueChange={setSearch}
-              />
-            ) : null}
-            <CommandList>
-              {/* The composer's New rows never filter out, so its no-match
-                  line is drawn by its groups instead. */}
-              {props.composer === null ? (
-                <CommandEmpty>No hosts match.</CommandEmpty>
-              ) : null}
-              <HostSwitcherGroups
-                hosts={hosts}
-                action={props.action}
-                composer={props.composer}
-                onPickNew={(configurationKey) => {
-                  props.composer?.onPickNew(configurationKey);
-                  setOpen(false);
-                }}
-                onOpenShape={(configurationKey) => {
-                  setOpen(false);
-                  props.composer?.onOpenShape(configurationKey);
-                }}
-                searching={search.length > 0}
-                search={search}
-                renderRow={(host) => (
-                  <HostSwitcherRow
-                    key={host.hostId}
-                    host={host}
-                    scoped={
-                      selected !== null && host.hostId === selected.hostId
-                    }
-                    active={host.hostId === props.activeHostId}
-                    intent={props.intent}
-                    surfaceRefusal={
-                      props.refusalByHostId.get(host.hostId) ?? null
-                    }
-                    surfaceInert={
-                      props.inertExceptHostId !== null &&
-                      host.hostId !== props.inertExceptHostId
-                    }
-                    updateView={props.updateViewForHost?.(host.hostId) ?? null}
-                    environmentLabel={
-                      props.environmentLabelForHost?.(host.hostId) ?? null
-                    }
-                    composer={props.composer !== null}
-                    subLines={hostSubLines(props.composer, host.hostId)}
-                    tag={
-                      props.composer === null
-                        ? null
-                        : props.composer.tagFor(host.hostId)
-                    }
-                    onSelect={() => {
-                      pickHostRow(props.composer, props.intent, host);
-                      props.onSelect(host.hostId);
-                      setOpen(false);
-                    }}
-                  />
-                )}
-                selected={selected}
-              />
-              {trailingAction === null ? null : (
-                // The composer's footer stays under a search that matched
-                // nothing: it is where the rest are.
-                <CommandGroup forceMount={props.composer !== null}>
-                  <CommandItem
-                    forceMount={props.composer !== null}
-                    value={trailingAction.commandValue}
-                    keywords={[...trailingAction.keywords]}
-                    onSelect={() => {
-                      setOpen(false);
-                      trailingAction.onSelect();
-                    }}
-                    data-testid={trailingAction.testId}
-                  >
-                    <trailingAction.icon className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate text-ui-sm">
-                      {trailingAction.label}
-                    </span>
-                  </CommandItem>
-                </CommandGroup>
+            <Command
+              filter={
+                props.composer === null ? undefined : composerSearchFilter
+              }
+            >
+              {props.consequence === null ? null : (
+                <div className="min-w-0 border-b px-3 py-2">
+                  <p className="min-w-0 text-ui-sm font-semibold wrap-break-word">
+                    {props.consequence.heading}
+                  </p>
+                  <p className="min-w-0 text-ui-xs text-muted-foreground wrap-break-word">
+                    {props.consequence.hint}
+                  </p>
+                </div>
               )}
-            </CommandList>
-          </Command>
-          {/* The same "a FAILED list is not an empty account" rule, at its third
-            consumer — the non-empty case. When one source list fails while the
-            other still contributes rows, `hosts` is nonempty, so the empty
-            branch above never runs and nothing said the picture was partial:
-            the sidebar presented half an account as all of it. The rows stay
-            usable; this footer says what is missing and offers the retry. */}
-          {/* Rows can be listed while a list is still on its first read (a
-            sandbox list withholds its rows until it answers): say more are
-            coming, so the rows shown do not read as the whole account. */}
-          {props.isLoading ? (
-            <div
-              className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
-              data-testid="settings-host-switcher-loading-more"
-            >
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-                tone="muted"
-              />
-              <span className="text-ui-xs text-muted-foreground">
-                Loading more hosts…
-              </span>
-            </div>
-          ) : null}
-          {props.listsFailed && !props.isLoading ? (
-            <div
-              className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
-              data-testid="settings-host-switcher-partial-failure"
-            >
-              <span className="text-ui-xs text-muted-foreground">
-                Some hosts may be missing
-              </span>
-              <button
-                type="button"
-                onClick={props.onRetryLists}
-                className="shrink-0 rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                data-testid="settings-host-switcher-retry-lists"
+              {showSearch ? (
+                <CommandInput
+                  placeholder={SEARCH_HOSTS_PLACEHOLDER}
+                  value={search}
+                  onValueChange={setSearch}
+                />
+              ) : null}
+              <CommandList>
+                {/* The composer's New rows never filter out, so its no-match
+                    line is drawn by its groups instead. */}
+                {props.composer === null ? (
+                  <CommandEmpty>No hosts match.</CommandEmpty>
+                ) : null}
+                <HostSwitcherGroups
+                  hosts={hosts}
+                  action={props.action}
+                  composer={props.composer}
+                  onPickNew={(configurationKey) => {
+                    // Keep the return target inside the keyboard menu without
+                    // focusing its search field on a touch-only pick.
+                    const command =
+                      contentRef.current?.querySelector<HTMLElement>(
+                        '[data-slot="command"]',
+                      ) ?? null;
+                    if (
+                      command !== null &&
+                      !command.contains(document.activeElement)
+                    ) {
+                      command
+                        .querySelector<HTMLElement>("[cmdk-list]")
+                        ?.focus();
+                    }
+                    if (props.composer?.onPickNew(configurationKey) !== false) {
+                      setOpen(false);
+                    }
+                  }}
+                  onOpenShape={(configurationKey) => {
+                    setOpen(false);
+                    props.composer?.onOpenShape(configurationKey);
+                  }}
+                  searching={search.length > 0}
+                  search={search}
+                  renderRow={(host) => (
+                    <HostSwitcherRow
+                      key={host.hostId}
+                      host={host}
+                      scoped={
+                        selected !== null && host.hostId === selected.hostId
+                      }
+                      active={host.hostId === props.activeHostId}
+                      intent={props.intent}
+                      surfaceRefusal={
+                        props.refusalByHostId.get(host.hostId) ?? null
+                      }
+                      surfaceInert={
+                        props.inertExceptHostId !== null &&
+                        host.hostId !== props.inertExceptHostId
+                      }
+                      updateView={
+                        props.updateViewForHost?.(host.hostId) ?? null
+                      }
+                      environmentLabel={
+                        props.environmentLabelForHost?.(host.hostId) ?? null
+                      }
+                      composer={props.composer !== null}
+                      subLines={hostSubLines(props.composer, host.hostId)}
+                      tag={
+                        props.composer === null
+                          ? null
+                          : props.composer.tagFor(host.hostId)
+                      }
+                      onSelect={() => {
+                        pickHostRow(props.composer, props.intent, host);
+                        props.onSelect(host.hostId);
+                        setOpen(false);
+                      }}
+                    />
+                  )}
+                  selected={selected}
+                />
+                {trailingAction === null ? null : (
+                  // The composer's footer stays under a search that matched
+                  // nothing: it is where the rest are.
+                  <CommandGroup forceMount={props.composer !== null}>
+                    <CommandItem
+                      forceMount={props.composer !== null}
+                      value={trailingAction.commandValue}
+                      keywords={[...trailingAction.keywords]}
+                      onSelect={() => {
+                        setOpen(false);
+                        trailingAction.onSelect();
+                      }}
+                      data-testid={trailingAction.testId}
+                    >
+                      <trailingAction.icon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate text-ui-sm">
+                        {trailingAction.label}
+                      </span>
+                    </CommandItem>
+                  </CommandGroup>
+                )}
+              </CommandList>
+            </Command>
+            {/* The same "a FAILED list is not an empty account" rule, at its third
+              consumer — the non-empty case. When one source list fails while the
+              other still contributes rows, `hosts` is nonempty, so the empty
+              branch above never runs and nothing said the picture was partial:
+              the sidebar presented half an account as all of it. The rows stay
+              usable; this footer says what is missing and offers the retry. */}
+            {/* Rows can be listed while a list is still on its first read (a
+              sandbox list withholds its rows until it answers): say more are
+              coming, so the rows shown do not read as the whole account. */}
+            {props.isLoading ? (
+              <div
+                className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
+                data-testid="settings-host-switcher-loading-more"
               >
-                Try again
-              </button>
-            </div>
-          ) : null}
-        </PopoverContent>
-      </Popover>
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                  tone="muted"
+                />
+                <span className="text-ui-xs text-muted-foreground">
+                  Loading more hosts…
+                </span>
+              </div>
+            ) : null}
+            {props.listsFailed && !props.isLoading ? (
+              <div
+                className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
+                data-testid="settings-host-switcher-partial-failure"
+              >
+                <span className="text-ui-xs text-muted-foreground">
+                  Some hosts may be missing
+                </span>
+                <button
+                  type="button"
+                  onClick={props.onRetryLists}
+                  className="shrink-0 rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  data-testid="settings-host-switcher-retry-lists"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : null}
+          </PopoverContent>
+        </Popover>
+      </span>
       <HostSwitcherStagedGear
         composer={props.composer}
         disabled={props.disabled}
       />
-    </>
+    </span>
   );
 }
 
@@ -592,16 +638,14 @@ function hostSwitcherShowsSearch(
 const COMPOSER_UNFILTERED_PREFIXES = ["new-sandbox:", "action:"] as const;
 
 /**
- * Whether a composer host row matches a search: its title or its name
+ * Whether a composer host row matches a search: its name
  * contains the term, ignoring case. Partial terms narrow (`p2` keeps
  * `e2e-sbx-p2` alone), unlike cmdk's scattered-letter scoring.
  */
 function composerHostMatches(host: HostScopeOption, term: string): boolean {
   const needle = term.trim().toLocaleLowerCase();
   if (needle.length === 0) return true;
-  return [hostRowTitle(host, true), host.name].some((text) =>
-    text.toLocaleLowerCase().includes(needle),
-  );
+  return host.name.toLocaleLowerCase().includes(needle);
 }
 
 /**
@@ -646,6 +690,21 @@ function hostSubLines(
 }
 
 /**
+ * Facts under the shared row. A computer in the composer also says its
+ * platform and whether it answers. An empty computer line is omitted.
+ */
+function hostRowFactLines(
+  composer: boolean,
+  host: HostScopeOption,
+  selectable: boolean,
+  subLines: readonly string[],
+): readonly string[] {
+  if (!composer || host.sandbox !== null) return subLines;
+  const computer = composerComputerSubLine(host, selectable);
+  return computer.length === 0 ? subLines : [computer, ...subLines];
+}
+
+/**
  * A row's pick before the selection is written: a composer pick only
  * stages (the first action wakes); a `pin` or `bind` pick of a sleeping
  * sandbox wakes it.
@@ -677,6 +736,7 @@ function HostSwitcherStagedGear(props: {
       type="button"
       variant="ghost"
       size="icon-xs"
+      className="shrink-0"
       aria-label="Change the staged sandbox's shape"
       data-testid="host-switcher-staged-gear"
       disabled={props.disabled || composer.stagedBusy}
@@ -817,7 +877,13 @@ function HostSwitcherGroups(props: {
     <>
       {groups.personal.length === 0 ? null : (
         <CommandGroup heading="Host">
-          {groups.personal.map(props.renderRow)}
+          {renderComputerRows({
+            hosts: groups.personal,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: "settings-host-switcher-personal",
+            renderRow: props.renderRow,
+          })}
         </CommandGroup>
       )}
       {groups.sandboxes.length === 0 ? null : (
@@ -847,15 +913,25 @@ function HostSwitcherGroups(props: {
           key={team.teamId}
           title={team.teamName}
           countLabel={String(
-            team.sandboxes.length + team.agentSandboxes.length,
+            team.computers.length +
+              team.sandboxes.length +
+              team.agentSandboxes.length,
           )}
           defaultOpen
           forceOpen={props.searching}
           testId={`settings-host-switcher-team-${team.teamId}`}
         >
+          {renderComputerRows({
+            hosts: team.computers,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: `settings-host-switcher-team-${team.teamId}`,
+            renderRow: props.renderRow,
+          })}
           {team.sandboxes.map(props.renderRow)}
           {team.agentSandboxes.length === 0 ? null : (
             <HostSwitcherCollapsible
+              commandValue={null}
               title="Agent sandboxes"
               countLabel={String(team.agentSandboxes.length)}
               defaultOpen={false}
@@ -873,7 +949,8 @@ function HostSwitcherGroups(props: {
 
 /**
  * The composer mode's groups: `In this task` (in-task pickers), `Yours`,
- * `Sandboxes you started` collapsed behind its count, then the New sandbox
+ * team computers under their team names, `Sandboxes you started` collapsed
+ * behind its count, then the New sandbox
  * group headed by the defining line.
  */
 function HostSwitcherComposerGroups(props: {
@@ -897,11 +974,20 @@ function HostSwitcherComposerGroups(props: {
   // A host the task already uses is listed once, under In this task.
   const yours = groups.yours.filter((host) => !inTaskIds.has(host.hostId));
   const started = groups.started.filter((host) => !inTaskIds.has(host.hostId));
+  const teams = groups.teams
+    .map((team) => ({
+      ...team,
+      computers: team.computers.filter((host) => !inTaskIds.has(host.hostId)),
+    }))
+    .filter((team) => team.computers.length > 0);
   const noHostMatches =
     props.search.trim().length > 0 &&
-    ![...inTask, ...yours, ...started].some((host) =>
-      composerHostMatches(host, props.search),
-    );
+    ![
+      ...inTask,
+      ...yours,
+      ...started,
+      ...teams.flatMap((team) => team.computers),
+    ].some((host) => composerHostMatches(host, props.search));
   return (
     <>
       {noHostMatches ? <HostSwitcherNoMatch search={props.search} /> : null}
@@ -910,7 +996,13 @@ function HostSwitcherComposerGroups(props: {
           heading={IN_THIS_TASK_LABEL}
           data-testid="host-switcher-in-this-task"
         >
-          {inTask.map(props.renderRow)}
+          {renderComputerRows({
+            hosts: inTask,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: "host-switcher-in-this-task",
+            renderRow: props.renderRow,
+          })}
         </CommandGroup>
       )}
       {yours.length === 0 ? null : (
@@ -918,9 +1010,30 @@ function HostSwitcherComposerGroups(props: {
           heading={YOURS_GROUP_LABEL}
           data-testid="host-switcher-yours"
         >
-          {yours.map(props.renderRow)}
+          {renderComputerRows({
+            hosts: yours,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: "host-switcher-yours",
+            renderRow: props.renderRow,
+          })}
         </CommandGroup>
       )}
+      {teams.map((team) => (
+        <CommandGroup
+          key={team.teamId}
+          heading={team.teamName}
+          data-testid={`settings-host-switcher-team-${team.teamId}`}
+        >
+          {renderComputerRows({
+            hosts: team.computers,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: `settings-host-switcher-team-${team.teamId}`,
+            renderRow: props.renderRow,
+          })}
+        </CommandGroup>
+      ))}
       {started.length === 0 ? null : (
         <HostSwitcherSandboxGroup
           title={SANDBOXES_YOU_STARTED_LABEL}
@@ -983,6 +1096,7 @@ function HostSwitcherNewGroup(props: {
       {head.map(renderNewRow)}
       {rest.length === 0 ? null : (
         <HostSwitcherCollapsible
+          commandValue={null}
           title={collapsedConfigurationsLabel(
             rest.map((row) => row.configuration),
           )}
@@ -1056,6 +1170,7 @@ function HostSwitcherSandboxGroup(props: {
   return (
     <CommandGroup>
       <HostSwitcherCollapsible
+        commandValue={null}
         title={props.title}
         countLabel={props.countLabel}
         defaultOpen={props.defaultOpen}
@@ -1068,12 +1183,52 @@ function HostSwitcherSandboxGroup(props: {
   );
 }
 
+/** Fold only unselected offline computers; sandbox lifecycle rows stay visible. */
+function renderComputerRows(props: {
+  readonly hosts: readonly HostScopeOption[];
+  readonly selectedHostId: string | null;
+  readonly searching: boolean;
+  readonly testId: string;
+  readonly renderRow: (host: HostScopeOption) => ReactNode;
+}): ReactNode {
+  const offline = props.hosts.filter(
+    (host) =>
+      host.sandbox === null &&
+      host.health.state === "offline" &&
+      !host.settingUp &&
+      host.hostId !== props.selectedHostId,
+  );
+  if (props.searching || offline.length < 2) {
+    return props.hosts.map(props.renderRow);
+  }
+  const offlineIds = new Set(offline.map((host) => host.hostId));
+  return (
+    <>
+      {props.hosts
+        .filter((host) => !offlineIds.has(host.hostId))
+        .map(props.renderRow)}
+      <HostSwitcherCollapsible
+        commandValue={`offline:${props.testId}`}
+        title={`${offline.length} offline`}
+        countLabel={null}
+        defaultOpen={false}
+        forceOpen={false}
+        testId={`${props.testId}-offline`}
+      >
+        {offline.map(props.renderRow)}
+      </HostSwitcherCollapsible>
+    </>
+  );
+}
+
 /**
  * A collapsible titled run of rows. Not a `CommandGroup` itself, so a team's
  * agent sub-group can sit inside the team's group.
  */
 function HostSwitcherCollapsible(props: {
   readonly title: string;
+  /** Registers a disclosure among the arrow-key choices, or null for group headers. */
+  readonly commandValue: string | null;
   /** `null` where the title counts for itself. */
   readonly countLabel: string | null;
   readonly defaultOpen: boolean;
@@ -1083,6 +1238,21 @@ function HostSwitcherCollapsible(props: {
 }): ReactNode {
   const [open, setOpen] = useState(props.defaultOpen);
   const expanded = open || props.forceOpen;
+  const label = (
+    <>
+      {expanded ? (
+        <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+      ) : (
+        <ChevronRight className="size-3.5 shrink-0" aria-hidden />
+      )}
+      <span className="min-w-0 flex-1 text-start wrap-break-word">
+        {props.title}
+      </span>
+      {props.countLabel === null ? null : (
+        <span className="shrink-0 tabular-nums">{props.countLabel}</span>
+      )}
+    </>
+  );
   return (
     <Collapsible
       open={expanded}
@@ -1090,25 +1260,28 @@ function HostSwitcherCollapsible(props: {
       className="flex flex-col"
       data-testid={props.testId}
     >
-      <CollapsibleTrigger
-        variant="quiet"
-        className="flex w-full items-center text-ui-xs font-medium"
-        data-testid={`${props.testId}-toggle`}
-      >
-        {expanded ? (
-          <ChevronDown className="size-3.5 shrink-0" aria-hidden />
-        ) : (
-          <ChevronRight className="size-3.5 shrink-0" aria-hidden />
-        )}
-        {/* Wraps rather than truncates: a cut list of names reads as more
-            of them than there are. */}
-        <span className="min-w-0 flex-1 text-start wrap-break-word">
-          {props.title}
-        </span>
-        {props.countLabel === null ? null : (
-          <span className="shrink-0 tabular-nums">{props.countLabel}</span>
-        )}
-      </CollapsibleTrigger>
+      {props.commandValue === null ? (
+        <CollapsibleTrigger
+          variant="quiet"
+          className="flex w-full items-center text-ui-xs font-medium"
+          data-testid={`${props.testId}-toggle`}
+        >
+          {label}
+        </CollapsibleTrigger>
+      ) : (
+        <CommandItem
+          value={props.commandValue}
+          onSelect={() => setOpen(!expanded)}
+          aria-label={
+            expanded
+              ? "Hide offline computers"
+              : `Show ${props.title} computers`
+          }
+          data-testid={`${props.testId}-toggle`}
+        >
+          {label}
+        </CommandItem>
+      )}
       <CollapsibleContent>{props.children}</CollapsibleContent>
     </Collapsible>
   );
@@ -1139,11 +1312,14 @@ function hostSwitcherTriggerText(
     selected === null
       ? null
       : hostOptionStatusWord(selected, AVAILABLE_HOST_ROW_SURFACE_STATE);
-  const name =
-    selected === null ? null : hostRowTitle(selected, composer !== null);
+  const name = selected?.name ?? null;
+  const spokenStatus =
+    status !== null && selected?.sandbox?.frozen
+      ? `${status} · ${HOST_FROZEN_WORD}`
+      : status;
   return {
     label: name ?? "Select a host",
-    ariaLabel: hostSwitcherLabel(intent, name, status),
+    ariaLabel: hostSwitcherLabel(intent, name, spokenStatus),
     status,
   };
 }
@@ -1163,6 +1339,25 @@ function HostSwitcherStagedBusy(props: {
   );
 }
 
+/**
+ * The trigger's tooltip. An empty label renders a Slot instead of a Tooltip,
+ * which remounts the trigger and drops keyboard focus, so the name is always
+ * the label and the tooltip opens only while that name is cut off.
+ */
+function useHostSwitcherTriggerTooltip(isTruncated: boolean): {
+  readonly open: boolean;
+  readonly onOpenChange: (next: boolean) => void;
+} {
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  if (!isTruncated && tooltipOpen) setTooltipOpen(false);
+  return {
+    open: isTruncated && tooltipOpen,
+    onOpenChange: (next) => {
+      if (isTruncated) setTooltipOpen(next);
+    },
+  };
+}
+
 function HostSwitcherTrigger(props: {
   readonly intent: HostPickIntent;
   readonly selected: HostScopeOption | null;
@@ -1175,159 +1370,122 @@ function HostSwitcherTrigger(props: {
   const { selected } = props;
   const text = hostSwitcherTriggerText(props.intent, selected, props.composer);
   const triggerStatus = text.status;
+  const { ref: nameRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
+    text.label,
+  );
+  const tooltip = useHostSwitcherTriggerTooltip(isTruncated);
   const keepFocusableWhenDisabled =
     props.disabled && props.keepFocusableWhenDisabled === true;
 
   return (
-    <PopoverTrigger asChild>
-      <Button
-        type="button"
-        variant="ghost"
-        // The DESTINATION belongs in the accessible name, not just the role.
-        // A bare "Host" would tell a screen-reader user what the control is
-        // for while withholding the one thing it displays.
-        // Named for what choosing DOES here. "Settings host" is the viewing
-        // scope; a `bind` surface is choosing the host the window runs on, and
-        // a screen reader that hears "Settings host" in the composer is being
-        // told about a different control than the one it is on.
-        aria-label={text.ariaLabel}
-        aria-disabled={keepFocusableWhenDisabled ? true : undefined}
-        disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
-        onClick={
-          keepFocusableWhenDisabled
-            ? (event: React.MouseEvent<HTMLButtonElement>) =>
-                event.preventDefault()
-            : undefined
-        }
-        data-testid="settings-host-switcher"
-        className={cn(
-          "group/host-switcher h-auto w-full justify-start gap-3 px-3 py-2 text-start",
-          "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
-          props.surface.trigger,
-        )}
-      >
-        <HostSwitcherStagedBusy composer={props.composer} />
-        {/* Healthy is the default and stays silent. Only an exception status
-          earns space in this compact trigger. */}
-        <span
+    <TooltipWrapper
+      label={text.label}
+      side="top"
+      sideOffset={6}
+      align={undefined}
+      open={tooltip.open}
+      onOpenChange={tooltip.onOpenChange}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          // The DESTINATION belongs in the accessible name, not just the role.
+          // A bare "Host" would tell a screen-reader user what the control is
+          // for while withholding the one thing it displays.
+          // Named for what choosing DOES here. "Settings host" is the viewing
+          // scope; a `bind` surface is choosing the host the window runs on, and
+          // a screen reader that hears "Settings host" in the composer is being
+          // told about a different control than the one it is on.
+          aria-label={text.ariaLabel}
+          aria-disabled={keepFocusableWhenDisabled ? true : undefined}
+          disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
+          onClick={
+            keepFocusableWhenDisabled
+              ? (event: React.MouseEvent<HTMLButtonElement>) =>
+                  event.preventDefault()
+              : undefined
+          }
+          data-testid="settings-host-switcher"
           className={cn(
-            "min-w-0 flex-1 truncate text-ui-sm font-medium",
-            selected === null || props.surfaceKind === "inline"
-              ? "text-muted-foreground"
-              : "text-foreground",
-            !props.disabled && "group-hover/host-switcher:text-foreground",
+            "group/host-switcher h-auto w-full min-w-0 justify-start gap-3 px-3 py-2 text-start",
+            "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
+            props.surface.trigger,
           )}
         >
-          {text.label}
-        </span>
-        {triggerStatus === null ? null : (
-          <span
-            className="shrink-0 text-ui-xs text-muted-foreground"
-            data-testid="settings-host-switcher-status"
-          >
-            {triggerStatus}
+          <HostSwitcherStagedBusy composer={props.composer} />
+          {props.surfaceKind !== "rail" || selected === null ? null : (
+            <HostGlyph
+              host={selected}
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+          )}
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span
+              ref={nameRef}
+              className={cn(
+                "min-w-0 flex-1 truncate text-ui-sm font-medium",
+                selected === null || props.surfaceKind === "inline"
+                  ? "text-muted-foreground"
+                  : "text-foreground",
+                !props.disabled && "group-hover/host-switcher:text-foreground",
+              )}
+            >
+              {text.label}
+            </span>
+            {triggerStatus === null ? null : (
+              <span className="flex shrink-0 items-center gap-2 text-ui-xs whitespace-nowrap text-muted-foreground">
+                <span data-testid="settings-host-switcher-status">
+                  {triggerStatus}
+                </span>
+                {selected?.sandbox?.frozen ? (
+                  <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+                ) : null}
+              </span>
+            )}
           </span>
-        )}
-        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-      </Button>
-    </PopoverTrigger>
+          <HostSwitcherTriggerKind
+            surfaceKind={props.surfaceKind}
+            selected={selected}
+          />
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+    </TooltipWrapper>
   );
 }
 
-/** The shared row, with any lines the surface puts under it. */
-function HostSwitcherOptionRow(props: {
-  readonly host: HostScopeOption;
-  readonly picked: boolean;
-  readonly active: boolean;
-  readonly intent: HostPickIntent;
-  readonly surfaceState: HostRowSurfaceState;
-  readonly updateView: FleetUpdateView | null;
-  readonly environmentLabel: string | null;
-  /** The composer and in-task pickers: the title wraps, never cut. */
-  readonly composer: boolean;
-  readonly subLines: readonly string[];
-  readonly tag: string | null;
+/** A panel header's kind word. The rail shows the kind as its glyph instead. */
+function HostSwitcherTriggerKind(props: {
+  readonly surfaceKind: HostSwitcherSurface;
+  readonly selected: HostScopeOption | null;
 }): ReactNode {
-  const tag =
-    props.tag === null ? null : (
-      <Badge size="xs" variant="muted" data-testid="host-switcher-row-tag">
-        {props.tag}
-      </Badge>
-    );
-  const row = (
-    <HostOptionRow
-      host={props.host}
-      picked={props.picked}
-      active={props.active}
-      intent={props.intent}
-      surfaceState={props.surfaceState}
-      updateView={props.updateView}
-      nameRef={null}
-      nameWraps={props.composer}
-      environmentLabel={props.environmentLabel}
-    />
-  );
-  if (props.subLines.length === 0) {
-    return (
-      <>
-        {row}
-        {tag}
-      </>
-    );
-  }
+  if (props.surfaceKind !== "panel-header") return null;
+  if (props.selected === null || props.selected.kind === null) return null;
   return (
-    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-      <span className="flex min-w-0 items-center gap-2">
-        {row}
-        {tag}
-      </span>
-      {props.subLines.map((line) => (
-        <span
-          key={line}
-          className="ps-6 text-ui-xs whitespace-normal text-muted-foreground"
-        >
-          {line}
-        </span>
-      ))}
+    <span className="shrink-0 text-ui-xs font-normal text-muted-foreground">
+      {" "}
+      {HOST_KIND_WORDS[props.selected.kind]}
     </span>
   );
 }
 
-/**
- * A computer in the composer and in-task pickers: its title, then what it is
- * and whether it answers on the line below, which is where its status is
- * said (so the title carries no status word beside it).
- */
-function ComposerComputerRow(props: {
-  readonly host: HostScopeOption;
-  readonly title: string;
-  readonly subLines: readonly string[];
+/** Supplemental facts under the name. They wrap; they are not a disclosure. */
+function HostSwitcherRowFacts(props: {
+  readonly lines: readonly string[];
 }): ReactNode {
+  if (props.lines.length === 0) return null;
   return (
-    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-      <span className="flex min-w-0 items-center gap-2">
-        <HostGlyph
-          host={props.host}
-          className="size-4 shrink-0 text-muted-foreground"
-        />
-        {/* A title that already says what it is (`This computer`) is not
-            announced twice. */}
-        {props.title === hostOptionKindLabel(props.host) ? null : (
-          <span className="sr-only">{hostOptionKindLabel(props.host)}</span>
-        )}
-        <span className="min-w-0 flex-1 text-start wrap-break-word">
-          {props.title}
-        </span>
-      </span>
-      {props.subLines.map((line) => (
+    <>
+      {props.lines.map((line) => (
         <span
           key={line}
-          className="ps-6 text-ui-xs whitespace-normal text-muted-foreground"
+          className="min-w-0 ps-6 text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground"
         >
           {line}
         </span>
       ))}
-    </span>
+    </>
   );
 }
 
@@ -1335,8 +1493,8 @@ function ComposerComputerRow(props: {
  * The combobox's interaction shell around the shared row: a cmdk item, its
  * search keywords, and the assistive-tech mark for "this is the one you are
  * viewing". Everything the row SAYS lives in `HostOptionRow`, which the
- * embedded sections and the Select host dialog draw too, except a computer's
- * in the composer and in-task pickers (`ComposerComputerRow`).
+ * embedded sections and the Select host dialog draw too. Supplemental facts
+ * sit under that row, including when the option cannot be picked.
  */
 function HostSwitcherRow(props: {
   readonly host: HostScopeOption;
@@ -1351,11 +1509,11 @@ function HostSwitcherRow(props: {
   readonly updateView: FleetUpdateView | null;
   /** This row's environment label, or `null` for a picker that does not say. */
   readonly environmentLabel: string | null;
-  /** The composer and in-task pickers: a computer row says what it is below its title. */
+  /** Composer and in-task pickers also show a computer's platform and status. */
   readonly composer: boolean;
-  /** Lines under the row (the composer's Local sub-line, the reach sentence). */
+  /** Supplemental facts under the name (the Local sub-line, the reach sentence). */
   readonly subLines: readonly string[];
-  /** The composer's configuration tag beside the title, or `null`. */
+  /** The composer's configuration mark beside the name, or `null`. */
   readonly tag: string | null;
   readonly onSelect: () => void;
 }): ReactNode {
@@ -1367,9 +1525,29 @@ function HostSwitcherRow(props: {
     surfaceInert: props.surfaceInert,
   });
   const selectable = isHostOptionSelectable(host, props.intent, surfaceState);
-  const title = hostRowTitle(host, props.composer);
+  const title = host.name;
+  const lines = hostRowFactLines(
+    props.composer,
+    host,
+    selectable,
+    props.subLines,
+  );
+  const row = (
+    <HostOptionRow
+      host={host}
+      picked={props.scoped}
+      active={props.active}
+      intent={props.intent}
+      surfaceState={surfaceState}
+      updateView={props.updateView}
+      environmentLabel={props.environmentLabel ?? props.tag}
+      offlineInSubLine={props.composer ? host.sandbox === null : false}
+      nameRef={null}
+    />
+  );
   return (
     <CommandItem
+      className={lines.length === 0 ? "items-end" : "items-start"}
       value={host.hostId}
       // One predicate, asked here exactly as the button list asks it, so a row
       // that explains why it cannot be picked is also a row that cannot be
@@ -1390,28 +1568,13 @@ function HostSwitcherRow(props: {
       // and every other row as the same text.
       aria-current={props.scoped ? "true" : undefined}
     >
-      {props.composer && host.sandbox === null ? (
-        <ComposerComputerRow
-          host={host}
-          title={title}
-          subLines={[
-            composerComputerSubLine(host, selectable, title !== host.name),
-            ...props.subLines,
-          ]}
-        />
+      {lines.length === 0 ? (
+        row
       ) : (
-        <HostSwitcherOptionRow
-          host={host}
-          picked={props.scoped}
-          active={props.active}
-          intent={props.intent}
-          surfaceState={surfaceState}
-          updateView={props.updateView}
-          environmentLabel={props.environmentLabel}
-          composer={props.composer}
-          subLines={props.subLines}
-          tag={props.tag}
-        />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0">{row}</span>
+          <HostSwitcherRowFacts lines={lines} />
+        </span>
       )}
     </CommandItem>
   );

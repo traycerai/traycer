@@ -221,12 +221,12 @@ test("the offline filter opens from the keyboard and returns focus on Escape", a
 
   const menu = page.getByTestId("epic-browsers-panel-filter-menu");
   await expect(
-    menu.getByRole("menuitemcheckbox", { name: "Show offline devices" }),
+    menu.getByRole("menuitemcheckbox", { name: "Show offline hosts" }),
   ).toBeVisible();
   await settleAnimations(page);
   // Each label sits on one line: a single-line item is one row high.
   const checkbox = menu.getByRole("menuitemcheckbox", {
-    name: "Show offline devices",
+    name: "Show offline hosts",
   });
   const submenu = menu.getByRole("menuitem", { name: "Open links on" });
   expect((await boxOf(checkbox)).height).toBeLessThan(40);

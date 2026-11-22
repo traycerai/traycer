@@ -1,3 +1,4 @@
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import {
   cleanup,
   fireEvent,
@@ -132,16 +133,25 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 
 // The attachment before a fork onto a team's host: passed straight through,
 // so every fork here goes on to `epic.createChat` as it did before.
-vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
-  isAttachEnvironmentUnsupported: () => false,
-  toastAttachEnvironmentNeedsOwnHost: () => undefined,
-  useEpicAttachEnvironment: () => ({
-    isPending: false,
-    mutate: (_input: unknown, options: { readonly onSuccess: () => void }) => {
-      options.onSuccess();
-    },
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    isAttachEnvironmentUnsupported: () => false,
+    toastAttachEnvironmentNeedsOwnHost: () => undefined,
+    useEpicAttachEnvironment: () => ({
+      isPending: false,
+      mutate: (
+        _input: unknown,
+        options: { readonly onSuccess: () => void },
+      ) => {
+        options.onSuccess();
+      },
+    }),
   }),
-}));
+);
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
@@ -394,6 +404,7 @@ function renderDialog(target: ChatForkDialogTarget): void {
       tabId="tab-test"
       onOpenChange={() => undefined}
     />,
+    { wrapper: WithTestQueryClient },
   );
 }
 
@@ -561,6 +572,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
         tabId="tab-test"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     seedLiveForkWorkspace();
 
@@ -600,6 +612,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
         tabId="tab-test"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     seedLiveForkWorkspace();
 
@@ -625,6 +638,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
         tabId="inactive-tab"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     const active = render(
       <ChatForkDialog
@@ -634,6 +648,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
         tabId="active-tab"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     seedLiveForkWorkspace();
 

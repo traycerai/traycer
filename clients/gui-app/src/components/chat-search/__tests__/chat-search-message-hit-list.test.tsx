@@ -63,7 +63,6 @@ function messageMatch(input: {
 function readyStatus(
   input: Partial<{
     readonly messages: ReadonlyArray<ChatSearchMessageMatch>;
-    readonly indexState: "complete" | "partial";
     readonly expansionBase: ChatSearchBaseRequest;
     readonly showMore: (() => void) | null;
     readonly loadingMore: boolean;
@@ -73,7 +72,6 @@ function readyStatus(
   return {
     kind: "ready",
     messages: input.messages ?? [],
-    indexState: input.indexState ?? "complete",
     // A surface's `renderExpansion` reads it; the list itself uses it only as
     // the identity it remounts on.
     expansionBase: input.expansionBase ?? EXPANSION_BASE,
@@ -113,7 +111,6 @@ function renderList(overrides: Partial<ChatSearchMessageHitListProps>): {
       renderExpansion={renderExpansion}
       taskTitles={new Map()}
       variant="full"
-      showIndexingNotice
       {...overrides}
       status={status}
     />
@@ -301,40 +298,6 @@ describe("ChatSearchMessageHitList: a show-more page that failed", () => {
     ).toBeNull();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("ChatSearchMessageHitList: indexing notice", () => {
-  it("shows the 'Still indexing' status only when indexState is 'partial'", () => {
-    renderList({
-      status: readyStatus({
-        messages: [messageMatch({ chatId: "c1" })],
-        indexState: "partial",
-      }),
-    });
-    expect(screen.getByRole("status").textContent).toContain(
-      "Still indexing chats on this host",
-    );
-    cleanup();
-
-    renderList({
-      status: readyStatus({
-        messages: [messageMatch({ chatId: "c1" })],
-        indexState: "complete",
-      }),
-    });
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-
-  it("hides the 'Still indexing' status when showIndexingNotice is false, even while partial", () => {
-    renderList({
-      status: readyStatus({
-        messages: [messageMatch({ chatId: "c1" })],
-        indexState: "partial",
-      }),
-      showIndexingNotice: false,
-    });
-    expect(screen.queryByRole("status")).toBeNull();
   });
 });
 

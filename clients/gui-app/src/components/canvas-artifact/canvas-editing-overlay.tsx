@@ -144,6 +144,8 @@ export function CanvasEditingOverlay(props: {
   readonly tileId: string;
   readonly boardPath: string;
   readonly registry: CanvasFrameRegistry;
+  /** See `CanvasSelectionOverlay`'s `pointerInPage`. */
+  readonly pointerInPage: boolean;
   readonly onPick: (
     path: string,
     point: { x: number; y: number; additive?: boolean },

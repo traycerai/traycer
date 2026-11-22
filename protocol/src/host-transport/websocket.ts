@@ -30,6 +30,35 @@ export interface WebSocketCloseEvent {
 }
 
 /**
+ * For a socket that may wait its turn before it dials, which a dial timer has
+ * to know: time spent waiting belongs to this client, and only the handshake
+ * says anything about the host.
+ *
+ * `dialStarted` settles when the handshake starts, and never settles on a
+ * socket closed before its turn. It is absent on a socket that dials as it is
+ * constructed, which is every factory with no dial gate.
+ */
+export interface DialStartSignal {
+  readonly dialStarted?: Promise<void>;
+}
+
+/**
+ * Runs `start` once the handshake has started: at once for a socket with no
+ * `dialStarted`, otherwise when it settles. A dial can end during that wait, so
+ * `start` checks that its dial is still the live one.
+ */
+export function whenDialStarted(
+  socket: DialStartSignal,
+  start: () => void,
+): void {
+  if (socket.dialStarted === undefined) {
+    start();
+    return;
+  }
+  void socket.dialStarted.then(start);
+}
+
+/**
  * Subset of the native WebSocket surface required by `WsRpcClient`.
  *
  * The handlers are assignable so the client can install them once and replace
@@ -37,7 +66,7 @@ export interface WebSocketCloseEvent {
  * Only string payloads are exchanged on the wire, so `send` and the message
  * event are typed as `string` rather than the platform `BufferSource` union.
  */
-export interface WebSocketLike {
+export interface WebSocketLike extends DialStartSignal {
   onopen: ((event: WebSocketOpenEvent) => void) | null;
   onmessage: ((event: WebSocketMessageEvent) => void) | null;
   onerror: ((event: WebSocketErrorEvent) => void) | null;
@@ -47,10 +76,12 @@ export interface WebSocketLike {
 }
 
 /**
- * Creates a fresh `WebSocketLike` connection bound to the given URL. Each
- * `WsRpcClient.request` call obtains exactly one connection through this
- * factory and discards it on completion - no long-lived socket state crosses
- * requests.
+ * Creates a fresh `WebSocketLike` connection bound to the given URL.
+ *
+ * A host that does not advertise `unary.persistentSession` is dialed once
+ * per call, and that socket is discarded when the call settles. A host that
+ * does advertise it is dialed once per host and signed-in identity; later
+ * calls reuse that socket. The factory itself stays one socket per `create`.
  *
  * `priority` says whether anything rendered is waiting on this call, so the
  * production factory's dial gate can let it past the boot flood

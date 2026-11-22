@@ -459,7 +459,7 @@ describe("EpicAccessCoordinator", () => {
     );
   });
 
-  it("does nothing on a downgrade to viewer (downgrade != close)", async () => {
+  it("does nothing on a downgrade from owner to editor (downgrade != close)", async () => {
     const handle = registerSession("epic-1");
     seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
 
@@ -468,7 +468,7 @@ describe("EpicAccessCoordinator", () => {
       expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1"),
     );
 
-    handle.store.setState({ permissionRole: "viewer" });
+    handle.store.setState({ permissionRole: "editor" });
     // Give any erroneous microtask-deferred close a chance to run.
     await new Promise((resolve) => setTimeout(resolve, 30));
 

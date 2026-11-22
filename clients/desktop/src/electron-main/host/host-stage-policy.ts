@@ -31,8 +31,8 @@
  */
 import { isStrictlyNewerHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import {
+  isCanonicalStableRelease,
   isHiddenFromDefaultCatalog,
-  isMatchingStableRelease,
   isSameReleaseLine,
 } from "@traycer-clients/shared/host-version/release-line";
 import {
@@ -99,8 +99,8 @@ export function requiresPreReleaseListing(input: {
  *
  *   - `stable-only`: null. The stable pointer is exactly the right answer and
  *     `--automatic` already follows it.
- *   - `implicit-rc-line`: the installed RC's OWN line only - its matching
- *     stable first, otherwise the highest later RC on that line.
+ *   - `implicit-rc-line`: the newest strictly newer STABLE on any line,
+ *     otherwise the highest later RC on the installed RC's own line.
  *   - `explicit-prerelease`: unchanged broad behavior - the newest available
  *     pre-release, but only when it beats both the installed build and the
  *     stable `latest` (otherwise `--automatic` is already fetching the better
@@ -133,38 +133,37 @@ export function resolveHostStageTarget(input: {
 }
 
 /**
- * MATCHING STABLE WINS OUTRIGHT over every later RC on the line, and that
- * priority is what makes implicit following terminate: taking `2.0.0` leaves
+ * A NEWER STABLE WINS OUTRIGHT over every later RC on the line, and that
+ * priority is what makes implicit following terminate: taking a stable leaves
  * the next launch a stable install, which derives `stable-only` with no
  * preference to undo.
  *
- * No downgrade guard is needed on the stable arm - SemVer puts `X.Y.Z` above
- * every `X.Y.Z-rc.N`, and `isMatchingStableRelease` only answers true when the
- * installed version is a canonical RC of that exact line. The RC arm keeps its
- * `isStrictlyNewerHostVersion` filter, which also drops the installed build
- * itself and anything incomparable.
+ * Stables are taken from ANY line, newest first, so several published
+ * releases are one hop: installed `2.0.0-rc.1` with `2.0.0` and `2.1.0` both
+ * published pins `2.1.0`, rather than `2.0.0` now and `2.1.0` after the
+ * relaunch that follows it. Only the RC arm is held to the installed line - the
+ * build consented to one line's prereleases, not to prereleases in general.
+ * Both arms keep the `isStrictlyNewerHostVersion` filter, which also drops the
+ * installed build itself and anything incomparable.
  */
 function resolveSameLineTarget(
   installedVersion: string,
   availableVersions: readonly string[],
 ): string | null {
-  const matchingStable = availableVersions.find((version) =>
-    isMatchingStableRelease(version, installedVersion),
+  const newerStables = availableVersions.filter(
+    (version) =>
+      isCanonicalStableRelease(version) &&
+      isStrictlyNewerHostVersion(version, installedVersion),
   );
-  if (matchingStable !== undefined) {
-    return matchingStable;
+  if (newerStables.length > 0) {
+    return newestVersion(newerStables);
   }
   const laterOnLine = availableVersions.filter(
     (version) =>
       isSameReleaseLine(installedVersion, version) &&
       isStrictlyNewerHostVersion(version, installedVersion),
   );
-  if (laterOnLine.length === 0) {
-    return null;
-  }
-  return laterOnLine.reduce((newest, version) =>
-    isStrictlyNewerHostVersion(version, newest) ? version : newest,
-  );
+  return newestVersion(laterOnLine);
 }
 
 function resolveBroadPreReleaseTarget(

@@ -140,12 +140,16 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(42);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(46);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
-    // `viewer` client frame that restates it on a live stream.
-    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
+    // `viewer` client frame; @1.8 added the `viewers` server frame.
+    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(8);
     // @1.1 carries the resume cursor that lets a reconnect skip the catch-up.
     expect(hostStreamRpcRegistry["worktree.changed"][1].latestMinor).toBe(1);
+    // @1.1 adds optional creator attribution to environment-owned chat rows.
+    expect(
+      hostStreamRpcRegistry["environment.chats.subscribe"][1].latestMinor,
+    ).toBe(1);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       3,
@@ -153,15 +157,15 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
     ).toBe(1);
-    // @1.7 / @1.6 widen the entry union with `notification.hooks.removed`;
-    // cloudFeed @1.5 stays the last minor that carries `sandbox.notice` only.
+    // The host feed stays on @1.8; cloudFeed @1.8 adds read-only retirement
+    // notices while @1.7 keeps its released feedback-only widening.
     expect(
       hostStreamRpcRegistry["host.notifications.feed.subscribe"][1].latestMinor,
-    ).toBe(7);
+    ).toBe(8);
     expect(
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1]
         .latestMinor,
-    ).toBe(6);
+    ).toBe(8);
     // @1.1 carries the in-flight `opening` list and the session identity;
     // `simulator.stream` is still on the @1.0 it opened with.
     expect(hostStreamRpcRegistry["simulator.sessions"][1].latestMinor).toBe(1);
@@ -679,7 +683,7 @@ describe("stream compatibility", () => {
     expect(openAckManifest["browser.screencast"]).toBeUndefined();
     expect(openAckManifest["terminal.subscribe"]).toEqual({
       major: 1,
-      minor: 7,
+      minor: 8,
     });
 
     const terminalAsHost = checkStreamMethodCompatibility(

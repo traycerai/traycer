@@ -17,7 +17,7 @@ interface TraycerReferenceChipProps {
   readonly icon: ReactNode;
   readonly children: ReactNode;
   readonly title: string | undefined;
-  readonly refKind: "spec" | "ticket" | "chat" | "epic";
+  readonly refKind: "spec" | "ticket" | "chat" | "epic" | "artifact";
   readonly onOpen: ((event: MouseEvent<HTMLButtonElement>) => void) | null;
   readonly sameEpicNodeRef: EpicNodeRef | null;
   readonly epicId: string | undefined;
@@ -28,9 +28,9 @@ interface TraycerReferenceChipProps {
  * the visual treatment of the prior `TraycerFileReference` chip: a small inline
  * button with an icon and the model-authored label.
  *
- * When `onOpen` is `null` the reference is not openable (missing id, no epic
- * context, or an unresolved same-epic node) and the chip degrades to the plain
- * label text - no button, no dead click.
+ * When `onOpen` is `null` the reference is not openable (missing id, or an
+ * unresolved same-epic node) and the chip degrades to the plain label text - no
+ * button, no dead click.
  *
  * A same-epic `spec` / `ticket` reference doubles as a drag source into the
  * canvas (mirroring the sidebar): the whole pill is the drag surface. Only that
@@ -152,7 +152,7 @@ function ReferenceChipButton(props: {
   /** Hover label; `tooltip` not `title` so the call site cannot read as the
    *  native attribute. */
   readonly tooltip: string | undefined;
-  readonly refKind: "spec" | "ticket" | "chat" | "epic";
+  readonly refKind: "spec" | "ticket" | "chat" | "epic" | "artifact";
   readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
   readonly drag: ReferenceChipDragWiring | null;
 }) {

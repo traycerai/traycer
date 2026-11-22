@@ -119,6 +119,7 @@ const OFFLINE_REMOTE_TARGET: RemoteHostDirectoryEntry = {
   version: "1.2.3",
   transportDialability: "not-dialable",
   publicKey: "public-key",
+  owner: null,
   relayFuseGrace: false,
   sandbox: null,
   remoteStatus: {

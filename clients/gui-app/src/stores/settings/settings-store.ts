@@ -62,6 +62,25 @@ import {
   type NotificationChimeSound,
   type NotificationChimeSoundsByEvent,
 } from "@/lib/notifications/notification-chime";
+import {
+  DEFAULT_NOTIFICATION_NOTIFY,
+  type NotificationNotifyByEvent,
+} from "@/lib/notifications/notification-notify";
+import {
+  DEFAULT_MIX_DIRECTOR,
+  isMixDirectorId,
+  type MixDirectorId,
+} from "@/lib/soundtrack/directors";
+import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
+import {
+  DEFAULT_RECORDING_LIMIT,
+  DEFAULT_RECORDING_QUALITY,
+  isRecordingLimitId,
+  isRecordingQuality,
+  type RecordingLimitId,
+  type RecordingQuality,
+} from "@/lib/soundtrack/recording";
+import { isVoiceName } from "@traycer-clients/shared/host-client/voice-sessions";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 export type ThemeMode = "system" | "light" | "dark";
@@ -288,6 +307,14 @@ export interface SettingsState {
   /** BCP-47-ish dictation language hint, or "auto". */
   voiceLanguage: string;
   /**
+   * The voice calls speak in on this device, as the provider names it, or
+   * `null` for the deployment's default. One choice for every bot, and
+   * device-local like the rest of this store: it is how the person hears
+   * calls here, not a fact about a bot or the account. A name the deployment
+   * no longer offers stays saved (`resolveCallVoice`).
+   */
+  callVoice: string | null;
+  /**
    * Prefix prepended verbatim to the branch name pre-filled when creating a
    * new worktree (no separator is auto-appended - the user types it, e.g.
    * `traycer/`, `anurag/`, `feat-`). Empty string means no prefix.
@@ -352,6 +379,31 @@ export interface SettingsState {
   chatDockPanelHeight: number;
   /** App-wide audible cues selected for each notification event type. */
   notificationChimeSounds: NotificationChimeSoundsByEvent;
+  /** Which kinds of notification interrupt on this computer. */
+  notificationNotify: NotificationNotifyByEvent;
+  /**
+   * Whether the person wants the soundtrack on. A window's session follows it,
+   * but not always at once: a launch or a sign-in opens the audio device on the
+   * next gesture (`SoundtrackWarmupBridge`), and a sign-out ends the session and
+   * leaves this set.
+   */
+  soundtrackEnabled: boolean;
+  soundtrackDirector: MixDirectorId;
+  /** A gain from 0 to 1. */
+  soundtrackVolume: number;
+  /** How long a music recording runs; the recording itself is never kept. */
+  soundtrackRecordingLimit: RecordingLimitId;
+  soundtrackRecordingQuality: RecordingQuality;
+  /** Whether a task's status row carries previous, pause and next. */
+  soundtrackPlaybackControls: boolean;
+  /**
+   * Whether the person has paused the music, across windows and restarts: a
+   * launch with it set opens nothing at the first gesture, and Play does. It
+   * can only be set where those controls can clear it, so turning Music on or
+   * the controls off clears it too, and storage restores it only with them on.
+   * The position in a track is not kept.
+   */
+  soundtrackPaused: boolean;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   /**
@@ -389,6 +441,7 @@ export interface SettingsState {
   setDefaultEditor: (id: DefaultOpenTarget | null) => void;
   setVoiceInputEnabled: (value: boolean) => void;
   setVoiceLanguage: (value: string) => void;
+  setCallVoice: (value: string | null) => void;
   setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
   setLinkOpen: (patch: Partial<LinkOpenSettings>) => void;
@@ -406,6 +459,17 @@ export interface SettingsState {
     eventType: NotificationChimeEventType,
     value: NotificationChimeSound,
   ) => void;
+  setNotificationNotifyForEvent: (
+    eventType: NotificationChimeEventType,
+    value: boolean,
+  ) => void;
+  setSoundtrackEnabled: (value: boolean) => void;
+  setSoundtrackDirector: (value: MixDirectorId) => void;
+  setSoundtrackVolume: (value: number) => void;
+  setSoundtrackRecordingLimit: (value: RecordingLimitId) => void;
+  setSoundtrackRecordingQuality: (value: RecordingQuality) => void;
+  setSoundtrackPlaybackControls: (value: boolean) => void;
+  setSoundtrackPaused: (value: boolean) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -438,6 +502,7 @@ type PersistedSettingsState = Pick<
   | "defaultEditor"
   | "voiceInputEnabled"
   | "voiceLanguage"
+  | "callVoice"
   | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
   | "linkOpen"
@@ -450,6 +515,14 @@ type PersistedSettingsState = Pick<
   | "workspaceFileWordWrap"
   | "chatDockPanelHeight"
   | "notificationChimeSounds"
+  | "notificationNotify"
+  | "soundtrackEnabled"
+  | "soundtrackDirector"
+  | "soundtrackVolume"
+  | "soundtrackRecordingLimit"
+  | "soundtrackRecordingQuality"
+  | "soundtrackPlaybackControls"
+  | "soundtrackPaused"
 >;
 
 type SetFn = (
@@ -486,6 +559,10 @@ function clampCodeFontSize(value: number): number {
   return Math.max(10, Math.min(24, Math.round(value)));
 }
 
+function clampSoundtrackVolume(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
 function partializeSettingsState(state: SettingsState): PersistedSettingsState {
   return {
     startPageWallpaper: state.startPageWallpaper,
@@ -516,6 +593,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     defaultEditor: state.defaultEditor,
     voiceInputEnabled: state.voiceInputEnabled,
     voiceLanguage: state.voiceLanguage,
+    callVoice: state.callVoice,
     worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
     linkOpen: state.linkOpen,
@@ -528,6 +606,14 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     chatDockPanelHeight: state.chatDockPanelHeight,
     notificationChimeSounds: state.notificationChimeSounds,
+    notificationNotify: state.notificationNotify,
+    soundtrackEnabled: state.soundtrackEnabled,
+    soundtrackDirector: state.soundtrackDirector,
+    soundtrackVolume: state.soundtrackVolume,
+    soundtrackRecordingLimit: state.soundtrackRecordingLimit,
+    soundtrackRecordingQuality: state.soundtrackRecordingQuality,
+    soundtrackPlaybackControls: state.soundtrackPlaybackControls,
+    soundtrackPaused: state.soundtrackPaused,
   };
 }
 
@@ -564,8 +650,9 @@ export const useSettingsStore = create<SettingsState>()(
       artifactIconColorMode: "byType",
       artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
       defaultEditor: "vscode",
-      voiceInputEnabled: true,
+      voiceInputEnabled: false,
       voiceLanguage: "auto",
+      callVoice: null,
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
       linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
@@ -578,6 +665,14 @@ export const useSettingsStore = create<SettingsState>()(
       workspaceFileWordWrap: null,
       chatDockPanelHeight: CHAT_DOCK_PANEL_DEFAULT_HEIGHT_RATIO,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+      notificationNotify: DEFAULT_NOTIFICATION_NOTIFY,
+      soundtrackEnabled: false,
+      soundtrackDirector: DEFAULT_MIX_DIRECTOR,
+      soundtrackVolume: MIX_TUNING.volume.initial,
+      soundtrackRecordingLimit: DEFAULT_RECORDING_LIMIT,
+      soundtrackRecordingQuality: DEFAULT_RECORDING_QUALITY,
+      soundtrackPlaybackControls: false,
+      soundtrackPaused: false,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -649,6 +744,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setVoiceInputEnabled: makeSetter(set, "voiceInputEnabled"),
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
+      setCallVoice: makeSetter(set, "callVoice"),
       setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
       setBrowserSearchEngine: (browserSearchEngine) =>
@@ -712,6 +808,43 @@ export const useSettingsStore = create<SettingsState>()(
               },
         );
       },
+      setNotificationNotifyForEvent: (eventType, value) => {
+        set((state) =>
+          state.notificationNotify[eventType] === value
+            ? state
+            : {
+                notificationNotify: {
+                  ...state.notificationNotify,
+                  [eventType]: value,
+                },
+              },
+        );
+      },
+      setSoundtrackEnabled: (value) => {
+        set((s) => ({
+          soundtrackEnabled: value,
+          soundtrackPaused: !value && s.soundtrackPaused,
+        }));
+      },
+      setSoundtrackDirector: makeSetter(set, "soundtrackDirector"),
+      setSoundtrackPlaybackControls: (value) => {
+        set((s) => ({
+          soundtrackPlaybackControls: value,
+          soundtrackPaused: value && s.soundtrackPaused,
+        }));
+      },
+      setSoundtrackPaused: makeSetter(set, "soundtrackPaused"),
+      setSoundtrackVolume: (value) => {
+        const next = clampSoundtrackVolume(value);
+        set((s) =>
+          s.soundtrackVolume === next ? s : { soundtrackVolume: next },
+        );
+      },
+      setSoundtrackRecordingLimit: makeSetter(set, "soundtrackRecordingLimit"),
+      setSoundtrackRecordingQuality: makeSetter(
+        set,
+        "soundtrackRecordingQuality",
+      ),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -739,8 +872,10 @@ export const useSettingsStore = create<SettingsState>()(
       // `resolvePersistedDefaultSelection`). `artifactIconColors` is
       // re-derived because a blob saved before a node kind existed (html,
       // canvas, file) has no colour for it, and that kind's glyph would render
-      // untinted forever while every other kind is coloured. Every other field
-      // keeps the default shallow merge behavior.
+      // untinted forever while every other kind is coloured. `callVoice` is
+      // re-derived because only a provider voice name can be a choice:
+      // anything else comes back as none. Every other field keeps the
+      // default shallow merge behavior.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -765,6 +900,9 @@ export const useSettingsStore = create<SettingsState>()(
             typeof persisted.showRecentHistory === "boolean"
               ? persisted.showRecentHistory
               : true,
+          callVoice: isVoiceName(persisted.callVoice)
+            ? persisted.callVoice
+            : null,
           worktreeBranchPrefix:
             typeof merged.worktreeBranchPrefix === "string" &&
             worktreeBranchPrefixError(merged.worktreeBranchPrefix) === null
@@ -798,6 +936,33 @@ export const useSettingsStore = create<SettingsState>()(
             persisted.notificationChimeSounds,
             persisted.notificationChimeSound,
           ),
+          notificationNotify: resolvePersistedNotificationNotify(
+            persisted.notificationNotify,
+          ),
+          soundtrackEnabled: persisted.soundtrackEnabled === true,
+          soundtrackDirector: isMixDirectorId(persisted.soundtrackDirector)
+            ? persisted.soundtrackDirector
+            : DEFAULT_MIX_DIRECTOR,
+          soundtrackVolume:
+            typeof persisted.soundtrackVolume === "number" &&
+            Number.isFinite(persisted.soundtrackVolume)
+              ? clampSoundtrackVolume(persisted.soundtrackVolume)
+              : MIX_TUNING.volume.initial,
+          soundtrackRecordingLimit: isRecordingLimitId(
+            persisted.soundtrackRecordingLimit,
+          )
+            ? persisted.soundtrackRecordingLimit
+            : DEFAULT_RECORDING_LIMIT,
+          soundtrackRecordingQuality: isRecordingQuality(
+            persisted.soundtrackRecordingQuality,
+          )
+            ? persisted.soundtrackRecordingQuality
+            : DEFAULT_RECORDING_QUALITY,
+          soundtrackPlaybackControls:
+            persisted.soundtrackPlaybackControls === true,
+          soundtrackPaused:
+            persisted.soundtrackPlaybackControls === true &&
+            persisted.soundtrackPaused === true,
         };
       },
     },
@@ -885,6 +1050,25 @@ function resolvePersistedNotificationChimeSounds(
     }
   }
 
+  return resolved;
+}
+
+/**
+ * Per kind, the stored switch when it is a boolean and the default otherwise:
+ * a blob written before the switches existed, or before a kind was added,
+ * takes that kind's default rather than turning it on or off by accident.
+ */
+function resolvePersistedNotificationNotify(
+  value: unknown,
+): NotificationNotifyByEvent {
+  const persisted = isRecord(value) ? value : {};
+  const resolved: Record<NotificationChimeEventType, boolean> = {
+    ...DEFAULT_NOTIFICATION_NOTIFY,
+  };
+  for (const eventType of NOTIFICATION_CHIME_EVENT_TYPES) {
+    const stored = persisted[eventType];
+    if (typeof stored === "boolean") resolved[eventType] = stored;
+  }
   return resolved;
 }
 

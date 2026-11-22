@@ -41,6 +41,7 @@
  * epoch was doing. That is what this adapter remembers, and it is the whole of
  * its state.
  */
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type {
   AdapterDescriptor,
   AdapterDetachReason,
@@ -85,7 +86,8 @@ import { EPIC_STATUS_LANE_ID } from "./lane-events";
  * claims the host answered a question it was never asked.
  */
 function durabilityLegsOf(
-  frame: EpicStatusDurabilityLegs,
+  frame: EpicStatusDurabilityLegs &
+    Pick<EpicStatusSnapshotFrame, "artifactSync">,
   peerServesDurabilityLegs: boolean,
 ): EpicCloudSyncDurability {
   return {
@@ -95,6 +97,7 @@ function durabilityLegsOf(
     localProtection: frame.localProtection,
     freshness: frame.freshness,
     peerSpeaksDurabilityLegs: peerServesDurabilityLegs,
+    artifactSync: frame.artifactSync,
   };
 }
 
@@ -304,14 +307,14 @@ export function createEpicStatusLaneAdapter(
         // drain never runs, for the life of the session.
         emit({
           kind: "control-snapshot-complete",
-          role: frame.permissionRole,
+          role: grantedRole(frame.permissionRole),
         });
         // Every field, restated, in the order a consumer needs them: the
         // permission verdict gates what the rest may do, so it lands first.
         emit({
           kind: "permission-changed",
-          role: frame.permissionRole,
-          canWrite: isWritablePermissionRole(frame.permissionRole),
+          role: grantedRole(frame.permissionRole),
+          canWrite: isWritablePermissionRole(grantedRole(frame.permissionRole)),
           securityEpoch: frame.securityEpoch,
         });
         emit({
@@ -369,8 +372,10 @@ export function createEpicStatusLaneAdapter(
             foldSecurityEpoch(frame.securityEpoch);
             emit({
               kind: "permission-changed",
-              role: frame.permissionRole,
-              canWrite: isWritablePermissionRole(frame.permissionRole),
+              role: grantedRole(frame.permissionRole),
+              canWrite: isWritablePermissionRole(
+                grantedRole(frame.permissionRole),
+              ),
               securityEpoch: frame.securityEpoch,
             });
             return;

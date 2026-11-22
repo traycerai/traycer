@@ -1,3 +1,8 @@
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
+import {
+  captureSettingsSaveOrigin,
+  type SettingsSaveOrigin,
+} from "@/lib/environment/settings-save-origin";
 import {
   queryOptions,
   useMutation,
@@ -26,17 +31,23 @@ import {
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import {
+  withHostQueryErrorBoundary,
+  withHostMutationErrorBoundary,
+} from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import type { EnvironmentCloudSource } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  sendFollowedSave,
+  type PendingSettingsSave,
+} from "@/lib/environment/settings-save-follow";
 import {
   HOST_METHOD_POLL_TABLE,
   stampHostRpcMethod,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
-import {
-  getConditionPollEpisodeCoordinator,
-  type ConditionPollRefetchInterval,
-} from "@/lib/query/condition-poll-episode-coordinator";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 type ConditionHostRpcMethod = {
   [
@@ -204,28 +215,52 @@ function useHostQueryEntry<
 ): { readonly queryKey: QueryKey; readonly canExecute: boolean } {
   const readiness = useReactiveHostReadiness(args.client);
   const effectiveHostId = useEffectiveHostId();
+  return {
+    queryKey: hostQueryEntryKey<Registry, Method>({
+      hostId: readiness.hostId,
+      effectiveHostId,
+      method: args.method,
+      params: args.params,
+      cacheKeyIdentity: args.cacheKeyIdentity,
+    }),
+    canExecute: readiness.canExecute,
+  };
+}
+
+/**
+ * The key of the entry a read of `method` lands in when `hostId`'s requester
+ * carries it. Exported for a caller outside a render that reads what such a
+ * read has already answered: it names the entry through the same builder.
+ */
+export function hostQueryEntryKey<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+>(input: {
+  readonly hostId: string | null;
+  readonly effectiveHostId: string | null;
+  readonly method: Method;
+  readonly params: RequestOfMethod<Registry, Method>;
+  readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
+}): QueryKey {
   // Keyed by the tier that ANSWERS, not the host the caller named: the client
   // routes a pool-only method to the pool and an input-device method to the
   // selected host whatever requester carried it, so keying by the caller
   // would file one answer under every host and miss the serving tier's
   // recovery sweeps.
   const servingHostId = hostRpcServingTierHostId(
-    args.method,
-    readiness.hostId,
+    input.method,
+    input.hostId,
     readProcessHostRpcTierPlan(),
-    effectiveHostId,
+    input.effectiveHostId,
   );
-  return {
-    queryKey: [
-      ...queryKeys.hostMethod<Registry, Method>(
-        servingHostId,
-        args.method,
-        args.params,
-      ),
-      ...(args.cacheKeyIdentity ?? []),
-    ],
-    canExecute: readiness.canExecute,
-  };
+  return [
+    ...queryKeys.hostMethod<Registry, Method>(
+      servingHostId,
+      input.method,
+      input.params,
+    ),
+    ...(input.cacheKeyIdentity ?? []),
+  ];
 }
 
 /**
@@ -310,82 +345,65 @@ export function useHostQueryWithResponseMap<
   const baseOptions = args.options ?? {};
   const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
     baseOptions;
-  const pollPolicy = HOST_METHOD_POLL_TABLE[method].poll;
-  let tablePollingOptions:
-    | {
-        readonly refetchInterval: ConditionPollRefetchInterval;
-        readonly retry: false;
-      }
-    | { readonly refetchInterval: false }
-    | {
-        readonly refetchInterval: number | false;
-        readonly refetchIntervalInBackground: false;
-      }
-    | Record<never, never> = {};
-  if (pollPolicy !== null && pollPolicy.kind === "condition") {
-    // `retry: false` belongs to the BRANDED poller, whose episode re-asks on
-    // its error lanes - which is why the coordinator asks for it of that
-    // observer alone. A reader that opts out owns no episode, so those lanes
-    // can never recover it: it keeps the ordinary retry, the only recovery it
-    // has left, and a single transient failure does not freeze it on a stale
-    // answer until some other producer happens to read the key.
-    tablePollingOptions =
-      poll === false
-        ? { refetchInterval: false }
-        : {
-            refetchInterval:
-              conditionPollCoordinator.refetchIntervalFor(method),
-            retry: false,
-          };
-  } else if (pollPolicy !== null) {
-    tablePollingOptions = {
-      refetchInterval: poll === true ? pollPolicy.intervalMs : false,
-      refetchIntervalInBackground: false,
-    };
-  }
+  const tablePollingOptions = conditionPollCoordinator.pollOptionsFor(
+    method,
+    poll,
+  );
   // The boundary normalizes every non-control-flow failure into the declared
   // `HostRpcError`, including throws from caller-supplied `mapResponse`.
   // Coordinator control flow deliberately remains TanStack cancellation.
   const request = ({ signal }: QueryFunctionContext): Promise<TData> =>
     withHostQueryErrorBoundary(method, async () => {
-      if (client === null) {
-        return Promise.reject<TData>(hostClientUnavailableError(method));
-      }
-      args.preflight?.();
-      // The payload, which is `params` unless a caller derives one per
-      // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
-      // that fence remains the last thing captured before the request leaves.
-      const buildRequest = args.buildRequest;
-      const payload =
-        buildRequest === undefined ? params : buildRequest(params);
-      const requirement = args.requiredHostMethodVersion?.() ?? null;
-      const requestContext = args.captureRequestContext?.();
-      const responseTimeoutMs = args.responseTimeoutMs;
-      let response: ResponseOfMethod<Registry, Method>;
-      if (responseTimeoutMs !== undefined) {
-        response = await client.requestWithOptions(method, payload, {
-          responseTimeoutMs,
-          idempotencyKey: null,
-          requiredHostMethodVersion: requirement,
+      try {
+        if (client === null) {
+          throw hostClientUnavailableError(method);
+        }
+        args.preflight?.();
+        // The payload, which is `params` unless a caller derives one per
+        // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
+        // that fence remains the last thing captured before the request leaves.
+        const buildRequest = args.buildRequest;
+        const payload =
+          buildRequest === undefined ? params : buildRequest(params);
+        const requirement = args.requiredHostMethodVersion?.() ?? null;
+        const requestContext = args.captureRequestContext?.();
+        const responseTimeoutMs = args.responseTimeoutMs;
+        let response: ResponseOfMethod<Registry, Method>;
+        if (responseTimeoutMs !== undefined) {
+          response = await client.requestWithOptions(method, payload, {
+            responseTimeoutMs,
+            idempotencyKey: null,
+            requiredHostMethodVersion: requirement,
+            signal,
+          });
+        } else if (requirement !== null) {
+          response = await client.requestWithSignalRequiringHostMethodVersion(
+            method,
+            payload,
+            signal,
+            requirement,
+          );
+        } else {
+          response = await client.requestWithSignal(method, payload, signal);
+        }
+        return await mapResponse({
+          response,
+          queryClient,
+          queryKey,
+          requestContext,
           signal,
         });
-      } else if (requirement !== null) {
-        response = await client.requestWithSignalRequiringHostMethodVersion(
-          method,
-          payload,
-          signal,
-          requirement,
-        );
-      } else {
-        response = await client.requestWithSignal(method, payload, signal);
+      } catch (error) {
+        if (error instanceof HostBelowMinimumError) {
+          // Throwing a silent cancellation alone leaves an initial fetch in
+          // flight, where the recovery sweep deliberately does not reach it.
+          void queryClient.cancelQueries(
+            { queryKey, exact: true },
+            { revert: true, silent: true },
+          );
+        }
+        throw error;
       }
-      return mapResponse({
-        response,
-        queryClient,
-        queryKey,
-        requestContext,
-        signal,
-      });
     });
 
   return useQuery<TData, HostRpcError, TData>(
@@ -449,18 +467,19 @@ export interface UseHostMutationOptions<
     variables: TVariables,
   ) => RequestOfMethod<Registry, Method>;
   /**
-   * Completes the mapped request asynchronously, at DISPATCH, on the client
-   * the request is about to be sent on. The one caller is the executable-write
-   * grant (`lib/environment/executable-write-grant.ts`): a grant is minted for
-   * one host and expires, so it has to be read when the write goes, not when
-   * the variables were built. Inside the dispatch boundary, so a throw here
-   * surfaces as the declared `HostRpcError` like a `mapVariables` throw does.
+   * Validates or transforms the mapped request immediately before dispatch,
+   * using the captured client that will send it. A preparation failure stays
+   * inside the mutation boundary, like a `mapVariables` failure.
    */
   readonly prepareRequest?:
     | ((
         request: RequestOfMethod<Registry, Method>,
         client: HostRequester<Registry>,
       ) => Promise<RequestOfMethod<Registry, Method>>)
+    | undefined;
+  /** Called just before the request is sent, on its client, so the app remembers what the save will propose. */
+  readonly followSettingsSave?:
+    | SettingsSaveFollow<Registry, Method>
     | undefined;
   /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
   readonly onResponse?: (
@@ -541,6 +560,38 @@ export interface UseHostMutationOptions<
    * the identity, and omitting the option is the same thing.
    */
   readonly mapDispatchError?: (cause: unknown) => unknown;
+  /** Cancellation is read at the actual dispatch, including redispatch. */
+  readonly signalFor?:
+    | ((variables: TVariables) => AbortSignal | undefined)
+    | null;
+}
+
+type FollowSettingsSave<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> = (
+  request: RequestOfMethod<Registry, Method>,
+  client: HostRequester<Registry>,
+  origin: SettingsSaveOrigin,
+) => Promise<PendingSettingsSave>;
+
+/** The caller passes `source` in, so this module reaches no hook module. */
+export interface SettingsSaveFollow<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> {
+  readonly source: EnvironmentCloudSource | null;
+  readonly follow: FollowSettingsSave<Registry, Method>;
+  readonly proposes: (response: ResponseOfMethod<Registry, Method>) => boolean;
+}
+
+interface PressedSettingsSave<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> {
+  readonly follow: SettingsSaveFollow<Registry, Method>;
+  readonly origin: SettingsSaveOrigin;
+  readonly client: HostRequester<Registry> | null;
 }
 
 /**
@@ -560,82 +611,116 @@ export function useHostMutation<
   TVariables,
   TContext
 > {
-  const baseOptions = args.options ?? {};
-  return useMutation<
+  return usePressCapturedMutation<
     ResponseOfMethod<Registry, Method>,
     HostRpcError,
     TVariables,
+    PressedSettingsSave<Registry, Method> | null,
     TContext
-  >({
-    ...withHostMutationLifecycleBoundary(args.method, baseOptions),
-    // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
-    // (pre-flight validation) surfaces as the declared `HostRpcError`.
-    mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, async () => {
-        const client =
-          typeof args.client === "function"
-            ? args.client(variables)
-            : args.client;
-        if (client === null) {
-          return Promise.reject<ResponseOfMethod<Registry, Method>>(
-            hostClientUnavailableError(args.method),
-          );
-        }
-        const mapped = args.mapVariables(variables);
-        const params =
-          args.prepareRequest === undefined
-            ? mapped
-            : await args.prepareRequest(mapped, client);
-        const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
-        const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
-        // A keyed dispatch carries both retry identity and version floor.
-        const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
-          if (idempotencyKey !== null) {
-            return client.requestWithOptions(args.method, params, {
-              idempotencyKey,
-              // The method's own scheduling budget. A keyed create is a small
-              // INTERACTIVE request once its images travel by hash, so there is
-              // nothing to extend - and the policy table REFUSES a budget it
-              // does not declare for the method.
-              responseTimeoutMs: null,
-              requiredHostMethodVersion: requirement,
-              signal: undefined,
-            });
-          }
-          if (requirement !== null)
-            return client.requestWithSignalRequiringHostMethodVersion(
-              args.method,
-              params,
-              undefined,
-              requirement,
-            );
-          return client.request(args.method, params);
+  >(
+    (variables) => {
+      const follow = args.followSettingsSave;
+      if (follow === undefined) return null;
+      try {
+        return {
+          follow,
+          origin: captureSettingsSaveOrigin(follow.source),
+          client:
+            typeof args.client === "function"
+              ? args.client(variables)
+              : args.client,
         };
-        const mapDispatchError = args.mapDispatchError;
-        // `.catch` directly on the dispatch, never chained after a `.then`: a
-        // catch downstream of a success arm also catches what that arm throws,
-        // and here that would re-map a `resolveResponse` failure into a
-        // dispatch error.
-        const mappedDispatch =
-          mapDispatchError === undefined
-            ? dispatch
-            : (): Promise<ResponseOfMethod<Registry, Method>> =>
-                dispatch().catch((cause: unknown) => {
-                  throw mapDispatchError(cause);
-                });
-        const dispatched = await mappedDispatch();
-        // Between the dispatch and `onResponse`, so a substituted response is
-        // what every arm below sees - including the caller's `onSuccess` and
-        // whatever `mutateAsync` resolves with.
-        const resolveResponse = args.resolveResponse;
-        const response =
-          resolveResponse === undefined
-            ? dispatched
-            : await resolveResponse(dispatched, variables, mappedDispatch);
-        args.onResponse?.(response, variables);
-        return response;
-      }),
-  });
+      } catch (error) {
+        throw toHostRpcError(error, args.method);
+      }
+    },
+    {
+      ...withHostMutationLifecycleBoundary(args.method, args.options ?? {}),
+      // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
+      // (pre-flight validation) surfaces as the declared `HostRpcError`.
+      mutationFn: (variables, pressed) =>
+        withHostMutationErrorBoundary(args.method, async () => {
+          let client: HostRequester<Registry> | null;
+          if (pressed !== null) {
+            client = pressed.client;
+          } else if (typeof args.client === "function") {
+            client = args.client(variables);
+          } else {
+            client = args.client;
+          }
+          if (client === null) {
+            return Promise.reject<ResponseOfMethod<Registry, Method>>(
+              hostClientUnavailableError(args.method),
+            );
+          }
+          const mapped = args.mapVariables(variables);
+          const params =
+            args.prepareRequest === undefined
+              ? mapped
+              : await args.prepareRequest(mapped, client);
+          const requirement =
+            args.requiredHostMethodVersion?.(variables) ?? null;
+          const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
+          // A keyed dispatch carries both retry identity and version floor.
+          const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
+            const signal = args.signalFor?.(variables) ?? undefined;
+            signal?.throwIfAborted();
+            if (idempotencyKey !== null) {
+              return client.requestWithOptions(args.method, params, {
+                idempotencyKey,
+                // The method's own scheduling budget. A keyed create is a small
+                // INTERACTIVE request once its images travel by hash, so there is
+                // nothing to extend - and the policy table REFUSES a budget it
+                // does not declare for the method.
+                responseTimeoutMs: null,
+                requiredHostMethodVersion: requirement,
+                signal,
+              });
+            }
+            if (requirement !== null)
+              return client.requestWithSignalRequiringHostMethodVersion(
+                args.method,
+                params,
+                signal,
+                requirement,
+              );
+            return signal === undefined
+              ? client.request(args.method, params)
+              : client.requestWithSignal(args.method, params, signal);
+          };
+          const mapDispatchError = args.mapDispatchError;
+          // `.catch` directly on the dispatch, never chained after a `.then`: a
+          // catch downstream of a success arm also catches what that arm throws,
+          // and here that would re-map a `resolveResponse` failure into a
+          // dispatch error.
+          const mappedDispatch =
+            mapDispatchError === undefined
+              ? dispatch
+              : (): Promise<ResponseOfMethod<Registry, Method>> =>
+                  dispatch().catch((cause: unknown) => {
+                    throw mapDispatchError(cause);
+                  });
+          const dispatched =
+            pressed === null
+              ? await mappedDispatch()
+              : await sendFollowedSave(
+                  await pressed.follow.follow(params, client, pressed.origin),
+                  mappedDispatch,
+                  pressed.follow.proposes,
+                );
+          // Between the dispatch and `onResponse`, so a substituted response is
+          // what every arm below sees - including the caller's `onSuccess` and
+          // whatever `mutateAsync` resolves with.
+          const resolveResponse = args.resolveResponse;
+          const response =
+            resolveResponse === undefined
+              ? dispatched
+              : await resolveResponse(dispatched, variables, mappedDispatch);
+          args.onResponse?.(response, variables);
+          return response;
+        }),
+    },
+  );
 }
 
 /**
@@ -653,6 +738,12 @@ export function useHostMutation<
  * of that one's answer. `null` for a caller with nothing to cancel: its call
  * stays on `requestWithResponseTimeout`, the entry point the local
  * maintenance fallback client intercepts.
+ *
+ * `idempotencyKey` and `requiredHostMethodVersion` are honoured here as they
+ * are on {@link useHostMutation}: a dispatch that names either, or a signal,
+ * goes through `requestWithOptions`, the one entry point that carries all
+ * four. A long upload needs its digest key and its version floor as much as
+ * its budget.
  */
 export function useHostMutationWithResponseTimeout<
   Registry extends VersionedRpcRegistry,
@@ -681,7 +772,7 @@ export function useHostMutationWithResponseTimeout<
   >({
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, async () => {
+      withHostMutationErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
             ? args.client(variables)
@@ -693,8 +784,12 @@ export function useHostMutationWithResponseTimeout<
         }
         const signal =
           args.signalFor === null ? undefined : args.signalFor(variables);
+        const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
+        const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
         const response =
-          signal === undefined
+          signal === undefined &&
+          idempotencyKey === null &&
+          requirement === null
             ? await client.requestWithResponseTimeout(
                 args.method,
                 args.mapVariables(variables),
@@ -705,8 +800,8 @@ export function useHostMutationWithResponseTimeout<
                 args.mapVariables(variables),
                 {
                   responseTimeoutMs: args.responseTimeoutMs,
-                  idempotencyKey: null,
-                  requiredHostMethodVersion: null,
+                  idempotencyKey,
+                  requiredHostMethodVersion: requirement,
                   signal,
                 },
               );

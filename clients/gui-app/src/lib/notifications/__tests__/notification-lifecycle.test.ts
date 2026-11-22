@@ -24,6 +24,19 @@ describe("classifyNotificationLifecycle", () => {
     ).toEqual({ section: "attention", tier: "blocking" });
   });
 
+  it("places an unread global needs_action row in attention as an invitation, never blocking", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "global", severity: "needs_action" }),
+      ),
+    ).toEqual({ section: "attention", tier: "invitation" });
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "global", severity: "needs_action", readAt: 7 }),
+      ),
+    ).toEqual({ section: "recent" });
+  });
+
   it("places unread host failures in attention as failure tier", () => {
     expect(
       classifyNotificationLifecycle(
@@ -56,24 +69,6 @@ describe("classifyNotificationLifecycle", () => {
     ).toEqual({ section: "recent" });
   });
 
-  it("never places global rows in attention regardless of severity or read state", () => {
-    expect(
-      classifyNotificationLifecycle(
-        input({ source: "global", severity: "failure", readAt: null }),
-      ),
-    ).toEqual({ section: "recent" });
-    expect(
-      classifyNotificationLifecycle(
-        input({ source: "global", severity: "needs_action" }),
-      ),
-    ).toEqual({ section: "recent" });
-    expect(
-      classifyNotificationLifecycle(
-        input({ source: "global", severity: "info", readAt: null }),
-      ),
-    ).toEqual({ section: "recent" });
-  });
-
   it("keeps host done/info rows in recent even when unread", () => {
     expect(
       classifyNotificationLifecycle(
@@ -90,11 +85,7 @@ describe("classifyNotificationLifecycle", () => {
   it("moves read unresolved prompts to recent", () => {
     expect(
       classifyNotificationLifecycle(
-        input({
-          source: "host",
-          severity: "needs_action",
-          readAt: 10,
-        }),
+        input({ source: "host", severity: "needs_action", readAt: 10 }),
       ),
     ).toEqual({ section: "recent" });
   });
@@ -141,8 +132,13 @@ describe("compareAttentionOrder", () => {
     );
   });
 
-  it("orders blocking, then failure, then answer, whatever the timestamps", () => {
+  it("orders blocking, then failure, then answer, then invitation, whatever the timestamps", () => {
     const rows = [
+      {
+        tier: "invitation" as const,
+        createdAt: 4_000,
+        feedId: "global:invite",
+      },
       { tier: "answer" as const, createdAt: 3_000, feedId: "host:answer" },
       { tier: "failure" as const, createdAt: 2_000, feedId: "host:failure" },
       { tier: "blocking" as const, createdAt: 1_000, feedId: "host:prompt" },
@@ -150,7 +146,7 @@ describe("compareAttentionOrder", () => {
 
     expect(
       rows.toSorted(compareAttentionOrder).map((row) => row.feedId),
-    ).toEqual(["host:prompt", "host:failure", "host:answer"]);
+    ).toEqual(["host:prompt", "host:failure", "host:answer", "global:invite"]);
   });
 
   it("orders newest createdAt first within the same tier", () => {

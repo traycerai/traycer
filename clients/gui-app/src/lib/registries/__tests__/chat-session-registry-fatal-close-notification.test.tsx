@@ -107,6 +107,7 @@ function remoteTarget(): RemoteHostDirectoryEntry {
     version: "1.0.0",
     transportDialability: "dialable",
     publicKey: "pubkey-a",
+    owner: null,
     relayFuseGrace: false,
     sandbox: null,
     remoteStatus: {
@@ -126,6 +127,7 @@ function fakeStreamSession(): IStreamSession {
     onServerFrame: () => undefined,
     onStatusChange: () => undefined,
     getNegotiatedSchemaVersion: () => null,
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => undefined,
   };

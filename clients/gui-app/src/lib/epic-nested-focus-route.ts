@@ -91,17 +91,22 @@ export function buildNestedFocusSearchPatch(
   };
 }
 
+/** The query of `href`, without its hash; empty when it has none. */
+export function hrefSearchParams(href: string): URLSearchParams {
+  const queryStart = href.indexOf("?");
+  if (queryStart === -1) return new URLSearchParams();
+  const hashStart = href.indexOf("#", queryStart);
+  return new URLSearchParams(
+    hashStart === -1
+      ? href.slice(queryStart + 1)
+      : href.slice(queryStart + 1, hashStart),
+  );
+}
+
 export function parseNestedFocusTargetFromHref(
   href: string,
 ): NestedFocusTarget | null {
-  const queryStart = href.indexOf("?");
-  if (queryStart === -1) return null;
-  const hashStart = href.indexOf("#", queryStart);
-  const query =
-    hashStart === -1
-      ? href.slice(queryStart + 1)
-      : href.slice(queryStart + 1, hashStart);
-  const params = new URLSearchParams(query);
+  const params = hrefSearchParams(href);
   return parseNestedFocusTargetFromSearch({
     focusPaneId: params.get("focusPaneId") ?? undefined,
     focusTileInstanceId: params.get("focusTileInstanceId") ?? undefined,

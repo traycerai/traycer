@@ -26,8 +26,9 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
  * refuses them.
  *
  * The shared version is written as an inclusion test over the writable roles
- * rather than as an exclusion of `"viewer"`, so a fourth role added to the enum
- * lands non-writable. Same truth table over today's three members.
+ * rather than as an exclusion of the roles that may not write, so a role added
+ * to the enum lands non-writable. Over today's two members what it decides is
+ * the `null` case: a role the host could not attribute is unwritable.
  */
 export { isWritablePermissionRole } from "@traycer-clients/shared/epic/permission-role";
 
@@ -99,7 +100,7 @@ export interface EpicSessionFacts {
    *
    * Deliberately different from {@link permissionRole}, and the difference is
    * load-bearing in both directions. Artifact-body writes gate on the bare
-   * snapshot role because sending one as a viewer hits the host's guarded
+   * snapshot role because sending one with no attributed role hits the guarded
    * `applyCollabUpdate`, which refuses the mutate AND evicts the warm slot,
    * tearing the room down mid-open. Root writes and optimistic stamps fall back
    * to the displayed role on @1 because they happen in the ~8s before its

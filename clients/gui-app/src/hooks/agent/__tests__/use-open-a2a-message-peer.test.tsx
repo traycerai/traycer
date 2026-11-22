@@ -1,6 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessagePeer } from "@traycer/protocol/host/agent/message-peer";
+import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { useOpenA2AMessagePeer } from "@/hooks/agent/use-open-a2a-message-peer";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
@@ -87,6 +88,7 @@ describe("useOpenA2AMessagePeer", () => {
     expect(mocks.openTile).toHaveBeenCalledTimes(1);
     expect(mocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({ target: { epicId: "epic-current" } }),
+      "user",
     );
     expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
@@ -110,6 +112,7 @@ describe("useOpenA2AMessagePeer", () => {
       kind: "open-epic",
       epicId: "epic-2",
       includeNestedFocus: true,
+      tracyOrigin: null,
       preparation: {
         kind: "open-tile",
         gesture: "explicit",
@@ -120,6 +123,24 @@ describe("useOpenA2AMessagePeer", () => {
           hostId: "host-2",
         },
       },
+    });
+  });
+
+  it("hands the controller the transcript's bot for a cross-task peer opened inside a Tracy transcript", () => {
+    const { result } = renderHook(() => useOpenA2AMessagePeer(), {
+      wrapper: ({ children }) => (
+        <TracyTranscriptOriginScope botId="bot-1">
+          {children}
+        </TracyTranscriptOriginScope>
+      ),
+    });
+
+    result.current(peer({ epicId: "epic-2", hostId: "host-2" }), "Cross Name");
+
+    expect(mocks.activateTabIntent.mock.calls.at(0)?.[1]).toMatchObject({
+      kind: "open-epic",
+      epicId: "epic-2",
+      tracyOrigin: { botId: "bot-1" },
     });
   });
 

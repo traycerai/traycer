@@ -1,4 +1,5 @@
 import type {
+  BotDirectoryRecord,
   BotRecord,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
@@ -48,7 +49,7 @@ export interface HomeBotsGroup {
    * nothing can be created into an environment the user is not in. */
   readonly canCreate: boolean;
   /** Live (unarchived) bots of this environment, by title. */
-  readonly bots: ReadonlyArray<BotRecord>;
+  readonly bots: ReadonlyArray<BotDirectoryRecord>;
   /** The environment's main bot, `null` when the list names none (its host
    * predates the field). */
   readonly mainBotId: string | null;
@@ -61,7 +62,7 @@ export interface HomeBotsModel {
 
 export interface HomeBotsModelInput {
   readonly environments: ReadonlyArray<EnvironmentDescriptor>;
-  readonly bots: ReadonlyArray<BotRecord>;
+  readonly bots: ReadonlyArray<BotDirectoryRecord>;
   readonly mainBotIds: MainBotIds;
 }
 
@@ -187,13 +188,13 @@ function reachabilityState(
   return input.environmentHostIds.has(boundHostId) ? "idle" : "paused";
 }
 
-function compareBots(a: BotRecord, b: BotRecord): number {
+function compareBots(a: BotDirectoryRecord, b: BotDirectoryRecord): number {
   const byTitle = a.title.localeCompare(b.title);
   return byTitle !== 0 ? byTitle : a.botId.localeCompare(b.botId);
 }
 
 export function buildHomeBotsModel(input: HomeBotsModelInput): HomeBotsModel {
-  const botsByEnvironment = new Map<string, BotRecord[]>();
+  const botsByEnvironment = new Map<string, BotDirectoryRecord[]>();
   for (const bot of input.bots) {
     if (bot.archivedAt !== null) continue;
     const rows = botsByEnvironment.get(bot.environmentId);

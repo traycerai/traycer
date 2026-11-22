@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
@@ -6,7 +7,10 @@ import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  setSettingsHostSelection,
+  settingsHostSelection,
+} from "@/stores/settings/__tests__/settings-host-scope-test-support";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -40,7 +44,6 @@ import {
   requestSandboxesPageConfiguration,
   useSandboxesPageStore,
 } from "@/stores/sandboxes/sandboxes-page-store";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -166,7 +169,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // Module-level stores: without this a leaked pick or an open dialog would
     // travel between the cases below and the assertions would stop meaning
     // anything.
-    useSettingsHostScopeStore.getState().setScopedHostId(null);
+    useSettingsHostScopeStore.getState().reset();
     // This one PERSISTS, so it needs both halves and in this order: the store
     // first, then the storage the persist middleware just rewrote. Two cases
     // below set it and rely on the bridge's own transition to clear it - a
@@ -177,7 +180,6 @@ describe("<EpicSessionLifecycleBridge />", () => {
     useAddHostDialogStore.getState().closeDialog();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();
-    useProviderLinkDialogStore.getState().close();
   });
 
   it("clears every live Epic and chat session on sign-out", () => {
@@ -284,7 +286,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // B's session opened Settings on a `vanished` host B has never seen and
     // cannot dismiss without re-picking. `null` restores "follow the active
     // host", which is the store's unset state, not an empty one.
-    useSettingsHostScopeStore.getState().setScopedHostId("host-owned-by-alice");
+    setSettingsHostSelection("host-owned-by-alice");
 
     render(
       <EpicSessionLifecycleBridge>
@@ -296,11 +298,11 @@ describe("<EpicSessionLifecycleBridge />", () => {
       resetAuth("signed-in", "bob@example.com", "user-bob");
     });
 
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+    expect(settingsHostSelection()?.hostId ?? null).toBeNull();
   });
 
   it("drops the Settings host scope on sign-out", () => {
-    useSettingsHostScopeStore.getState().setScopedHostId("host-owned-by-alice");
+    setSettingsHostSelection("host-owned-by-alice");
 
     render(
       <EpicSessionLifecycleBridge>
@@ -312,7 +314,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
       resetAuth("signed-out", null, null);
     });
 
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+    expect(settingsHostSelection()?.hostId ?? null).toBeNull();
   });
 
   it("drops the shared watch-host pick on user-switch", () => {
@@ -713,46 +715,6 @@ describe("<EpicSessionLifecycleBridge />", () => {
     expect(useProvidersFocusStore.getState().startSignIn).toBe(true);
   });
 
-  it("closes the provider Link dialog on user-switch", () => {
-    // The target names a provider profile of account A's; left open, account B
-    // would see A's Link dialog and could run its sign-in under B's session.
-    useProviderLinkDialogStore
-      .getState()
-      .open({ providerId: "claude", profileId: "profile-alice" });
-
-    render(
-      <EpicSessionLifecycleBridge>
-        <div />
-      </EpicSessionLifecycleBridge>,
-    );
-
-    act(() => {
-      resetAuth("signed-in", "bob@example.com", "user-bob");
-    });
-
-    expect(useProviderLinkDialogStore.getState().target).toBeNull();
-  });
-
-  it("leaves an open provider Link dialog alone when the identity has not changed", () => {
-    // The counterweight: a bridge that closed it on every render would
-    // satisfy the user-switch case above while never letting it survive a
-    // normal render.
-    useProviderLinkDialogStore
-      .getState()
-      .open({ providerId: "claude", profileId: "profile-a" });
-
-    render(
-      <EpicSessionLifecycleBridge>
-        <div />
-      </EpicSessionLifecycleBridge>,
-    );
-
-    expect(useProviderLinkDialogStore.getState().target).toEqual({
-      providerId: "claude",
-      profileId: "profile-a",
-    });
-  });
-
   it("leaves an open Add-host dialog alone when the identity has not changed", () => {
     // The counterweight: without it, a bridge that closed the dialog on every
     // render would satisfy both cases above while making the dialog impossible
@@ -774,7 +736,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // transition, so an explicit pick must survive it. Without this the two
     // assertions above would also pass for a bridge that cleared the scope on
     // every render.
-    useSettingsHostScopeStore.getState().setScopedHostId("host-a");
+    setSettingsHostSelection("host-a");
 
     render(
       <EpicSessionLifecycleBridge>
@@ -782,7 +744,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
       </EpicSessionLifecycleBridge>,
     );
 
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(settingsHostSelection()?.hostId ?? null).toBe("host-a");
   });
 
   it("does not clear sessions on the initial mount when already signed-in", () => {

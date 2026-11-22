@@ -457,6 +457,7 @@ function ActivityChildRow(props: ActivityChildRowProps) {
           imageResults={segment.imageResults}
           artifact={segment.artifact}
           mcpApp={segment.mcpApp}
+          feedbackDraft={segment.feedbackDraft}
           variant="row"
           headerFindUnitId={
             segment.agentMessageSend === null ? headerFindUnitId : null

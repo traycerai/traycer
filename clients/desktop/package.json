@@ -285,11 +285,16 @@
     "implicitDependencies": [
       "@traycer/protocol",
       "@traycer-clients/shared",
-      "traycer-clients-gui-app"
+      "traycer-clients-gui-app",
+      "@traycer/html-source"
     ],
     "targets": {
+      "build": {
+        "dependsOn": []
+      },
       "test": {
         "inputs": [
+          "{workspaceRoot}/scripts/test-worker-environment.ts",
           "default",
           "^production",
           "sharedGlobals",

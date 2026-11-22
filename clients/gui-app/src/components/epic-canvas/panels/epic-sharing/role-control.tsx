@@ -101,39 +101,6 @@ export function RoleDropdown({ className, ...props }: RoleDropdownProps) {
   );
 }
 
-export function RoleOrBadge(props: {
-  value: PermissionRole;
-  canChange: boolean;
-  disabled: boolean;
-  isPending: boolean;
-  ariaLabel: string;
-  testId: string;
-  onChange: (role: AssignableCollaboratorRole) => void;
-}) {
-  if (!props.canChange) {
-    return (
-      <RoleBadge
-        value={props.value}
-        testId={`${props.testId}-badge`}
-        ariaLabel={undefined}
-        tooltip={undefined}
-      />
-    );
-  }
-  return (
-    <RoleDropdown
-      value={props.value}
-      onChange={props.onChange}
-      disabled={props.disabled}
-      isPending={props.isPending}
-      variant="muted"
-      className="min-w-24"
-      aria-label={props.ariaLabel}
-      data-testid={props.testId}
-    />
-  );
-}
-
 export function RoleBadge(props: {
   readonly value: PermissionRole;
   readonly testId: string;

@@ -148,6 +148,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    setDraftAccountFollowsDefault: vi.fn(),
     seedUnseededDraft: vi.fn(() => false),
   };
   // A store API, not just a selector hook: the landing composer also reads
@@ -156,7 +157,8 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     (selector: (value: typeof state) => unknown) => selector(state),
     { getState: () => state, subscribe: () => () => undefined },
   );
-  return { useLandingDraftStore };
+  // No draft in this suite was opened for a host.
+  return { useLandingDraftStore, useLandingDraftNamedHostId: () => null };
 });
 
 vi.mock("@/stores/composer/composer-run-settings-store", () => {
@@ -186,8 +188,122 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
-  const toolbarStore = createStore(() => ({
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => ({
+    accountChosen: false,
+    defaultAccount: emptyDefaultAccount,
+    setAccountChosen: (chosen: boolean) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultAccount = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        defaultAccount !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === defaultAccount.harnessId &&
+        state.selection.harnessId === defaultAccount.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: defaultAccount.profileId,
+        };
+      } else if (
+        defaultAccount !== null &&
+        state.selection.profileId === defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        accountChosen: chosen,
+        selection: presentedSelection,
+      });
+    },
+    setDefaultAccount: (
+      account: {
+        readonly harnessId: string;
+        readonly profileId: string;
+      } | null,
+    ) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        state.defaultAccount !== null &&
+        state.selection.profileId === state.defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        defaultAccount: account,
+        selection: presentedSelection,
+      });
+    },
     ultracode: false,
     selection: {
       harnessId: "claude",
@@ -220,7 +336,8 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   }),
 }));
 
-vi.mock("@/providers/use-runner-host", () => ({
+vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
   useRunnerHost: () => ({
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
@@ -263,6 +380,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({
   useComposerDictation: () => ({
@@ -308,9 +426,15 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({ data: null }),
+  }),
+);
 // The setup line prices a resting sandbox from the account's list.
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: undefined }),

@@ -2,11 +2,13 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { AgentMessagePeer } from "@traycer/protocol/host/agent/message-peer";
+import { useTracyTranscriptOrigin } from "@/components/bots/tracy-transcript-origin-context";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { useMaybeOpenEpicId } from "@/lib/epic-selectors";
 import { activateTabIntent, resourceEpicTabIntent } from "@/lib/tab-navigation";
+import { fromTracyTranscript } from "@/lib/tab-navigation/intents";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
 
 export function useOpenA2AMessagePeer(): (
@@ -17,6 +19,9 @@ export function useOpenA2AMessagePeer(): (
   const { openTile } = useEpicTileNavigation();
   const navigate = useNavigate();
   const openBotChannel = useOpenBotChannel();
+  // A message card in a Tracy transcript opens its peer's task with a way
+  // back to that transcript's channel.
+  const tracyOrigin = useTracyTranscriptOrigin();
   return useCallback(
     (peer, name) => {
       if (peer.bot !== null) {
@@ -36,28 +41,31 @@ export function useOpenA2AMessagePeer(): (
         hostId: peer.hostId,
       };
       if (peer.epicId === epicId) {
-        openTile(tileIntent(node, { epicId }, "explicit", "direct_ui"));
+        openTile(tileIntent(node, { epicId }, "explicit", "direct_ui"), "user");
         return;
       }
       // Tile placement alone does not activate another task's header tab.
       activateTabIntent(
         navigate,
-        resourceEpicTabIntent({
-          epicId: peer.epicId,
-          tabId: null,
-          name: undefined,
-          focus: {
-            focusedAt: undefined,
-            focusArtifactId: undefined,
-            focusThreadId: undefined,
-            migrationSource: undefined,
-          },
-          preparation: { kind: "open-tile", node, gesture: "explicit" },
-          includeNestedFocus: true,
-        }),
+        fromTracyTranscript(
+          resourceEpicTabIntent({
+            epicId: peer.epicId,
+            tabId: null,
+            name: undefined,
+            focus: {
+              focusedAt: undefined,
+              focusArtifactId: undefined,
+              focusThreadId: undefined,
+              migrationSource: undefined,
+            },
+            preparation: { kind: "open-tile", node, gesture: "explicit" },
+            includeNestedFocus: true,
+          }),
+          tracyOrigin,
+        ),
         undefined,
       );
     },
-    [epicId, navigate, openBotChannel, openTile],
+    [epicId, navigate, openBotChannel, openTile, tracyOrigin],
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import {
+  useComposerDragAffordance,
   isAttachmentIngestPending,
   IMAGE_READ_TIMEOUT_MS,
   FILE_PATH_RESOLUTION_TIMEOUT_MS,
@@ -27,6 +28,7 @@ import type { PendingImageIngestEditorHandle } from "@/hooks/composer/use-compos
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { fileTransfer } from "@/lib/composer/__tests__/file-drop-fixtures";
 
 /**
  * The two upstream PORTS an editor exposes, intersected: paste needs
@@ -55,14 +57,14 @@ vi.mock("sonner", () => ({
 const EMPTY_EDITOR_DOC = { type: "doc", content: [] };
 
 /**
- * The deleted `useComposerPasteAdapter`'s SIGNATURE, over the hook that ships.
+ * The paste hook that ships, `useComposerHashPaste`, taking an insertion
+ * callback and a file-path ingest instead of an editor handle.
  *
  * Almost everything in this file pins the shared BASE — drag depth and overlay
  * variants, clipboard and drop path resolution, the read timeout, the pending
  * gates, unmount liveness — which lives in `useComposerPasteEvents` and is
- * identical under any ingest. That coverage had no reason to die with the
- * base64 adapter, so the adapter's two-argument shape is reproduced here and
- * every assertion below is unchanged.
+ * identical under any ingest. This fixture lets a case drive that base with its
+ * own callbacks while the real hook runs underneath.
  *
  * `putImage` is doubled: these are not image-store pins, and the hash the job
  * lands is never asserted.
@@ -88,26 +90,37 @@ function useAdapterUnderTest(
   });
   const editorRef = useRef<ComposerPasteEditorHandle>({
     isReady: () => true,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
+    getEditorIncarnation: () => null,
+    draftGeneration: () => 0,
+    getJSON: () => ({ type: "doc", content: [] }),
     insertImageAttachments: (attrs) => {
       insertRef.current(attrs);
     },
     beginPathInsertion: () => filePathsRef.current.beginPathInsertion(),
     focus: () => undefined,
   });
-  return useComposerHashPaste(
-    editorRef,
-    filePaths.fileDrops,
-    filePaths.mentionRoots,
-  );
+  return useComposerHashPaste(editorRef, {
+    fileDrops: filePaths.fileDrops,
+    mentionRoots: filePaths.mentionRoots,
+    fileRoute: null,
+    pathsReachTarget: filePaths.pathsReachTarget,
+  });
 }
 
-/** The deleted `useComposerPaste`'s signature, likewise over the shipping hook. */
+/** The paste hook that ships, with no file route and paths that reach the target. */
 function usePasteUnderTest(
   editorRef: { readonly current: ComposerPasteEditorHandle | null },
   fileDrops: IFileDropHost,
   mentionRoots: ReadonlyArray<string>,
 ): UseComposerPasteResult {
-  return useComposerHashPaste(editorRef, fileDrops, mentionRoots);
+  return useComposerHashPaste(editorRef, {
+    fileDrops,
+    mentionRoots,
+    fileRoute: null,
+    pathsReachTarget: true,
+  });
 }
 
 // Default fixture for tests that don't care about file-path resolution at
@@ -121,6 +134,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
   },
   mentionRoots: [],
   beginPathInsertion: () => null,
+  pathsReachTarget: true,
 };
 
 afterEach(() => {
@@ -154,6 +168,7 @@ describe("composer paste core - runPendingImageJob (landing in-place paste)", ()
       isAttachmentIngestPending({
         isIngestingImages: result.current.isIngestingImages,
         isResolvingFilePaths: result.current.isResolvingFilePaths,
+        isAttachingFiles: false,
       }),
     ).toBe(true);
 
@@ -172,6 +187,7 @@ describe("composer paste core - runPendingImageJob (landing in-place paste)", ()
       isAttachmentIngestPending({
         isIngestingImages: result.current.isIngestingImages,
         isResolvingFilePaths: result.current.isResolvingFilePaths,
+        isAttachingFiles: false,
       }),
     ).toBe(false);
   });
@@ -424,6 +440,10 @@ describe("composer paste core - attachImageFiles", () => {
     const editorRef: { current: PasteAndIngestHandle | null } = {
       current: {
         insertImageAttachments,
+        insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
         beginPathInsertion: () => null,
         isReady: () => true,
         focus: vi.fn(),
@@ -458,6 +478,10 @@ describe("composer paste core - attachImageFiles", () => {
     const editorRef: { current: PasteAndIngestHandle | null } = {
       current: {
         insertImageAttachments,
+        insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
         beginPathInsertion: () => null,
         // The subject of this pin: a live handle that is NOT ready.
         isReady: () => false,
@@ -521,6 +545,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "notes.txt": ["/repo/notes.txt"] }, {}),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -544,6 +569,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "doc.pdf": ["/repo/external/doc.pdf"] }, {}),
       mentionRoots: [],
       beginPathInsertion: () => (paths) => {
@@ -569,6 +595,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "my-folder": ["/repo/my-folder"] }, {}),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -591,6 +618,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops(
         {},
         // `fileUriToPath` strips the `file://` scheme before this is called,
@@ -629,6 +657,7 @@ describe("composer paste core - onPaste", () => {
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     };
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops,
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -657,6 +686,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       // Mirrors the non-Electron surface: resolveDroppedFilePaths always [].
       fileDrops: makeFileDrops({}, {}),
       mentionRoots: [],
@@ -687,6 +717,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops(
         {
           "a.txt": ["/repo/a.txt"],
@@ -724,6 +755,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "notes.txt": ["/repo/notes.txt"] }, {}),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -755,6 +787,7 @@ describe("composer paste core - onPaste", () => {
       Promise.resolve(["/repo/notes.txt"]),
     );
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,
@@ -792,6 +825,7 @@ describe("composer paste core - onPaste", () => {
       Promise.resolve(["/tmp/traycer-copy/shot-xyz.png"]),
     );
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,
@@ -830,6 +864,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths: () =>
           new Promise((resolve) => {
@@ -857,6 +892,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
       isAttachmentIngestPending({
         isIngestingImages: zone.getAttribute("data-ingesting") === "true",
         isResolvingFilePaths: zone.getAttribute("data-resolving") === "true",
+        isAttachingFiles: false,
       }),
     ).toBe(true);
     expect(insertPaths).not.toHaveBeenCalled();
@@ -866,6 +902,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
       isAttachmentIngestPending({
         isIngestingImages: false,
         isResolvingFilePaths: true,
+        isAttachingFiles: false,
       }),
     ).toBe(true);
 
@@ -882,6 +919,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
       isAttachmentIngestPending({
         isIngestingImages: zone.getAttribute("data-ingesting") === "true",
         isResolvingFilePaths: zone.getAttribute("data-resolving") === "true",
+        isAttachingFiles: false,
       }),
     ).toBe(false);
     expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
@@ -894,6 +932,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
     vi.useFakeTimers();
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths: () => new Promise(() => undefined),
         copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
@@ -937,18 +976,21 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
       isAttachmentIngestPending({
         isIngestingImages: true,
         isResolvingFilePaths: false,
+        isAttachingFiles: false,
       }),
     ).toBe(true);
     expect(
       isAttachmentIngestPending({
         isIngestingImages: false,
         isResolvingFilePaths: true,
+        isAttachingFiles: false,
       }),
     ).toBe(true);
     expect(
       isAttachmentIngestPending({
         isIngestingImages: false,
         isResolvingFilePaths: false,
+        isAttachingFiles: false,
       }),
     ).toBe(false);
   });
@@ -971,6 +1013,7 @@ describe("composer paste core - drag-and-drop", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "doc.pdf": ["/repo/doc.pdf"] }, {}),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -1000,6 +1043,7 @@ describe("composer paste core - drag-and-drop", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops(
         { "dropped-folder": ["/repo/dropped-folder"] },
         {},
@@ -1024,6 +1068,7 @@ describe("composer paste core - drag-and-drop", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops(
         {},
         {
@@ -1127,6 +1172,7 @@ describe("composer paste core - drag-and-drop", () => {
     );
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,
@@ -1387,3 +1433,42 @@ function makeOversizedImage(name: string, size: number): File {
   Object.defineProperty(file, "size", { value: size });
   return file;
 }
+
+/**
+ * An outer zone with the affordance's handlers, and an inner element in it that
+ * takes the dragover itself and stops it there, as the editor inside a chat
+ * pane does; a sibling of the inner element, also in the zone.
+ */
+function ZoneWithInnerEditor(): ReactNode {
+  const drag = useComposerDragAffordance();
+  return (
+    <div
+      data-testid="outer"
+      onDragEnter={drag.onDragEnter}
+      onDragLeave={drag.onDragLeave}
+      onDragOver={drag.onDragOver}
+    >
+      <div data-testid="inner" onDragOver={drag.onDragOver} />
+      <div data-testid="sibling" />
+      <span data-testid="overlay">{drag.overlayVariant ?? "none"}</span>
+    </div>
+  );
+}
+
+describe("useComposerDragAffordance the zone a drag belongs to", () => {
+  it("keeps the affordance for a drag that went over the outer zone first, then over an inner element that took it, then over a sibling the outer handler never sees", () => {
+    render(<ZoneWithInnerEditor />);
+    const sibling = screen.getByTestId("sibling");
+    sibling.addEventListener("dragover", (event) => event.stopPropagation());
+    const files = fileTransfer([
+      new File([new Uint8Array([1])], "shot.png", { type: "image/png" }),
+    ]);
+
+    fireEvent.dragOver(screen.getByTestId("outer"), { dataTransfer: files });
+    expect(screen.getByTestId("overlay").textContent).toBe("images");
+    fireEvent.dragOver(screen.getByTestId("inner"), { dataTransfer: files });
+    fireEvent.dragOver(sibling, { dataTransfer: files });
+
+    expect(screen.getByTestId("overlay").textContent).toBe("images");
+  });
+});

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
@@ -38,6 +39,9 @@ class StubSession implements IStreamSession {
     return this.negotiatedSchemaVersion;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   emitFrame(frame: Parameters<ServerFrameHandler>[0]): void {
@@ -61,6 +65,7 @@ function makeWsStreamClient(
     endpoint: () => null,
     hostId: null,
     bearer: () => null,
+    userId: AUTHENTICATED_USER_FIXTURE_ID,
     auth: null,
     clock: null,
     hostCredentialMint: null,

@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/node";
 import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
+import { spawnAckSentryTags } from "../host/spawn-ack-tags";
 import { errorFromUnknown } from "../logger";
 import { withBoundedWaitProgress } from "./bounded-wait-progress";
 import {
@@ -224,9 +225,9 @@ async function reportCommandFailure(
     defaultRepeatGateIo,
   );
   if (decision.kind === "report") {
-    Sentry.captureException(err, {
-      extra: { repeatsSinceLastReport: decision.repeatsSinceLastReport },
-    });
+    const extra = { repeatsSinceLastReport: decision.repeatsSinceLastReport };
+    const tags = spawnAckSentryTags(err);
+    Sentry.captureException(err, tags === null ? { extra } : { extra, tags });
     return;
   }
   Sentry.addBreadcrumb({

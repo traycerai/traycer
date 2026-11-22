@@ -3,7 +3,10 @@ import {
   useNotificationFeedMode,
   useNotificationFeedModeSettling,
 } from "@/lib/notifications/notification-feed-mode";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import {
+  useHostNotificationIndicators,
+  type IndicatorFreshnessMode,
+} from "@/hooks/notifications/use-host-notification-indicators-query";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
@@ -76,6 +79,32 @@ export interface UseNotificationIndicatorsArgs {
 export function useNotificationIndicators(
   args: UseNotificationIndicatorsArgs,
 ): SurfaceNotificationIndicators {
+  return useNotificationIndicatorsBase(args, "base").indicators;
+}
+
+export function useNotificationIndicatorsWithFreshness(
+  args: UseNotificationIndicatorsArgs,
+): {
+  readonly fresh: boolean;
+  readonly positiveFresh: boolean;
+  readonly cloudPositiveIndicators: SurfaceNotificationIndicators;
+  readonly hostPositiveIndicators: SurfaceNotificationIndicators;
+  readonly hostId: string | null;
+} {
+  return useNotificationIndicatorsBase(args, "activity");
+}
+
+function useNotificationIndicatorsBase(
+  args: UseNotificationIndicatorsArgs,
+  freshnessMode: IndicatorFreshnessMode,
+): {
+  readonly indicators: SurfaceNotificationIndicators;
+  readonly fresh: boolean;
+  readonly positiveFresh: boolean;
+  readonly cloudPositiveIndicators: SurfaceNotificationIndicators;
+  readonly hostPositiveIndicators: SurfaceNotificationIndicators;
+  readonly hostId: string | null;
+} {
   const feedMode = useNotificationFeedMode();
   const isMixed = feedMode === "cloud";
   // A held `cloud` whose host is re-negotiating sends no `home: "local"`
@@ -85,6 +114,7 @@ export function useNotificationIndicators(
   // settles either way; its last data stays rendered meanwhile.
   const feedModeSettling = useNotificationFeedModeSettling();
   const hostIndicators = useHostNotificationIndicators({
+    freshnessMode,
     hostId: args.hostId,
     epicIds: args.epicIds,
     chatIds: args.chatIds,
@@ -102,6 +132,9 @@ export function useNotificationIndicators(
   // second hook is what makes the two unable to disagree.
   const readHostId = hostIndicators.hostId;
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
+  const cloudFresh = useCloudNotificationsStore(
+    (state) => state.hasSnapshot && state.connectionState === "connected",
+  );
   const cloudIndicators = useMemo<SurfaceNotificationIndicators>(() => {
     if (!isMixed || !args.enabled) return EMPTY_INDICATOR_STATE_RESPONSE;
     const projection = selectCloudNotificationIndicatorProjection(
@@ -114,7 +147,7 @@ export function useNotificationIndicators(
       byOriginHostId: projection.byOriginHostId,
     };
   }, [isMixed, args.enabled, cloudRows, args.epicIds, args.chatIds]);
-  return isMixed
+  const indicators = isMixed
     ? mergeLocalPartitionIntoCloudIndicators(
         cloudIndicators,
         hostIndicators.data,
@@ -122,6 +155,55 @@ export function useNotificationIndicators(
         { epicIds: args.epicIds, chatIds: args.chatIds },
       )
     : scopeIndicatorsToOrigin(hostIndicators.data, readHostId);
+  const positiveFresh =
+    args.enabled &&
+    !feedModeSettling &&
+    feedMode !== "upgrade-required" &&
+    readHostId !== null &&
+    hostIndicators.hasAnswer &&
+    !hostIndicators.isPending &&
+    hostIndicators.error === null;
+  const fresh = positiveFresh && isMixed && cloudFresh;
+  return {
+    indicators,
+    ...attestedPositivePartitions({
+      cloudFresh: isMixed && cloudFresh,
+      cloud: cloudIndicators,
+      hostFresh: positiveFresh,
+      host: hostIndicators.data,
+      hostId: readHostId,
+    }),
+    fresh,
+    positiveFresh,
+    hostId: readHostId,
+  };
+}
+
+/** Positive facts contribute independently from each attested source. */
+function attestedPositivePartitions({
+  cloudFresh,
+  cloud,
+  hostFresh,
+  host,
+  hostId,
+}: {
+  cloudFresh: boolean;
+  cloud: SurfaceNotificationIndicators;
+  hostFresh: boolean;
+  host: SurfaceNotificationIndicators;
+  hostId: string | null;
+}): {
+  cloudPositiveIndicators: SurfaceNotificationIndicators;
+  hostPositiveIndicators: SurfaceNotificationIndicators;
+} {
+  return {
+    cloudPositiveIndicators: cloudFresh
+      ? cloud
+      : EMPTY_INDICATOR_STATE_RESPONSE,
+    hostPositiveIndicators: hostFresh
+      ? scopeIndicatorsToOrigin(host, hostId)
+      : EMPTY_INDICATOR_STATE_RESPONSE,
+  };
 }
 
 function scopeIndicatorsToOrigin(

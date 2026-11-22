@@ -40,6 +40,7 @@ export function useOpenManagedCommandOutput(
           "single",
           "direct_ui",
         ),
+        "user",
       );
     },
     [epicId, openTile],

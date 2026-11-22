@@ -1,3 +1,4 @@
+import type { DesktopSystemWake } from "../../ipc-contracts/host-types";
 import { log } from "../app/logger";
 
 const WAKE_RECOVERY_REFRESH_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
@@ -29,13 +30,17 @@ export type PowerMonitorWakeInstaller = (
  * double-register every power event. `onLeave` is the opposite edge, fired on
  * suspend and on screen lock: the person is leaving the machine, so a live
  * voice session's microphone must close.
+ *
+ * A machine can wake behind its lock screen, so each wake says whether the
+ * screen is still locked: the person is back only at the unlock that follows.
  */
 export function installHostWakeRecovery(
   host: HostWakeRecoveryTarget,
   install: PowerMonitorWakeInstaller,
-  onWake: () => void,
+  onWake: (wake: DesktopSystemWake) => void,
   onLeave: () => void,
 ): void {
+  let screenLocked = false;
   install({
     onSuspend: () => {
       log.info("[desktop] pausing on system suspend");
@@ -43,11 +48,17 @@ export function installHostWakeRecovery(
     },
     onResume: () => {
       log.info("[desktop] resuming after system wake");
-      onWake();
+      onWake({ screenLocked });
       void refreshHostAfterWake(host);
     },
-    onLockScreen: () => onLeave(),
-    onUnlockScreen: () => onWake(),
+    onLockScreen: () => {
+      screenLocked = true;
+      onLeave();
+    },
+    onUnlockScreen: () => {
+      screenLocked = false;
+      onWake({ screenLocked });
+    },
   });
 }
 

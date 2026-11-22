@@ -783,6 +783,7 @@ describe("CommGraphTile projection", () => {
           hostId: HOST_A,
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -846,6 +847,7 @@ describe("CommGraphTile projection", () => {
           hostId: HOST_A,
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -895,6 +897,7 @@ describe("CommGraphTile projection", () => {
           hostId: HOST_A,
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -942,6 +945,7 @@ describe("CommGraphTile projection", () => {
           hostId: HOST_A,
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -983,6 +987,7 @@ describe("CommGraphTile projection", () => {
           hostId: HOST_A,
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     expect(
       useChatTranscriptJumpStore.getState().requestsByChatId[
@@ -1017,6 +1022,7 @@ describe("CommGraphTile projection", () => {
           type: "terminal-agent",
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
   });
@@ -1048,6 +1054,7 @@ describe("CommGraphTile projection", () => {
           type: "terminal-agent",
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
   });
@@ -1200,6 +1207,7 @@ describe("comm-graph agent detail", () => {
           type: "terminal-agent",
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
   });
 

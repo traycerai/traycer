@@ -5,7 +5,9 @@ import {
   isFoundTaskContext,
   type GetTaskContextsResponse,
   type ListTaskLight,
+  type TaskContextResult,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -31,6 +33,8 @@ export interface EpicTaskContextRefetchBatch {
 
 export interface EpicTaskContexts {
   readonly tasksById: ReadonlyMap<string, ListTaskLight>;
+  readonly resolutionsById: ReadonlyMap<string, TaskContextResult>;
+  readonly pendingTaskIds: ReadonlySet<string>;
   /** Refreshes each mounted context batch once, including inside staleTime. */
   readonly refetch: () => Promise<void>;
   /** Individual query batches so shared History scopes can dedupe by key. */
@@ -85,8 +89,8 @@ export interface UseEpicGetTaskContextsOptions {
 
 /**
  * Resolves task ids to their cloud `ListTaskLight` contexts via cap-sized
- * `epic.getTaskContexts` batches. Only `found` rows enter the map; absence and
- * unknown outcomes stay unavailable to this presentation-only caller. Cache identity is
+ * `epic.getTaskContexts` batches. Only `found` rows enter `tasksById`;
+ * `resolutionsById` carries the host's other verdicts. Cache identity is
  * scoped by `userId` because permission-dependent responses must not leak
  * across account switches; the hook stays disabled until a user is known.
  * An older host without the method degrades to an empty map, not an error.
@@ -100,7 +104,24 @@ export function useEpicGetTaskContexts(
   userId: string | null,
   options: UseEpicGetTaskContextsOptions,
 ): EpicTaskContexts {
-  const client = useHostClient();
+  return useEpicGetTaskContextsForClient(
+    useHostClient(),
+    taskIds,
+    userId,
+    options,
+  );
+}
+
+/**
+ * {@link useEpicGetTaskContexts} on `client`'s host: a tab reads through its
+ * own host's client (`useTabHostClient`), not the app's.
+ */
+export function useEpicGetTaskContextsForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  taskIds: readonly string[],
+  userId: string | null,
+  options: UseEpicGetTaskContextsOptions,
+): EpicTaskContexts {
   const requests = useMemo(
     () =>
       chunkTaskIds(taskIds, GET_TASK_CONTEXTS_MAX_IDS).map((chunk) => ({
@@ -124,7 +145,7 @@ export function useEpicGetTaskContexts(
       enabled: options.enabled && userId !== null && taskIds.length > 0,
       staleTime: TASK_CONTEXT_TITLE_STALE_TIME_MS,
     },
-    combine: combineTaskContextResults,
+    combine: (results) => combineTaskContextResults(results, requests),
   });
   return {
     ...combined,
@@ -137,15 +158,27 @@ export function useEpicGetTaskContexts(
 
 function combineTaskContextResults(
   results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
+  requests: ReadonlyArray<{
+    readonly params: { readonly taskIds: readonly string[] };
+  }>,
 ): CombinedTaskContexts {
   const tasksById = new Map<string, ListTaskLight>();
+  const resolutionsById = new Map<string, TaskContextResult>();
+  const pendingTaskIds = new Set<string>();
   const localHomedTaskIds = new Set<string>();
   const batchRefetches = results.map((result) => async () => {
     await result.refetch();
   });
-  for (const result of results) {
-    if (result.data === undefined) continue;
+  for (const [index, result] of results.entries()) {
+    if (result.data === undefined) {
+      if (result.isFetching) {
+        for (const taskId of requests[index]?.params.taskIds ?? [])
+          pendingTaskIds.add(taskId);
+      }
+      continue;
+    }
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
+      resolutionsById.set(taskId, resolution);
       if (isFoundTaskContext(resolution)) {
         const recentAt = result.data.recentAtByTaskId?.[taskId];
         tasksById.set(
@@ -162,6 +195,8 @@ function combineTaskContextResults(
   }
   return {
     tasksById,
+    resolutionsById,
+    pendingTaskIds,
     refetch: async () => {
       await Promise.all(batchRefetches.map((refetch) => refetch()));
     },

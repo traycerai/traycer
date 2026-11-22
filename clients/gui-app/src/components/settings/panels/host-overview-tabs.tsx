@@ -34,9 +34,9 @@ import { cn } from "@/lib/utils";
 /**
  * The tab bar and the tab bodies under the pinned host header.
  *
- * Every tab renders for every host in every state, so the bar never shifts
- * under the reader; each body decides for itself what it can show while the
- * host connects or cannot be reached.
+ * Sandbox hosts add Secrets and Costs after Ports. The other tabs stay
+ * present in every connection state; each body decides what it can show
+ * while the host connects or cannot be reached.
  *
  * A VISITED tab stays mounted, hidden while inactive - the Permissions Rules
  * tab's rule - so a half-typed retention limit survives a look at Updates.
@@ -56,8 +56,13 @@ export function HostOverviewTabs(props: {
   readonly isMobile: boolean;
   readonly badges: HostOverviewTabBadges;
   readonly bodies: HostOverviewTabBodies;
+  readonly sandbox?: boolean;
 }): ReactNode {
   const { tab, isMobile } = props;
+  const tabs = HOST_OVERVIEW_TABS.filter(
+    (value) =>
+      (value !== "secrets" && value !== "costs") || props.sandbox === true,
+  );
   const [visited, setVisited] = useState<ReadonlySet<HostOverviewTab>>(
     () => new Set([tab]),
   );
@@ -87,13 +92,14 @@ export function HostOverviewTabs(props: {
             tab={tab}
             onSelect={props.onSelectTab}
             badges={props.badges}
+            tabs={tabs}
           />
         ) : (
           <TabsList
             variant="line"
             className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start"
           >
-            {HOST_OVERVIEW_TABS.map((value) => (
+            {tabs.map((value) => (
               <TabsTrigger
                 key={value}
                 value={value}
@@ -114,7 +120,7 @@ export function HostOverviewTabs(props: {
         className="md:min-h-0 md:overflow-y-auto"
         data-testid="host-overview-tab-body"
       >
-        {HOST_OVERVIEW_TABS.map((value) => (
+        {tabs.map((value) => (
           <TabsContent
             key={value}
             value={value}
@@ -159,6 +165,7 @@ function HostOverviewTabSelect(props: {
   readonly tab: HostOverviewTab;
   readonly onSelect: HostOverviewSelectTab;
   readonly badges: HostOverviewTabBadges;
+  readonly tabs: readonly HostOverviewTab[];
 }): ReactNode {
   return (
     <Select
@@ -178,7 +185,7 @@ function HostOverviewTabSelect(props: {
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        {HOST_OVERVIEW_TABS.map((value) => (
+        {props.tabs.map((value) => (
           <SelectItem key={value} value={value}>
             {HOST_OVERVIEW_TAB_GROUPS[value].label}
             {props.badges[value]}

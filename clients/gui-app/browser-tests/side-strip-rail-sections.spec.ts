@@ -225,7 +225,7 @@ test("reorders a dragged tile among its own section's tiles and lands it at that
 }) => {
   await openRail(page, RAIL);
   const from = await centreOf(tile(page, "staging"));
-  const farBelow = await centreOf(tile(page, "react"));
+  const last = await centreOf(tile(page, "react"));
   const order = (): Promise<ReadonlyArray<string>> =>
     page.evaluate(
       "window.__sideTabStripProbe.items().map((item) => item.join('+'))",
@@ -233,9 +233,10 @@ test("reorders a dragged tile among its own section's tiles and lands it at that
 
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
-  // Dropped over the last Idle tile, it stays in Needs you: behind the only
-  // other task there, ahead of To review, and not at the end of the strip.
-  await page.mouse.move(farBelow.x, farBelow.y, { steps: 16 });
+  // Dropped past the last Idle tile, on no task, it stays in Needs you: behind
+  // the only other task there, ahead of To review, and not at the end of the
+  // strip.
+  await page.mouse.move(last.x, last.y + 40, { steps: 16 });
   await nextFrames(page, 3);
   await page.mouse.up();
 
@@ -253,4 +254,26 @@ test("reorders a dragged tile among its own section's tiles and lands it at that
       "epic:fixture-launch",
       "epic:fixture-react",
     ]);
+});
+
+test("splits a dragged tile with the tile of another section it is dropped on", async ({
+  page,
+}) => {
+  await openRail(page, RAIL);
+  const from = await centreOf(tile(page, "staging"));
+  const target = await centreOf(tile(page, "react"));
+
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(target.x, target.y, { steps: 16 });
+  await nextFrames(page, 3);
+  await page.mouse.up();
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        "window.__sideTabStripProbe.items().map((item) => item.join('+'))",
+      ),
+    )
+    .toContain("epic:fixture-staging+epic:fixture-react");
 });

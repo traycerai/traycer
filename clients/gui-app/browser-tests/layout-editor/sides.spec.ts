@@ -17,7 +17,12 @@ import {
   violationLog,
   type Rect,
 } from "../support/layout-editor/dom.ts";
-import { moveTo } from "../support/layout-editor/input.ts";
+import {
+  moveInSteps,
+  moveTo,
+  pressAt,
+  releasePointer,
+} from "../support/layout-editor/input.ts";
 import { layoutEditorUse, sharedPage } from "../support/layout-editor/pages.ts";
 import {
   contrastRatio,
@@ -27,7 +32,10 @@ import {
   sampleAmber,
   samplePixelAt,
 } from "../support/layout-editor/pixels.ts";
-import { waitForStableBoxes } from "../support/layout-editor/waits.ts";
+import {
+  waitForStableBox,
+  waitForStableBoxes,
+} from "../support/layout-editor/waits.ts";
 
 // THE SIDE PLACEMENTS' REGRESSION (A11, A12, A13, L-163, D4, 6.x).
 //
@@ -81,6 +89,22 @@ const TITLE_BAND_HEIGHT = 40;
 const WCO_LEADING_INSET_FALLBACK = 82;
 /** `min(env(titlebar-area-x, 82px), 0.75rem)` while the inspector docks left. */
 const LEFT_DOCK_COLUMN_GUTTER = 12;
+/**
+ * `WINDOW_TRAILING_INSET_CLASS` (`title-bar-drag.ts`):
+ * `max(12px, 100vw - env(titlebar-area-x) - env(titlebar-area-width) + 12px)`.
+ * No browser sets the `env()`s, so the fixture sees the 12px floor; the
+ * caption buttons' real width reaches it only under Electron. What the
+ * fixture can decide is that the class is on and wins over the header's own
+ * 10px `pr-2.5` (`inspector-shell.tsx`), which is what a window with no
+ * overlay keeps.
+ */
+const WCO_TRAILING_INSET_FALLBACK = 12;
+const INSPECTOR_HEADER_TRAILING_PADDING = 10;
+/**
+ * `FLOAT_DOCK_TOP_INSET` (`dock-modes.ts`): the floor of a floating
+ * inspector's top edge where no band is drawn.
+ */
+const FLOAT_DOCK_TOP_INSET = 28;
 /**
  * The rail tile and its monogram chip: `SIDE_TAB_TILE_CLASS` (`h-11 w-10`)
  * and `MonogramChip` (`h-[22px] w-[26px]`), in `side-strip-tokens.ts` /
@@ -861,6 +885,72 @@ async function assertDockLeftInset(page: Page): Promise<void> {
   ).toBe(LEFT_DOCK_COLUMN_GUTTER);
 }
 
+/**
+ * The right-docked inspector's header ends under the native window controls
+ * on Windows and Linux: its trailing padding is the controls' inset, and Done
+ * ends inside it. Without an overlay the header keeps its own 10px.
+ */
+async function assertDockRightTrailingInset(
+  page: Page,
+  expected: number,
+): Promise<void> {
+  const read = await page.evaluate<{
+    readonly headerPadding: number;
+    readonly headerRight: number;
+    readonly doneRight: number | null;
+  } | null>(`(() => {
+    const header = document.querySelector("[data-layout-inspector-header]");
+    if (header === null) return null;
+    const done = Array.from(header.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Done",
+    );
+    return {
+      headerPadding: Number.parseFloat(getComputedStyle(header).paddingRight),
+      headerRight: header.getBoundingClientRect().right,
+      doneRight: done === undefined ? null : done.getBoundingClientRect().right,
+    };
+  })()`);
+  expect(read, "no inspector header in the session").not.toBeNull();
+  if (read === null) return;
+  note(
+    `inspector header pads ${String(read.headerPadding)}px at the trailing edge, ends at x=${read.headerRight.toFixed(1)}; Done ends at ${String(read.doneRight)}`,
+  );
+  expect(
+    read.headerPadding,
+    `the right-docked inspector's header pads ${String(read.headerPadding)}px at the trailing edge, expected ${String(expected)}px`,
+  ).toBe(expected);
+  expect(
+    read.doneRight !== null &&
+      read.doneRight <= read.headerRight - expected + 0.5,
+    `Done ends at x=${String(read.doneRight)}, inside the ${String(expected)}px the header reserves before x=${read.headerRight.toFixed(1)}`,
+  ).toBe(true);
+}
+
+/**
+ * A floating inspector dragged to the window's top edge stops at `floor`: the
+ * band's bottom where one is drawn (the native controls paint over its
+ * trailing end), the chrome inset otherwise. The drag picks the header up
+ * left of its controls and keeps its x, clear of both snap bands.
+ */
+async function assertFloatTopFloor(page: Page, floor: number): Promise<void> {
+  const header = await requireRect(page, "[data-layout-inspector-header]");
+  const grab = { x: header.x + 24, y: header.cy };
+  expect(
+    header.y,
+    `the float opens with its header at y=${header.y.toFixed(1)}, above the ${String(floor)}px floor`,
+  ).toBeGreaterThanOrEqual(floor - 0.5);
+  await pressAt(page, grab.x, grab.y);
+  await moveInSteps(page, { x: grab.x, y: 0 });
+  await releasePointer(page);
+  await waitForStableBox(page, "[data-layout-inspector]", 3);
+  const panel = await requireRect(page, "[data-layout-inspector]");
+  note(`float dragged to the top edge rests at ${boxText(panel)}`);
+  expect(
+    Math.abs(panel.y - floor) <= 0.5,
+    `the float dragged to the top edge rests at y=${panel.y.toFixed(1)}, not at the ${String(floor)}px floor`,
+  ).toBe(true);
+}
+
 // --- the frameless window (wco none) -----------------------------------------
 
 test.describe("a frameless window (no window-controls overlay)", () => {
@@ -894,6 +984,13 @@ test.describe("a frameless window (no window-controls overlay)", () => {
     const page = getPage();
     await configureCanvas(page, tabsAt("right", true));
     await assertBesideInspector(page, await assertFlush(page, "right"));
+  });
+
+  test("with no window controls the right-docked header keeps its own trailing padding and a float stops at the chrome inset", async () => {
+    const page = getPage();
+    await assertDockRightTrailingInset(page, INSPECTOR_HEADER_TRAILING_PADDING);
+    await configureCanvas(page, { ...AT_REST_LEFT, dock: "float" });
+    await assertFloatTopFloor(page, FLOAT_DOCK_TOP_INSET);
   });
 
   test("the collapsed rail is 60px wide, its monogram tiles centred 40x44 with drawn 26x22 chips over the meter row", async () => {
@@ -997,6 +1094,16 @@ test.describe("a Windows window", () => {
       band: "shown",
       titleRow: false,
     });
+  });
+
+  test("a right-docked inspector's header pads the window-controls inset, so Done ends before the caption buttons", async () => {
+    await assertDockRightTrailingInset(getPage(), WCO_TRAILING_INSET_FALLBACK);
+  });
+
+  test("a floating inspector dragged to the top edge stops under the title band", async () => {
+    const page = getPage();
+    await configureCanvas(page, { ...AT_REST_LEFT, dock: "float" });
+    await assertFloatTopFloor(page, TITLE_BAND_HEIGHT);
   });
 });
 

@@ -52,7 +52,19 @@ export interface ChatTurnMinimapProps {
    * the rail off the per-token path.
    */
   readonly transcriptWindow: TranscriptWindow | null;
+  /**
+   * Leads each item with its sender's name: a bot's channel and its threads,
+   * where several people post and the preview alone does not say who.
+   */
+  readonly senderFirst: boolean;
   readonly listRef: RefObject<LegendListRef | null>;
+  /**
+   * Whether the timeline is at its end: the owner's mirror of its follow
+   * mode, which the jump-to-latest pill shows from. Read at each refresh, not
+   * captured at render, so a scroll's refresh sees the mode that scroll just
+   * set. The owner calls `inViewRefreshRef` when the mode flips without one.
+   */
+  readonly atEndRef: RefObject<boolean>;
   readonly topOffsetAdjustmentRef: RefObject<number>;
   readonly viewportRef: RefObject<HTMLElement | null>;
   readonly bottomInset: number;
@@ -93,11 +105,13 @@ function hasRouterHistory(
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const { ref } = props;
   const {
+    atEndRef,
     bottomInset,
     inViewRefreshRef,
     listRef,
     rows,
     onSelect,
+    senderFirst,
     shown,
     side,
     topOffsetAdjustmentRef,
@@ -118,8 +132,8 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   // churning with it. The `useMemo` is left in place only to keep the lookup
   // itself off the re-render path; the cache is what makes the result stable.
   const items = useMemo(
-    () => chatTurnMinimapItems({ rows, window: transcriptWindow }),
-    [rows, transcriptWindow],
+    () => chatTurnMinimapItems({ rows, window: transcriptWindow, senderFirst }),
+    [rows, transcriptWindow, senderFirst],
   );
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const coarsePointer = useCoarsePointer();
@@ -160,12 +174,13 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
           rawState.scrollLength - Math.max(0, bottomInset),
         ),
         topOffsetAdjustment: topOffsetAdjustmentRef.current,
+        atEnd: atEndRef.current,
       },
       items,
     );
     if (next !== null)
       setCurrentIndex((current) => (current === next ? current : next));
-  }, [bottomInset, items, listRef, topOffsetAdjustmentRef]);
+  }, [atEndRef, bottomInset, items, listRef, topOffsetAdjustmentRef]);
 
   useEffect(() => {
     inViewRefreshRef.current = refreshCurrent;

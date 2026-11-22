@@ -9,6 +9,11 @@
  * connectable hosts, the notification indicators and the bot's activity (the
  * real protocol schemas do not load in this suite's jsdom).
  */
+import {
+  drawsColouredMascot,
+  expectedTracyGlyph,
+  renderedTracyGlyphs,
+} from "@/components/bots/__tests__/mascot-drawing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -45,6 +50,12 @@ import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-str
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { setMobileApp } from "@/lib/mobile-app";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { AppColumnFrame } from "@/components/layout/app-column-frame";
+import { PHONE_SHELL_STRIP_CHROME } from "@/components/layout/header/app-title-band-kind";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
+import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
+import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
@@ -74,7 +85,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
+import { SIDE_STRIP_RAIL_WIDTH_PX } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -303,6 +314,14 @@ vi.mock("@/components/auth/user-menu", async (importOriginal) => ({
   UserMenu: () => <span data-testid="foot-account" />,
 }));
 
+// Whether this window is the phone shell; the width rule itself runs for real
+// against the `#root` width each case sets.
+const phoneShell = vi.hoisted((): { headerActive: boolean } => ({
+  headerActive: false,
+}));
+vi.mock("@/components/layout/header/use-mobile-header-active", () => ({
+  useMobileHeaderActive: () => phoneShell.headerActive,
+}));
 // The header's global controls each reach a host runtime this harness does not
 // mount; the header's own hamburger, title and bell are what the shell cases read.
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
@@ -366,6 +385,13 @@ const ENVIRONMENTS: typeof scripted.environments = [
   { environmentId: TEAM_ENV, label: "Acme", ownerKind: "organization" },
 ];
 
+/** The entry draws the one-colour Tracy glyph at 16px and no coloured mascot. */
+function expectEntryDrawsTracyGlyph(entry: HTMLElement): void {
+  const [icon] = within(entry).getAllByTestId("tracy-entry-icon");
+  expect(renderedTracyGlyphs(icon)).toEqual([expectedTracyGlyph(16)]);
+  expect(drawsColouredMascot(icon)).toBe(false);
+}
+
 function tracyIsMainBot(): void {
   scripted.list = {
     bots: [
@@ -424,6 +450,7 @@ function resetStores(): void {
     ...useLayoutStore.getState().arrangement,
     tabStripPlacement: "top",
   });
+  phoneShell.headerActive = false;
   tabCommandCoordinator.resetReconciliationForTesting();
   __resetBotListChangedSessionsForTesting();
   scripted.list = undefined;
@@ -560,7 +587,7 @@ describe("the fixed Tracy entry - top strip", () => {
 
     expect(entry.textContent).toContain("Tracy");
     expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
-    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expectEntryDrawsTracyGlyph(entry);
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -1106,22 +1133,24 @@ describe("the fixed Tracy entry - signals", () => {
     },
   );
 
-  describe("the unread count", () => {
-    // The rail tile's chip clips what overhangs it, so the row draws the count.
+  describe("the unread signal", () => {
+    // The entry shows no number: the label is bold while unread, the
+    // collapsed rail (which has no label) shows the unread badge, and the
+    // accessible name still carries the count.
     const PLACEMENTS = [
       {
         placement: "top strip",
-        countTestId: "tracy-entry-unread-count",
+        railed: false,
         mountEntry: () => mountTopStrip("/"),
       },
       {
         placement: "vertical strip",
-        countTestId: "tracy-entry-unread-count",
+        railed: false,
         mountEntry: () => mountSideStrip("/"),
       },
       {
         placement: "collapsed rail",
-        countTestId: "side-tab-rail-count",
+        railed: true,
         mountEntry: () => {
           useSideTabStripStore.setState({ collapsed: true });
           return mountSideStrip("/");
@@ -1141,78 +1170,54 @@ describe("the fixed Tracy entry - signals", () => {
     }
 
     it.each(PLACEMENTS)(
-      "is drawn on the glyph in the $placement, outside the rail tile's chip, and named by the entry",
-      async ({ placement, countTestId, mountEntry }) => {
+      "marks the entry in the $placement without drawing the count, and names it with the count",
+      async ({ railed, mountEntry }) => {
         tracyIndicators({ unreadDone: true, unreadCount: 3 });
         mountEntry();
 
-        const entry = await screen.findByTestId("tab-tracy");
-        const count = within(entry).getByTestId(countTestId);
-        expect(count.textContent).toBe("3");
-        const glyph = within(entry).getByTestId("tracy-entry-icon");
-        if (placement === "collapsed rail") {
-          const chip = within(entry).getByTestId("side-tab-monogram-chip");
-          expect(chip.contains(glyph)).toBe(true);
-          expect(chip.contains(count)).toBe(false);
-          expect(
-            within(chip).queryByTestId("tracy-entry-unread-count"),
-          ).toBeNull();
-        } else {
-          expect(count.parentElement?.contains(glyph)).toBe(true);
-        }
-        expect(entry.getAttribute("aria-label")).toBe("Tracy, 3 unread");
+        const entry = await screen.findByRole("tab", {
+          name: "Tracy, 3 unread",
+        });
         expect(entry.hasAttribute("data-unread")).toBe(true);
-        // The count stands for the rail's unread badge.
-        expect(within(entry).queryByTestId("side-tab-rail-badge")).toBeNull();
-      },
-    );
-
-    it("reads 99+ past ninety-nine", async () => {
-      tracyIndicators({ unreadDone: true, unreadCount: 120 });
-      mountTopStrip("/");
-
-      const entry = await screen.findByTestId("tab-tracy");
-      expect(
-        within(entry).getByTestId("tracy-entry-unread-count").textContent,
-      ).toBe("99+");
-      expect(entry.getAttribute("aria-label")).toBe("Tracy, 99+ unread");
-    });
-
-    it.each(PLACEMENTS)(
-      "is not drawn in the $placement while nothing is unread",
-      async ({ countTestId, mountEntry }) => {
-        tracyIndicators({ unreadCount: 0 });
-        mountEntry();
-
-        const entry = await screen.findByTestId("tab-tracy");
-        expect(within(entry).queryByTestId(countTestId)).toBeNull();
-        expect(entry.getAttribute("aria-label")).toBe("Tracy");
-        expect(entry.hasAttribute("data-unread")).toBe(false);
-      },
-    );
-
-    it.each(PLACEMENTS)(
-      "is not drawn in the $placement for a host that does not count, which keeps the bold name or the rail's unread badge",
-      async ({ placement, countTestId, mountEntry }) => {
-        tracyIndicators({ unreadDone: true, unreadCount: null });
-        mountEntry();
-
-        const entry = await screen.findByTestId("tab-tracy");
-        expect(within(entry).queryByTestId(countTestId)).toBeNull();
-        expect(entry.getAttribute("aria-label")).toBe("Tracy");
-        expect(entry.hasAttribute("data-unread")).toBe(true);
-        if (placement === "top strip") {
-          expect(within(entry).getByText("Tracy").className).toContain(
-            "font-semibold",
-          );
-        }
-        if (placement === "collapsed rail") {
+        expect(within(entry).queryByText("3")).toBeNull();
+        if (railed) {
           expect(
             within(entry)
               .getByTestId("side-tab-rail-badge")
               .getAttribute("data-kind"),
           ).toBe("unread");
+        } else {
+          // The top strip bolds the text; the vertical row bolds its title wrapper.
+          expect(
+            within(entry).getByText("Tracy").closest(".font-semibold"),
+          ).not.toBeNull();
         }
+      },
+    );
+
+    it.each(PLACEMENTS)(
+      "leaves the $placement unmarked, with no badge, while nothing is unread",
+      async ({ mountEntry }) => {
+        tracyIndicators({ unreadCount: 0 });
+        mountEntry();
+
+        const entry = await screen.findByRole("tab", { name: "Tracy" });
+        expect(entry.hasAttribute("data-unread")).toBe(false);
+        expect(within(entry).queryByTestId("side-tab-rail-badge")).toBeNull();
+      },
+    );
+
+    it.each(PLACEMENTS)(
+      "marks the $placement for a host that does not count, naming it without a count",
+      async ({ railed, mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: null });
+        mountEntry();
+
+        const entry = await screen.findByRole("tab", { name: "Tracy" });
+        expect(entry.hasAttribute("data-unread")).toBe(true);
+        expect(
+          within(entry).queryByTestId("side-tab-rail-badge") !== null,
+        ).toBe(railed);
       },
     );
   });
@@ -1275,7 +1280,7 @@ describe("the fixed Tracy entry - a default channel with any title", () => {
     expect(entry.textContent).toContain("Tracy");
     expect(entry.textContent).not.toContain("Release Notes");
     expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
-    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expectEntryDrawsTracyGlyph(entry);
 
     await userEvent.hover(entry);
     const body = await screen.findByTestId("tracy-entry-hover-body");
@@ -1359,7 +1364,7 @@ describe("the fixed Tracy entry - vertical strip", () => {
     expect(
       within(entry).getAllByTestId("tracy-entry-icon").length,
     ).toBeGreaterThan(0);
-    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expectEntryDrawsTracyGlyph(entry);
     expect(entry.getAttribute("aria-label")).toBe("Tracy");
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -1378,7 +1383,7 @@ describe("the fixed Tracy entry - vertical strip", () => {
     });
   });
 
-  it("joins the strip's edge to its surface's canvas while selected, as a task row does", async () => {
+  it("joins the strip's edge to its channel column in the sidebar's fill while selected, as a task row joins its panel", async () => {
     openEpicTabs(["Alpha"]);
     mountSideStrip("/epics/e-alpha/e-alpha");
 
@@ -1393,107 +1398,13 @@ describe("the fixed Tracy entry - vertical strip", () => {
     });
 
     expect(entry.getAttribute("data-sheet-joined")).toBe("left");
-    expect(entry.getAttribute("data-join-pane")).toBe("canvas");
+    expect(entry.getAttribute("data-join-pane")).toBe("panel");
     expect(alpha.hasAttribute("data-sheet-joined")).toBe(false);
     expect(
       document
         .querySelector('[data-sheet-join-bridge="left"]')
         ?.getAttribute("data-join-pane"),
-    ).toBe("canvas");
-  });
-
-  it("draws no Talk under the entry or in the collapsed rail when voice is available", async () => {
-    const initialVoice = useVoiceSessionStore.getInitialState();
-    useVoiceSessionStore.setState({
-      availability: "live",
-      driver: {
-        start: () => undefined,
-        end: () => undefined,
-        setMuted: () => undefined,
-      },
-    });
-    try {
-      openEpicTabs(["Alpha"]);
-      mountSideStrip("/epics/e-alpha/e-alpha");
-
-      await screen.findByRole("tab", { name: "Tracy" });
-      expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-
-      act(() => {
-        useSideTabStripStore.setState({ collapsed: true });
-      });
-      await waitFor(() =>
-        expect(
-          screen.getByTestId("side-tab-strip").getAttribute("data-collapsed"),
-        ).toBe("true"),
-      );
-      expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    } finally {
-      useVoiceSessionStore.setState(initialVoice, true);
-    }
-  });
-});
-
-describe("Talk without the fixed Tracy entry", () => {
-  const initialVoice = useVoiceSessionStore.getInitialState();
-
-  beforeEach(() => {
-    // Show Tracy off: no fixed entry, the surface stays reachable as a tab.
-    useSettingsStore.setState({ showTracy: false });
-    useVoiceSessionStore.setState({
-      availability: "live",
-      driver: {
-        start: () => undefined,
-        end: () => undefined,
-        setMuted: () => undefined,
-      },
-    });
-  });
-
-  afterEach(() => {
-    useVoiceSessionStore.setState(initialVoice, true);
-  });
-
-  it("draws no Talk on the header strip", async () => {
-    openEpicTabs(["Alpha"]);
-    mountTopStrip("/epics/e-alpha/e-alpha");
-
-    await screen.findByRole("tab", { name: "Alpha" });
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
-  });
-
-  it("draws no Talk on the empty landing route, where the strip draws no tabs, idle or through a live session", async () => {
-    // Show Tracy off, Home off, no tabs, route "/": the strip's empty landing.
-    setHomeTabEnabled(false);
-    const mounted = mountTopStrip("/");
-
-    await waitFor(() => expect(mounted.pathname()).toBe("/"));
-    expect(screen.queryByTestId("tab-strip")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-
-    act(() => {
-      useVoiceSessionStore.setState({ phase: "live" });
-    });
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-  });
-
-  it("draws no Talk in the vertical strip's top block, expanded or collapsed", async () => {
-    openEpicTabs(["Alpha"]);
-    mountSideStrip("/epics/e-alpha/e-alpha");
-
-    const strip = await screen.findByTestId("side-tab-strip");
-    expect(strip.getAttribute("data-collapsed")).toBe("false");
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
-
-    act(() => {
-      useSideTabStripStore.setState({ collapsed: true });
-    });
-    await waitFor(() =>
-      expect(strip.getAttribute("data-collapsed")).toBe("true"),
-    );
-    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
+    ).toBe("panel");
   });
 });
 
@@ -1525,12 +1436,115 @@ describe("the Show Tracy setting", () => {
   });
 });
 
-describe("the strip's width and collapse", () => {
+/** What the app shell draws from the form: the strip beside the header, or neither. */
+function PhoneShellHarness(): ReactNode {
+  const form = useMobileStripForm();
+  const placement = useTabStripPlacement();
+  const chrome =
+    form === null
+      ? ({ placement: "top", titleBand: "header" } as const)
+      : PHONE_SHELL_STRIP_CHROME;
+  return (
+    <AppColumnFrame
+      {...chrome}
+      columnRef={() => undefined}
+      header={<MobileAppHeader />}
+      strip={
+        placement === "left" ? (
+          <SideTabStrip edge="left" ownsTitleBar={false} />
+        ) : null
+      }
+      banners={null}
+      surface={null}
+      mainTail={null}
+      tail={null}
+    />
+  );
+}
+
+/** Where each form's width lands on the phones and tablets the rule names. */
+const RAIL_WIDTH_PX = 750;
+const EXPANDED_WIDTH_PX = 1210;
+const DRAWER_WIDTH_PX = 400;
+
+function setRootWidth(contentWidthPx: number): void {
+  document.getElementById("root")?.remove();
+  const root = document.createElement("div");
+  root.id = "root";
+  root.getBoundingClientRect = () => new DOMRect(0, 0, contentWidthPx, 402);
+  document.body.append(root);
+  phoneShell.headerActive = true;
+}
+
+function PhoneShell(): ReactNode {
+  return (
+    <MobileStripFormScope>
+      <PhoneShellHarness />
+    </MobileStripFormScope>
+  );
+}
+
+function mountPhoneShell(contentWidthPx: number): void {
+  setRootWidth(contentWidthPx);
+  mount("/", <PhoneShell />);
+}
+
+describe("the phone shell's strip", () => {
+  beforeEach(tracyIsMainBot);
   afterEach(() => {
+    document.getElementById("root")?.remove();
     setMobileApp(false);
   });
 
-  it("keeps the stored width and the handle", async () => {
+  it("draws the rail beside the header over a stored expanded choice, with Tracy after Home and no hamburger or bell", async () => {
+    mountPhoneShell(RAIL_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-collapsed")).toBe("true");
+    expect(strip.style.width).toBe(`${SIDE_STRIP_RAIL_WIDTH_PX}px`);
+    const home = await screen.findByTestId("tab-home");
+    const tracy = await screen.findByTestId("tab-tracy");
+    expect(
+      home.compareDocumentPosition(tracy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(screen.queryByTestId("mobile-nav-trigger")).toBeNull();
+    expect(screen.queryByTestId("mobile-header-bell")).toBeNull();
+    expect(screen.getByTestId("mobile-header-title")).not.toBeNull();
+    expect(strip.nextElementSibling?.contains(screen.getByRole("banner"))).toBe(
+      true,
+    );
+  });
+
+  it("draws no strip in the drawer form, and keeps the hamburger and the bell", async () => {
+    mountPhoneShell(DRAWER_WIDTH_PX);
+
+    expect(await screen.findByTestId("mobile-nav-trigger")).not.toBeNull();
+    expect(screen.queryByTestId("side-tab-strip")).toBeNull();
+    expect(screen.getByTestId("mobile-header-bell")).not.toBeNull();
+  });
+
+  it("takes the strip's side from the form, over a stored pick of the right edge", async () => {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      tabStripPlacement: "right",
+    });
+    mountPhoneShell(RAIL_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-edge")).toBe("left");
+  });
+
+  it("draws the expanded form at the default width with no resize handle, over a wider stored width", async () => {
+    useSideTabStripStore.setState({ widthPx: 400 });
+    mountPhoneShell(EXPANDED_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-collapsed")).toBe("false");
+    expect(strip.style.width).toBe("240px");
+    expect(screen.queryByTestId("side-tab-strip-resize-handle")).toBeNull();
+  });
+
+  it("keeps the stored width and the handle on desktop, where no form applies", async () => {
     useSideTabStripStore.setState({ widthPx: 400 });
     mountSideStrip("/");
 
@@ -1539,29 +1553,55 @@ describe("the strip's width and collapse", () => {
     expect(screen.getByTestId("side-tab-strip-resize-handle")).not.toBeNull();
   });
 
-  it("takes the collapse chord in the installed app", async () => {
-    setMobileApp(true);
-    const router = buildRouter(
-      "/",
-      <SideTabStrip edge="left" ownsTitleBar={false} />,
-    );
-    render(
-      <KeybindingProvider router={router}>
-        <RouterProvider router={router} />
-      </KeybindingProvider>,
-    );
-    await screen.findByTestId("side-tab-strip");
+  it("offers the collapse toggle only where the expanded strip fits, so a stored collapse cannot be flipped at 750", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    mountPhoneShell(RAIL_WIDTH_PX);
 
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        code: "KeyS",
-        key: "S",
-        shiftKey: true,
-        altKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    await screen.findByTestId("side-tab-strip");
+    expect(screen.queryByTestId("side-tab-strip-collapse")).toBeNull();
+    expect(useSideTabStripStore.getState().collapsed).toBe(true);
+
+    cleanup();
+    mountPhoneShell(EXPANDED_WIDTH_PX);
+
+    fireEvent.click(await screen.findByTestId("side-tab-strip-collapse"));
+    expect(useSideTabStripStore.getState().collapsed).toBe(false);
+  });
+
+  it("takes the collapse chord in the installed app at 1210, and has no handler for it at 750", async () => {
+    setMobileApp(true);
+    const pressCollapseChord = (): void => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyS",
+          key: "S",
+          shiftKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+    const mountWithKeybindings = async (
+      contentWidthPx: number,
+    ): Promise<void> => {
+      setRootWidth(contentWidthPx);
+      const router = buildRouter("/", <PhoneShell />);
+      render(
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>,
+      );
+      await screen.findByTestId("side-tab-strip");
+    };
+
+    await mountWithKeybindings(RAIL_WIDTH_PX);
+    pressCollapseChord();
+    expect(useSideTabStripStore.getState().collapsed).toBe(false);
+
+    cleanup();
+    await mountWithKeybindings(EXPANDED_WIDTH_PX);
+    pressCollapseChord();
     expect(useSideTabStripStore.getState().collapsed).toBe(true);
   });
 });

@@ -1,10 +1,11 @@
 /**
- * The bridge between the host's reads and every standalone name: the real
+ * The bridge between the app's reads and every standalone name: the real
  * bridge, the real queries and the real consumers, with only the host's
- * transport, its negotiated methods and the serving-host choice faked.
+ * transport, authn's answers, the host's negotiated methods and the
+ * serving-host choice faked. The environment list is the app's own read from
+ * authn on the person's sign-in; the bots are the host's.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
@@ -19,7 +20,7 @@ import type {
 } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
-import type { HostNotificationsCloudFeedRowV16 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV17 } from "@traycer/protocol/host/notifications/contracts";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -43,9 +44,15 @@ import {
   displayCloudSnapshotArrivals,
   resetNotificationFeedDisplayReceiptsForTests,
 } from "@/lib/notifications/notification-display";
-import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 const host = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
@@ -61,6 +68,10 @@ const host = vi.hoisted(() => ({
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => host.client,
 }));
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
@@ -193,7 +204,7 @@ const NEEDS_HOST: BotOnboardingSetup = {
   arrival: null,
 };
 
-/** The host's answers; a test swaps one to change what the next read sees. */
+/** The answers; a test swaps one to change what the next read sees. */
 interface HostAnswers {
   environments: () =>
     | EnvironmentListResponseV11
@@ -202,8 +213,15 @@ interface HostAnswers {
 }
 
 function mountHost(answers: HostAnswers): (children: ReactNode) => ReactNode {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.list": () => answers.environments(),
+  });
+  harness.queryClient.setDefaultOptions({
+    queries: {
+      queryKeyHashFn: hashAppQueryKey,
+      retry: false,
+      gcTime: Infinity,
+    },
   });
   let requestCounter = 0;
   const spine = new HostClient<HostRpcRegistry>({
@@ -218,7 +236,6 @@ function mountHost(answers: HostAnswers): (children: ReactNode) => ReactNode {
         return `req-${String(requestCounter)}`;
       },
       handlers: {
-        "environment.list": () => answers.environments(),
         "bot.list": () => answers.bots(),
         "bot.onboarding.read": () =>
           onboardingWith({ ...NEEDS_HOST, botId: host.setupBotId }),
@@ -230,10 +247,14 @@ function mountHost(answers: HostAnswers): (children: ReactNode) => ReactNode {
   );
   host.client = spine.createRequester(mockLocalHostEntry);
   return (children) => (
-    <QueryClientProvider client={queryClient}>
-      <StandaloneBotsBridge />
-      {children}
-    </QueryClientProvider>
+    <harness.Wrapper>
+      <ResolvedThemeContext.Provider
+        value={{ resolvedTheme: "dark", themePreset: "neutral" }}
+      >
+        <StandaloneBotsBridge />
+        {children}
+      </ResolvedThemeContext.Provider>
+    </harness.Wrapper>
   );
 }
 
@@ -241,6 +262,7 @@ function mountHost(answers: HostAnswers): (children: ReactNode) => ReactNode {
 function pickerOn(botId: string): ReactNode {
   return (
     <BotChannelTitle
+      level2="menu"
       title="Tracy"
       activeBotId={botId}
       hostId="host-1"
@@ -253,7 +275,7 @@ function titleText(): string {
   return screen.getByTestId("bot-tab-title").textContent;
 }
 
-function verdictArrival(botId: string): HostNotificationsCloudFeedRowV16 {
+function verdictArrival(botId: string): HostNotificationsCloudFeedRowV17 {
   return {
     entryId: "verdict-1",
     originHostId: "host-1",
@@ -303,6 +325,7 @@ function nativeTarget() {
     ),
     playChime: vi.fn(),
     onToastClick: vi.fn(),
+    notifies: () => true,
   };
 }
 
@@ -314,7 +337,6 @@ function signIn(userId: string): void {
 }
 
 beforeEach(() => {
-  setPhoneLayoutOnly(true);
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   resetNotificationFeedDisplayReceiptsForTests();
   host.support = true;
@@ -328,7 +350,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  setPhoneLayoutOnly(false);
+  resetTeamPageHarness();
   vi.restoreAllMocks();
   toast.dismiss();
   __resetBotListChangedSessionsForTesting();
@@ -449,6 +471,7 @@ describe("<StandaloneBotsBridge /> and a change to the bots elsewhere", () => {
     await waitFor(() => {
       expect(useStandaloneBotsStore.getState().settled).toBe(true);
     });
+    expect(useStandaloneBotsStore.getState().botsListed).toBe(true);
     expect(titleText()).toBe("Tracy");
 
     answers.bots = BOTH_BOTS;
@@ -538,6 +561,7 @@ describe("<StandaloneBotsBridge /> and a main bot still to be set up", () => {
         }}
         client={host.client}
         hostId={mockLocalHostEntry.hostId}
+        level2="menu"
         threadsView={THREADS_CLOSED}
       />
     );
@@ -649,6 +673,7 @@ describe("a bot's notification before the directory has answered", () => {
     });
 
     expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+    expect(useStandaloneBotsStore.getState().botsListed).toBe(false);
   });
 
   it("shows the old account nothing once it has left, whatever the lists do after", async () => {
@@ -817,7 +842,7 @@ describe("a bot's notification while a known host cannot take a read", () => {
     };
   }
 
-  function laterArrival(): HostNotificationsCloudFeedRowV16 {
+  function laterArrival(): HostNotificationsCloudFeedRowV17 {
     return {
       ...verdictArrival(TEAM_MAIN_BOT_ID),
       entryId: "verdict-2",

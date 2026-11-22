@@ -1,6 +1,10 @@
 import type { Element, Root, Text } from "hast";
 import { visit } from "unist-util-visit";
-import { TRAYCER_AGENT_TAG, TRAYCER_MENTION_TAG } from "./const";
+import {
+  TRAYCER_AGENT_TAG,
+  TRAYCER_MENTION_TAG,
+  TRAYCER_ARTIFACT_PATH_TAG,
+} from "./const";
 
 const UUID_REFERENCE_TOKEN_PATTERN =
   /(?<![0-9a-f-])[0-9a-f][0-9a-f-]{7,35}(?![0-9a-f-])/gi;
@@ -16,6 +20,7 @@ export function rehypeTraycerAgentReferences() {
         "tagName" in parent &&
         (parent.tagName === "code" ||
           parent.tagName === "a" ||
+          parent.tagName === TRAYCER_ARTIFACT_PATH_TAG ||
           parent.tagName === TRAYCER_AGENT_TAG ||
           // A mention's text is a member's id, not an agent's.
           parent.tagName === TRAYCER_MENTION_TAG)

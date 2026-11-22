@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useCallback,
   useEffect,
@@ -289,6 +290,7 @@ export function GitDiffPanelBodyLive(
   // against a candidate again. This automatic choice stays unpinned so late
   // task records can still correct the host after recovery.
   const retryUnavailableRoots = useCallback(() => {
+    if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
     const cleared = unavailableGitRootKeys.reset();
     void queryClient.invalidateQueries({
       predicate: (query) =>
@@ -313,6 +315,7 @@ export function GitDiffPanelBodyLive(
   }, [
     gitRows,
     ignoreWhitespace,
+    pin.resolvedHostId,
     props.epicId,
     queryClient,
     setSelectedRepo,
@@ -336,8 +339,9 @@ export function GitDiffPanelBodyLive(
   // is in flight, which is only true if the caller can await it.
   const { refetch: refetchBindings } = bindingsQuery;
   const retryBindings = useCallback(async (): Promise<void> => {
+    if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
     await refetchBindings();
-  }, [refetchBindings]);
+  }, [pin.resolvedHostId, refetchBindings]);
 
   // Returning the surface to following by clearing the pin - the recovery the
   // panel can perform on its own, rather than waiting on the authority to
@@ -438,7 +442,7 @@ function renderGitDiffPanelBody(input: {
   // render only inside `GitDiffPanelLoaded`. So each of the states below -
   // reached BY choosing a host - removed the one control that could choose a
   // different one. Pinning to a host that could not answer produced "No git
-  // workspaces available" with no picker, no auto-follow (the pin is deposed
+  // folders available" with no picker, no auto-follow (the pin is deposed
   // only on a lease death that needs a refusal streak nothing here re-dials to
   // produce) and no refetch (host queries disable every automatic recovery
   // route), so the panel stayed there across reloads: the pin is persisted.
@@ -532,7 +536,7 @@ interface GitDiffPanelDegradedProps {
  * loaded header renders do not exist here - there is no selected root, so no
  * change counts, no submodule tree and no watcher status to qualify. The
  * switcher already models exactly this: `selected: null` renders "Select
- * workspace", and an empty `roots` renders "No workspaces found." in its list.
+ * folder", and an empty `roots` renders "No folders found." in its list.
  * What survives is the part that matters - the host section, and any rows the
  * host DID return, so a pick can move the panel out of this state.
  *
@@ -559,6 +563,7 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
 
   const handleSelectRoot = useCallback(
     (row: WorktreeBindingSelectorRowV12) => {
+      if (showHostUpdateNeededForGesture(row.hostId)) return;
       onLatchHost();
       setSelectedRepo(epicId, {
         hostId: row.hostId,
@@ -784,6 +789,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
 
   const handleSelectRoot = useCallback(
     (row: WorktreeBindingSelectorRowV12) => {
+      if (showHostUpdateNeededForGesture(row.hostId)) return;
       onLatchHost();
       setSelectedRepo(epicId, {
         hostId: row.hostId,

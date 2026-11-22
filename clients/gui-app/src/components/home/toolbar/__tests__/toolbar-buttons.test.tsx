@@ -75,9 +75,7 @@ describe("composer toolbar chips (L-88)", () => {
   it("draws the attach button flat by default: no border, no fill", () => {
     render(<ComposerAttachImageTrigger />);
 
-    const classes = classesOf(
-      screen.getByRole("button", { name: "Attach image" }),
-    );
+    const classes = classesOf(screen.getByRole("button", { name: "Attach" }));
     expect(classes).not.toContain("border");
     expect(classes).not.toContain("border-border");
     expect(classes).not.toContain("bg-background");
@@ -92,9 +90,7 @@ describe("composer toolbar chips (L-88)", () => {
     });
     render(<ComposerAttachImageTrigger />);
 
-    const classes = classesOf(
-      screen.getByRole("button", { name: "Attach image" }),
-    );
+    const classes = classesOf(screen.getByRole("button", { name: "Attach" }));
     expect(classes).toContain("border");
     expect(classes).toContain("border-border");
     expect(classes).toContain("bg-background");
@@ -107,7 +103,7 @@ describe("composer toolbar chips (L-88)", () => {
   it("gives the labelled chip every state the square has", () => {
     render(<ComposerAttachImageTrigger />);
     const squareStates = classesOf(
-      screen.getByRole("button", { name: "Attach image" }),
+      screen.getByRole("button", { name: "Attach" }),
     ).filter((candidate) => candidate.includes(":"));
     cleanup();
 

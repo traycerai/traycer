@@ -3,6 +3,7 @@ import type { AgentSummary, ListAgentsResponse } from "@traycer/protocol/host";
 import {
   agentListUpgradeV100ToV101,
   agentListUpgradeV101ToV102,
+  agentListUpgradeV102ToV103,
   agentListUpgradeV91ToV92,
   agentListUpgradeV92ToV100,
 } from "@traycer/protocol/host/agent/contracts";
@@ -41,8 +42,9 @@ function agent(
     // entry, which keeps every expectation below that predates the flag intact.
     archived: null,
     // The `@10.1` run tuple. `null` is "this answer cannot say", which is what
-    // a host that predates the tuple is upgraded to, so a row built without an
-    // opinion renders no token and no legend line.
+    // a host that predates the tuple is upgraded to, so a full row built
+    // without an opinion prints both values as unobservable and shows the
+    // tuple legend.
     profile: null,
     permissionMode: null,
     // The `@10.2` reach fields. `null` / `unknown` are the row's own "this
@@ -306,10 +308,12 @@ describe("formatAgentListResponse categorization", () => {
     // is what hands the listing to the formatter, and it fills `null`.
     expect(Object.hasOwn(parsed.agents[1], "archived")).toBe(false);
     const output = formatAgentListResponse(
-      agentListUpgradeV101ToV102.upgradeResponse(
-        agentListUpgradeV100ToV101.upgradeResponse(
-          agentListUpgradeV92ToV100.upgradeResponse(
-            agentListUpgradeV91ToV92.upgradeResponse(parsed),
+      agentListUpgradeV102ToV103.upgradeResponse(
+        agentListUpgradeV101ToV102.upgradeResponse(
+          agentListUpgradeV100ToV101.upgradeResponse(
+            agentListUpgradeV92ToV100.upgradeResponse(
+              agentListUpgradeV91ToV92.upgradeResponse(parsed),
+            ),
           ),
         ),
       ),
@@ -488,7 +492,7 @@ describe("formatAgentListResponse categorization", () => {
     expect(output).not.toContain("You:");
   });
 
-  it("renders model/effort/fast on a GUI row after the surface/harness token", () => {
+  it("renders model, effort and tier without a redundant fast token on a GUI row", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const configured = agent({
       id: "done",
@@ -497,6 +501,7 @@ describe("formatAgentListResponse categorization", () => {
         model: { kind: "concrete", slug: "gpt-5.6-sol" },
         reasoningEffort: "high",
         fastMode: true,
+        serviceTier: "priority",
       },
     });
     const output = formatAgentListResponse(
@@ -504,8 +509,9 @@ describe("formatAgentListResponse categorization", () => {
     );
 
     expect(output).toContain(
-      "done gui/claude model: gpt-5.6-sol effort: high fast",
+      "done gui/claude model: gpt-5.6-sol effort: high serviceTier: priority",
     );
+    expect(agentLine(output, "done gui/claude")).not.toContain(" fast");
   });
 
   it("omits null effort and disabled fast tokens", () => {
@@ -515,6 +521,7 @@ describe("formatAgentListResponse categorization", () => {
         model: { kind: "concrete", slug: "gpt-5.6-sol" },
         reasoningEffort: null,
         fastMode: false,
+        serviceTier: null,
       },
     });
     const output = formatAgentListResponse(response([configured], "done"));
@@ -534,6 +541,7 @@ describe("formatAgentListResponse categorization", () => {
         model: { kind: "provider-default" },
         reasoningEffort: null,
         fastMode: null,
+        serviceTier: null,
       },
     });
     const output = formatAgentListResponse(response([configured], "term"));
@@ -989,6 +997,7 @@ describe("formatAgentListPage", () => {
           model: { kind: "concrete", slug: "gpt-5.6-sol" },
           reasoningEffort: "high",
           fastMode: true,
+          serviceTier: null,
         },
       }),
       "connectable",
@@ -1085,6 +1094,7 @@ describe("formatAgentListPage", () => {
               model: { kind: "concrete", slug: "gpt-5.6-sol" },
               reasoningEffort: null,
               fastMode: null,
+              serviceTier: null,
             },
           }
         : {},
@@ -1275,6 +1285,7 @@ describe("formatAgentListPage", () => {
               model: { kind: "concrete", slug: "gpt-5.6-sol" },
               reasoningEffort: "high",
               fastMode: true,
+              serviceTier: null,
             },
           }),
           "offline",
@@ -1340,7 +1351,7 @@ describe("formatAgentListPage", () => {
     }
     expect(collected).toEqual(expected);
   });
-  it("keeps the bytes a listing with unreachable rows has always had when nothing is cut", () => {
+  it("keeps a matching full listing with unreachable rows uncut", () => {
     // `a` and `b` name each other as parent, so no root reaches either and
     // neither is printed. Before pages existed the formatter still printed
     // their section heading and lit the legend from every agent in the
@@ -1363,7 +1374,7 @@ describe("formatAgentListPage", () => {
     const expected = [
       "Agents in epic (relative to you):",
       "You:",
-      "me [self] gui/claude",
+      "me [self] gui/claude profile: unobservable mode: unobservable",
       "",
       "Other agents (user-triggered):",
       "",
@@ -1378,6 +1389,7 @@ describe("formatAgentListPage", () => {
       "-: no available action",
       "dir: <path>: the working directory the agent runs in",
       "worktree: <path>: the agent runs in a dedicated git worktree",
+      "profile: <id> / mode: <word>: the provider profile (ambient is the provider's own login) and permission mode the agent's future turns use, in the form traycer_configure_agent takes back. unobservable means the answering host cannot report that value",
     ].join("\n");
 
     const unpaged = formatAgentListResponse(listing);
@@ -1485,12 +1497,31 @@ describe("formatAgentSelf", () => {
           model: { kind: "concrete", slug: "gpt-5.6-sol" },
           reasoningEffort: "high",
           fastMode: true,
+          serviceTier: null,
         },
       }),
     );
     expect(output).toContain("model: gpt-5.6-sol");
     expect(output).toContain("effort: high");
     expect(output).toContain("fast: yes");
+  });
+
+  it("reports a selected tier without a redundant GUI fast line", () => {
+    const output = formatAgentSelf(
+      agent({
+        id: "self",
+        isSelf: true,
+        runConfig: {
+          model: { kind: "concrete", slug: "gpt-6.1-sol" },
+          reasoningEffort: "high",
+          fastMode: true,
+          serviceTier: "priority",
+        },
+      }),
+    );
+
+    expect(output).toContain("serviceTier: priority");
+    expect(output).not.toContain("fast:");
   });
 
   it("omits null effort and reports disabled GUI fast mode as no", () => {
@@ -1501,6 +1532,7 @@ describe("formatAgentSelf", () => {
           model: { kind: "concrete", slug: "gpt-5.6-sol" },
           reasoningEffort: null,
           fastMode: false,
+          serviceTier: null,
         },
       }),
     );
@@ -1518,6 +1550,7 @@ describe("formatAgentSelf", () => {
           model: { kind: "provider-default" },
           reasoningEffort: null,
           fastMode: null,
+          serviceTier: null,
         },
       }),
     );
@@ -1550,6 +1583,7 @@ describe("profile and permission mode tokens", () => {
         model: { kind: "concrete", slug: "gpt-5.6-sol" },
         reasoningEffort: "high",
         fastMode: true,
+        serviceTier: null,
       },
       profile: "work",
       permissionMode: "supervised",
@@ -1595,17 +1629,11 @@ describe("profile and permission mode tokens", () => {
     expect(output).toContain("permission mode: auto_accept_edits");
   });
 
-  it("reads an absent key, null, and malformed values as absent: no token, no legend line", () => {
+  it("uses unobservable for absent and malformed values", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const rows = [
       caller,
       agent({ id: "absent", parentId: "caller" }),
-      agent({
-        id: "nulls",
-        parentId: "caller",
-        profile: null,
-        permissionMode: null,
-      }),
       withWireValue(
         agent({ id: "oddmode", parentId: "caller" }),
         "permissionMode",
@@ -1627,22 +1655,61 @@ describe("profile and permission mode tokens", () => {
 
     expect(output).not.toContain("yolo");
     expect(output).not.toContain("bad profile");
-    expect(output).not.toContain(LEGEND_LINE);
-    for (const line of output.split("\n")) {
-      expect(line).not.toMatch(/ profile: /);
-      expect(line).not.toMatch(/ mode: /);
-    }
+    expect(output).toContain(LEGEND_LINE);
+    expect(lineWith(output, "oddmode gui/")).toContain(
+      "profile: unobservable mode: unobservable",
+    );
+    expect(lineWith(output, "oddprofile gui/")).toContain(
+      "profile: unobservable mode: unobservable",
+    );
+    expect(lineWith(output, "emptyprofile gui/")).toContain(
+      "profile: unobservable mode: unobservable",
+    );
     const malformedSelf = withWireValue(
       agent({ id: "self", isSelf: true }),
       "permissionMode",
       "yolo",
     );
     const self = formatAgentSelf(malformedSelf);
-    expect(self).not.toContain("profile:");
-    expect(self).not.toContain("permission mode:");
+    expect(self).not.toContain("yolo");
+    expect(self).toContain("profile: unobservable");
+    expect(self).toContain("permission mode: unobservable");
   });
 
-  it("renders only the valid half when the other is malformed", () => {
+  it("renders null run-tuple fields as unobservable on full rows and get-self", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const row = agent({
+      id: "unobservable",
+      parentId: "caller",
+      profile: null,
+      permissionMode: null,
+    });
+    const halfKnown = agent({
+      id: "half-known",
+      parentId: "caller",
+      profile: "work",
+      permissionMode: null,
+    });
+
+    const output = formatAgentListResponse(
+      response([caller, row, halfKnown], "caller"),
+    );
+
+    expect(lineWith(output, "unobservable gui/")).toContain(
+      "profile: unobservable mode: unobservable",
+    );
+    expect(lineWith(output, "half-known gui/")).toContain(
+      "profile: work mode: unobservable",
+    );
+    expect(output).toContain(LEGEND_LINE);
+    expect(output).toContain(
+      "unobservable means the answering host cannot report that value",
+    );
+    expect(formatAgentSelf(row)).toContain("profile: unobservable");
+    expect(formatAgentSelf(row)).toContain("permission mode: unobservable");
+  });
+
+  it("renders the valid profile with an unobservable malformed mode", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const row = withWireValue(
       agent({ id: "half", parentId: "caller", profile: "work" }),
@@ -1653,7 +1720,7 @@ describe("profile and permission mode tokens", () => {
     const output = formatAgentListResponse(response([caller, row], "caller"));
 
     expect(lineWith(output, "half gui/")).toBe(
-      "half gui/claude profile: work R/S activity: idle",
+      "half gui/claude profile: work mode: unobservable R/S activity: idle",
     );
     expect(output).not.toContain("yolo");
   });

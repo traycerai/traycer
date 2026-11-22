@@ -41,7 +41,12 @@
     },
     "test": {
       "cache": true,
-      "inputs": ["default", "^production", "sharedGlobals"]
+      "inputs": [
+        "default",
+        "^production",
+        "sharedGlobals",
+        "{workspaceRoot}/scripts/test-worker-environment.ts"
+      ]
     },
     "format": {
       "cache": true,

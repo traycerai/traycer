@@ -1,6 +1,7 @@
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   use,
+  createContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -73,7 +74,7 @@ import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-sco
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
-import { useResourceMonitorHostScope } from "@/hooks/resources/use-resource-monitor-host-scope";
+import { useWatchHostScope } from "@/hooks/host-scope/use-watch-host-scope";
 import { useDesktopAppResourceUsage } from "@/hooks/resources/use-desktop-app-resource-usage";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -110,7 +111,6 @@ import {
   type GlobalResourceEpicEntry,
   type GlobalResourceProjection,
 } from "@/stores/resources/resources-registry";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { useGlobalResourcesUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
 import {
@@ -127,10 +127,13 @@ import {
   formatCpuPercent,
   formatMemoryBytes,
   formatProcessCount,
+  formatRamSharePercent,
 } from "@/lib/resources/format-resource-usage";
 import {
   combineHeadlineResourceSummary,
   hostMemorySharePercent,
+  hostCpuSharePercent,
+  hostCpuCoresLabel,
   readingShowsLocalDesktop,
   resolveResourceMonitorHostReading,
   type HeadlineResourceSummary,
@@ -522,7 +525,9 @@ function armResourceRowAction(
  * closing the panel the instant a host was chosen from the picker inside it.
  */
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
-  const { scope, hasExplicitPick } = useResourceMonitorHostScope();
+  // The resource stream mounts next to the trigger, so resolve its host here
+  // rather than inside PopoverContent: the pick must follow while it is closed.
+  const { scope, hasExplicitPick } = useWatchHostScope();
   const scopedStreamBinding = useScopedStreamBinding(scope);
   const ambientStreamBinding = use(StreamRuntimeContext);
   return (
@@ -567,9 +572,6 @@ function ScopedResourceMonitorPopover(props: {
       setOpen(true);
     });
   }, [claimsOpenAction]);
-  // While the panel is open, let the header drop its title-bar drag regions so a
-  // click on the (otherwise event-swallowing) drag area dismisses the popover.
-  useTitleBarDragSuppression("resource-monitor", open);
   const scope = props.scope;
   // The status bar segment's own readings, for the forms that draw them.
   // Every source under it is a store or context read, so the icon button pays
@@ -1075,6 +1077,7 @@ function ResourceMonitorHostPickerRow(props: {
         }}
         surface="panel-header"
         intent="view"
+        consequence={null}
         disabled={false}
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
@@ -1214,6 +1217,9 @@ function resourceMonitorWaitingCopy(
 function watchesNamedHost(scope: HostScope, hasExplicitPick: boolean): boolean {
   return hasExplicitPick && !scope.isViewingActive;
 }
+
+// Host CPU denominator; desktop rows retain their explicitly named native share.
+const ResourceCpuAppContext = createContext<AppResourceUsage | null>(null);
 
 /**
  * The panel itself, mounted only once the surface is bound to the host it
@@ -1495,219 +1501,220 @@ function ResourceMonitorPanel(props: {
   };
 
   return (
-    <div
-      ref={panelRef}
-      {...{ [RESOURCE_MONITOR_PANEL_ATTRIBUTE]: "" }}
-      className="min-w-0"
-      onPointerDownCapture={dismissSortMenuFromPanelClick}
-      onClickCapture={swallowDismissedSortMenuClick}
-      onKeyDownCapture={handlePanelKeyDown}
-    >
-      <div className="border-b border-border/60 px-3.5 pb-3 pt-3">
-        <div className="flex items-center justify-between gap-3">
-          <h4 className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
-            Resources
-          </h4>
-          <div className="flex shrink-0 items-center gap-1">
-            {rowActions.selectionMode ? (
-              // Selection mode replaces the header controls wholesale (the
-              // sort dropdown included), mirroring the chat navigator's
-              // Select all / Cancel / destructive-action toolbar.
-              <div className="flex items-center gap-0.5">
-                <SelectAllToggle
-                  allSelected={rowActions.allVisibleSelected}
-                  onSelectAll={rowActions.selectAllVisible}
-                  onDeselectAll={rowActions.deselectAllVisible}
-                />
-                <Button
-                  type="button"
-                  variant="muted"
-                  size="xs"
-                  className="h-6"
-                  aria-label="Cancel selection"
-                  onClick={rowActions.cancelSelection}
-                >
-                  <X className="mr-1 size-3.5" />
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  variant={
-                    selectionCopy.destructive ? "destructive-ghost" : "muted"
-                  }
-                  size="xs"
-                  className="h-6"
-                  disabled={
-                    rowActions.selectedCount === 0 || rowActions.isPending
-                  }
-                  aria-label={selectionCopy.ariaLabel}
-                  onClick={rowActions.runSelected}
-                >
-                  {selectionCopy.text}
-                  {rowActions.isPending ? (
-                    <AgentSpinningDots
-                      className="ml-1"
-                      testId={undefined}
-                      variant={undefined}
-                    />
-                  ) : null}
-                </Button>
-              </div>
-            ) : (
-              <>
-                <Button
-                  type="button"
-                  variant="muted"
-                  size="icon-sm"
-                  aria-label="Select processes to kill"
-                  onClick={rowActions.enterSelection}
-                >
-                  <ListChecks className="size-3.5" />
-                </Button>
-                <DropdownMenu
-                  modal={false}
-                  open={sortMenuOpen}
-                  onOpenChange={setSortMenuOpen}
-                >
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      ref={sortTriggerRef}
-                      type="button"
-                      className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
-                      aria-label="Sort resource rows"
-                    >
-                      <ArrowDownNarrowWide className="size-3.5" />
-                      <span>{SORT_LABELS[sortOption]}</span>
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-40">
-                    <DropdownMenuRadioGroup
-                      value={sortOption}
-                      onValueChange={(value) => {
-                        if (isResourceSortOption(value)) setSortOption(value);
-                      }}
-                    >
-                      <DropdownMenuRadioItem value="memory">
-                        Memory
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="cpu">
-                        CPU
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="name">
-                        Name
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="tab">
-                        Tab order
-                      </DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
-            )}
+    <ResourceCpuAppContext value={projection.app}>
+      <div
+        ref={panelRef}
+        {...{ [RESOURCE_MONITOR_PANEL_ATTRIBUTE]: "" }}
+        className="min-w-0"
+        onPointerDownCapture={dismissSortMenuFromPanelClick}
+        onClickCapture={swallowDismissedSortMenuClick}
+        onKeyDownCapture={handlePanelKeyDown}
+      >
+        <div className="border-b border-border/60 px-3.5 pb-3 pt-3">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
+              Resources
+            </h4>
+            <div className="flex shrink-0 items-center gap-1">
+              {rowActions.selectionMode ? (
+                // Selection mode replaces the header controls wholesale (the
+                // sort dropdown included), mirroring the chat navigator's
+                // Select all / Cancel / destructive-action toolbar.
+                <div className="flex items-center gap-0.5">
+                  <SelectAllToggle
+                    allSelected={rowActions.allVisibleSelected}
+                    onSelectAll={rowActions.selectAllVisible}
+                    onDeselectAll={rowActions.deselectAllVisible}
+                  />
+                  <Button
+                    type="button"
+                    variant="muted"
+                    size="xs"
+                    className="h-6"
+                    aria-label="Cancel selection"
+                    onClick={rowActions.cancelSelection}
+                  >
+                    <X className="mr-1 size-3.5" />
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={
+                      selectionCopy.destructive ? "destructive-ghost" : "muted"
+                    }
+                    size="xs"
+                    className="h-6"
+                    disabled={
+                      rowActions.selectedCount === 0 || rowActions.isPending
+                    }
+                    aria-label={selectionCopy.ariaLabel}
+                    onClick={rowActions.runSelected}
+                  >
+                    {selectionCopy.text}
+                    {rowActions.isPending ? (
+                      <AgentSpinningDots
+                        className="ml-1"
+                        testId={undefined}
+                        variant={undefined}
+                      />
+                    ) : null}
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    variant="muted"
+                    size="icon-sm"
+                    aria-label="Select processes to kill"
+                    onClick={rowActions.enterSelection}
+                  >
+                    <ListChecks className="size-3.5" />
+                  </Button>
+                  <DropdownMenu
+                    modal={false}
+                    open={sortMenuOpen}
+                    onOpenChange={setSortMenuOpen}
+                  >
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        ref={sortTriggerRef}
+                        type="button"
+                        className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
+                        aria-label="Sort resource rows"
+                      >
+                        <ArrowDownNarrowWide className="size-3.5" />
+                        <span>{SORT_LABELS[sortOption]}</span>
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-40">
+                      <DropdownMenuRadioGroup
+                        value={sortOption}
+                        onValueChange={(value) => {
+                          if (isResourceSortOption(value)) setSortOption(value);
+                        }}
+                      >
+                        <DropdownMenuRadioItem value="memory">
+                          Memory
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="cpu">
+                          CPU
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="name">
+                          Name
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="tab">
+                          Tab order
+                        </DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              )}
+            </div>
           </div>
+
+          <ResourceSearchInput
+            value={searchQuery}
+            onChange={updateSearchQuery}
+          />
+
+          {summary === null ? (
+            <div className="mt-4 text-ui-xs text-muted-foreground">
+              {resourceMonitorWaitingCopy(scope, props.hasExplicitPick)}
+            </div>
+          ) : (
+            <>
+              <div className="mt-3 grid grid-cols-3 divide-x divide-border/50">
+                <HostCpuShareMetric app={projection.app} summary={summary} />
+                <MetricBlock
+                  label={resourceMemoryLabel(memoryMetric, desktopApp !== null)}
+                  value={
+                    summary.memoryBytes === null
+                      ? null
+                      : formatMemoryBytes(summary.memoryBytes)
+                  }
+                  detail={
+                    <MemoryMetricDetail
+                      summary={summary}
+                      metric={memoryMetric}
+                      includesDesktopWorkingSet={desktopApp !== null}
+                    />
+                  }
+                />
+                <HostRamShareMetric app={projection.app} summary={summary} />
+              </div>
+              <HostRamShareBar app={projection.app} summary={summary} />
+            </>
+          )}
         </div>
 
-        <ResourceSearchInput value={searchQuery} onChange={updateSearchQuery} />
-
-        {summary === null ? (
-          <div className="mt-4 text-ui-xs text-muted-foreground">
-            {resourceMonitorWaitingCopy(scope, props.hasExplicitPick)}
-          </div>
-        ) : (
-          <>
-            <div className="mt-3 grid grid-cols-3 divide-x divide-border/50">
-              <MetricBlock
-                label="CPU"
-                value={formatCpuPercent(summary.cpuPercent)}
-                detail={null}
-              />
-              <MetricBlock
-                label={resourceMemoryLabel(memoryMetric, desktopApp !== null)}
-                value={
-                  summary.memoryBytes === null
-                    ? null
-                    : formatMemoryBytes(summary.memoryBytes)
-                }
-                detail={
-                  <MemoryMetricDetail
-                    summary={summary}
-                    metric={memoryMetric}
-                    includesDesktopWorkingSet={desktopApp !== null}
+        <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
+          {search.desktopApp === null ? null : (
+            <DesktopAppResourceSection
+              app={search.desktopApp}
+              sortOption={sortOption}
+              searchQuery={searchQuery}
+            />
+          )}
+          {search.hostApp === null ? null : (
+            <HostAppResourceSection
+              app={search.hostApp}
+              memoryMetric={memoryMetric}
+            />
+          )}
+          {summary === null ? null : (
+            <div className="py-1">
+              {!search.active && search.taskRows.length === 0 ? (
+                <div className="px-3.5 py-4 text-center text-ui-xs text-muted-foreground">
+                  No active task process trees.
+                </div>
+              ) : (
+                search.taskRows.map((task) => (
+                  <TaskResourceSection
+                    key={task.entry.epicId}
+                    task={task}
+                    searchQuery={searchQuery}
+                    liveOwnerTitleByKey={liveOwnerTitleByKey}
+                    expandedOwners={expandedOwners}
+                    expandedProcesses={expandedProcesses}
+                    sortOption={sortOption}
+                    memoryMetric={memoryMetric}
+                    onToggleOwner={toggleOwner}
+                    onToggleProcess={toggleProcess}
+                    onOpenOwner={openOwner}
+                    actions={rowActions.api}
                   />
-                }
-              />
-              <HostRamShareMetric app={projection.app} summary={summary} />
-            </div>
-            <HostRamShareBar app={projection.app} summary={summary} />
-          </>
-        )}
-      </div>
-
-      <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
-        {search.desktopApp === null ? null : (
-          <DesktopAppResourceSection
-            app={search.desktopApp}
-            sortOption={sortOption}
-            searchQuery={searchQuery}
-          />
-        )}
-        {search.hostApp === null ? null : (
-          <HostAppResourceSection
-            app={search.hostApp}
-            memoryMetric={memoryMetric}
-          />
-        )}
-        {summary === null ? null : (
-          <div className="py-1">
-            {!search.active && search.taskRows.length === 0 ? (
-              <div className="px-3.5 py-4 text-center text-ui-xs text-muted-foreground">
-                No active task process trees.
-              </div>
-            ) : (
-              search.taskRows.map((task) => (
-                <TaskResourceSection
-                  key={task.entry.epicId}
-                  task={task}
+                ))
+              )}
+              {search.other === null ? null : (
+                <OtherResourceSection
+                  other={search.other}
                   searchQuery={searchQuery}
-                  liveOwnerTitleByKey={liveOwnerTitleByKey}
-                  expandedOwners={expandedOwners}
                   expandedProcesses={expandedProcesses}
                   sortOption={sortOption}
                   memoryMetric={memoryMetric}
-                  onToggleOwner={toggleOwner}
                   onToggleProcess={toggleProcess}
-                  onOpenOwner={openOwner}
                   actions={rowActions.api}
+                  killHostId={defaultHostId}
                 />
-              ))
-            )}
-            {search.other === null ? null : (
-              <OtherResourceSection
-                other={search.other}
-                searchQuery={searchQuery}
-                expandedProcesses={expandedProcesses}
-                sortOption={sortOption}
-                memoryMetric={memoryMetric}
-                onToggleProcess={toggleProcess}
-                actions={rowActions.api}
-                killHostId={defaultHostId}
-              />
-            )}
-            {search.restricted === null ? null : (
-              <RestrictedResourceSection
-                usage={search.restricted}
-                memoryMetric={memoryMetric}
-              />
-            )}
-            {search.noResults ? (
-              <div className="px-3.5 py-6 text-center text-ui-xs text-muted-foreground">
-                No resources match “{searchQuery.trim()}”.
-              </div>
-            ) : null}
-          </div>
-        )}
+              )}
+              {search.restricted === null ? null : (
+                <RestrictedResourceSection
+                  usage={search.restricted}
+                  memoryMetric={memoryMetric}
+                />
+              )}
+              {search.noResults ? (
+                <div className="px-3.5 py-6 text-center text-ui-xs text-muted-foreground">
+                  No resources match “{searchQuery.trim()}”.
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </ResourceCpuAppContext>
   );
 }
 
@@ -1862,7 +1869,7 @@ function DesktopAppResourceSection(props: {
   readonly searchQuery: string;
 }) {
   const showOther =
-    props.app.other.cpuPercent > 0 ||
+    props.app.other.cpuSharePercent > 0 ||
     props.app.other.rssBytes > 0 ||
     props.app.other.processCount > 0;
   const groups = sortDesktopProcessGroups(
@@ -1895,7 +1902,8 @@ function DesktopAppResourceSection(props: {
         </div>
         <div className="flex items-center">
           <MetricPair
-            cpuPercent={props.app.cpuPercent}
+            cpuTooltip
+            cpu={{ sharePercent: props.app.cpuSharePercent }}
             memoryBytes={props.app.rssBytes}
             className="text-ui-sm text-foreground"
           />
@@ -1923,7 +1931,8 @@ function DesktopAppProcessGroupRow(props: {
         <span className="min-w-0 truncate text-ui-xs">{props.label}</span>
       </div>
       <MetricPair
-        cpuPercent={props.usage.cpuPercent}
+        cpuTooltip
+        cpu={{ sharePercent: props.usage.cpuSharePercent }}
         memoryBytes={props.usage.rssBytes}
         className="text-ui-xs text-muted-foreground/80"
       />
@@ -1951,7 +1960,8 @@ function HostAppResourceSection(props: {
         </div>
         <div className="flex items-center">
           <MetricPair
-            cpuPercent={props.app.cpuPercent}
+            cpuTooltip
+            cpu={{ perCorePercent: props.app.cpuPercent }}
             memoryBytes={resourceMemoryBytes(props.app, props.memoryMetric)}
             className="text-ui-sm text-foreground"
           />
@@ -2010,6 +2020,23 @@ function hostTreeVisibleProjection(
   };
 }
 
+function HostCpuShareMetric(props: {
+  readonly app: AppResourceUsage | null;
+  readonly summary: HeadlineResourceSummary;
+}) {
+  const percent = props.summary.cpuSharePercent;
+  return (
+    <MetricBlock
+      label="CPU"
+      value={percent === null ? null : formatCpuPercent(percent)}
+      detail={
+        hostCpuCoresLabel(props.summary.cpuPercent, props.app) ??
+        "This host doesn't report how many processors it has, so there is no total to take a CPU share of."
+      }
+    />
+  );
+}
+
 function HostRamShareMetric(props: {
   readonly app: AppResourceUsage | null;
   readonly summary: HeadlineResourceSummary | null;
@@ -2021,7 +2048,7 @@ function HostRamShareMetric(props: {
   return (
     <MetricBlock
       label="RAM share"
-      value={percent === null ? null : formatCpuPercent(percent)}
+      value={percent === null ? null : formatRamSharePercent(percent)}
       detail={null}
     />
   );
@@ -2192,7 +2219,8 @@ function TaskResourceSection(props: {
         </span>
         <div className="flex items-center">
           <MetricPair
-            cpuPercent={props.task.cpuPercent}
+            cpuTooltip
+            cpu={{ perCorePercent: props.task.cpuPercent }}
             memoryBytes={props.task.memoryBytes}
             className="text-ui-sm text-foreground/90"
           />
@@ -2304,7 +2332,8 @@ function OtherResourceSection(props: {
         </button>
         <div className="flex items-center">
           <MetricPair
-            cpuPercent={processRows.treeCpuPercent}
+            cpuTooltip
+            cpu={{ perCorePercent: processRows.treeCpuPercent }}
             memoryBytes={processRows.treeMemoryBytes}
             className="text-ui-sm text-foreground/90"
           />
@@ -2347,7 +2376,8 @@ function RestrictedResourceSection(props: {
         </div>
         <div className="flex items-center">
           <MetricPair
-            cpuPercent={props.usage.cpuPercent}
+            cpuTooltip
+            cpu={{ perCorePercent: props.usage.cpuPercent }}
             memoryBytes={resourceMemoryBytes(props.usage, props.memoryMetric)}
             className="text-ui-sm text-foreground/90"
           />
@@ -3090,7 +3120,8 @@ function OwnerRowMetrics(props: {
     if (props.expanded) return <MetricSpacer />;
     return (
       <MetricPair
-        cpuPercent={props.row.treeCpuPercent}
+        cpuTooltip
+        cpu={{ perCorePercent: props.row.treeCpuPercent }}
         memoryBytes={props.row.treeMemoryBytes}
         className="text-ui-sm text-foreground/90"
       />
@@ -3407,9 +3438,15 @@ function ProcessMetricPair(props: {
   readonly hasDescendants: boolean;
   readonly className: string;
 }) {
+  const app = use(ResourceCpuAppContext);
+  const selfShare = hostCpuSharePercent(props.selfCpuPercent, app);
+  const treeShare = hostCpuSharePercent(props.treeCpuPercent, app);
+  const selfCores = hostCpuCoresLabel(props.selfCpuPercent, app);
+  const treeCores = hostCpuCoresLabel(props.treeCpuPercent, app);
   const metrics = (
     <MetricPair
-      cpuPercent={props.cpuPercent}
+      cpuTooltip={!props.hasDescendants}
+      cpu={{ perCorePercent: props.cpuPercent }}
       memoryBytes={props.memoryBytes}
       className={props.className}
     />
@@ -3420,13 +3457,27 @@ function ProcessMetricPair(props: {
       label={
         <div className="space-y-1 text-ui-xs">
           <div>
-            Self: {formatCpuPercent(props.selfCpuPercent)} CPU ·{" "}
+            Self:{" "}
+            {selfShare === null
+              ? UNAVAILABLE_DASH
+              : formatCpuPercent(selfShare)}{" "}
+            CPU{selfCores === null ? "" : ` (${selfCores})`} ·{" "}
             {formatMemoryBytesOrUnavailable(props.selfMemoryBytes)} memory
           </div>
           <div>
-            Tree: {formatCpuPercent(props.treeCpuPercent)} CPU ·{" "}
+            Tree:{" "}
+            {treeShare === null
+              ? UNAVAILABLE_DASH
+              : formatCpuPercent(treeShare)}{" "}
+            CPU{treeCores === null ? "" : ` (${treeCores})`} ·{" "}
             {formatMemoryBytesOrUnavailable(props.treeMemoryBytes)} memory
           </div>
+          {selfShare === null ? (
+            <div>
+              This host doesn't report how many processors it has, so there is
+              no total to take a CPU share of.
+            </div>
+          ) : null}
         </div>
       }
       side="left"
@@ -3439,13 +3490,42 @@ function ProcessMetricPair(props: {
 }
 
 function MetricPair(props: {
-  readonly cpuPercent: number;
+  readonly cpuTooltip: boolean;
+  readonly cpu:
+    | { readonly perCorePercent: number }
+    | { readonly sharePercent: number };
   readonly memoryBytes: number | null;
   readonly className: string;
 }) {
+  const app = use(ResourceCpuAppContext);
+  const share =
+    "perCorePercent" in props.cpu
+      ? hostCpuSharePercent(props.cpu.perCorePercent, app)
+      : props.cpu.sharePercent;
+  const perCore =
+    "perCorePercent" in props.cpu
+      ? props.cpu.perCorePercent
+      : props.cpu.sharePercent * (app?.hostCpuCount ?? 0);
+  const cores = hostCpuCoresLabel(perCore, app);
   return (
     <div className={cn(METRIC_COLS, props.className)}>
-      <span className={CPU_COL}>{formatCpuPercent(props.cpuPercent)}</span>
+      <TooltipWrapper
+        label={
+          props.cpuTooltip
+            ? (cores ??
+              ("sharePercent" in props.cpu
+                ? "Core count unavailable."
+                : "This host doesn't report how many processors it has, so there is no total to take a CPU share of."))
+            : null
+        }
+        side="left"
+        sideOffset={6}
+        align="center"
+      >
+        <span className={CPU_COL}>
+          {share === null ? UNAVAILABLE_DASH : formatCpuPercent(share)}
+        </span>
+      </TooltipWrapper>
       <span className={MEM_COL}>
         {props.memoryBytes === null ? (
           <>
@@ -4120,7 +4200,7 @@ function desktopAppMatchesSearch(
     return true;
   }
   const showOther =
-    app.other.cpuPercent > 0 ||
+    app.other.cpuSharePercent > 0 ||
     app.other.rssBytes > 0 ||
     app.other.processCount > 0;
   return (
@@ -4519,7 +4599,7 @@ function sortDesktopProcessGroups(
       sorted.sort((a, b) => b.usage.rssBytes - a.usage.rssBytes);
       break;
     case "cpu":
-      sorted.sort((a, b) => b.usage.cpuPercent - a.usage.cpuPercent);
+      sorted.sort((a, b) => b.usage.cpuSharePercent - a.usage.cpuSharePercent);
       break;
     case "name":
       sorted.sort((a, b) => a.label.localeCompare(b.label));
@@ -4740,8 +4820,11 @@ function commitOwnerFocus(args: {
     args.tabId === args.activeTabId
   ) {
     const tabId = args.tabId;
-    args.navigateNested(args.epicId, tabId, () =>
-      prepareResourceTarget(tabId, args.preparation),
+    args.navigateNested(
+      args.epicId,
+      tabId,
+      () => prepareResourceTarget(tabId, args.preparation),
+      "user",
     );
     return;
   }
@@ -4770,7 +4853,10 @@ function prepareResourceTarget(
     return openTileWithNavigation(
       tileIntent(preparation.node, { tabId }, preparation.gesture, "direct_ui"),
       commitWithoutNavigation,
-      MANUAL_TILE_OPEN,
+      // A person picked this row out of the resource popover. The navigator
+      // above claims nothing either way, so this says who asked in case the
+      // caller's wrapping `navigateNested` ever becomes this one's.
+      { ...MANUAL_TILE_OPEN, provenance: "user" },
     );
   }
   return canvas.prepareSetActiveTileTabFocusTarget(
@@ -5233,7 +5319,8 @@ function resourceTooltipLabel(
     return label;
   }
   if (cpuView === null) return label;
-  if (cpuView.value !== null) return `${label} · CPU ${cpuView.value}`;
+  if (cpuView.value !== null)
+    return `${label} · CPU ${cpuView.value}${cpuView.cpuCoresLabel === null ? "" : ` (${cpuView.cpuCoresLabel})`}`;
   return cpuView.unavailableReason === null
     ? label
     : `${label} · ${cpuView.unavailableReason}`;

@@ -531,7 +531,7 @@ export function ProviderMcpTab(props: {
     );
   }, [effectiveScope, projectListForShadow.data?.servers]);
 
-  const mutate = useProvidersMcpMutate();
+  const mutate = useProvidersMcpMutate(null, null);
   const confirmationMutate = useProvidersMcpApplyRemedy();
   const discover = useProvidersMcpDiscover();
   const auth = useProvidersMcpAuth();
@@ -956,10 +956,10 @@ export function ProviderMcpTab(props: {
       // stays as it was, which reads as the click having missed.
       .catch(() => {
         reportableErrorToast("Couldn't open the folder picker.", undefined, {
-          title: "Could not add workspace folders",
+          title: "Could not add folders",
           message: "The folder picker failed to open.",
           code: null,
-          source: "Workspace folders",
+          source: "Folders",
         });
       });
   }, [browseForWorkspace, setScope, setWorkspaceRoot]);
@@ -1231,7 +1231,7 @@ function McpScopeHeader(props: {
     <div className="flex flex-wrap items-center justify-between gap-2">
       {globalOnly ? (
         <p className="text-ui-xs text-muted-foreground">
-          Applies to every workspace on this host.
+          Applies to every folder on this host.
         </p>
       ) : (
         <McpScopePicker
@@ -1431,15 +1431,15 @@ function McpServerList(props: {
       return (
         <div className="flex items-center gap-2 py-6 text-ui-sm text-muted-foreground">
           <MutedAgentSpinner />
-          Resolving workspaces on this host
+          Resolving folders on this host
         </div>
       );
     }
     if (props.multiWorkspace) {
       return (
         <EmptyState
-          title="Select a workspace"
-          description="Choose a project workspace above to manage project-scoped MCP servers on this host."
+          title="Select a folder"
+          description="Choose a project folder above to manage project-scoped MCP servers on this host."
           actionLabel={null}
           onAction={null}
         />
@@ -1447,8 +1447,8 @@ function McpServerList(props: {
     }
     return (
       <EmptyState
-        title="Open a workspace"
-        description="Open a workspace on this host to manage project-scoped MCP servers."
+        title="Open a folder"
+        description="Open a folder on this host to manage project-scoped MCP servers."
         actionLabel={null}
         onAction={null}
       />

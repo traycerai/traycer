@@ -1,7 +1,7 @@
 /**
- * A bot looks like a bot: on a bot's channel rows the
- * bot's picture is a squircle and a person's a circle, read from the
- * rendered element's clip; a row names no owner, which the bot's card
+ * A bot looks like a bot: on a bot's channel rows the bot's picture is its
+ * mascot in a squircle box with no picture layer, and a person's a clipped
+ * circle; a row names no owner, which the bot's card
  * carries; and the bot's card says what it is doing now from the real `useBotActivity` over the real shared
  * `bot.subscribe` subscription, whose stream the test scripts.
  */
@@ -17,7 +17,11 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentMember } from "@traycer/protocol/host/environment/contracts";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
-import { creatureMark, drawCreatureMark } from "@/lib/bots/creature-mark";
+import {
+  MASCOT_AT_REST,
+  botMascot,
+  drawMascotMark,
+} from "@/lib/bots/mascot-mark";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -72,6 +76,7 @@ const PRESENTATION: ChatBotPresentation = {
   openAnnouncementThread: null,
   threadAnchorKinds: [],
   chooseOption: null,
+  reply: null,
   questions: null,
   failedRequest: null,
   failedRecovery: null,
@@ -234,16 +239,23 @@ describe("a bot channel's rows", () => {
     expect(avatarShape(within(botRow).getByTestId("bot-avatar"))).toBe(
       "squircle",
     );
+    expect(avatarShape(within(memberRow).getByTestId("person-avatar"))).toBe(
+      "circle",
+    );
+    // The bot is its own mascot, a size under the row's 40 px box.
     expect(
-      avatarShape(within(memberRow).getByTestId("chat-sender-avatar")),
-    ).toBe("circle");
-    // The bot is its own creature mark, at the message row's 40 px.
-    expect(
-      within(botRow)
-        .getByTestId("bot-avatar")
-        .querySelector('[data-slot="bot-creature"] path')
-        ?.getAttribute("d"),
-    ).toBe(drawCreatureMark(creatureMark(BOT_ID), 40).path);
+      [
+        ...within(botRow)
+          .getByTestId("bot-avatar")
+          .querySelectorAll('[data-slot="bot-mascot"] path'),
+      ].map((path) => path.getAttribute("d")),
+    ).toEqual(
+      drawMascotMark(
+        botMascot(BOT_ID, null, false),
+        32,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
+    );
   });
 });
 

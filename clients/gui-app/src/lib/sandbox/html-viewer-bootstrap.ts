@@ -104,6 +104,29 @@ function htmlViewerBootstrap(): void {
     setScale(scale * Math.exp(-pixels * 0.005), event.clientX, event.clientY);
   };
 
+  // The pinch listens after the page's own touch handlers, so a page that
+  // takes a pinch for itself (a map) keeps it. While the reader comments on
+  // the page (the app says so in `traycer/html/view`), the selection script
+  // keeps a touch's start and end from the page's handlers at the window's
+  // capture, so there the pinch listens ahead of it. It never stops a
+  // touch's moves, so those need no second ear.
+  let commenting = false;
+  const inPhase =
+    (capture: boolean, handler: (event: TouchEvent) => void) =>
+    (event: TouchEvent): void => {
+      if (capture === commenting) handler(event);
+    };
+  const listenToTouch = (
+    type: "touchstart" | "touchend" | "touchcancel",
+    handler: (event: TouchEvent) => void,
+  ): void => {
+    for (const capture of [true, false])
+      window.addEventListener(type, inPhase(capture, handler), {
+        capture,
+        passive: true,
+      });
+  };
+
   let pinch: { distance: number; scale: number; x: number; y: number } | null =
     null;
   const touchGeometry = (touches: TouchList) => {
@@ -122,14 +145,10 @@ function htmlViewerBootstrap(): void {
       y: (first.clientY + second.clientY) / 2,
     };
   };
-  window.addEventListener(
-    "touchstart",
-    (event) => {
-      const geometry = zoomEnabled ? touchGeometry(event.touches) : null;
-      pinch = geometry === null ? null : { ...geometry, scale };
-    },
-    { passive: true },
-  );
+  listenToTouch("touchstart", (event) => {
+    const geometry = zoomEnabled ? touchGeometry(event.touches) : null;
+    pinch = geometry === null ? null : { ...geometry, scale };
+  });
   const onTouchMove = (event: TouchEvent): void => {
     const geometry = touchGeometry(event.touches);
     if (!zoomEnabled || pinch === null || geometry === null) return;
@@ -163,6 +182,10 @@ function htmlViewerBootstrap(): void {
     const data = event.data;
     if (data.method !== "traycer/html/view" || !isRecord(data.params)) return;
     const params = data.params;
+    if (commenting !== (params.commenting === true)) {
+      commenting = params.commenting === true;
+      pinch = null;
+    }
     setZoomEnabled(params.enabled === true);
     if (typeof params.scale === "number" && Number.isFinite(params.scale)) {
       setScale(params.scale, window.innerWidth / 2, window.innerHeight / 2);
@@ -172,8 +195,8 @@ function htmlViewerBootstrap(): void {
   const endPinch = (): void => {
     pinch = null;
   };
-  window.addEventListener("touchend", endPinch, { passive: true });
-  window.addEventListener("touchcancel", endPinch, { passive: true });
+  listenToTouch("touchend", endPinch);
+  listenToTouch("touchcancel", endPinch);
 
   document.addEventListener(
     "DOMContentLoaded",

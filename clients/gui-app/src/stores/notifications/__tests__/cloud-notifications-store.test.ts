@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   IStreamSession,
@@ -14,7 +15,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV16,
+  HostNotificationsCloudFeedRowV17,
   HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -127,7 +128,7 @@ function cloudPromptRow(
 function cloudBotAnswerRow(
   entryId: string,
   createdAt: number,
-): HostNotificationsCloudFeedRowV16 {
+): HostNotificationsCloudFeedRowV17 {
   return {
     entryId,
     originHostId: "host-a",
@@ -162,7 +163,7 @@ function cloudBotConversationRow(
   createdAt: number,
   operation: "bot.reply" | "bot.post",
   mention: boolean,
-): HostNotificationsCloudFeedRowV16 {
+): HostNotificationsCloudFeedRowV17 {
   return {
     ...cloudBotAnswerRow(entryId, createdAt),
     entry: {
@@ -205,6 +206,9 @@ class ControlledSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   close(): void {
@@ -239,6 +243,7 @@ class ControlledWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,
@@ -898,7 +903,7 @@ describe("cloud notifications store", () => {
       null,
     );
     const base = cloudRow("entry-stalled", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV16 = {
+    const row: HostNotificationsCloudFeedRowV17 = {
       ...base,
       coalesceKey: "environment.move.stalled:host-a",
       entry: {

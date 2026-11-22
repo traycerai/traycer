@@ -21,6 +21,7 @@ import {
   formatContextUsageRowValue,
 } from "@/components/chat/context-usage";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
 import {
@@ -871,6 +872,34 @@ describe("ContextUsageChip", () => {
 
     fireEvent.click(action);
     expect(onCompact).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ContextUsageChip in a read-only session", () => {
+  it("never registers the contextUsage region, so an active layout editor cannot hover, select or drag it through this chip", () => {
+    // A real editing session, hovering exactly the region this chip would
+    // otherwise name itself as: a read-only bot
+    // session's chip was still reachable through whatever editor session
+    // happens to be live elsewhere in the window.
+    requestContextUsageGhost();
+    render(
+      <ChatStatusReadOnlyContext value>
+        <ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />
+      </ChatStatusReadOnlyContext>,
+    );
+    const button = screen.getByTestId("context-usage-chip");
+    expect(button.hasAttribute("data-layout-region")).toBe(false);
+    expect(button.hasAttribute("data-layout-instance")).toBe(false);
+    expect(button.hasAttribute("data-layout-draggable")).toBe(false);
+    expect(button.hasAttribute("data-hover")).toBe(false);
+    expect(button.hasAttribute("data-selected")).toBe(false);
+    // The registry the real editor's canvas reads to find draggable/
+    // selectable instances: this chip must never appear in it while
+    // read-only, session or no session.
+    const instances = [...useLayoutEditorStore.getState().instances.values()];
+    expect(
+      instances.some((instance) => instance.regionId === "contextUsage"),
+    ).toBe(false);
   });
 });
 

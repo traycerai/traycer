@@ -23,7 +23,7 @@ interface NestedFocusRouterLike {
 export function useEpicNestedFocusNavigation(): NavigateNestedFocus {
   const router: unknown = useRouter({ warn: false });
   return useCallback(
-    (targetEpicId, targetTabId, prepare) => {
+    (targetEpicId, targetTabId, prepare, provenance) => {
       if (!isNestedFocusRouterLike(router)) {
         const target = prepare();
         return target;
@@ -39,6 +39,7 @@ export function useEpicNestedFocusNavigation(): NavigateNestedFocus {
         },
         { epicId: targetEpicId, tabId: targetTabId },
         prepare,
+        provenance,
       );
     },
     [router],

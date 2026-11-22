@@ -84,7 +84,7 @@ function makeCollaboratorResponse(
         accessType: "direct",
         grantedAt: 1,
         grantedBy: "user-owner",
-        role: "viewer",
+        role: "editor",
         user: {
           userId: `user-${email}`,
           profile: {
@@ -376,6 +376,39 @@ describe("useEpicCollaboratorsQuery", () => {
 
     expect(hook.result.current.data?.ownerTeam).toBeNull();
     expect(hook.result.current.data?.teams).toHaveLength(1);
+  });
+
+  it("projects a viewer collaborator as editor, and drops one whose role nothing recognises", () => {
+    const base = makeCollaboratorResponse("viewer@example.com");
+    const entry = base.collaborators[0];
+    mockQueryResult.current = {
+      data: {
+        ...base,
+        collaborators: [
+          { ...entry, role: "viewer" },
+          // A role nothing recognises never parses on the wire; it is handed
+          // over the way a decoder that let it through would.
+          Object.assign({ ...entry }, { role: "supervisor" }),
+        ],
+      },
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(
+      hook.result.current.data?.directUsers.map((row) => row.role),
+    ).toEqual(["editor"]);
   });
 
   it("withholds the retained list once the caller's verdict gate closes", () => {

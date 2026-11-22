@@ -23,7 +23,7 @@ import {
 } from "@/stores/chats/chat-run-activity";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
 import type {
   PendingInterviewView,
@@ -610,13 +610,6 @@ export function inlineEditIsPending(
   return inlineEdit !== null && inlineEdit.pendingClientActionId !== null;
 }
 
-function inlineEditHasDraftContent(inlineEdit: InlineEditState): boolean {
-  return (
-    extractPlainTextFromComposerJSONContent(inlineEdit.currentContent).trim()
-      .length > 0 || containsImageAtoms(inlineEdit.currentContent)
-  );
-}
-
 export function chatMessageEditingForInlineEdit(input: {
   readonly editing: InlineEditState | null;
   readonly canModifyMessages: boolean;
@@ -641,7 +634,7 @@ export function chatMessageEditingForInlineEdit(input: {
     canSubmit:
       input.canModifyMessages &&
       input.editSettings !== null &&
-      inlineEditHasDraftContent(editing),
+      contentIsSubmittable(editing.currentContent),
     slashProviderId: input.editSettings?.harnessId ?? DEFAULT_SLASH_PROVIDER_ID,
     slashProfileId: input.editSettings?.profileId ?? null,
     mentionRoots: input.mentionRoots,

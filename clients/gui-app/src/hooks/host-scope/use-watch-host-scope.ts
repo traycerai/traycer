@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import {
   useHostScopeFor,
   type HostScope,
@@ -44,7 +45,26 @@ export interface WatchHostScope {
 
 export function useWatchHostScope(): WatchHostScope {
   const scopedHostId = useWatchHostStore((state) => state.scopedHostId);
+  const scopedHostName = useWatchHostStore((state) => state.scopedHostName);
   const setScopedHostId = useWatchHostStore((state) => state.setScopedHostId);
+  const selectHost = useWatchHostStore((state) => state.selectHost);
   const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
-  return { scope, hasExplicitPick: scopedHostId !== null };
+  const setHostId = useCallback(
+    (hostId: string) => {
+      const host = scope.hosts.find((option) => option.hostId === hostId);
+      if (host !== undefined) selectHost({ hostId, name: host.name });
+    },
+    [scope.hosts, selectHost],
+  );
+  return {
+    scope: {
+      ...scope,
+      setHostId,
+      vanishedSelection:
+        scope.vanishedHostId !== null && scopedHostName !== null
+          ? { name: scopedHostName, forget: () => setScopedHostId(null) }
+          : null,
+    },
+    hasExplicitPick: scopedHostId !== null,
+  };
 }

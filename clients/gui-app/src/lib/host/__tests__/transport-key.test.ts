@@ -63,6 +63,7 @@ function remoteEntry(
     publicKey: "pubkey-a",
     relayFuseGrace: false,
     sandbox: null,
+    owner: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -182,7 +183,7 @@ describe("the transport's refusal gate", () => {
   });
 });
 
-describe("hostTransportKeyFor - what OPEN presents is identity", () => {
+describe("hostTransportKeyFor - whose computer it is is identity", () => {
   const personal = remoteEntry({ sandbox: null });
   const sandbox = remoteEntry({
     sandbox: {
@@ -194,12 +195,19 @@ describe("hostTransportKeyFor - what OPEN presents is identity", () => {
     },
   });
 
-  it("keys a sandbox row apart from the same host projected as a personal one, so a stale read rebuilds the stream", () => {
-    const asPersonal = hostTransportKeyFor(personal, false);
-    const asSandbox = hostTransportKeyFor(sandbox, false);
-    expect(asPersonal).not.toBeNull();
-    expect(asSandbox).not.toBeNull();
-    expect(asSandbox).not.toBe(asPersonal);
+  it("changes transport identity when a physical host's owner changes from personal to team", () => {
+    const asPersonal = Object.assign(remoteEntry({ sandbox: null }), {
+      owner: { kind: "user" as const, id: "user-a" },
+    });
+    const asTeam = Object.assign(remoteEntry({ sandbox: null }), {
+      owner: { kind: "team" as const, id: "team-a", name: "Alpha" },
+    });
+
+    expect(hostTransportKeyFor(asPersonal, false)).not.toBeNull();
+    expect(hostTransportKeyFor(asTeam, false)).not.toBeNull();
+    expect(hostTransportKeyFor(asTeam, false)).not.toBe(
+      hostTransportKeyFor(asPersonal, false),
+    );
   });
 
   it("keeps one key across a same-content re-emit, and across a sandbox's state change", () => {
@@ -220,8 +228,8 @@ describe("hostTransportKeyFor - what OPEN presents is identity", () => {
         false,
       ),
     ).toBe(hostTransportKeyFor(sandbox, false));
-    // The lifecycle word is not part of what OPEN presents: waking it must
-    // not tear the stream down.
+    // The lifecycle word is not identity: waking it must not tear the stream
+    // down.
     expect(
       hostTransportKeyFor(
         remoteEntry({

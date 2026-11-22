@@ -1,7 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
+import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
@@ -69,12 +85,25 @@ vi.mock("@/lib/analytics", () => ({
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
   useAccountHostScope,
-  useHostScope,
+  useHostScopeFor,
   usePersonalHostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
+function renderHookWithQueryClient<Result>(callback: () => Result) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  return renderHook(callback, {
+    wrapper: ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 function makeClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry: HostDirectoryEntry = {
@@ -82,7 +111,7 @@ function makeClient(hostId: string): HostClient<HostRpcRegistry> {
     label: hostId,
     kind: "remote",
     websocketUrl: "wss://mock-remote.invalid/rpc",
-    version: "1.1.11",
+    version: "2.0.0",
     transportDialability: "dialable",
   };
   const client = new HostClient<HostRpcRegistry>({
@@ -123,16 +152,18 @@ function installTwoHosts(): void {
   harness.overrideClient = makeClient(PICKED_HOST_ID);
 }
 
-function renderBothScopes() {
-  return renderHook(() => ({
-    hostGroup: useHostScope(),
-    personal: usePersonalHostScope(),
-  }));
+function renderBothScopes(initialHostId: string | null) {
+  return renderHookWithQueryClient(() => {
+    const [scopedHostId, setScopedHostId] = useState(initialHostId);
+    return {
+      hostGroup: useHostScopeFor({ scopedHostId, setScopedHostId }),
+      personal: usePersonalHostScope(),
+    };
+  });
 }
 
 afterEach(() => {
   cleanup();
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -144,11 +175,38 @@ afterEach(() => {
 });
 
 describe("usePersonalHostScope", () => {
+  it("does not expose a client for an older remote host even when the host row still has a newer version field", () => {
+    const remoteBase = remoteEntry(WINDOW_HOST_ID, null);
+    const olderRemote: RemoteHostDirectoryEntry = {
+      ...remoteBase,
+      version: "9.9.9",
+      remoteStatus: {
+        ...remoteBase.remoteStatus,
+        appVersion: "1.5.4",
+      },
+    };
+    harness.hosts = [
+      hostScopeOptionFixture({
+        hostId: WINDOW_HOST_ID,
+        isLocalMachine: false,
+        isActive: true,
+        entry: olderRemote,
+      }),
+    ];
+    harness.activeHostId = WINDOW_HOST_ID;
+    harness.ambientClient = makeClient(WINDOW_HOST_ID);
+    harness.overrideClient = makeClient(WINDOW_HOST_ID);
+
+    const { result } = renderHookWithQueryClient(() => usePersonalHostScope());
+
+    expect(result.current.status).toBe("unreachable");
+    expect(harness.overrideClient).not.toBeNull();
+    expect(result.current.client).toBeNull();
+  });
+
   it("reads the window's own host while the Host group is pointed at another host", () => {
     installTwoHosts();
-    useSettingsHostScopeStore.setState({ scopedHostId: PICKED_HOST_ID });
-
-    const { result } = renderBothScopes();
+    const { result } = renderBothScopes(PICKED_HOST_ID);
 
     expect(result.current.hostGroup.hostId).toBe(PICKED_HOST_ID);
     expect(result.current.hostGroup.isViewingActive).toBe(false);
@@ -160,7 +218,7 @@ describe("usePersonalHostScope", () => {
 
   it("is moved by no pick: a pick under the Host group changes only the Host group", () => {
     installTwoHosts();
-    const { result } = renderBothScopes();
+    const { result } = renderBothScopes(null);
     expect(result.current.hostGroup.hostId).toBe(WINDOW_HOST_ID);
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
 
@@ -170,14 +228,11 @@ describe("usePersonalHostScope", () => {
 
     expect(result.current.hostGroup.hostId).toBe(PICKED_HOST_ID);
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
-      PICKED_HOST_ID,
-    );
   });
 
   it("offers no way to re-point itself: its setter changes neither scope", () => {
     installTwoHosts();
-    const { result } = renderBothScopes();
+    const { result } = renderBothScopes(null);
 
     act(() => {
       result.current.personal.setHostId(PICKED_HOST_ID);
@@ -185,13 +240,11 @@ describe("usePersonalHostScope", () => {
 
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
     expect(result.current.hostGroup.hostId).toBe(WINDOW_HOST_ID);
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
   });
 
   it("follows the window when the window's own host changes", () => {
     installTwoHosts();
-    useSettingsHostScopeStore.setState({ scopedHostId: PICKED_HOST_ID });
-    const { result, rerender } = renderBothScopes();
+    const { result, rerender } = renderBothScopes(PICKED_HOST_ID);
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
 
     harness.hosts = [
@@ -218,7 +271,7 @@ describe("usePersonalHostScope under the Environment dropdown's pick", () => {
     installTwoHosts();
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
 
-    const { result } = renderHook(() => ({
+    const { result } = renderHookWithQueryClient(() => ({
       personal: usePersonalHostScope(),
       account: useAccountHostScope(),
     }));
@@ -237,7 +290,7 @@ describe("usePersonalHostScope under the Environment dropdown's pick", () => {
       defaultPick: LOCAL_PICK,
     });
 
-    const { result } = renderHook(() => usePersonalHostScope());
+    const { result } = renderHookWithQueryClient(() => usePersonalHostScope());
 
     expect(result.current.hostId).toBe(PICKED_HOST_ID);
   });
@@ -245,7 +298,7 @@ describe("usePersonalHostScope under the Environment dropdown's pick", () => {
   it("returns to the window's host when the pick goes back to Personal, and stays there for a team", () => {
     installTwoHosts();
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
-    const { result } = renderHook(() => usePersonalHostScope());
+    const { result } = renderHookWithQueryClient(() => usePersonalHostScope());
     expect(result.current.hostId).toBe(PICKED_HOST_ID);
 
     act(() => {
@@ -264,7 +317,7 @@ describe("usePersonalHostScope under the Environment dropdown's pick", () => {
   it("is not re-pointed by the Host group's pick while a Local row is picked", () => {
     installTwoHosts();
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
-    const { result } = renderBothScopes();
+    const { result } = renderBothScopes(null);
 
     act(() => {
       result.current.hostGroup.setHostId(WINDOW_HOST_ID);

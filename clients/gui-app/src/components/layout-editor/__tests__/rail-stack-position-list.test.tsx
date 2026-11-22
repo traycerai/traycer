@@ -16,7 +16,11 @@ import {
   stackRailPanels,
   unstackRail,
 } from "@/lib/layout/layout-arrangement";
-import { railStackId, type RailEntry } from "@/lib/layout/rail";
+import {
+  BROWSERS_SIMULATORS_STACK_ID,
+  railStackId,
+  type RailEntry,
+} from "@/lib/layout/rail";
 import type { RegionId } from "@/lib/layout/region-id";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -146,7 +150,9 @@ describe("the stack link as its own Position-list row (L-166, L-168)", () => {
     const linkId = railStackId(["railAgents", "railArtifacts"]);
     const before = rail();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove stack" }));
+    fireEvent.click(
+      within(row(linkId)).getByRole("button", { name: "Remove stack" }),
+    );
 
     const after = rail();
     expect(
@@ -237,6 +243,16 @@ describe("stacking a panel from its own row (L-166, L-168)", () => {
   });
 
   it("keeps the pressed panel ABOVE and moves nothing (L-170)", () => {
+    // Browsers must stand alone for Terminals to join it, so start from the
+    // rail without the shipped Browsers and Simulators stack.
+    useLayoutStore.setState({
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        rail: DEFAULT_ARRANGEMENT.rail.filter(
+          (entry) => entry.id !== BROWSERS_SIMULATORS_STACK_ID,
+        ),
+      },
+    });
     render(section("railAgents", vi.fn()));
     const before = panelIds(rail());
 
@@ -289,7 +305,12 @@ describe("stacking a panel from its own row (L-166, L-168)", () => {
     // back: while the two are apart neither draws a chevron, so the flag has
     // had no control that could clear it and must not come back with the join.
     useLeftPanelStore.getState().togglePanelSectionCollapsed("artifacts");
-    fireEvent.click(screen.getByRole("button", { name: "Remove stack" }));
+    fireEvent.click(
+      within(row(railStackId(["railAgents", "railArtifacts"]))).getByRole(
+        "button",
+        { name: "Remove stack" },
+      ),
+    );
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -379,7 +400,11 @@ describe("the rail list on a phone, which has no rail", () => {
       stackEntry,
       { kind: "panel", id: panels[1] },
       dividerEntry,
-      ...panels.slice(3).map((id) => ({ kind: "panel", id })),
+      // Everything past the divider keeps its place, the Git Diff stack
+      // included; the grabbed panel left it for the front.
+      ...before
+        .slice(before.indexOf(dividerEntry) + 1)
+        .filter((entry) => entry.id !== panels[2]),
     ]);
   });
 });

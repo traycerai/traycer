@@ -19,6 +19,7 @@ export function useEpicOpenDeletedArtifacts(
         "explicit",
         "direct_ui",
       ),
+      "user",
     );
   };
 }

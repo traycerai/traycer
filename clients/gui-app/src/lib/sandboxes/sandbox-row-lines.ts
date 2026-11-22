@@ -1,5 +1,8 @@
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
-import { sandboxSettingsFailureLine } from "@traycer/protocol/host/sandbox-settings";
+import {
+  HOST_SANDBOX_STATE_WORDS,
+  hostSandboxStateWord,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import type {
   HostStatusAgentSession,
   HostStatusSessions,
@@ -15,16 +18,18 @@ import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
   AGENT_SANDBOX,
+  costLine,
+  keptByLine,
+  startedByLine,
+  teamPossessive,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
+  burstIdleLine,
   configurationLabel,
-  costLine,
   formatSandboxCost,
   formatSandboxDollars,
-  keptByLine,
-  paidByLine,
-  startedByLine,
-  sandboxVerbPendingLine,
+  idleAndRestingLine,
+  idleLine,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -140,16 +145,6 @@ const PUBLIC_STATE: Record<HostSandboxState, SandboxPublicState> = {
   failed: "failed",
 };
 
-export const SANDBOX_PUBLIC_STATE_LABEL: Record<SandboxPublicState, string> = {
-  creating: "Creating",
-  awake: "Awake",
-  suspended: "Suspended",
-  stopped: "Stopped",
-  destroying: "Destroying",
-  frozen: "Frozen",
-  failed: "Failed",
-};
-
 /** Whether the row is between two states, which offers no action but Details. */
 export function sandboxRowMoving(summary: SandboxSummary): boolean {
   switch (summary.state) {
@@ -166,13 +161,7 @@ export function sandboxRowMoving(summary: SandboxSummary): boolean {
 }
 
 export type SandboxKindFilter = "all" | SandboxRowKind;
-export type SandboxStateFilter =
-  | "all"
-  | "awake"
-  | "suspended"
-  | "stopped"
-  | "frozen"
-  | "failed";
+export type SandboxStateFilter = "all" | HostSandboxState;
 export type SandboxStarterFilter = "anyone" | "you" | "agent" | "others";
 
 export interface SandboxRowFilter {
@@ -198,11 +187,7 @@ export const SANDBOX_KIND_FILTER_LABEL: Record<SandboxKindFilter, string> = {
 
 export const SANDBOX_STATE_FILTER_LABEL: Record<SandboxStateFilter, string> = {
   all: "All",
-  awake: "Awake",
-  suspended: "Suspended",
-  stopped: "Stopped",
-  frozen: "Frozen",
-  failed: "Failed",
+  ...HOST_SANDBOX_STATE_WORDS,
 };
 
 export const SANDBOX_STARTER_FILTER_LABEL: Record<
@@ -246,7 +231,7 @@ export function sandboxRowMatches(
   if (filter.kind !== "all" && sandboxRowKind(summary) !== filter.kind) {
     return false;
   }
-  if (filter.state !== "all" && sandboxPublicState(summary) !== filter.state) {
+  if (filter.state !== "all" && summary.state !== filter.state) {
     return false;
   }
   if (
@@ -257,9 +242,9 @@ export function sandboxRowMatches(
   }
   const term = filter.search.trim().toLowerCase();
   if (term.length === 0) return true;
-  // The task is matched by id: the summary carries no task title.
   return (
     summary.displayName.toLowerCase().includes(term) ||
+    (summary.createdByTaskTitle?.toLowerCase().includes(term) ?? false) ||
     (summary.createdByTaskId?.toLowerCase().includes(term) ?? false)
   );
 }
@@ -271,8 +256,8 @@ export function sortSandboxRows(
   const activity = (row: SandboxSummary): number =>
     row.lastActivityAt ?? row.lastTransitionAt;
   return [...rows].sort((a, b) => {
-    const awakeA = sandboxPublicState(a) === "awake" ? 0 : 1;
-    const awakeB = sandboxPublicState(b) === "awake" ? 0 : 1;
+    const awakeA = a.state === "awake" ? 0 : 1;
+    const awakeB = b.state === "awake" ? 0 : 1;
     if (awakeA !== awakeB) return awakeA - awakeB;
     return activity(b) - activity(a) || a.id.localeCompare(b.id);
   });
@@ -287,17 +272,29 @@ export function sandboxDestroyAllIdleOffered(
 
 // ── Who ─────────────────────────────────────────────────────────────────────
 
+/**
+ * `you`, or the member's name. Null when this viewer is not them and the
+ * server sends no name: row copy leaves the person out rather than saying
+ * `a member`.
+ */
+function facingMemberName(
+  member: SandboxMember,
+  viewerUserId: string | null,
+): string | null {
+  if (viewerUserId !== null && member.userId === viewerUserId) return "you";
+  return member.displayName;
+}
+
 /** `you`, the member's name, or `a member` when they have none to show. */
 export function sandboxMemberName(
   member: SandboxMember,
   viewerUserId: string | null,
 ): string {
-  if (viewerUserId !== null && member.userId === viewerUserId) return "you";
-  return member.displayName ?? "a member";
+  return facingMemberName(member, viewerUserId) ?? "a member";
 }
 
 /**
- * `Started by you` / `Started by Priya` / `Agent sandbox` / `Automations`.
+ * Starter history; Automations already names its role in the row's title.
  * A row an agent created and someone kept reads `Started by <agent>`, or
  * `Started by an agent` where the server does not name it to this viewer:
  * Keep changes who keeps it, never who started it.
@@ -305,43 +302,24 @@ export function sandboxMemberName(
 export function sandboxStartedByLabel(
   summary: SandboxSummary,
   viewerUserId: string | null,
-): string {
+): string | null {
   if (summary.kind === "automation") return "Automations";
   if (summary.burst) return AGENT_SANDBOX;
   if (summary.createdByAgentId !== null) {
     return startedByLine(summary.createdByAgentName ?? "an agent");
   }
   if (summary.createdBy === null) return startedByLine("you");
-  return startedByLine(sandboxMemberName(summary.createdBy, viewerUserId));
-}
-
-/**
- * `Paid by you` to the payer, `Paid by Priya` to anyone else, on an awake
- * team row only. A payer the server does not name is never `a member`.
- */
-export function sandboxPaidByLabel(
-  summary: SandboxSummary,
-  configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
-): string | null {
-  if (configuration.kind !== "team") return null;
-  if (sandboxPublicState(summary) !== "awake" || summary.wakePayer === null) {
-    return null;
-  }
-  const payer = summary.wakePayer;
-  if (viewerUserId !== null && payer.userId === viewerUserId) {
-    return paidByLine("you");
-  }
-  return payer.displayName === null ? null : paidByLine(payer.displayName);
+  const name = facingMemberName(summary.createdBy, viewerUserId);
+  return name === null ? null : startedByLine(name);
 }
 
 export function sandboxKeptByLabel(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string | null {
-  return summary.keptBy === null
-    ? null
-    : keptByLine(sandboxMemberName(summary.keptBy, viewerUserId));
+  if (summary.keptBy === null) return null;
+  const name = facingMemberName(summary.keptBy, viewerUserId);
+  return name === null ? null : keptByLine(name);
 }
 
 // ── The shape and cost line ─────────────────────────────────────────────────
@@ -353,66 +331,81 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
 }
 
 /**
- * The row's second line: the shape, then the cost line, or for the
- * Automations row what it runs and who pays for it. An agent sandbox names
- * the agent that created it and its task in place of whose credits, where
- * the server names them to this viewer.
+ * The row's second line: the shape, then the cost line. An agent sandbox
+ * names the agent that created it and its task. A kept row is not burst and
+ * still carries that task, in the same clause. A team row's cost line names
+ * the team's credits whoever woke it last.
  */
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
 ): string {
-  if (summary.kind === "automation") return automationsShapeLine(configuration);
-  const shape = sandboxShapeLine(summary);
-  const creator = agentCreatorClause(summary);
-  const teamNonPayer =
-    configuration.kind === "team" && summary.wakePayer?.userId !== viewerUserId;
-  const resting = summary.state === "suspended" || summary.state === "stopped";
-  const wakeWarning =
-    teamNonPayer && resting ? "waking it makes you the payer" : null;
-  if (summary.priceMcPerHour === null) {
-    return joinParts(shape, wakeWarning, wakeWarning === null ? null : creator);
-  }
-  const cost =
-    creator !== null || teamNonPayer
-      ? `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`
-      : costLine(
-          summary.priceMcPerHour.awakeMc,
-          configurationCopy(configuration),
-        );
-  return joinParts(shape, cost, wakeWarning, creator);
+  return sandboxRowShapeAndCostLine(summary, configuration);
 }
 
-/** `created by Planner for Sandbox setup`, on an agent sandbox. */
+/** `credits` null (unknown) leaves the funding clause out. */
+export function sandboxRowShapeAndCostLine(
+  summary: SandboxSummary,
+  credits: SandboxPageConfiguration | null,
+): string {
+  if (summary.kind === "automation") {
+    return credits === null
+      ? AUTOMATIONS_RUN_NO_AGENTS
+      : automationsShapeLine(credits);
+  }
+  const creator = agentCreatorClause(summary);
+  if (summary.priceMcPerHour === null) {
+    return joinParts(sandboxShapeLine(summary), creator);
+  }
+  const hourly = `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
+  // A burst creator replaces the funding clause. A kept row's task does not.
+  const cost =
+    (summary.burst && creator !== null) || credits === null
+      ? hourly
+      : costLine(summary.priceMcPerHour.awakeMc, configurationCopy(credits));
+  return joinParts(sandboxShapeLine(summary), cost, creator);
+}
+
+/**
+ * `created by Planner for Sandbox setup` on an agent sandbox, and the same
+ * clause on a kept row that still names its task. A kept row is not burst.
+ * With a task and no agent name, the clause is `for <task>`.
+ */
 function agentCreatorClause(summary: SandboxSummary): string | null {
   const agent = summary.createdByAgentName;
-  if (!summary.burst || agent === null) return null;
   const task = summary.createdByTaskTitle;
-  return task === null
-    ? `created by ${agent}`
-    : `created by ${agent} for ${task}`;
+  if (summary.burst) {
+    if (agent === null) return null;
+    return task === null
+      ? `created by ${agent}`
+      : `created by ${agent} for ${task}`;
+  }
+  if (task === null) return null;
+  return agent === null ? `for ${task}` : `created by ${agent} for ${task}`;
 }
+
+const AUTOMATIONS_RUN_NO_AGENTS = "agents can't run here";
 
 /** What the configuration's Automations host is for, and what it costs. */
 export function automationsShapeLine(
   configuration: SandboxPageConfiguration,
 ): string {
   return configuration.kind === "team"
-    ? `Runs ${configuration.teamName}'s long-running shells · agents can't run here · uses ${configuration.teamName}'s shared credits, not a member's allowance`
-    : "Runs your long-running shells · agents can't run here · no charge";
+    ? `Runs ${configuration.teamName}'s long-running shells · ${AUTOMATIONS_RUN_NO_AGENTS} · uses ${configuration.teamName}'s shared credits, not a member's allowance`
+    : `Runs your long-running shells · ${AUTOMATIONS_RUN_NO_AGENTS} · no charge`;
 }
 
 const RELEASED_CLAUSE = "files kept · the next shell starts it";
 /**
- * The Automations host at rest, or not created yet: the next shell starts it.
- * Its badge reads Suspended, and so does the line.
+ * The Automations host before its first shell creates it. The badge reads
+ * Not running; this line says the files stay and a shell starts the host.
  */
-export const AUTOMATIONS_RELEASED_LINE = `Suspended · ${RELEASED_CLAUSE}`;
+export const AUTOMATIONS_RELEASED_LINE =
+  "Files are kept; starts when you open a shell.";
 
 /** The released row's line with the sandbox as its subject, for its chat. */
 export function sandboxReleasedChatLine(name: string): string {
-  return `${name} is suspended · ${RELEASED_CLAUSE}`;
+  return `${name} is ${hostSandboxStateWord("released").toLowerCase()} · ${RELEASED_CLAUSE}`;
 }
 
 /**
@@ -421,7 +414,7 @@ export function sandboxReleasedChatLine(name: string): string {
  */
 export function unstartedAutomationsMatches(filter: SandboxRowFilter): boolean {
   if (filter.kind !== "all" && filter.kind !== "automation") return false;
-  if (filter.state !== "all" && filter.state !== "suspended") return false;
+  if (filter.state !== "all" && filter.state !== "released") return false;
   if (filter.startedBy !== "anyone") return false;
   const term = filter.search.trim().toLowerCase();
   return term.length === 0 || "automations".includes(term);
@@ -441,6 +434,8 @@ export interface SandboxClockInput {
   readonly resumePending?: boolean;
   readonly summary: SandboxSummary;
   readonly configuration: SandboxPageConfiguration;
+  /** `null` (unknown) leaves both out. */
+  readonly credits: SandboxPageConfiguration | null;
   readonly cost: SandboxCost | null;
   /** The class's wake string, or `null` when the catalogue does not say. */
   readonly wakeString: string | null;
@@ -461,6 +456,25 @@ export function formatSandboxDuration(ms: number): string {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+/**
+ * `Nov 7, 2026` for a date announced as a UTC calendar day, read in UTC.
+ *
+ * An announced day is one day for everyone, so it cannot be read in the
+ * reader's zone: midnight UTC shown locally is the day before for every
+ * reader west of it, which would show a date the announcement never named and
+ * a different date to two readers of the same notice. Its sibling
+ * `formatSandboxDate` stays local, because every other date here is an
+ * instant that happened rather than a day that was announced.
+ */
+export function formatSandboxUtcDay(at: number): string {
+  return new Date(at).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 /** `Oct 31`, `Oct 31 at 23:40` with a time. */
@@ -500,7 +514,9 @@ export function sandboxDestroyedLine(
   },
   viewerUserId: string | null,
 ): string {
-  return `${ended.name} was destroyed by ${sandboxMemberName(ended.actor, viewerUserId)} at ${formatSandboxTime(ended.at)}.`;
+  const who = facingMemberName(ended.actor, viewerUserId);
+  const by = who === null ? "" : ` by ${who}`;
+  return `${ended.name} was destroyed${by} at ${formatSandboxTime(ended.at)}.`;
 }
 
 /**
@@ -566,59 +582,114 @@ function idleMinutesOf(summary: SandboxSummary): number {
 }
 
 /**
- * The three frozen causes, each its own sentence. The payer whose
- * credits ran out is the row's last payer; the third cause (the payer left
- * the team) is not on the summary, so it reads as the second.
+ * Whose credits ran out: the person's own on Personal, the team's on a
+ * team's sandbox, whoever woke it last. The out-of-credits badge sits beside
+ * the state.
  */
 export function sandboxFrozenCause(
-  summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
 ): string {
   if (configuration.kind === "personal") {
-    return "Frozen: your credits ran out.";
+    return "Your credits ran out.";
   }
-  const team = configuration.teamName;
-  const payer = summary.wakePayer;
-  if (
-    payer === null ||
-    (viewerUserId !== null && payer.userId === viewerUserId)
-  ) {
-    return `Frozen: your ${team} credits ran out.`;
-  }
-  return `Frozen: ${payer.displayName ?? "a member"}'s ${team} credits ran out.`;
+  return `${teamPossessive(configuration.teamName)} credits ran out.`;
 }
 
-/** Whether a frozen row's remedy is the viewer's own top-up. */
-export function sandboxFrozenNeedsOwnCredits(
-  summary: SandboxSummary,
+/** Never the person's own top-up for a team's sandbox: only the team's Admin may buy its credits. */
+export function sandboxFrozenOffersAddCredits(
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
+  teamBillingAdmin: boolean,
 ): boolean {
-  if (configuration.kind === "personal") return true;
-  const payer = summary.wakePayer;
-  return (
-    payer === null || (viewerUserId !== null && payer.userId === viewerUserId)
-  );
+  return configuration.kind === "personal" || teamBillingAdmin;
 }
 
 /** The frozen clock's sentence; the frozen date governs even a `never` period. */
 export function sandboxFrozenClock(frozenAt: number | null): string | null {
   if (frozenAt === null) return null;
-  return `Frozen sandboxes aren't destroyed on their idle schedule; this one is destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
+  return sandboxRemovalLine(frozenDestroyAt(frozenAt));
+}
+
+function sandboxRemovalLine(at: number): string {
+  return `Will be removed on ${formatSandboxDate(at, false)}`;
 }
 
 /**
- * `destroyed Nov 1 at 09:49 unless used`, or `kept until you destroy it` on
- * a row that rests forever. `null` while a period is set but its date has not
- * arrived yet: a default drawn before the value would flash the wrong claim.
+ * Whether a withdrawal, not the resting policy, is what decides how long this
+ * row is kept.
+ *
+ * A withdrawn row is ended by its own `destroyAt` where it has one and by its
+ * announced date otherwise, and the server sends an unfrozen one no resting
+ * deadline (a frozen row keeps the day-30 deadline that its `destroyAt` is;
+ * see the exception below). So the resting policy is no longer a claim about
+ * this row,
+ * and a surface that states one says something the withdrawal contradicts —
+ * `kept until you destroy it` above a notice giving the day it stops being
+ * the worst of them.
+ *
+ * Two mechanisms keep that out, and which one covers a surface depends on
+ * what the surface reads:
+ *
+ * - a surface that states a retention from the row's PERIOD asks this, because
+ *   the period is still set on a withdrawn row and still reads as a promise:
+ *   the resting and idle-policy clauses, the Resting detail row, and the
+ *   Stop, Keep and resting-setting dialogs;
+ * - a surface gated on `destroyAt` needs nothing, because the server holds a
+ *   withdrawn row's resting deadline and sends none. The `Destroyed on`
+ *   detail row is the one place that then states the withdrawal's own day
+ *   instead, because a row that says when a sandbox ends has an answer for a
+ *   withdrawn one and would otherwise go silent.
+ *
+ *   The exception is a FROZEN row, which keeps its day-30 deadline through a
+ *   withdrawal — its own approved policy, decided ahead of the withdrawal in
+ *   `destroyAtOf` — so a frozen withdrawn row carries BOTH, and a surface
+ *   holding both must prefer `destroyAt`: it is the day the server acts on.
+ *   `sandboxGiveAnotherLabel` is unaffected either way, since it excludes a
+ *   frozen row for its own reasons.
+ *
+ * A surface that describes the POLICY rather than a row — a catalogue default,
+ * a shape being picked — asks neither, because no row's withdrawal bears on
+ * what a new sandbox would do.
  */
-function restingDestroyClause(
-  summary: SandboxSummary,
-  verb: string,
-): string | null {
+export function sandboxRetentionIsWithdrawn(summary: SandboxSummary): boolean {
+  return summary.withdrawalEndsAt !== null;
+}
+
+/**
+ * What this row does when it goes idle, and what decides how long it is then
+ * kept: `destroys itself after 30 idle minutes · files on it are lost then`
+ * for a burst row, `Suspends after 30 idle min · destroyed after 7 days suspended or stopped` for an ordinary one, and the idle clause alone for a withdrawn row,
+ * where that is decided by its own `destroyAt` if it has one and by the
+ * announced date otherwise, never by its resting policy.
+ *
+ * The three readings are one decision about one row, so they are made here
+ * rather than at each surface that draws them. What makes that worth
+ * centralising is how easily a withdrawn row takes the wrong one: the resting
+ * clause would promise a deadline the withdrawal holds, and a withdrawn
+ * NON-burst row routed through the burst sentence would promise its files are
+ * lost at an idle timeout it does not have.
+ *
+ * A burst row keeps its burst sentence once withdrawn, which is why `burst`
+ * is answered before the withdrawal below. The burst idle destroy is its own
+ * policy and is outside the resting hold, so that sentence stays true.
+ */
+export function sandboxIdlePolicyLine(summary: SandboxSummary): string {
+  const idleMinutes = idleMinutesOf(summary);
+  if (summary.burst) return burstIdleLine(idleMinutes);
+  if (sandboxRetentionIsWithdrawn(summary)) return idleLine(idleMinutes);
+  return idleAndRestingLine(idleMinutes, summary.destroyAfterRestingMinutes);
+}
+
+/**
+ * `Will be removed on Nov 1`, or `kept until you destroy it` on
+ * a row that rests forever. `null` while a period is set but its date has not
+ * arrived yet: a default drawn before the value would flash the wrong claim,
+ * and `null` on a withdrawn row, whose retention the resting policy no longer
+ * decides (`sandboxRetentionIsWithdrawn`).
+ */
+function restingDestroyClause(summary: SandboxSummary): string | null {
+  if (sandboxRetentionIsWithdrawn(summary)) return null;
   if (summary.destroyAt !== null) {
-    return `destroyed ${formatSandboxDate(summary.destroyAt, true)} unless ${verb}`;
+    return sandboxRemovalLine(summary.destroyAt);
   }
   const period = summary.destroyAfterRestingMinutes;
   // `0` is never, as the server spells it.
@@ -648,36 +719,36 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
 }
 
 /**
- * The row's clock line, per state. A destroy in flight
- * reads `Destroying · pending`: the row's clock and its keep promise no longer
- * hold.
+ * The row's clock line, per state. A transition without a settled clock reads
+ * `Pending.`; the state is already shown in the row's pill.
  */
 export function sandboxClockLine(input: SandboxClockInput): string {
   const { summary } = input;
   const state = sandboxPublicState(summary);
   switch (state) {
     case "destroying":
-      return sandboxVerbPendingLine("destroy");
+      return "Pending.";
     case "frozen":
-      return [
-        sandboxFrozenCause(summary, input.configuration, input.viewerUserId),
-        sandboxFrozenClock(summary.frozenAt),
-      ]
+      return [rowFrozenCause(input), sandboxFrozenClock(summary.frozenAt)]
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
-      return sandboxFailedChatLine(summary);
+      return joinParts(
+        `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`,
+        sandboxCreateFailureReason(summary.failureCode),
+        sandboxSupportReference(summary.failureCode),
+      );
     case "creating":
-      return "Starting";
+      return "Pending.";
     case "awake":
-      if (input.resumePending) return sandboxVerbPendingLine("resume");
+      if (input.resumePending) return "Pending.";
       return summary.kind === "automation"
         ? `stops after ${idleMinutesOf(summary)} idle min · files kept · the next shell starts it`
         : awakeClockLine(input);
     case "suspended":
     case "stopped":
       return summary.kind === "automation"
-        ? AUTOMATIONS_RELEASED_LINE
+        ? `${hostSandboxStateWord(summary.state)} · ${RELEASED_CLAUSE}`
         : restingClockLine(input, state);
   }
 }
@@ -691,9 +762,8 @@ function awakeClockLine(input: SandboxClockInput): string {
       : `Running, but Traycer can't connect · last contact ${formatSandboxAge(contact, now)}`;
   }
   if (summary.guestConfigured === false) {
-    return sandboxSettingsFailureLine(
-      summary.displayName,
-      configurationLabel(configurationCopy(input.configuration)),
+    return joinParts(
+      `${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`,
       sandboxSupportReference(summary.failureCode) ?? "SBX-0520",
     );
   }
@@ -705,8 +775,8 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
   const awake =
     awakeMs === null
-      ? "Awake"
-      : `Awake ${formatSandboxDuration(awakeMs)} today`;
+      ? null
+      : `${hostSandboxStateWord("awake")} ${formatSandboxDuration(awakeMs)} today`;
   if (summary.burst) {
     return joinParts(
       awake,
@@ -722,41 +792,48 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
 }
 
+function rowFrozenCause(input: SandboxClockInput): string | null {
+  return input.credits === null ? null : sandboxFrozenCause(input.credits);
+}
+
+/**
+ * Whose credits a resting row's storage draws on: the person's, or the
+ * team's; nothing while that is not known.
+ */
+function storageCreditClause(
+  credits: SandboxPageConfiguration | null,
+): string | null {
+  if (credits === null) return null;
+  return credits.kind === "personal"
+    ? "storage uses your credits"
+    : `storage uses ${teamPossessive(credits.teamName)} credits`;
+}
+
 function restingClockLine(
   input: SandboxClockInput,
   state: "suspended" | "stopped",
 ): string {
-  const { summary, configuration, cost, now } = input;
+  const { summary, cost, now } = input;
   const since = summary.restingSince ?? summary.lastTransitionAt;
   const resting =
     state === "suspended"
       ? joinParts(
-          `Suspended since ${formatSandboxSince(since, now)}`,
+          `${hostSandboxStateWord(summary.state)} since ${formatSandboxSince(since, now)}`,
           input.wakeString,
           RESUMES_ON_YOUR_NEXT_ACTION,
-          restingDestroyClause(summary, "used"),
+          restingDestroyClause(summary),
         )
       : joinParts(
           `${stoppedLead(summary, input.viewerUserId)} since ${formatSandboxSince(since, now)}`,
-          restingDestroyClause(summary, "started"),
+          restingDestroyClause(summary),
         );
-  if (configuration.kind !== "team") {
-    return joinParts(
-      resting,
-      cost !== null && cost.todayMillicredits > 0
-        ? `${formatSandboxCost(cost.todayMillicredits)} today`
-        : null,
-    );
-  }
-  // The storage payer is the last wake's; a server that drops it at rest
-  // leaves the sentence out rather than naming the wrong member.
-  const payer = summary.wakePayer;
-  if (payer === null) return resting;
-  const who = sandboxMemberName(payer, input.viewerUserId);
-  const storage = `${resting} · Storage uses ${possessive(who)} ${configuration.teamName} credits.`;
-  return who === "you"
-    ? storage
-    : `${storage} Resuming changes the payer to you.`;
+  return joinParts(
+    resting,
+    storageCreditClause(input.credits),
+    cost !== null && cost.todayMillicredits > 0
+      ? `${formatSandboxCost(cost.todayMillicredits)} today`
+      : null,
+  );
 }
 
 /**
@@ -767,33 +844,69 @@ function stoppedLead(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string {
+  const word = hostSandboxStateWord(summary.state);
   const operation = summary.operation;
-  if (operation === null || operation.state !== "stopped") return "Stopped";
+  if (operation === null || operation.state !== "stopped") return word;
   if (operation.outcomeCause === "failure")
-    return "Stopped after a failed wake";
-  if (operation.actor === null) return "Stopped";
-  return `Stopped by ${sandboxMemberName(operation.actor, viewerUserId)}`;
+    return `${word} after a failed wake`;
+  if (operation.actor === null) return word;
+  const who = facingMemberName(operation.actor, viewerUserId);
+  if (who === null) return word;
+  return `${word} by ${who}`;
 }
 
 /** The failed-create sentence shared by the row and its chat. */
 export function sandboxFailedChatLine(summary: SandboxSummary): string {
   return joinParts(
     `Couldn't start ${summary.displayName} at ${formatSandboxTime(summary.lastTransitionAt)}`,
+    sandboxCreateFailureReason(summary.failureCode),
     sandboxSupportReference(summary.failureCode),
   );
 }
 
-/**
- * `Failed to start (SBX-0412)`, by the failure's support reference; with no
- * reference, `Failed to start` alone. Never the raw code.
- */
+/** The known create failure category, with its support reference secondary. */
 export function sandboxFailedToStart(failureCode: string | null): string {
-  return `Failed to start${referenceSuffix(failureCode)}`;
+  return joinParts(
+    "Failed to start",
+    sandboxCreateFailureReason(failureCode),
+    sandboxSupportReference(failureCode),
+  );
 }
 
-function referenceSuffix(failureCode: string | null): string {
-  const reference = sandboxSupportReference(failureCode);
-  return reference === null ? "" : ` (${reference})`;
+const CREATE_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
+  ["boot-timeout", "The sandbox took too long to start."],
+  ["wake-timeout", "The sandbox took too long to start."],
+  ["wake-window-spent", "The sandbox took too long to start."],
+  ["wake-prepare", "The sandbox couldn't finish setting up."],
+  ["wake-complete", "The sandbox couldn't finish starting."],
+  [
+    "wake-complete:wake_cancelled",
+    "The start was cancelled before it finished. Try creating the sandbox again.",
+  ],
+  ["wake-complete:generation_superseded", "A newer start replaced this one."],
+  ["envelope-delivery", "The sandbox couldn't receive its settings."],
+  ["chat-store-newer", "The sandbox needs an update to open its saved chats."],
+  ["boot-token-mint", "The sandbox couldn't sign in to Traycer."],
+  ["boot-token-delivery", "The sandbox couldn't sign in to Traycer."],
+  ["grant_set_failed", "The sandbox couldn't get access to its settings."],
+  [
+    "environment_placement_failed",
+    "The sandbox couldn't join the selected environment.",
+  ],
+  ["provider-unavailable", "Sandboxes aren't available right now."],
+  ["provider-pending", "The sandbox service hasn't finished starting it."],
+  ["create", "The sandbox service couldn't start it."],
+  ["provider-error", "The sandbox service couldn't start it."],
+]);
+
+function sandboxCreateFailureReason(failureCode: string | null): string | null {
+  if (failureCode === null) return null;
+  const stage = failureCode.split(":", 1)[0];
+  return (
+    CREATE_FAILURE_REASONS.get(failureCode) ??
+    CREATE_FAILURE_REASONS.get(stage) ??
+    null
+  );
 }
 
 /**
@@ -807,10 +920,6 @@ export function sandboxSupportReferenceLine(
   return [sandboxSupportReference(failureCode), sandboxId]
     .filter((part): part is string => part !== null)
     .join(" · ");
-}
-
-function possessive(name: string): string {
-  return name === "you" ? "your" : `${name}'s`;
 }
 
 // ── Sessions ────────────────────────────────────────────────────────────────
@@ -955,7 +1064,6 @@ export type SandboxRowAction =
   | "retry"
   | "retry-applying"
   | "repair-setup"
-  | "resume-paying"
   | "add-credits"
   | "open-tab"
   | "open-terminal"
@@ -980,8 +1088,7 @@ const NO_ROW_ACTIONS: SandboxRowActions = { primary: null, menu: [] };
 export function sandboxRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
-  /** A frozen row's remedy is the viewer's own top-up. */
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const actions = matrixRowActions(input);
@@ -992,7 +1099,7 @@ export function sandboxRowActions(input: {
 function matrixRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const { summary } = input;
@@ -1008,7 +1115,7 @@ function matrixRowActions(input: {
   const state = sandboxPublicState(summary);
   if (state === "frozen") {
     return {
-      primary: input.frozenNeedsOwnCredits ? "add-credits" : "resume-paying",
+      primary: input.frozenOffersAddCredits ? "add-credits" : "resume",
       menu: ["rename", "destroy"],
     };
   }
@@ -1073,17 +1180,9 @@ const SANDBOX_ROW_ACTION_LABEL = {
   rename: "Rename",
   "idle-settings": "Idle settings…",
   destroy: "Destroy",
-} satisfies Record<Exclude<SandboxRowAction, "resume-paying">, string>;
+} satisfies Record<SandboxRowAction, string>;
 
-export function sandboxRowActionLabel(
-  action: SandboxRowAction,
-  configuration: SandboxPageConfiguration,
-): string {
-  if (action === "resume-paying") {
-    return configuration.kind === "team"
-      ? `Resume using my ${configuration.teamName} credits`
-      : "Resume using my credits";
-  }
+export function sandboxRowActionLabel(action: SandboxRowAction): string {
   return SANDBOX_ROW_ACTION_LABEL[action];
 }
 

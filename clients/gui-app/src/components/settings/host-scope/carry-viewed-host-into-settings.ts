@@ -14,6 +14,8 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
  * resolve through Settings' scope, so the followed case landed on the wrong
  * machine all the same.
  *
+ * The target stays pending until Settings can resolve its environment.
+ *
  * Shared by every read-only host surface with a Settings CTA, rather than
  * copied per popover: two implementations of one rule is how one of them
  * silently stops matching the other.
@@ -22,5 +24,5 @@ export function carryViewedHostIntoSettingsScope(
   displayedHostId: string | null,
 ): void {
   if (displayedHostId === null) return;
-  useSettingsHostScopeStore.getState().setScopedHostId(displayedHostId);
+  useSettingsHostScopeStore.getState().requestHost(displayedHostId);
 }

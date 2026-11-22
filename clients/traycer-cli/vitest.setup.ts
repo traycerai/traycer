@@ -21,9 +21,13 @@ import { afterAll, afterEach, beforeEach } from "vitest";
 // Per test file, not per worker: setup files run before each file, and a
 // worker's environment carries over between them, so the ORIGINAL home is
 // kept in the environment on the first pass and never re-read from HOME.
-const ORIGINAL_HOME_ENV = "TRAYCER_VITEST_ORIGINAL_HOME";
-const originalHome = process.env[ORIGINAL_HOME_ENV] ?? homedir();
-process.env[ORIGINAL_HOME_ENV] = originalHome;
+// Keep the first home across file/module resets without trusting an inherited
+// environment marker or exposing it to children and assertion diffs.
+const originalHomeKey = Symbol.for("traycer.vitest.originalHome");
+const previousHome: unknown = Reflect.get(process, originalHomeKey);
+const originalHome =
+  typeof previousHome === "string" ? previousHome : homedir();
+Reflect.set(process, originalHomeKey, originalHome);
 const testHome = mkdtempSync(join(tmpdir(), "traycer-cli-test-home-"));
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;

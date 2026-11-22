@@ -75,7 +75,7 @@ export function SwitcherBrowsersList(props: SwitcherListProps) {
         }
         viewMenu={<BrowserOfflineFilter epicId={epicId} tabId={tabId} mobile />}
       />
-      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain will-change-transform p-1 pb-safe-bottom">
         <BrowserListFeedback
           model={model}
           epicId={epicId}
@@ -331,21 +331,24 @@ function SwitcherBrowserDriverButton(props: {
   const onSelect = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       if (chat === undefined) return;
-      openTile({
-        node: makeOpenableNodeRef({
-          id: chat.id,
-          instanceId: crypto.randomUUID(),
-          type: "chat",
-          name: chat.title,
-          hostId: row.session.hostId,
-        }),
-        target: { tabId },
-        gesture: "explicit",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: makeOpenableNodeRef({
+            id: chat.id,
+            instanceId: crypto.randomUUID(),
+            type: "chat",
+            name: chat.title,
+            hostId: row.session.hostId,
+          }),
+          target: { tabId },
+          gesture: "explicit",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
       onClose();
     },
     [chat, onClose, openTile, row.session.hostId, tabId],

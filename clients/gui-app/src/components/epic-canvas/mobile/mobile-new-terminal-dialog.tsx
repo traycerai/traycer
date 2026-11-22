@@ -55,6 +55,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
       onOpenChange(false);
       if (onLaunched !== null) onLaunched();
@@ -85,7 +86,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
         // picker's own body supplies the scroller and the bar; the cap is what
         // keeps the bar above a soft keyboard, since both mobile shells shrink
         // the layout viewport to make room for one.
-        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem,var(--safe-area-width))] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         data-testid="mobile-epic-new-terminal-dialog"
         // With the search input focusing itself, Radix's own open-autofocus
         // would land on the first host row instead and take it away. With the

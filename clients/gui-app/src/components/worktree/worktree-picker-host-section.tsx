@@ -38,6 +38,7 @@ export function WorktreePickerHostSection(
   return (
     <div className="border-b border-border/60 p-2.5">
       <HostSection
+        heading="Host"
         hosts={options.hosts}
         activeHostId={pin.resolvedHostId}
         onSelect={pin.setSelection}

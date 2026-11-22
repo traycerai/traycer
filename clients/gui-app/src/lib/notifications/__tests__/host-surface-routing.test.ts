@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isNotificationPayloadRoutable,
@@ -21,7 +22,10 @@ import {
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  setSettingsHostSelection,
+  settingsHostSelection,
+} from "@/stores/settings/__tests__/settings-host-scope-test-support";
 
 /**
  * The `hostSurface` destination family: a notification about a host-managed
@@ -45,7 +49,7 @@ describe("host surface notification routing", () => {
       view: "settings",
       focusedRunId: null,
     });
-    useSettingsHostScopeStore.setState({ scopedHostId: null });
+    useSettingsHostScopeStore.getState().reset();
   });
 
   it("opens Settings → Worktrees and remembers the section on the tab", () => {
@@ -64,10 +68,10 @@ describe("host surface notification routing", () => {
     );
   });
 
-  it("opens Settings → Notifications on the computer the notice names, whether or not it is reachable", () => {
-    // No host directory is installed, so the named computer is unreachable
-    // from here; the route still scopes Settings to it rather than to the
-    // computer this window is viewing.
+  it("opens Settings → Alerts for a hooks-removed notice, and does not scope Settings to the computer it names", () => {
+    // Notification hooks are gone from the app, so the host page that listed
+    // them is too. The notice still names its computer on the wire, but Alerts
+    // is not a host's page, so nothing is carried into the Settings scope.
     const navigate = vi.fn();
     routeNotificationForHost(
       navigate,
@@ -82,13 +86,11 @@ describe("host surface notification routing", () => {
     );
 
     expect(navigate).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "/settings/notifications" }),
+      expect.objectContaining({ to: "/settings/alerts" }),
     );
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(
-      "host-work-laptop",
-    );
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
     expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
-      "/settings/notifications",
+      "/settings/alerts",
     );
   });
 
@@ -103,13 +105,13 @@ describe("host surface notification routing", () => {
       { kind: "hostSurface", surface: "notificationSettings", hostId: 7 },
     ],
   ])(
-    "degrades a native Notifications settings envelope with %s instead of routing it",
+    "degrades a native hooks-removed envelope with %s instead of routing it",
     (_label, envelope) => {
       expect(parseNotificationPayload(envelope)).toBeNull();
     },
   );
 
-  it("leaves the worktree cleanup view alone when it opens Notifications settings", () => {
+  it("leaves the worktree cleanup view alone when it opens Alerts for a hooks-removed notice", () => {
     useWorktreeCleanupViewStore.setState({
       view: "cleanupHistory",
       focusedRunId: "run-1",
@@ -132,7 +134,7 @@ describe("host surface notification routing", () => {
     });
   });
 
-  it("round-trips the Notifications settings route through a native activation envelope", () => {
+  it("round-trips the hooks-removed notice through a native activation envelope", () => {
     expect(
       parseNotificationPayload({
         kind: "hostSurface",
@@ -282,7 +284,7 @@ describe("host surface notification routing", () => {
     });
     // History is host-local, so the destination is only well defined once
     // Settings is administering the host the run happened on.
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-b");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("host-b");
   });
 
   it("still opens history when the run id cannot be resolved", () => {
@@ -313,7 +315,7 @@ describe("host surface notification routing", () => {
    */
   it("leaves a manual worktree-deletion row's behavior exactly as it was", () => {
     useWorktreeCleanupViewStore.getState().openHistory("run-42");
-    useSettingsHostScopeStore.getState().setScopedHostId("host-a");
+    setSettingsHostSelection("host-a");
     const navigate = vi.fn();
 
     const payload = parseNotificationPayload({
@@ -336,7 +338,7 @@ describe("host surface notification routing", () => {
     );
     // No `hostId` on the row means no retarget: the user keeps administering
     // whichever host they were already on.
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(settingsHostSelection()?.hostId ?? null).toBe("host-a");
     expect(useWorktreeCleanupViewStore.getState()).toMatchObject({
       view: "settings",
       focusedRunId: null,

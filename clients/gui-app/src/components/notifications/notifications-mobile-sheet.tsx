@@ -3,6 +3,7 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 /**
@@ -24,10 +25,12 @@ import "@/components/layout/shell/mobile-shell-touch-targets.css";
  *
  * Renders nothing outside the phone shell, where the header bell + anchored
  * popover stay exactly as before, even in a narrow window that keeps its desktop
- * chrome.
+ * chrome. Nor where the phone shell draws the strip, whose Notifications row
+ * opens the center beside it.
  */
 export function NotificationsMobileSheet(): ReactNode {
   const phoneShell = useMobileHeaderActive();
+  const stripMounted = useMobileStripForm() !== null;
   const open = useNotificationsPopoverStore((state) => state.open);
   const setOpen = useNotificationsPopoverStore((state) => state.setOpen);
   // main's popover is purely presentational: the caller owns outer sizing via
@@ -39,7 +42,7 @@ export function NotificationsMobileSheet(): ReactNode {
   // No ancestor popover to keep open here, so the filter menu's open state is
   // irrelevant - the sheet owns its own dismissal.
   const handleFilterMenuOpenChange = useCallback(() => undefined, []);
-  if (!phoneShell) return null;
+  if (!phoneShell || stripMounted) return null;
   return (
     <Drawer direction="bottom" open={open} onOpenChange={setOpen}>
       <DrawerContent

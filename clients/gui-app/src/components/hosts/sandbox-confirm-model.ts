@@ -125,7 +125,7 @@ export function sandboxTypedNameReason(
  * a mid-sentence clause elsewhere, so it is not reused here.
  */
 const KEPT_FOREVER_PREVIEW =
-  "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days frozen.";
+  "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days.";
 
 /** The resting period's preview: the date a save from now would set. */
 export function sandboxRestingPreview(
@@ -136,5 +136,5 @@ export function sandboxRestingPreview(
     return KEPT_FOREVER_PREVIEW;
   }
   if (Number.isNaN(minutes)) return "";
-  return `Destroyed on ${formatSandboxDate(now + minutes * MS_PER_MINUTE, true)} if it rests from now.`;
+  return `Destroyed on ${formatSandboxDate(now + minutes * MS_PER_MINUTE, true)} if it's suspended or stopped from now on.`;
 }

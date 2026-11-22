@@ -27,6 +27,29 @@ const VOICE_AVAILABILITY_FETCH_TIMEOUT_MS = 10_000;
 const VOICE_CREDITS_EXHAUSTED = "VOICE_CREDITS_EXHAUSTED";
 const VOICE_UNAVAILABLE = "VOICE_UNAVAILABLE";
 const VOICE_SESSION_NOT_FOUND = "VOICE_SESSION_NOT_FOUND";
+const VOICE_SELECTION_UNAVAILABLE = "VOICE_SELECTION_UNAVAILABLE";
+
+/** The most voices an offered list may name; a longer one is not read. */
+const VOICE_SELECTION_MAX_VOICES = 256;
+
+const VOICE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/**
+ * A voice as the server names it: lower-case letters, digits, `_` and `-`,
+ * starting with a letter or digit, at most 64. The server's mint request
+ * schema holds the same bound.
+ */
+export function isVoiceName(value: unknown): value is string {
+  return typeof value === "string" && VOICE_NAME.test(value);
+}
+
+/**
+ * What a mint does with a requested voice the server does not offer:
+ * `fallback` speaks the server's default instead; `exact` refuses the mint
+ * before any session is made (`voice-unavailable`), for a call renewing the
+ * voice it already speaks in.
+ */
+export type VoiceSelectionPolicy = "fallback" | "exact";
 
 /** What the app sends to open a session. */
 export interface VoiceSessionMintRequest {
@@ -37,7 +60,40 @@ export interface VoiceSessionMintRequest {
    * server-side at 4,000 characters.
    */
   readonly input: string;
+  /** The voice asked for; `null` sends none, and the server's default speaks. */
+  readonly voice: string | null;
+  /** `null` sends none, which a server reads as `fallback`. */
+  readonly voicePolicy: VoiceSelectionPolicy | null;
 }
+
+/**
+ * The voices a deployment offers for calls (`GET /api/voice/availability`),
+ * and the one that speaks when a call names none. `exactVoiceRenewal` says
+ * the mint honours the `exact` policy.
+ */
+export interface VoiceSelectionCapability {
+  readonly version: 1;
+  readonly defaultVoice: string;
+  readonly voices: ReadonlyArray<string>;
+  readonly exactVoiceRenewal: true;
+}
+
+/**
+ * Which voice the server asked the vendor for, as its answer says it.
+ * `absent` from a server that names none; `invalid` when the answer names it
+ * in a shape this build cannot read. Either way the session beside it still
+ * parses, so its id can be ended.
+ */
+export type MintedVoiceSelection =
+  | { readonly kind: "absent" }
+  | { readonly kind: "invalid" }
+  | {
+      readonly kind: "valid";
+      /** The request's `voice`; `null` when it named none. */
+      readonly requestedVoice: string | null;
+      readonly effectiveVoice: string;
+      readonly reason: "selected" | "default" | "unavailable";
+    };
 
 /** A minted session: the answer to the offer and when the vendor ends it. */
 export interface VoiceSessionMinted {
@@ -45,12 +101,32 @@ export interface VoiceSessionMinted {
   readonly answerSdp: string;
   /** Epoch milliseconds. */
   readonly expiresAt: number;
+  /**
+   * The lines the voice says, word for word, when the person finishes
+   * speaking: what tells the app an utterance ended. `null` from a server
+   * that does not name them, or names them as anything but a list of
+   * strings: the session itself still parses, so the app can end it.
+   */
+  readonly acknowledgementLines: ReadonlyArray<string> | null;
+  readonly voiceSelection: MintedVoiceSelection;
 }
 
 const voiceSessionMintedSchema = z.object({
   voiceSessionId: z.string().min(1),
   answerSdp: z.string().min(1),
   expiresAt: z.number(),
+});
+
+const acknowledgementLinesSchema = z.object({
+  acknowledgementLines: z.array(z.string()),
+});
+
+const voiceNameSchema = z.string().refine(isVoiceName);
+
+const mintedVoiceSelectionSchema = z.object({
+  requestedVoice: voiceNameSchema.nullable(),
+  effectiveVoice: voiceNameSchema,
+  reason: z.enum(["selected", "default", "unavailable"]),
 });
 
 const voiceSessionEndedSchema = z.object({
@@ -61,13 +137,32 @@ const voiceAvailabilitySchema = z.object({
   available: z.boolean(),
 });
 
+const voiceSelectionCapabilitySchema = z
+  .object({
+    version: z.literal(1),
+    defaultVoice: voiceNameSchema,
+    voices: z
+      .array(voiceNameSchema)
+      .min(1)
+      .max(VOICE_SELECTION_MAX_VOICES)
+      .refine((voices) => new Set(voices).size === voices.length),
+    exactVoiceRenewal: z.literal(true),
+  })
+  .refine((capability) => capability.voices.includes(capability.defaultVoice));
+
 /**
  * The outcome of the availability read. `available: false` is the dormant
  * deployment (no voice key), answered without opening a microphone or a
- * session; Talk hides on it.
+ * session; Talk hides on it. `voiceSelection` is `null` from a server that
+ * offers no choice of voice, or offers one this build cannot read: calls
+ * there name no voice.
  */
 export type VoiceAvailabilityFetchResult =
-  | { readonly kind: "ok"; readonly available: boolean }
+  | {
+      readonly kind: "ok";
+      readonly available: boolean;
+      readonly voiceSelection: VoiceSelectionCapability | null;
+    }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error"; readonly detail: string };
 
@@ -82,6 +177,8 @@ const errorBodySchema = z.object({ error: z.string() });
  *                          session; said once, never retried.
  *  - `unavailable`       — 502: the vendor refused or failed. Transient; Talk
  *                          stays and the person may try again.
+ *  - `voice-unavailable` — 409: an `exact` request named a voice the server
+ *                          no longer offers. No session was made.
  *  - `unauthorized`      — the bearer was rejected (401/403).
  *  - `network-error`     — transport/timeout, an unexpected status, or a body
  *                          this build cannot parse. `detail` is a stable
@@ -92,6 +189,7 @@ export type VoiceSessionMintFetchResult =
   | { readonly kind: "dormant" }
   | { readonly kind: "credits-exhausted" }
   | { readonly kind: "unavailable" }
+  | { readonly kind: "voice-unavailable" }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error"; readonly detail: string };
 
@@ -171,6 +269,8 @@ async function call(
         },
         body,
         signal: abort.signal,
+        // The bearer rides in a header: never follow a redirect.
+        redirect: "manual",
       }),
       abort.signal,
     );
@@ -230,7 +330,17 @@ export async function voiceSessionsMintViaHttp(
 ): Promise<VoiceSessionMintFetchResult> {
   const raw = await call(
     voiceSessionsUrl(serverBaseUrl, ""),
-    JSON.stringify({ offerSdp: request.offerSdp, input: request.input }),
+    // Each field named, so nothing else the caller's object carries is sent;
+    // the voice fields only when set, so a request naming no voice is the
+    // body every server version reads.
+    JSON.stringify({
+      offerSdp: request.offerSdp,
+      input: request.input,
+      ...(request.voice === null ? {} : { voice: request.voice }),
+      ...(request.voicePolicy === null
+        ? {}
+        : { voicePolicy: request.voicePolicy }),
+    }),
     VOICE_MINT_FETCH_TIMEOUT_MS,
     bearerToken,
     proxyToken,
@@ -248,6 +358,12 @@ export async function voiceSessionsMintViaHttp(
   if (raw.status === 502 && errorCodeOf(raw.body) === VOICE_UNAVAILABLE) {
     return { kind: "unavailable" };
   }
+  if (
+    raw.status === 409 &&
+    errorCodeOf(raw.body) === VOICE_SELECTION_UNAVAILABLE
+  ) {
+    return { kind: "voice-unavailable" };
+  }
   if (raw.status < 200 || raw.status >= 300) {
     return {
       kind: "network-error",
@@ -262,7 +378,37 @@ export async function voiceSessionsMintViaHttp(
       detail: "the minted voice session did not match the contract",
     };
   }
-  return { kind: "ok", session: parsed.data };
+  const lines = acknowledgementLinesSchema.safeParse(raw.body);
+  return {
+    kind: "ok",
+    session: {
+      ...parsed.data,
+      acknowledgementLines: lines.success
+        ? lines.data.acknowledgementLines
+        : null,
+      voiceSelection: mintedVoiceSelectionOf(raw.body),
+    },
+  };
+}
+
+/**
+ * The answer's `voiceSelection`, read apart from the session it comes with:
+ * an unreadable one is `invalid`, never a reason to lose the session's id.
+ */
+function mintedVoiceSelectionOf(body: unknown): MintedVoiceSelection {
+  const value = voiceSelectionField(body);
+  if (value === undefined) return { kind: "absent" };
+  const parsed = mintedVoiceSelectionSchema.safeParse(value);
+  return parsed.success
+    ? { kind: "valid", ...parsed.data }
+    : { kind: "invalid" };
+}
+
+/** A body's `voiceSelection`, which the schemas beside it do not keep. */
+function voiceSelectionField(body: unknown): unknown {
+  return typeof body === "object" && body !== null
+    ? Reflect.get(body, "voiceSelection")
+    : undefined;
 }
 
 /**
@@ -297,7 +443,16 @@ export async function voiceSessionsAvailabilityViaHttp(
       detail: "the voice availability answer did not match the contract",
     };
   }
-  return { kind: "ok", available: parsed.data.available };
+  // Read apart from `available`: a capability this build cannot read means
+  // calls name no voice there, not that voice is off.
+  const capability = voiceSelectionCapabilitySchema.safeParse(
+    voiceSelectionField(raw.body),
+  );
+  return {
+    kind: "ok",
+    available: parsed.data.available,
+    voiceSelection: capability.success ? capability.data : null,
+  };
 }
 
 /** Whether `id` is one plain path segment, so no URL is built from anything else. */

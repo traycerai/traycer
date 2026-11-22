@@ -12,6 +12,7 @@ import {
 } from "@/components/settings/__tests__/settings-search-targets";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
+import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { AlertsSettingsPanel } from "@/components/settings/panels/alerts-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
@@ -22,6 +23,7 @@ import { LayoutSettingsPanel } from "@/components/settings/panels/layout-setting
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import type { RecordingSaveChannel } from "@/lib/soundtrack/recording";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -30,6 +32,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 // Layout's provider list is read through the WATCHED host's scope. It carries
 // no anchors - the set exists only for providers a host has reported - so the
@@ -101,29 +104,30 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
 // contract mounts both under a `connecting` scope - the state where every
 // host-backed body is withheld - and the fixture's `hostScope` says which
 // state to serve. Permissions reads `usePersonalHostScope` (it is an Account
-// page now) and the Overview reads `useHostScope`, so BOTH hooks answer with
-// the same connecting-aware factory. The ref is set per test.
+// page now), the Overview reads `useHostScope`, and the checklist reads the
+// unscoped fleet through `useHostScopeFor`. All use the same connecting-aware
+// factory. Keep the mock self-contained: the real scope and membership reader
+// import each other. The ref is set per test.
 const hostScopeState = vi.hoisted((): { current: "connecting" | null } => ({
   current: null,
 }));
-vi.mock(
-  "@/components/settings/host-scope/use-host-scope",
-  async (importOriginal) => {
-    const { hostScopeFixture: fixture } =
-      await import("@/components/settings/host-scope/host-scope-fixture");
-    const useScope = () =>
-      fixture(
-        hostScopeState.current === "connecting" ? { status: "connecting" } : {},
-      );
-    return {
-      ...(await importOriginal<
-        typeof import("@/components/settings/host-scope/use-host-scope")
-      >()),
-      useHostScope: useScope,
-      usePersonalHostScope: useScope,
-    };
-  },
-);
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture: fixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const useScope = () =>
+    fixture(
+      hostScopeState.current === "connecting" ? { status: "connecting" } : {},
+    );
+  return {
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
+    useHostScope: useScope,
+    usePersonalHostScope: useScope,
+    useHostScopeFor: useScope,
+  };
+});
 
 // The Layout panel wraps itself directly in the shared watched-usage read
 // (`LayoutUsageProvider`), which resolves a host scope through a real
@@ -176,6 +180,7 @@ const MOUNTS: {
   permissions: <PermissionsSettingsPanel />,
   browser: <BrowserSettingsPanel />,
   alerts: <AlertsSettingsPanel />,
+  "app-notifications": <AppNotificationsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
   host: <HostSettingsPanel />,
 };
@@ -187,7 +192,9 @@ afterEach(() => {
   hostScopeState.current = null;
   setMobileApp(false);
   setPhoneLayoutOnly(false);
-  setFeatureSettingsBridge(null);
+  (globalThis as { runnerHost?: unknown }).runnerHost = undefined;
+  vi.unstubAllEnvs();
+  useSettingsStore.setState({ soundtrackEnabled: false });
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useSettingsSearchStore.setState({
     query: "",
@@ -239,8 +246,10 @@ describe("settings search fixtures", () => {
 
 /**
  * Mounts `panel` in exactly the shell `context` describes: its runner host (or
- * none), the window-level feature-settings bridge, the mobile-app flag and
- * whether the phone layout is drawn (the installed app draws it at every width).
+ * none), the window-level feature-settings and recording bridges, the
+ * mobile-app flag, whether the phone layout is drawn (the installed app draws it
+ * at every width), and whether the build has a soundtrack to play (a development
+ * build does) and whether Music is on.
  */
 function mountInShell(
   context: SettingsAvailabilityContext,
@@ -249,7 +258,9 @@ function mountInShell(
 ): HTMLElement {
   setMobileApp(context.mobileApp);
   setPhoneLayoutOnly(context.phoneLayout);
-  setFeatureSettingsBridge(context.featureSettings);
+  setWindowBridges(context);
+  if (context.soundtrackOffered) vi.stubEnv("MODE", "development");
+  useSettingsStore.setState({ soundtrackEnabled: context.soundtrackOn });
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -282,9 +293,36 @@ function ShellProbe(props: {
   return null;
 }
 
-function setFeatureSettingsBridge(
-  featureSettings: SettingsAvailabilityContext["featureSettings"],
-): void {
+const RECORDING_CHANNEL: RecordingSaveChannel = {
+  open: () => Promise.resolve({ kind: "refused" }),
+  append: () => Promise.resolve({ kind: "ok" }),
+  close: () => Promise.resolve({ kind: "ok" }),
+  reveal: () => Promise.resolve(false),
+  onFinishRequested: () => () => undefined,
+};
+
+function setWindowBridges(context: SettingsAvailabilityContext): void {
+  const {
+    featureSettings,
+    soundtrackRecordingOffered,
+    soundtrackSetPiecesOffered,
+  } = context;
   (globalThis as { runnerHost?: unknown }).runnerHost =
-    featureSettings === null ? undefined : { platform: { featureSettings } };
+    featureSettings === null &&
+    !soundtrackRecordingOffered &&
+    !soundtrackSetPiecesOffered
+      ? undefined
+      : {
+          platform: { featureSettings },
+          soundtrackRecording: soundtrackRecordingOffered
+            ? RECORDING_CHANNEL
+            : null,
+          ...(soundtrackSetPiecesOffered
+            ? {
+                soundtrackSourceAvailable: true,
+                readSoundtrackSet: () =>
+                  Promise.resolve({ kind: "unavailable" as const }),
+              }
+            : {}),
+        };
 }

@@ -1,7 +1,27 @@
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
 import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 
-/** Verbatim: a chat on a host no team owns, in a team's task. */
+/** Verbatim: a chat whose host runs Personal, in a team's task. */
 export const TEAM_EPIC_PERSONAL_LINE = "Running on your Personal settings.";
+
+/** The tab host's settings place, using the Overview's classification. */
+export function teamEpicSettingsLine(
+  status: EnvironmentStatusResponseV11 | null,
+): string | null {
+  if (status === null) return null;
+  const state = hostSettingsCardState(status);
+  switch (state.kind) {
+    case "local":
+      return "Running on this computer's own settings.";
+    case "moved":
+    case "other":
+      return TEAM_EPIC_PERSONAL_LINE;
+    case "moving":
+    case "move_stopped":
+      return null;
+  }
+}
 
 /**
  * The team a chat could continue on: the team that owns the task, when the

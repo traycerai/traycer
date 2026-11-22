@@ -129,12 +129,16 @@ export function useProviderTerminalLogin(args: {
           // synchronously inside the call, so the close still lands before the
           // open, and the open's target - committed second - is the one the
           // route ends on.
-          navigateNested(epicId, viewTabId, () =>
-            prepareCloseCanvasTabFocusTarget(
-              viewTabId,
-              replaced.paneId,
-              replaced.instanceId,
-            ),
+          navigateNested(
+            epicId,
+            viewTabId,
+            () =>
+              prepareCloseCanvasTabFocusTarget(
+                viewTabId,
+                replaced.paneId,
+                replaced.instanceId,
+              ),
+            "user",
           );
         }
       }

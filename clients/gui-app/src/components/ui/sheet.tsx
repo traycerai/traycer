@@ -6,6 +6,7 @@ import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -61,12 +62,13 @@ function SheetContent({
   // Concealed region (see `portal-concealment-context`): un-present the
   // portal; the root keeps its open state and it re-presents on return.
   const concealed = usePortalConcealed();
+  const contentRef = useOverlayDragSuppressionRef(ref);
   if (concealed) return null;
   return (
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="sheet-content"
         data-side={side}
         data-close-button={showCloseButton}
@@ -94,6 +96,12 @@ function SheetContent({
           // shrinking it. The cap carries no modifier, so a caller's
           // `sm:max-w-*` still wins at width.
           "data-[side=left]:mt-safe-top data-[side=left]:ml-safe-left data-[side=left]:h-safe-dvh data-[side=left]:max-w-safe-dvw data-[side=right]:mt-safe-top data-[side=right]:mr-safe-right data-[side=right]:h-safe-dvh data-[side=right]:max-w-safe-dvw data-[side=top]:mt-safe-top data-[side=top]:ml-safe-left data-[side=top]:mr-safe-right data-[side=bottom]:ml-safe-left data-[side=bottom]:mr-safe-right",
+          // Top and bottom sheets size to their content (`h-auto`). The cap is
+          // the safe viewport: `100dvh` minus the top inset and keyboard
+          // (`--spacing-safe-dvh`) minus the bottom inset. Side sheets are
+          // already `h-safe-dvh`. The scroll is on the sheet; a caller that
+          // pins a footer puts `min-h-0 overflow-y-auto` on the body.
+          "data-[side=top]:max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom))] data-[side=top]:min-h-0 data-[side=top]:overflow-y-auto data-[side=bottom]:max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom))] data-[side=bottom]:min-h-0 data-[side=bottom]:overflow-y-auto",
           className,
         )}
         {...props}
@@ -127,7 +135,7 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="sheet-header"
       className={cn(
-        "flex flex-col gap-0.5 p-4 group-data-[close-button=true]/sheet-content:pe-12",
+        "flex shrink-0 flex-col gap-0.5 p-4 group-data-[close-button=true]/sheet-content:pe-12",
         className,
       )}
       {...props}
@@ -139,7 +147,7 @@ function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sheet-footer"
-      className={cn("mt-auto flex flex-col gap-2 p-4", className)}
+      className={cn("mt-auto flex shrink-0 flex-col gap-2 p-4", className)}
       {...props}
     />
   );

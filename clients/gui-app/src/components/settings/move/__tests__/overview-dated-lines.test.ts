@@ -46,26 +46,12 @@ describe("Overview dated lines", () => {
     );
   });
 
-  it("counts held values and commands apart, leaving out a kind with none", () => {
-    const line = (values: number, commands: number, host: string) =>
-      heldItemsLineText({ values, commands }, host);
-    expect(line(3, 0, "MacBook Pro")).toBe(
-      "3 values from MacBook Pro are on hold until you choose · Review them",
+  it("counts the held commands, one or many", () => {
+    expect(heldItemsLineText(1, "dev-box")).toBe(
+      "1 command from dev-box is on hold until you choose · Review it",
     );
-    expect(line(1, 0, "dev-box")).toBe(
-      "1 value from dev-box is on hold until you choose · Review it",
-    );
-    expect(line(2, 1, "H")).toBe(
-      "2 values and 1 command from H are on hold until you choose · Review them",
-    );
-    expect(line(1, 1, "H")).toBe(
-      "1 value and 1 command from H are on hold until you choose · Review them",
-    );
-    expect(line(0, 1, "H")).toBe(
-      "1 command from H is on hold until you choose · Review it",
-    );
-    expect(line(0, 2, "H")).toBe(
-      "2 commands from H are on hold until you choose · Review them",
+    expect(heldItemsLineText(2, "MacBook Pro")).toBe(
+      "2 commands from MacBook Pro are on hold until you choose · Review them",
     );
   });
 
@@ -100,7 +86,7 @@ describe("copy a person reads", () => {
       RETURNED_FROM_TEAM_LINE,
       SHARED_BY_EARLIER_VERSION_LINE,
       stoppedSharingLine(OCT_20),
-      heldItemsLineText({ values: 2, commands: 1 }, "MacBook Pro"),
+      heldItemsLineText(2, "MacBook Pro"),
       RETROSPECTIVE_DISCLOSURE,
       RETROSPECTIVE_RECORD_LINE,
       retrospectiveTitle("MacBook Pro"),

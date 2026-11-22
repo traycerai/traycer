@@ -69,6 +69,51 @@ async function open(page: Page): Promise<void> {
   await expect(board(page, "B").locator('[data-tid="name"]')).toHaveText("B");
 }
 
+/** How long one click may take to focus the board before it is treated as
+ *  having hit the previous frame. Focusing the iframe is the hit test's
+ *  result: the parent document's element at the point can already be the new
+ *  board while Chrome still routes the click to the previous frame. */
+const BOARD_HIT_WAIT_MS = 300;
+
+/**
+ * Click the centre of the board until that click focuses its frame. Chrome
+ * routes the click from the last compositor frame, so a parent animation
+ * frame can leave the previous board owning the point after the step has
+ * painted the new board into the DOM. A click that focused the previous
+ * frame is not the press under test; the one that focuses this frame is.
+ */
+async function clickWhenBoardOwnsPoint(
+  page: Page,
+  title: string,
+): Promise<void> {
+  const iframe = page.locator(`iframe[title="${title}"]`);
+  await expect
+    .poll(
+      async () => {
+        const box = await iframe.boundingBox();
+        if (box === null) return "no-box";
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        try {
+          await page.waitForFunction(
+            (frameTitle) =>
+              document.activeElement?.getAttribute("title") === frameTitle,
+            title,
+            { timeout: BOARD_HIT_WAIT_MS },
+          );
+        } catch {
+          // The click focused another frame. The compositor has not caught up.
+          return "stale";
+        }
+        return "owned";
+      },
+      {
+        message:
+          "no click was delivered to the step's frame, so the press would still hit the previous board",
+      },
+    )
+    .toBe("owned");
+}
+
 test.describe("fullscreen keeps the same running board", () => {
   test("entering and leaving fullscreen never reloads the board", async ({
     page,
@@ -138,18 +183,10 @@ test.describe("fullscreen steps through the reading order", () => {
 
     // Click into the running board so its document owns the keyboard, then
     // step from there. By coordinates: the fullscreen frame is scaled, and
-    // the claim is that a real press inside it reaches the app.
-    const frame = await page.locator('iframe[title="A"]').boundingBox();
-    if (frame === null) throw new Error("the fullscreen board has no box");
-    await page.mouse.click(
-      frame.x + frame.width / 2,
-      frame.y + frame.height / 2,
-    );
-    await expect
-      .poll(() =>
-        page.evaluate(() => document.activeElement?.getAttribute("title")),
-      )
-      .toBe("A");
+    // the claim is that a real press inside it reaches the app. The click
+    // is repeated until it focuses A's frame: that focus is the hit test
+    // the press used, and a parent frame can leave B owning the point.
+    await clickWhenBoardOwnsPoint(page, "A");
     await page.keyboard.press("ArrowRight");
     await expect(fullscreenBoardChoice(page)).toHaveText("B");
     await expect(canvasSurface(page)).toHaveAttribute(
@@ -351,6 +388,186 @@ test.describe("ctrl-wheel zoom", () => {
       x: iframeBox.x + iframeBox.width / 2,
       y: iframeBox.y + iframeBox.height / 2,
     });
+  });
+});
+
+test.describe("the stage around a zoom gesture", () => {
+  test("keeps the dot grid and fill on the whole stage while a zoom-out scales the boards", async ({
+    page,
+  }) => {
+    await open(page);
+    // The wheel events come from the page, one per frame, so the boxes are
+    // read while the gesture is still held. Real input would let the
+    // gesture's redraw land between the wheel and the read on a loaded runner.
+    const held = await page.evaluate(async () => {
+      const flow = document.querySelector('[aria-label="Canvas workspace"]');
+      const grid = document.querySelector('[data-testid="rf__background"]');
+      if (flow === null || grid === null)
+        throw new Error("the canvas is not mounted");
+      const box = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        };
+      };
+      const before = { flow: box(flow), grid: box(grid) };
+      for (let frame = 0; frame < 4; frame += 1) {
+        flow.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: 120,
+            ctrlKey: true,
+            clientX: before.flow.x + 300,
+            clientY: before.flow.y + 200,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      return { before, during: { flow: box(flow), grid: box(grid) } };
+    });
+
+    // The gesture is scaling everything drawn in canvas coordinates...
+    expect(held.during.flow.width).toBeLessThan(held.before.flow.width * 0.8);
+    // ...and the backdrop still covers exactly what it covered: no edge of
+    // the shrinking layer shows against the stage.
+    for (const side of ["x", "y", "width", "height"] as const)
+      expect(
+        Math.abs(held.during.grid[side] - held.before.grid[side]),
+      ).toBeLessThan(0.5);
+  });
+
+  test("stays where it is when a board scrolls its own content into view", async ({
+    page,
+  }) => {
+    await open(page);
+    const zoomReadout = page.getByRole("button", { name: /, zoom$/ });
+    const zoomBefore = await zoomReadout.textContent();
+    const paneBox = await page
+      .getByRole("application", { name: "Canvas workspace" })
+      .boundingBox();
+    if (paneBox === null) throw new Error("the canvas pane has no box");
+    // Zoom in about the left edge until board B runs past the right one:
+    // only then is there anywhere the canvas could be scrolled to.
+    await page.mouse.move(paneBox.x + 80, paneBox.y + paneBox.height - 40);
+    await page.keyboard.down("Control");
+    try {
+      await page.mouse.wheel(0, -240);
+    } finally {
+      await page.keyboard.up("Control");
+    }
+    await expect(zoomReadout).not.toHaveText(zoomBefore ?? "");
+    await nextFrames(page, 2);
+    const boardA = page.locator('iframe[title="A"]');
+    const boardB = page.locator('iframe[title="B"]');
+    const before = await boardA.boundingBox();
+    const boxB = await boardB.boundingBox();
+    if (before === null || boxB === null) throw new Error("a board has no box");
+    expect(boxB.x + boxB.width).toBeGreaterThan(paneBox.x + paneBox.width);
+
+    // A page revealing something of its own asks every scrollable ancestor
+    // to scroll, the app's included.
+    await board(page, "B")
+      .locator("body")
+      .evaluate((body) => {
+        const far = document.createElement("div");
+        far.style.cssText =
+          "position:absolute;right:0;bottom:0;width:8px;height:8px";
+        body.append(far);
+        far.scrollIntoView();
+      });
+    await nextFrames(page, 2);
+
+    expect(await boardA.boundingBox()).toEqual(before);
+  });
+});
+
+test.describe("a two-finger pinch on the canvas", () => {
+  // d3-zoom binds its touch listeners only on a touch-capable page.
+  test.use({ hasTouch: true });
+
+  test("scales the drawn canvas while the fingers are down, and gives React Flow the zoom once they are quiet", async ({
+    page,
+  }) => {
+    await open(page);
+    const pane = page.getByRole("application", { name: "Canvas workspace" });
+    const paneBox = await pane.boundingBox();
+    if (paneBox === null) throw new Error("the canvas pane has no box");
+    const viewport = page.locator(".react-flow__viewport");
+    // The layer around React Flow is the one the pinch scales.
+    const zoomLayer = page.locator(".react-flow").locator("xpath=..");
+    const viewportScale = (): Promise<number> =>
+      viewport.evaluate((element) => new DOMMatrix(element.style.transform).a);
+    const layerTransform = (): Promise<string> =>
+      zoomLayer.evaluate((element) => element.style.transform);
+
+    const viewportBefore = await viewport.evaluate(
+      (element) => element.style.transform,
+    );
+    const scaleBefore = await viewportScale();
+    // Each time the layer is drawn, the page notes what React Flow had drawn
+    // under it. A read from here instead would race the quiet that ends the
+    // gesture: on a loaded runner the zoom can be drawn before the read lands.
+    const layerPaints = await page.evaluateHandle(() => {
+      const layer = document.querySelector(".react-flow")?.parentElement;
+      const drawn = document.querySelector<HTMLElement>(
+        ".react-flow__viewport",
+      );
+      if (layer === null || layer === undefined || drawn === null)
+        throw new Error("the canvas has no zoom layer");
+      const paints: { layer: string; viewport: string }[] = [];
+      new MutationObserver(() =>
+        paints.push({
+          layer: layer.style.transform,
+          viewport: drawn.style.transform,
+        }),
+      ).observe(layer, { attributes: true, attributeFilter: ["style"] });
+      return paints;
+    });
+    const firstScaledPaint = async (): Promise<string | null> =>
+      (await layerPaints.jsonValue()).find((paint) =>
+        paint.layer.includes("scale("),
+      )?.viewport ?? null;
+
+    // Empty canvas below both boards.
+    const centre = { x: paneBox.x + 240, y: paneBox.y + paneBox.height - 60 };
+    const startHalfGap = 40;
+    const endHalfGap = 100;
+    const steps = 8;
+    const touches = (halfGap: number) => [
+      { x: centre.x - halfGap, y: centre.y, id: 1 },
+      { x: centre.x + halfGap, y: centre.y, id: 2 },
+    ];
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: touches(startHalfGap),
+    });
+    for (let step = 1; step <= steps; step += 1) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: touches(
+          startHalfGap + ((endHalfGap - startHalfGap) * step) / steps,
+        ),
+      });
+      await nextFrames(page, 1);
+    }
+
+    // The pinch was drawn by scaling the layer, over the viewport React Flow
+    // already had: it had been handed nothing new.
+    await expect.poll(firstScaledPaint).toBe(viewportBefore);
+
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await expect.poll(layerTransform).toBe("");
+    const grewBy = (await viewportScale()) / scaleBefore;
+    expect(grewBy).toBeGreaterThan((endHalfGap / startHalfGap) * 0.9);
+    expect(grewBy).toBeLessThan((endHalfGap / startHalfGap) * 1.1);
   });
 });
 

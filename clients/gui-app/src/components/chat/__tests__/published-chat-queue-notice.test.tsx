@@ -138,7 +138,9 @@ function renderBody(
   return render(
     <TooltipProvider delayDuration={0}>
       <TabHostProvider hostId={HOST_ID}>
-        <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
+        <ChatTranscriptProvider
+          value={{ chatId: CHAT_ID, hostId: HOST_ID, payerHostId: HOST_ID }}
+        >
           <ChatExpansionTestProviders tileInstanceId={TILE_INSTANCE_ID}>
             <SessionTranscript handle={handle}>
               <AssistantMessageBody

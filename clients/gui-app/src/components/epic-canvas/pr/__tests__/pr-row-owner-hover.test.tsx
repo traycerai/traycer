@@ -273,6 +273,7 @@ describe("PrRow owner hover card", () => {
           hostId: "host-1",
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
     // Left open it would sit over the tile it just opened until the pointer
     // happened to leave the row. `open` flips synchronously, but the content

@@ -102,7 +102,15 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
 }));
 
 vi.mock("../../browser-sessions/browser-sessions-transport", () => ({
+  browserSessionsOwnerKey: (
+    entry:
+      | import("@traycer-clients/shared/host-client/host-directory").HostDirectoryEntry
+      | null,
+  ): string | null =>
+    entry === null ? null : JSON.stringify([entry.kind, entry.hostId]),
   createBrowserSessionsHostDirectory: () => ({
+    peek: () => null,
+    subscribe: () => (): void => undefined,
     invalidate: (): void => undefined,
     reset: (): void => undefined,
     resolve: () => Promise.reject(new Error("not used in this suite")),

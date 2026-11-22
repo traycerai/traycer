@@ -1,6 +1,7 @@
 import { canonicalChord, type ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 import { isMobileApp } from "@/lib/mobile-app";
+import { soundtrackOffered } from "@/lib/soundtrack/manifest";
 
 /**
  * Stable identifiers for every keyboard-bindable action in the app. Adding
@@ -72,7 +73,7 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
-  "voice.talk.toggle",
+  "soundtrack.toggle",
   "composer.suggestion.accept",
   "composer.drafts",
   "composer.model-picker.toggle",
@@ -902,7 +903,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "composer.dictation.toggle",
     label: "Voice input",
     description:
-      "Dictate into the composer. Tap to start, tap again to stop; or hold to talk and release to stop. Speech is transcribed on-device.",
+      "Dictate into the composer. Tap to toggle, or hold to talk. In a bot's channel or thread, starts or ends a call.",
     category: "app",
     kind: "chord",
     // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on
@@ -915,21 +916,19 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     secondaryTerminalPolicy: undefined,
     desktopOnly: false,
   },
-  "voice.talk.toggle": {
-    id: "voice.talk.toggle",
-    label: "Talk",
-    description:
-      "Start or stop talking with your bots. Costs credits while on.",
+  "soundtrack.toggle": {
+    id: "soundtrack.toggle",
+    label: "Soundtrack",
+    description: "Play or stop the soundtrack.",
     category: "app",
     kind: "chord",
-    // Its own chord, apart from dictation's ⌃⇧M. Per-platform like the model
-    // picker's: ⌃⌥T keeps Control distinct from ⌘ on macOS, and Alt+Shift+T
-    // avoids the Windows/Linux Ctrl+Alt=AltGr conflict.
-    defaultChord: { mac: "ctrl+alt+t", other: "alt+shift+t" },
+    // Unbound by default: it is a setting, in Sounds, so it earns a palette
+    // row rather than one of the few chords left.
+    defaultChord: null,
     secondaryChord: undefined,
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
-    // The phone's Talk is its own surface (the mobile voice ticket).
+    // Background audio and autoplay on the phone are still to be settled.
     desktopOnly: true,
   },
   "composer.suggestion.accept": {
@@ -1021,13 +1020,15 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
 };
 /**
  * Whether `id` can run in this app: it is not a desktop-only action in the
- * installed mobile app, where its handler is never registered. One that cannot
- * is bound to nothing, whatever a profile stored for it: it matches no key,
- * reserves no chord, is forwarded from no browser tile, conflicts with no
- * rebind and has no Settings row. The stored chord itself is kept, so an app
+ * installed mobile app, where its handler is never registered, nor the
+ * soundtrack's in a build with nothing to play. One that cannot is bound to
+ * nothing, whatever a profile stored for it: it matches no key, reserves no
+ * chord, is forwarded from no browser tile, conflicts with no rebind and has no
+ * Settings row. The stored chord itself is kept, so an app
  * that can run the action again finds it where the person left it.
  */
 export function isActionAvailable(id: ActionId): boolean {
+  if (id === "soundtrack.toggle" && !soundtrackOffered()) return false;
   return !(ACTION_META[id].desktopOnly && isMobileApp());
 }
 

@@ -14,6 +14,7 @@ import { buildAllHarnessModelRows } from "@/components/home/data/harness-model-s
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 import { HarnessModelPickerPanelBody } from "@/components/home/pickers/harness-model-picker-panel";
+import { EMPTY_REMOVED_PROFILES_BY_HARNESS_ID } from "@/components/home/pickers/harness-rail-providers";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { SAMPLE_TOOLBAR_VALUES, sampleNoop } from "./sample-workspace-scene";
 
@@ -88,6 +89,7 @@ function SampleModelPickerBody(): ReactNode {
       fallbackHarnesses={SAMPLE_HARNESSES}
       offeredAgents={null}
       profilesByHarnessId={NO_PROFILES}
+      removedProfilesByHarnessId={EMPTY_REMOVED_PROFILES_BY_HARNESS_ID}
       resolvedActiveProviderId={SAMPLE_SELECTION.harnessId}
       activeProfileId={null}
       activeProfileIdByHarnessId={NO_ACTIVE_PROFILES}
@@ -104,10 +106,12 @@ function SampleModelPickerBody(): ReactNode {
       onRefreshCatalog={async () => {}}
       hostUnavailableLabel={null}
       onOpenProviderSettings={sampleNoop}
+      onOpenHostUpdates={sampleNoop}
       onClosePicker={sampleNoop}
       listRef={listRef}
       listKey="sample"
       visibleRows={SAMPLE_ROWS}
+      hiddenModelProviders={NO_HIDDEN_MODEL_PROVIDERS}
       selectedRowId={selectedRowId}
       effectiveActiveRowId={selectedRowId}
       hoveredRowId=""
@@ -229,6 +233,8 @@ const SAMPLE_HARNESSES: ReadonlyArray<GuiHarnessCatalogEntry> = [
     sampleModel("codex", "sample-model", "Sample model"),
   ]),
 ];
+
+const NO_HIDDEN_MODEL_PROVIDERS: ReadonlySet<string> = new Set();
 
 const SAMPLE_ROWS = buildAllHarnessModelRows([
   { harness: SAMPLE_ACTIVE_HARNESS, models: SAMPLE_ACTIVE_HARNESS.models },

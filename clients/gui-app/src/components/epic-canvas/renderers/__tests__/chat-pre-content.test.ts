@@ -109,7 +109,6 @@ function input(overrides: Partial<ChatPreContentInput>): ChatPreContentInput {
     hostKind: "local",
     hostLabel: LABEL,
     hostBehindClient: false,
-    cloneAllowed: true,
     hasReadySession: false,
     elapsed: "early",
     ...overrides,
@@ -205,20 +204,17 @@ function everyInput(): ChatPreContentInput[] {
         kinds.flatMap((hostKind) =>
           labels.flatMap((hostLabel) =>
             [true, false].flatMap((hostBehindClient) =>
-              [true, false].flatMap((cloneAllowed) =>
-                [true, false].flatMap((hasReadySession) =>
-                  ELAPSED.map((elapsed) => ({
-                    session,
-                    lease: leaseValue,
-                    reachabilityStatus,
-                    hostKind,
-                    hostLabel,
-                    hostBehindClient,
-                    cloneAllowed,
-                    hasReadySession,
-                    elapsed,
-                  })),
-                ),
+              [true, false].flatMap((hasReadySession) =>
+                ELAPSED.map((elapsed) => ({
+                  session,
+                  lease: leaseValue,
+                  reachabilityStatus,
+                  hostKind,
+                  hostLabel,
+                  hostBehindClient,
+                  hasReadySession,
+                  elapsed,
+                })),
               ),
             ),
           ),
@@ -754,57 +750,42 @@ describe("arm 3: the host is gone", () => {
     expect(view.detail).toBeNull();
   });
 
-  // The second line says what the reader can do about the other machine, and
-  // offers the strip's Clone only while that strip draws it.
+  // The second line says what the reader can do about the other machine.
   it.each<[string, Partial<ChatPreContentInput>, string | null]>([
     [
-      "a remote host the directory still calls reachable, with Clone offered",
+      "a remote host the directory still calls reachable",
       {
         lease: DEAD_OFFLINE,
         reachabilityStatus: "reachable",
         hostKind: "remote",
-        cloneAllowed: true,
       },
       `Open Traycer on "${LABEL}", or continue here as a new agent.`,
     ],
     [
-      "a remote host the directory still checks, with Clone offered",
+      "a remote host the directory still checks",
       {
         lease: DEAD_OFFLINE,
         reachabilityStatus: "checking",
         hostKind: "remote",
-        cloneAllowed: true,
       },
       `Open Traycer on "${LABEL}", or continue here as a new agent.`,
     ],
     [
-      "a remote host the directory calls unreachable, with Clone offered",
+      "a remote host the directory calls unreachable",
       {
         lease: DEAD_OFFLINE,
         reachabilityStatus: "unreachable",
         hostKind: "remote",
-        cloneAllowed: true,
       },
       `Open Traycer on "${LABEL}", or continue here as a new agent.`,
     ],
     [
-      "a remote host with Clone withheld from this role",
-      {
-        lease: DEAD_OFFLINE,
-        reachabilityStatus: "reachable",
-        hostKind: "remote",
-        cloneAllowed: false,
-      },
-      `Open Traycer on "${LABEL}".`,
-    ],
-    [
       // The session proves the machine is on and running Traycer.
-      "a remote host with a ready live session, whatever Clone allows",
+      "a remote host with a ready live session, whatever the directory says",
       {
         lease: DEAD_OFFLINE,
         reachabilityStatus: "reachable",
         hostKind: "remote",
-        cloneAllowed: true,
         hasReadySession: true,
       },
       null,
@@ -816,20 +797,8 @@ describe("arm 3: the host is gone", () => {
         reachabilityStatus: "reachable",
         hostKind: "remote",
         hostLabel: null,
-        cloneAllowed: true,
       },
       "Open Traycer on the host, or continue here as a new agent.",
-    ],
-    [
-      "a remote host with no label and Clone withheld",
-      {
-        lease: DEAD_OFFLINE,
-        reachabilityStatus: "reachable",
-        hostKind: "remote",
-        hostLabel: null,
-        cloneAllowed: false,
-      },
-      "Open Traycer on the host.",
     ],
     [
       "this machine's own host",
@@ -837,7 +806,6 @@ describe("arm 3: the host is gone", () => {
         lease: DEAD_OFFLINE,
         reachabilityStatus: "unreachable",
         hostKind: "local",
-        cloneAllowed: true,
       },
       null,
     ],
@@ -847,7 +815,6 @@ describe("arm 3: the host is gone", () => {
         lease: DEAD_REMOVED,
         reachabilityStatus: "reachable",
         hostKind: "remote",
-        cloneAllowed: true,
       },
       null,
     ],
@@ -857,7 +824,6 @@ describe("arm 3: the host is gone", () => {
         lease: DEAD_INCOMPATIBLE,
         reachabilityStatus: "reachable",
         hostKind: "remote",
-        cloneAllowed: true,
       },
       null,
     ],
@@ -1223,7 +1189,6 @@ describe("negative controls over every input", () => {
           value.hasReadySession,
         ),
       ).toBe("offline");
-      expect(value.cloneAllowed).toBe(true);
     }
     expect(pointing).toBeGreaterThan(0);
   });

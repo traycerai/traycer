@@ -42,11 +42,8 @@ function UsageHostSplitItem(props: {
       className="flex flex-wrap items-center gap-x-3 gap-y-1"
       data-testid={`usage-host-split-row-${row.hostId}`}
     >
-      {/* The full id is worth reaching for whichever way the label reads: a
-          truncated id needs its remaining characters, and a NAMED host is
-          the case where the id is otherwise nowhere on screen at all. */}
       <TooltipWrapper
-        label={row.hostId}
+        label={row.name}
         side="top"
         sideOffset={undefined}
         align="start"
@@ -54,8 +51,6 @@ function UsageHostSplitItem(props: {
         <span
           className={cn(
             "w-32 min-w-0 shrink truncate text-ui-sm",
-            // A truncated id is a real host we simply cannot name, so it is
-            // muted rather than hidden - never a blank cell.
             row.nameIsFallback ? "text-muted-foreground" : "text-foreground",
           )}
         >

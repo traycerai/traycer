@@ -28,15 +28,23 @@ export const DOCK_EDGE_SNAP_PX = 24;
 /** Where the panel opens before it has ever been dragged. */
 const FLOAT_DOCK_DEFAULT_INSET = 48;
 /**
- * The strip along the top of the window the panel never covers: the app's own
- * chrome is up there, and a floating panel over it takes the title bar's drag
- * region with it. The prototype's `clampFloat` floor.
+ * The least of the strip along the top of the window the panel never covers:
+ * the app's own chrome is up there, and a floating panel over it takes the
+ * title bar's drag region with it. The prototype's `clampFloat` floor. Under a
+ * title band the floor is the band itself (`DockViewport.top`): on Windows and
+ * Linux the native window controls paint over the band's trailing end, above
+ * every renderer layer, and a panel header under them loses its Done.
  */
 const FLOAT_DOCK_TOP_INSET = 28;
+
+/** The band or header at the window's top edge (`--app-title-band-height`). */
+const TITLE_BAND_SURFACE_SELECTOR = "[data-app-title-band-surface]";
 
 export interface DockViewport {
   readonly width: number;
   readonly height: number;
+  /** Where the panel may start: the title band's bottom, never above 28px. */
+  readonly top: number;
 }
 
 export function floatDockHeight(viewportHeight: number): number {
@@ -53,12 +61,12 @@ export function clampFloatPosition(
 ): LayoutDockPosition {
   const maxX = Math.max(0, viewport.width - FLOAT_DOCK_WIDTH);
   const maxY = Math.max(
-    FLOAT_DOCK_TOP_INSET,
+    viewport.top,
     viewport.height - floatDockHeight(viewport.height),
   );
   return {
     x: Math.min(Math.max(position.x, 0), maxX),
-    y: Math.min(Math.max(position.y, FLOAT_DOCK_TOP_INSET), maxY),
+    y: Math.min(Math.max(position.y, viewport.top), maxY),
   };
 }
 
@@ -110,8 +118,22 @@ export function edgeSnapDockMode(
   return null;
 }
 
+/**
+ * The band's bottom edge, measured: a band that is drawn but hidden (macOS
+ * fullscreen) measures 0, so the floor stays at the chrome inset.
+ */
+function readTitleBandFloor(): number {
+  const band = document.querySelector(TITLE_BAND_SURFACE_SELECTOR);
+  const bottom = band === null ? 0 : band.getBoundingClientRect().bottom;
+  return Math.max(FLOAT_DOCK_TOP_INSET, bottom);
+}
+
 function readViewport(): DockViewport {
-  return { width: window.innerWidth, height: window.innerHeight };
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
+    top: readTitleBandFloor(),
+  };
 }
 
 /**

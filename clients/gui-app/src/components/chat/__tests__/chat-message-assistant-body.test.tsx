@@ -96,6 +96,7 @@ const AUTONOMOUS_RESUME_SEGMENT: MessageSegment = {
       outputFile: null,
       mcp: null,
       managedCommand: null,
+      conversationMessage: null,
     },
   ],
 };
@@ -114,6 +115,7 @@ const MCP_FAILED_RESUME_SEGMENT: MessageSegment = {
       outputFile: null,
       mcp: { serverName: "docs", toolName: "search" },
       managedCommand: null,
+      conversationMessage: null,
     },
   ],
 };
@@ -339,6 +341,7 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
       outputFile: null,
       mcp: null,
       managedCommand: null,
+      conversationMessage: null,
     };
     render(
       <AssistantMessageBody
@@ -1136,6 +1139,7 @@ const SHARED_TOOL: ToolSegment = {
   imageResults: [],
   artifact: null,
   mcpApp: null,
+  feedbackDraft: null,
 };
 
 const SHARED_APPROVAL: ApprovalSegment = {

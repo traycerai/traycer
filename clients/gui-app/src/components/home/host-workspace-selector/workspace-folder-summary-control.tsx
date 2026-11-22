@@ -320,7 +320,7 @@ export function WorkspaceFolderSummaryControl(props: {
       }
       content={<WorkspaceFolderHoverList items={props.items} />}
       appearance="preview"
-      semantics={{ role: "dialog", label: "Workspace folders" }}
+      semantics={{ role: "dialog", label: "Folders" }}
       side={props.popoverSide}
       sideOffset={4}
       align="start"
@@ -610,7 +610,7 @@ function WorkspaceCheckedAtText(props: {
       className="text-ui-xs whitespace-nowrap text-muted-foreground"
       data-testid="workspace-folders-checked-at"
     >
-      Workspace snapshot · {relative}
+      Folder snapshot · {relative}
     </span>
   );
 }

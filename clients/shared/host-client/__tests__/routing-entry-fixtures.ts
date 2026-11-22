@@ -31,6 +31,7 @@ export function remoteEntry(
     publicKey: `pubkey-${hostId}`,
     relayFuseGrace: false,
     sandbox,
+    owner: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "unknown",

@@ -310,6 +310,7 @@ export function formatAgentConfigureResponse(
     `profile: --profile ${formatProfileSelection(settings.profileSelection)}`,
     `reasoningEffort: ${settings.reasoningEffort ?? "-"}`,
     `fastMode: ${settings.fastMode ? "on" : "off"}`,
+    `serviceTier: ${settings.serviceTier ?? "-"}`,
     `permissionMode: ${settings.permissionMode}`,
     `agentMode: ${settings.agentMode}`,
   ];

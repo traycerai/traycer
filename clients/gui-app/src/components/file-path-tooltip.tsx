@@ -121,6 +121,7 @@ export function FilePathReveal(props: FilePathTooltipProps): ReactNode {
     },
     disabled: false,
     acceptsMouse: false,
+    acceptsPen: false,
   });
   return (
     <FilePathTooltip content={props.content} side={props.side}>

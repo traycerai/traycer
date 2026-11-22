@@ -83,7 +83,7 @@ export interface WindowCaptureBridge {
  * wait ends as soon as the document is or becomes hidden, allowing the
  * capture to proceed without waiting for the window to be shown again.
  */
-function nextPresentedFrame(): Promise<void> {
+export function nextPresentedFrame(): Promise<void> {
   return new Promise((resolve) => {
     if (document.visibilityState === "hidden") {
       resolve();

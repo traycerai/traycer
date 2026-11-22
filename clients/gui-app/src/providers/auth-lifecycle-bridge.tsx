@@ -8,6 +8,7 @@ import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
@@ -15,7 +16,6 @@ import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { resetSandboxesPage } from "@/stores/sandboxes/sandboxes-page-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
@@ -85,14 +85,9 @@ export function EpicSessionLifecycleBridge(
       // tabs are reconciled normally instead of being protected by the prior
       // identity's create markers.
       clearSessionCreatedEpics();
-      // Settings' viewing scope is a host id, and host ids belong to an
-      // ACCOUNT. Left standing across a switch it names the previous account's
-      // machine, which the new account's lists will never contain — so Settings
-      // opens `vanished`, reporting a host id the person signing in has never
-      // seen and cannot dismiss except by re-picking. `null` is not "no host",
-      // it is "follow the active host", so this returns the surface to its
-      // default rather than emptying it.
-      useSettingsHostScopeStore.getState().setScopedHostId(null);
+      // Settings selections and pending entries belong to this account.
+      // Signing out clears every environment's view before another signs in.
+      useSettingsHostScopeStore.getState().reset();
       // The shared watch pick — the one host the usage gauge and the resource
       // monitor READ — is a host id on the same account-owned terms, and it
       // PERSISTS: left standing it survives the restart into the next sign-in
@@ -137,10 +132,6 @@ export function EpicSessionLifecycleBridge(
       // otherwise see A's sandbox id in the drawer and A's team on the page.
       closeSandboxDetails();
       resetSandboxesPage();
-      // The provider Link dialog's target names one of the outgoing account's
-      // profiles; left set, account B's Providers would mount A's dialog and
-      // send A's profile id through B's host.
-      useProviderLinkDialogStore.getState().close();
       // A last-copy draft toast is minted with NO duration, and the app-level
       // `<Toaster />` is mounted outside this tree - so it is the one piece of
       // renderer state that survives everything disposed above and keeps the
@@ -148,6 +139,10 @@ export function EpicSessionLifecycleBridge(
       // to this boundary only: a chat or epic closing must NOT take it down,
       // because the text it holds is still the user's only copy.
       dismissRetainedDraftToasts();
+      // The signals bridge goes down with the session, so the music would go on
+      // sounding the outgoing account's last signals. The wish stays: it is
+      // this device's, and comes back on the next account's first gesture.
+      useSoundtrackStore.getState().disable();
       // The move reminder survives navigation, but its host belongs to the
       // outgoing identity. Retire the toast and any retained action callback.
       retireOnboardingReminder();

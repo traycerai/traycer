@@ -1381,6 +1381,7 @@ export async function gateStoreFormatFloor(args: {
    * and asking the network would be a round trip that cannot answer.
    */
   readonly consultRegistry: boolean;
+  readonly publishedEntry?: LookedUpTargetEntry | null;
   /** See `StoreFormatFloorInput.installedStoreFormats`. */
   readonly installedStoreFormats: HostStoreFormats | null;
   readonly installedProvenance: InstalledProvenance | null;
@@ -1422,7 +1423,7 @@ export async function gateStoreFormatFloor(args: {
         args.targetVersion,
         args.logger,
       )
-    : null;
+    : (args.publishedEntry ?? null);
   const publishedStoreFormats = entry?.storeFormats ?? null;
   const target = resolveHostStoreFormats(
     args.targetVersion,

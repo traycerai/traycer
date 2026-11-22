@@ -41,6 +41,10 @@ export const PROVIDER_INVALIDATIONS: ReadonlyArray<
   // mutation re-read it - including after a first read that failed. An
   // optional method; invalidating it on a host without it is a no-op.
   "providers.settingsFile.status",
+  // Which model an alias runs on follows the account and its settings, so a
+  // sign-in or a provider change re-asks. An optional method, like the entry
+  // above.
+  "providers.readModelRoutes",
 ];
 
 /**

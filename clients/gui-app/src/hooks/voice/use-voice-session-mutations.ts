@@ -1,66 +1,79 @@
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type {
+  VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionIndicator,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
-import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  VoiceCallAuthority,
+  VoiceCallPrincipalChanged,
+} from "@/lib/auth/auth-service";
 import { useAuthService } from "@/lib/host";
 import { voiceMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
- * `POST /api/voice/sessions`: mints a voice session for the offer. The
- * route's refusals (dormant, credits, unavailable) come back as the result's
- * `kind`, not as errors: the controller ends the attempt with the matching
- * reason and the strip says it, so nothing is toasted here.
+ * `POST /api/voice/sessions`: mints a voice session for the offer, under the
+ * account the call was started under. The route's refusals (dormant,
+ * credits, unavailable, voice-unavailable) and a changed account come back
+ * as the result's `kind`, not as errors: the controller ends the attempt
+ * with the matching reason and the call says it, so nothing is toasted here.
  */
 export function useVoiceSessionMintMutation(): UseMutationResult<
-  VoiceSessionMintFetchResult,
+  VoiceSessionMintFetchResult | VoiceCallPrincipalChanged,
   Error,
-  VoiceSessionMintRequest
+  {
+    readonly request: VoiceSessionMintRequest;
+    readonly authority: VoiceCallAuthority;
+  }
 > {
   const auth = useAuthService();
   return useMutation({
     mutationKey: voiceMutationKeys.mint(),
-    mutationFn: (request) => auth.mintVoiceSession(request),
+    mutationFn: ({ request, authority }) =>
+      auth.mintVoiceSession(request, authority),
+  });
+}
+
+/**
+ * `GET /api/voice/availability`, read once by a call as it starts, under the
+ * call's own account: the voices it may ask for come from this answer, never
+ * the window's cached one. Not retried: a failed read refuses the dial, and
+ * the person's next Call reads again.
+ */
+export function useVoiceCallAvailabilityMutation(): UseMutationResult<
+  VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged,
+  Error,
+  { readonly authority: VoiceCallAuthority }
+> {
+  const auth = useAuthService();
+  return useMutation({
+    mutationKey: voiceMutationKeys.callAvailability(),
+    mutationFn: ({ authority }) => auth.getVoiceAvailabilityForCall(authority),
+    retry: false,
   });
 }
 
 /**
  * `POST /api/voice/sessions/:id/end`: closes the server's row for a session
- * this window minted. Best effort from the controller's terminal latch; a
- * refusal is logged there, since the session is already over for the person.
+ * this window minted, under the account that minted it or not at all. Best
+ * effort from the controller's terminal latch; a refusal is logged there,
+ * since the session is already over for the person.
  */
 export function useVoiceSessionEndMutation(): UseMutationResult<
-  VoiceSessionEndFetchResult,
+  VoiceSessionEndFetchResult | VoiceCallPrincipalChanged,
   Error,
-  string
+  { readonly voiceSessionId: string; readonly authority: VoiceCallAuthority }
 > {
   const auth = useAuthService();
   return useMutation({
     mutationKey: voiceMutationKeys.end(),
-    mutationFn: (voiceSessionId) => auth.endVoiceSession(voiceSessionId),
-  });
-}
-
-/**
- * The voice router's one model call for an utterance (the passthrough). A
- * refusal comes back as the result's `kind`: the say loop refuses the route
- * and the voice asks the person to repeat, so nothing is toasted here.
- */
-export function useVoiceRouteMutation(): UseMutationResult<
-  VoiceRouteFetchResult,
-  Error,
-  string
-> {
-  const auth = useAuthService();
-  return useMutation({
-    mutationKey: voiceMutationKeys.route(),
-    mutationFn: (requestBody) => auth.routeVoiceUtterance(requestBody),
+    mutationFn: ({ voiceSessionId, authority }) =>
+      auth.endVoiceSession(voiceSessionId, authority),
   });
 }
 

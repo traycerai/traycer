@@ -37,25 +37,28 @@ export function ManagedCommandChatBacklink(
   const label = displayTitle(chat.title, "agent");
 
   const open = (event: MouseEvent<HTMLButtonElement>) => {
-    openTile({
-      // The chat's OWN host when the projection knows it, else the surface's
-      // bound host. `dedupe` matches on that pair, so a clone that holds two
-      // tabs for one copied chat id activates the one this window actually
-      // belongs to rather than whichever came first.
-      node: makeOpenableNodeRef({
-        id: chatId,
-        instanceId: uuidv4(),
-        type: "chat",
-        name: label,
-        hostId: chat.hostId ?? props.fallbackHostId,
-      }),
-      target: { tabId },
-      gesture: "explicit",
-      modifiers: modifiersFromMouseEvent(event),
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    openTile(
+      {
+        // The chat's OWN host when the projection knows it, else the surface's
+        // bound host. `dedupe` matches on that pair, so a clone that holds two
+        // tabs for one copied chat id activates the one this window actually
+        // belongs to rather than whichever came first.
+        node: makeOpenableNodeRef({
+          id: chatId,
+          instanceId: uuidv4(),
+          type: "chat",
+          name: label,
+          hostId: chat.hostId ?? props.fallbackHostId,
+        }),
+        target: { tabId },
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      "user",
+    );
   };
 
   return (

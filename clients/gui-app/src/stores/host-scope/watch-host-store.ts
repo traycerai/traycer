@@ -32,6 +32,12 @@ interface WatchHostStoreState {
    * while nothing on screen explained the difference.
    */
   readonly scopedHostId: string | null;
+  readonly scopedHostName: string | null;
+  /** Record the name with the pick so a vanished host can still be named. */
+  readonly selectHost: (host: {
+    readonly hostId: string;
+    readonly name: string;
+  }) => void;
   /** `null` returns to following the active host. */
   readonly setScopedHostId: (hostId: string | null) => void;
 }
@@ -61,6 +67,11 @@ function readScopedHostId(value: unknown): string | null {
   return value;
 }
 
+function readScopedHostName(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  return value;
+}
+
 // Runs at module load, BEFORE `create` hydrates the store below: the seed has
 // to be a record on disk by the time hydration reads one, or the adoption is
 // not a migration at all — merge is not written back, so it would re-run every
@@ -79,24 +90,41 @@ export const useWatchHostStore = create<WatchHostStoreState>()(
   persist(
     (set, get) => ({
       scopedHostId: null,
+      scopedHostName: null,
+      selectHost: (host) => {
+        if (
+          get().scopedHostId === host.hostId &&
+          get().scopedHostName === host.name
+        )
+          return;
+        set({ scopedHostId: host.hostId, scopedHostName: host.name });
+      },
       setScopedHostId: (scopedHostId) => {
         if (get().scopedHostId === scopedHostId) return;
-        set({ scopedHostId });
+        set({ scopedHostId, scopedHostName: null });
       },
     }),
     {
       ...basePersistOptions(WATCH_HOST_PERSIST_KEY),
       storage: createJSONStorage(() => localStorage),
-      merge: (persistedState, currentState) => ({
-        ...currentState,
-        scopedHostId:
-          persistedState !== null &&
-          typeof persistedState === "object" &&
+      merge: (persistedState, currentState) => {
+        if (persistedState === null || typeof persistedState !== "object") {
+          return { ...currentState, scopedHostId: null, scopedHostName: null };
+        }
+        const scopedHostId =
           "scopedHostId" in persistedState
             ? readScopedHostId(persistedState.scopedHostId)
-            : null,
+            : null;
+        const scopedHostName =
+          scopedHostId !== null && "scopedHostName" in persistedState
+            ? readScopedHostName(persistedState.scopedHostName)
+            : null;
+        return { ...currentState, scopedHostId, scopedHostName };
+      },
+      partialize: (state) => ({
+        scopedHostId: state.scopedHostId,
+        scopedHostName: state.scopedHostName,
       }),
-      partialize: (state) => ({ scopedHostId: state.scopedHostId }),
     },
   ),
 );

@@ -1,3 +1,4 @@
+import { cpuUsage } from "node:process";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -3322,6 +3323,13 @@ describe("performance on large documents", () => {
     return { value, elapsedMs: performance.now() - startedAt };
   }
 
+  function cpuTimed<T>(operation: () => T): { value: T; elapsedMs: number } {
+    const started = cpuUsage();
+    const value = operation();
+    const spent = cpuUsage(started);
+    return { value, elapsedMs: (spent.user + spent.system) / 1000 };
+  }
+
   function exerciseEveryOperation(text: string): void {
     const lastRow = text.lastIndexOf(`<div class="row"`);
     const locator: ElementLocator = {
@@ -3378,19 +3386,53 @@ describe("performance on large documents", () => {
     expect(elapsedMs).toBeLessThan(LIMIT_MS);
   });
 
-  it("applies single-element edits within the limit", () => {
-    const operations: ReadonlyArray<() => EditResult> = [
-      () => setAttribute(large, lastRow, "title", "t"),
-      () => setAttribute(large, lastRow, "class", null),
-      () => setStyleDeclaration(large, lastRow, "color", "blue"),
-      () => setStyleDeclaration(large, lastRow, "margin", null),
-      () => setTextNode(large, lastRow, 0, "changed"),
-      () => insertTid(large, lastRow, "tid"),
+  it("keeps single-element edits linear in document size", () => {
+    const bigger = buildDocument(150_000);
+    const smaller = buildDocument(9_375);
+    const biggerRow: ElementLocator = {
+      kind: "position",
+      startTagOffset: bigger.lastIndexOf(`<div class="row"`),
+      tagName: "div",
+    };
+    const smallerRow: ElementLocator = {
+      kind: "position",
+      startTagOffset: smaller.lastIndexOf(`<div class="row"`),
+      tagName: "div",
+    };
+    // buildDocument stops on the first row past the requested length, so
+    // the documents stay near a sixteen-to-one size ratio. A linear edit
+    // grows about sixteenfold; a quadratic edit grows about 256-fold.
+    // The bound is four times the size ratio (about 64), leaving a factor
+    // of four above linear growth and below quadratic growth.
+    const sizeRatio = bigger.length / smaller.length;
+    expect(sizeRatio).toBeGreaterThan(15);
+    expect(sizeRatio).toBeLessThan(17);
+
+    const edits: ReadonlyArray<
+      (text: string, locator: ElementLocator) => EditResult
+    > = [
+      (text, locator) => setAttribute(text, locator, "title", "t"),
+      (text, locator) => setAttribute(text, locator, "class", null),
+      (text, locator) => setStyleDeclaration(text, locator, "color", "blue"),
+      (text, locator) => setStyleDeclaration(text, locator, "margin", null),
+      (text, locator) => setTextNode(text, locator, 0, "changed"),
+      (text, locator) => insertTid(text, locator, "tid"),
     ];
-    for (const operation of operations) {
-      const { value, elapsedMs } = timed(operation);
-      expect(value.ok).toBe(true);
-      expect(elapsedMs).toBeLessThan(LIMIT_MS);
+    const linearBound = sizeRatio * 4;
+    // Keep the minimum of four CPU samples to reduce incidental GC/JIT
+    // overhead. CPU time excludes waits for another process to run.
+    for (const edit of edits) {
+      let smallMs = Number.POSITIVE_INFINITY;
+      let bigMs = Number.POSITIVE_INFINITY;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const small = cpuTimed(() => edit(smaller, smallerRow));
+        const big = cpuTimed(() => edit(bigger, biggerRow));
+        expect(small.value.ok).toBe(true);
+        expect(big.value.ok).toBe(true);
+        smallMs = Math.min(smallMs, small.elapsedMs);
+        bigMs = Math.min(bigMs, big.elapsedMs);
+      }
+      expect(bigMs).toBeLessThan(smallMs * linearBound);
     }
   });
 

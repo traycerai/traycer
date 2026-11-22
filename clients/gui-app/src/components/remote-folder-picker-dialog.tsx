@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useMemo,
   useRef,
@@ -244,6 +245,7 @@ function RemoteFolderPickerBody(): ReactNode {
   });
 
   const setPath = (path: string): void => {
+    if (showHostUpdateNeededForGesture(hostId)) return;
     setPathInput({ source: "navigation", value: path });
     setSelectedIndex(UNSET_SELECTION);
     setKeyboardAim(null);
@@ -374,6 +376,7 @@ function RemoteFolderPickerBody(): ReactNode {
           onEnter={enterEntry}
           onShowFullPath={setFullPath}
           onRetry={() => {
+            if (showHostUpdateNeededForGesture(hostId)) return;
             // Retry receives focus and disappears when it succeeds - hand
             // the keyboard back to the combobox field either way.
             void browseQuery.refetch().finally(() => {
@@ -507,10 +510,10 @@ function useRemoteFolderPickerNative(args: {
     } catch {
       if (isCurrentPickerRequest(requestId)) {
         reportableErrorToast("Couldn't open the folder picker.", undefined, {
-          title: "Could not add workspace folders",
+          title: "Could not add folders",
           message: "The folder picker failed to open.",
           code: null,
-          source: "Workspace folders",
+          source: "Folders",
         });
       }
     } finally {
@@ -719,6 +722,7 @@ function PickerRow(props: {
     onLongPress: props.onShowFullPath,
     disabled: false,
     acceptsMouse: false,
+    acceptsPen: false,
   });
   return (
     // Hover is the pointer's half of the long-press: `useLongPress` is touch
@@ -1040,7 +1044,7 @@ function RemoteFolderPickerListingStatus(props: {
       <div
         className="flex flex-col gap-1"
         data-testid="remote-folder-picker-loading"
-        aria-busy="true"
+        role="status"
         aria-label="Loading folders"
       >
         {[0, 1, 2].map((i) => (

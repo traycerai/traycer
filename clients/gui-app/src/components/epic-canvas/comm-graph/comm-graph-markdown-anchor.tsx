@@ -32,7 +32,7 @@ export function CommGraphMarkdownAnchor(props: Record<string, unknown>) {
       // app mounts a `TooltipProvider` at its root, so the wrapper is always
       // renderable here.
       <TooltipWrapper
-        label={`${href} - file links can't be resolved here; this panel isn't bound to a workspace`}
+        label={`${href} - file links can't be resolved here; this panel isn't bound to a folder`}
         side="bottom"
         sideOffset={4}
         align="center"

@@ -235,6 +235,7 @@ function respond(
     policy: { ...createDefaultFallbackPolicy(), enabled: true, ...overrides },
     storedPolicyUnreadable: false,
     inFlightCount: 0,
+    source: "own",
   };
 }
 

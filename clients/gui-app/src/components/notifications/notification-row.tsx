@@ -21,9 +21,13 @@ import {
   TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
+import {
+  NotificationRowAuthorAvatar,
+  NotificationRowBotAvatar,
+} from "@/components/notifications/notification-bots";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import { notificationRowBotId } from "@/lib/notifications/notification-row-bot-id";
+import { FeedbackDraftSendControl } from "@/components/notifications/feedback-draft-send-control";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -134,9 +138,9 @@ function rowMotionProps(options: {
 }
 
 /**
- * One flat, balanced two-line row - a small semantic glyph, title/meta
- * content, trailing relative time, and exactly one primary interactive
- * control. A navigable row's primary control is the row itself (click to
+ * One flat row, a title line over a body of up to two lines - a small
+ * semantic glyph, title/meta content, trailing relative time, and exactly
+ * one primary interactive control. A navigable row's primary control is the row itself (click to
  * activate) with a sibling mark-as-read affordance while unread; a
  * payload-less row never pretends to navigate - its only control is an
  * explicit acknowledge button, so neither shape ever nests a button inside
@@ -248,12 +252,15 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         aria-hidden
         className="flex size-6 shrink-0 items-center justify-center"
       >
-        <NotificationRowBotAvatar
-          payload={row.payload}
+        <NotificationRowPicture
+          row={row}
           fallback={<Icon className={cn("size-4", glyph.colorClassName)} />}
         />
       </span>
-      <NotificationRowWithSecrets row={row}>
+      <NotificationRowWithInlineControls
+        row={row}
+        originUnavailable={originUnavailable}
+      >
         <NotificationRowMain
           row={row}
           isRead={isRead}
@@ -261,7 +268,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
           originUnavailability={originUnavailability}
           onActivate={props.onActivate}
         />
-      </NotificationRowWithSecrets>
+      </NotificationRowWithInlineControls>
       <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
         <NotificationTimestamp createdAt={row.createdAt} />
         <NotificationRowTrailingControl
@@ -275,27 +282,80 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   );
 }
 
+function NotificationRowPicture(props: {
+  readonly row: MergedNotificationRow;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const { row, fallback } = props;
+  const authorUserId = row.botAuthorUserId ?? null;
+  if (authorUserId === null) {
+    return (
+      <NotificationRowBotAvatar payload={row.payload} fallback={fallback} />
+    );
+  }
+  return (
+    <NotificationRowAuthorAvatar
+      authorUserId={authorUserId}
+      payload={row.payload}
+      fallback={fallback}
+    />
+  );
+}
+
 /**
- * A grant request's card sits UNDER the row's main area and never inside it,
- * because that area is one button when the row is navigable and the card's
- * controls are buttons of their own.
+ * A row's own controls (a grant request's card, a feedback draft's Send) sit
+ * UNDER the row's main area and never inside it, because that area is one
+ * button when the row is navigable and the controls are buttons of their own.
  *
  * Every other row gets its main area back untouched, with no wrapper.
  */
-function NotificationRowWithSecrets(props: {
+function NotificationRowWithInlineControls(props: {
   readonly row: MergedNotificationRow;
+  readonly originUnavailable: boolean;
   readonly children: ReactNode;
 }): ReactNode {
-  const secrets = props.row.secrets ?? null;
-  if (secrets === null) return props.children;
+  const controls = notificationRowInlineControls(
+    props.row,
+    props.originUnavailable,
+  );
+  if (controls === null) return props.children;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       {props.children}
+      {controls}
+    </div>
+  );
+}
+
+function notificationRowInlineControls(
+  row: MergedNotificationRow,
+  originUnavailable: boolean,
+): ReactNode {
+  const secrets = row.secrets ?? null;
+  if (secrets !== null) {
+    return (
       <SecretGrantRequestCard
         detail={secrets}
-        resolved={props.row.resolvedAt !== null}
+        resolved={row.resolvedAt !== null}
       />
-    </div>
+    );
+  }
+  if (
+    row.payload === null ||
+    row.payload.kind !== "feedbackDraft" ||
+    row.originHostId === null ||
+    originUnavailable
+  ) {
+    return null;
+  }
+  return (
+    <FeedbackDraftSendControl
+      hostId={row.originHostId}
+      epicId={row.payload.epicId}
+      chatId={row.payload.chatId}
+      blockId={row.payload.blockId}
+      resolved={row.resolvedAt !== null}
+    />
   );
 }
 
@@ -415,6 +475,8 @@ function NotificationRowBody(props: NotificationRowBodyProps): ReactNode {
   const { title, body, isRead } = props;
   const { ref: titleRef, isTruncated } =
     useIsTextTruncated<HTMLSpanElement>(title);
+  const { ref: bodyRef, isTruncated: isBodyTruncated } =
+    useIsTextTruncated<HTMLSpanElement>(body);
   return (
     <>
       <TooltipWrapper
@@ -436,12 +498,22 @@ function NotificationRowBody(props: NotificationRowBodyProps): ReactNode {
           {title}
         </span>
       </TooltipWrapper>
-      <span
-        data-testid="notification-body"
-        className="block truncate text-ui-xs text-muted-foreground"
+      {/* Two lines, not one: a failure row's body ends in what went wrong,
+          after an agent name long enough to push it off a single line. */}
+      <TooltipWrapper
+        label={isBodyTruncated ? body : null}
+        side="bottom"
+        sideOffset={6}
+        align="start"
       >
-        {body}
-      </span>
+        <span
+          ref={bodyRef}
+          data-testid="notification-body"
+          className="line-clamp-2 text-ui-xs wrap-anywhere text-muted-foreground"
+        >
+          {body}
+        </span>
+      </TooltipWrapper>
     </>
   );
 }
@@ -526,6 +598,7 @@ const HOST_KIND_GLYPHS: Record<
   "agent.stalled": FAILED_CHAT,
   "approval.requested": NEUTRAL_BELL,
   "interview.requested": NEUTRAL_BELL,
+  "feedback.drafted": NEUTRAL_BELL,
   "workspace.operation.failed": FAILED_CHAT,
   // Only reachable for an `info` row: the severity branches above already
   // claim every `done`/`failure`/`needs_action` host-operation row, and the
@@ -541,6 +614,7 @@ const HOST_KIND_GLYPHS: Record<
   // The reader's own role is the subject, so the row carries the same shield as
   // the task-sharing role change it mirrors.
   "team.role.changed": { icon: Shield, colorClassName: INVITE_COLOR },
+  "access.readonly.retired": { icon: Shield, colorClassName: NEUTRAL_COLOR },
   // Never rendered: the merged rows drop the kind.
   "secret.export.minted": NEUTRAL_BELL,
   "secret.rotated": NEUTRAL_BELL,

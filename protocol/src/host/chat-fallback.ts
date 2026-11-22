@@ -743,11 +743,13 @@ export type FallbackModelTarget = z.infer<typeof fallbackModelTargetSchema>;
  * by the ENGINE's own resolution rather than re-derived by the client.
  *
  * Read-only with ONE bounded exception: no probe, no gauge write, no
- * traversal-record write - but a user whose fallback policy row has never been
- * seeded gets its one-time tier-group seed on their first call, because the
- * host reads groups through the same seeding helper the ladder's tier rung
- * uses. Skipping it would answer `no-group` for a user the engine would have
- * found targets for. Idempotent thereafter, and it never touches the traversal
+ * traversal-record write - but where the policy is the caller's OWN, a row
+ * that has never been seeded gets its one-time tier-group seed on their first
+ * call, because the host reads groups through the same seeding helper the
+ * ladder's tier rung uses. Skipping it would answer `no-group` for a user the
+ * engine would have found targets for. On a host whose policy belongs to a
+ * team there is no exception at all: that row is the team's, written by the
+ * host's own applier, and every read of it settles nothing. Idempotent thereafter, and it never touches the traversal
  * record - so opening the menu still cannot move a traversal, and a surface may
  * call it on every open and refresh freely.
  *
@@ -883,8 +885,8 @@ export type FallbackModelTargetV10 = z.infer<
  * Frozen `chat.fallback.listTargets@1.0` response, as the 1.5.0 tags shipped
  * it. Both run-settings slots (`failedTuple` and each model row's `target`)
  * bound the live tuple until the first harness id after 1.5.0; v2.0 carries
- * it now. The profile rows and the skip record carry no harness id and are
- * shared with the live response by reference.
+ * it now. Profile rows and the skip record retain their published shapes too:
+ * freeze a shared leaf here before extending it on the current line.
  */
 export const chatFallbackListTargetsResponseSchemaV10 = lazySchema(() =>
   z.object({

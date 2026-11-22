@@ -351,6 +351,7 @@ describe("useSubagentContinueAsChat", () => {
           hostId: "host-1",
           placement: null,
           source: "direct_ui",
+          provenance: "user",
         });
         expect(close).toHaveBeenCalledTimes(1);
       },

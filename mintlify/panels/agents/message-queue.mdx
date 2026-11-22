@@ -44,7 +44,13 @@ If **Delivery not confirmed** appears beside the composer, click **Check deliver
 
 ### Coding Agents That Can't Steer
 
-Cursor, Droid, Kimi, Kilo Code, Amp, Devin, Antigravity, and Command Code can't take a message in the middle of a turn. With these agents, the steer shortcut queues the message as **After turn**. The row's steer button still works, but it ends the current turn and restarts it with your message, so the row shows **Restart pending**.
+Cursor, Droid, Kimi, Kilo Code, Amp, Antigravity, and Command Code can't take a message in the middle of a turn. With these agents, the steer shortcut queues the message as **After turn**. The row's steer button still works, but it ends the current turn and restarts it with your message, so the row shows **Restart pending**.
+
+### Steering Devin
+
+Devin can take a text follow-up during a running turn when its installed version supports it. Images cannot be steered into the running turn. When you try to steer a queued image, hosts that support restart confirmation ask how to proceed; older hosts restart the turn without that dialog. Slash commands and messages sent while Devin is running a slash command wait for a follow-up turn instead. Older versions also queue the message for a follow-up turn.
+
+Traycer can show that the message was sent, but Devin does not confirm when it has processed it.
 
 ### Steering After Changing Settings
 

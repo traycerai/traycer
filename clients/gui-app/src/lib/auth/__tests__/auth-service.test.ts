@@ -1,16 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { putConfigurationMcpServer } from "@traycer-clients/shared/environment/configuration-settings";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type { SlackAppWriteResult } from "@traycer-clients/shared/host-client/slack-app";
 import {
   AUTH_FETCH_MAX_ATTEMPTS,
   authRetryDelayMs,
 } from "@traycer-clients/shared/auth/auth-validation";
 import type {
+  SignInSaveResult,
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
+import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import {
   DEFAULT_SKEW_ENTER_MS,
   DEFAULT_SKEW_EXIT_MS,
@@ -517,6 +531,7 @@ describe("AuthService", () => {
 
   beforeEach(() => {
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setSignInStorageLow(false);
     // `setSignedOut()` does not touch `cloudVerdictLoss` (E10) - it is a
     // separate latch a real `signed-out` never clears in production either -
     // so a test that latches it (a credential/account rejection) leaks it
@@ -533,9 +548,79 @@ describe("AuthService", () => {
       }
     }
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setSignInStorageLow(false);
     useAuthStore.getState().setCloudVerdictLoss("unreachable");
     vi.useRealTimers();
     restoreFetch();
+  });
+
+  it("forwards all bot setup writes on the verified bearer and makes no signed-out call", async () => {
+    const { service, host } = makeService();
+    const runSettings: BotUpdateRunSettingsRequest = {
+      botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+      profile: null,
+    };
+    const replyMode: BotUpdateReplyModeRequest = {
+      botId: runSettings.botId,
+      replyMode: "direct",
+    };
+    const deleteRequest: BotDeleteRequest = { botId: runSettings.botId };
+    const slackRequest: SlackAppRegisterRequest = {
+      botId: runSettings.botId,
+      appId: "A07K2M9QX4T",
+      clientId: "123.456",
+      clientSecret: "client-secret",
+      signingSecret: "signing-secret",
+    };
+    const run = vi.spyOn(host, "updateBotRunSettings").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotSetupWriteResult);
+    const reply = vi.spyOn(host, "updateBotReplyMode").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotSetupWriteResult);
+    const deletion = vi.spyOn(host, "deleteBot").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotDeleteResult);
+    const slack = vi.spyOn(host, "registerSlackApp").mockResolvedValue({
+      kind: "network-error",
+      detail: "test",
+    } satisfies SlackAppWriteResult);
+
+    await expect(service.updateBotRunSettings(runSettings)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.updateBotReplyMode(replyMode)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.deleteBot(deleteRequest)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.registerSlackApp(slackRequest)).resolves.toEqual({
+      kind: "unauthorized",
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+    expect(deletion).not.toHaveBeenCalled();
+    expect(slack).not.toHaveBeenCalled();
+
+    await host.tokenStore.signIn(
+      { token: "verified-bearer", refreshToken: "refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    await service.start();
+
+    await service.updateBotRunSettings(runSettings);
+    await service.updateBotReplyMode(replyMode);
+    await service.deleteBot(deleteRequest);
+    await service.registerSlackApp(slackRequest);
+
+    expect(run).toHaveBeenCalledWith("verified-bearer", runSettings);
+    expect(reply).toHaveBeenCalledWith("verified-bearer", replyMode);
+    expect(deletion).toHaveBeenCalledWith("verified-bearer", deleteRequest);
+    expect(slack).toHaveBeenCalledWith("verified-bearer", slackRequest);
   });
 
   it("rehydrates a persisted token after AuthnV3 validation succeeds", async () => {
@@ -560,6 +645,113 @@ describe("AuthService", () => {
     expect(service.getCurrentSessionSnapshot().token).toBe("persisted-token");
     expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-1");
     expect(seenAuthHeaders).toContain("Bearer persisted-token");
+  });
+
+  it("loads the initial sign-in storage flag and does not overwrite a newer event", async () => {
+    const { service, host } = makeService();
+    const initialRead = Promise.withResolvers<boolean>();
+    host.tokenStore.getSignInStorageLow = () => initialRead.promise;
+    const events: { publish: ((low: boolean) => void) | null } = {
+      publish: null,
+    };
+    const subscribe = host.tokenStore.subscribeSignInStorageLow.bind(
+      host.tokenStore,
+    );
+    host.tokenStore.subscribeSignInStorageLow = (listener) => {
+      events.publish = listener;
+      return subscribe(listener);
+    };
+
+    const starting = service.start();
+    expect(events.publish).not.toBeNull();
+    events.publish?.(true);
+    expect(useAuthStore.getState().signInStorageLow).toBe(true);
+    initialRead.resolve(false);
+    await starting;
+
+    expect(useAuthStore.getState().signInStorageLow).toBe(true);
+  });
+
+  it("loads a pre-existing low-storage flag during service startup", async () => {
+    const { service, host } = makeService();
+    host.tokenStore.getSignInStorageLow = () => Promise.resolve(true);
+
+    await service.start();
+
+    expect(useAuthStore.getState().signInStorageLow).toBe(true);
+  });
+
+  it("fans a fake main-process pressure event to independent renderer stores", async () => {
+    const host = new MockRunnerHost({
+      signInUrl:
+        "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    const listeners: Array<(low: boolean) => void> = [];
+    host.tokenStore.getSignInStorageLow = () => Promise.resolve(false);
+    host.tokenStore.subscribeSignInStorageLow = (listener) => {
+      listeners.push(listener);
+      return {
+        dispose: () => listeners.splice(listeners.indexOf(listener), 1),
+      };
+    };
+
+    vi.resetModules();
+    const { AuthService: FirstAuthService } =
+      await import("@/lib/auth/auth-service");
+    const { useAuthStore: firstStore } =
+      await import("@/stores/auth/auth-store");
+    const first = new FirstAuthService({ runnerHost: host });
+    await first.start();
+
+    vi.resetModules();
+    const { AuthService: SecondAuthService } =
+      await import("@/lib/auth/auth-service");
+    const { useAuthStore: secondStore } =
+      await import("@/stores/auth/auth-store");
+    const second = new SecondAuthService({ runnerHost: host });
+    await second.start();
+
+    expect(firstStore).not.toBe(secondStore);
+    expect(listeners).toHaveLength(2);
+    for (const listener of listeners) listener(true);
+
+    expect(firstStore.getState().signInStorageLow).toBe(true);
+    expect(secondStore.getState().signInStorageLow).toBe(true);
+    first.dispose();
+    second.dispose();
+  });
+
+  it("applies and clears a reserve-pressure event while keeping the live session", async () => {
+    const { service, host } = makeService();
+    const events: { publish: ((low: boolean) => void) | null } = {
+      publish: null,
+    };
+    const subscribe = host.tokenStore.subscribeSignInStorageLow.bind(
+      host.tokenStore,
+    );
+    host.tokenStore.subscribeSignInStorageLow = (listener) => {
+      events.publish = listener;
+      return subscribe(listener);
+    };
+    await service.start();
+    await deviceSignIn(service, host, "storage-flag-token");
+
+    events.publish?.(true);
+    expect(useAuthStore.getState().signInStorageLow).toBe(true);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe(
+      "storage-flag-token",
+    );
+
+    events.publish?.(false);
+    expect(useAuthStore.getState().signInStorageLow).toBe(false);
+    expect(useAuthStore.getState().status).toBe("signed-in");
   });
 
   it("refreshes and refetches when a running desktop session predates tracking", async () => {
@@ -1161,7 +1353,7 @@ describe("AuthService", () => {
     });
 
     // Electron powerMonitor resume bridged through the runner host.
-    host.emitSystemResumed({ backgroundedForMs: null });
+    host.emitSystemResumed({ backgroundedForMs: null, screenLocked: false });
 
     await vi.waitFor(() => {
       expect(service.getCurrentSessionSnapshot().token).toBe(rotated);
@@ -1193,7 +1385,7 @@ describe("AuthService", () => {
       return okWithProfile();
     });
 
-    host.emitSystemResumed({ backgroundedForMs: null });
+    host.emitSystemResumed({ backgroundedForMs: null, screenLocked: false });
     for (let i = 0; i < 8; i++) {
       await Promise.resolve();
     }
@@ -2811,9 +3003,9 @@ describe("AuthService", () => {
       host.tokenStore.signIn = async (
         tokens: StoredAuthTokens,
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         statusAtWrite.push(useAuthStore.getState().status);
-        await originalSignIn(tokens, identity);
+        return originalSignIn(tokens, identity);
       };
 
       await service.start();
@@ -2938,7 +3130,7 @@ describe("AuthService", () => {
         return okWithProfile();
       });
 
-      host.emitSystemResumed({ backgroundedForMs: null });
+      host.emitSystemResumed({ backgroundedForMs: null, screenLocked: false });
 
       await vi.waitFor(() => {
         expect(service.getCurrentSessionSnapshot().token).toBe(rotated);
@@ -2971,10 +3163,10 @@ describe("AuthService", () => {
       host.tokenStore.signIn = async (
         tokens: StoredAuthTokens,
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         signalSaveStarted();
         await savePending;
-        await originalSignIn(tokens, identity);
+        return originalSignIn(tokens, identity);
       };
 
       host.deviceFlow.emitResult({
@@ -3019,13 +3211,13 @@ describe("AuthService", () => {
       host.tokenStore.signIn = async (
         tokens: StoredAuthTokens,
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         if (hangNext) {
           hangNext = false;
           signalSaveStarted();
           await savePending;
         }
-        await originalSignIn(tokens, identity);
+        return originalSignIn(tokens, identity);
       };
 
       await service.signIn();
@@ -3125,7 +3317,7 @@ describe("AuthService", () => {
       await service.start();
 
       const originalSignIn = host.tokenStore.signIn.bind(host.tokenStore);
-      host.tokenStore.signIn = (): Promise<void> =>
+      host.tokenStore.signIn = (): Promise<SignInSaveResult> =>
         Promise.reject(new Error("disk full"));
 
       await service.signIn();
@@ -3177,7 +3369,7 @@ describe("AuthService", () => {
       // inside `tokenStore.rotate`. `delete` is serialized behind that rotate
       // (AuthTokenStore op chain), so signOut must be started while the rotate
       // is in flight and the hang must be released before signOut can finish.
-      host.emitSystemResumed({ backgroundedForMs: null });
+      host.emitSystemResumed({ backgroundedForMs: null, screenLocked: false });
       await refreshStarted;
 
       const signOutPromise = service.signOut();
@@ -3239,9 +3431,9 @@ describe("AuthService", () => {
       host.tokenStore.signIn = async (
         tokens: StoredAuthTokens,
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         statusAtWrite.push(useAuthStore.getState().status);
-        await originalSignIn(tokens, identity);
+        return originalSignIn(tokens, identity);
       };
 
       await service.signIn();
@@ -3265,8 +3457,9 @@ describe("AuthService", () => {
       await deviceSignIn(service, host, "live-token");
       expect(await host.tokenStore.get()).not.toBeNull();
 
-      await service.signOut();
+      const signOutCompleted = await service.signOut();
 
+      expect(signOutCompleted).toBe(true);
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(await host.tokenStore.get()).toBeNull();
     });
@@ -3324,8 +3517,9 @@ describe("AuthService", () => {
       host.tokenStore.delete = (): Promise<void> =>
         Promise.reject(new Error("EACCES: credentials locked"));
 
-      await service.signOut();
+      const signOutCompleted = await service.signOut();
 
+      expect(signOutCompleted).toBe(false);
       // Failed sign-out must never claim signed-out without the delete landing.
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("sticky-token");
@@ -3450,6 +3644,41 @@ describe("AuthService", () => {
       expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
     });
 
+    it("start() leaves a newer pending sign-in intact when its held get() faults", async () => {
+      const { service, host } = makeService();
+      let markReadEntered: () => void = () => undefined;
+      const readEntered = new Promise<void>((resolve) => {
+        markReadEntered = resolve;
+      });
+      let rejectRead: (error: Error) => void = () => undefined;
+      const pendingRead = new Promise<StoredCredentials | null>(
+        (_resolve, reject) => {
+          rejectRead = (error) => {
+            reject(error);
+          };
+        },
+      );
+      host.tokenStore.get = (): Promise<StoredCredentials | null> => {
+        markReadEntered();
+        return pendingRead;
+      };
+
+      const starting = service.start();
+      await readEntered;
+      await service.signIn();
+      expect(useAuthStore.getState().status).toBe("signing-in");
+
+      rejectRead(
+        Object.assign(new Error("EACCES: credentials unreadable"), {
+          code: "EACCES",
+        }),
+      );
+
+      await expect(starting).resolves.toBeUndefined();
+      expect(useAuthStore.getState().status).toBe("signing-in");
+      expect(service.getLastError()).toBeNull();
+    });
+
     it("start() maps rotate() faults to store-unavailable UI signed-out", async () => {
       const { service, host } = makeService();
       await host.tokenStore.signIn(
@@ -3465,6 +3694,45 @@ describe("AuthService", () => {
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
       // File kept — automatic failure never deletes.
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("stale-token", "stale-token-refresh"),
+      );
+    });
+
+    it("start() keeps the stored session available when rotation reports disk-full", async () => {
+      const { service, host } = makeService();
+      const events: { publish: ((low: boolean) => void) | null } = {
+        publish: null,
+      };
+      const subscribe = host.tokenStore.subscribeSignInStorageLow.bind(
+        host.tokenStore,
+      );
+      host.tokenStore.subscribeSignInStorageLow = (listener) => {
+        events.publish = listener;
+        return subscribe(listener);
+      };
+      await host.tokenStore.signIn(
+        { token: "stale-token", refreshToken: "stale-token-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() => status(401));
+      host.tokenStore.rotate = (): Promise<TokenRotateResult> => {
+        events.publish?.(true);
+        return Promise.resolve({
+          outcome: "disk-full",
+          pair: null,
+          rejection: null,
+          diskPressure: null,
+        });
+      };
+
+      await expect(service.start()).resolves.toBeUndefined();
+
+      expect(useAuthStore.getState().status).toBe("unverified");
+      expect(service.getCurrentSessionSnapshot().token).toBe("stale-token");
+      expect(service.getLastError()).toBeNull();
+      expect(useAuthStore.getState().signInStorageLow).toBe(true);
       expect(await host.tokenStore.get()).toEqual(
         expectedStored("stale-token", "stale-token-refresh"),
       );
@@ -3495,6 +3763,48 @@ describe("AuthService", () => {
       );
     });
 
+    it("reactive disk-full keeps the live session", async () => {
+      const { service, host } = makeService();
+      const events: { publish: ((low: boolean) => void) | null } = {
+        publish: null,
+      };
+      const subscribe = host.tokenStore.subscribeSignInStorageLow.bind(
+        host.tokenStore,
+      );
+      host.tokenStore.subscribeSignInStorageLow = (listener) => {
+        events.publish = listener;
+        return subscribe(listener);
+      };
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      restoreFetch();
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        return url === NEGOTIATED_VALIDATION_URL ? status(401) : status(500);
+      });
+      host.tokenStore.rotate = (): Promise<TokenRotateResult> => {
+        events.publish?.(true);
+        return Promise.resolve({
+          outcome: "disk-full",
+          pair: null,
+          rejection: null,
+          diskPressure: null,
+        });
+      };
+
+      const outcome = await service.revalidateCurrentContext();
+
+      expect(outcome?.kind).toBe("network-error");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(useAuthStore.getState().signInStorageLow).toBe(true);
+      expect(service.getCurrentSessionSnapshot().token).toBe("live-token");
+      expect(service.getLastError()).toBeNull();
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("live-token", "live-token-refresh"),
+      );
+    });
+
     it("commit-failed with a foreign pair does not bind the foreign bearer", async () => {
       const { service, host } = makeService();
       await service.start();
@@ -3511,6 +3821,7 @@ describe("AuthService", () => {
       host.tokenStore.rotate = () =>
         Promise.resolve({
           outcome: "commit-failed" as const,
+          diskPressure: null,
           rejection: null,
           pair: {
             token: "foreign-token",
@@ -3967,6 +4278,139 @@ describe("AuthService", () => {
       expect(appServerClock.currentState().verdict).toBe("ok");
 
       resetAppClockToOk();
+    });
+  });
+
+  describe("environment calls stop at the sign-in an operation began on", () => {
+    const ITEMS_URL =
+      "http://localhost:5005/api/v3/environments/env-1/items?kind=mcp_server";
+    const SERVER_URL =
+      "http://localhost:5005/api/v3/environments/env-1/mcp-servers/srv-1";
+
+    const SAVE: EnvironmentConfigurationMcpServerPutRequestV11 = {
+      environmentId: "env-1",
+      serverId: "srv-1",
+      name: "github",
+      transport: "http",
+      url: "https://mcp.example.com",
+      command: null,
+      args: [],
+      env: [],
+      toolToggles: {},
+      offFor: [],
+      credential: { kind: "unchanged" },
+    };
+
+    interface Sent {
+      readonly url: string;
+      readonly method: string;
+      readonly authorization: string;
+    }
+
+    function installEnvironmentFetch(
+      beforeAnswer: () => Promise<void>,
+    ): Sent[] {
+      const sent: Sent[] = [];
+      restoreFetch();
+      restoreFetch = installFetch(async (input, init) => {
+        const url = String(input);
+        if (!url.includes("/api/v3/environments/")) {
+          return init?.headers?.Authorization === "Bearer account-b-token"
+            ? okWithProfileForUser("user-2")
+            : okWithProfile();
+        }
+        sent.push({
+          url,
+          method: init?.method ?? "GET",
+          authorization: init?.headers?.Authorization ?? "",
+        });
+        if (url !== ITEMS_URL) {
+          return Response.json({ code: "item_refused" }, { status: 400 });
+        }
+        await beforeAnswer();
+        return Response.json({
+          items: [
+            {
+              kind: "mcp_server",
+              key: "github",
+              os: null,
+              value: { mcpServerId: "srv-1", toolToggles: {} },
+              revision: 3,
+              updatedAt: 1,
+              writtenBy: { source: "dashboard", hostId: null, hostName: null },
+            },
+          ],
+        });
+      });
+      return sent;
+    }
+
+    async function signedIn(): Promise<{
+      service: AuthService;
+      host: MockRunnerHost;
+    }> {
+      const made = makeService();
+      await made.service.start();
+      await deviceSignIn(made.service, made.host, "account-a-token");
+      return made;
+    }
+
+    it("sends both of a save's requests while its sign-in holds", async () => {
+      const { service } = await signedIn();
+      const sent = installEnvironmentFetch(() => Promise.resolve());
+
+      await expect(
+        putConfigurationMcpServer(service.environmentCloud(), SAVE, 3),
+      ).resolves.toEqual({
+        outcome: "refused",
+        reason: "item_refused",
+        serverId: null,
+      });
+
+      expect(sent).toEqual([
+        {
+          url: ITEMS_URL,
+          method: "GET",
+          authorization: "Bearer account-a-token",
+        },
+        {
+          url: SERVER_URL,
+          method: "PATCH",
+          authorization: "Bearer account-a-token",
+        },
+      ]);
+    });
+
+    it("never sends a save's write once another person's session replaces it", async () => {
+      const { service } = await signedIn();
+      const cloud = service.environmentCloud();
+      const sent = installEnvironmentFetch(() => {
+        service.applyExternalSession(
+          externalSessionForUser("user-2", "account-b-token"),
+        );
+        return Promise.resolve();
+      });
+
+      await expect(putConfigurationMcpServer(cloud, SAVE, 3)).rejects.toThrow(
+        "Connect to manage settings.",
+      );
+
+      expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+      expect(sent.map((request) => request.url)).toEqual([ITEMS_URL]);
+    });
+
+    it("never sends a save's write once the same person signs in again", async () => {
+      const { service, host } = await signedIn();
+      const cloud = service.environmentCloud();
+      const sent = installEnvironmentFetch(() =>
+        deviceSignIn(service, host, "account-a-token-2"),
+      );
+
+      await expect(putConfigurationMcpServer(cloud, SAVE, 3)).rejects.toThrow(
+        "Connect to manage settings.",
+      );
+
+      expect(sent.map((request) => request.url)).toEqual([ITEMS_URL]);
     });
   });
 });

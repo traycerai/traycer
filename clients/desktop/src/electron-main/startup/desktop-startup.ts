@@ -1,4 +1,7 @@
 import { SandboxArtifactServer } from "../app/sandbox-artifact-server";
+import { createHostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import { createHostTokenFilePersistence } from "@traycer-clients/shared/auth/host-token-file";
+import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
 import { app, dialog, nativeImage } from "electron";
 import type { Event as ElectronEvent } from "electron";
 import { randomUUID } from "node:crypto";
@@ -208,6 +211,7 @@ import {
 } from "../app/app-protocol";
 import { installSandboxProtocolHandler } from "../app/sandbox-protocol";
 import { applyHardwareAccelerationPreference } from "../app/gpu-acceleration";
+import { applyRemoteDebuggingPortPreference } from "../app/remote-debugging-port";
 import { configureHostResolverDoH } from "../app/host-resolver";
 import { configureUserAgent, preconnectTraycerHosts } from "../app/network";
 import {
@@ -269,6 +273,12 @@ const QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 200;
 // answer in milliseconds; past this the quit asks as if the host were up.
 const QUIT_HOST_LIVENESS_TIMEOUT_MS = 2_000;
 
+// How long the quit waits for a recording of the music to finish while its
+// save channels are still up: the window's last second of audio, its log's end
+// and its close are local IPC and a small write, well under this. A disk that
+// stalls past it leaves the files closed as they stand, which still open.
+const QUIT_SOUNDTRACK_RECORDING_TIMEOUT_MS = 2_000;
+
 /**
  * A relaunch is intended when this quit hands over to another instance: the
  * updater's `quitAndInstall`, or the macOS move to /Applications, which
@@ -303,6 +313,11 @@ async function isLocalHostRunningForQuit(
     clearTimeout(timer);
   }
 }
+
+// The credentials lock is held for at most one bounded refresh, so a host
+// token write waits as long as a credentials write does.
+const HOST_TOKENS_LOCK_WAIT_MS = 12_000;
+const HOST_TOKENS_LOCK_POLL_MS = 50;
 
 /**
  * Phased desktop boot.
@@ -578,8 +593,9 @@ async function timed(
 // Pre-ready: command-line switches, scheme registration, hardware
 // acceleration toggle, V8 heap, and crash collection all run before
 // Chromium initializes. These are synchronous in-process Electron calls
-// (two documented sync-filesystem exceptions: the GPU preference read in
-// app/gpu-acceleration.ts and the memory-backed /proc write in
+// (three documented sync-filesystem exceptions: the GPU and debugging-port
+// preference reads in app/gpu-acceleration.ts and
+// app/remote-debugging-port.ts, and the memory-backed /proc write in
 // app/core-dump-guard.ts, which must land before Chromium spawns children).
 export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
@@ -588,6 +604,7 @@ export function runPreReady(state: BootState): void {
   // `traycer-host`'s `BROWSER_CAPTURE_HELPER_PERMISSIONS`
   // (browser-capture-helper.ts).
   applyHardwareAccelerationPreference();
+  applyRemoteDebuggingPortPreference(state.config.environment);
   suppressWslKernelCoreDumps();
   // `initCrashReporter()` must run before `registerAppScheme()`. When a
   // Sentry DSN is configured, `SentryElectron.init()` makes its own raw
@@ -815,6 +832,26 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     authnBaseUrl: config.authnBaseUrl,
     watchImpl: undefined,
   });
+  // The person's host-only tokens, in the file beside the credentials file and
+  // written under its lock. Main is the only writer on this machine's desktop.
+  const hostTokens = createHostTokenSource({
+    persistence: createHostTokenFilePersistence({
+      environment: config.environment,
+      lockWaitMs: HOST_TOKENS_LOCK_WAIT_MS,
+      lockPollIntervalMs: HOST_TOKENS_LOCK_POLL_MS,
+    }),
+    mint: (hostId, signInToken, signal) =>
+      mintHostTokenViaHttp(config.authnBaseUrl, hostId, signInToken, signal),
+    // Main's own verified copy of the person's sign-in, which every window
+    // already sends it: a mint spends nothing authn has not confirmed.
+    signIn: (userId) => {
+      const session = authSession.get();
+      return session.verified && session.profile?.userId === userId
+        ? session.token
+        : null;
+    },
+    now: Date.now,
+  });
 
   const hostLabel = labelForEnvironment(config.environment);
   const hostLayout = getHostFsLayout(config.environment);
@@ -967,6 +1004,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     hostController,
     authnBaseUrl: config.authnBaseUrl,
     authTokenStore,
+    hostTokens,
     // Device flow is the only login - there is no loopback redirect_uri to
     // snapshot - so the renderer always falls back to the custom-scheme
     // sign-in URL composition.
@@ -1230,9 +1268,9 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     installHostWakeRecovery(
       services.host,
       installPowerMonitorListeners,
-      () => {
+      (wake) => {
         state.bridge?.notifySystemResumed();
-        state.bridge?.fanOut(RunnerHostEvent.systemResumed, undefined);
+        state.bridge?.fanOut(RunnerHostEvent.systemResumed, wake);
         checkForUpdatesAfterResume(state.config.isDev);
         // `force: true` - matches `checkForUpdatesAfterResume` above: a real
         // probe on every wake, gated only by the debounce below (not by cache
@@ -1613,8 +1651,18 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   const authorizeQuitAfterFlush = (): void => {
     const finalBrowserCapture =
       state.bridge?.captureFinalBrowserState() ?? Promise.resolve();
+    const finishedRecordings =
+      state.bridge?.finishSoundtrackRecordings(
+        QUIT_SOUNDTRACK_RECORDING_TIMEOUT_MS,
+      ) ?? Promise.resolve();
     void Promise.all([
       flushShellState(),
+      finishedRecordings.catch((error: unknown) => {
+        log.warn(
+          "[desktop] finishing a soundtrack recording failed - quitting anyway",
+          error,
+        );
+      }),
       finalBrowserCapture.catch((error) => {
         log.warn(
           "[desktop] final browser capture failed - quitting anyway",

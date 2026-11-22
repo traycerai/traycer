@@ -164,6 +164,21 @@ def describe(w, intent, est0):
         flags.append("turnEnded")
     if w.get("boot", "none") != "none":
         flags.append(f"boot={w['boot']}")
+    # A frame whose scrollable size changed, the writes it has yet to decide,
+    # a write left to land late, the send's void, the layout hold.
+    if w.get("frameDirty"):
+        flags.append("frameDirty")
+    if w.get("burst", {}).get("on"):
+        b = w["burst"]
+        flags.append(f"burst {b['from']}->{b['to']} low={b['low']}")
+    if w.get("late", -1) != -1:
+        flags.append(f"late->{w['late']}")
+    if w.get("inval"):
+        flags.append("void")
+    if w.get("holdStruct", "none") != "none":
+        flags.append(f"hold={w['holdStruct']}")
+    if w.get("owed"):
+        flags.append("owed")
     if flags:
         parts.append("{" + ",".join(flags) + "}")
     st = w["store"]
@@ -185,7 +200,10 @@ def main(path):
     for n, st in enumerate(states(text), 1):
         if est0 is None:
             est0 = st["w"].get("est")
-        print(f"{n:2} {st['last']:<22} {describe(st['w'], st['intent'], est0)}")
+        ledger = f"  led={st['led']}" if "led" in st else ""
+        # A replay beat the model did not issue stutters the model's state.
+        label = "(skipped beat)" if st.get("replayAction") == "skip" else st["last"]
+        print(f"{n:2} {label:<22} {describe(st['w'], st['intent'], est0)}{ledger}")
 
 
 if __name__ == "__main__":

@@ -13,29 +13,34 @@ import {
   TEAM_MAIN_BOT_ID,
   TWO_MAIN_BOTS_DIRECTORY,
 } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
-import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
 
-function titleText(botId: string, installedApp: boolean): string {
-  setPhoneLayoutOnly(installedApp);
+function titleText(botId: string, level2: MobileLevel2Form | null): string {
+  // The picker's sheet reads the resolved theme, so it needs its provider.
   render(
-    <BotChannelTitle
-      title="Tracy"
-      activeBotId={botId}
-      hostId="host-1"
-      threadsView={null}
-    />,
+    <ResolvedThemeContext.Provider
+      value={{ resolvedTheme: "dark", themePreset: "neutral" }}
+    >
+      <BotChannelTitle
+        level2={level2}
+        title="Tracy"
+        activeBotId={botId}
+        hostId="host-1"
+        threadsView={null}
+      />
+    </ResolvedThemeContext.Provider>,
   );
   return screen.getByTestId("bot-tab-title").textContent;
 }
 
 afterEach(() => {
   cleanup();
-  setPhoneLayoutOnly(false);
   useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
 });
 
@@ -46,7 +51,7 @@ describe("<BotChannelTitle /> and the environment", () => {
       settled: true,
     });
 
-    expect(titleText(TEAM_MAIN_BOT_ID, true)).toBe("Tracy · traycerai");
+    expect(titleText(TEAM_MAIN_BOT_ID, "menu")).toBe("Tracy · traycerai");
   });
 
   it("never suffixes the personal bot", () => {
@@ -55,7 +60,7 @@ describe("<BotChannelTitle /> and the environment", () => {
       settled: true,
     });
 
-    expect(titleText(PERSONAL_MAIN_BOT_ID, true)).toBe("Tracy");
+    expect(titleText(PERSONAL_MAIN_BOT_ID, "bar")).toBe("Tracy");
   });
 
   it("keeps a team's bot to its name when it is the only main bot", () => {
@@ -64,7 +69,7 @@ describe("<BotChannelTitle /> and the environment", () => {
       settled: true,
     });
 
-    expect(titleText(TEAM_MAIN_BOT_ID, true)).toBe("Tracy");
+    expect(titleText(TEAM_MAIN_BOT_ID, "menu")).toBe("Tracy");
   });
 
   it("keeps the personal bot to its name when it is the only main bot", () => {
@@ -73,15 +78,15 @@ describe("<BotChannelTitle /> and the environment", () => {
       settled: true,
     });
 
-    expect(titleText(PERSONAL_MAIN_BOT_ID, true)).toBe("Tracy");
+    expect(titleText(PERSONAL_MAIN_BOT_ID, "menu")).toBe("Tracy");
   });
 
-  it("shows only the name in the pane header where the bots column stands", () => {
+  it("shows only the name in the pane header beside a column", () => {
     useStandaloneBotsStore.setState({
       directory: TWO_MAIN_BOTS_DIRECTORY,
       settled: true,
     });
 
-    expect(titleText(TEAM_MAIN_BOT_ID, false)).toBe("Tracy");
+    expect(titleText(TEAM_MAIN_BOT_ID, null)).toBe("Tracy");
   });
 });

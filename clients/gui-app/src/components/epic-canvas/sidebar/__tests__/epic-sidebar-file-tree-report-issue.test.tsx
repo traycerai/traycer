@@ -567,7 +567,7 @@ describe("epic sidebar file-tree load failure report action", () => {
       activeDialog: "report-issue",
       reportIssueContext: {
         title: "Unable to load files",
-        message: "The workspace file tree could not be loaded.",
+        message: "The folder file tree could not be loaded.",
         code: null,
         source: "File tree",
       },
@@ -609,7 +609,7 @@ describe("epic sidebar file-tree workspace picker persistence", () => {
 
   it("keeps the picker when NO workspace resolves", () => {
     // Zero rows is what a host that cannot answer resolves to, so the panel
-    // falls to "No workspace linked." The picker used to live in that
+    // falls to "No folder linked." The picker used to live in that
     // conditional's OTHER arm, which meant choosing a host that could not
     // answer removed the control that could choose a different one - and the
     // pin is persisted, so it survived a reload. Same defect the git-diff
@@ -624,13 +624,13 @@ describe("epic sidebar file-tree workspace picker persistence", () => {
     ).toBeDefined();
     const picker = screen.getByTestId("mock-file-tree-workspace-picker");
     // Rendered with a NULL selection rather than being skipped - the picker
-    // already models "no workspace chosen" ("Select workspace").
+    // already models "no folder chosen" ("Select folder").
     expect(picker.getAttribute("data-selected-path")).toBe("<null>");
   });
 
-  it("does not claim 'No workspace linked' when the host never ANSWERED", () => {
+  it("does not claim 'No folder linked' when the host never ANSWERED", () => {
     // A failed read and an answered-but-empty read both leave the selection
-    // null, so the panel used to tell one story for both. "No workspace
+    // null, so the panel used to tell one story for both. "No folder
     // linked." is a claim about the agent; this is a fact about the
     // connection, and only one of them has a remedy the user can act on.
     fileTreeBindingsState.rows = [];

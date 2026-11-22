@@ -279,6 +279,7 @@ function PrDetailLoaded(props: {
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
     },
     [openTile, props.viewTabId, hostId],

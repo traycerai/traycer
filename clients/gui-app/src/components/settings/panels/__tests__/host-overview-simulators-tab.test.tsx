@@ -54,11 +54,16 @@ interface TabFakes {
   status: SimulatorStatusResponse;
   /** The host's side of `simulator.status`: answers `status` unless a case says otherwise. */
   readStatus: Mock<() => Promise<SimulatorStatusResponse>>;
+  queryHooks: Mock<(name: string) => void>;
   write: Mock;
   remove: Mock;
   removePending: boolean;
   titles: Map<string, string>;
   openTask: Mock<(epicId: string) => void>;
+  startSetup: Mock<
+    (input: { hostName: string; status: SimulatorStatusResponse }) => boolean
+  >;
+  hostReachable: boolean;
 }
 
 const fakes = vi.hoisted((): TabFakes => ({
@@ -74,11 +79,14 @@ const fakes = vi.hoisted((): TabFakes => ({
     installed: null,
   },
   readStatus: vi.fn(),
+  queryHooks: vi.fn(),
   write: vi.fn(),
   remove: vi.fn(),
   removePending: false,
   titles: new Map(),
   openTask: vi.fn(),
+  startSetup: vi.fn(),
+  hostReachable: true,
 }));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
@@ -93,6 +101,12 @@ vi.mock("@/components/settings/panels/use-simulator-task-titles", () => ({
   useSimulatorTaskTitles: () => fakes.titles,
 }));
 
+vi.mock("@/hooks/simulator/use-start-simulator-setup-agent", () => ({
+  useStartSimulatorSetupAgent: () => ({
+    hostReachable: fakes.hostReachable,
+    start: fakes.startSetup,
+  }),
+}));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     fakes.methodSupport[method] ?? null,
@@ -111,10 +125,10 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
     >();
   return {
     INSTANCE_INVALIDATIONS,
-    useSimulatorInstancesQuery: () => ({
-      data: { instances: fakes.instances },
-      isError: false,
-    }),
+    useSimulatorInstancesQuery: () => {
+      fakes.queryHooks("instances");
+      return { data: { instances: fakes.instances }, isError: false };
+    },
     useSimulatorPowerOffMutation: () => ({
       mutation: useMutation({
         mutationFn: (request: SimulatorPowerOffRequest) =>
@@ -126,15 +140,15 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
       mutation: { mutate: vi.fn(), isPending: false },
       supported: true,
     }),
-    useSimulatorConfigQuery: () => ({
-      data: fakes.config,
-      isPending: false,
-      isError: false,
-    }),
+    useSimulatorConfigQuery: () => {
+      fakes.queryHooks("config");
+      return { data: fakes.config, isPending: false, isError: false };
+    },
     // A real query under the real key, so what the tab's Check again
     // invalidates is what this read answers again from `fakes.readStatus`.
-    useSimulatorStatusQuery: (_client: unknown, hostId: string | null) =>
-      useQuery({
+    useSimulatorStatusQuery: (_client: unknown, hostId: string | null) => {
+      fakes.queryHooks("status");
+      return useQuery({
         queryKey: hostQueryKeys.method<HostRpcRegistry, "simulator.status">(
           hostId,
           "simulator.status",
@@ -142,7 +156,11 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
         ),
         queryFn: () => fakes.readStatus(),
         staleTime: Number.POSITIVE_INFINITY,
-      }),
+        retry: false,
+        // Check again mounts a second observer: it must not re-read a failure.
+        retryOnMount: false,
+      });
+    },
     useSimulatorConfigSetMutation: () => ({
       mutation: { mutate: fakes.write, isPending: false },
       supported: true,
@@ -180,7 +198,11 @@ beforeEach(() => {
   fakes.removePending = false;
   fakes.titles = new Map();
   fakes.openTask.mockReset();
+  fakes.startSetup.mockReset();
+  fakes.startSetup.mockReturnValue(true);
+  fakes.hostReachable = true;
   fakes.readStatus.mockReset();
+  fakes.queryHooks.mockClear();
   fakes.readStatus.mockImplementation(() => Promise.resolve(fakes.status));
   fakes.status = {
     platforms: [
@@ -210,12 +232,13 @@ function statusKey(): QueryKey {
 }
 
 /** The tab over a cache already holding the host's last status answer. */
-function renderTab(): QueryClient {
+function renderTabWithUsability(usable: boolean): QueryClient {
   const queryClient = new QueryClient();
   queryClient.setQueryData(statusKey(), fakes.status);
   render(
     <QueryClientProvider client={queryClient}>
       <HostOverviewSimulatorsTab
+        usable={usable}
         client={null}
         hostId={HOST}
         hostName="Studio Mac"
@@ -223,6 +246,28 @@ function renderTab(): QueryClient {
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+function renderTab(): QueryClient {
+  return renderTabWithUsability(true);
+}
+
+/** The tab with no cached status: the read is whatever `fakes.readStatus` does. */
+function renderTabUncached(): void {
+  render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <HostOverviewSimulatorsTab
+        usable
+        client={null}
+        hostId={HOST}
+        hostName="Studio Mac"
+      />
+    </QueryClientProvider>,
+  );
 }
 
 const RUNNING: SimulatorHostInstance = {
@@ -247,6 +292,24 @@ function switchRow(): HTMLElement {
 }
 
 describe("HostOverviewSimulatorsTab", () => {
+  it("offers no simulator controls and starts no reads for an unusable host with retained capabilities and status", () => {
+    fakes.config = { enabled: true, idleMinutes: 15 };
+    fakes.instances = [RUNNING];
+    const queryClient = renderTabWithUsability(false);
+
+    expect(queryClient.getQueryData(statusKey())).toEqual(fakes.status);
+    expect(fakes.methodSupport["config.simulator.get"]).toBe(true);
+    expect(fakes.methodSupport["config.simulator.set"]).toBe(true);
+    expect(fakes.methodSupport["simulator.status"]).toBe(true);
+    expect(fakes.methodSupport["simulator.removeTools"]).toBe(true);
+    expect(screen.queryByTestId("settings-simulators-enabled")).toBeNull();
+    expect(screen.queryByTestId("settings-simulators-remove-tools")).toBeNull();
+    expect(screen.queryByTestId("settings-simulators-idle-minutes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    expect(fakes.queryHooks).not.toHaveBeenCalled();
+    expect(fakes.readStatus).not.toHaveBeenCalled();
+  });
+
   it("replaces the switch with one sentence while the host's methods are unknown or missing, and never draws an agent row", () => {
     fakes.methodSupport["config.simulator.set"] = null;
     renderTab();
@@ -375,6 +438,226 @@ describe("HostOverviewSimulatorsTab", () => {
     expect(
       screen.getByTestId("host-overview-mobile-simulators").textContent,
     ).toContain("iOS: No Xcode. Android: No Android SDK.");
+  });
+
+  describe("setting up with an agent", () => {
+    const UNSUPPORTED: SimulatorPackState = {
+      kind: "unsupported",
+      reason: "No platform can run here.",
+      progress: null,
+    };
+
+    it("off with a platform that can be set up: holds the switch, hints at setup and starts the agent from the offer", () => {
+      fakes.config = { enabled: false };
+      fakes.status = {
+        ...withPack(UNSUPPORTED, null),
+        installed: null,
+        platforms: [
+          {
+            platform: "ios",
+            available: false,
+            reason: "No Xcode.",
+            setupSupported: true,
+          },
+          {
+            platform: "android",
+            available: false,
+            reason: "No Android SDK.",
+            setupSupported: true,
+          },
+        ],
+      };
+      renderTab();
+      expect(switchRow().hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByTestId("settings-simulators-setup-needed").textContent,
+      ).toContain("Set up a platform on Studio Mac to turn this on.");
+      expect(
+        screen.queryByTestId("settings-simulators-unsupported"),
+      ).toBeNull();
+      fireEvent.click(screen.getByTestId("settings-simulators-setup-agent"));
+      expect(fakes.startSetup).toHaveBeenCalledWith({
+        hostName: "Studio Mac",
+        status: fakes.status,
+      });
+      expect(fakes.write).not.toHaveBeenCalled();
+    });
+
+    it("on with one platform missing: offers setup beside the Platforms row", () => {
+      fakes.status = {
+        ...fakes.status,
+        platforms: [
+          {
+            platform: "ios",
+            available: true,
+            reason: null,
+            setupSupported: true,
+          },
+          {
+            platform: "android",
+            available: false,
+            reason: "No Android SDK.",
+            setupSupported: true,
+          },
+        ],
+      };
+      renderTab();
+      expect(
+        screen.getByTestId("settings-simulators-setup-agent"),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByTestId("settings-simulators-setup-agent"));
+      expect(fakes.startSetup).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers nothing and says the host cannot run simulators when no platform can be set up here", () => {
+      fakes.config = { enabled: false };
+      fakes.status = {
+        ...withPack(UNSUPPORTED, null),
+        installed: null,
+        platforms: [
+          {
+            platform: "ios",
+            available: false,
+            reason: "iOS needs macOS.",
+            setupSupported: false,
+          },
+          {
+            platform: "android",
+            available: false,
+            reason: "Unsupported processor.",
+            setupSupported: false,
+          },
+        ],
+      };
+      renderTab();
+      expect(
+        screen.queryByTestId("settings-simulators-setup-agent"),
+      ).toBeNull();
+      expect(
+        screen.getByTestId("settings-simulators-unsupported").textContent,
+      ).toContain("Studio Mac can't run mobile simulators.");
+      expect(switchRow().hasAttribute("disabled")).toBe(true);
+    });
+
+    it("never offers setup to an older host that does not say whether it can be set up", () => {
+      fakes.config = { enabled: false };
+      fakes.status = {
+        ...withPack(UNSUPPORTED, null),
+        installed: null,
+        platforms: [
+          { platform: "ios", available: false, reason: "No Xcode." },
+          { platform: "android", available: false, reason: "No SDK." },
+        ],
+      };
+      renderTab();
+      expect(
+        screen.queryByTestId("settings-simulators-setup-agent"),
+      ).toBeNull();
+    });
+
+    it("does not offer setup for an unsupported verdict while a platform is available, and shows the host's reason", () => {
+      fakes.config = { enabled: false };
+      fakes.status = {
+        ...withPack(
+          {
+            kind: "unsupported",
+            reason: "No tools for this processor.",
+            progress: null,
+          },
+          null,
+        ),
+        installed: null,
+        platforms: [
+          {
+            platform: "ios",
+            available: true,
+            reason: null,
+            setupSupported: true,
+          },
+          {
+            platform: "android",
+            available: false,
+            reason: "No Android SDK.",
+            setupSupported: true,
+          },
+        ],
+      };
+      renderTab();
+      expect(
+        screen.queryByTestId("settings-simulators-setup-agent"),
+      ).toBeNull();
+      expect(
+        screen.getByTestId("host-overview-mobile-simulators").textContent,
+      ).toContain("No tools for this processor.");
+    });
+
+    it("disables the offer and says the host is offline when it cannot be reached", () => {
+      fakes.hostReachable = false;
+      fakes.config = { enabled: false };
+      fakes.status = {
+        ...withPack(UNSUPPORTED, null),
+        installed: null,
+        platforms: [
+          {
+            platform: "android",
+            available: false,
+            reason: "No SDK.",
+            setupSupported: true,
+          },
+        ],
+      };
+      renderTab();
+      const button = screen.getByTestId("settings-simulators-setup-agent");
+      expect(button.hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByTestId("settings-simulators-setup-agent-offline")
+          .textContent,
+      ).toContain(
+        "Studio Mac is offline. Reconnect it to set up with an agent.",
+      );
+      fireEvent.click(button);
+      expect(fakes.startSetup).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the switch while the host's capability is unknown", () => {
+    it("holds the switch off while the status read is pending", () => {
+      fakes.config = { enabled: false };
+      fakes.readStatus.mockImplementation(() => new Promise(() => {}));
+      renderTabUncached();
+      expect(switchRow().hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByTestId("host-overview-mobile-simulators").textContent,
+      ).toContain("Checking what Studio Mac can run.");
+      fireEvent.click(switchRow());
+      expect(fakes.write).not.toHaveBeenCalled();
+    });
+
+    it("holds the switch off when the read fails and offers Check again", async () => {
+      fakes.config = { enabled: false };
+      fakes.readStatus.mockImplementation(() =>
+        Promise.reject(new Error("offline")),
+      );
+      renderTabUncached();
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("host-overview-mobile-simulators").textContent,
+        ).toContain("Couldn't check what Studio Mac can run."),
+      );
+      expect(switchRow().hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByTestId("settings-simulators-check-again"),
+      ).toBeTruthy();
+    });
+
+    it("never holds the switch from turning off", () => {
+      fakes.config = { enabled: true };
+      fakes.readStatus.mockImplementation(() => new Promise(() => {}));
+      renderTabUncached();
+      expect(switchRow().hasAttribute("disabled")).toBe(false);
+      fireEvent.click(switchRow());
+      expect(fakes.write).toHaveBeenCalledWith({ enabled: false });
+    });
   });
 
   describe("Check again", () => {

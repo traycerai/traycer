@@ -90,7 +90,6 @@ function results(
     messageMatches: [],
     chatNextCursor: null,
     messageNextCursor: null,
-    indexState: "complete",
     ...input,
   };
 }
@@ -589,28 +588,6 @@ describe("ChatSearchResultsView: a show-more page that failed", () => {
       screen.getByRole("separator", { name: "Matches in messages" }),
     ).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toBe("Host went away");
-  });
-});
-
-describe("ChatSearchResultsView: indexing notice", () => {
-  it("shows the 'Still indexing' status only when indexState is partial", () => {
-    renderView({
-      results: results({
-        chatMatches: [chatMatch({ chatId: "c1" })],
-        indexState: "partial",
-      }),
-    });
-    const notice = screen.getByRole("status");
-    expect(notice.textContent).toContain("Still indexing chats on this host");
-    cleanup();
-
-    renderView({
-      results: results({
-        chatMatches: [chatMatch({ chatId: "c1" })],
-        indexState: "complete",
-      }),
-    });
-    expect(screen.queryByRole("status")).toBeNull();
   });
 });
 

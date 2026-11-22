@@ -6,6 +6,7 @@ import type {
 import type {
   BotNotificationLevelReadResponse,
   BotReadCursorReadResponse,
+  BotReadPosition,
   BotRecord,
   BotThreadFollowReadResponse,
 } from "@traycer/protocol/host/bot/schemas";
@@ -15,12 +16,13 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useBotThreadFollowSupported } from "@/hooks/bots/use-bot-thread-follow";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotReadCursorSupported } from "@/hooks/bots/use-bot-read-cursor";
 import {
   channelMuted,
   followingOf,
 } from "@/lib/bots/bot-notification-settings";
-import { threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
+import { advanceTarget, threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
 
 /** A thread the person follows, with the bot whose channel it hangs off. */
 export type BotFollowedThread = {
@@ -28,6 +30,9 @@ export type BotFollowedThread = {
   readonly thread: BotThreadSummary;
   /** A reply has landed past the person's read cursor (decision 139). */
   readonly newReplies: boolean;
+  readonly readTarget: BotReadPosition | null;
+  /** The bot's read cursors these come from; `undefined` until they answer. */
+  readonly read: BotReadCursorReadResponse | undefined;
 };
 
 export type BotFollowedThreads =
@@ -68,6 +73,8 @@ export function useBotFollowedThreads(
   const supported = listSupported && followSupported;
   const viewerUserId = useCloudChatViewerId();
   const viewerKnown = viewerUserId.length > 0;
+  // The follow, read-cursor and level reads take `{ botId }` alone; only the
+  // thread list carries the page bound.
   const byBot = useMemo(
     () => bots.map((bot) => ({ botId: bot.botId })),
     [bots],
@@ -75,7 +82,11 @@ export function useBotFollowedThreads(
   const lists = useHostQueries<HostRpcRegistry, "bot.thread.list">({
     client,
     requests: useMemo(
-      () => byBot.map((params) => ({ method: "bot.thread.list", params })),
+      () =>
+        byBot.map(({ botId }) => ({
+          method: "bot.thread.list",
+          params: botThreadListParams(botId),
+        })),
       [byBot],
     ),
     cacheKeyIdentity: undefined,
@@ -174,12 +185,16 @@ function followedThreadsOf(
       threads.push({
         bot,
         thread,
+        readTarget:
+          cursors === undefined
+            ? null
+            : advanceTarget(cursors, thread.threadId),
         newReplies: threadHasNewReplies(
           cursors,
           thread.threadId,
-          thread.lastReplyAt,
           !channelMuted(levels?.levels, thread.conversationId),
         ),
+        read: cursors,
       });
     }
   }

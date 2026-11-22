@@ -171,13 +171,17 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
   });
 });
 
-describe("hostOptionKindLabel — unchanged, and deliberately route-side", () => {
-  it("names this computer", () => {
+describe("hostOptionKindLabel", () => {
+  it("uses the protocol word for a registered Personal computer", () => {
     expect(
       hostOptionKindLabel(
-        hostScopeOptionFixture({ hostId: "host-a", isLocalMachine: true }),
+        hostScopeOptionFixture({
+          hostId: "host-a",
+          isLocalMachine: true,
+          kind: "personal",
+        }),
       ),
-    ).toBe("This computer");
+    ).toBe("Computer");
   });
 
   it("falls back to Host when no directory entry says otherwise", () => {
@@ -186,6 +190,7 @@ describe("hostOptionKindLabel — unchanged, and deliberately route-side", () =>
         hostScopeOptionFixture({
           hostId: "host-a",
           isLocalMachine: false,
+          kind: null,
           entry: null,
         }),
       ),
@@ -310,6 +315,7 @@ describe("hostOptionStatusWord - a sandbox's lifecycle word against its health",
         state: input.state,
         frozen: input.frozen,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -338,7 +344,7 @@ describe("hostOptionStatusWord - a sandbox's lifecycle word against its health",
           sandboxOption({ state: "awake", frozen: false, health }),
           available,
         ),
-      ).toBe("awake");
+      ).toBe("Awake");
     }
   });
 
@@ -364,13 +370,13 @@ describe("hostOptionStatusWord - a sandbox's lifecycle word against its health",
         sandboxOption({ state: "suspended", frozen: false, health: "offline" }),
         available,
       ),
-    ).toBe("suspended");
+    ).toBe("Suspended");
     expect(
       hostOptionStatusWord(
         sandboxOption({ state: "awake", frozen: true, health: "offline" }),
         available,
       ),
-    ).toBe("frozen");
+    ).toBe("Awake");
   });
 });
 
@@ -393,6 +399,7 @@ describe("sandboxWordYieldsToHealth", () => {
         state: input.state,
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });

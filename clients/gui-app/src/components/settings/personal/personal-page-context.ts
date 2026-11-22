@@ -1,16 +1,15 @@
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import { createContext, useContext } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   pendingUploadKeys,
   type PersonalHostState,
-  type PersonalPageStatusLine,
 } from "@/components/settings/personal/personal-page-status";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
@@ -21,7 +20,6 @@ export interface PersonalPageContextValue {
   readonly section: SettingsSectionId;
   readonly pick: EnvironmentPick;
   readonly state: PersonalHostState;
-  readonly line: PersonalPageStatusLine | null;
   readonly hostName: string;
   /** This host's machine facts: values that apply on it only. */
   readonly localOverrides: readonly LocalOverride[];
@@ -30,12 +28,12 @@ export interface PersonalPageContextValue {
   readonly client: HostClient<HostRpcRegistry> | null;
   /** This page's convergence notices and "needs you" rows. */
   readonly notices: readonly EnvironmentNotice[];
-  readonly review: readonly EnvironmentReviewEntry[];
+  readonly review: readonly ReviewHeldEntry[];
 }
 
 export const NO_OVERRIDES: readonly LocalOverride[] = [];
 export const NO_NOTICES: readonly EnvironmentNotice[] = [];
-export const NO_REVIEW: readonly EnvironmentReviewEntry[] = [];
+export const NO_REVIEW: readonly ReviewHeldEntry[] = [];
 
 export const PersonalPageContext =
   createContext<PersonalPageContextValue | null>(null);
@@ -123,26 +121,6 @@ export function usePersonalRowNotes(
 }
 
 const EMPTY_NOTES: ReadonlyMap<string, PersonalRowNote> = new Map();
-
-/**
- * The page's values of `kind` an earlier version held because they look like
- * a key, by item key (an override's is `<harness>:<NAME>`). Their value is
- * never shown. Empty outside a Personal page.
- */
-export function usePersonalHeldValues(
-  kind: "variable" | "env_override",
-): ReadonlyMap<string, EnvironmentReviewEntry> {
-  const review = useContext(PersonalPageContext)?.review ?? NO_REVIEW;
-  const held = new Map<string, EnvironmentReviewEntry>();
-  for (const entry of review) {
-    if (entry.reason === "credential_like_value" && entry.kind === kind) {
-      held.set(entry.key, entry);
-    }
-  }
-  return held.size === 0 ? EMPTY_HELD : held;
-}
-
-const EMPTY_HELD: ReadonlyMap<string, EnvironmentReviewEntry> = new Map();
 
 /**
  * What a Personal MCP server or skill says where its settings cannot be

@@ -62,12 +62,7 @@ const RETURN_TO_PREFERRED_COPY: Record<
   },
   auto: {
     label: "Switch back automatically",
-    // The queued messages moving back is the half a user is least likely to
-    // expect, and it is the half this arm alone is responsible for. The fresh
-    // session is NOT repeated here: the ladder editor states it once for every
-    // switch, and the note beside this radio group says it again for the way
-    // back, so a third copy on one option would be the page naming one cost
-    // three times.
+    // Only automatic return moves queued messages back to the original target.
     description:
       "Messages waiting to run move back to the original account or model.",
   },
@@ -154,10 +149,9 @@ interface ReturnToPreferredRowProps {
 /**
  * A radio group rather than a select, unlike the two rows above it.
  *
- * Two of the three arms have a consequence that has to be readable BEFORE the
- * choice is made - `auto` starts a fresh session and moves queued messages -
- * and a select hides every option but the current one behind a click. Three
- * options with descriptions is exactly the case radios are for.
+ * All choices and their consequences stay visible before a choice is made.
+ * The group describes the session cost; automatic return also moves queued
+ * messages, so that consequence belongs to its option.
  */
 function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
   const { policy, onChange } = props;
@@ -184,15 +178,11 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
           id={descriptionId}
           className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
         >
-          {/* "too" had no antecedent: nothing earlier on the page had said
-              the OUTBOUND switch starts a session either, so the word pointed
-              at a fact the reader had never been given. The ladder editor now
-              states it once, up front, which is what earns the "also" here. */}
           Switching back also starts a new agent session using this chat&apos;s
           history.
         </p>
       </div>
-      <div className={cn("ml-auto", SETTINGS_ROW_STACK.control)}>
+      <div className={cn("ml-auto max-w-full", SETTINGS_ROW_STACK.control)}>
         {/* The radio group carries the SETTING's name and its caveat. Without
             these two the group had no name at all: each radio said "Ask me" or
             "Stay where it switched to" with nothing to say what question it was
@@ -213,15 +203,6 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
               <RadioGroupItem
                 value={value}
                 id={`fallback-return-${value}`}
-                // The option's own consequence, where it has one - which in
-                // practice is `auto`, the arm whose cost ("Starts a fresh
-                // session and moves queued messages back") is the whole reason
-                // this row is radios instead of a Select: it has to be
-                // readable BEFORE the choice is made, and a paragraph sitting
-                // visually beside the radio is not readable before the choice
-                // by anyone navigating by control. Dropped where an option has
-                // no consequence paragraph rather than pointing at an element
-                // that is not rendered.
                 aria-describedby={
                   copy.description === null
                     ? undefined
@@ -229,16 +210,11 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
                 }
                 className="mt-0.5"
               />
-              <div className="space-y-0.5">
+              <div className="min-w-0 space-y-0.5">
                 <Label htmlFor={`fallback-return-${value}`} variant="option">
                   {copy.label}
                 </Label>
                 {copy.description === null ? null : (
-                  // The id is derived from the option's own value rather than
-                  // from `useId`, matching the radio's `id` two lines up: both
-                  // are inside a `map`, where a hook cannot go, and the copy
-                  // map's keys are the wire union so they are unique by
-                  // construction.
                   <p
                     id={`fallback-return-${value}-description`}
                     className="text-ui-sm text-muted-foreground"

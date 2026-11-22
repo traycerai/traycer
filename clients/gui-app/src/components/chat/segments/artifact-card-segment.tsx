@@ -683,21 +683,24 @@ function ObjectArtifactCard(props: ObjectArtifactCardProps) {
   });
   const openArtifact = (event: MouseEvent<HTMLButtonElement>): void => {
     if (live === null || !canOpen) return;
-    openTile({
-      ...tileIntent(
-        {
-          id: live.id,
-          instanceId: uuidv4(),
-          type: live.kind,
-          name: live.title,
-          hostId,
-        },
-        { epicId },
-        "single",
-        "direct_ui",
-      ),
-      modifiers: modifiersFromMouseEvent(event),
-    });
+    openTile(
+      {
+        ...tileIntent(
+          {
+            id: live.id,
+            instanceId: uuidv4(),
+            type: live.kind,
+            name: live.title,
+            hostId,
+          },
+          { epicId },
+          "single",
+          "direct_ui",
+        ),
+        modifiers: modifiersFromMouseEvent(event),
+      },
+      "user",
+    );
   };
   if (!isObjectCardKind(kind))
     return (
@@ -888,21 +891,24 @@ function ArtifactCardSegmentContent(props: MarkdownArtifactCardSegmentProps) {
   const openArtifact = (event: MouseEvent<HTMLButtonElement>): void => {
     // Re-check the raw conditions so the host id narrows to a non-null string.
     if (isDeleted || live === null) return;
-    openTile({
-      node: {
-        id: artifactId,
-        instanceId: uuidv4(),
-        type: displayKind,
-        name: openTitle,
-        hostId: activeHostId,
+    openTile(
+      {
+        node: {
+          id: artifactId,
+          instanceId: uuidv4(),
+          type: displayKind,
+          name: openTitle,
+          hostId: activeHostId,
+        },
+        target: { epicId },
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       },
-      target: { epicId },
-      gesture: "explicit",
-      modifiers: modifiersFromMouseEvent(event),
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+      "user",
+    );
   };
 
   const change = props.change;

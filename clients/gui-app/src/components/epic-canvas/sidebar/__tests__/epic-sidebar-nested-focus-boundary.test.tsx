@@ -823,6 +823,7 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       EPIC_ID,
       TAB_ID,
       expect.any(Function),
+      "user",
     );
     // `TAB_ID` has no seeded canvas (`canvasByTabId[TAB_ID]` is unset), so
     // `openTileWithNavigation` resolves against the empty canvas
@@ -866,6 +867,7 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       EPIC_ID,
       TAB_ID,
       expect.any(Function),
+      "user",
     );
     expect(testState.prepareCloseCanvasTabFocusTarget).toHaveBeenCalledWith(
       TAB_ID,
@@ -911,6 +913,7 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       EPIC_ID,
       TAB_ID,
       expect.any(Function),
+      "user",
     );
     // All 3 deleted tabs are gone; only the untouched 4th tile (D) survives,
     // and the single prepared target - read from real post-batch canvas

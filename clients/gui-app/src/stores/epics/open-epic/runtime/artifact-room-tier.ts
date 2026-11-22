@@ -116,7 +116,7 @@ export interface ArtifactRoomReplicaEntry {
    * windows do not silently discard user edits: artifact-room-doc awareness
    * and reconnect-safe body edits.
    *
-   * On viewer downgrade the queue is cleared (fail-closed). When a
+   * On access loss the queue is cleared (fail-closed). When a
    * `artifactRoomSnapshot` arrives, the queue is collapsed into a single
    * merged-replica reconcile - sent immediately only after the current open
    * cycle has received a fresh root snapshot/permission role, or stashed in
@@ -143,8 +143,8 @@ export interface ArtifactRoomReplicaEntry {
    * against the host's state vector at snapshot time, so it subsumes every local
    * artifact-room-body edit produced during the reconnect window.
    *
-   * Cleared on viewer/null downgrade (fail-closed), on a successful send, and
-   * on artifactRoom destruction.
+   * Cleared on access loss (fail-closed), on a successful send, and on
+   * artifactRoom destruction.
    */
   pendingReconcileUpdate: Uint8Array | null;
   /**
@@ -606,8 +606,7 @@ export interface ArtifactRoomTier {
   flushPending(artifactRoomId: string): void;
   flushAllPending(): void;
   /**
-   * Drop every room's unsent local state (discard-changes, viewer downgrade,
-   * access loss).
+   * Drop every room's unsent local state (discard-changes, access loss).
    */
   clearAllPending(): void;
 
@@ -835,7 +834,7 @@ export function createArtifactRoomTier(
       clearPendingRoomUpdates(entry);
       return;
     }
-    // Either no divergence (reconcile is trivial) or the role is viewer/null
+    // Either no divergence (reconcile is trivial) or no writable role
     // (fail-closed). In both cases there is nothing safe to send and nothing
     // to retain.
     clearPendingRoomUpdates(entry);
@@ -1054,8 +1053,7 @@ export function createArtifactRoomTier(
       origin: unknown,
     ): void => {
       if (origin === BIN_AWARENESS_REMOTE_ORIGIN) return;
-      const role = session.permissionRole();
-      if (role === "viewer" || role === null) return;
+      if (!isWritablePermissionRole(session.permissionRole())) return;
       if (session.transportStatus() !== "open") return;
       const touched = changes.added
         .concat(changes.updated)

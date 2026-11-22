@@ -1,5 +1,6 @@
 import {
   cleanup,
+  fireEvent,
   render as rtlRender,
   screen,
   type RenderResult,
@@ -18,6 +19,35 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+
+/**
+ * The artifacts list windows its rows by the scroller's measured height, which
+ * jsdom reports as 0 - no rows at all. The height is reported from here
+ * instead: tall enough for every row by default, and set short by the case
+ * that asserts the windowing itself.
+ */
+const viewport = vi.hoisted(() => ({ height: 10_000 }));
+vi.mock("@tanstack/react-virtual", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-virtual")>();
+  return {
+    ...actual,
+    useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) =>
+      actual.useVirtualizer({
+        ...options,
+        observeElementRect: (_instance, onRect) => {
+          onRect({ width: 400, height: viewport.height });
+          return () => undefined;
+        },
+        // jsdom lays nothing out, so a drawn row would measure 0px tall and
+        // every row would collapse onto the first; a row measures its estimate.
+        measureElement: (element, _entry, instance) =>
+          instance.options.estimateSize(
+            Number(element.getAttribute("data-index")),
+          ),
+      }),
+  };
+});
 
 interface FixtureRecord {
   readonly id: string;
@@ -380,11 +410,13 @@ beforeEach(() => {
   // Reset with the rest: a case that activates search would otherwise leave
   // every later case rendering the results surface instead of the browse list.
   holder.search = INACTIVE_SEARCH;
+  viewport.height = 10_000;
   sessionHandle = newSessionHandle();
 });
 afterEach(() => {
   cleanup();
   sessionHandle.dispose();
+  document.documentElement.style.fontSize = "";
 });
 
 describe("<SwitcherArtifactsList />", () => {
@@ -453,14 +485,20 @@ describe("<SwitcherArtifactsList />", () => {
     const tree = screen.getByRole("tree", { name: "Epic artifacts tree" });
     const items = screen.getAllByRole("treeitem");
     expect(items).toHaveLength(3);
-    // One root under the tree; the deeper two each reached through a group.
-    expect(tree.querySelectorAll(':scope > [role="treeitem"]')).toHaveLength(1);
+    // The rows are windowed, so they are siblings under the tree and each
+    // says its own place: level, and position within its parent's children.
+    expect(items.every((item) => tree.contains(item))).toBe(true);
     expect(
-      items[0].querySelector(':scope > [role="group"] > [role="treeitem"]'),
-    ).toBe(items[1]);
-    expect(
-      items[1].querySelector(':scope > [role="group"] > [role="treeitem"]'),
-    ).toBe(items[2]);
+      items.map((i) => [
+        i.getAttribute("aria-level"),
+        i.getAttribute("aria-posinset"),
+        i.getAttribute("aria-setsize"),
+      ]),
+    ).toEqual([
+      ["1", "1", "1"],
+      ["2", "1", "1"],
+      ["3", "1", "1"],
+    ]);
     // The open tile is the selected item, and only it.
     expect(items.map((i) => i.getAttribute("aria-selected"))).toEqual([
       "false",
@@ -474,6 +512,47 @@ describe("<SwitcherArtifactsList />", () => {
       "true",
       "true",
       null,
+    ]);
+  });
+
+  it("mounts only the rows in and around the viewport, and the rows under it as it scrolls", () => {
+    // A big task has hundreds of artifacts; drawing every row is what made the
+    // category take seconds to open on an iPad. Two rows' worth of viewport.
+    // Seeded youngest-first, so the epic's default recency sort lists tk-299
+    // at the top and tk-0 at the bottom.
+    viewport.height = 100;
+    holder.records = Array.from({ length: 300 }, (_, index) =>
+      artifactFixture(`tk-${index}`, null, `Ticket ${index}`, "ticket"),
+    );
+    render(<SwitcherArtifactsList {...PROPS} />);
+    const drawn = screen.queryAllByTestId(/^switcher-artifact-row-/);
+    expect(drawn.length).toBeGreaterThan(2);
+    expect(drawn.length).toBeLessThan(40);
+    expect(screen.getByTestId("switcher-artifact-row-tk-299")).toBeDefined();
+    expect(screen.queryByTestId("switcher-artifact-row-tk-0")).toBeNull();
+
+    const tree = screen.getByRole("tree", { name: "Epic artifacts tree" });
+    tree.scrollTop = 300 * 46;
+    fireEvent.scroll(tree);
+    expect(screen.getByTestId("switcher-artifact-row-tk-0")).toBeDefined();
+    expect(screen.queryByTestId("switcher-artifact-row-tk-299")).toBeNull();
+  });
+
+  it("places rows by the person's UI font size, not a fixed pixel height", () => {
+    // The UI font size setting is applied as the root font size, and a row's
+    // `min-h-11` grows with it; a window placing rows 46px apart at 20px
+    // would overlap every row with the next.
+    document.documentElement.style.fontSize = "20px";
+    holder.records = [
+      artifactFixture("tk-1", null, "Ticket 1", "ticket"),
+      artifactFixture("tk-2", null, "Ticket 2", "ticket"),
+    ];
+    render(<SwitcherArtifactsList {...PROPS} />);
+    const items = screen.getAllByRole("treeitem");
+    // 2.75rem row + 0.125rem gap at 20px.
+    expect(items.map((item) => item.style.transform)).toEqual([
+      "translateY(0px)",
+      "translateY(57.5px)",
     ]);
   });
 

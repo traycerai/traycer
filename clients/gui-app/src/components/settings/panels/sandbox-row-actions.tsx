@@ -89,8 +89,9 @@ const DIALOG_OF: Partial<Record<SandboxRowAction, RowDialog>> = {
 interface SandboxRowActionsProps {
   readonly summary: SandboxSummary;
   readonly configuration: SandboxPageConfiguration;
+  readonly credits: SandboxPageConfiguration | null;
   readonly unreachable: boolean;
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }
 
@@ -122,8 +123,8 @@ function useRowDialog(
 }
 
 /**
- * One row's actions: the primary button, `Give it another
- * <period>` inside the warning lead, `Details` on every row, and the ⋯ menu.
+ * One primary button, inline recovery and Details controls, and a More menu.
+ * Give it another <period> appears before the retention deadline.
  * Interrupting and ending actions confirm in their dialogs; a wake is one click
  * after the row says who pays.
  */
@@ -133,13 +134,14 @@ export function SandboxRowActions(props: SandboxRowActionsProps): ReactNode {
       <SandboxFailedRowActions
         summary={props.summary}
         configuration={props.configuration}
+        credits={props.credits}
       />
     );
   }
   return (
     <SandboxLifecycleRowActions
       {...props}
-      inlineDetails={
+      settingsFailure={
         props.settingsFailed || props.summary.guestConfigured === false
       }
     />
@@ -147,9 +149,10 @@ export function SandboxRowActions(props: SandboxRowActionsProps): ReactNode {
 }
 
 function SandboxLifecycleRowActions(
-  props: SandboxRowActionsProps & { readonly inlineDetails: boolean },
+  props: SandboxRowActionsProps & { readonly settingsFailure: boolean },
 ): ReactNode {
   const { summary, configuration } = props;
+  const chooseAnother = useChooseAnotherHost();
   const verb = useSandboxVerb(summary.id);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
@@ -176,11 +179,20 @@ function SandboxLifecycleRowActions(
   const actions = sandboxRowActions({
     summary,
     unreachable: props.unreachable,
-    frozenNeedsOwnCredits: props.frozenNeedsOwnCredits,
+    frozenOffersAddCredits: props.frozenOffersAddCredits,
     settingsFailed: props.settingsFailed,
   });
   const primary = useSandboxSettingsPrimaryAction(summary, actions.primary);
   const giveAnother = sandboxGiveAnotherLabel(summary, now);
+  const inlineActions = settingsFailureInlineActions(
+    actions.menu,
+    props.settingsFailure,
+    pendingVerb,
+  );
+  const menuActions =
+    pendingVerb === null
+      ? actions.menu.filter((action) => !inlineActions.includes(action))
+      : [];
   const offered = (action: SandboxRowAction): boolean =>
     actions.primary === action || actions.menu.includes(action);
   const [dialog, setDialog] = useRowDialog(offered);
@@ -204,8 +216,6 @@ function SandboxLifecycleRowActions(
   const immediate: Partial<Record<SandboxRowAction, () => void>> = {
     resume: () => wake("resume"),
     start: () => wake("start"),
-    // The person chose to pay; the button said so.
-    "resume-paying": () => wake("resume"),
     "add-credits": () =>
       void openLink(
         sandboxAddCreditsUrl(runnerHost.signInUrl, configuration),
@@ -233,7 +243,7 @@ function SandboxLifecycleRowActions(
   };
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">
       {openAutomationTerminal.failure ? (
         <p role="alert" className="text-ui-xs text-destructive">
           {openAutomationTerminal.failure}
@@ -280,71 +290,50 @@ function SandboxLifecycleRowActions(
       <SandboxRowPrimaryAction
         primary={primary}
         pendingVerb={pendingVerb}
-        configuration={configuration}
         busy={busy}
         dialogOpen={dialog !== null}
         run={run}
       />
-      <SandboxRowSettingsFailureActions
-        summary={summary}
-        configuration={configuration}
-        visible={props.inlineDetails}
-        menu={actions.menu}
-        pendingVerb={pendingVerb}
+      {inlineActions.map((action) => (
+        <Button
+          key={action}
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => run(action)}
+        >
+          {sandboxRowActionLabel(action)}
+        </Button>
+      ))}
+      {props.settingsFailure ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={chooseAnother}
+        >
+          Choose another host
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => openSandboxDetails(summary.id)}
+      >
+        {DETAILS}
+      </Button>
+      <SandboxRowMenu
+        actions={menuActions}
+        name={summary.displayName}
         busy={busy}
         run={run}
       />
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`More actions for ${summary.displayName}`}
-            data-testid="sandbox-row-menu"
-          >
-            <MoreHorizontal className="size-3.5" aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
-          {actions.menu
-            .filter((action) => pendingVerb === null && action !== "destroy")
-            .map((action) => (
-              <DropdownMenuItem
-                key={action}
-                disabled={busy}
-                data-testid={`sandbox-row-menu-${action}`}
-                onSelect={() => run(action)}
-              >
-                {sandboxRowActionLabel(action, configuration)}
-              </DropdownMenuItem>
-            ))}
-          {props.inlineDetails ? null : (
-            <DropdownMenuItem
-              data-testid="sandbox-row-menu-details"
-              onSelect={() => openSandboxDetails(summary.id)}
-            >
-              {DETAILS}
-            </DropdownMenuItem>
-          )}
-          {pendingVerb === null && actions.menu.includes("destroy") ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                data-testid="sandbox-row-menu-destroy"
-                onSelect={() => run("destroy")}
-              >
-                {sandboxRowActionLabel("destroy", configuration)}
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}
-        configuration={configuration}
+        configuration={props.credits ?? undefined}
         operation={shownOperation}
         busy={busy}
         onRetry={(pressed) => {
@@ -392,6 +381,85 @@ function SandboxLifecycleRowActions(
   );
 }
 
+/** Setup remedies stay inline only while the lifecycle still offers them. */
+function settingsFailureInlineActions(
+  menu: readonly SandboxRowAction[],
+  settingsFailure: boolean,
+  pendingVerb: SandboxRowVerb | null,
+): readonly SandboxRowAction[] {
+  if (!settingsFailure || pendingVerb !== null) return [];
+  return menu.filter(
+    (action) => action === "open-terminal" || action === "stop",
+  );
+}
+
+/** A lone secondary action stays visible; larger groups share a menu. */
+function SandboxRowMenu(props: {
+  readonly actions: readonly SandboxRowAction[];
+  readonly name: string;
+  readonly busy: boolean;
+  readonly run: (action: SandboxRowAction) => void;
+}): ReactNode {
+  if (props.actions.length === 0) return null;
+  const [onlyAction] = props.actions;
+  if (props.actions.length === 1) {
+    return (
+      <Button
+        type="button"
+        variant={onlyAction === "destroy" ? "destructive-ghost" : "outline"}
+        size="sm"
+        disabled={props.busy}
+        data-testid={`sandbox-row-menu-${onlyAction}`}
+        aria-label={`${sandboxRowActionLabel(onlyAction)} ${props.name}`}
+        onClick={() => props.run(onlyAction)}
+      >
+        {sandboxRowActionLabel(onlyAction)}
+      </Button>
+    );
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`More actions for ${props.name}`}
+          data-testid="sandbox-row-menu"
+        >
+          <MoreHorizontal className="size-3.5" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
+        {props.actions
+          .filter((action) => action !== "destroy")
+          .map((action) => (
+            <DropdownMenuItem
+              key={action}
+              disabled={props.busy}
+              data-testid={`sandbox-row-menu-${action}`}
+              onSelect={() => props.run(action)}
+            >
+              {sandboxRowActionLabel(action)}
+            </DropdownMenuItem>
+          ))}
+        {props.actions.includes("destroy") ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              data-testid="sandbox-row-menu-destroy"
+              onSelect={() => props.run("destroy")}
+            >
+              {sandboxRowActionLabel("destroy")}
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function useSandboxSettingsPrimaryAction(
   summary: SandboxSummary,
   primary: SandboxRowAction | null,
@@ -408,56 +476,9 @@ function useSandboxSettingsPrimaryAction(
     : null;
 }
 
-function SandboxRowSettingsFailureActions(props: {
-  readonly summary: SandboxSummary;
-  readonly configuration: SandboxPageConfiguration;
-  readonly visible: boolean;
-  readonly menu: readonly SandboxRowAction[];
-  readonly pendingVerb: SandboxRowVerb | null;
-  readonly busy: boolean;
-  readonly run: (action: SandboxRowAction) => void;
-}): ReactNode {
-  const chooseAnother = useChooseAnotherHost();
-  if (!props.visible) return null;
-  const actions =
-    props.pendingVerb === null
-      ? props.menu.filter(
-          (action) => action === "open-terminal" || action === "stop",
-        )
-      : [];
-  return (
-    <>
-      {actions.map((action) => (
-        <Button
-          key={action}
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={props.busy}
-          onClick={() => props.run(action)}
-        >
-          {sandboxRowActionLabel(action, props.configuration)}
-        </Button>
-      ))}
-      <Button type="button" variant="outline" size="sm" onClick={chooseAnother}>
-        Choose another host
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => openSandboxDetails(props.summary.id)}
-      >
-        Details
-      </Button>
-    </>
-  );
-}
-
 function SandboxRowPrimaryAction(props: {
   readonly primary: SandboxRowAction | null;
   readonly pendingVerb: SandboxRowVerb | null;
-  readonly configuration: SandboxPageConfiguration;
   readonly busy: boolean;
   readonly dialogOpen: boolean;
   readonly run: (action: SandboxRowAction) => void;
@@ -492,7 +513,7 @@ function SandboxRowPrimaryAction(props: {
           variant={undefined}
         />
       ) : null}
-      {sandboxRowActionLabel(primary, props.configuration)}
+      {sandboxRowActionLabel(primary)}
     </Button>
   );
 }

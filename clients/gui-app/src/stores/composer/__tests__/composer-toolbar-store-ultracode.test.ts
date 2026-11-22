@@ -67,14 +67,17 @@ function catalog(input: {
   readonly harnessId: ProviderId;
   readonly models: ReadonlyArray<ModelOption>;
   readonly modelsLoaded: boolean;
+  readonly modelsFailed: boolean;
   readonly ultracodeCarried: boolean;
 }): ComposerToolbarCatalog {
   return {
     hostId: null,
     harnesses: [harness("claude"), harness("codex")],
     modelsHarnessId: input.harnessId,
+    modelsProfileId: null,
     models: input.models,
     modelsLoaded: input.modelsLoaded,
+    modelsFailed: input.modelsFailed,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
     ultracodeCarried: input.ultracodeCarried,
@@ -117,6 +120,7 @@ function createStore(input: {
       harnessId: input.harnessId,
       models: input.harnessId === "claude" ? CLAUDE_MODELS : [CODEX],
       modelsLoaded: true,
+      modelsFailed: false,
       ultracodeCarried: input.ultracodeCarried,
     }),
   );
@@ -168,6 +172,7 @@ describe("composer toolbar Ultracode intent", () => {
         harnessId: "claude",
         models: [],
         modelsLoaded: false,
+        modelsFailed: false,
         ultracodeCarried: true,
       }),
     );
@@ -179,6 +184,7 @@ describe("composer toolbar Ultracode intent", () => {
         harnessId: "claude",
         models: [EXCLUDING],
         modelsLoaded: true,
+        modelsFailed: false,
         ultracodeCarried: true,
       }),
     );
@@ -206,6 +212,7 @@ describe("composer toolbar Ultracode intent", () => {
         harnessId: "claude",
         models: CLAUDE_MODELS,
         modelsLoaded: true,
+        modelsFailed: false,
         ultracodeCarried: true,
       }),
     );

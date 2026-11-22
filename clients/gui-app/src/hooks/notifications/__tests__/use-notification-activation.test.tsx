@@ -659,6 +659,41 @@ describe("useNotificationActivation", () => {
       ]?.target,
     ).toEqual({ kind: "block", blockId: "interview-block-1" });
   });
+  it("parks a feedback draft jump at its tool card", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-feedback", "Feedback task");
+    store.openTileInTab(tabId, {
+      id: "chat-feedback",
+      instanceId: "chat-feedback-instance",
+      type: "chat",
+      name: "Feedback agent",
+      hostId: "stub-host",
+    });
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "feedbackDraft",
+          epicId: "epic-feedback",
+          chatId: "chat-feedback",
+          blockId: "feedback-block-1",
+        },
+        originHostId: "stub-host",
+        receivedAt: 904,
+        feedId: "host:feedback",
+        onResult: null,
+      });
+    });
+
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey("stub-host", "chat-feedback")
+      ]?.target,
+    ).toEqual({ kind: "block", blockId: "feedback-block-1" });
+  });
 
   it("parks an approval jump at its approval id", () => {
     const store = useEpicCanvasStore.getState();

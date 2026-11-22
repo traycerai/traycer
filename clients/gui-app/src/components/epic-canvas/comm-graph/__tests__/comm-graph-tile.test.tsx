@@ -1,3 +1,4 @@
+import { readDesktopHorizontalWheelOwnership } from "@/components/layout/shell/desktop-history-gesture-ownership";
 const useHostNotificationIndicatorsMock = vi.hoisted(() =>
   vi.fn(() => ({
     data: { epics: {}, chats: {} },
@@ -1021,6 +1022,17 @@ describe("CommGraphTile", () => {
       current: 0,
       total: 0,
       exactHighlight: "none",
+    });
+  });
+
+  it("owns horizontal swipes across the whole graph", async () => {
+    await renderTile();
+
+    const canvas = await screen.findByTestId("comm-graph-canvas");
+
+    expect(readDesktopHorizontalWheelOwnership(canvas)).toEqual({
+      back: true,
+      forward: true,
     });
   });
 

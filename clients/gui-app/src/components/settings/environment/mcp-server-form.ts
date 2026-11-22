@@ -3,7 +3,10 @@ import type {
   EnvironmentMcpServerCredentialV11,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
-import type { EnvironmentMcpServer } from "@/hooks/environment/team/use-mcp-servers";
+import type {
+  EnvironmentMcpServer,
+  McpServerSave,
+} from "@/hooks/environment/team/use-mcp-servers";
 
 /** What the Add or Edit dialog holds while the person types. */
 export interface McpServerForm {
@@ -70,7 +73,7 @@ function secretHosts(secret: EnvironmentSecret): readonly string[] {
   return [...new Set(hosts.filter((host) => host.length > 0))];
 }
 
-/** The secrets a server at `url` can be bound to: live, brokered, sent there. */
+/** The secrets a server at `url` can be bound to: live, and sent there. */
 export function pickableSecrets(
   secrets: readonly EnvironmentSecret[],
   url: string,
@@ -78,11 +81,7 @@ export function pickableSecrets(
   const host = urlHost(url);
   if (host === null) return [];
   return secrets.filter(
-    (secret) =>
-      !secret.revoked &&
-      secret.state === "live" &&
-      secret.mode === "brokered" &&
-      secretHosts(secret).includes(host),
+    (secret) => !secret.revoked && secretHosts(secret).includes(host),
   );
 }
 
@@ -181,26 +180,29 @@ function mcpServerTarget(
 }
 
 /**
- * The put a save sends. An edit keeps the server's variables, tool toggles
- * and the providers it is off for, and every field the person left as it
- * was; a create starts every provider's. A switched-off server has no item
- * to read them from, and the host keeps the ones it holds for it.
+ * The save a form sends, but its credential, which is read when it is sent.
+ * An edit keeps the server's variables, tool toggles and the providers it is
+ * off for, and every field the person left as it was, and names the item
+ * revision they were shown with; a create starts every provider's. A
+ * switched-off server has no item to read them from, and authn keeps the
+ * ones it holds for it.
  */
-export function mcpServerPutRequest(
+export function mcpServerSave(
   form: McpServerForm,
   server: EnvironmentMcpServer | null,
   environmentId: string,
-  credential: EnvironmentMcpServerCredentialV11,
-): EnvironmentConfigurationMcpServerPutRequestV11 {
+): McpServerSave {
   return {
-    environmentId,
-    serverId: server === null ? null : server.serverId,
-    name: editedText(server?.name ?? null, form.name),
-    transport: form.transport,
-    ...mcpServerTarget(form, server),
-    env: server === null ? [] : [...server.env],
-    toolToggles: server?.item?.toolToggles ?? {},
-    offFor: server?.item?.offFor ?? [],
-    credential,
+    request: {
+      environmentId,
+      serverId: server === null ? null : server.serverId,
+      name: editedText(server?.name ?? null, form.name),
+      transport: form.transport,
+      ...mcpServerTarget(form, server),
+      env: server === null ? [] : [...server.env],
+      toolToggles: server?.item?.toolToggles ?? {},
+      offFor: server?.item?.offFor ?? [],
+    },
+    seenItemRevision: server?.item?.revision ?? null,
   };
 }

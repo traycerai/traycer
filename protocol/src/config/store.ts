@@ -33,6 +33,8 @@ import {
   worktreesOnlyConfigSchema,
   type AgentWorktreeCreatePolicy,
   type WorktreesConfig,
+  agentFeedbackOnlyConfigSchema,
+  type AgentFeedbackConfig,
   visualizationOnlyConfigSchema,
   type VisualizationConfig,
   SIMULATOR_CONFIG_DEFAULT,
@@ -1142,6 +1144,43 @@ export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
       ...current,
       features: { ...current.features, agentRoles: enabled },
     },
+    result: undefined,
+  }));
+}
+
+/**
+ * Best-effort synchronous read for the gates on `traycer_draft_feedback`. No
+ * config file is the unset case, so it reads on. A file that cannot be read or
+ * parsed fails CLOSED, unlike `readBrowserConfigSync`: this switch stops data
+ * leaving the machine, and that file may hold the user's `false`.
+ */
+export function readAgentFeedbackConfigSync(): AgentFeedbackConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const result = agentFeedbackOnlyConfigSchema.safeParse(parsed);
+    // Migration rewrites a version it cannot read to the oldest one, which
+    // would let a corrupt `"version": "999"` read as a valid file.
+    const versionReadable =
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("version" in parsed) ||
+      typeof parsed.version === "number";
+    if (versionReadable && result.success && parseCliConfig(parsed).success) {
+      return result.data.agentFeedback;
+    }
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { enabled: true };
+    }
+  }
+  return { enabled: false };
+}
+
+/** Enables or disables agent feedback while preserving the rest of the config. */
+export async function setAgentFeedbackEnabled(enabled: boolean): Promise<void> {
+  await updateCliConfig((current) => ({
+    next: { ...current, agentFeedback: { enabled } },
     result: undefined,
   }));
 }

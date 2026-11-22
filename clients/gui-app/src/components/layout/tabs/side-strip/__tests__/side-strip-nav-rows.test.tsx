@@ -1,5 +1,5 @@
 /**
- * `SideStripNavRows`: the Notifications row (one unread count, tinted by needs-you,
+ * `SideStripNavRows`: the Notifications row (one count in a neutral badge,
  * collapsed badge, admission gate) and the All tasks row (shortcut, active
  * state), plus the Tasks label above the rows. Mounted through the real
  * `SideTabStrip` so `ColumnEdgeContext`, the popover store and the real
@@ -153,7 +153,12 @@ function resetSharedState(): void {
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useSideTabStripStore.setState({ widthPx: 240, collapsed: false });
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  // Tabs only, the view the Layered cases are written about; the shipped
+  // strip lists the agents too, and `activateActivityView` picks that one.
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: { ...DEFAULT_ARRANGEMENT, sideStripView: "layered" },
+  });
   useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
   useTitleBarDragStore.setState({ suppressors: new Set() });
   useNotificationsPopoverStore.getState().setOpen(false);
@@ -296,25 +301,27 @@ describe("SideStripNavRows", () => {
     ).not.toBe(0);
   });
 
-  it("Layered view: the amber pill is the Needs you task count, the muted one the unread total while no task needs you, hidden at 0", async () => {
+  it("Layered view: unread with nothing to count is a dot, and the neutral pill is the Needs you task count", async () => {
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
     expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+    expect(screen.queryByTestId("side-strip-inbox-quiet-dot")).toBeNull();
 
     seedFeed(0, 3);
-    const unread = screen.getByTestId("side-strip-inbox-count");
-    expect(unread.textContent).toBe("3");
-    expect(unread.dataset.needsYou).toBe("false");
+    expect(screen.getByTestId("side-strip-inbox-quiet-dot")).toBeTruthy();
+    expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
 
-    // Amber says Needs you, so it never carries the unread total.
+    // The pill says Needs you, so it never carries the unread total.
     seedFeed(2, 5);
     const needsYou = screen.getByTestId("side-strip-inbox-count");
     expect(needsYou.textContent).toBe("2");
     expect(needsYou.dataset.needsYou).toBe("true");
+    expect(needsYou.dataset.variant).toBe("muted");
+    expect(screen.queryByTestId("side-strip-inbox-quiet-dot")).toBeNull();
   });
 
-  it("Layered view: with no task waiting, failures keep a red count over the unread total", async () => {
+  it("Layered view: with no task waiting, failures keep a count, in the same neutral badge, over the unread total", async () => {
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
@@ -331,24 +338,29 @@ describe("SideStripNavRows", () => {
     expect(pill.textContent).toBe("2");
     expect(pill.dataset.tone).toBe("attention");
     expect(pill.dataset.needsYou).toBe("false");
+    expect(pill.dataset.variant).toBe("muted");
     expect(
       screen.getByTestId("side-strip-inbox").getAttribute("aria-label"),
     ).toBe("Notifications, 2 need attention, 5 unread");
   });
 
-  it("Activity view: the pill is the Needs you task count, not the unread total, and is absent at 0", async () => {
+  it("Activity view: with no task waiting, the pill is the attention count in the same neutral badge, as in the Layered view", async () => {
     activateActivityView();
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
-    // Unread with nothing waiting: the Layered view would show a muted "3".
-    seedFeed(0, 3);
-    expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 5, attentionCount: 2 },
+      });
+    });
 
-    seedFeed(2, 5);
-    const badge = screen.getByTestId("side-strip-inbox-count");
-    expect(badge.textContent).toBe("2");
-    expect(badge.dataset.needsYou).toBe("true");
+    const pill = screen.getByTestId("side-strip-inbox-count");
+    expect(pill.textContent).toBe("2");
+    expect(pill.dataset.tone).toBe("attention");
+    expect(pill.dataset.variant).toBe("muted");
   });
 
   it("collapsed: shows one amber corner badge sized by the Needs you task count", async () => {
@@ -361,6 +373,36 @@ describe("SideStripNavRows", () => {
       screen.getByTestId("side-strip-inbox-needs-you-badge").textContent,
     ).toBe("3");
     expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+  });
+
+  it("collapsed: with no task waiting, the corner badge is the red attention count", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 5, attentionCount: 2 },
+      });
+    });
+
+    expect(
+      screen.getByTestId("side-strip-inbox-attention-badge").textContent,
+    ).toBe("2");
+    expect(screen.queryByTestId("side-strip-inbox-needs-you-badge")).toBeNull();
+  });
+
+  it("collapsed: unread with nothing to count is a dot in the corner", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    seedFeed(0, 3);
+
+    expect(screen.getByTestId("side-strip-inbox-quiet-dot")).toBeTruthy();
+    expect(screen.queryByTestId("side-strip-inbox-attention-badge")).toBeNull();
   });
 
   it("collapsed: shows no badge with nothing waiting", async () => {

@@ -59,14 +59,21 @@ export type GuiHarnessUnavailableReason = z.infer<
 //
 //  - `placeholder`: the harness is launched with a placeholder in place of the
 //    key, and the egress gateway swaps the real credential in on the wire.
-//  - `process-scoped`: the harness is handed a short-lived token file scoped
-//    to its own process, rewritten before it expires.
+//    This is the only way a harness reaches its provider: no credential is
+//    handed to a sandbox as its own text.
 //  - `unsupported`: the way this harness authenticates cannot be brokered. The
 //    row stays in the catalog so the picker can say why; the mechanism is in
 //    `sandboxCredentialNote`.
 //
 // A harness the host does not offer on a sandbox at all is absent from the
 // catalog, so it has no member here.
+//
+// `process-scoped` is retired - no harness is handed a token file of its own
+// any more - and stays a declared member because `@10.1` is released and a
+// member may not leave it: this is a catalog method, where growth and
+// shrinkage both freeze the shipped line (`compat-exceptions.json` says so of
+// these three methods by name). Nothing emits it; the host's launch-state
+// table has no such row left.
 export const guiHarnessSandboxCredentialModeSchema = lazySchema(() =>
   z.enum(["placeholder", "process-scoped", "unsupported"]),
 );
@@ -812,6 +819,21 @@ export type ListGuiAgentModelsRequest = z.infer<
 export const listGuiAgentModelsRequestSchemaV11 = lazySchema(() =>
   listGuiAgentModelsRequestSchema.extend({
     opencodeLine: opencodeLineSchema.optional(),
+  }),
+);
+
+/**
+ * 1.2 carries the account whose model list is wanted, as
+ * `listGuiAgentCommandsRequestSchemaV11` does for commands: a provider's
+ * models and their speed tiers are the account's (Codex advertises a tier
+ * per plan), so a picker on a managed profile asks for that profile's list.
+ * Absent or `null` (and every 1.1 caller) is the ambient account; absent
+ * rather than defaulted so an ambient request's bytes, and the cache slot the
+ * client keys on them, are the 1.1 ones.
+ */
+export const listGuiAgentModelsRequestSchemaV12 = lazySchema(() =>
+  listGuiAgentModelsRequestSchemaV11.extend({
+    profileId: z.string().nullable().optional(),
   }),
 );
 

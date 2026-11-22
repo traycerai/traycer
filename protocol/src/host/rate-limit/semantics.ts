@@ -249,6 +249,24 @@ const UNRESOLVED_MODEL_TOKENS: ReadonlySet<string> = new Set([
   "inherit",
 ]);
 
+function isInformativeModelToken(token: string): boolean {
+  return (
+    /[a-z]/.test(token) &&
+    !PROVIDER_GENERIC_TOKENS.has(token) &&
+    !UNRESOLVED_MODEL_TOKENS.has(token)
+  );
+}
+
+/**
+ * Whether `modelSlug` names no particular model, so only the CLI that runs it
+ * can say which family it spends. The host fills that in from the CLI's own
+ * handshake (`providers.readModelRoutes`); without that evidence an alias stays
+ * gated by every window.
+ */
+export function rateLimitModelSlugIsAlias(modelSlug: string): boolean {
+  return !rateLimitMatchTokens(modelSlug).some(isInformativeModelToken);
+}
+
 /**
  * Whether a limited window's `family` gates the model described by
  * `modelTokens` (the union of its slug's and label's tokens).
@@ -309,12 +327,6 @@ export function rateLimitFamilyAffectsModel(
     (token) => /[a-z]/.test(token) && !PROVIDER_GENERIC_TOKENS.has(token),
   );
   if (familyTokens.length === 0) return true;
-  const informativeModelTokens = [...modelTokens].filter(
-    (token) =>
-      /[a-z]/.test(token) &&
-      !PROVIDER_GENERIC_TOKENS.has(token) &&
-      !UNRESOLVED_MODEL_TOKENS.has(token),
-  );
-  if (informativeModelTokens.length === 0) return true;
+  if (![...modelTokens].some(isInformativeModelToken)) return true;
   return familyTokens.some((token) => modelTokens.has(token));
 }

@@ -2,10 +2,11 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { PersonalPageHeaderStatus } from "@/components/settings/personal/personal-page-frame";
+import { SettingsPhoneScopeLine } from "@/components/settings/settings-phone-scope-line";
 
 interface SettingsPanelShellProps {
   title: string;
-  description?: string;
+  description?: ReactNode;
   /** Optional control rendered at the top-right of the header (e.g. refresh). */
   headerAction?: ReactNode;
   /**
@@ -57,13 +58,14 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
           >
             {title}
           </h1>
+          <SettingsPhoneScopeLine />
           {description ? (
             <p className="max-w-[72ch] text-ui-sm text-muted-foreground">
               {description}
             </p>
           ) : null}
-          {/* A Personal page's line about the host it reads through;
-              nothing on any other page. */}
+          {/* A Personal page's header content (Secrets' Details, the page's
+              notices); nothing on any other page. */}
           <PersonalPageHeaderStatus />
         </div>
         {headerAction === undefined ? null : (

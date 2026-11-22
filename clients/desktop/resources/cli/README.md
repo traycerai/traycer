@@ -12,6 +12,17 @@ arch-scoped subdirectory:
 - `resources/cli/<platform>-<arch>/traycer.exe` (Windows)
 - `resources/cli/<platform>-<arch>/version.json` - bundled CLI version metadata
   consumed by Desktop's `readBundledCliVersion()`.
+- `resources/cli/<platform>-<arch>/host-runtime-<platform>-<arch>.tar.gz`
+  (Windows keeps the signed asset's real extension, `.tar.gz` or `.zip`)
+- that archive's `.minisig`
+- `host-runtime-<platform>-<arch>.descriptor.json` and its `.minisig`
+
+Windows arm64 uses the `host-runtime-win32-x64` filename inside
+`win32-arm64` when that desktop arch is packed. The shipped Windows
+installer is x64. The macOS job stages both `darwin-arm64` and `darwin-x64`
+before the one `electron-builder --mac` pack. No new `extraResources`
+target is added; `filter: **/*` already copies these siblings.
+`resources/host` stays the empty placeholder.
 
 `electron-builder` maps **only the arch being packed** into the bundle: the
 per-platform `extraResources` entries in `package.json` (`build.mac`,

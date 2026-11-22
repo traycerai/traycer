@@ -12,7 +12,10 @@ import type {
 } from "@traycer/protocol/host/status/contracts";
 import type { SandboxSessionReport } from "@/lib/sandboxes/sandbox-row-lines";
 
-/** One sandbox row as `GET /api/sandboxes` carries it, with overrides. */
+/**
+ * One sandbox row as `GET /api/sandboxes` carries it, with overrides. The
+ * provider follows the row's OS unless an override names one.
+ */
 export function sandboxSummaryFixture(
   overrides: Partial<SandboxSummary>,
 ): SandboxSummary {
@@ -20,7 +23,7 @@ export function sandboxSummaryFixture(
     id: "sbx_1",
     hostId: "host-sbx-1",
     kind: "agent",
-    provider: "tensorlake",
+    provider: overrides.os === "windows" ? "gce-windows" : "firecracker",
     region: "us-east",
     os: "linux",
     cpus: 2,
@@ -57,6 +60,7 @@ export function sandboxSummaryFixture(
     keptAt: null,
     operation: null,
     regionLabel: null,
+    withdrawalEndsAt: null,
     ...overrides,
   };
 }

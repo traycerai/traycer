@@ -11,11 +11,14 @@ import {
   LOAD_TIMEOUT_MS,
   PING_TIMEOUT_MS,
   SandboxBridgeHost,
+  type SandboxArtifactLink,
   type SandboxHostContext,
+  type SandboxServedPages,
   type SandboxShortcutPress,
 } from "../bridge-host";
 import type {
   CanvasElement,
+  CanvasPageActivity,
   CanvasPageError,
   CanvasTextSelection,
 } from "../canvas-bridge";
@@ -65,6 +68,7 @@ interface Harness {
   >;
   readonly onPageError: Mock<(error: CanvasPageError) => void>;
   readonly onRelativeLink: Mock<(href: string) => void>;
+  readonly onArtifactLink: Mock<(link: SandboxArtifactLink) => void>;
   readonly onDoubleClick: Mock<(element: CanvasElement) => void>;
   readonly onShortcut: Mock<(press: SandboxShortcutPress) => void>;
   /** The newest request posted with this method. */
@@ -73,15 +77,26 @@ interface Harness {
 
 const hosts: SandboxBridgeHost[] = [];
 
+/** A folder of pages: canvas with these is a commentable html page, not a board. */
+const COMMENTABLE_PAGES: SandboxServedPages = {
+  treePath: "site",
+  onNavigate: () => undefined,
+  onPageMissing: () => undefined,
+  onPageUnreachable: () => undefined,
+};
+
 function createHarness(options: {
   readonly canvas: boolean;
   readonly ready: boolean;
+  /** Omitted, the document is one page: a board when `canvas` is set. */
+  readonly pages?: SandboxServedPages | null;
 }): Harness {
   const sent: Sent[] = [];
   const onTextSelection =
     vi.fn<(selection: CanvasTextSelection | null) => void>();
   const onPageError = vi.fn<(error: CanvasPageError) => void>();
   const onRelativeLink = vi.fn<(href: string) => void>();
+  const onArtifactLink = vi.fn<(link: SandboxArtifactLink) => void>();
   const onDoubleClick = vi.fn<(element: CanvasElement) => void>();
   const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
   const host = new SandboxBridgeHost({
@@ -90,7 +105,7 @@ function createHarness(options: {
       canvas: options.canvas,
       nonce: NONCE,
       forwardedShortcuts: [],
-      pages: null,
+      pages: options.pages ?? null,
     },
     hostContext: HOST_CONTEXT,
     hostVersion: "9.9.9",
@@ -108,6 +123,7 @@ function createHarness(options: {
       onTextSelection,
       onPageError,
       onRelativeLink,
+      onArtifactLink,
       onDoubleClick,
     },
     appRequests: null,
@@ -126,6 +142,7 @@ function createHarness(options: {
     onTextSelection,
     onPageError,
     onRelativeLink,
+    onArtifactLink,
     onDoubleClick,
     onShortcut,
     requestOf: (method) => {
@@ -1275,13 +1292,31 @@ describe("html view state", () => {
   it("reaches a plain page as soon as it is ready, without an initialized handshake", () => {
     const harness = createHarness({ canvas: false, ready: true });
 
-    harness.host.setHtmlView(true, 1.5);
+    harness.host.setHtmlView({ enabled: true, scale: 1.5, commenting: false });
 
     expect(viewMessages(harness)).toEqual([
       {
         jsonrpc: "2.0",
         method: "traycer/html/view",
-        params: { enabled: true, scale: 1.5 },
+        params: { enabled: true, scale: 1.5, commenting: false },
+      },
+    ]);
+  });
+
+  it("reaches a commentable html page, which a board would have refused", () => {
+    const harness = createHarness({
+      canvas: true,
+      ready: true,
+      pages: COMMENTABLE_PAGES,
+    });
+
+    harness.host.setHtmlView({ enabled: true, scale: 1.25, commenting: true });
+
+    expect(viewMessages(harness)).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "traycer/html/view",
+        params: { enabled: true, scale: 1.25, commenting: true },
       },
     ]);
   });
@@ -1289,7 +1324,7 @@ describe("html view state", () => {
   it("is dropped, not queued, before the page has proven itself", () => {
     const harness = createHarness({ canvas: false, ready: false });
 
-    harness.host.setHtmlView(true, 2);
+    harness.host.setHtmlView({ enabled: true, scale: 2, commenting: false });
     harness.host.receive({
       jsonrpc: "2.0",
       method: "traycer/notifications/document-ready",
@@ -1302,8 +1337,246 @@ describe("html view state", () => {
   it("is never sent to a canvas board", () => {
     const harness = createHarness({ canvas: true, ready: true });
 
-    harness.host.setHtmlView(true, 1.5);
+    harness.host.setHtmlView({ enabled: true, scale: 1.5, commenting: false });
 
     expect(viewMessages(harness)).toEqual([]);
+  });
+});
+
+describe("page activity from a commentable html page", () => {
+  function commentable(ready: boolean): Harness {
+    return createHarness({
+      canvas: true,
+      ready,
+      pages: COMMENTABLE_PAGES,
+    });
+  }
+
+  function listen(harness: Harness): CanvasPageActivity[] {
+    const heard: CanvasPageActivity[] = [];
+    harness.host.onPageActivity((activity) => {
+      heard.push(activity);
+    });
+    return heard;
+  }
+
+  function edit(harness: Harness): void {
+    void harness.host.setMode("edit");
+  }
+
+  function hover(marker: number): Sent {
+    return notification("traycer/canvas/hover", {
+      nonce: NONCE,
+      element: element({ marker }),
+    });
+  }
+
+  it("delivers the newest of each kind once the frame runs, and nothing before", () => {
+    const harness = commentable(true);
+    edit(harness);
+    const heard = listen(harness);
+
+    harness.host.receive(hover(1));
+    harness.host.receive(hover(2));
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: NONCE, x: 12, y: 34 }),
+    );
+    harness.host.receive(
+      notification("traycer/canvas/layout", { nonce: NONCE }),
+    );
+
+    expect(heard).toEqual([]);
+    vi.advanceTimersToNextFrame();
+
+    expect(heard.map((activity) => activity.kind)).toEqual([
+      "hover",
+      "pick",
+      "layout",
+    ]);
+    expect(heard[0]).toMatchObject({ kind: "hover", element: { marker: 2 } });
+    expect(heard[1]).toEqual({ kind: "pick", x: 12, y: 34 });
+    expect(heard[2]).toEqual({ kind: "layout" });
+  });
+
+  it("drops a board's reports even after the app asked it to edit", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    edit(harness);
+    const heard = listen(harness);
+
+    harness.host.receive(hover(7));
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: NONCE, x: 1, y: 2 }),
+    );
+    harness.host.receive(
+      notification("traycer/canvas/layout", { nonce: NONCE }),
+    );
+    vi.advanceTimersToNextFrame();
+
+    expect(heard).toEqual([]);
+  });
+
+  it("drops a report before the page has proven its nonce, and one carrying another nonce", () => {
+    const unproven = commentable(false);
+    edit(unproven);
+    const unprovenHeard = listen(unproven);
+    unproven.host.receive(hover(7));
+    vi.advanceTimersToNextFrame();
+    expect(unprovenHeard).toEqual([]);
+
+    const harness = commentable(true);
+    edit(harness);
+    const heard = listen(harness);
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: "other-nonce", x: 1, y: 2 }),
+    );
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+  });
+
+  it("drops reports while the page is for reading", () => {
+    const harness = commentable(true);
+    const heard = listen(harness);
+
+    harness.host.receive(hover(6));
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+  });
+
+  it("cancels a queued report when leaving Edit and accepts a later Edit pick", () => {
+    const harness = commentable(true);
+    const heard = listen(harness);
+    edit(harness);
+    harness.host.receive(hover(7));
+    void harness.host.setMode("play");
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+
+    edit(harness);
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: NONCE, x: 8, y: 9 }),
+    );
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([{ kind: "pick", x: 8, y: 9 }]);
+  });
+
+  it("drops a queued report when the frame moves to another page", () => {
+    const harness = commentable(true);
+    edit(harness);
+    const heard = listen(harness);
+    harness.host.receive(hover(7));
+
+    // The entry page's ready ran ahead of its load. The next load begins
+    // the page after it, and that page has not been asked to edit.
+    harness.host.frameLoaded();
+    harness.host.frameLoaded();
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+
+    harness.host.receive({
+      jsonrpc: "2.0",
+      method: "traycer/notifications/document-ready",
+      params: { nonce: NONCE, height: 80 },
+    });
+    edit(harness);
+    harness.host.receive(
+      notification("traycer/canvas/pick", { nonce: NONCE, x: 3, y: 4 }),
+    );
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([{ kind: "pick", x: 3, y: 4 }]);
+  });
+
+  it("treats a zoom report as a layout move while the page is being commented on", () => {
+    const harness = commentable(true);
+    edit(harness);
+    const heard = listen(harness);
+
+    harness.host.receive(
+      notification("traycer/notifications/html-view", { scale: 1.5 }),
+    );
+    vi.advanceTimersToNextFrame();
+
+    expect(heard).toEqual([{ kind: "layout" }]);
+  });
+});
+
+describe("artifact links from a served html artifact page", () => {
+  const PAGE = "traycer-artifact://artifact-a1--m1/a/b/index.html";
+  const link = (overrides: Record<string, unknown>): Sent =>
+    notification("traycer/notifications/artifact-link", {
+      nonce: NONCE,
+      href: "../sibling/index.html",
+      page: PAGE,
+      ...overrides,
+    });
+  function htmlPage(ready: boolean): Harness {
+    return createHarness({ canvas: false, ready, pages: COMMENTABLE_PAGES });
+  }
+
+  it("delivers the authored href with the clicked page's path from the tree root", () => {
+    const harness = htmlPage(true);
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).toHaveBeenCalledExactlyOnceWith({
+      href: "../sibling/index.html",
+      pagePath: "a/b/index.html",
+      pageUrl: PAGE,
+    });
+  });
+
+  it.each([
+    ["a wrong nonce", { nonce: "other" }],
+    ["no nonce", { nonce: undefined }],
+    ["an over-long href", { href: "a".repeat(8193) }],
+    ["a non-string href", { href: 7 }],
+    [
+      "a page that is not an artifact address",
+      { page: "https://example.com/" },
+    ],
+    ["no page", { page: undefined }],
+  ])("drops a report with %s", (_label, overrides) => {
+    const harness = htmlPage(true);
+
+    harness.host.receive(link(overrides));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it("drops a report before the page has proven itself", () => {
+    const harness = htmlPage(false);
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it("drops a report from a page that proved itself but is marked crashed", () => {
+    const harness = createHarness({
+      canvas: false,
+      ready: false,
+      pages: COMMENTABLE_PAGES,
+    });
+    harness.host.receive(
+      notification("traycer/notifications/early-error", { message: "early" }),
+    );
+    harness.host.receive(
+      notification("traycer/notifications/document-ready", {
+        nonce: NONCE,
+        height: 10,
+      }),
+    );
+    expect(harness.host.status).toBe("crashed");
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it("drops a report from a canvas board, which reports its own links", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
   });
 });

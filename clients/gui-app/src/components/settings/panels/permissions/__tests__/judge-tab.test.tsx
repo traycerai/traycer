@@ -15,7 +15,10 @@ import type {
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   advanceLegendListTime,
   installLegendListTestClock,
@@ -35,6 +38,7 @@ import {
   provider,
   resetModels,
   setModels,
+  setProfileModels,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
@@ -72,6 +76,9 @@ vi.mock("@/hooks/host/use-host-capability-probe", () => ({
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatViewerId: () => "viewer-a",
+}));
+vi.mock("@/components/home/pickers/terminal-account-first-mention", () => ({
+  TerminalAccountFirstMention: () => null,
 }));
 
 // Whether the host advertises `autoJudge.get` (tri-state, as the real hook is)
@@ -298,6 +305,23 @@ function face(): HTMLElement {
   return screen.getByTestId("auto-judge-model-face");
 }
 
+function withAliases(
+  row: ProviderProfile,
+  aliases: readonly string[],
+): ProviderProfile {
+  return { ...row, aliases: [...aliases] };
+}
+
+function faceAccentDot(): HTMLSpanElement | null {
+  const dot = Array.from(face().querySelectorAll("span")).find(
+    (element) =>
+      element.getAttribute("aria-hidden") === "true" &&
+      element.className.includes("rounded-full") &&
+      element.className.includes("absolute"),
+  );
+  return dot ?? null;
+}
+
 function faceDimmed(): boolean {
   return face().closest(".opacity-45") !== null;
 }
@@ -475,7 +499,7 @@ describe("JudgeTab", () => {
       renderTab();
 
       expect(isChecked(automaticRadio())).toBe(true);
-      expect(face().textContent).toContain("GPT Mini · Signed out");
+      expect(face().textContent).toContain("GPT Mini · ambient · Signed out");
       expect(faceDimmed()).toBe(true);
       expect(faceInert()).toBe(false);
       expect(face().tabIndex).toBe(0);
@@ -883,11 +907,10 @@ describe("JudgeTab", () => {
       expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
         "Billed to your Claude Code account (work)",
       );
-      // The chip names it under the same rule.
-      expect(face().textContent).toContain("work");
+      expect(face().textContent).toContain("Claude Sonnet · work");
     });
 
-    it("names no account when the provider has one", () => {
+    it("names the one account of a profile provider on the closed face, with its accent dot", () => {
       judgeRecord.current = {
         selection: CLAUDE_STORED,
         effective: {
@@ -898,7 +921,136 @@ describe("JudgeTab", () => {
       };
       renderTab();
 
+      expect(face().textContent).toContain("Claude Sonnet · ambient");
+      const dot = faceAccentDot();
+      expect(dot).not.toBeNull();
+      expect(dot?.textContent).toBe("A");
+      expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+        "Billed to your Claude Code account",
+      );
+    });
+
+    it("names no account and draws no accent dot for one account of a provider that cannot have profiles", () => {
+      judgeCatalog.harnesses = [
+        ...judgeCatalog.harnesses,
+        harness({ id: "copilot", label: "Copilot" }),
+      ];
+      setModels("copilot", {
+        kind: "ready",
+        models: [model("copilot", "gpt-5", "GPT 5", {})],
+      });
+      judgeCatalog.providers = [
+        ...(judgeCatalog.providers ?? []),
+        provider("copilot", [profile("desk-row", "ambient")]),
+      ];
+      judgeRecord.current = {
+        selection: {
+          harnessId: "copilot",
+          model: "gpt-5",
+          profileId: null,
+          reasoningEffort: null,
+        },
+        effective: {
+          source: "selection",
+          harnessId: "copilot",
+          model: "gpt-5",
+        },
+      };
+      renderTab();
+
+      expect(face().textContent).toContain("GPT 5");
+      expect(face().textContent).not.toContain("desk-row");
+      expect(faceAccentDot()).toBeNull();
+      expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+        "Billed to your Copilot account",
+      );
+    });
+
+    it("names no account and draws no accent dot when the pin matches no row", () => {
+      judgeRecord.current = {
+        selection: { ...CLAUDE_STORED, profileId: "gone-row" },
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(face().textContent).toContain("Claude Sonnet");
       expect(face().textContent).not.toContain("ambient");
+      expect(face().textContent).not.toContain("gone-row");
+      expect(faceAccentDot()).toBeNull();
+      expect(screen.getByTestId("auto-judge-warning").textContent).toBe(
+        "The account this judge used was removed from Claude Code. Pick another account, or Auto mode asks you instead.",
+      );
+    });
+
+    it("a judge pinned to an unambiguous alias of a live account shows no removed warning", () => {
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          withAliases(profile("desk-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = {
+        selection: { ...CLAUDE_STORED, profileId: "pin-x" },
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(screen.queryByTestId("auto-judge-warning")).toBeNull();
+      expect(face().textContent).toContain("Claude Sonnet · desk-row");
+    });
+
+    it("a last pick pinned to an unambiguous alias restores on a click and is not last-broken", async () => {
+      const stored = { ...CLAUDE_STORED, profileId: "pin-x" };
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          withAliases(profile("desk-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = { selection: null, lastSelection: stored };
+      renderTab();
+
+      expect(isChecked(automaticRadio())).toBe(true);
+      expect(face().textContent).not.toContain("Account removed");
+      expect(faceDimmed()).toBe(true);
+      expect(faceInert()).toBe(true);
+      fireEvent.click(face());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(pickerPanel()).toBeNull();
+      expect(writes()).toEqual([stored]);
+    });
+
+    it("a pin that is one row's id and another's alias shows the removed warning", () => {
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          profile("pin-x", "managed"),
+          withAliases(profile("second-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = {
+        selection: { ...CLAUDE_STORED, profileId: "pin-x" },
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(screen.getByTestId("auto-judge-warning").textContent).toBe(
+        "The account this judge used was removed from Claude Code. Pick another account, or Auto mode asks you instead.",
+      );
     });
 
     it("shows the spinner alone while a pick saves", async () => {
@@ -1103,6 +1255,35 @@ describe("JudgeTab", () => {
         {
           harnessId: "codex",
           model: "gpt-mini",
+          profileId: null,
+          reasoningEffort: null,
+        },
+      ]);
+      expectNoEmptyModelWrite();
+    });
+
+    it("a named default provider switch commits while its model query is pending", async () => {
+      judgeCatalog.harnesses = [
+        harness({
+          id: "claude",
+          label: "Claude Code",
+          nativeAutoJudge: true,
+          judgeDefaultModel: "claude-named-default",
+        }),
+        harness({ id: "codex", label: "Codex" }),
+      ];
+      setModels("claude", { kind: "pending" });
+
+      const user = await switchToCodex();
+      expect(pendingLine().textContent).toContain("Waiting for Codex's models");
+
+      await user.click(await screen.findByRole("tab", { name: /Claude/ }));
+
+      await waitFor(() => expect(setJudgeMutate).toHaveBeenCalledTimes(1));
+      expect(writes()).toEqual([
+        {
+          harnessId: "claude",
+          model: "claude-named-default",
           profileId: null,
           reasoningEffort: null,
         },
@@ -2649,6 +2830,71 @@ describe("JudgeTab", () => {
         expect(thinkingEffortSlider().getAttribute("aria-valuetext")).toBe(
           "Low",
         );
+      });
+
+      it("holds a retained effort until the selected account catalog settles, then clamps against that account", async () => {
+        judgeCatalog.providers = [
+          provider("claude-code", [
+            profile("ambient", "ambient"),
+            profile("account-a", "managed"),
+            profile("account-b", "managed"),
+          ]),
+          provider("codex", [profile("ambient", "ambient")]),
+        ];
+        judgeRecord.current = {
+          selection: {
+            harnessId: "claude",
+            model: "opus",
+            profileId: "account-a",
+            reasoningEffort: "high",
+          },
+        };
+        setProfileModels("claude", "account-a", {
+          kind: "ready",
+          models: [EFFORT_MODEL],
+        });
+        setProfileModels("claude", "account-b", { kind: "pending" });
+        autoJudgeSetVersion.current = { major: 1, minor: 3 };
+
+        renderTab();
+        const user = userEvent.setup();
+        await user.click(face());
+        await screen.findByRole("dialog", { name: "Select model" });
+        expect(thinkingEffortSlider().getAttribute("aria-valuetext")).toBe(
+          "High",
+        );
+        await user.click(
+          screen.getByRole("button", { name: /profile: account-a/ }),
+        );
+        await user.click(
+          await screen.findByRole("menuitem", { name: "account-b" }),
+        );
+
+        expect(setJudgeMutate).not.toHaveBeenCalled();
+
+        act(() => {
+          setProfileModels("claude", "account-b", {
+            kind: "ready",
+            models: [
+              model("claude", "opus", "Claude Opus", {
+                supportedReasoningEfforts: [
+                  { id: "medium", label: "Medium", description: null },
+                  { id: "low", label: "Low", description: null },
+                ],
+              }),
+            ],
+          });
+        });
+
+        await waitFor(() => expect(setJudgeMutate).toHaveBeenCalledTimes(1));
+        expect(writes()).toEqual([
+          {
+            harnessId: "claude",
+            model: "opus",
+            profileId: "account-b",
+            reasoningEffort: "low",
+          },
+        ]);
       });
 
       it("a same-provider model change from a non-empty effort lands on the new model's lowest, even when the new model still advertises the old level", async () => {

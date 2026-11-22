@@ -67,6 +67,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
         "explicit",
         "direct_ui",
       ),
+      "user",
     );
   };
   const metadata = useWorktreeOwnerMetadata({
@@ -246,7 +247,7 @@ function OwnerMetadataRefreshFooter(props: {
           type="button"
           size="xs"
           variant="ghost"
-          aria-label="Refresh workspace details"
+          aria-label="Refresh folder details"
           aria-keyshortcuts="R"
           disabled={!props.canRefresh || props.refreshing}
           // The pointer is what holds a HoverCard open; letting the button take
@@ -300,7 +301,7 @@ function OwnerMetadataCheckedAtText(props: {
       className="text-ui-xs whitespace-nowrap text-muted-foreground"
       data-testid="owner-workspace-checked-at"
     >
-      Workspace snapshot · {relative}
+      Folder snapshot · {relative}
     </span>
   );
 }

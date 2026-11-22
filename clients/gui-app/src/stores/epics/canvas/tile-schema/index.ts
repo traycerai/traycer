@@ -142,5 +142,5 @@ type EpicNodeTileKindId = {
 }[TileKindId];
 
 export function isEpicNodeTileRef(ref: EpicCanvasTileRef): ref is EpicNodeRef {
-  return ref.type in EPIC_NODE_TILE_KINDS;
+  return Object.hasOwn(EPIC_NODE_TILE_KINDS, ref.type);
 }

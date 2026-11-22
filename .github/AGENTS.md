@@ -48,11 +48,12 @@ Every push to `main` starts a run of every workflow, each running what the
 merged commit reaches, once, and a later merge never cancels an earlier merge's
 run.
 
-- A failed merge run is re-run once (`trunk-red.yml`, failed jobs only,
-  because the test suites have known flakes). If the re-run fails too, the
-  `trunk-red` run itself fails, with the commit, its author and the run in its
-  summary. It sends nothing anywhere: a failed `trunk-red` run is the signal,
-  and the one thing an alert has to watch.
+- No test may need a retry: a test passes on its first attempt (owner ruling,
+  3 Nov 2026). `trunk-red.yml` re-runs nothing. A failed merge run is red on
+  attempt 1: the `trunk-red` run itself fails, with the commit, its author and
+  the run in its summary, and the failure is fixed forward. It sends nothing
+  anywhere: a failed `trunk-red` run is the signal, and the one thing an alert
+  has to watch.
 - A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`,
   the `changes` jobs of `browser-regressions.yml`, `formal-regressions.yml`,
   `protocol-compat.yml`, `real-supervisor.yml` and `gradle-wrapper.yml`,
@@ -87,7 +88,9 @@ run.
   refuses a cancelled run.
 - `pre-commit.yml`'s `lint` and `compile` jobs restore a cache only a passing
   push saves, so every run starts from the last green `main` entry. It holds
-  `NX_CACHE_DIRECTORY`, the Nx database and gui-app's ESLint cache. A cached
+  `NX_CACHE_DIRECTORY`, the Nx database and the ESLint cache of every project
+  that lints with ESLint. Each uses `--cache-strategy content`, because a fresh
+  checkout gives every file a new mtime. A cached
   result replays as a pass, so a target's `inputs` must name everything its
   answer depends on: `lint` is type-aware and lists `^production`, and lists
   every source extension the linters read. A rule that reads another file
@@ -96,7 +99,14 @@ run.
   React-compiled modules instead (`TRAYCER_REACT_COMPILER_CACHE_DIR`, read by
   `clients/desktop/scripts/react-compiler-plugin.ts`), keyed on each module's
   code, the compiler options and `bun.lock`, so a renderer change recompiles
-  only the modules it changed. A failed compile is never stored.
+  only the modules it changed. A failed compile is never stored. The build
+  lane sets `NX_LEGACY_AFFECTED=false`, so it runs the build tasks whose own
+  inputs changed rather than every target of a touched project. Desktop's
+  build depends on no other build: it compiles protocol, gui-app and
+  html-source from source, and neither gui-app nor html-source has a build
+  of its own. html-source is an implicit dependency of desktop, so a change
+  to its production files still selects desktop's build. Protocol's build
+  still runs when a protocol input changes.
 - A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
   unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
   once more alone first, because a file's time on the runner moves by half

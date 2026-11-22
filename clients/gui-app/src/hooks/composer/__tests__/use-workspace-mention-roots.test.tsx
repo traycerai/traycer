@@ -1,4 +1,4 @@
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorktreeBinding,
@@ -6,10 +6,12 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
+  runDirectoryFromWorktreeBindingAndIntent,
   mentionRootsFromWorktreeIntent,
   mentionRootsFromWorktreeBinding,
   mentionRootsFromWorktreeBindingAndIntent,
   useLandingComposerMentionRoots,
+  useLandingRunWorkingDirectory,
   useWorkspaceMentionRoots,
 } from "../use-workspace-mention-roots";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
@@ -465,5 +467,129 @@ describe("mentionRootsFromWorktreeBindingAndIntent", () => {
         worktreeIntent("/repo", "import", "/wt/feature"),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("runDirectoryFromWorktreeBindingAndIntent", () => {
+  it("uses the primary binding and overlays staged intent", () => {
+    const local = binding([
+      bindingEntry({ workspacePath: "/other", isPrimary: false }),
+      bindingEntry({ workspacePath: "/repo" }),
+    ]);
+    const worktree = binding([
+      bindingEntry({ mode: "worktree", worktreePath: "/checkout" }),
+    ]);
+    expect(runDirectoryFromWorktreeBindingAndIntent(local, null)).toBe("/repo");
+    expect(runDirectoryFromWorktreeBindingAndIntent(worktree, null)).toBe(
+      "/checkout",
+    );
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        worktree,
+        worktreeIntent("/repo", "local", null),
+      ),
+    ).toBe("/repo");
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        local,
+        worktreeIntent("/repo", "import", "/imported"),
+      ),
+    ).toBe("/imported");
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        local,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toBe("/repo");
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        worktree,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toBe("/repo");
+  });
+
+  it("cannot determine a directory for empty or folderless bindings", () => {
+    expect(runDirectoryFromWorktreeBindingAndIntent(null, null)).toBeNull();
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(binding([]), null),
+    ).toBeNull();
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        { ...binding([bindingEntry({})]), workspaceMode: "folderless" },
+        null,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("useLandingRunWorkingDirectory", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+  afterEach(() => {
+    cleanup();
+    resetStores();
+  });
+
+  it.each(["global", "draft"] as const)(
+    "uses the %s primary folder and its staged intent",
+    (scope) => {
+      setGlobalFolders(["/first", "/primary"]);
+      useWorkspaceFoldersStore.setState({
+        byHost: {
+          [HOST_A]: {
+            folders: ["/first", "/primary"],
+            folderInfoByPath: {},
+            primaryPath: "/primary",
+          },
+        },
+      });
+      const draftId =
+        scope === "draft"
+          ? useLandingDraftStore.getState().createDraft(null)
+          : null;
+      if (draftId !== null) setGlobalFolders(["/other"]);
+      const key = { surface: "landing" as const, hostId: HOST_A, draftId };
+      const hook = renderHook(() => useLandingRunWorkingDirectory(draftId));
+      expect(hook.result.current).toBe("/primary");
+      act(() =>
+        useWorktreeIntentStagingStore
+          .getState()
+          .stageIntent(key, worktreeIntent("/primary", "import", "/checkout")),
+      );
+      expect(hook.result.current).toBe("/checkout");
+      act(() =>
+        useWorktreeIntentStagingStore
+          .getState()
+          .stageIntent(key, worktreeIntent("/primary", "create", null)),
+      );
+      expect(hook.result.current).toBe("/primary");
+    },
+  );
+
+  it("keeps the primary when only a sibling is staged", () => {
+    setGlobalFolders(["/primary", "/sibling"]);
+    useWorktreeIntentStagingStore
+      .getState()
+      .stageIntent(
+        { surface: "landing", hostId: HOST_A, draftId: null },
+        worktreeIntent("/sibling", "import", "/sibling-checkout"),
+      );
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null));
+    expect(hook.result.current).toBe("/primary");
+  });
+
+  it("has no directory without folders", () => {
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null));
+    expect(hook.result.current).toBeNull();
+  });
+
+  it("uses the draft workspace even when global folders change", () => {
+    setGlobalFolders(["/draft-repo"]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    setGlobalFolders(["/global-repo"]);
+    const hook = renderHook(() => useLandingRunWorkingDirectory(draftId));
+    expect(hook.result.current).toBe("/draft-repo");
   });
 });

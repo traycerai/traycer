@@ -97,6 +97,7 @@ function usePrOwnerResolution(args: {
         "explicit",
         "direct_ui",
       ),
+      "user",
     );
   }, [epicId, hostId, label, openTile, ownerId, ownerKind]);
 

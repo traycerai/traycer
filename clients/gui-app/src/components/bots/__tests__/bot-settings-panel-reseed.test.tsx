@@ -67,7 +67,6 @@ function modelOption(harnessId: string, slug: string, efforts: string[]) {
 const mocks = vi.hoisted(() => ({
   tabHostClient: null as HostClient<HostRpcRegistry> | null,
   stores: [] as ComposerToolbarStore[],
-  runSettingsClients: [] as Array<HostClient<HostRpcRegistry> | null>,
   updateRunSettings: vi.fn<(variables: object) => void>(),
 }));
 
@@ -107,6 +106,11 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
+  // The toolbar store asks which `providers.list` line this host speaks, to
+  // know whether its rows carry the hidden model providers. No line is
+  // negotiated here, so the panel sees the whole catalog, which is what these
+  // cases are about.
+  useHostMethodSchemaVersion: () => null,
 }));
 vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
   useUsageSummarySupported: () => false,
@@ -132,18 +136,21 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => {
     useBotUpdateTitleMutation: () => idle,
     useBotDeleteMutation: () => idle,
     useBotUpdateReplyModeMutation: () => idle,
-    useBotUpdateRunSettingsMutation: (
-      client: HostClient<HostRpcRegistry> | null,
-    ) => {
-      mocks.runSettingsClients.push(client);
-      return {
-        isPending: false,
-        error: null,
-        mutate: mocks.updateRunSettings,
-      };
-    },
+    useBotUpdateAppearanceMutation: () => ({
+      ...idle,
+      isError: false,
+      variables: undefined,
+    }),
+    useBotUpdateRunSettingsMutation: () => ({
+      isPending: false,
+      error: null,
+      mutate: mocks.updateRunSettings,
+    }),
   };
 });
+vi.mock("@/hooks/bots/use-bot-may-change", () => ({
+  useBotMayChange: () => true,
+}));
 vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
   useBotNotificationLevelsQuery: () => ({ data: undefined, error: null }),
   useBotNotificationLevelSetMutation: () => ({
@@ -185,6 +192,7 @@ function panel(bot: BotRecord): ReactNode {
         <BotChannelSettingsPanel
           bot={bot}
           personal={false}
+          mayChange
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
@@ -214,7 +222,6 @@ beforeEach(() => {
   queryClient = new QueryClient();
   mocks.tabHostClient = buildTabHostClient();
   mocks.stores.length = 0;
-  mocks.runSettingsClients.length = 0;
   useComposerHarnessMemoryStore.getState().resetForTests();
 });
 
@@ -246,7 +253,6 @@ describe("<BotChannelSettingsPanel /> model, over the real toolbar store", () =>
       effort: "high",
       profile: "profile-1",
     });
-    expect(mocks.runSettingsClients.at(-1)).toBe(mocks.tabHostClient);
 
     // The refetched row names a tuple other than the one in the picker.
     rerender(

@@ -6,6 +6,7 @@ import { HomeHero } from "@/components/home/home-hero";
 import { LandingComposer } from "@/components/home/composer/landing-composer";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
+import { AccessCheckNotice } from "@/components/home/access-check-notice";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { CurrentTasksSection } from "@/components/home/current-tasks-section";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
@@ -14,6 +15,7 @@ import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftShell } from "@/stores/home/landing-draft-store";
 import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/landing-terminal-host";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import "./home-touch-targets.css";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -59,6 +61,8 @@ export function LandingDraftSurface() {
   // inline copy is pure duplication at this width.
   const isMobile = useIsMobileViewport();
   const setNavOpen = useMobileNavStore((state) => state.setOpen);
+  const stripMounted = useMobileStripForm() !== null;
+  const { openHistory } = useSystemTabModalActions();
   const workspaceSurface = useMemo(
     () => ({ kind: "home" as const, draftId }),
     [draftId],
@@ -156,27 +160,24 @@ export function LandingDraftSurface() {
           narrow viewport (or the space left beside the terminal panel) and
           the outer overflow-clip would clip the right edge instead of
           letting content reflow. */}
-      {/* Row 2 bottom-aligns the hero and row 3 top-anchors the composer, so
-          the boundary between them is where the pair sits. An even 1fr/1fr
-          split (desktop, where the epics list fills row 3) centres it; below md
-          the list is gone, so row 3 is weighted heavier to lift the pair just
-          above the midpoint, where it reads better on a tall phone. Both rows
-          stay fractional on purpose - an intrinsic row 3 would let a grown
-          composer (attachments, several folders, keyboard open) squeeze row 2
-          to zero and then clip against this container's overflow-hidden.
-          With both the greeting and the recent list off there is no pair to
-          balance, so row 2 collapses outright and the composer centres itself
-          inside the whole remainder. */}
+      {/* Desktop splits the window between the greeting and the composer row.
+          Current tasks share that composer row and scroll inside it.
+          Below md the body scrolls, and the composer track keeps its own
+          height so a grown composer and an expanded setup failure stay
+          reachable. With both the greeting and the recent list off there is
+          no pair to balance, so the hero row collapses and the composer
+          centres itself in the remainder. */}
       <div
         ref={appearanceSurfaceRef}
         className={cn(
-          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden max-md:short-landscape:content-start max-md:short-landscape:overflow-y-auto",
+          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden max-md:overflow-y-auto max-md:short-landscape:content-start",
           layout.rows,
         )}
       >
         <LandingAppearanceWallpaper />
-        <div className="mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
+          <AccessCheckNotice />
         </div>
 
         <section
@@ -189,13 +190,12 @@ export function LandingDraftSurface() {
           <HomeHero workspaceFolders={workspaceFolders} />
         </section>
 
-        {/* Composer + recent epics share one row so the composer is top-anchored:
-            adding a folder grows it downward into the (scrollable) epics list
-            below instead of recentering and shoving the hero up. */}
+        {/* Composer and Current tasks share this row, so adding a folder grows
+            the composer downward into the scrollable task list. */}
         <div
           data-composer-placement={layout.placement}
           className={cn(
-            "relative mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 max-md:px-4",
+            "relative mx-auto flex w-full max-w-3xl flex-col px-6 max-md:px-4",
             layout.composer,
           )}
         >
@@ -227,7 +227,11 @@ export function LandingDraftSurface() {
               type="button"
               data-testid="home-view-history"
               className="mt-auto shrink-0 self-center pt-4 pb-safe-bottom-gutter text-ui-xs text-muted-foreground transition-colors active:text-foreground"
-              onClick={() => setNavOpen(true)}
+              onClick={() => {
+                // The strip has replaced the drawer, so this goes to the list itself.
+                if (stripMounted) openHistory();
+                else setNavOpen(true);
+              }}
             >
               View history
             </button>
@@ -279,6 +283,10 @@ function usePendingDraftId(draftId: string | null): string {
  * would reconcile the composer against its slot and remount the editor) and
  * the composer centres itself in the whole remainder. Any other combination
  * keeps the fractional two-row split described at the grid itself.
+ *
+ * Desktop is that split from `md` up, and Current tasks share the composer
+ * row. Below md there is no list, the body scrolls, and the composer's row
+ * keeps its own height so a grown composer is not clipped.
  */
 function startPageLayout(
   showGreeting: boolean,
@@ -291,13 +299,19 @@ function startPageLayout(
 } {
   return showGreeting || showRecentHistory
     ? {
-        rows: "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        rows: cn(
+          "md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
+          "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        ),
         hero: "",
-        composer: "",
+        composer: "md:min-h-0",
         placement: "top",
       }
     : {
-        rows: "grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        rows: cn(
+          "md:grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)]",
+          "max-md:grid-rows-[auto_0_minmax(min-content,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        ),
         hero: "h-0 overflow-hidden",
         composer: "justify-center",
         placement: "centered",

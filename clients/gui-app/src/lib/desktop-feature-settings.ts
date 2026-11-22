@@ -1,10 +1,14 @@
 export interface FeatureSettingsSnapshot {
   readonly agentRoles: boolean;
+  readonly agentFeedback: boolean;
 }
 
 export interface FeatureSettingsBridge {
   readonly get: () => Promise<FeatureSettingsSnapshot>;
   readonly setAgentRolesEnabled: (
+    enabled: boolean,
+  ) => Promise<FeatureSettingsSnapshot>;
+  readonly setAgentFeedbackEnabled: (
     enabled: boolean,
   ) => Promise<FeatureSettingsSnapshot>;
 }

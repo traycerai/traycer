@@ -15,10 +15,13 @@ import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-con
 /**
  * Read side of the bearer seam used by the transport open frame.
  *
- * `identity.userId` is consumed only for diagnostics (the empty-token error
- * message) and the same-user rotation guard; the transport never reads the rest
- * of an identity. `getBearerToken()` throws when no bearer is available (e.g. a
- * released credential lease), which the transport maps to a pre-dial failure.
+ * `identity.userId` is consumed only by the same-user guards (rotation,
+ * {@link bearerSourceForUser} and {@link cloudVerdictForUser}, which keep a
+ * transport on its own user); the transport never reads the rest of an
+ * identity, and it never reaches an error message — a sink that logs a whole
+ * error object would publish the id above DEBUG. `getBearerToken()` throws
+ * when no bearer is available (e.g. a released credential lease), which the
+ * transport maps to a pre-dial failure.
  */
 export interface OpenFrameBearerSource {
   getBearerToken(): string;
@@ -31,6 +34,47 @@ export interface OpenFrameBearerSource {
  * dialing rather than sending an empty `open` frame.
  */
 export type BearerSourceProvider = () => OpenFrameBearerSource | null;
+
+/**
+ * `provider`, answering only for `userId`: a source of any other identity
+ * reads as no bearer. A provider is usually a live read of the current
+ * context, which after an account switch returns the new user lease while a
+ * transport built for the old user is still held; bound, that transport never
+ * presents it, at a dial, an open or a credential push. Same-user rotation and
+ * a same-user re-sign-in (a fresh lease, the same `userId`) still pass.
+ */
+export function bearerSourceForUser(
+  provider: BearerSourceProvider,
+  userId: string,
+): BearerSourceProvider {
+  return () => {
+    const source = provider();
+    return source !== null && source.identity.userId === userId ? source : null;
+  };
+}
+
+/**
+ * `cloudAuthorized`, answering only for `userId`: `false` while `provider`
+ * returns no source of that user. The verdict a transport is given is usually
+ * a live read of the current session, so after an account switch it is the
+ * next user's; bound, a transport built for the old user reports `false` on
+ * its open frame and in its verdict pushes instead. Same-user promotion and
+ * demotion pass through unchanged.
+ *
+ * Exact while `cloudAuthorized` describes the session whose bearer
+ * `provider` returns at the same moment. A composition keeps that by
+ * committing an identity transition's context and verdict in one synchronous
+ * run: the GUI's `AuthService` commits the request context, then the auth
+ * store, and announces the verdict after both.
+ */
+export function cloudVerdictForUser(
+  provider: BearerSourceProvider,
+  userId: string,
+  cloudAuthorized: () => boolean,
+): () => boolean {
+  const bearer = bearerSourceForUser(provider, userId);
+  return () => bearer() !== null && cloudAuthorized();
+}
 
 /**
  * A bearer a composition has declared fit for CLOUD use: the account's authn
@@ -93,7 +137,7 @@ export class MutableBearerLease implements BearerLease {
   getBearerToken(): string {
     if (this.token.length === 0) {
       throw new CredentialLeaseReleasedError(
-        `No bearer available for user '${this.identity.userId}'`,
+        "No bearer available for this credential lease",
       );
     }
     return this.token;

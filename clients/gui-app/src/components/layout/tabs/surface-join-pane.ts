@@ -62,10 +62,13 @@ export function surfaceJoinPane(
     case "settings":
       return edge === "left" ? "panel" : "surface";
     // The Tracy surface's header band runs along its top in `--background`.
-    // Down its sides it shows its sheet's canvas: the channel column paints
-    // no ground of its own, and the content pane beside it is canvas.
+    // Its channel column stands at its start edge in the sidebar's fill, as a
+    // task's panel does (`BotChannelColumn`), and the content pane fills the
+    // rest in canvas. The column is drawn only from the tab's `@3xl` width;
+    // narrower, the left edge shows the canvas and the join stays the panel.
     case "tracy":
-      return edge === "top" ? "surface" : "canvas";
+      if (edge === "top") return "surface";
+      return edge === "left" ? "panel" : "canvas";
     case "home":
     case "history":
     case "sample-workspace":

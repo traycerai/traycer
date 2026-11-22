@@ -3254,9 +3254,10 @@ interface TaskExecAction {
 //     commands/host-start.ts for that form.
 //
 // Passing a cmd.exe line through this function produces a line cmd cannot
-// resolve, which fails silently as a non-zero exit. Nothing in this file
-// shells through cmd.exe any more - the capability probe below runs the CLI
-// directly, precisely so there is only one dialect in play here.
+// resolve, which fails silently as a non-zero exit. The capability probes below
+// run the CLI directly for that reason. The one cmd.exe line in this file is
+// the launcher's nonce read, which needs a redirect; see
+// `buildHiddenHostLauncher`.
 function quoteWindowsArg(arg: string): string {
   const escaped = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1");
   return `"${escaped}"`;
@@ -3294,6 +3295,15 @@ function hiddenHostLauncherPath(label: ServiceLabel): string {
  * when the image cannot be launched at all, so the probe is wrapped in
  * `On Error Resume Next`: any failure to even ask degrades to the unlabelled
  * start, never to an aborted script that leaves the machine hostless.
+ *
+ * The adoption nonce is the one probe whose stdout the launcher reads, and it
+ * reads it from a file. `shell.Exec` is the only `WScript.Shell` call with a
+ * stdout stream, and it takes no window style: from `wscript.exe`, which has no
+ * console, it opens a visible console window on every task-managed start. So
+ * this line is a hidden `shell.Run` of `cmd.exe` with a redirect, which needs
+ * no change to the CLI it runs, however old that slot is. It is in cmd.exe's
+ * plain `"` dialect, and the file sits beside this launcher, under the user's
+ * own install home, for as long as the read takes.
  */
 function buildHiddenHostLauncher(
   cli: CliInvocation,
@@ -3324,8 +3334,9 @@ function buildHiddenHostLauncher(
     "--service-label",
     label.id,
   ]
-    .map(quoteWindowsArg)
+    .map((arg) => `"${arg}"`)
     .join(" ");
+  const adoptionNonceRedirectStart = `${quoteWindowsArg(windowsSystemPath("cmd.exe"))} /d /s /c "${adoptionNonceProbe} > `;
   const adoptionCapabilityProbe = [
     ...invocation,
     "host",
@@ -3342,7 +3353,10 @@ function buildHiddenHostLauncher(
     "Dim commandLine",
     "Dim probeStatus",
     "Dim adoptionCapabilityStatus",
-    "Dim nonceProbe",
+    "Dim fileSystem",
+    "Dim nonceFile",
+    "Dim nonceStatus",
+    "Dim nonceStream",
     "Dim adoptionNonce",
     "Dim noncePattern",
     'Set shell = CreateObject("WScript.Shell")',
@@ -3359,11 +3373,11 @@ function buildHiddenHostLauncher(
     "  If Err.Number <> 0 Then adoptionCapabilityStatus = 1",
     "  Err.Clear",
     "  If adoptionCapabilityStatus = 0 Then",
-    `    Set nonceProbe = shell.Exec(${quoteVbsString(adoptionNonceProbe)})`,
-    "    If Err.Number = 0 Then",
-    "      Do While nonceProbe.Status = 0",
-    "        WScript.Sleep 10",
-    "      Loop",
+    '    Set fileSystem = CreateObject("Scripting.FileSystemObject")',
+    '    nonceFile = fileSystem.BuildPath(fileSystem.GetParentFolderName(WScript.ScriptFullName), "host-start-nonce-" & fileSystem.GetTempName)',
+    `    nonceStatus = shell.Run(${quoteVbsString(adoptionNonceRedirectStart)} & Chr(34) & nonceFile & Chr(34) & " 2>NUL" & Chr(34), 0, True)`,
+    "    If Err.Number = 0 And nonceStatus = 0 Then",
+    "      Set nonceStream = fileSystem.OpenTextFile(nonceFile, 1)",
     // The CLI prints the nonce with a trailing newline. VBScript `Trim`
     // strips SPACES only, and a VBScript RegExp `$` (no Multiline) does not
     // match before a trailing LF, so `Trim(...)` alone left a 37-char string
@@ -3372,8 +3386,10 @@ function buildHiddenHostLauncher(
     // grant until it expired (~60 s), and install / restart / update all
     // reported failure while the host came up a minute later. Strip CR and
     // LF explicitly; `$(...)` does this for free on the POSIX launchers.
-    '      If nonceProbe.ExitCode = 0 Then adoptionNonce = Trim(Replace(Replace(nonceProbe.StdOut.ReadAll, vbCr, ""), vbLf, ""))',
+    '      adoptionNonce = Trim(Replace(Replace(nonceStream.ReadAll, vbCr, ""), vbLf, ""))',
+    "      nonceStream.Close",
     "    End If",
+    "    fileSystem.DeleteFile nonceFile, True",
     "  End If",
     "  Err.Clear",
     "  On Error Goto 0",

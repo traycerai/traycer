@@ -107,6 +107,8 @@ import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
+import { buildHostUseCommand } from "./commands/host-use";
+import { buildHostClaimCommand } from "./commands/host-claim";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
@@ -121,7 +123,8 @@ import {
   type HostMaintenanceLeaseAdmission,
 } from "./commands/host-maintenance-lease";
 import { buildHostRestartCommand } from "./commands/host-restart";
-import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
+import type { RunHostStartOptions } from "./commands/host-start";
+import { runHostStartCommand } from "./commands/host-start-command";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
 import { LIFECYCLE_ORIGIN_COMMANDS } from "@traycer/protocol/config/lifecycle-origin-commands";
 import {
@@ -178,7 +181,8 @@ import {
 } from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
-import { readonlyEnv } from "./runner/runtime";
+import { readonlyEnv, resolveRuntimeContext } from "./runner/runtime";
+import { createOutput } from "./runner/output";
 import {
   agentWorktreeCreateOffered,
   assertAgentWorktreeCreateAllowed,
@@ -1177,7 +1181,12 @@ function registerHostCommands(program: Command): void {
     // going through the runner, so nothing else resolves them for it.
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const opts = command.optsWithGlobals() as Record<string, unknown>;
-    const logger = createCliLogger(config.environment);
+    const runtime = resolveRuntimeContext(
+      extractRunnerFlags(opts),
+      readonlyEnv(),
+    );
+    const logger = runtime.logger;
+    const output = createOutput(runtime);
     const serviceLabel =
       typeof opts.serviceLabel === "string" ? opts.serviceLabel : null;
     const transitionId =
@@ -1217,7 +1226,8 @@ function registerHostCommands(program: Command): void {
       {},
     );
     try {
-      await runHostStart(
+      await runHostStartCommand(
+        { runtime, output, progress: (info) => output.progress(info) },
         hostStartOptionsFromCommand({
           environment: config.environment,
           cwd: typeof opts.cwd === "string" ? opts.cwd : null,
@@ -1479,11 +1489,24 @@ function registerHostCommands(program: Command): void {
       }),
   );
 
+  host
+    .command("pin")
+    .description("Print the host version pinned by this CLI build as JSON")
+    .action(() => {
+      process.stdout.write(
+        `${JSON.stringify({ supportedHostVersion: config.supportedHostVersion })}\n`,
+      );
+    });
+
   registerServiceCommands(host);
 
   withRunner(
     host
       .command("install")
+      .option(
+        "--team <slug>",
+        "Add this computer to the team identified by its slug after installing.",
+      )
       .description(
         "Install a host version from the registry (defaults to latest), or a local archive with --from, then register the OS service and start the host. Prompts for browser sign-in first when you are signed out and the terminal can ask, and provisions the started host's credential (best effort). Use --no-service-register for bytes only.",
       )
@@ -1571,6 +1594,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostInstallCommand({
+          team: typeof opts.team === "string" ? opts.team : null,
           attemptAdoption: attemptAdoptionNonce(opts),
           lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           // Registry path defaults to "latest" when neither flag is set.
@@ -1596,6 +1620,10 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("ensure")
+      .option(
+        "--team <slug>",
+        "Add this computer to the team identified by its slug, or keep it there.",
+      )
       .description(
         "Make sure the host is installed, registered as a service, and running - installing or starting it if needed. Safe to run repeatedly.",
       )
@@ -1610,6 +1638,12 @@ function registerHostCommands(program: Command): void {
       .option(
         "--from <path>",
         "Ensure from a local archive. Mutually exclusive with --release.",
+      )
+      .addOption(
+        new Option(
+          "--bundled <path>",
+          "Ensure from a signed bundled host archive.",
+        ).conflicts(["release", "from"]),
       )
       .option(
         "--no-linger",
@@ -1640,23 +1674,31 @@ function registerHostCommands(program: Command): void {
           ? opts.release
           : null;
       const fromPath = typeof opts.from === "string" ? opts.from : null;
+      const bundledPath =
+        typeof opts.bundled === "string" ? opts.bundled : null;
       // See `host install` above - the mutual-exclusion check runs inside
       // the CommandFn so the runner emits a proper NDJSON error envelope.
       return async (ctx) => {
-        if (explicitVersion !== null && fromPath !== null) {
+        if (
+          [explicitVersion, fromPath, bundledPath].filter(
+            (value) => value !== null,
+          ).length > 1
+        ) {
           throw cliError({
             code: CLI_ERROR_CODES.INVALID_ARGUMENT,
             message:
-              "host ensure: --release and --from are mutually exclusive; pass one or the other",
-            details: { release: explicitVersion, from: fromPath },
+              "host ensure: --release, --from and --bundled are mutually exclusive",
+            details: null,
             exitCode: 1,
           });
         }
         return buildHostEnsureCommand({
+          team: typeof opts.team === "string" ? opts.team : null,
           attemptAdoption: attemptAdoptionNonce(opts),
           lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           versionRequest: explicitVersion,
           fromPath,
+          bundledPath,
           enableLinger: opts.linger !== false,
           allowSelfInvocation: opts.allowSelfInvocation === true,
           // commander's `--no-service-register` materialises as
@@ -1668,6 +1710,22 @@ function registerHostCommands(program: Command): void {
         })(ctx);
       };
     },
+  );
+
+  withRunner(
+    host
+      .command("use")
+      .argument("<slug>", "Team slug from its dashboard address")
+      .description("Give this computer to a team you belong to."),
+    (_opts, [team]) => buildHostUseCommand(team ?? ""),
+  );
+
+  withRunner(
+    host
+      .command("claim")
+      .description("Claim this team computer as your own.")
+      .option("--yes", "Skips the question, for scripts."),
+    (opts) => buildHostClaimCommand({ yes: opts.yes === true }),
   );
 
   withRunner(
@@ -2901,13 +2959,14 @@ function registerProfileCommands(program: Command): void {
         "Sign an existing profile in again. Prints a sign-in link and waits for it to finish.",
       )
       .argument("<provider>", providerArgument)
-      .argument("<profile>", profileArgument),
-    (_opts, args) =>
+      .argument("<profile>", profileArgument)
+      .option("--switch-account", "Switch account"),
+    (opts, args) =>
       buildProfileLoginCommand(
         {
           provider: expectRequiredPositional(args[0], "provider"),
           target: {
-            kind: "existing",
+            kind: opts.switchAccount === true ? "switch" : "existing",
             profile: expectRequiredPositional(args[1], "profile"),
           },
         },
@@ -3223,17 +3282,14 @@ function registerAgentCommands(
     ? " Use this with a path returned by 'traycer worktree create'."
     : "";
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
-  // Deliberately spells out what OMITTING the option does: omission is its own
-  // selection (the remembered last-used profile), not a synonym for 'ambient'.
   const profileHelp =
-    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to use the last-used profile.";
+    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to use 'ambient'.";
   // Rate-limit reads and configuration resolve no last-used fallback - they
   // act on the one profile the caller names - so `--profile` is required there.
   const profileRequiredHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'.";
-  // Fork's own omission default is 'inherit' (continue the SOURCE agent's
-  // profile byte-for-byte) - distinct from create's last-used preference
-  // lookup, so this cannot reuse `profileHelp`'s wording.
+  // Fork inherits the source profile, so it cannot reuse create's
+  // ambient-default wording.
   const forkProfileHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to inherit the source agent's own profile.";
   const agent = program
@@ -3283,6 +3339,10 @@ function registerAgentCommands(
         "--fast",
         "Request fast mode for supported models. Only available for gui surface. May consume additional credits - set it only when the user asks for it or the agent selection guide recommends it.",
       )
+      .option(
+        "--service-tier <id>",
+        "Service tier id from 'traycer agent list-harness-models <harness>'. Overrides --fast and may cost more.",
+      )
       .option("--profile <ambient|id>", profileHelp)
       .option(
         "--cwd <path>",
@@ -3319,6 +3379,8 @@ function registerAgentCommands(
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+        serviceTier:
+          typeof opts.serviceTier === "string" ? opts.serviceTier : null,
         profile: typeof opts.profile === "string" ? opts.profile : null,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
         workspacePaths: Array.isArray(opts.workspacePath)
@@ -3351,6 +3413,18 @@ function registerAgentCommands(
       )
       .option("--profile <ambient|id>", forkProfileHelp)
       .option(
+        "--service-tier <id>",
+        "Service tier id from 'traycer agent list-harness-models <harness>'. Overrides --fast and may cost more. Omit both to inherit the source's speed.",
+      )
+      .option(
+        "--fast",
+        "Request fast mode for supported models. May cost more. Omit --fast/--no-fast to inherit the source's speed.",
+      )
+      .option(
+        "--no-fast",
+        "Use default speed when no service tier is specified",
+      )
+      .option(
         "--cwd <path>",
         `Primary working directory for the forked agent.${worktreeCreateCwdHint} Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.`,
       )
@@ -3375,6 +3449,9 @@ function registerAgentCommands(
         permissionMode:
           typeof opts.permissionMode === "string" ? opts.permissionMode : null,
         profile: typeof opts.profile === "string" ? opts.profile : null,
+        serviceTier:
+          typeof opts.serviceTier === "string" ? opts.serviceTier : null,
+        fast: typeof opts.fast === "boolean" ? opts.fast : null,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
         workspacePaths: Array.isArray(opts.workspacePath)
           ? opts.workspacePath.filter(
@@ -3413,12 +3490,17 @@ function registerAgentCommands(
     agent
       .command("list-harness-models", readonlyHidden)
       .description("List available models (and params) for one harness.")
-      .argument("<harness>", harnessHelp),
+      .argument("<harness>", harnessHelp)
+      .option(
+        "--profile <ambient|id>",
+        "Provider profile whose models and service tiers to list. Omit to use the ambient login.",
+      ),
     (opts, args) =>
       buildAgentListHarnessModelsCommand({
         epicId: null,
         senderAgentId: null,
         harnessId: expectRequiredPositional(args[0], "harness"),
+        profileId: typeof opts.profile === "string" ? opts.profile : null,
       }),
   );
 
@@ -3473,6 +3555,10 @@ function registerAgentCommands(
         "Enable fast mode for supported models. Omitting it disables fast mode. May consume additional credits - turn it on only when the user asks for it or the agent selection guide recommends it.",
       )
       .option(
+        "--service-tier <id>",
+        "Service tier id from 'traycer agent list-harness-models <harness>'. Overrides --fast and may cost more.",
+      )
+      .option(
         "--permission-mode <mode>",
         `Permission mode for future turns. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
       ),
@@ -3491,6 +3577,8 @@ function registerAgentCommands(
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+        serviceTier:
+          typeof opts.serviceTier === "string" ? opts.serviceTier : null,
       }),
   );
 
@@ -3856,13 +3944,33 @@ function registerBotCommands(program: Command): void {
     bot
       .command("threads")
       .description(
-        "List a bot's threads with the post each answers, its replies, open requests and cost. Works only on the host the bot runs on.",
+        "List a bot's threads with the post each answers, its replies, open requests and cost, most recent activity first. Works only on the host the bot runs on.",
       )
-      .argument("<bot>", botArgument),
-    (_opts, args) =>
-      buildBotThreadsCommand({
+      .argument("<bot>", botArgument)
+      .option("--limit <count>", "List at most this many threads")
+      .option(
+        "--cursor <cursor>",
+        "Continue after the page a listing ended, with the cursor it printed",
+      ),
+    (opts, args) => {
+      const limit =
+        typeof opts.limit === "string"
+          ? parsePositiveIntegerArg(opts.limit)
+          : null;
+      if (typeof opts.limit === "string" && limit === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message: "bot threads: --limit must be a positive whole number",
+          details: { limit: opts.limit },
+          exitCode: 1,
+        });
+      }
+      return buildBotThreadsCommand({
         bot: expectRequiredPositional(args[0], "bot"),
-      }),
+        limit,
+        cursor: typeof opts.cursor === "string" ? opts.cursor : null,
+      });
+    },
   );
 
   withRunner(

@@ -1,20 +1,15 @@
 import type { ReactNode } from "react";
-import { Bot } from "lucide-react";
+import { TracyGlyph } from "@/components/bots/tracy-glyph";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
-import { Badge } from "@/components/ui/badge";
 import { HoverCard } from "@/components/ui/hover-card";
-import {
-  formatUnreadCount,
-  labelWithUnreadCount,
-} from "@/lib/notifications/unread-count";
+import { labelWithUnreadCount } from "@/lib/notifications/unread-count";
 import { cn } from "@/lib/utils";
 import { TabChrome } from "./header-tab-visual";
 import { useSurfaceJoinPane } from "./surface-join-pane";
 import { headerTabClassName } from "./tab-chrome-tokens";
 import type { TracyStripEntry } from "./tab-strip-controller";
 import { StripElapsedTime } from "./side-strip/strip-elapsed-time";
-import { SIDE_STRIP_NAV_TILE_COUNT_CLASS } from "./side-strip/side-strip-tokens";
 import {
   useTracyEntrySignals,
   type TracyEntrySignals,
@@ -27,54 +22,26 @@ import {
 export const TRACY_ENTRY_LABEL = "Tracy";
 
 /**
- * The entry's glyph, in every strip placement, wearing the bot's unread count
- * on its top-right corner (the rail tile passes none: its row draws the count)
- * and the muted mark on its bottom-right while the person set the channel to
- * Nothing; the bare glyph at zero, and where the host does not count.
+ * The entry's picture, in every strip placement. It wears the muted mark on
+ * its bottom-right while the person has set the channel to Nothing. It wears
+ * no count: the entry's label is bold while unread, and the Notifications
+ * count carries how many.
  */
 export function TracyEntryIcon(props: {
   readonly className: string | undefined;
-  readonly unreadCount: number | null;
   readonly muted: boolean;
 }): ReactNode {
-  const { className, unreadCount, muted } = props;
-  const mutedMark = muted ? (
-    <BotMutedGlyph
-      className="absolute right-0 bottom-0 translate-x-1/2 translate-y-1/4 rounded-full bg-background"
-      testId="tracy-entry-muted"
-    />
-  ) : null;
-  if ((unreadCount === null || unreadCount <= 0) && !muted) {
-    return (
-      <Bot
-        className={cn("size-4 shrink-0", className)}
-        aria-hidden="true"
-        data-testid="tracy-entry-icon"
-      />
-    );
-  }
   return (
-    <span className={cn("relative inline-flex shrink-0", className)}>
-      <Bot
-        className="size-4 shrink-0"
-        aria-hidden="true"
-        data-testid="tracy-entry-icon"
-      />
-      {mutedMark}
-      {unreadCount === null || unreadCount <= 0 ? null : (
-        <Badge
-          variant="destructive"
-          size="xs"
-          aria-hidden
-          data-testid="tracy-entry-unread-count"
-          className={cn(
-            SIDE_STRIP_NAV_TILE_COUNT_CLASS,
-            "translate-x-1/2 -translate-y-1/2 tabular-nums",
-          )}
-        >
-          {formatUnreadCount(unreadCount)}
-        </Badge>
-      )}
+    <span className={cn("relative inline-flex shrink-0", props.className)}>
+      <span className="inline-flex" data-testid="tracy-entry-icon">
+        <TracyGlyph size="xs" className={undefined} />
+      </span>
+      {props.muted ? (
+        <BotMutedGlyph
+          className="absolute right-0 bottom-0 translate-x-1/2 translate-y-1/4 rounded-full bg-background"
+          testId="tracy-entry-muted"
+        />
+      ) : null}
     </span>
   );
 }
@@ -104,8 +71,7 @@ export function TracyEntryHoverBody(props: {
 
 /**
  * The fixed Tracy entry at the strip's leading edge, after Home and outside
- * the scrolling tabs: the Tracy glyph with the bot's unread count and
- * "Tracy", bold while unread, and how
+ * the scrolling tabs: the Tracy glyph and "Tracy", bold while unread, and how
  * long the bot has been working while it runs a turn; the hover names the
  * channel the surface shows. Like Home it has no drag,
  * no close, no menu and no Alt-digit; unlike Home it is a real tab, so it
@@ -148,11 +114,7 @@ export function TracyStripSlot(props: {
             color={null}
             session={false}
           />
-          <TracyEntryIcon
-            className="relative z-20"
-            unreadCount={signals.unreadCount}
-            muted={signals.muted}
-          />
+          <TracyEntryIcon className="relative z-20" muted={signals.muted} />
           <span
             className={cn(
               "relative z-20 min-w-0 truncate",

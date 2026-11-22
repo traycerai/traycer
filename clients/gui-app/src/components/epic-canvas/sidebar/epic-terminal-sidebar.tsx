@@ -129,18 +129,21 @@ function TerminalsPanelBodyLive(props: {
     (row: TerminalSidebarSessionRow, event: MouseEvent<HTMLElement>) => {
       const tile = prepareOpenRow(row);
       if (tile === null) return;
-      openTile({
-        node: tile,
-        target: { tabId },
-        // Explicit, not `single`: double-click on a terminal row is RENAME, so
-        // no gesture would ever promote a previewed terminal tile and clicking
-        // row A then row B would evict A.
-        gesture: "explicit",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: tile,
+          target: { tabId },
+          // Explicit, not `single`: double-click on a terminal row is RENAME, so
+          // no gesture would ever promote a previewed terminal tile and clicking
+          // row A then row B would evict A.
+          gesture: "explicit",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openTile, prepareOpenRow, tabId],
   );

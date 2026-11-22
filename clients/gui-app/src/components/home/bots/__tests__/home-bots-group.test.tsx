@@ -1,8 +1,7 @@
 /**
  * Where Home's "Created by" rules meet (Tracy Bots): the group card asks
- * the member directory only for a TEAM environment and only when the band's
- * host answers `environment.members`, and hands each row the label built
- * from the signed-in viewer and that directory.
+ * the member directory only for a TEAM environment, and hands each row the
+ * label built from the signed-in viewer and that directory.
  *
  * The card and its rows are real: each row is found by its button's
  * accessible name and its attribution read from what it renders; the
@@ -26,28 +25,15 @@ import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   activateTabIntent: vi.fn<(intent: unknown) => void>(),
-  supported: true as boolean | null,
-  supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   memberQueries: [] as Array<{
     environmentId: string | null;
     enabled: boolean;
   }>,
 }));
 
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: (hostId: string | null, method: string) => {
-    mocks.supportQueries.push({ hostId, method });
-    return mocks.supported;
-  },
-  useHostSupportsMethod: () => true,
-}));
 // The directory knows one teammate by name, and answers only when asked.
 vi.mock("@/hooks/bots/use-environment-members-query", () => ({
-  useEnvironmentMembers: (
-    _client: unknown,
-    environmentId: string | null,
-    enabled: boolean,
-  ) => {
+  useEnvironmentMembers: (environmentId: string | null, enabled: boolean) => {
     mocks.memberQueries.push({ environmentId, enabled });
     return (userId: string) =>
       enabled && userId === "user-teammate"
@@ -69,7 +55,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-band",
 }));
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
-  useBotSubscription: () => ({
+  useBotSubscriptionForHost: () => ({
     snapshot: null,
     deleted: false,
     error: null,
@@ -144,11 +130,10 @@ function mountCard(
         connectableHostIds={[]}
         environmentBindings={{
           byHostId: new Map(),
+          ownSettingsHostIds: [],
           failedHostIds: [],
           retryFailed: () => undefined,
         }}
-        client={null}
-        hostId={HOST}
         setup={null}
       />
     </StrictMode>,
@@ -183,8 +168,6 @@ beforeEach(() => {
     botId: null,
     visitedBotIds: [],
   });
-  mocks.supported = true;
-  mocks.supportQueries.length = 0;
   mocks.memberQueries.length = 0;
   useAuthStore.setState({
     profile: { userId: VIEWER, userName: "Viewer", email: "v@example.com" },
@@ -197,13 +180,9 @@ afterEach(() => {
 });
 
 describe("<HomeBotsGroupCard /> attribution", () => {
-  it("names who made each team bot from the team's directory, asked of the band's host", () => {
+  it("names who made each team bot from the team's directory", () => {
     mountCard("organization", null);
 
-    expect(mocks.supportQueries).toContainEqual({
-      hostId: HOST,
-      method: "environment.members",
-    });
     expect(mocks.memberQueries).toContainEqual({
       environmentId: "env-1",
       enabled: true,
@@ -224,18 +203,6 @@ describe("<HomeBotsGroupCard /> attribution", () => {
     ).toBe(true);
     expect(createdBy()).toEqual({
       "bot-mine": "none",
-      "bot-teammate": "none",
-      "bot-stranger": "none",
-    });
-  });
-
-  it("keeps the viewer's own line but names no teammate on a host without environment.members", () => {
-    mocks.supported = false;
-    mountCard("organization", null);
-
-    expect(mocks.memberQueries.every((query) => !query.enabled)).toBe(true);
-    expect(createdBy()).toEqual({
-      "bot-mine": "Created by you",
       "bot-teammate": "none",
       "bot-stranger": "none",
     });
@@ -279,11 +246,10 @@ describe("<HomeBotsGroupCard /> adding a bot", () => {
         connectableHostIds={[]}
         environmentBindings={{
           byHostId: new Map(),
+          ownSettingsHostIds: [],
           failedHostIds: [],
           retryFailed: () => undefined,
         }}
-        client={null}
-        hostId={HOST}
         setup={null}
       />,
     );
@@ -319,11 +285,10 @@ describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
         connectableHostIds={[]}
         environmentBindings={{
           byHostId: new Map(),
+          ownSettingsHostIds: [],
           failedHostIds: [],
           retryFailed: () => undefined,
         }}
-        client={null}
-        hostId={HOST}
         setup={setup}
       />,
     );

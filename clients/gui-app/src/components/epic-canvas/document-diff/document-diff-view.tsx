@@ -133,15 +133,18 @@ export function DocumentDiffView(props: DocumentDiffViewProps): ReactNode {
   const handleOpen = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       if (openRef === null) return;
-      openTile({
-        node: openRef,
-        target: { tabId: props.viewTabId },
-        gesture: "single",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: openRef,
+          target: { tabId: props.viewTabId },
+          gesture: "single",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openRef, openTile, props.viewTabId],
   );

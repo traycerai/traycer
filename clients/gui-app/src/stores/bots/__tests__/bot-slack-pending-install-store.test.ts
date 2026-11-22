@@ -35,6 +35,7 @@ function appIn(
     teamName: installState === "registered" ? null : "Acme",
     botUserId: installState === "registered" ? null : "U01",
     installedAt,
+    dmsEnabled: true,
   };
 }
 

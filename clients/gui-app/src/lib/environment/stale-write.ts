@@ -26,12 +26,13 @@ export function staleWriteOfHostError(
 
 /**
  * The sentence for a stale save. A host's label is text the person typed, so
- * it is only ever rendered as text.
+ * it is only ever rendered as text. A change no computer made came from a
+ * person's session, in the app or on the dashboard, so it names no place.
  */
 export function staleWriteMessage(staleWrite: EnvironmentStaleWrite): string {
   const { changedBy } = staleWrite;
   if (changedBy.kind === "dashboard") {
-    return "This setting was changed in the dashboard just now.";
+    return "This setting was changed just now.";
   }
   return changedBy.hostLabel === null
     ? "This setting was changed on another host just now."

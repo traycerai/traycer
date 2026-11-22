@@ -27,6 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { WINDOW_TRAILING_INSET_CLASS } from "@/components/layout/header/title-bar-drag";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { cn } from "@/lib/utils";
@@ -95,6 +96,10 @@ export function InspectorShell(props: InspectorShellProps): ReactNode {
           // it keeps the traffic-light reserve the app column gives up.
           dockMode === "left" &&
             "wco:pl-[max(0.875rem,var(--window-leading-inset))]",
+          // Docked right, it sits at the top-right corner, under the native
+          // minimise/maximise/close controls on Windows and Linux: the
+          // trailing inset keeps Done out from under them.
+          dockMode === "right" && WINDOW_TRAILING_INSET_CLASS,
         )}
       >
         <span className="text-ui-sm font-medium tracking-[0.01em]">Layout</span>

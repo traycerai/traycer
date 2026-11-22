@@ -51,7 +51,7 @@ export interface VersionPickerProps {
 }
 
 /**
- * "Pick a different version" — the list the card body used to hold open, and
+ * "Install a different version" — the list the card body used to hold open, and
  * then Installation's Advanced disclosure held shut. It is the Updates tab's
  * now, shown open, under the answer card and the auto-update switch.
  *
@@ -92,7 +92,7 @@ export function VersionPicker(
     >
       <div className="flex min-h-7 flex-wrap items-center justify-between gap-2">
         <div className="font-medium text-foreground">
-          Pick a different version
+          Install a different version
         </div>
         {props.checkNowShown ? (
           <CheckNowButton
@@ -104,7 +104,7 @@ export function VersionPicker(
       </div>
       <div className="overflow-hidden rounded-md border border-border/40">
         <div className="flex flex-col gap-3 px-4 py-3">
-          <p className="text-ui-sm text-muted-foreground">
+          <p className="wrap-anywhere text-ui-sm text-muted-foreground">
             Install a specific host version — upgrade to a release candidate or
             hotfix, or downgrade to an earlier release.
           </p>

@@ -93,7 +93,6 @@ export function taskEntry(overrides: Partial<BotTaskEntry>): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -144,6 +143,9 @@ export class FakeStreamSession implements IStreamSession {
     this.statusHandler = handler;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     // The fake never owns a socket, so there is nothing to re-dial.
   }

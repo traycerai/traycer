@@ -1,3 +1,5 @@
+import { useHostDirectoryListQuery } from "@/hooks/host/use-host-directory-list-query";
+import { useHostMentionEntries } from "@/hooks/composer/use-host-mention-entries";
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import {
   useCallback,
@@ -65,6 +67,7 @@ import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/lo
 import { taskMentionTitleFromRawTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import { displayTitle } from "@/lib/display-title";
 import type {
+  BotMentionEntry,
   BrowserTabMentionEntry,
   EpicAgentMentionEntry,
   EpicChatMentionEntry,
@@ -85,6 +88,8 @@ import {
   type TaskHomeDirectory,
 } from "@/lib/terminals/terminal-title";
 import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+import { botMentionEntriesFromDirectory } from "@/lib/composer/mentions/bot-mention-entries";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 
 import type {
@@ -92,7 +97,7 @@ import type {
   ComposerPickerStore,
 } from "./composer-picker-store";
 
-const MENTION_RESULT_LIMIT = 25;
+export const MENTION_RESULT_LIMIT = 25;
 const MENTION_QUERY_DEBOUNCE_MS = 250;
 // Artifacts answer from local epic state behind a cloud list; a refetch that
 // has not settled in ten seconds is not going to.
@@ -272,6 +277,17 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     active,
   });
 
+  // Bots are not entities of the open Task: the Tracy category lists every
+  // bot the person can see, read from the standalone directory Home and the
+  // palette read, in any agent composer whichever task is open. A closed
+  // picker reads nothing off it.
+  const botDirectory = useStandaloneBotsStore((state) => state.directory);
+  const botEntries = useMemo<ReadonlyArray<BotMentionEntry>>(
+    () =>
+      active ? botMentionEntriesFromDirectory(botDirectory) : EMPTY_BOT_ENTRIES,
+    [active, botDirectory],
+  );
+
   // Which rows this host's user picked this session, for the root search's
   // recency nudge. The bucket identity only changes on a pick, so the map is
   // rebuilt once per pick, never per keystroke.
@@ -395,6 +411,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       agentEntries: EMPTY_AGENT_ENTRIES,
       terminalEntries: EMPTY_TERMINAL_ENTRIES,
       browserTabEntries: EMPTY_BROWSER_TAB_ENTRIES,
+      botEntries: EMPTY_BOT_ENTRIES,
       epicAttachedRoots,
       github: emptyGithubContext,
       recentPicks: EMPTY_RECENT_PICKS,
@@ -413,6 +430,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       agentEntries: EMPTY_AGENT_ENTRIES,
       terminalEntries: EMPTY_TERMINAL_ENTRIES,
       browserTabEntries: EMPTY_BROWSER_TAB_ENTRIES,
+      botEntries: EMPTY_BOT_ENTRIES,
       epicAttachedRoots,
       github: emptyGithubContext,
       recentPicks: EMPTY_RECENT_PICKS,
@@ -545,6 +563,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       agentEntries: epicAgentEntries,
       terminalEntries: epicTerminalEntries,
       browserTabEntries,
+      botEntries,
       epicAttachedRoots,
       github: github.context,
       recentPicks,
@@ -555,6 +574,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicTerminalEntries,
       epicAttachedRoots,
       browserTabEntries,
+      botEntries,
       epicEntries,
       epicRequests.length,
       github.context,
@@ -574,7 +594,18 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, resolvedContext, step],
   );
 
-  const stepEntries = liveStepEntries;
+  const mentionHostDirectory = useHostDirectoryListQuery(active);
+  const mentionHosts = useMemo(
+    () =>
+      (mentionHostDirectory.data ?? [])
+        .filter((host) => host.kind !== "pool")
+        .map((host) => ({ hostId: host.hostId, label: host.label })),
+    [mentionHostDirectory.data],
+  );
+  const stepEntries = useHostMentionEntries(step, query, liveStepEntries, {
+    hosts: mentionHosts,
+    answered: !mentionHostDirectory.isPending && !mentionHostDirectory.isError,
+  });
   // Only an accepted setItems publication earns a hold. openPicker and
   // setStep clear the store's stamp; a render attempt publishes nothing.
   const holdPublishedItems =
@@ -921,6 +952,7 @@ export function mentionNoMatchDismissVerdict(
 const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];
 const EMPTY_TERMINAL_ENTRIES: ReadonlyArray<EpicTerminalMentionEntry> = [];
 const EMPTY_BROWSER_TAB_ENTRIES: ReadonlyArray<BrowserTabMentionEntry> = [];
+const EMPTY_BOT_ENTRIES: ReadonlyArray<BotMentionEntry> = [];
 const EMPTY_BROWSER_TAB_SOURCES: ReadonlyArray<BrowserTabMentionSource> = [];
 const EMPTY_ATTACHED_ROOTS: ReadonlySet<string> = new Set();
 const EMPTY_ARTIFACT_ENTRIES: ReadonlyArray<EpicMentionArtifactSuggestion> = [];

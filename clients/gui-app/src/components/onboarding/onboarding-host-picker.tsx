@@ -95,6 +95,7 @@ export function OnboardingHostPickerBar(props: {
             action={null}
             surface="inline"
             intent="view"
+            consequence={null}
             disabled={false}
             isLoading={scope.isLoading}
             listsFailed={scope.listsFailed}

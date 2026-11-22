@@ -1,4 +1,7 @@
-import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  SANDBOX_OUT_OF_CREDITS,
+  type SandboxControlFailure,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_BUSY,
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
@@ -10,15 +13,21 @@ import {
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+  SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS,
   SANDBOX_REFUSAL_CODE_TEAM_PODS_FULL,
   SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
 } from "@traycer/protocol/host/sandbox-control";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
+  TEAM_CREDITS_DONT_COVER_AN_HOUR,
+  teamSandboxOutOfCreditsLine,
+} from "@/lib/sandboxes/sandbox-strings";
+import {
   SANDBOX_CREATE_ENVIRONMENT_UNAVAILABLE_LINE,
   sandboxNotAMemberLine,
 } from "@/components/hosts/sandbox-create-model";
+import { ownValue } from "@/lib/own-value";
 
 /** Keep the control-plane refusal available to the row and its diagnostics. */
 export class SandboxOperationError extends Error {
@@ -39,11 +48,18 @@ const SHAPE_REASON_COPY: Record<string, string> = {
   "disk-out-of-range": "That disk size is outside what's offered.",
   "provider-plan-too-small":
     "This account's sandbox plan can't run a sandbox yet.",
+  "provider-withdrawn":
+    "That operating system isn't offered for new sandboxes any more.",
 };
 
 function insufficientCreditCopy(
   failure: Extract<SandboxControlFailure, { kind: "refused" }>,
 ): string {
+  // A refusal the server words itself (a team seat waiting on payment) is
+  // about the person, not the sandbox's cost.
+  if (failure.message !== null && failure.message.length > 0) {
+    return failure.message;
+  }
   if (failure.reason === "unverified") {
     return "Traycer couldn't confirm your credit balance. Try again in a moment.";
   }
@@ -65,6 +81,14 @@ function insufficientCreditCopy(
 /** The refusals whose sentence depends on nothing but the code. */
 const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   [
+    "create_principal_mismatch",
+    "This sandbox can't be created for the selected owner. Choose another owner and try again.",
+  ],
+  [
+    "pod_add_admin_only",
+    "Only a team admin can add an Automations sandbox for this team.",
+  ],
+  [
     SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE,
     "Couldn't rename the sandbox. Try again in a moment.",
   ],
@@ -74,7 +98,7 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   ],
   [
     SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
-    "The sandbox failed to start. It's listed as failed; destroy it and try again.",
+    "Couldn't complete the sandbox action.",
   ],
   [
     SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
@@ -86,10 +110,11 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   ],
   [
     SANDBOX_REFUSAL_CODE_FROZEN,
-    "This sandbox is frozen because your credits ran out. Add credits to wake it.",
+    "This sandbox is out of credits. Add credits to wake it.",
   ],
   [SANDBOX_REFUSAL_CODE_NOT_FOUND, "This sandbox no longer exists."],
   [SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE, "This action isn't available yet."],
+  [SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS, "The team already has a host."],
 ]);
 
 /**
@@ -112,17 +137,43 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
       return insufficientCreditCopy(failure);
     case SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED:
       return (
-        SHAPE_REASON_COPY[failure.reason ?? ""] ??
+        ownValue(SHAPE_REASON_COPY, failure.reason ?? "") ??
         "That size is outside what's offered."
       );
     // The server names the team and its admins; its sentence is the copy.
     case SANDBOX_REFUSAL_CODE_TEAM_PODS_FULL:
       return failure.message !== null && failure.message.length > 0
         ? failure.message
-        : "Every team pod is full; ask an admin to add one.";
+        : "Every team sandbox is full; ask an admin to add one.";
     default:
       return REFUSAL_COPY.get(failure.code) ?? "Traycer refused that request.";
   }
+}
+
+/** Where ownership is unknown, nobody can buy and there is no name. */
+export interface SandboxFailureReader {
+  readonly buysTeamCredits: boolean;
+  readonly teamName: string | null;
+}
+
+/** Someone who cannot buy the credits is never told to add them. */
+export function sandboxFailureMessageFor(
+  failure: SandboxControlFailure,
+  message: string,
+  reader: SandboxFailureReader,
+): string {
+  if (reader.buysTeamCredits || failure.kind !== "refused") return message;
+  if (failure.code === SANDBOX_REFUSAL_CODE_FROZEN) {
+    return reader.teamName !== null && reader.teamName.length > 0
+      ? teamSandboxOutOfCreditsLine(reader.teamName)
+      : SANDBOX_OUT_OF_CREDITS;
+  }
+  const teamCreditRefusal =
+    failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&
+    failure.creditSource === "team" &&
+    failure.reason !== "unverified" &&
+    failure.reason !== "unsupported-subscription";
+  return teamCreditRefusal ? TEAM_CREDITS_DONT_COVER_AN_HOUR : message;
 }
 
 /**

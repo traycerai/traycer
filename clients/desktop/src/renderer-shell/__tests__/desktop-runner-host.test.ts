@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DesktopSystemWake } from "../../ipc-contracts/host-types";
 import type {
   HostControllerStatus,
   HostLifecycleSetRequest,
@@ -92,7 +93,7 @@ interface FakeBridgeHandle {
     readonly bytes: ArrayBuffer;
   }>;
   emit(snapshot: LocalHostSnapshot | null): void;
-  emitSystemResumed(): void;
+  emitSystemResumed(wake: DesktopSystemWake): void;
   systemResumedBridgeSubscriptionCount(): number;
   emitSystemSuspended(): void;
 }
@@ -106,7 +107,7 @@ function buildFakeBridge(
   const registeredHostsHandlers = new Set<
     (push: RegisteredHostsChange) => void
   >();
-  const systemResumedHandlers = new Set<() => void>();
+  const systemResumedHandlers = new Set<(wake: DesktopSystemWake) => void>();
   const systemSuspendedHandlers = new Set<() => void>();
 
   const tokenSlot = { value: null as string | null };
@@ -132,11 +133,25 @@ function buildFakeBridge(
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
+    mintTeamComputerInstallToken: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    releaseTeamComputer: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     deregisterHostFromAccount: async () => ({ kind: "network-error" as const }),
     listSandboxes: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),
+    listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    setTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
+    attachTaskEnvironment: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -158,10 +173,6 @@ function buildFakeBridge(
       detail: "test",
     }),
     endVoiceSession: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
-    routeVoiceUtterance: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),
@@ -215,6 +226,13 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    setSlackAppDms: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    updateBotRunSettings: async () => ({ kind: "no_response" as const }),
+    updateBotReplyMode: async () => ({ kind: "no_response" as const }),
+    deleteBot: async () => ({ kind: "no_response" as const }),
     getSandboxGrants: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -223,6 +241,7 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    replaceEnvironmentApiKey: async () => ({ kind: "failed" as const }),
     getEnvironmentProviders: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -231,13 +250,11 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
-    mintExecutableWriteGrant: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {
+        getSignInStorageLow: async () => false,
+        subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
         get: async () => stored,
         signIn: async (tokens, identity) => {
           stored = {
@@ -246,10 +263,12 @@ function buildFakeBridge(
             savedAt: new Date().toISOString(),
             user: identity,
           };
+          return "saved";
         },
         rotate: async () => ({
           outcome: "deleted",
           pair: null,
+          diskPressure: null,
           rejection: null,
         }),
         delete: async () => {
@@ -266,6 +285,14 @@ function buildFakeBridge(
         migrateLegacyCredentials: async () => "identity-unknown" as const,
       };
     })(),
+    hostTokens: {
+      era: (_userId: string) => 0,
+      obtain: async () => ({ outcome: { kind: "no-sign-in" }, era: 0 }),
+      renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
+      adopt: async () => ({ era: 0 }),
+      forgetUser: async () => ({ era: 0 }),
+      subscribe: () => ({ dispose: () => undefined }),
+    },
     listUserSessions: async () => ({ kind: "network-error" as const }),
     revokeUserSession: async () => ({ kind: "network-error" as const }),
     revokeAllSessions: async () => ({ kind: "network-error" as const }),
@@ -325,7 +352,7 @@ function buildFakeBridge(
       };
     },
     onLocalHostUnresponsive: () => ({ dispose: () => undefined }),
-    onSystemResumed: (handler: () => void) => {
+    onSystemResumed: (handler: (wake: DesktopSystemWake) => void) => {
       systemResumedHandlers.add(handler);
       return {
         dispose: () => {
@@ -796,8 +823,8 @@ function buildFakeBridge(
     },
     sandboxArtifacts: {
       policySource: "traycer-sandbox:",
-      artifactOrigin: ({ artifactId, mountId }) =>
-        `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+      artifactOrigin: ({ artifactId }) =>
+        `traycer-sandbox://artifact-${artifactId}`,
       register: async () => undefined,
       unregister: async () => undefined,
       onRequest: (_handler) => ({ dispose: () => undefined }),
@@ -909,7 +936,8 @@ function buildFakeBridge(
     },
     localHostCapability: "managed",
     selectionAuthority: createInertSelectionAuthorityClient(),
-    refreshSelectionFleet: () => Promise.resolve(),
+    refreshSelectionFleet: () =>
+      Promise.resolve({ kind: "published" as const }),
   };
 
   return {
@@ -924,9 +952,9 @@ function buildFakeBridge(
         handler(snapshot);
       }
     },
-    emitSystemResumed(): void {
+    emitSystemResumed(wake: DesktopSystemWake): void {
       for (const handler of systemResumedHandlers) {
-        handler();
+        handler(wake);
       }
     },
     systemResumedBridgeSubscriptionCount(): number {
@@ -1006,6 +1034,46 @@ describe("DesktopRunnerHost.runSandboxVerb", () => {
       "send",
       87_000,
     );
+  });
+});
+
+describe("DesktopRunnerHost bot setup writes", () => {
+  it("forwards each bearer and request unchanged to the preload bridge", async () => {
+    const runSettings = vi.fn<DesktopPreloadBridge["updateBotRunSettings"]>(
+      async () => ({ kind: "no_response" }),
+    );
+    const replyMode = vi.fn<DesktopPreloadBridge["updateBotReplyMode"]>(
+      async () => ({ kind: "no_response" }),
+    );
+    const deleteBot = vi.fn<DesktopPreloadBridge["deleteBot"]>(async () => ({
+      kind: "no_response",
+    }));
+    const host = new DesktopRunnerHost({
+      bridge: {
+        ...buildFakeBridge(null).bridge,
+        updateBotRunSettings: runSettings,
+        updateBotReplyMode: replyMode,
+        deleteBot,
+      },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const settings = {
+      botId: "bot-1",
+      harness: "claude",
+      model: "model-1",
+      effort: null,
+      profile: null,
+    };
+    const reply = { botId: "bot-1", replyMode: "thread" } as const;
+    const deletion = { botId: "bot-1" };
+
+    await host.updateBotRunSettings("bearer-1", settings);
+    await host.updateBotReplyMode("bearer-1", reply);
+    await host.deleteBot("bearer-1", deletion);
+
+    expect(runSettings).toHaveBeenCalledWith("bearer-1", settings);
+    expect(replyMode).toHaveBeenCalledWith("bearer-1", reply);
+    expect(deleteBot).toHaveBeenCalledWith("bearer-1", deletion);
   });
 });
 
@@ -1127,6 +1195,32 @@ describe("DesktopRunnerHost.getTeamEnvironment", () => {
 
     expect(getTeamEnvironment).toHaveBeenCalledTimes(1);
     expect(getTeamEnvironment).toHaveBeenCalledWith("bearer-1", "team-acme");
+  });
+});
+
+describe("DesktopRunnerHost.replaceEnvironmentApiKey", () => {
+  it("passes the bearer and request to the preload bridge and returns its answer", async () => {
+    const result = { kind: "ok" as const };
+    const replaceEnvironmentApiKey = vi.fn<
+      DesktopPreloadBridge["replaceEnvironmentApiKey"]
+    >(async () => result);
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, replaceEnvironmentApiKey },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const request = {
+      environmentId: "env-acme",
+      profileId: "profile-1",
+      harnessId: "claude",
+      key: "fixture-key",
+    };
+
+    await expect(
+      host.replaceEnvironmentApiKey("bearer-1", request),
+    ).resolves.toEqual(result);
+
+    expect(replaceEnvironmentApiKey).toHaveBeenCalledTimes(1);
+    expect(replaceEnvironmentApiKey).toHaveBeenCalledWith("bearer-1", request);
   });
 });
 
@@ -1666,17 +1760,20 @@ describe("DesktopRunnerHost.onSystemResumed", () => {
     const subscriptions = calls.map((handler) => host.onSystemResumed(handler));
 
     expect(fake.systemResumedBridgeSubscriptionCount()).toBe(1);
-    fake.emitSystemResumed();
+    fake.emitSystemResumed({ screenLocked: false });
     for (const handler of calls) {
       expect(handler).toHaveBeenCalledTimes(1);
       // Desktop cannot measure sleep duration (`powerMonitor` reports none),
       // so its resume event must say so - a number here would put every
       // desktop wake through the mobile duration gate.
-      expect(handler).toHaveBeenCalledWith({ backgroundedForMs: null });
+      expect(handler).toHaveBeenCalledWith({
+        backgroundedForMs: null,
+        screenLocked: false,
+      });
     }
 
     subscriptions[0]?.dispose();
-    fake.emitSystemResumed();
+    fake.emitSystemResumed({ screenLocked: false });
     expect(calls[0]).toHaveBeenCalledTimes(1);
     for (const handler of calls.slice(1)) {
       expect(handler).toHaveBeenCalledTimes(2);
@@ -1684,10 +1781,30 @@ describe("DesktopRunnerHost.onSystemResumed", () => {
 
     host.dispose();
     expect(fake.systemResumedBridgeSubscriptionCount()).toBe(0);
-    fake.emitSystemResumed();
+    fake.emitSystemResumed({ screenLocked: false });
     for (const handler of calls.slice(1)) {
       expect(handler).toHaveBeenCalledTimes(2);
     }
+  });
+});
+
+describe("DesktopRunnerHost.onSystemResumed screen lock", () => {
+  it("carries a wake behind the lock screen through as still locked", () => {
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const handler = vi.fn();
+    host.onSystemResumed(handler);
+
+    fake.emitSystemResumed({ screenLocked: true });
+
+    expect(handler).toHaveBeenCalledWith({
+      backgroundedForMs: null,
+      screenLocked: true,
+    });
+    host.dispose();
   });
 });
 

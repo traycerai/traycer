@@ -94,6 +94,7 @@ function renderMinimap(
   document.body.append(viewport);
   const refreshRef: RefObject<() => void> = { current: () => undefined };
   const onSelect = vi.fn<(messageId: string) => void>();
+  const atEndRef: RefObject<boolean> = { current: false };
   render(
     <ChatTurnMinimap
       bottomInset={0}
@@ -102,12 +103,14 @@ function renderMinimap(
         scroll: options.scroll ?? 1050,
         scrollLength: 160,
       })}
+      atEndRef={atEndRef}
       rows={transcriptListRows({
         window: null,
         rendered: messages,
         splitLongTurns: true,
       })}
       transcriptWindow={null}
+      senderFirst={false}
       onSelect={onSelect}
       shown={options.shown ?? true}
       side={options.side ?? "right"}
@@ -115,7 +118,17 @@ function renderMinimap(
       viewportRef={{ current: viewport }}
     />,
   );
-  return { onSelect, refreshRef };
+  return { atEndRef, onSelect, refreshRef };
+}
+
+function activeTickMessageId(): string | null {
+  return (
+    document
+      .querySelector(
+        '[data-testid="chat-turn-minimap-tick"][data-active="true"]',
+      )
+      ?.getAttribute("data-message-id") ?? null
+  );
 }
 
 function renderRegisteredMinimap(input: {
@@ -135,12 +148,14 @@ function renderRegisteredMinimap(input: {
         bottomInset={0}
         inViewRefreshRef={{ current: () => undefined }}
         listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
+        atEndRef={{ current: false }}
         rows={transcriptListRows({
           window: null,
           rendered: messages,
           splitLongTurns: true,
         })}
         transcriptWindow={null}
+        senderFirst={false}
         onSelect={onSelect}
         shown
         side={input.side}
@@ -304,6 +319,17 @@ describe("ChatTurnMinimap", () => {
     expect(new Set(widths).size).toBe(1);
   });
 
+  it("marks the last tick on a refresh while the timeline is at its end", async () => {
+    const { atEndRef, refreshRef } = renderMinimap(undefined);
+    await flushFrame();
+    expect(activeTickMessageId()).toBe("message-10");
+
+    atEndRef.current = true;
+    act(() => refreshRef.current());
+
+    expect(activeTickMessageId()).toBe("message-22");
+  });
+
   it("ignores agent-to-agent user rows as turn boundaries", async () => {
     const a2a = {
       ...user(2, "Agent traffic"),
@@ -351,12 +377,14 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
           bottomInset={0}
           inViewRefreshRef={{ current: () => undefined }}
           listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
+          atEndRef={{ current: false }}
           rows={transcriptListRows({
             splitLongTurns: true,
             window: null,
             rendered: makeTranscript(3),
           })}
           transcriptWindow={null}
+          senderFirst={false}
           onSelect={onSelect}
           shown={false}
           side="right"
@@ -470,7 +498,6 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: true,
         shown: false,
         mobileViewport: false,
-        botChannel: false,
       }),
     ).toBe(false);
     expect(
@@ -478,7 +505,6 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: true,
         shown: false,
         mobileViewport: true,
-        botChannel: false,
       }),
     ).toBe(true);
     expect(
@@ -486,26 +512,6 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
         hasContent: false,
         shown: true,
         mobileViewport: true,
-        botChannel: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("never mounts in a bot channel, whatever the region or viewport says", () => {
-    expect(
-      shouldMountChatTurnMinimap({
-        hasContent: true,
-        shown: true,
-        mobileViewport: false,
-        botChannel: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldMountChatTurnMinimap({
-        hasContent: true,
-        shown: false,
-        mobileViewport: true,
-        botChannel: true,
       }),
     ).toBe(false);
   });

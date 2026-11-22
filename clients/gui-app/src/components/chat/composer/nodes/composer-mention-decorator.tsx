@@ -5,6 +5,7 @@ import {
   GitBranch,
   GitPullRequest,
   Layers,
+  Monitor,
 } from "lucide-react";
 import type { ReactElement } from "react";
 import type {
@@ -24,6 +25,7 @@ import {
   EpicArtifactIcon,
   StaticEpicNodeIcon,
 } from "@/components/epic-canvas/epic-node-tab-icon";
+import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { cn } from "@/lib/utils";
 import {
   composerInlineChipClassNames,
@@ -54,6 +56,11 @@ function DecoratorIcon({
       <Folder className={cn(className, "text-muted-foreground")} aria-hidden />
     );
   }
+  if (mention.contextType === "host") {
+    return (
+      <Monitor className={cn(className, "text-muted-foreground")} aria-hidden />
+    );
+  }
   if (mention.contextType === "worktree") {
     return (
       <FolderGit2
@@ -75,6 +82,9 @@ function DecoratorIcon({
     return (
       <StaticEpicNodeIcon type={mention.contextType} className={className} />
     );
+  }
+  if (mention.contextType === "bot") {
+    return <NamedBotAvatar botId={mention.botId ?? mention.epicId} size="xs" />;
   }
   if (mention.contextType === "github_pull_request") {
     return (

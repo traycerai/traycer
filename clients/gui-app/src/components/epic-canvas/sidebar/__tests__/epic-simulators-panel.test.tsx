@@ -43,8 +43,17 @@ import {
 } from "@/stores/epics/simulator-pending-opens-store";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 
+import {
+  SIMULATOR_TILE_DND_TYPE,
+  readEpicCanvasDragSourceData,
+} from "@/components/epic-canvas/dnd/dnd";
+
 const HOST = mockLocalHostEntry.hostId;
 const EPIC = "epic-1";
+
+const dndState = vi.hoisted(() => ({
+  draggables: [] as Array<{ readonly data: unknown }>,
+}));
 
 /** The sessions stream and the signed-in viewer: the boundaries mocked below. */
 const world = vi.hoisted(() => ({
@@ -100,6 +109,17 @@ vi.mock("@traycer-clients/shared/host-transport/remote/index", () => ({
 }));
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: world.hostErrorToast,
+}));
+vi.mock("@dnd-kit/core", () => ({
+  useDraggable: (input: { readonly data: unknown }) => {
+    dndState.draggables.push(input);
+    return {
+      attributes: {},
+      listeners: {},
+      setNodeRef: () => undefined,
+      isDragging: false,
+    };
+  },
 }));
 vi.mock("sonner", () => ({ toast: { error: world.toastError } }));
 vi.mock("@/stores/epics/canvas/store", () => ({
@@ -509,6 +529,30 @@ describe("Mobile simulators panel", () => {
     expect(
       screen.getByTestId("epic-simulator-ended-row-session-ended").textContent,
     ).toContain("Ended when its agent was archived");
+  });
+
+  it("registers a live row as a simulator tile drag source", async () => {
+    setCatalog([record("session-live", {})]);
+    dndState.draggables = [];
+    renderPanel(vi.fn());
+    await screen.findByTestId("epic-simulator-row-udid-1");
+
+    const sources = dndState.draggables
+      .map((entry) => readEpicCanvasDragSourceData(entry.data))
+      .filter((source) => source?.kind === SIMULATOR_TILE_DND_TYPE);
+    expect(sources.at(-1)).toMatchObject({
+      kind: SIMULATOR_TILE_DND_TYPE,
+      epicId: EPIC,
+      viewTabId: "tab-1",
+      tile: {
+        type: "simulator",
+        hostId: HOST,
+        simulatorId: "udid-1",
+        platform: "ios",
+        name: "iPhone 16",
+        instanceKey: "udid-1",
+      },
+    });
   });
 
   it("says Mobile simulators in tasks aren't available yet when the catalog is not ready", async () => {

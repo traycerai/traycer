@@ -1,23 +1,31 @@
 import "@/components/settings/details/environment-details-providers";
 import { QueryClient, queryOptions } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SandboxCost,
   SandboxHistoryEntry,
   SandboxListResponse,
 } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
+import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
+import {
+  formatSandboxDate,
+  formatSandboxUtcDay,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { beginEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
 
 const NOW = 1_791_100_000_000;
 
 describe("sandboxDetailsEntry", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("exports the sandbox id as the support reference", () => {
     const summary = sandboxSummaryFixture({ id: "sbx_support_42" });
     const exported = sandboxDetailsEntry({
@@ -46,7 +54,10 @@ describe("sandboxDetailsEntry", () => {
       now: NOW,
     });
     const rows = entry.status.map((row) => [row.label, row.value]);
-    expect(rows).toContainEqual(["Failed", "Failed to start (SBX-0412)"]);
+    expect(rows).toContainEqual([
+      "Failed",
+      "Failed to start · The sandbox service couldn't start it. · SBX-0412",
+    ]);
     expect(rows).toContainEqual([
       "Support reference",
       "SBX-0412 · sbx_support_42",
@@ -56,6 +67,53 @@ describe("sandboxDetailsEntry", () => {
       "create:kube-create-service-account",
     );
   });
+
+  it.each([
+    ["boot-timeout", "The sandbox took too long to start."],
+    ["boot-token-delivery", "The sandbox couldn't sign in to Traycer."],
+    ["grant_set_failed", "The sandbox couldn't get access to its settings."],
+    [
+      "environment_placement_failed",
+      "The sandbox couldn't join the selected environment.",
+    ],
+    ["provider-unavailable", "Sandboxes aren't available right now."],
+    ["provider-pending", "The sandbox service hasn't finished starting it."],
+    ["create", "The sandbox service couldn't start it."],
+  ])("explains a failed start at %s in Details", (stage, reason) => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        state: "failed",
+        failureCode: `${stage}:provider-detail`,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: true,
+      now: NOW,
+    });
+
+    expect(entry.status.find((row) => row.label === "Failed")?.value).toContain(
+      reason,
+    );
+  });
+
+  it.each([null, "unknown-stage:provider-detail"] as const)(
+    "keeps the generic failed-start sentence for an unrecognized code (%s)",
+    (failureCode) => {
+      const entry = sandboxDetailsEntry({
+        summary: sandboxSummaryFixture({ state: "failed", failureCode }),
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        personal: true,
+        now: NOW,
+      });
+
+      const value = entry.status.find((row) => row.label === "Failed")?.value;
+      expect(value).toContain("Failed to start");
+      if (failureCode !== null) expect(value).not.toContain(failureCode);
+    },
+  );
 
   it("shows the region label the server sends in the Region row", () => {
     const entry = sandboxDetailsEntry({
@@ -118,7 +176,7 @@ describe("sandboxDetailsEntry", () => {
       now: NOW,
     });
 
-    expect(entry.export().status.Frozen).toMatch(
+    expect(entry.export().status["Out of credits"]).toMatch(
       /^out of credits since [A-Z][a-z]{2} \d{1,2} at \d{2}:\d{2}; destroyed on [A-Z][a-z]{2} \d{1,2} at \d{2}:\d{2}$/,
     );
   });
@@ -194,6 +252,27 @@ describe("sandboxDetailsEntry", () => {
     expect(mine.export().status["Started by"]).toBe("you");
   });
 
+  it("reads a kept sandbox's member starter, and keeps the agent's name out of the status and the export", () => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        createdBy: null,
+        burst: false,
+        createdByAgentId: "agent-planner",
+        createdByAgentName: "Planner",
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: "u-me",
+      personal: true,
+      now: NOW,
+    });
+    const startedBy = entry.status.find((row) => row.label === "Started by");
+    expect(startedBy?.value).toBe("you");
+    expect(JSON.stringify(entry.status)).not.toContain("Planner");
+    expect(entry.export().status["Started by"]).toBe("you");
+    expect(JSON.stringify(entry.export())).not.toContain("Planner");
+  });
+
   it("gives an agent's sandbox no Resting row beside its self-destroying Idle row", () => {
     const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
@@ -208,6 +287,150 @@ describe("sandboxDetailsEntry", () => {
     });
     expect(entry.export().status.Idle).toMatch(/destroys itself/);
     expect(entry.export().status.Resting).toBeUndefined();
+  });
+
+  it("labels the retention clock by the suspended or stopped state it starts from", () => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        burst: false,
+        destroyAfterRestingMinutes: 7 * 24 * 60,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: true,
+      now: NOW,
+    });
+
+    expect(
+      entry.status.find((row) => row.label === "Suspended or stopped for")
+        ?.value,
+    ).toBe("destroyed after 7 days");
+  });
+
+  // The announced day is read in UTC whatever zone the runtime is in, so the
+  // zone is PINNED to one that is not UTC: left to the runner's own zone this
+  // case is vacuous on a UTC runner, where a local reading and a UTC reading
+  // name the same day. The sibling pin on `sandboxWithdrawalLine` covers the
+  // card's sentence; this one covers the Details row, which is a second call
+  // site of the same formatter and could regress on its own.
+  it('gives an unfrozen withdrawn row no Resting row, an Idle row, and a Destroyed-on row naming the announced day with no "unless used"', () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    // The pin itself has to take, or the case proves nothing.
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe(
+      "America/Los_Angeles",
+    );
+
+    const endsAt = Date.UTC(2026, 11, 1);
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        burst: false,
+        destroyAfterRestingMinutes: null,
+        destroyAt: null,
+        withdrawalEndsAt: endsAt,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: false,
+      now: NOW,
+    });
+    const status = entry.export().status;
+    expect(status.Idle).toMatch(/suspends after/);
+    expect(status.Resting).toBeUndefined();
+    // Computed, not written out: the formatter renders in the runtime's own
+    // default locale, so a literal `Dec 1, 2026` would fail under any other
+    // one while the UTC day was named correctly.
+    const dayOptions: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    };
+    const utcDay = new Date(endsAt).toLocaleDateString(undefined, {
+      ...dayOptions,
+      timeZone: "UTC",
+    });
+    const localDay = new Date(endsAt).toLocaleDateString(undefined, dayOptions);
+    // The pin only proves anything if the two readings actually diverge for
+    // this instant and zone; a runner where they coincide would pass this
+    // case for the wrong reason.
+    expect(utcDay).not.toBe(localDay);
+    expect(status["Destroyed on"]).toBe(utcDay);
+    expect(status["Destroyed on"]).not.toContain(localDay);
+    expect(status["Destroyed on"]).not.toContain("unless used");
+  });
+
+  it("names the frozen day-30 deadline bare, never the later withdrawal date and never with 'unless used', for a frozen row that carries both", () => {
+    const frozenAt = Date.UTC(2026, 10, 1);
+    const destroyAt = frozenDestroyAt(frozenAt);
+    const withdrawalEndsAt = Date.UTC(2026, 11, 15);
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        burst: false,
+        // A resting policy is set as well, so the row carries both a freeze
+        // and a retention policy at once. It does not make a resting reading
+        // of THIS deadline available — the server answers a frozen row's
+        // `destroyAt` from its freeze — so the pair that proves `frozen` is
+        // the discriminator is the case below, not this one.
+        destroyAfterRestingMinutes: 7 * 24 * 60,
+        frozen: true,
+        frozenAt,
+        destroyAt,
+        withdrawalEndsAt,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: false,
+      now: NOW,
+    });
+    const status = entry.export().status;
+    // Computed, not written out, for the same locale reason as the case
+    // above. The row is matched EXACTLY: the bug this guards against
+    // produced a well-formed row carrying the wrong day, and an exact match
+    // is what rules out both that day and a trailing `unless used`.
+    const destroyDay = formatSandboxDate(destroyAt, true);
+    const withdrawalDay = formatSandboxUtcDay(withdrawalEndsAt);
+    expect(destroyDay).not.toBe(withdrawalDay);
+    expect(status["Destroyed on"]).toBe(destroyDay);
+    // The same day, stated the same way, by the row beside it — the
+    // agreement that makes the bare day right rather than merely shorter.
+    expect(status["Out of credits"]).toContain(`destroyed on ${destroyDay}`);
+  });
+
+  // Both arms of that branch, on ONE pair of inputs that differs in `frozen`
+  // and nothing else: the same `destroyAt`, neither row withdrawn. That is
+  // what makes `frozen` the proven discriminator — the case above pairs a
+  // frozen row with an unfrozen one that is also withdrawn, so a branch on
+  // the withdrawal's presence would satisfy it too.
+  //
+  // Both directions are needed: without the clause case the clause could be
+  // deleted from the row outright, and without the bare case it could be
+  // appended to every row, with half the rule still passing either way.
+  it("states the day bare for a frozen row and with 'unless used' for an unfrozen one, on the same deadline", () => {
+    const frozenAt = Date.UTC(2026, 9, 9);
+    const destroyAt = frozenDestroyAt(frozenAt);
+    const day = formatSandboxDate(destroyAt, true);
+    const rowFor = (frozen: boolean): Record<string, string> =>
+      sandboxDetailsEntry({
+        summary: sandboxSummaryFixture({
+          burst: false,
+          destroyAfterRestingMinutes: 7 * 24 * 60,
+          frozen,
+          frozenAt: frozen ? frozenAt : null,
+          destroyAt,
+          withdrawalEndsAt: null,
+        }),
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        personal: false,
+        now: NOW,
+      }).export().status;
+
+    expect(rowFor(true)["Destroyed on"]).toBe(day);
+    // A wake really does reset a resting deadline, so this row keeps saying so.
+    expect(rowFor(false)["Destroyed on"]).toBe(`${day} unless used`);
   });
 });
 
@@ -245,9 +468,7 @@ function loadSandboxDetails(queryClient: QueryClient, sandboxId: string) {
   return provider(
     { environmentId: "env-personal", kind: "sandbox", key: sandboxId },
     {
-      hostId: null,
-      // Unused: a sandbox's evidence is the control plane's, not a host's.
-      client: {} as HostClient<HostRpcRegistry>,
+      environmentCloud: beginEnvironmentCloudOperation(null),
       queryClient,
     },
   );
@@ -280,12 +501,15 @@ describe("the Settings Details drawer's sandbox provider", () => {
 
     expect(entry.title).toBe("api-refactor");
     const status = entry.status();
-    expect(status.reason).toBe("Failed to start (SBX-0412)");
+    expect(status.reason).toBe(
+      "Failed to start · The sandbox service couldn't start it. · SBX-0412",
+    );
     expect(status.hosts).toEqual([
       expect.objectContaining({
         hostId: "host-sbx-1",
         name: "api-refactor",
-        reason: "Failed to start (SBX-0412)",
+        reason:
+          "Failed to start · The sandbox service couldn't start it. · SBX-0412",
       }),
     ]);
     const history = entry.history();
@@ -501,7 +725,9 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
 
     it("reads as Failed to start with its code and the first shell, never as Created", () => {
       const [event] = events([failedStart({})], { kind: "automation" });
-      expect(event.label).toBe("Failed to start (SBX-0412)");
+      expect(event.label).toBe(
+        "Failed to start · The sandbox service couldn't start it. · SBX-0412",
+      );
       expect(event.value).toBe("by the first shell");
     });
 
@@ -509,7 +735,9 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
       const [event] = events([failedStart({ actor: ME })], {
         kind: "automation",
       });
-      expect(event.label).toBe("Failed to start (SBX-0412)");
+      expect(event.label).toBe(
+        "Failed to start · The sandbox service couldn't start it. · SBX-0412",
+      );
       expect(event.value).toMatch(/^by you/);
     });
 

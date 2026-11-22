@@ -440,6 +440,10 @@ export function acquireHostConnection(hostId: string): HostConnectionLease {
   };
 }
 
+export function reopenHostConnectionNow(hostId: string): void {
+  records.get(hostId)?.reconnect.reopenNow();
+}
+
 /** Test-only: live consumer references held for `hostId`. */
 export function hostConnectionRefCountForTest(hostId: string): number {
   return records.get(hostId)?.refCount ?? 0;
@@ -487,11 +491,36 @@ export function hostDirectoryEntryEquals(
     // A host with a populated cache and nobody holding it is exactly the case
     // this module cannot see.
     remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
+    hostOwnerKeyOf(a) === hostOwnerKeyOf(b) &&
+    remoteAppVersionOf(a) === remoteAppVersionOf(b) &&
+    remoteUpdateStateOf(a) === remoteUpdateStateOf(b) &&
     // A sandbox's lifecycle moves with its connectivity mostly, not always (a
     // frozen flag set on an already-suspended row moves nothing else), and a
     // tab deciding whether its open wakes the sandbox must hear the move.
     sandboxStateKeyOf(a) === sandboxStateKeyOf(b)
   );
+}
+
+function remoteAppVersionOf(entry: HostDirectoryEntry): string | null {
+  return isRemoteHostDirectoryEntry(entry)
+    ? entry.remoteStatus.appVersion
+    : null;
+}
+
+function remoteUpdateStateOf(entry: HostDirectoryEntry): string | null {
+  return isRemoteHostDirectoryEntry(entry)
+    ? entry.remoteStatus.updateState
+    : null;
+}
+
+function hostOwnerKeyOf(entry: HostDirectoryEntry): string | null {
+  if (entry.owner == null) return null;
+  const owner = entry.owner;
+  return JSON.stringify([
+    owner.kind,
+    owner.id,
+    owner.kind === "team" ? owner.name : null,
+  ]);
 }
 
 function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {

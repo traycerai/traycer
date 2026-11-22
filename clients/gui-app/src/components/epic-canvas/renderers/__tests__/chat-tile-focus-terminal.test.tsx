@@ -61,6 +61,7 @@ describe("useFocusEpicTerminalSession", () => {
       EPIC_ID,
       viewTabId,
       expect.any(Function),
+      "user",
     );
 
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
@@ -82,6 +83,7 @@ describe("useFocusEpicTerminalSession", () => {
       EPIC_ID,
       viewTabId,
       expect.any(Function),
+      "user",
     );
 
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];

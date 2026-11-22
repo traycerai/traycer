@@ -174,6 +174,7 @@ export function useSubagentContinueAsChat(
             hostId,
             placement: null,
             source: "direct_ui",
+            provenance: "user",
           });
           // The chat opens whatever the reader is looking at now - they
           // asked for it. The view closes only if it still shows the card

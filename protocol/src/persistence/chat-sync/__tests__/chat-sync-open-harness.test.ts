@@ -1,5 +1,8 @@
 import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { chatSyncAssistantMessageSchema } from "@traycer/protocol/persistence/chat-sync/entries";
+import {
+  chatSyncAssistantMessageSchema,
+  preserveChatMessage,
+} from "@traycer/protocol/persistence/chat-sync/entries";
 import {
   CHAT_SYNC_1_1_READER_FLOOR,
   encodeChatHead,
@@ -620,6 +623,53 @@ describe("chat-sync derived schema forks", () => {
     };
 
     expect(() => snapshotUserMessageSchema.parse(mismatched)).toThrow();
+  });
+
+  const SLACK_MESSAGE = {
+    kind: "slack",
+    content: { type: "doc", content: [] },
+    author: {
+      displayName: "Priya",
+      slackUserId: "U0PRIYA01",
+      traycerUserId: null,
+    },
+    ts: "1760000010.000100",
+    trigger: "mention",
+    followUp: false,
+    omitted: [],
+  };
+
+  it("carries a Slack message on the bot's user sender, through preservation", () => {
+    const row = snapshotUserMessageSchema.parse({
+      role: "user",
+      messageId: "slack-row-1",
+      sender: { type: "user", userId: "u-1" },
+      message: SLACK_MESSAGE,
+      timestamp: 1,
+    });
+
+    expect(preserveChatMessage(row).raw).toMatchObject({
+      message: { kind: "slack" },
+    });
+  });
+
+  it("refuses a Slack message on any other sender", () => {
+    expect(() =>
+      snapshotUserMessageSchema.parse({
+        role: "user",
+        messageId: "slack-row-1",
+        sender: {
+          type: "agent",
+          harnessId: "codex",
+          agentId: "a-1",
+          displayName: null,
+          reply: { expectsReply: false },
+          inReplyTo: null,
+        },
+        message: SLACK_MESSAGE,
+        timestamp: 1,
+      }),
+    ).toThrow();
   });
 
   it("keeps the provider notice bound to the epic schema's live fields", () => {

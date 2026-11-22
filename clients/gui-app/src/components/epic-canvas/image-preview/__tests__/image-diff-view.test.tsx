@@ -1,3 +1,4 @@
+import { readDesktopHorizontalWheelOwnership } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import {
@@ -366,6 +367,17 @@ describe("<ImageDiffView />", () => {
 
     expect(root?.className).toContain("h-full");
   });
+
+  it.each([false, true])(
+    "marks the root as owning horizontal swipes only outside compact mode (compact: %s)",
+    (compact) => {
+      const { container } = renderDiff({ compact });
+
+      expect(
+        readDesktopHorizontalWheelOwnership(container.firstElementChild),
+      ).toEqual({ back: !compact, forward: !compact });
+    },
+  );
 
   it("sizes a compact root from the more demanding known side ratio", () => {
     const { container } = renderDiff({ compact: true });

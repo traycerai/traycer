@@ -38,12 +38,15 @@ import {
 import {
   decodeMuxFrame,
   encodeMuxFrame,
+  encodedSubscribeStreamId,
   MuxFrameType,
   NOISE_PROLOGUE,
   QosClass,
   SESSION_CAPABILITY_RESUME,
   SESSION_CONTROL_STREAM_ID,
+  sessionOpenPayloadSchema,
   type ResumePayload,
+  type SessionOpenPayload,
 } from "../../mux";
 import {
   encodeResumeFrame,
@@ -79,9 +82,10 @@ import {
 } from "../config";
 import type { AttachGrantProvider, AttachGrantProvision } from "../grant";
 import { NoiseChannel } from "../noise-channel";
-import type { RelaySocketHandlers, RelaySocketOptions } from "../relay-socket";
+import * as relaySocketModule from "../relay-socket";
 import { HostTransportFailureError } from "../rpc-types";
 import { RemoteSession, type RemoteSessionEvidence } from "../session";
+import { countWebCrypto, settleNoise } from "./web-crypto-completion-fixture";
 
 /**
  * Own-leg loss on a session that negotiated resume: the client keeps its Noise
@@ -102,77 +106,6 @@ const EMPTY_AD = new Uint8Array(0);
 const STATUS_METHOD = "host.status";
 const STREAM_METHOD = "cursor.subscribe";
 const RELINK_CLOSE_CODE = 4007;
-
-/** Captured before fake timers: a real turn lets WebCrypto's completions in. */
-const realSetImmediate = globalThis.setImmediate;
-
-/**
- * The fake clock moves everything here but Noise, which runs on WebCrypto's
- * thread pool. These count its operations, so a test awaits them finishing
- * rather than sleeping for as long as they usually take.
- */
-let webCryptoInFlight = 0;
-
-function countedWebCrypto<T>(operation: Promise<T>): Promise<T> {
-  webCryptoInFlight += 1;
-  return operation.finally(() => {
-    webCryptoInFlight -= 1;
-  });
-}
-
-function countWebCrypto(): void {
-  const subtle = globalThis.crypto.subtle;
-  const decrypt = subtle.decrypt.bind(subtle);
-  const digest = subtle.digest.bind(subtle);
-  const encrypt = subtle.encrypt.bind(subtle);
-  const importKey = subtle.importKey.bind(subtle);
-  const sign = subtle.sign.bind(subtle);
-  vi.spyOn(subtle, "decrypt").mockImplementation((...args) =>
-    countedWebCrypto(decrypt(...args)),
-  );
-  vi.spyOn(subtle, "digest").mockImplementation((...args) =>
-    countedWebCrypto(digest(...args)),
-  );
-  vi.spyOn(subtle, "encrypt").mockImplementation((...args) =>
-    countedWebCrypto(encrypt(...args)),
-  );
-  vi.spyOn(subtle, "importKey").mockImplementation((...args) =>
-    countedWebCrypto(importKey(...args)),
-  );
-  vi.spyOn(subtle, "sign").mockImplementation((...args) =>
-    countedWebCrypto(sign(...args)),
-  );
-}
-
-/**
- * Returns once no Noise operation is running. It takes two quiet turns because
- * the continuation of a finished operation can start the next one.
- */
-async function settleNoise(): Promise<void> {
-  let quietTurns = 0;
-  while (quietTurns < 2) {
-    await new Promise((resolve) => {
-      realSetImmediate(resolve);
-    });
-    quietTurns = webCryptoInFlight === 0 ? quietTurns + 1 : 0;
-  }
-}
-
-/** The handlers the session gave each relay socket, in dial order. */
-const capturedLegs = vi.hoisted(() => ({
-  handlers: [] as RelaySocketHandlers[],
-}));
-
-vi.mock("../relay-socket", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../relay-socket")>();
-  class RecordingRelaySocket extends actual.RelaySocket {
-    constructor(options: RelaySocketOptions) {
-      super(options);
-      capturedLegs.handlers.push(options.handlers);
-    }
-  }
-  return { ...actual, RelaySocket: RecordingRelaySocket };
-});
 
 const statusContract = defineRpcContract({
   method: STATUS_METHOD,
@@ -325,6 +258,7 @@ class FakeRelay {
   readonly dialTimes: number[] = [];
   readonly clientFrames: ClientFrameRecord[] = [];
   readonly resumes: ResumePayload[] = [];
+  readonly openPayloads: SessionOpenPayload[] = [];
   readonly requestStreamIds: number[] = [];
   readonly pendingRequests: PendingRequest[] = [];
   readonly subscribedStreams: number[] = [];
@@ -464,7 +398,11 @@ class FakeRelay {
   }
 
   /** A host-sent session FATAL on stream 0, sealed in order like any host frame. */
-  async sendSessionFatal(code: string, retryable: boolean): Promise<void> {
+  async sendSessionFatal(
+    code: string,
+    retryable: boolean,
+    doorReason: string | null,
+  ): Promise<void> {
     await this.sendMux(this.host(), {
       type: MuxFrameType.FATAL,
       streamId: SESSION_CONTROL_STREAM_ID,
@@ -476,6 +414,7 @@ class FakeRelay {
           incompatibleMethods: null,
           upgradeGuidance: null,
           retryable,
+          ...(doorReason === null ? {} : { doorReason }),
         },
       },
       binary: null,
@@ -612,6 +551,7 @@ class FakeRelay {
       message.streamId === SESSION_CONTROL_STREAM_ID &&
       message.type === MuxFrameType.OPEN
     ) {
+      this.openPayloads.push(sessionOpenPayloadSchema.parse(json));
       await this.sendMux(session, {
         type: MuxFrameType.OPEN_ACK,
         streamId: SESSION_CONTROL_STREAM_ID,
@@ -738,16 +678,22 @@ function buildEvidence(relay: FakeRelay): EvidenceSpies {
   };
 }
 
-function hostAuth(revalidate: FixtureConfig["revalidate"]): RemoteSessionAuth {
+function hostAuth(
+  revalidate: FixtureConfig["revalidate"],
+  readBearer: () => string,
+): RemoteSessionAuth {
   return {
     missingOpenAuthCause: "missing-host-credential",
-    readOpenAuth: () => ({
-      bearer: "relink-bearer",
-      authz: null,
-      fingerprint: "relink-bearer",
-    }),
-    readCredentialUpdateBearer: () => "relink-bearer",
-    currentFingerprint: () => "relink-bearer",
+    readOpenAuth: (attachGrant) => {
+      const bearer = readBearer();
+      return {
+        bearer,
+        authz: { v: 1, grant: attachGrant.grant },
+        fingerprint: `${bearer}:${attachGrant.grant}`,
+      };
+    },
+    readCredentialUpdateBearer: readBearer,
+    currentFingerprint: readBearer,
     revalidateForReconnect: revalidate,
   };
 }
@@ -776,6 +722,7 @@ interface Fixture {
   readonly statuses: StatusEvent[];
   readonly readinessLost: Mock<() => void>;
   readonly recovered: Mock<() => void>;
+  readonly setOpenBearer: (bearer: string) => void;
 }
 
 const opened: Session[] = [];
@@ -826,12 +773,13 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
     }),
   );
   let nextRequestId = 0;
+  let openBearer = "relink-bearer";
   const session: Session = new RemoteSession({
     hostId: HOST_ID,
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: relay.publicKey,
     grantProvider: grants,
-    auth: hostAuth(config.revalidate),
+    auth: hostAuth(config.revalidate, () => openBearer),
     clock: null,
     rpcRegistry,
     streamRegistry,
@@ -847,7 +795,6 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
       appVersion: "0.0.0-test",
     },
     livenessProbe: null,
-    mintMemberCredential: null,
   });
   opened.push(session);
   const ticks: number[] = [];
@@ -875,6 +822,9 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
     statuses,
     readinessLost,
     recovered,
+    setOpenBearer: (bearer) => {
+      openBearer = bearer;
+    },
   };
 }
 
@@ -1007,7 +957,6 @@ describe("RemoteSession relink on an own-leg loss", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     countWebCrypto();
-    capturedLegs.handlers.length = 0;
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
@@ -1442,7 +1391,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
       const fixture = await readyFixture(LIVE);
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal("INTERNAL_ERROR", true);
+      await relay.sendSessionFatal("INTERNAL_ERROR", true, null);
       await until(() => held.spy.mock.calls.length === 1);
       const mint = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint.promise);
@@ -1716,12 +1665,20 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
   describe("leg identity", () => {
     it("ignores every late event from a superseded leg", async () => {
+      // A spy on the export, not `vi.mock`: files in this worker share one
+      // module cache, and a mock misses a session another file loaded first.
+      const OriginalRelaySocket = relaySocketModule.RelaySocket;
+      const dials = vi
+        .spyOn(relaySocketModule, "RelaySocket")
+        .mockImplementation(function (options) {
+          return new OriginalRelaySocket(options);
+        });
       const fixture = await readyFixture(LIVE);
       const { relay, session } = fixture;
       relay.dropLeg(1006, "net");
       await advanceUntil(() => relay.legs.length === 2, 30_000);
       await untilResumed(fixture, 1);
-      const old = capturedLegs.handlers[0];
+      const old = dials.mock.calls[0]?.[0].handlers;
       if (old === undefined) {
         throw new Error("the first leg's handlers were not captured");
       }
@@ -1766,6 +1723,39 @@ describe("RemoteSession relink on an own-leg loss", () => {
     });
   });
 
+  describe("a SUBSCRIBE still sealing when the leg goes", () => {
+    it("counts as sent once the gap resend hands it to the next leg", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session } = fixture;
+      const sealed = deferred<Uint8Array>();
+      const encryptSpy = vi
+        .spyOn(NoiseChannel.prototype, "encrypt")
+        .mockImplementationOnce(() => sealed.promise);
+
+      const second = session.subscribe(STREAM_METHOD, { cursor: null });
+      await until(() => encryptSpy.mock.calls.length === 1);
+      const streamId = encodedSubscribeStreamId(encryptSpy.mock.calls[0][0]);
+      expect(streamId).not.toBeNull();
+      relay.dropLeg(1006, "net");
+      await step(0);
+      sealed.resolve(new Uint8Array([1, 2, 3]));
+      await untilResumed(fixture, 1);
+      await until(() => relay.subscribedStreams.includes(streamId ?? -1));
+
+      // Its only SUBSCRIBE is the resend on the next leg: the held seal sent
+      // nothing on the leg that went.
+      expect(
+        relay.clientFrames
+          .filter((frame) => frame.leg === 1)
+          .map((frame) => frame.type),
+      ).toEqual([MuxFrameType.RESUME, MuxFrameType.SUBSCRIBE]);
+      expect(
+        relay.subscribedStreams.filter((id) => id === streamId),
+      ).toHaveLength(1);
+      expect(second.hasSentOpenRequest()).toBe(true);
+    });
+  });
+
   describe("a claim dial's late completions", () => {
     /**
      * Claim mint #1 is outstanding after `forceReconnect` when an old inbound
@@ -1782,7 +1772,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
     }> {
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal("INTERNAL_ERROR", true);
+      await relay.sendSessionFatal("INTERNAL_ERROR", true, null);
       await until(() => held.spy.mock.calls.length === 1);
       const mint1 = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint1.promise);
@@ -2202,7 +2192,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
       const fixture = await readyFixture(LIVE);
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal("INTERNAL_ERROR", true);
+      await relay.sendSessionFatal("INTERNAL_ERROR", true, null);
       await until(() => held.spy.mock.calls.length === 1);
       const mint1 = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint1.promise);
@@ -2227,7 +2217,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
       const fixture = await readyFixture({ ...LIVE, revalidate });
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal("UNAUTHORIZED", false);
+      await relay.sendSessionFatal("UNAUTHORIZED", false, null);
       await until(() => held.spy.mock.calls.length === 1);
       const mint1 = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint1.promise);
@@ -2300,6 +2290,111 @@ describe("RemoteSession relink on an own-leg loss", () => {
       expect(relay.legs).toHaveLength(2);
       expect(relay.legs[1]?.claim).toBeNull();
       expect(relay.sessions).toHaveLength(2);
+    });
+  });
+
+  describe("a host closes a session over its owner and the door's reason decides the redial", () => {
+    it("not_admitted from a person-owned host (UNAUTHORIZED) then rotated: the same session is ready again and presents the newly read host-only token", async () => {
+      const revalidate = vi.fn((): Promise<RemoteSessionAuthRecoveryOutcome> =>
+        Promise.resolve("rotated"),
+      );
+      const fixture = await readyFixture({
+        ...LIVE,
+        issueKeys: false,
+        revalidate,
+      });
+      const { relay, session } = fixture;
+      const onClosed = vi.fn();
+      session.onClosed(onClosed);
+      fixture.setOpenBearer("reopened-host-only-token");
+      fixture.grants.mockImplementationOnce(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          grant: { grant: "reopened-grant-jws", expiresInSeconds: 300 },
+        }),
+      );
+
+      await relay.sendSessionFatal("UNAUTHORIZED", false, "not_admitted");
+      await advanceUntil(() => relay.openPayloads.length === 2, 30_000);
+      await advanceUntil(() => session.isReady(), 30_000);
+      await relay.host().queue;
+      await settleNoise();
+
+      expect(session.isReady()).toBe(true);
+      expect(session.isClosed()).toBe(false);
+      expect(onClosed).not.toHaveBeenCalled();
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(relay.openPayloads.map(({ bearer }) => bearer)).toEqual([
+        "relink-bearer",
+        "reopened-host-only-token",
+      ]);
+      expect(relay.openPayloads[0]?.authz).toEqual({
+        v: 1,
+        grant: "grant-jws",
+      });
+      expect(relay.openPayloads[1]?.authz).toEqual({
+        v: 1,
+        grant: "reopened-grant-jws",
+      });
+      expect(fixture.session).toBe(session);
+    });
+
+    it("not_admitted from a team-owned host (TEAM_MEMBERSHIP_REQUIRED) then rejected: one close, no second open", async () => {
+      const revalidate = vi.fn((): Promise<RemoteSessionAuthRecoveryOutcome> =>
+        Promise.resolve("rejected"),
+      );
+      const fixture = await readyFixture({
+        ...LIVE,
+        issueKeys: false,
+        revalidate,
+      });
+      const { relay, session } = fixture;
+      const onClosed = vi.fn();
+      session.onClosed(onClosed);
+
+      await relay.sendSessionFatal(
+        "TEAM_MEMBERSHIP_REQUIRED",
+        false,
+        "not_admitted",
+      );
+      await advanceUntil(() => session.isClosed(), 30_000);
+      await until(() => onClosed.mock.calls.length === 1);
+      await step(60_000);
+
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(session.isClosed()).toBe(true);
+      expect(onClosed).toHaveBeenCalledTimes(1);
+      expect(session.terminalFatal()?.code).toBe("TEAM_MEMBERSHIP_REQUIRED");
+      expect(session.terminalFatal()?.doorReason).toBe("not_admitted");
+      expect(relay.openPayloads).toHaveLength(1);
+      expect(relay.legs).toHaveLength(1);
+    });
+
+    it("host_claimed: a terminal close without a revalidation or a second open", async () => {
+      const revalidate = vi.fn((): Promise<RemoteSessionAuthRecoveryOutcome> =>
+        Promise.resolve("rotated"),
+      );
+      const fixture = await readyFixture({
+        ...LIVE,
+        issueKeys: false,
+        revalidate,
+      });
+      const { relay, session } = fixture;
+      const onClosed = vi.fn();
+      session.onClosed(onClosed);
+
+      await relay.sendSessionFatal("UNAUTHORIZED", false, "host_claimed");
+      await advanceUntil(() => session.isClosed(), 30_000);
+      await until(() => onClosed.mock.calls.length === 1);
+      await step(60_000);
+
+      expect(revalidate).not.toHaveBeenCalled();
+      expect(session.isClosed()).toBe(true);
+      expect(onClosed).toHaveBeenCalledTimes(1);
+      expect(session.terminalFatal()?.code).toBe("UNAUTHORIZED");
+      expect(session.terminalFatal()?.doorReason).toBe("host_claimed");
+      expect(relay.openPayloads).toHaveLength(1);
+      expect(relay.legs).toHaveLength(1);
     });
   });
 

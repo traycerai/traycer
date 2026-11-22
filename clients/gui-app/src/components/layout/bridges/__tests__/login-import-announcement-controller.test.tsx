@@ -46,6 +46,11 @@ vi.mock("@/hooks/browser/use-login-import-available", () => ({
   useLoginImportAvailable: () => loginImportAvailableMock.value,
 }));
 
+const moveAskHoldMock = vi.hoisted(() => ({ value: false }));
+vi.mock("@/components/settings/move/use-move-ask-holds-announcements", () => ({
+  useMoveAskHoldsAnnouncements: () => moveAskHoldMock.value,
+}));
+
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
@@ -146,6 +151,7 @@ function buildFakeSystemTabModalApi(): SystemTabModalApi {
 describe("<LoginImportAnnouncementController />", () => {
   beforeEach(() => {
     loginImportAvailableMock.value = true;
+    moveAskHoldMock.value = false;
     toastMock.mockClear();
     toastMock.dismiss.mockClear();
     navigateToSettingsSectionMock.mockClear();
@@ -205,6 +211,36 @@ describe("<LoginImportAnnouncementController />", () => {
     });
 
     expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not claim while the move ask holds, then shows and claims on release", () => {
+    moveAskHoldMock.value = true;
+    const { rerender } = render(<LoginImportAnnouncementController />);
+
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeUndefined();
+
+    moveAskHoldMock.value = false;
+    rerender(<LoginImportAnnouncementController />);
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["login-import"],
+    ).toBeDefined();
+  });
+
+  it("keeps a shown announcement up when the move ask begins", () => {
+    const { rerender } = render(<LoginImportAnnouncementController />);
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    moveAskHoldMock.value = true;
+    rerender(<LoginImportAnnouncementController />);
+
+    expect(toastMock.dismiss).not.toHaveBeenCalledWith(
+      "traycer-login-import-announcement",
+    );
   });
 
   it("does not show when signed out", () => {

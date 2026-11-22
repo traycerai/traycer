@@ -5,12 +5,20 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { ThreadAnchorHoverPopover } from "@/components/comments/thread-anchor-hover-popover";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
+import {
+  collaboratorEntry,
+  collaboratorsResponse,
+  createPersonAvatarHarness,
+  type PersonAvatarHarness,
+} from "./person-avatar-test-support";
 
 const EPIC_ID = "epic-1";
 const ARTIFACT_ID = "spec-1";
@@ -95,12 +103,14 @@ function makeEditorWithLinkedAnchor(): {
   return { editor, anchor };
 }
 
-function renderPopover(
+let queryClient: QueryClient;
+
+function popoverElement(
   editor: Editor,
   onActivateThread: (threadId: string) => void,
   laneThreads: readonly CommentThreadWire[] | null,
 ) {
-  return render(
+  return (
     <ThreadAnchorHoverPopover
       epicId={EPIC_ID}
       hostClient={null}
@@ -111,19 +121,33 @@ function renderPopover(
       editor={editor}
       resolvedThreadIds={new Set<string>()}
       onActivateThread={onActivateThread}
-    />,
+    />
+  );
+}
+
+function renderPopover(
+  editor: Editor,
+  onActivateThread: (threadId: string) => void,
+  laneThreads: readonly CommentThreadWire[] | null,
+) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {popoverElement(editor, onActivateThread, laneThreads)}
+    </QueryClientProvider>,
   );
 }
 
 const HOVER_DELAY_MS = 300;
 
 beforeEach(() => {
+  queryClient = new QueryClient();
   vi.useFakeTimers({ shouldAdvanceTime: true });
   threads.value = [threadFixture()];
 });
 
 afterEach(() => {
   cleanup();
+  queryClient.clear();
   vi.useRealTimers();
   editors.splice(0).forEach((editor) => editor.destroy());
   elements.splice(0).forEach((element) => element.remove());
@@ -260,5 +284,62 @@ describe("<ThreadAnchorHoverPopover /> state-lane threads", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Open thread" })).toBeNull();
+  });
+});
+
+describe("<ThreadAnchorHoverPopover /> author picture", () => {
+  let harness: PersonAvatarHarness;
+
+  beforeEach(() => {
+    harness = createPersonAvatarHarness();
+    stubImmediateImage();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    harness.dispose();
+  });
+
+  it("draws the last comment's author from the cached collaborators list, picture and display name", () => {
+    harness.publishCollaborators(
+      collaboratorsResponse([
+        collaboratorEntry("user-2", {
+          displayName: "Grace Hopper",
+          avatarUrl: "https://example.com/grace.png",
+        }),
+      ]),
+    );
+    const thread = threadFixture();
+    const [comment] = thread.comments;
+    const { editor, anchor } = makeEditorWithAnchor();
+    render(
+      harness.wrap(
+        popoverElement(editor, vi.fn(), [
+          {
+            ...thread,
+            comments: [
+              {
+                ...comment,
+                author: { userId: "user-2", fallbackHandle: "grace-handle" },
+              },
+            ],
+          },
+        ]),
+      ),
+    );
+
+    fireEvent.pointerOver(anchor, { pointerType: "mouse" });
+    act(() => {
+      vi.advanceTimersByTime(HOVER_DELAY_MS);
+    });
+
+    expect(screen.getByText("Grace Hopper")).toBeTruthy();
+    expect(screen.queryByText("grace-handle")).toBeNull();
+    expect(
+      screen
+        .getByTestId("person-avatar")
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toBe("https://example.com/grace.png");
   });
 });

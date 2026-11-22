@@ -107,12 +107,9 @@ function HtmlArtifactVersionChoices({
           />
         </DropdownMenuRadioItem>
       ) : null}
+      {/* The current version is the Latest row above, never a row of its own. */}
       {versions
-        .filter(
-          (item) =>
-            item.versionNumber !== currentVersionNumber ||
-            item.id === selectedId,
-        )
+        .filter((item) => item.versionNumber !== currentVersionNumber)
         .map((item) => (
           <DropdownMenuRadioItem key={item.id} value={item.id}>
             <HtmlArtifactVersionLabel

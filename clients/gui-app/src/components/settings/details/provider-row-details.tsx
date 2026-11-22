@@ -1,19 +1,17 @@
 import type { ReactNode } from "react";
-import { useHostClient } from "@/lib/host";
 import { SettingsDetailsButton } from "@/components/settings/details/settings-details-button";
-import { useDetailsEnvironmentId } from "@/components/settings/details/use-details-environment-id";
+import { useProviderRowDetailsSubject } from "./use-provider-row-details-subject";
 
 export function ProviderRowDetails(props: {
   readonly kind: string;
   readonly itemKey: string;
   readonly title: string;
 }): ReactNode {
-  const client = useHostClient();
-  const environmentId = useDetailsEnvironmentId(client);
-  if (environmentId === null) return null;
+  const subject = useProviderRowDetailsSubject(props.kind, props.itemKey);
+  if (subject === null) return null;
   return (
     <SettingsDetailsButton
-      subject={{ environmentId, kind: props.kind, key: props.itemKey }}
+      subject={subject}
       title={props.title}
       controls={null}
     />

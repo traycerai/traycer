@@ -89,6 +89,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
           "explicit",
           "direct_ui",
         ),
+        "user",
       );
       setIsOpen(false);
       if (onLaunched !== null) onLaunched();

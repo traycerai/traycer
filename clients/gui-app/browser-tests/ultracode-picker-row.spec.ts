@@ -62,10 +62,18 @@ async function setCarried(page: Page, carried: boolean): Promise<void> {
   }
 }
 
+/**
+ * The row's first frames are the panel zooming in (`duration-100`, scale
+ * 0.95 and a short slide). A geometry read in that window is not the resting
+ * seam.
+ */
 async function open(page: Page, query: string): Promise<void> {
   await page.goto(`${fixture("ultracode-picker-row")}${query}`);
   await expect(page.getByTestId("picker-ultracode-row")).toBeVisible();
-  await nextFrames(page, 2);
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+  await settled(page.getByRole("dialog", { name: "Select model" }));
 }
 
 interface Box {
@@ -89,15 +97,37 @@ async function box(locator: Locator): Promise<Box> {
   });
 }
 
+/**
+ * One layout snapshot of several elements. A separate read per element is a
+ * separate paint, and the positioned popover can move between them, so a seam
+ * measured that way can report a gap the screen never had.
+ */
+async function boxes(
+  locators: readonly [Locator, Locator, ...Locator[]],
+): Promise<Box[]> {
+  const handles = await Promise.all(
+    locators.map((locator) => locator.elementHandle()),
+  );
+  return locators[0].page().evaluate((elements) => {
+    return elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+      };
+    });
+  }, handles);
+}
+
 test("the row sits directly above the effort footer", async ({ page }) => {
   await open(page, "");
-  const row = page.getByTestId("picker-ultracode-row");
-  const effortBand = page
-    .getByRole("group", { name: "Thinking effort" })
-    .locator("xpath=ancestor::div[contains(@class,'border-t')][1]");
-
-  const rowBox = await box(row);
-  const bandBox = await box(effortBand);
+  const [rowBox, bandBox] = await boxes([
+    page.getByTestId("picker-ultracode-row"),
+    effortOf(page),
+  ]);
 
   expect(Math.abs(rowBox.bottom - bandBox.top)).toBeLessThanOrEqual(1);
 });
@@ -130,8 +160,7 @@ test("the normal hint is one line and the switch lies inside the row", async ({
     const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
     return element.getBoundingClientRect().height <= lineHeight + 1;
   });
-  const rowBox = await box(row);
-  const toggleBox = await box(toggle);
+  const [rowBox, toggleBox] = await boxes([row, toggle]);
 
   expect(hintOneLine).toBe(true);
   expect(toggleBox.left).toBeGreaterThanOrEqual(rowBox.left);
@@ -186,25 +215,36 @@ function effortOf(page: Page): Locator {
 /**
  * The chip's text changes its width, which moves the panel's transform origin;
  * the panel transitions that for a moment before it is back in place. Measure
- * once its own animations have finished.
+ * once that animation, and any still running inside the dialog, has finished.
+ * The dialog's own animation list misses the thumb's slide.
  */
 async function settled(locator: Locator): Promise<void> {
-  await locator.evaluate(async (element) => {
-    await Promise.all(
-      element.getAnimations().map((animation) => animation.finished),
-    );
-  });
+  await expect
+    .poll(
+      () =>
+        locator.evaluate(
+          (element) =>
+            !element.getAnimations({ subtree: true }).some((animation) => {
+              if (animation.playState !== "running") return false;
+              const end = animation.effect?.getComputedTiming().endTime;
+              return end !== Infinity;
+            }),
+        ),
+      { intervals: [16], message: "the picker was still animating" },
+    )
+    .toBe(true);
 }
 
 async function frameOf(page: Page): Promise<Frame> {
   const dialog = page.getByRole("dialog", { name: "Select model" });
   await settled(dialog);
-  return {
-    dialog: await box(dialog),
-    search: await box(page.getByRole("textbox", { name: /^Search/ })),
-    rail: await box(railOf(page)),
-    effort: await box(effortOf(page)),
-  };
+  const [dialogBox, search, rail, effort] = await boxes([
+    dialog,
+    page.getByRole("textbox", { name: /^Search/ }),
+    railOf(page),
+    effortOf(page),
+  ]);
+  return { dialog: dialogBox, search, rail, effort };
 }
 
 function expectSameFrame(actual: Frame, expected: Frame): void {
@@ -267,8 +307,7 @@ test("the frame does not move when the harness changes to another and back", asy
 });
 
 async function inside(inner: Locator, outer: Locator): Promise<boolean> {
-  const innerBox = await box(inner);
-  const outerBox = await box(outer);
+  const [innerBox, outerBox] = await boxes([inner, outer]);
   return (
     innerBox.left >= outerBox.left &&
     innerBox.right <= outerBox.right &&

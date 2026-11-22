@@ -78,12 +78,14 @@ describe("createEnvironmentArmLanes", () => {
   let lanes = createEnvironmentArmLanes<State, Frame>();
 
   function spec(key: string): EnvironmentArmLaneSpec<State, Frame> {
+    const ended: State = ["ended"];
     return {
       key,
       poolHostId: "pool-host",
       client: new FakeStreamClient(true),
       initial: [],
-      ended: ["ended"],
+      ended,
+      reopenedFromEnd: ended,
       open: (_client, readState) => {
         readStates.push(readState());
         const session = new ArmSession();
@@ -235,6 +237,31 @@ describe("createEnvironmentArmLanes", () => {
     expect(lanes.read("k", [])).toEqual(["ended", "a"]);
   });
 
+  it("starts an ended arm over from what its spec says when asked to reopen it, before the fresh stream's first frame", () => {
+    lanes.acquire({ ...spec("k"), reopenedFromEnd: ["reopened"] });
+    sessions[0]?.closeWith(fatal("FORBIDDEN"));
+    expect(lanes.read("k", [])).toEqual(["ended"]);
+
+    lanes.reopen("k");
+
+    expect(lanes.read("k", [])).toEqual(["reopened"]);
+    expect(readStates).toEqual([[], ["reopened"]]);
+    sessions[1]?.emit(frameEnvelope(0, "a"), null);
+    expect(lanes.read("k", [])).toEqual(["reopened", "a"]);
+  });
+
+  it("keeps what a live arm holds when asked to reopen it, so a resumption continues from it", () => {
+    lanes.acquire({ ...spec("k"), reopenedFromEnd: ["reopened"] });
+    sessions[0]?.emit(frameEnvelope(1, "a"), null);
+
+    lanes.reopen("k");
+
+    expect(lanes.read("k", [])).toEqual(["a"]);
+    expect(readStates).toEqual([[], ["a"]]);
+    sessions[1]?.emit(frameEnvelope(0, "b"), null);
+    expect(lanes.read("k", [])).toEqual(["a", "b"]);
+  });
+
   it("keeps the replacement open when a reopen scheduled for the stream it replaced comes due", async () => {
     lanes.acquire(spec("k"));
     sessions[0]?.closeWith(fatal("UNAUTHORIZED"));
@@ -283,31 +310,10 @@ describe("createEnvironmentArmLanes", () => {
     expect(heard).toHaveBeenCalledTimes(1);
   });
 
-  it("lets a passive reader of held() subscribe before any lane exists and hear each change", () => {
-    const seen: Array<ReadonlyArray<readonly [string, State]>> = [];
-    const unsubscribe = lanes.subscribeHeld(() => {
-      seen.push(lanes.held());
-    });
-
-    const release = lanes.acquire(spec("k"));
-    expect(seen).toEqual([]);
-    sessions[0]?.emit(frameEnvelope(1, "a"), null);
-    expect(seen).toEqual([[["k", ["a"]]]]);
-
-    release();
-    expect(seen).toEqual([[["k", ["a"]]], []]);
-
-    unsubscribe();
-    lanes.acquire(spec("k"));
-    sessions[1]?.emit(frameEnvelope(1, "b"), null);
-    expect(seen).toEqual([[["k", ["a"]]], []]);
-    expect(lanes.held()).toEqual([["k", ["b"]]]);
-  });
-
-  it("shows an arm that ended while it opened in held() at the last notification", () => {
-    const seen: Array<ReadonlyArray<readonly [string, State]>> = [];
-    lanes.subscribeHeld(() => {
-      seen.push(lanes.held());
+  it("shows an arm that ended while it opened to read() at the last notification", () => {
+    const seen: State[] = [];
+    lanes.subscribe("k", () => {
+      seen.push(lanes.read("k", []));
     });
 
     lanes.acquire({
@@ -319,20 +325,6 @@ describe("createEnvironmentArmLanes", () => {
       },
     });
 
-    expect(seen.at(-1)).toEqual([["k", ["ended"]]]);
-    expect(lanes.read("k", [])).toEqual(["ended"]);
-  });
-
-  it("lists only the lanes someone holds", () => {
-    const releaseA = lanes.acquire(spec("a"));
-    lanes.acquire(spec("b"));
-    sessions[0]?.emit(frameEnvelope(1, "x"), null);
-    expect(lanes.held()).toEqual([
-      ["a", ["x"]],
-      ["b", []],
-    ]);
-
-    releaseA();
-    expect(lanes.held()).toEqual([["b", []]]);
+    expect(seen.at(-1)).toEqual(["ended"]);
   });
 });

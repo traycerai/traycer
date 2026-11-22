@@ -1,3 +1,4 @@
+import { AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION } from "@traycer/protocol/host";
 import {
   useQueryClient,
   type QueryClient,
@@ -7,7 +8,10 @@ import {
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { useRefreshProvidersForClient } from "@/hooks/providers/use-refresh-providers";
@@ -27,7 +31,10 @@ import {
   useHostQueryWithResponseMap,
   type UseHostQueryOptions,
 } from "@/hooks/host/use-host-query";
-import { useHostQueries } from "@/hooks/host/use-host-queries";
+import {
+  useHostQueries,
+  type HostRequestSpec,
+} from "@/hooks/host/use-host-queries";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { automaticJudgeInputs } from "@/lib/auto-mode/auto-judge-billing";
 import { COMMAND_CATALOG_COMPOSER_STALE_MS } from "@traycer/protocol/host/agent/gui/command-catalog-policy";
@@ -40,9 +47,10 @@ import {
 // Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
 // the batched fan-out in `useGuiHarnessCatalog` and the standalone
 // `useGuiHarnessModelsQuery` alike - so no observer ever refetches one on its
-// own. Not on a timer, not when a surface mounts, and not when an `enabled`
-// gate flips as the user moves between composers, chat tiles and palette
-// subpages.
+// own. Not on a timer, and not when an `enabled` gate flips as the user moves
+// between composers, chat tiles and palette subpages. A surface that re-asks
+// a warm slot does it explicitly, through `harnessCatalogEntryNeedsRefresh`
+// (the intent edges below).
 //
 // A finite `staleTime` is not enough here, and that is the subtle part. It
 // stops nothing by itself: it only decides whether the *next* mount or
@@ -69,10 +77,12 @@ import {
 // is about via its own targeted query on the shared cache slot.
 //
 // Models therefore refresh in exactly three places:
-//   - the picker's intent edges - popover open, harness selection - which
-//     refresh ONLY the selected harness, and only once its cached entry is
-//     older than `HARNESS_CATALOG_REFRESH_AFTER_MS`
-//     (`harnessCatalogEntryNeedsRefresh`);
+//   - intent edges, each refreshing ONLY its one harness's slot and only
+//     when `harnessCatalogEntryNeedsRefresh` says it is due - never loaded,
+//     errored, empty, or older than `HARNESS_CATALOG_REFRESH_AFTER_MS`: the
+//     picker's popover open and harness/profile selection (the selected
+//     harness), and Settings > Fallback's test-model panel on mount and on a
+//     tested-provider change (the tested harness);
 //   - targeted per-harness fetches on their surface's own gate: the picker's
 //     selected-harness and browsed-provider queries
 //     (`useGuiHarnessModelsQueryForClient`), the composer toolbar's selected
@@ -108,6 +118,12 @@ export interface HarnessCatalogEntryFreshness {
   readonly dataUpdatedAt: number;
   readonly isError: boolean;
   readonly isFetching: boolean;
+  /**
+   * The cached model list's length; `null` when there is no list to count -
+   * an entry that is not a model catalog, or one with nothing cached yet
+   * (which `dataUpdatedAt === 0` already makes due).
+   */
+  readonly modelCount: number | null;
 }
 
 /**
@@ -127,13 +143,16 @@ export interface HarnessCatalogEntryFreshness {
  *
  * An entry that never loaded (`dataUpdatedAt === 0`) or whose last fetch failed
  * is always due: with no background retry left, the intent edges are also the
- * error-recovery path.
+ * error-recovery path. So is an empty model list: a provider can answer `[]`
+ * before its account's catalog is ready, so an empty slot is asked again on
+ * every edge until it fills.
  */
 export function harnessCatalogEntryNeedsRefresh(
   entry: HarnessCatalogEntryFreshness,
 ): boolean {
   if (entry.isFetching) return false;
   if (entry.isError || entry.dataUpdatedAt === 0) return true;
+  if (entry.modelCount === 0) return true;
   return Date.now() - entry.dataUpdatedAt >= HARNESS_CATALOG_REFRESH_AFTER_MS;
 }
 
@@ -167,6 +186,29 @@ export interface QueryActivityOptions {
  */
 export interface CatalogQueryActivityOptions extends QueryActivityOptions {
   readonly modelsFetch: "all-harnesses" | "cached-only";
+  /** The focused provider's account; other providers retain their ambient slots. */
+  readonly modelProfile?: {
+    readonly harnessId: GuiHarnessId;
+    readonly profileId: string | null;
+  };
+}
+
+function modelCatalogProfileParam(
+  harnessId: GuiHarnessId,
+  selection: CatalogQueryActivityOptions["modelProfile"],
+): { readonly profileId?: string } {
+  return selection?.harnessId === harnessId && selection.profileId !== null
+    ? { profileId: selection.profileId }
+    : {};
+}
+
+function modelCatalogRequiredHostVersion(
+  request: HostRequestSpec<HostRpcRegistry, "agent.gui.listModels">,
+): RequiredHostMethodVersion | null {
+  return request.params.profileId === undefined ||
+    request.params.profileId === null
+    ? null
+    : AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION;
 }
 
 /**
@@ -397,7 +439,7 @@ export function useGuiHarnessesQueryForClient(
 export function useGuiHarnessModelsQuery(
   harnessId: GuiHarnessId,
   workingDirectory: string | null,
-  activity: QueryActivityOptions,
+  activity: QueryActivityOptions & { readonly profileId: string | null },
 ): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
   return useGuiHarnessModelsQueryForClient(
     useDefaultHostClient(),
@@ -407,26 +449,39 @@ export function useGuiHarnessModelsQuery(
   );
 }
 
-/** Client-scoped `agent.gui.listModels`; see `useGuiHarnessesQueryForClient`. */
+/**
+ * Client-scoped `agent.gui.listModels`; see `useGuiHarnessesQueryForClient`.
+ *
+ * `profileId` names the account whose list is wanted: a provider's models and
+ * their speed tiers are the account's (Codex advertises a tier per plan). The
+ * ambient account (`null`) sends no key and so shares the cache slot the
+ * fan-out and the app-load prefetch fill; a managed profile has a slot of its
+ * own, filled by the one surface that browses or runs on it.
+ */
 export function useGuiHarnessModelsQueryForClient(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId,
   workingDirectory: string | null,
-  activity: QueryActivityOptions,
+  activity: QueryActivityOptions & { readonly profileId: string | null },
 ): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
   const opencodeLine = useChatOpencodeLine();
   const params = useMemo(
     () => ({
       harnessId,
       workingDirectory,
+      ...(activity.profileId === null ? {} : { profileId: activity.profileId }),
       ...catalogOpencodeLineParam(harnessId, opencodeLine),
     }),
-    [harnessId, workingDirectory, opencodeLine],
+    [harnessId, workingDirectory, activity.profileId, opencodeLine],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listModels">({
     cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listModels",
+    requiredHostMethodVersion: () =>
+      activity.profileId === null
+        ? null
+        : AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     params,
     options: {
@@ -604,13 +659,15 @@ export function useGuiHarnessCatalogForClientLine(
       params: {
         harnessId,
         workingDirectory,
+        ...modelCatalogProfileParam(harnessId, activity.modelProfile),
         ...catalogOpencodeLineParam(harnessId, opencodeLine),
       },
     }));
-  }, [harnessIds, workingDirectory, opencodeLine]);
+  }, [harnessIds, workingDirectory, opencodeLine, activity.modelProfile]);
 
   const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
+    requiredHostMethodVersion: modelCatalogRequiredHostVersion,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests,
@@ -650,6 +707,10 @@ export function useGuiHarnessCatalogForClientLine(
                     params: {
                       harnessId: harness.id,
                       workingDirectory,
+                      ...modelCatalogProfileParam(
+                        harness.id,
+                        activity.modelProfile,
+                      ),
                       ...catalogOpencodeLineParam(harness.id, opencodeLine),
                     },
                   },
@@ -657,13 +718,20 @@ export function useGuiHarnessCatalogForClientLine(
               : [],
           ) ?? EMPTY_GUI_MODEL_REQUESTS)
         : EMPTY_GUI_MODEL_REQUESTS,
-    [attached, harnessesQuery.data?.harnesses, workingDirectory, opencodeLine],
+    [
+      attached,
+      harnessesQuery.data?.harnesses,
+      workingDirectory,
+      opencodeLine,
+      activity.modelProfile,
+    ],
   );
   const pendingModelQueries = useHostQueries<
     HostRpcRegistry,
     "agent.gui.listModels"
   >({
     client,
+    requiredHostMethodVersion: modelCatalogRequiredHostVersion,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests: pendingRequests,

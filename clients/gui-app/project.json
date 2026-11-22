@@ -9,9 +9,6 @@
     "default": ["{projectRoot}/**/*"]
   },
   "targets": {
-    "build": {
-      "inputs": ["{projectRoot}/**/*", "^production", "sharedGlobals"]
-    },
     "compile": {
       "inputs": ["{projectRoot}/**/*", "^production", "sharedGlobals"]
     },

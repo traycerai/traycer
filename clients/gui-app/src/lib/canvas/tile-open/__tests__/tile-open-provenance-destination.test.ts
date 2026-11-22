@@ -88,7 +88,7 @@ describe("openTileWithNavigation marks the RESOLVED destination", () => {
     openTileWithNavigation(
       intentForFreshInstance(freshId),
       commitWithoutNavigation,
-      MANUAL_TILE_OPEN,
+      { ...MANUAL_TILE_OPEN, provenance: "user" },
     );
 
     // THE CLAIM. Without it the mounted tile is never told, and the fresh id
@@ -110,7 +110,7 @@ describe("openTileWithNavigation marks the RESOLVED destination", () => {
     openTileWithNavigation(
       intentForFreshInstance("inst-brand-new"),
       commitWithoutNavigation,
-      MANUAL_TILE_OPEN,
+      { ...MANUAL_TILE_OPEN, provenance: "user" },
     );
     expect(wasTileOpenRequested("inst-brand-new")).toBe(true);
   });

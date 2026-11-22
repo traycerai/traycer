@@ -20,7 +20,7 @@ import {
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListDowngradeV24ToV10,
-  hostNotificationsListDowngradeV25ToV10,
+  hostNotificationsListDowngradeV26ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsSetConfig,
@@ -1060,7 +1060,7 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsListUpgradeV10ToV20);
     expect(
       hostRpcRegistry["host.notifications.list"][2].downgradePathsFromLatest[1],
-    ).toBe(hostNotificationsListDowngradeV25ToV10);
+    ).toBe(hostNotificationsListDowngradeV26ToV10);
   });
 
   it("REFUSES a local-home selector on the v1 bridge instead of widening it to whole-origin", () => {
@@ -1298,6 +1298,58 @@ describe("browser.human.needed stays off every released contract", () => {
       expect(visibleHostNotificationKinds(surface, { major, minor })).toContain(
         "browser.human.needed",
       );
+    }
+  });
+});
+
+describe("access.readonly.retired is center-only: cloudFeed@1.8+ only, every other surface unchanged", () => {
+  it("the ordinary host feed (list, feed.subscribe, the frozen legacy stream) never carries it, at any negotiated version", () => {
+    const ordinary: ReadonlyArray<{
+      readonly surface: HostNotificationsSurface;
+      readonly major: number;
+      readonly minor: number;
+    }> = [
+      { surface: { method: "host.notifications.list" }, major: 1, minor: 0 },
+      { surface: { method: "host.notifications.list" }, major: 2, minor: 6 },
+      // An unknown future minor falls through to the released set, never to
+      // everything this build knows.
+      { surface: { method: "host.notifications.list" }, major: 2, minor: 99 },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        major: 1,
+        minor: 0,
+      },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        major: 1,
+        minor: 8,
+      },
+      {
+        surface: { method: "host.notifications.subscribe" },
+        major: 1,
+        minor: 0,
+      },
+    ];
+    for (const { surface, major, minor } of ordinary) {
+      expect(
+        visibleHostNotificationKinds(surface, { major, minor }),
+      ).not.toContain("access.readonly.retired");
+    }
+  });
+
+  it("the cloud relay withholds it through @1.7 and carries it from @1.8 onward", () => {
+    const surface: HostNotificationsSurface = {
+      method: "host.notifications.cloudFeed.subscribe",
+    };
+    for (const minor of [0, 1, 2, 3, 4, 5, 6, 7]) {
+      expect(
+        visibleHostNotificationKinds(surface, { major: 1, minor }),
+      ).not.toContain("access.readonly.retired");
+    }
+    for (const minor of [8, 9]) {
+      expect(
+        visibleHostNotificationKinds(surface, { major: 1, minor }),
+      ).toContain("access.readonly.retired");
     }
   });
 });

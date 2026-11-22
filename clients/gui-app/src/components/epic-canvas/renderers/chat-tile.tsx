@@ -1,5 +1,6 @@
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
+import { ComposerDropPane } from "@/components/chat/composer/composer-drop-pane";
 import {
   resolveChatSandbox,
   wakeOf,
@@ -12,6 +13,7 @@ import {
   ChatStateLineContext,
 } from "./chat-state-line";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
+import { reportSentChatMessage } from "@/components/share-on-x/sent-messages";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox-state";
 import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
@@ -31,6 +33,7 @@ import {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import {
@@ -49,6 +52,11 @@ import type { ChatForkMode } from "@/components/chat/chat-message";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
+import type {
+  ProviderCliState,
+  ProvidersListResponse,
+} from "@traycer/protocol/host/provider-schemas";
+import type { RemovedProviderProfile } from "@/components/providers/provider-profile-model";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
 import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
@@ -81,6 +89,11 @@ import {
   type ChatScrollCardKind,
 } from "@/components/chat/chat-scroll-to-block";
 import { PENDING_CARD_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
+import {
+  ChatLoadAutofocusContext,
+  useChatLoadFocusHold,
+} from "@/components/chat/chat-load-focus-hold";
+import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
 import {
   ChatPlanActionsContext,
   type ChatPlanActionsContextValue,
@@ -151,14 +164,13 @@ import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   useChatById,
   useEpicLiveArtifactTitle,
-  useEpicPermissionRole,
   useOpenEpicId,
 } from "@/lib/epic-selectors";
-import { isEditableRole } from "@/lib/epic-permissions";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
   mentionRootsFromWorktreeBinding,
   mentionRootsFromWorktreeBindingAndIntent,
+  runDirectoryFromWorktreeBindingAndIntent,
   useWorkspaceMentionRoots,
   worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
@@ -220,6 +232,13 @@ import {
 } from "@/stores/chats/rendered-messages";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useEpicChatStarter } from "@/hooks/chats/use-epic-chat-starter";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { cloudChatBelongsToViewer } from "@/lib/chats/cloud-chat-view-ownership";
+import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
+import { EVICTED_SEND_FAILED_MESSAGE } from "@/lib/chats/evicted-chat-refusal";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
@@ -235,7 +254,7 @@ import {
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { TranscriptQueuePauseReasonSupportContext } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import { useHostBinding } from "@/lib/host";
+import { useHostBinding, useOptionalHostClient } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
@@ -246,9 +265,15 @@ import {
 import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import {
+  useChatEvictionServing,
   useChatServing,
   useChatServingHostId,
 } from "@/lib/chats/chat-serving-witness";
+import {
+  useEvictedChatSend,
+  type EvictedChatSend,
+} from "@/hooks/chats/use-evicted-chat-send";
+import { useEvictedSendAckRefusals } from "@/hooks/chats/use-evicted-send-ack-refusals";
 import { useChatContinueHere } from "@/hooks/chats/use-chat-continue-here";
 import {
   useEpicCreateChatForHost,
@@ -321,11 +346,13 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
 import {
   resolveAgentReasoningLabel,
   resolveAgentServiceTierLabel,
   resolveAgentSenderDisplay,
-  resolveSenderLabel,
+  otherPersonSenderId,
+  resolvePersonSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
 import { getModelLabelIndex } from "@/lib/chat/model-label-index";
@@ -417,6 +444,18 @@ const COMPACT_ACTION_LOCK_MS = 1500;
  * every time and re-partition the setup lifecycle on every streamed token.
  */
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
+const NO_PROVIDERS: ReadonlyArray<ProviderCliState> = [];
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
+
+function tombstonedProfileListProps(list: ProvidersListResponse | undefined): {
+  readonly providers: ReadonlyArray<ProviderCliState>;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
+} {
+  return {
+    providers: list?.providers ?? NO_PROVIDERS,
+    removedProfiles: list?.removedProfiles ?? NO_REMOVED_PROFILES,
+  };
+}
 
 /** Per-chat compact-conversation state, keyed by `handle.chatId` - see the comment on `compactConversation`. */
 interface CompactChatState {
@@ -439,7 +478,14 @@ interface ChatTileProps {
 }
 
 interface ChatTileSessionViewProps {
+  readonly cloudChat?: CloudChatSummary;
   readonly restingSandbox?: RestingChatSandbox;
+  /**
+   * The road for a message to a chat its host may have dropped the records
+   * of. Held by the live tile above its session, so a parked message outlives
+   * the session's move from the pool to the host; absent on a published copy.
+   */
+  readonly evictedSend?: EvictedChatSend;
   readonly handle: ChatSessionStoreHandle;
   readonly node: ChatSurfaceNode;
   readonly viewTabId: string;
@@ -491,19 +537,6 @@ export function ChatTile(props: ChatTileProps) {
 }
 
 /**
- * Whether this viewer's epic role can create agents - the gate the dead-tile
- * banner draws Clone agent on. The live tile reads it once, into its
- * pre-content frame, and hands that one value to both its banner and the
- * body under it, so the two cannot disagree. `epic.createChat` is editor-gated host-side, and
- * an unresolved role (`null`) keeps the offer: the host gate is the backstop,
- * and withholding the way out of a dead tile needs evidence.
- */
-function useChatCloneAllowed(): boolean {
-  const permissionRole = useEpicPermissionRole();
-  return permissionRole === null || isEditableRole(permissionRole);
-}
-
-/**
  * The wait for this chat's first transcript, with what the pre-content body
  * needs from above the handle branch. See `ChatLoadWait` for why it lives
  * here and not in the body.
@@ -513,7 +546,6 @@ function useChatTilePreContentFrame(
   hasReadySession: boolean,
   sandboxFooter: boolean,
 ): ChatTilePreContentFrame {
-  const cloneAllowed = useChatCloneAllowed();
   const [wait, setWait] = useState<ChatLoadWait>(() => ({
     startedAt: Date.now(),
     attemptsBefore: 0,
@@ -531,18 +563,10 @@ function useChatTilePreContentFrame(
       wait,
       restartWait,
       reachability,
-      cloneAllowed,
       hasReadySession,
       sandboxFooter,
     }),
-    [
-      wait,
-      restartWait,
-      reachability,
-      cloneAllowed,
-      hasReadySession,
-      sandboxFooter,
-    ],
+    [wait, restartWait, reachability, hasReadySession, sandboxFooter],
   );
 }
 
@@ -670,6 +694,14 @@ function ChatTileForChat(props: ChatTileProps) {
   // serves never reads as an offline tile.
   const servingKey = { hostId: tabHostId, epicId, chatId: node.id };
   const servingHostId = useChatServingHostId(servingKey);
+  const eviction = useChatEvictionServing(servingKey);
+  const evictedSend = useEvictedChatSend({
+    epicId,
+    chatId: node.id,
+    hostId: tabHostId,
+    served: eviction.served,
+    held: eviction.held,
+  });
   const reachability = useHostReachability(servingHostId);
   const hostLabel = useChatTileHostLabel(reachability, tabHostId);
   const ownerReachability = useHostReachability(tabHostId);
@@ -691,11 +723,9 @@ function ChatTileForChat(props: ChatTileProps) {
     tabHostId,
     node.id,
   );
-  const canEdit = useChatCloneAllowed();
   const sandbox = resolveChatSandbox(sandboxState, {
     ...copyFacts,
     reachable: ownerReachable,
-    canEdit,
   });
   const sandboxAvailability = chatSandboxAvailability(sandbox, ownerReachable);
   const lease = useHostLease(servingHostId);
@@ -714,6 +744,20 @@ function ChatTileForChat(props: ChatTileProps) {
     hasReadySession,
     sandboxAvailability.explainsLoad,
   );
+  const snapshotLoaded = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) =>
+        handle === null ? () => undefined : handle.store.subscribe(onChange),
+      [handle],
+    ),
+    () => handle?.store.getState().snapshotLoaded ?? false,
+  );
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const loadFocusHold = useChatLoadFocusHold({
+    loaded: snapshotLoaded,
+    active: isActive,
+    surface: surfaceRef,
+  });
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
   // tab-scoped query the reauth gate/rate-limit prompt already read, so this
@@ -746,7 +790,7 @@ function ChatTileForChat(props: ChatTileProps) {
     );
     if (strip === "offline") {
       return (
-        <ChatDeadTileBannerWithOffer
+        <ChatDeadTileBannerContainer
           epicId={epicId}
           tabId={viewTabId}
           chatId={node.id}
@@ -757,8 +801,6 @@ function ChatTileForChat(props: ChatTileProps) {
           // never a published copy the banner could truthfully point at.
           showsPublishedCopy={false}
           testId={`chat-dead-tile-${node.id}`}
-          // The frame's value, which the body under this strip reads too.
-          cloneAllowed={preContentFrame.cloneAllowed}
         />
       );
     }
@@ -796,6 +838,7 @@ function ChatTileForChat(props: ChatTileProps) {
   if (handle === null) {
     return (
       <div
+        ref={surfaceRef}
         data-testid="chat-tile"
         data-node-id={node.id}
         className="flex h-full min-h-0 flex-col"
@@ -818,7 +861,11 @@ function ChatTileForChat(props: ChatTileProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+    <div
+      ref={surfaceRef}
+      className="flex h-full min-h-0 flex-col"
+      data-node-id={node.id}
+    >
       {deadTileBanner}
       <ChatTileCatchingUpBanner
         chat={servingKey}
@@ -831,23 +878,28 @@ function ChatTileForChat(props: ChatTileProps) {
       />
       <SandboxReadyLineForChat chatId={node.id} />
       <TombstonedProfileProvider
-        providers={providersList.data?.providers ?? []}
+        {...tombstonedProfileListProps(providersList.data)}
         hostId={tabHostId}
       >
         <ChatSandboxLineContext value={sandbox.line !== null}>
           <ChatStateLineContext value={stateLine}>
-            <ChatTileSessionView
-              handle={handle}
-              node={node}
-              viewTabId={viewTabId}
-              tileId={props.tileId}
-              isActive={isActive}
-              currentEpicId={epicId}
-              restingSandbox={wakeOf(sandbox)}
-              readOnlyNotice={sandboxAvailability.readOnlyNotice}
-              isLiveSession
-              preContent={preContentFrame}
-            />
+            <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
+              <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
+                <ChatTileSessionView
+                  handle={handle}
+                  node={node}
+                  viewTabId={viewTabId}
+                  tileId={props.tileId}
+                  isActive={isActive}
+                  currentEpicId={epicId}
+                  restingSandbox={wakeOf(sandbox)}
+                  evictedSend={evictedSend}
+                  readOnlyNotice={sandboxAvailability.readOnlyNotice}
+                  isLiveSession
+                  preContent={preContentFrame}
+                />
+              </ChatLoadAutofocusContext>
+            </PaneActivationFocusIntentContext>
           </ChatStateLineContext>
         </ChatSandboxLineContext>
       </TombstonedProfileProvider>
@@ -894,7 +946,6 @@ export function SubstitutedCatchingUpBanner(props: {
   const state = useChatSandboxState(props.epicId, props.ownerHostId, reachable);
   const view = resolveChatSandbox(state, {
     reachable,
-    canEdit: false,
     ownedByViewer: false,
     environmentOwned: false,
   });
@@ -942,17 +993,6 @@ interface ChatDeadTileBannerContainerProps {
   readonly sourceOwnerUserId?: string;
 }
 
-/**
- * The dead-tile banner for a surface with no role read of its own (the
- * published tile, the canvas substitution): it reads the viewer's role here.
- */
-export function ChatDeadTileBannerContainer(
-  props: ChatDeadTileBannerContainerProps,
-): ReactNode {
-  const cloneAllowed = useChatCloneAllowed();
-  return <ChatDeadTileBannerWithOffer {...props} cloneAllowed={cloneAllowed} />;
-}
-
 function useDeadTileSourceOwner(props: DeadTileOfferSource): string | null {
   // The EPIC SESSION's client, by intent: the cloud lookup below SHARES the
   // list the sidebar tree already fetched for this epic, and that fetch rides
@@ -992,14 +1032,11 @@ function useDeadTileCloneOffer(props: DeadTileOfferSource) {
   const chatRecord = useChatById(props.chatId);
   const sourceOwnerUserId = useDeadTileSourceOwner(props);
   const sourceTitle = chatRecord?.title ?? "";
-  // The two facts the banner's copy and Clone offer vary on (shared-chat
-  // support). Ownership: only a POSITIVE mismatch against the signed-in user
-  // flips the foreign-owner copy - an unknown owner or identity stays on the
-  // own-chat sentences, which were this banner's whole vocabulary before
-  // collaborators existed. Role: `epic.createChat` is editor-gated host-side,
-  // so a known viewer gets the reason in the banner instead of a Clone button
-  // that dies on a bare "You don't have permission" toast (`useChatCloneAllowed`).
-  // A team sandbox's chat names its sandbox rather than a collaborator or a
+  // The facts the banner's copy varies on (shared-chat support). Ownership:
+  // only a POSITIVE mismatch against the signed-in user flips the
+  // foreign-owner copy - an unknown owner or identity stays on the own-chat
+  // sentences, which were this banner's whole vocabulary before collaborators
+  // existed. A team sandbox's chat names its sandbox rather than a collaborator or a
   // machine; an owner not yet told apart stays on the own-chat sentences.
   const { ownedByViewer, environmentOwned } = useChatOwnerCopyFacts(
     sourceOwnerUserId,
@@ -1026,15 +1063,9 @@ function useDeadTileCloneOffer(props: DeadTileOfferSource) {
   };
 }
 
-/**
- * The banner and its Clone offer, for a mounting surface that already holds
- * the role gate - the live tile, whose body under the strip reads the same
- * value.
- */
-function ChatDeadTileBannerWithOffer(
-  props: ChatDeadTileBannerContainerProps & {
-    readonly cloneAllowed: boolean;
-  },
+/** The dead-tile banner and its Clone offer. */
+export function ChatDeadTileBannerContainer(
+  props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const {
     sourceOwnerUserId,
@@ -1066,7 +1097,6 @@ function ChatDeadTileBannerWithOffer(
   );
   const sandbox = resolveChatSandbox(sandboxState, {
     reachable: hostAnswered,
-    canEdit: props.cloneAllowed,
     ownedByViewer,
     environmentOwned,
   });
@@ -1078,11 +1108,7 @@ function ChatDeadTileBannerWithOffer(
   const stateLine = chatSandboxStateLine(
     sandbox.line,
     sandboxState.kind === "destroyed" ? (
-      <SandboxEndActionButtons
-        ended={sandboxState.ended}
-        cloneAllowed={props.cloneAllowed}
-        offer={offer}
-      />
+      <SandboxEndActionButtons ended={sandboxState.ended} offer={offer} />
     ) : null,
   );
   if (stateLine !== null) {
@@ -1108,7 +1134,6 @@ function ChatDeadTileBannerWithOffer(
         ownerName={ownerName}
         cloneTargetLabel={cloneTargetLabel}
         environmentOwned={environmentOwned}
-        cloneAllowed={props.cloneAllowed}
         showsPublishedCopy={props.showsPublishedCopy}
         continueTargetLabel={continueOffer.targetLabel}
         onClone={continues ? continueOffer.continueHere : offer.clone}
@@ -1138,36 +1163,26 @@ function ChatDeadTileBannerWithOffer(
 export function SandboxEndActions(
   props: DeadTileOfferSource & { readonly ended: TaskSandboxEndedHost },
 ): ReactNode {
-  const cloneAllowed = useChatCloneAllowed();
   const { offer } = useDeadTileCloneOffer(props);
-  return (
-    <SandboxEndActionButtons
-      ended={props.ended}
-      cloneAllowed={cloneAllowed}
-      offer={offer}
-    />
-  );
+  return <SandboxEndActionButtons ended={props.ended} offer={offer} />;
 }
 
 function SandboxEndActionButtons(props: {
   readonly ended: TaskSandboxEndedHost;
-  readonly cloneAllowed: boolean;
   readonly offer: ChatCloneOnHostSwitch;
 }): ReactNode {
   const { offer } = props;
   return (
     <>
-      {props.cloneAllowed ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={offer.cloning}
-          onClick={offer.clone}
-        >
-          Continue on another host
-        </Button>
-      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={offer.cloning}
+        onClick={offer.clone}
+      >
+        Continue on another host
+      </Button>
       <TaskSandboxEndDetails ended={props.ended} />
       {offer.profileRecovery !== null ? (
         <CloneProfileRecovery
@@ -1894,6 +1909,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1903,6 +1919,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },
@@ -1921,6 +1938,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1930,6 +1948,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },
@@ -1947,6 +1966,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
       },
       hash: (request) => {
@@ -1967,6 +1987,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "single",
                 "direct_ui",
               ),
+              "user",
             ),
           onDoubleClick: () =>
             openTile(
@@ -1976,6 +1997,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 "double",
                 "direct_ui",
               ),
+              "user",
             ),
         };
       },
@@ -2005,7 +2027,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                * absolutely positioned, so it does not participate in this flex
                * layout regardless. The definite flex height also makes this a
                * size container for the dock panel's proportional height. */}
-              <div
+              <ComposerDropPane
                 data-chat-pane=""
                 className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
               >
@@ -2125,7 +2147,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                     </div>
                   </div>
                 ) : null}
-              </div>
+              </ComposerDropPane>
               <ChatTileErrorNoticeToasts handle={view.handle} />
               <ChatTileRestoreResultToasts handle={view.handle} />
               <RevertOnEditDialog
@@ -2196,6 +2218,22 @@ type GatedChatSend = {
   readonly submit: ChatComposerSubmitInput;
   readonly dispatch: (input: ChatComposerSubmitInput) => boolean;
   readonly refusal: () => string | null;
+};
+
+// What the rebind gate did with a send: dispatched it (accepted or refused
+// at once), or armed the teardown dialog, in which case `accepted` settles
+// with the dialog - `true` once "Send and switch" dispatched it, `false` on
+// dismiss or when the armed send is dropped. The composer keeps its text
+// until then and clears only on `true`.
+type GatedChatSendOutcome =
+  | { readonly kind: "dispatched"; readonly accepted: boolean }
+  | { readonly kind: "armed"; readonly accepted: Promise<boolean> };
+
+// An armed send with the settle of its promised outcome. Re-arming after a
+// drift re-disclosure keeps the same settle: the composer asked once.
+type ArmedChatSend = {
+  readonly send: GatedChatSend;
+  readonly settle: (accepted: boolean) => void;
 };
 
 // The composer submit's own eligibility (access + sign-in) is re-checked
@@ -2512,6 +2550,16 @@ function useChatTileSessionViewModel(
       ),
     [state.worktreeBinding, stagedChatWorktreeIntent],
   );
+  // The folder alias routes are read in for the next run. The staged
+  // intent takes precedence over the binding, as for the roots above.
+  const composerRunWorkingDirectory = useMemo(
+    () =>
+      runDirectoryFromWorktreeBindingAndIntent(
+        state.worktreeBinding,
+        stagedChatWorktreeIntent ?? null,
+      ),
+    [state.worktreeBinding, stagedChatWorktreeIntent],
+  );
   const isFolderlessWorkspace = worktreeBindingIsFolderless(
     state.worktreeBinding,
   );
@@ -2591,12 +2639,19 @@ function useChatTileSessionViewModel(
     tabHostCatalogClient,
     surfaceVisible,
   );
+  const identifyPerson = usePersonIdentityResolver();
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
       resolveProfileLabel: resolveRunProfileLabel,
       resolveUserSenderLabel: (sender) =>
-        resolveSenderLabel(sender, displayContext),
-      resolveUserSenderAvatarUrl: () => null,
+        resolvePersonSenderLabel(sender, displayContext, identifyPerson),
+      resolveUserSenderAvatarUrl: (sender) => {
+        const userId = otherPersonSenderId(sender, profile);
+        return userId === null
+          ? null
+          : (identifyPerson(userId)?.avatarUrl ?? null);
+      },
+      resolveUserSenderId: (sender) => otherPersonSenderId(sender, profile),
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
@@ -2605,7 +2660,7 @@ function useChatTileSessionViewModel(
         resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
-    [displayContext, resolveRunProfileLabel],
+    [displayContext, identifyPerson, profile, resolveRunProfileLabel],
   );
   // Read from the full store: its effective activity includes the handoff
   // carry, even before the next host turn is named.
@@ -2629,6 +2684,26 @@ function useChatTileSessionViewModel(
     { ...state, queueTurnContinuity: false },
     activeTurnStatus,
   );
+  // A parked message reads as any send on its way. Handing it to the session
+  // swaps this row for the store's own in one commit.
+  const parkedEvictedSends = props.evictedSend?.parked;
+  const pendingUserMessages = useMemo(
+    () =>
+      parkedEvictedSends === undefined || parkedEvictedSends.length === 0
+        ? state.pendingUserMessages
+        : [
+            ...state.pendingUserMessages,
+            ...parkedEvictedSends
+              .filter(
+                (send) =>
+                  send.onOriginSignIn() &&
+                  send.row.sender.type === "user" &&
+                  send.row.sender.userId === profile?.userId,
+              )
+              .map((send) => send.row),
+          ],
+    [parkedEvictedSends, profile?.userId, state.pendingUserMessages],
+  );
   const renderedMessages = useRenderedMessages(
     {
       messages: state.messages,
@@ -2641,7 +2716,7 @@ function useChatTileSessionViewModel(
       // its own correction up by row id. See `adoptWholeLogIdentity`.
       setupCardWindows:
         state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
-      pendingUserMessages: state.pendingUserMessages,
+      pendingUserMessages,
       pendingTurn: state.pendingTurn,
       turnObservedAt: state.turnObservedAt,
       queuedPromptMessageIds: queuedPromptIds,
@@ -3246,6 +3321,10 @@ function useChatTileSessionViewModel(
       getDraftBlobBridgeSupported,
     });
 
+  const cloneChat = useCallback(() => {
+    forkAtAssistantMessage(null, "plain", null, FORK_ON_SOURCE_HOST);
+  }, [forkAtAssistantMessage]);
+
   // Switching hosts clones the chat from the latest checkpoint available to
   // the destination at submit time. Per-message forks still name an exact reply.
   const forkChatOnHost = useCallback(
@@ -3300,7 +3379,7 @@ function useChatTileSessionViewModel(
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly holders: readonly WorktreeBusyHolder[];
   } | null>(null);
-  const pendingSubmitRef = useRef<ArmedTeardownSubmit<GatedChatSend> | null>(
+  const pendingSubmitRef = useRef<ArmedTeardownSubmit<ArmedChatSend> | null>(
     null,
   );
   const [teardownOwnerId, setTeardownOwnerId] = useState(node.id);
@@ -3309,7 +3388,21 @@ function useChatTileSessionViewModel(
     setTeardownDialog(null);
   }
   useEffect(() => {
-    pendingSubmitRef.current = null;
+    // A send awaiting consent belongs to this mounted page and chat. Refuse
+    // it before either goes away, including a page retained in the back cache.
+    const cancelPending = (): void => {
+      pendingSubmitRef.current?.input.settle(false);
+      pendingSubmitRef.current = null;
+    };
+    const onPageHide = (): void => {
+      cancelPending();
+      setTeardownDialog(null);
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      cancelPending();
+    };
   }, [node.id]);
 
   const dispatchUserSend = useCallback(
@@ -3370,8 +3463,12 @@ function useChatTileSessionViewModel(
   // reopens one of two holes: a phantom disclosure on a no-op draft, or a
   // staged rebind committing silently.
   const submitThroughRebindGate = useCallback(
-    (send: GatedChatSend): boolean => {
+    (send: GatedChatSend): GatedChatSendOutcome => {
       const { submit, dispatch } = send;
+      const dispatched = (): GatedChatSendOutcome => ({
+        kind: "dispatched",
+        accepted: dispatch(submit),
+      });
       const stagedKey: WorktreeStagingKey = {
         surface: "owner",
         hostId: activeHostId,
@@ -3390,7 +3487,7 @@ function useChatTileSessionViewModel(
           removedWorkspacePaths: [],
         })
       ) {
-        return dispatch(submit);
+        return dispatched();
       }
       const snapshot = snapshotTeardownHolders(
         droppedRunDirectoriesFromDraft({
@@ -3407,15 +3504,27 @@ function useChatTileSessionViewModel(
         stopTargets: snapshot.stopTargets,
       };
       if (snapshot.holders.length > 0) {
+        // One armed send at a time: a second one arriving while the dialog
+        // asks about the first (a composer send whose image preparation
+        // finished after a next-step click armed it) would replace the send
+        // the dialog is about, and "Send and switch" would dispatch the
+        // wrong prompt. It is refused instead, so its text stays put.
+        if (pendingSubmitRef.current !== null) {
+          return { kind: "dispatched", accepted: false };
+        }
+        let settle: (accepted: boolean) => void = () => undefined;
+        const accepted = new Promise<boolean>((resolve) => {
+          settle = resolve;
+        });
         pendingSubmitRef.current = {
-          input: send,
+          input: { send, settle },
           capture,
           ownerId: node.id,
         };
         setTeardownDialog({ holders: snapshot.holders });
-        return false;
+        return { kind: "armed", accepted };
       }
-      return dispatch(submit);
+      return dispatched();
     },
     [
       activeHostId,
@@ -3431,9 +3540,110 @@ function useChatTileSessionViewModel(
     chatId: node.id,
     target: props.restingSandbox ?? null,
   });
+  // The ordinary road for a message on this session: the parked message of an
+  // evicted chat takes it too, once the session is the host's.
+  const submitLiveMessage = useCallback(
+    (
+      input: ChatComposerSubmitInput,
+      onDispatch: ((accepted: boolean) => void) | null,
+      onOriginSignIn: (() => boolean) | null,
+    ): boolean | Promise<boolean> => {
+      if (!canAct) return false;
+      // Armed behind the folder dialog, the composer gets the promise and
+      // clears its text only once "Send and switch" dispatches the send.
+      return submitThroughRebindGate({
+        submit: input,
+        dispatch: (message) => {
+          if (onOriginSignIn !== null && !onOriginSignIn()) return false;
+          const accepted = dispatchUserSend(message);
+          // Transfer custody and report at dispatch, before a consent promise
+          // continuation or the next parked send can run.
+          onDispatch?.(accepted);
+          void reportSentChatMessage(accepted, {
+            text: input.contentText,
+            epicId: currentEpicId,
+            hostId: activeHostId,
+          });
+          return accepted;
+        },
+        refusal:
+          onOriginSignIn === null
+            ? NO_LIVE_SEND_REFUSAL
+            : () => (onOriginSignIn() ? null : EVICTED_SEND_FAILED_MESSAGE),
+      }).accepted;
+    },
+    [
+      canAct,
+      dispatchUserSend,
+      submitThroughRebindGate,
+      currentEpicId,
+      activeHostId,
+    ],
+  );
+  const evictedSend = props.evictedSend ?? null;
+  const isAtRest =
+    props.restingSandbox !== undefined || evictedSend?.served === true;
+  const cloudChatClient = useOptionalHostClient();
+  const atRestCloudChats = useCloudChatList({
+    client: cloudChatClient,
+    taskId: currentEpicId,
+    enabled: isAtRest,
+  });
+  const environmentChatRows = useEnvironmentArmChats(
+    isAtRest ? currentEpicId : "",
+  );
+  const cloudChat = useMemo(() => {
+    const namesThisChat = (chat: CloudChatSummary): boolean =>
+      chat.identity.taskId === currentEpicId &&
+      chat.identity.chatId === node.id &&
+      chat.identity.ownerUserId === state.chat?.userId &&
+      chat.ownerHostId === activeHostId;
+    if (props.cloudChat !== undefined && namesThisChat(props.cloudChat)) {
+      return props.cloudChat;
+    }
+    const viewerRow = atRestCloudChats.data?.chats.find(namesThisChat);
+    if (viewerRow?.creatorUserId !== undefined) return viewerRow;
+    return environmentChatRows.find(namesThisChat) ?? viewerRow;
+  }, [
+    activeHostId,
+    atRestCloudChats.data,
+    currentEpicId,
+    environmentChatRows,
+    node.id,
+    props.cloudChat,
+    state.chat?.userId,
+  ]);
+  const recordedStarter = useEpicChatStarter(
+    currentEpicId,
+    state.chat?.userId ?? null,
+    node.id,
+  );
+  const teamEnvironments = useEnvironmentListQuery(isAtRest);
+  // This only chooses local capture while the read-only pool serves the chat.
+  // The host's fresh access verdict still decides whether a captured send goes.
+  const heldCreatorMatchesViewer =
+    teamEnvironments.data?.environments.some(
+      (environment) =>
+        environment.ownerKind === "organization" &&
+        environment.environmentId === state.chat?.userId,
+    ) === true &&
+    recordedStarter !== null &&
+    recordedStarter !== SYSTEM_ACTOR_ID &&
+    recordedStarter === profile?.userId;
+  const canParkCreatorMessage =
+    isAtRest &&
+    profile !== null &&
+    (cloudChat === undefined
+      ? heldCreatorMatchesViewer
+      : cloudChatBelongsToViewer(cloudChat, profile.userId));
   const submitMessage = useCallback(
-    (input: ChatComposerSubmitInput): boolean => {
+    (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
       if (profile === null) return false;
+      if (
+        handle.store.getState().access?.role !== "owner" &&
+        !canParkCreatorMessage
+      )
+        return false;
       if (activeEditingQueueItemId !== null) {
         if (!canAct) return false;
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
@@ -3467,26 +3677,76 @@ function useChatTileSessionViewModel(
       }
       if (props.restingSandbox !== undefined)
         return submitBoundSandboxMessage(input);
-      if (!canAct) return false;
-      return submitThroughRebindGate({
-        submit: input,
-        dispatch: dispatchUserSend,
-        refusal: NO_LIVE_SEND_REFUSAL,
-      });
+      if (evictedSend?.parks === true) {
+        return evictedSend.park(input, {
+          type: "user",
+          userId: profile.userId,
+        });
+      }
+      return submitLiveMessage(input, null, null);
     },
     [
       activeEditingQueueItemId,
       props.restingSandbox,
       submitBoundSandboxMessage,
+      evictedSend,
+      submitLiveMessage,
       canAct,
       chatActions,
       dispatchUi,
-      dispatchUserSend,
       node.instanceId,
       profile,
-      submitThroughRebindGate,
+      handle.store,
+      canParkCreatorMessage,
     ],
   );
+  // A host snapshot, not the at-rest hint, decides whether locally captured messages go.
+  useEffect(() => {
+    if (evictedSend === null || !evictedSend.ready) return;
+    if (
+      evictedSend.served ||
+      !state.snapshotLoaded ||
+      state.connectionStatus !== "open" ||
+      handle.userId !== profile?.userId
+    )
+      return;
+    if (!canAct) {
+      if (state.access?.role !== "viewer") return;
+      for (;;) {
+        const refused = evictedSend.take().at(0);
+        if (refused === undefined) break;
+        evictedSend.settle(refused, false);
+      }
+      return;
+    }
+    for (;;) {
+      const send = evictedSend.take().at(0);
+      if (send === undefined) break;
+      const accepted = submitLiveMessage(
+        send.input,
+        (result) => evictedSend.settle(send, result),
+        send.onOriginSignIn,
+      );
+      if (typeof accepted === "boolean") {
+        evictedSend.settle(send, accepted);
+      } else {
+        // Consent owns this send until it settles. Later messages stay parked;
+        // settlement schedules the next pass without retaining a stale batch.
+        void accepted.then((result) => evictedSend.settle(send, result));
+        break;
+      }
+    }
+  }, [
+    evictedSend,
+    canAct,
+    submitLiveMessage,
+    handle.userId,
+    profile?.userId,
+    state.snapshotLoaded,
+    state.connectionStatus,
+    state.access?.role,
+  ]);
+  useEvictedSendAckRefusals(handle, evictedSend?.refuse ?? null);
   // `/btw` / `/side`: fork this chat and ask there. The tile contributes what
   // only it knows about its own chat - owner, title, lineage, workspace, pane -
   // and `startSideChat` owns the create, its recovery, and the open. Deliberately
@@ -3620,7 +3880,9 @@ function useChatTileSessionViewModel(
         plainTextPromptContent(option.prompt),
         slashCatalog,
       );
-      return submitThroughRebindGate({
+      // An armed send is not yet a send: the click reports as not sent and
+      // the dialog's confirm dispatches it.
+      const outcome = submitThroughRebindGate({
         submit: {
           content,
           contentText: option.prompt,
@@ -3633,6 +3895,7 @@ function useChatTileSessionViewModel(
         dispatch: dispatchUserSend,
         refusal: nextStepSendRefusal,
       });
+      return outcome.kind === "dispatched" && outcome.accepted;
     },
     [
       canSendNextStep,
@@ -3780,7 +4043,7 @@ function useChatTileSessionViewModel(
       plainTextPromptContent("Implement the plan above."),
       slashCatalog,
     );
-    return submitThroughRebindGate({
+    const outcome = submitThroughRebindGate({
       submit: {
         content,
         contentText: "Implement the plan above.",
@@ -3793,6 +4056,7 @@ function useChatTileSessionViewModel(
       dispatch: dispatchUserSend,
       refusal: nextStepSendRefusal,
     });
+    return outcome.kind === "dispatched" && outcome.accepted;
   }, [
     canSendNextStep,
     dispatchUserSend,
@@ -3985,17 +4249,20 @@ function useChatTileSessionViewModel(
   const lowerAccess = useMemo(
     () => ({
       isCopy,
-      isViewer: accessFlags.isViewer,
+      isViewer: accessFlags.isViewer && !canParkCreatorMessage,
       canAct,
       readOnlyNotice: props.readOnlyNotice,
       restingSandbox: props.restingSandbox,
+      parksEvictedSend: evictedSend?.parks,
     }),
     [
       isCopy,
       accessFlags.isViewer,
+      canParkCreatorMessage,
       canAct,
       props.readOnlyNotice,
       props.restingSandbox,
+      evictedSend?.parks,
     ],
   );
 
@@ -4232,10 +4499,12 @@ function useChatTileSessionViewModel(
       nodeId: node.id,
       isActive,
       mentionRoots: composerMentionRoots,
+      runWorkingDirectory: composerRunWorkingDirectory,
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       onSubmitMessage: submitMessage,
       onSideChat: startSideChatFromComposer,
+      onClone: cloneChat,
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -4252,10 +4521,12 @@ function useChatTileSessionViewModel(
       node.id,
       isActive,
       composerMentionRoots,
+      composerRunWorkingDirectory,
       isFolderlessWorkspace,
       currentEpicId,
       submitMessage,
       startSideChatFromComposer,
+      cloneChat,
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -4386,7 +4657,8 @@ function useChatTileSessionViewModel(
         // taking the armed submit so a refusal keeps the dialog and its
         // armed send (and the staged draft — consent was for a send that
         // did not happen), matching the access refusals above.
-        const armedRefusal = pendingSubmitRef.current?.input.refusal() ?? null;
+        const armedRefusal =
+          pendingSubmitRef.current?.input.send.refusal() ?? null;
         if (armedRefusal !== null) {
           toast(armedRefusal);
           return;
@@ -4394,6 +4666,7 @@ function useChatTileSessionViewModel(
         const armed = takeArmedTeardownSubmit(pendingSubmitRef);
         if (armed === null) return;
         if (armed.ownerId !== node.id) {
+          armed.input.settle(false);
           setTeardownDialog(null);
           return;
         }
@@ -4440,9 +4713,12 @@ function useChatTileSessionViewModel(
           return;
         }
         setTeardownDialog(null);
-        armed.input.dispatch(armed.input.submit);
+        // Settled with the dispatch's own answer: a send the store refused is
+        // reported as not sent, so the composer keeps its text for it.
+        armed.input.settle(armed.input.send.dispatch(armed.input.send.submit));
       },
       onDismiss: () => {
+        pendingSubmitRef.current?.input.settle(false);
         pendingSubmitRef.current = null;
         setTeardownDialog(null);
       },
@@ -4606,6 +4882,7 @@ export function ChatSessionMessagesSurface(
                 taskId={props.node.id}
                 epicId={props.epicId}
                 hostId={props.tabHostId}
+                payerHostId={props.tabHostId}
                 messages={props.messages}
                 transcriptWindow={props.transcriptWindow}
                 onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
@@ -4616,6 +4893,7 @@ export function ChatSessionMessagesSurface(
                 backgroundItems={props.backgroundItems}
                 scrollRequest={props.scrollRequest}
                 onScrollRequestSettled={props.onScrollRequestSettled}
+                onReaderMoved={null}
                 getMessageActions={props.getMessageActions}
                 nextStepActions={props.nextStepActions}
                 instanceId={props.node.instanceId}

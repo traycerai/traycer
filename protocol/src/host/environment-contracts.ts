@@ -1,5 +1,7 @@
 import { defineRpcContract, defineUpgradePath } from "../framework/index";
 import * as schemas from "./environment-schemas";
+import { environmentProposalsV10 } from "./environment/settings-proposals";
+import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
 
 /**
  * The environment methods: every one a NEW name, introduced at `@1.0`, off
@@ -11,20 +13,18 @@ import * as schemas from "./environment-schemas";
  * optional manifest and the GUI meets `E_HOST_UNSUPPORTED`. Shapes:
  * `environment-schemas.ts`.
  *
- * Which carry the executable-write grant: `config.env.localOverride.set`,
- * `environment.agentDefinitions.put`, `environment.setup.put` and
- * `environment.undo`, the writes that reach an execution sink.
- * `environment.setup.retry` reruns content already authorised, and Review's
- * Apply goes through the dashboard, so neither takes one here.
+ * No method here carries an executable-write grant.
  *
  * `@1.1` MINORs, each with its upgrade from `@1.0`: every
  * `environment.secrets.*` request names the environment it addresses (null
  * for the host's own) and `versions` answers a secret's removal;
  * `environment.status` answers the move's consent and planes;
- * `environment.review` answers the retrospective sheet's record;
- * `providers.link` and `providers.linkComplete` name the environment whose
- * plan they link. Neither
- * line has shipped, so none is a MAJOR.
+ * `environment.review` answers the retrospective sheet's record. Each is a
+ * MINOR because every addition is additive and an
+ * older peer is served directly: both lines HAVE shipped - `cli-v1.5.2` and
+ * `cli-v1.5.3` carry them - so a removal here would need a MAJOR, which is
+ * why the fields those releases require are filled from
+ * `host/released-wire-rows.ts` rather than dropped.
  */
 export const environmentSecretsListV10 = defineRpcContract({
   method: "environment.secrets.list",
@@ -57,7 +57,12 @@ export const environmentSecretsListV12 = defineRpcContract({
   responseSchema: schemas.environmentSecretsListResponseSchemaV12,
 });
 
-/** A `@1.1` host names no variables: its rows set the secret under none. */
+/**
+ * A `@1.1` host names no variables: its rows set the secret under none. It
+ * names no provider variable either, and no host does any more
+ * (`RETIRED_PROVIDER_VARIABLES`), so the key is the empty list rather than a
+ * guess about what that host held.
+ */
 export const environmentSecretsListUpgradeV11ToV12 = defineUpgradePath<
   typeof environmentSecretsListV11,
   typeof environmentSecretsListV12
@@ -70,7 +75,7 @@ export const environmentSecretsListUpgradeV11ToV12 = defineUpgradePath<
     secrets: response.secrets.map((secret) => ({
       ...secret,
       variables: [],
-      providerVariables: [],
+      providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     })),
     removed: response.removed.map((removed) => ({
       ...removed,
@@ -209,6 +214,94 @@ export const environmentStatusUpgradeV10ToV11 = defineUpgradePath<
     returnedFromTeam: null,
     stoppedAt: null,
   }),
+});
+
+export const environmentStatusV12 = defineRpcContract({
+  method: "environment.status",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: schemas.environmentStatusRequestSchema,
+  responseSchema: schemas.environmentStatusResponseSchemaV12,
+});
+
+export const environmentStatusUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentStatusV11,
+  typeof environmentStatusV12
+>({
+  from: environmentStatusV11.schemaVersion,
+  to: environmentStatusV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, acceptedUploads: [] }),
+});
+
+/** `@1.2`'s answer with the move attempt's outcome, `move`. */
+export const environmentStatusV13 = defineRpcContract({
+  method: "environment.status",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: schemas.environmentStatusRequestSchema,
+  responseSchema: schemas.environmentStatusResponseSchemaV13,
+});
+
+export const environmentStatusUpgradeV12ToV13 = defineUpgradePath<
+  typeof environmentStatusV12,
+  typeof environmentStatusV13
+>({
+  from: environmentStatusV12.schemaVersion,
+  to: environmentStatusV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, move: null }),
+});
+
+/** `host.remoteAccess.set@1.0`: On and Off, through the host. */
+export const hostRemoteAccessSetV10 = defineRpcContract({
+  method: "host.remoteAccess.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.hostRemoteAccessSetRequestSchema,
+  responseSchema: schemas.hostRemoteAccessSetResponseSchema,
+});
+
+/**
+ * `host.remoteAccess.set@2.0`, Off only; `@1.0` stays registered beside it.
+ * Not an agent capability.
+ */
+export const hostRemoteAccessSetV20 = defineRpcContract({
+  method: "host.remoteAccess.set",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: schemas.hostRemoteAccessSetRequestSchemaV20,
+  responseSchema: schemas.hostRemoteAccessSetResponseSchemaV20,
+});
+
+/**
+ * Never run: `@2.0` has no downgrade, so a host refuses a `@1.0` caller and an app
+ * meets a `@1.0`-only host as unsupported.
+ */
+export const hostRemoteAccessSetUpgradeV10ToV20 = defineUpgradePath<
+  typeof hostRemoteAccessSetV10,
+  typeof hostRemoteAccessSetV20
+>({
+  from: hostRemoteAccessSetV10.schemaVersion,
+  to: hostRemoteAccessSetV20.schemaVersion,
+  upgradeRequest: () => {
+    throw new Error(
+      "host.remoteAccess.set v1.0 requests cannot be upgraded to v2.0: v2.0 only turns remote access off",
+    );
+  },
+  upgradeResponse: () => {
+    throw new Error(
+      "host.remoteAccess.set v1.0 responses cannot be upgraded to v2.0: v1.0's state is not v2.0's off",
+    );
+  },
+});
+
+/**
+ * Reads this computer's own row now and answers once that read ends, with no result
+ * and no refusals. Any admitted person may call it. Off the released floor with
+ * `unsupported`, so an older host keeps its two-minute interval.
+ */
+export const hostStatusRefreshV10 = defineRpcContract({
+  method: "host.status.refresh",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.hostStatusRefreshRequestSchema,
+  responseSchema: schemas.hostStatusRefreshResponseSchema,
 });
 
 export const environmentReviewV10 = defineRpcContract({
@@ -363,89 +456,74 @@ export const environmentSecretsConsentUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const providersLinkV10 = defineRpcContract({
-  method: "providers.link",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: schemas.providersLinkRequestSchema,
-  responseSchema: schemas.providersLinkResponseSchema,
+export const environmentAgentDefinitionsPutV10 = defineRpcContract({
+  method: "environment.agentDefinitions.put",
+  schemaVersion: { major: 1, minor: 0 },
+  requestSchema: schemas.environmentAgentDefinitionsPutRequestSchema,
+  responseSchema: schemas.environmentWriteOutcomeSchema,
 });
-
-export const providersLinkV11 = defineRpcContract({
-  method: "providers.link",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: schemas.providersLinkRequestSchemaV11,
-  responseSchema: schemas.providersLinkResponseSchema,
+export const environmentAgentDefinitionsPutV11 = defineRpcContract({
+  method: "environment.agentDefinitions.put",
+  schemaVersion: { major: 1, minor: 1 },
+  requestSchema: schemas.environmentAgentDefinitionsPutRequestSchema,
+  responseSchema: schemas.environmentLocalWriteOutcomeSchema,
 });
-
-export const providersLinkUpgradeV10ToV11 = defineUpgradePath<
-  typeof providersLinkV10,
-  typeof providersLinkV11
+export const environmentAgentDefinitionsPutUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentAgentDefinitionsPutV10,
+  typeof environmentAgentDefinitionsPutV11
 >({
-  from: providersLinkV10.schemaVersion,
-  to: providersLinkV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, environmentId: null }),
+  from: environmentAgentDefinitionsPutV10.schemaVersion,
+  to: environmentAgentDefinitionsPutV11.schemaVersion,
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
-export const providersLinkCompleteV10 = defineRpcContract({
-  method: "providers.linkComplete",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: schemas.providersLinkCompleteRequestSchema,
-  responseSchema: schemas.providersLinkCompleteResponseSchema,
+export const environmentAgentDefinitionsDeleteV10 = defineRpcContract({
+  method: "environment.agentDefinitions.delete",
+  schemaVersion: { major: 1, minor: 0 },
+  requestSchema: schemas.environmentAgentDefinitionsDeleteRequestSchema,
+  responseSchema: schemas.environmentWriteOutcomeSchema,
 });
-
-export const providersLinkCompleteV11 = defineRpcContract({
-  method: "providers.linkComplete",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: schemas.providersLinkCompleteRequestSchemaV11,
-  responseSchema: schemas.providersLinkCompleteResponseSchema,
+export const environmentAgentDefinitionsDeleteV11 = defineRpcContract({
+  method: "environment.agentDefinitions.delete",
+  schemaVersion: { major: 1, minor: 1 },
+  requestSchema: schemas.environmentAgentDefinitionsDeleteRequestSchema,
+  responseSchema: schemas.environmentLocalWriteOutcomeSchema,
 });
+export const environmentAgentDefinitionsDeleteUpgradeV10ToV11 =
+  defineUpgradePath<
+    typeof environmentAgentDefinitionsDeleteV10,
+    typeof environmentAgentDefinitionsDeleteV11
+  >({
+    from: environmentAgentDefinitionsDeleteV10.schemaVersion,
+    to: environmentAgentDefinitionsDeleteV11.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
 
-export const providersLinkCompleteUpgradeV10ToV11 = defineUpgradePath<
-  typeof providersLinkCompleteV10,
-  typeof providersLinkCompleteV11
+export const environmentSetupPutV10 = defineRpcContract({
+  method: "environment.setup.put",
+  schemaVersion: { major: 1, minor: 0 },
+  requestSchema: schemas.environmentSetupPutRequestSchema,
+  responseSchema: schemas.environmentWriteOutcomeSchema,
+});
+export const environmentSetupPutV11 = defineRpcContract({
+  method: "environment.setup.put",
+  schemaVersion: { major: 1, minor: 1 },
+  requestSchema: schemas.environmentSetupPutRequestSchema,
+  responseSchema: schemas.environmentLocalWriteOutcomeSchema,
+});
+export const environmentSetupPutUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentSetupPutV10,
+  typeof environmentSetupPutV11
 >({
-  from: providersLinkCompleteV10.schemaVersion,
-  to: providersLinkCompleteV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, environmentId: null }),
+  from: environmentSetupPutV10.schemaVersion,
+  to: environmentSetupPutV11.schemaVersion,
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
 export const ENVIRONMENT_RPC_METHODS = {
-  "providers.link": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: providersLinkV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: providersLinkV11,
-          upgradeFromPreviousVersion: providersLinkUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "providers.linkComplete": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: providersLinkCompleteV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: providersLinkCompleteV11,
-          upgradeFromPreviousVersion: providersLinkCompleteUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "config.env.localOverride.set": {
     degrade: { kind: "unsupported" },
     1: {
@@ -494,6 +572,19 @@ export const ENVIRONMENT_RPC_METHODS = {
             requestSchema: schemas.environmentLocalOverridesRequestSchema,
             responseSchema: schemas.environmentLocalOverridesResponseSchema,
           }),
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.proposals": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentProposalsV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -683,16 +774,17 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.agentDefinitions.put": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "environment.agentDefinitions.put",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.environmentAgentDefinitionsPutRequestSchema,
-            responseSchema: schemas.environmentWriteOutcomeSchema,
-          }),
+          contract: environmentAgentDefinitionsPutV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentAgentDefinitionsPutV11,
+          upgradeFromPreviousVersion:
+            environmentAgentDefinitionsPutUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -701,17 +793,17 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.agentDefinitions.delete": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "environment.agentDefinitions.delete",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema:
-              schemas.environmentAgentDefinitionsDeleteRequestSchema,
-            responseSchema: schemas.environmentWriteOutcomeSchema,
-          }),
+          contract: environmentAgentDefinitionsDeleteV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentAgentDefinitionsDeleteV11,
+          upgradeFromPreviousVersion:
+            environmentAgentDefinitionsDeleteUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -738,16 +830,16 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.setup.put": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "environment.setup.put",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.environmentSetupPutRequestSchema,
-            responseSchema: schemas.environmentWriteOutcomeSchema,
-          }),
+          contract: environmentSetupPutV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentSetupPutV11,
+          upgradeFromPreviousVersion: environmentSetupPutUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -810,7 +902,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 3,
       versions: {
         0: {
           contract: environmentStatusV10,
@@ -819,6 +911,14 @@ export const ENVIRONMENT_RPC_METHODS = {
         1: {
           contract: environmentStatusV11,
           upgradeFromPreviousVersion: environmentStatusUpgradeV10ToV11,
+        },
+        2: {
+          contract: environmentStatusV12,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV11ToV12,
+        },
+        3: {
+          contract: environmentStatusV13,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -887,12 +987,30 @@ export const ENVIRONMENT_RPC_METHODS = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "host.remoteAccess.set",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.hostRemoteAccessSetRequestSchema,
-            responseSchema: schemas.hostRemoteAccessSetResponseSchema,
-          }),
+          contract: hostRemoteAccessSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostRemoteAccessSetV20,
+          upgradeFromPreviousVersion: hostRemoteAccessSetUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.status.refresh": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostStatusRefreshV10,
           upgradeFromPreviousVersion: null,
         },
       },

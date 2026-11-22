@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -13,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DataRootResolution } from "@traycer/protocol/config/data-root";
+import type { BundledHostDescriptor } from "../bundled-descriptor";
 
 type Environment = "dev" | "production";
 
@@ -68,7 +70,18 @@ const mocks = vi.hoisted(() => ({
   assertStoreFormatFloorAfterStopMock: vi.fn(),
   observeSwapQuiescenceMock: vi.fn(),
   serviceManagerMayRespawnMock: vi.fn(),
+  verifyBundledHostArchiveMock: vi.fn(),
 }));
+
+vi.mock("../bundled-descriptor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../bundled-descriptor")>();
+  return {
+    ...actual,
+    verifyBundledHostArchive: async (
+      ...callArgs: Parameters<typeof mocks.verifyBundledHostArchiveMock>
+    ) => mocks.verifyBundledHostArchiveMock(...callArgs),
+  };
+});
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -320,6 +333,7 @@ import type {
 } from "../../registry";
 import {
   ungatedStoreFormatFloorEvidence,
+  storeFloorTargetIdentity,
   type TargetRegistryEntry,
 } from "../../host/store-format-floor";
 import { EPIC_STATE_DIRNAME } from "../../host/chat-store-survey";
@@ -1596,6 +1610,87 @@ describe("stageHostInstallSource", () => {
 
   afterEach(() => {
     rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  function makeBundledArchive(runtimeVersion: string): {
+    readonly archivePath: string;
+    readonly descriptor: BundledHostDescriptor;
+  } {
+    const sourceDir = join(sandboxRoot, `bundled-runtime-${runtimeVersion}`);
+    writeLocalHostSource(sourceDir, runtimeVersion);
+    writeFileSync(
+      join(sourceDir, "version.json"),
+      JSON.stringify({ version: runtimeVersion, storeFormats: { chatDb: 22 } }),
+    );
+    const archivePath = join(
+      sandboxRoot,
+      `host-runtime-${runtimeVersion}.tar.gz`,
+    );
+    execFileSync("tar", ["-czf", archivePath, "-C", sourceDir, "."]);
+    const descriptor = {
+      version: runtimeVersion,
+      platformKey: currentHostPlatformKey(),
+      sha256: "a".repeat(64),
+      sizeBytes: 1,
+      publicKeyId: "0123456789abcdef",
+      requiredCliVersion: null,
+      minimumEpoch: 2,
+      storeFormats: { chatDb: 22 },
+      canonicalUrl: `https://releases.example.invalid/host/${runtimeVersion}/runtime.tar.gz`,
+    };
+    mocks.verifyBundledHostArchiveMock.mockResolvedValue({
+      archiveSha256: "a".repeat(64),
+      signatureKeyId: "0123456789abcdef",
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+    });
+    return { archivePath, descriptor };
+  }
+
+  it("refuses a signed bundle whose extracted runtime version differs from its descriptor", async () => {
+    const { archivePath, descriptor } = makeBundledArchive("1.5.2");
+    const mismatchedDescriptor = { ...descriptor, version: "1.5.3" };
+
+    await expect(
+      stageHostInstallSource({
+        environment: ENV,
+        source: {
+          kind: "bundled",
+          path: archivePath,
+          descriptor: mismatchedDescriptor,
+        },
+        onProgress: () => undefined,
+        recordVersionOverride: null,
+      }),
+    ).rejects.toMatchObject({
+      code: "E_HOST_VERIFY_FAILED",
+      message: expect.stringContaining(
+        "extracted runtime version does not match the signed descriptor",
+      ),
+    });
+  });
+
+  it("persists an accepted bundled install with registry provenance at the descriptor version", async () => {
+    const { archivePath, descriptor } = makeBundledArchive("1.5.3");
+    const { record } = await installHost({
+      environment: ENV,
+      source: { kind: "bundled", path: archivePath, descriptor },
+      onProgress: () => undefined,
+      lifecycle: null,
+      recordVersionOverride: null,
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+    });
+    const persisted = await readHostInstallRecord(ENV);
+
+    expect(persisted).toEqual(record);
+    expect(persisted).toMatchObject({
+      version: "1.5.3",
+      runtimeVersion: "1.5.3",
+      source: { kind: "registry", value: "1.5.3" },
+      signatureKeyId: "0123456789abcdef",
+    });
+    if (persisted === null)
+      throw new Error("expected persisted install record");
+    expect(storeFloorTargetIdentity(persisted, null)).toBe("registry-artifact");
   });
 
   it("blocks extraction until beforeExtract RESOLVES - the downgrade/private-source path, not only downloadAndStageHost", async () => {

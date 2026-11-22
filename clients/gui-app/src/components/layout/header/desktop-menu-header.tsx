@@ -47,6 +47,7 @@ export function DesktopMenuHeader(props: DesktopMenuHeaderProps): ReactNode {
     return (
       <div
         data-testid="app-title-band"
+        data-app-title-band-surface
         aria-hidden={active ? undefined : true}
         className={cn(
           "h-[var(--app-title-band-height)] md:bg-transparent md:after:hidden",

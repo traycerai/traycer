@@ -428,6 +428,16 @@ export const DRAFT_BLOB_MAX_BASE64_LENGTH =
   Math.ceil(DRAFT_BLOB_MAX_BYTES / 3) * 4;
 
 /**
+ * The decoded ceiling for one non-image file attachment, and its base64 length
+ * on the wire. 16 MiB is the cloud's per-blob cap, so a file this accepts can
+ * always be published as a chat blob; a larger one would need multipart
+ * publication, which does not exist.
+ */
+export const FILE_ATTACHMENT_MAX_BYTES = 16 * 1024 * 1024;
+export const FILE_ATTACHMENT_MAX_BASE64_LENGTH =
+  Math.ceil(FILE_ATTACHMENT_MAX_BYTES / 3) * 4;
+
+/**
  * `drafts.putBlob@1.1` - the `@1.0` request with `bytesBase64` capped.
  *
  * A NEW INSTANCE, and `draftsPutBlobRequestSchema` stays pinned to
@@ -464,6 +474,69 @@ export const draftsPutBlobResponseSchema = lazySchema(() =>
   ]),
 );
 export type DraftsPutBlobResponse = z.infer<typeof draftsPutBlobResponseSchema>;
+
+/**
+ * `drafts.putBlob@1.2` - a put may say it is a FILE.
+ *
+ * ABSENT `kind` MEANS IMAGE, and the host must read it so. The image arm is the
+ * `@1.1` request with its cap unchanged and an optional `kind: "image"`. Every
+ * put before `@1.2` was an image, so an upgraded `@1.1` request and a `@1.2`
+ * image put that omits the tag both arrive untagged.
+ *
+ * `kind: "file"` is a non-image attachment, capped at
+ * {@link FILE_ATTACHMENT_MAX_BASE64_LENGTH} and carrying the name and media
+ * type its author's client declared. The message's `fileAttachment` node
+ * carries the same two values, and it is what every later reader uses: a
+ * download (`epic.readChatFile`) returns the bytes alone.
+ *
+ * A `file` put is only meaningful to a host that negotiated `>= 1.2`. Sent to an
+ * older host, it projects through that line's stripping schema and loses
+ * `kind`, `fileName` and `mediaType`: it is then refused or stored as an image
+ * blob, by its size and that line's cap. A client gates the file route on the
+ * negotiated minor, not on the response.
+ */
+export const draftsPutBlobRequestSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("image").optional(),
+      sha256: draftBlobSha256Schema,
+      /** Base64 of the RAW bytes — what `sha256` is over. */
+      bytesBase64: z.string().max(DRAFT_BLOB_MAX_BASE64_LENGTH),
+    }),
+    z.object({
+      kind: z.literal("file"),
+      sha256: draftBlobSha256Schema,
+      /** Base64 of the RAW bytes — what `sha256` is over. */
+      bytesBase64: z.string().max(FILE_ATTACHMENT_MAX_BASE64_LENGTH),
+      fileName: z.string().min(1),
+      mediaType: z.string().min(1),
+    }),
+  ]),
+);
+export type DraftsPutBlobRequestV12 = z.infer<
+  typeof draftsPutBlobRequestSchemaV12
+>;
+
+/**
+ * `@1.2` success may carry `path`: the absolute path on the host's disk a
+ * stored `file` was written to. Present for a stored file and absent for an
+ * image, which is never materialized as a file.
+ */
+export const draftsPutBlobResponseSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    z.object({
+      ok: z.literal(true),
+      path: z.string().min(1).optional(),
+    }),
+    z.object({
+      ok: z.literal(false),
+      reason: z.literal("digest-mismatch"),
+    }),
+  ]),
+);
+export type DraftsPutBlobResponseV12 = z.infer<
+  typeof draftsPutBlobResponseSchemaV12
+>;
 
 /**
  * Read one blob a draft's `blobHashes` names. The second-device path:

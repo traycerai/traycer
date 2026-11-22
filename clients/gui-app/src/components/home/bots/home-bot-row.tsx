@@ -1,12 +1,12 @@
 import { useMemo, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Bot } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { Badge } from "@/components/ui/badge";
+import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
+import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
 import { botWorkingOf, liveActivityOf } from "@/hooks/bots/use-bot-activity";
 import {
   buildHomeBotRow,
@@ -43,8 +43,9 @@ const STATE_BADGE_VARIANTS = {
 } as const satisfies Record<HomeBotState, "success" | "muted" | "warning">;
 
 /**
- * One bot on Home. The row subscribes to its own `bot.subscribe` through the
- * app-wide host and renders whatever the snapshot says as it arrives: the
+ * One bot on Home. The row subscribes to its own `bot.subscribe` through
+ * this window's host, on the stream an open tab of the same bot there
+ * already holds, and renders whatever the snapshot says as it arrives: the
  * title, its state, the tasks it spun and still runs, and the
  * open-request HINT. The hint is shown only when it is above zero, because
  * the conversation's rows, not this number, decide what is open.
@@ -80,7 +81,7 @@ export function HomeBotRow(props: {
     isMain,
   } = props;
   const hostId = useEffectiveHostId();
-  const subscription = useBotSubscription({
+  const subscription = useBotSubscriptionForHost({
     hostId,
     botId: bot.botId,
     enabled: hostId !== null,
@@ -113,8 +114,8 @@ export function HomeBotRow(props: {
       className="group flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       onClick={() => openTab?.(row.botId)}
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6 text-muted-foreground">
-        <Bot className="size-4" aria-hidden="true" />
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6">
+        <NamedBotAvatar botId={row.botId} size="sm" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-2">
@@ -176,8 +177,8 @@ export function HomeSetupBotRow(props: {
       className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       onClick={() => openTab?.(setup.botId)}
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6 text-muted-foreground">
-        <Bot className="size-4" aria-hidden="true" />
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6">
+        <NamedBotAvatar botId={setup.botId} size="sm" />
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span className="truncate text-ui-sm text-foreground">

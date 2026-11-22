@@ -4,11 +4,18 @@ import {
   createEpicRequestSchemaV14,
   createEpicRequestSchemaV15,
   updateChatRunSettingsRequestSchemaV12,
+  updateChatRunSettingsRequestSchemaV13,
 } from "./unary-schemas";
 import {
   getChatRunSettingsResponseSchemaV41,
+  getChatRunSettingsResponseSchemaV42,
   getChatRunSettingsBatchResponseSchemaV21,
+  getChatRunSettingsBatchResponseSchemaV22,
 } from "./chat-records";
+import {
+  hydrateChatRequestSchema,
+  hydrateChatResponseSchema,
+} from "./chat-hydration";
 import {
   defineDowngradePath,
   defineRpcContract,
@@ -91,6 +98,7 @@ import {
   getTaskContextsResponseSchemaPre13,
   isFoundTaskContext,
   listTasksRequestSchema,
+  listTasksRequestSchemaPre110,
   listTasksRequestSchemaPre16,
   listTasksRequestSchemaV11,
   listTasksRequestSchemaPre13,
@@ -172,16 +180,20 @@ import {
   listTaskHostsResponseSchema,
 } from "@traycer/protocol/host/task-host-summary";
 import {
+  getChatTitleRequestSchema,
+  getChatTitleResponseSchema,
   listCloudChatPayloadsRequestSchema,
   listCloudChatPayloadsResponseSchema,
   listCloudChatsRequestSchema,
   listCloudChatsResponseSchema,
+  listCloudChatsResponseV10Schema,
   readCloudChatPartRequestSchema,
   readCloudChatPartResponseSchema,
   readCloudChatPayloadRequestSchema,
   readCloudChatPayloadResponseSchema,
   resolveCloudChatHeadRequestSchema,
   resolveCloudChatHeadResponseSchema,
+  resolveCloudChatHeadResponseV10Schema,
   setChatSharingDefaultRequestSchema,
   setChatSharingDefaultResponseSchema,
   setCloudChatVisibilityRequestSchema,
@@ -207,6 +219,8 @@ import {
   listChatRecordsResponseV11Schema,
   listChatRecordsResponseV12Schema,
   listChatRecordsResponseV13Schema,
+  listChatRecordsResponseV14Schema,
+  listChatRecordsResponseV15Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -222,6 +236,10 @@ import {
   readChatAttachmentRequestSchemaPre11,
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
+import {
+  readChatFileRequestSchema,
+  readChatFileResponseSchema,
+} from "@traycer/protocol/host/epic/chat-file";
 import {
   artifactVersionsGetBlobRequestSchema,
   artifactVersionsGetBlobResponseSchema,
@@ -246,7 +264,9 @@ import {
 } from "@traycer/protocol/host/epic/artifact-attachment";
 import {
   attachEnvironmentRequestSchema,
+  attachEnvironmentRequestSchemaV20,
   attachEnvironmentResponseSchema,
+  attachEnvironmentResponseSchemaV20,
 } from "@traycer/protocol/host/epic/environment-attachment";
 import {
   localHistoryReadRequestSchema,
@@ -401,7 +421,7 @@ export const epicListTasksUpgradeV14ToV15 = defineUpgradePath<
 export const epicListTasksV16 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 6 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaPre110,
   responseSchema: listTasksResponseSchemaPre17,
 });
 
@@ -423,7 +443,7 @@ export const epicListTasksUpgradeV15ToV16 = defineUpgradePath<
 export const epicListTasksV17 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 7 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaPre110,
   responseSchema: listTasksResponseSchemaPre18,
 });
 
@@ -441,7 +461,7 @@ export const epicListTasksUpgradeV16ToV17 = defineUpgradePath<
 export const epicListTasksV18 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 8 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaPre110,
   responseSchema: listTasksResponseSchemaPre19,
 });
 
@@ -461,7 +481,7 @@ export const epicListTasksUpgradeV17ToV18 = defineUpgradePath<
 export const epicListTasksV19 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 9 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaPre110,
   responseSchema: listTasksResponseSchema,
 });
 
@@ -471,6 +491,26 @@ export const epicListTasksUpgradeV18ToV19 = defineUpgradePath<
 >({
   from: epicListTasksV18.schemaVersion,
   to: epicListTasksV19.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// `created-desc` is request value growth only. A 1.9 host would reject the
+// value at parse, so the client refuses to project it onto an older minor
+// (`DOWNGRADE_UNSUPPORTED`) and the History menu offers it only from 1.10.
+export const epicListTasksV110 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 10 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV19ToV110 = defineUpgradePath<
+  typeof epicListTasksV19,
+  typeof epicListTasksV110
+>({
+  from: epicListTasksV19.schemaVersion,
+  to: epicListTasksV110.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1289,6 +1329,39 @@ export const epicAttachEnvironmentV10 = defineRpcContract({
 });
 
 /**
+ * `epic.attachEnvironment@2.0`, the prepare without the cloud attachment;
+ * `@1.0` stays registered beside it. Not an agent capability.
+ */
+export const epicAttachEnvironmentV20 = defineRpcContract({
+  method: "epic.attachEnvironment",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: attachEnvironmentRequestSchemaV20,
+  responseSchema: attachEnvironmentResponseSchemaV20,
+});
+
+/**
+ * Never run: `@2.0` has no downgrade, so a host refuses a `@1.0` caller and an app
+ * meets a `@1.0`-only host as unsupported.
+ */
+export const epicAttachEnvironmentUpgradeV10ToV20 = defineUpgradePath<
+  typeof epicAttachEnvironmentV10,
+  typeof epicAttachEnvironmentV20
+>({
+  from: epicAttachEnvironmentV10.schemaVersion,
+  to: epicAttachEnvironmentV20.schemaVersion,
+  upgradeRequest: () => {
+    throw new Error(
+      "epic.attachEnvironment v1.0 requests cannot be upgraded to v2.0: v2.0 attaches nothing",
+    );
+  },
+  upgradeResponse: () => {
+    throw new Error(
+      "epic.attachEnvironment v1.0 responses cannot be upgraded to v2.0: v1.0's attached is not v2.0's prepared",
+    );
+  },
+});
+
+/**
  * Optional (non-floor): the host's local History contribution, read with no
  * cloud call. See `local-history.ts`.
  */
@@ -1783,14 +1856,58 @@ export const epicListCloudChatsV10 = defineRpcContract({
   method: "epic.listCloudChats",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listCloudChatsRequestSchema,
+  responseSchema: listCloudChatsResponseV10Schema,
+});
+
+export const epicListCloudChatsV11 = defineRpcContract({
+  method: "epic.listCloudChats",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listCloudChatsRequestSchema,
   responseSchema: listCloudChatsResponseSchema,
+});
+
+export const epicListCloudChatsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicListCloudChatsV10,
+  typeof epicListCloudChatsV11
+>({
+  from: epicListCloudChatsV10.schemaVersion,
+  to: epicListCloudChatsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicResolveCloudChatHeadV10 = defineRpcContract({
   method: "epic.resolveCloudChatHead",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveCloudChatHeadRequestSchema,
+  responseSchema: resolveCloudChatHeadResponseV10Schema,
+});
+
+export const epicResolveCloudChatHeadV11 = defineRpcContract({
+  method: "epic.resolveCloudChatHead",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: resolveCloudChatHeadRequestSchema,
   responseSchema: resolveCloudChatHeadResponseSchema,
+});
+
+export const epicResolveCloudChatHeadUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicResolveCloudChatHeadV10,
+  typeof epicResolveCloudChatHeadV11
+>({
+  from: epicResolveCloudChatHeadV10.schemaVersion,
+  to: epicResolveCloudChatHeadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// The title a reference to a chat is drawn with, read by task and chat id.
+// Its own optional method: a peer without it answers `E_HOST_UNSUPPORTED` and
+// the reference keeps the text it was written with.
+export const epicGetChatTitleV10 = defineRpcContract({
+  method: "epic.getChatTitle",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: getChatTitleRequestSchema,
+  responseSchema: getChatTitleResponseSchema,
 });
 
 export const epicReadCloudChatPartV10 = defineRpcContract({
@@ -1996,6 +2113,71 @@ export const epicListChatRecordsUpgradeV12ToV13 = defineUpgradePath<
   }),
 });
 
+// `@1.4` says on each row whether the serving host has dropped the chat's
+// records (`evicted`), so a client routes the chat's tile to the server pool
+// without a witness round trip. Request unchanged from `@1.3`; the row gains
+// one key, which an older peer's schema strips.
+export const epicListChatRecordsV14 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV14Schema,
+});
+
+/**
+ * REQUEST: the identity; `@1.4` takes `@1.3`'s request unchanged.
+ *
+ * RESPONSE, `evicted: false` on every snapshot row: a FACT about a `@1.3`
+ * host, which predates eviction and holds every chat it lists. The
+ * `unchanged` arm carries no rows and passes through.
+ */
+export const epicListChatRecordsUpgradeV13ToV14 = defineUpgradePath<
+  typeof epicListChatRecordsV13,
+  typeof epicListChatRecordsV14
+>({
+  from: epicListChatRecordsV13.schemaVersion,
+  to: epicListChatRecordsV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    response.kind === "unchanged"
+      ? response
+      : {
+          ...response,
+          chats: response.chats.map((row) => ({ ...row, evicted: false })),
+        },
+});
+
+// `@1.5` says on each row who started the chat (`starterUserId`). Request
+// unchanged from `@1.3`; the row gains one optional key, which an older peer's
+// schema strips.
+export const epicListChatRecordsV15 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV15Schema,
+});
+
+/** A `@1.4` host's rows carry no `starterUserId`, and absent is the honest answer for it. */
+export const epicListChatRecordsUpgradeV14ToV15 = defineUpgradePath<
+  typeof epicListChatRecordsV14,
+  typeof epicListChatRecordsV15
+>({
+  from: epicListChatRecordsV14.schemaVersion,
+  to: epicListChatRecordsV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Brings an evicted chat's records back onto its host before a message is
+// sent to it (`chat-hydration.ts`). Optional and off the released floor: a
+// host that predates it does not evict chats.
+export const epicHydrateChatV10 = defineRpcContract({
+  method: "epic.hydrateChat",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hydrateChatRequestSchema,
+  responseSchema: hydrateChatResponseSchema,
+});
+
 // One chat image attachment's bytes, resolved by the VIEWER's tab host (local
 // disk store first, cloud blob pass-through second). Optional and off the
 // released floor like every other read above it: a host that predates it
@@ -2020,6 +2202,17 @@ export const epicReadChatAttachmentV11 = defineRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: readChatAttachmentRequestSchema,
   responseSchema: readChatAttachmentResponseSchema,
+});
+
+// One chat FILE attachment's bytes, and nothing else: the referencing node
+// carries the name and media type. A sibling of the image read rather than a
+// minor of it, because that read's media type is sniffed and it refuses
+// non-images; see `chat-file.ts`.
+export const epicReadChatFileV10 = defineRpcContract({
+  method: "epic.readChatFile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readChatFileRequestSchema,
+  responseSchema: readChatFileResponseSchema,
 });
 
 // Host-local artifact history. Every method is optional/non-floor: a client
@@ -2567,11 +2760,58 @@ export const epicGetChatRunSettingsBatchUpgradeV20ToV21 = defineUpgradePath<
     getChatRunSettingsBatchResponseSchemaV21.parse(response),
 });
 
-export const epicGetChatRunSettingsDowngradeV41ToV30 = defineDowngradePath<
+/** Portable account provenance is absent on all earlier wire slots. */
+export const epicUpdateChatRunSettingsV13 = defineRpcContract({
+  method: "epic.updateChatRunSettings",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: updateChatRunSettingsRequestSchemaV13,
+  responseSchema: updateChatRunSettingsResponseSchema,
+});
+export const epicUpdateChatRunSettingsUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicUpdateChatRunSettingsV12,
+  typeof epicUpdateChatRunSettingsV13
+>({
+  from: epicUpdateChatRunSettingsV12.schemaVersion,
+  to: epicUpdateChatRunSettingsV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+export const epicGetChatRunSettingsV42 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 4, minor: 2 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
+  responseSchema: getChatRunSettingsResponseSchemaV42,
+});
+export const epicGetChatRunSettingsUpgradeV41ToV42 = defineUpgradePath<
   typeof epicGetChatRunSettingsV41,
+  typeof epicGetChatRunSettingsV42
+>({
+  from: epicGetChatRunSettingsV41.schemaVersion,
+  to: epicGetChatRunSettingsV42.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+export const epicGetChatRunSettingsBatchV22 = defineRpcContract({
+  method: "epic.getChatRunSettingsBatch",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: getChatRunSettingsBatchRequestSchema,
+  responseSchema: getChatRunSettingsBatchResponseSchemaV22,
+});
+export const epicGetChatRunSettingsBatchUpgradeV21ToV22 = defineUpgradePath<
+  typeof epicGetChatRunSettingsBatchV21,
+  typeof epicGetChatRunSettingsBatchV22
+>({
+  from: epicGetChatRunSettingsBatchV21.schemaVersion,
+  to: epicGetChatRunSettingsBatchV22.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicGetChatRunSettingsDowngradeV42ToV30 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV42,
   typeof epicGetChatRunSettingsV30
 >({
-  from: { major: 4, minor: 1 },
+  from: { major: 4, minor: 2 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -2592,11 +2832,11 @@ export const epicGetChatRunSettingsDowngradeV41ToV30 = defineDowngradePath<
   },
 });
 
-export const epicGetChatRunSettingsDowngradeV41ToV20 = defineDowngradePath<
-  typeof epicGetChatRunSettingsV41,
+export const epicGetChatRunSettingsDowngradeV42ToV20 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV42,
   typeof epicGetChatRunSettingsV20
 >({
-  from: { major: 4, minor: 1 },
+  from: { major: 4, minor: 2 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -2615,11 +2855,11 @@ export const epicGetChatRunSettingsDowngradeV41ToV20 = defineDowngradePath<
   },
 });
 
-export const epicGetChatRunSettingsDowngradeV41ToV10 = defineDowngradePath<
-  typeof epicGetChatRunSettingsV41,
+export const epicGetChatRunSettingsDowngradeV42ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV42,
   typeof epicGetChatRunSettingsV10
 >({
-  from: { major: 4, minor: 1 },
+  from: { major: 4, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -2638,11 +2878,11 @@ export const epicGetChatRunSettingsDowngradeV41ToV10 = defineDowngradePath<
   },
 });
 
-export const epicGetChatRunSettingsBatchDowngradeV21ToV10 = defineDowngradePath<
-  typeof epicGetChatRunSettingsBatchV21,
+export const epicGetChatRunSettingsBatchDowngradeV22ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsBatchV22,
   typeof epicGetChatRunSettingsBatchV10
 >({
-  from: { major: 2, minor: 1 },
+  from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Omits each entry the 1.0 line cannot represent and keeps the rest. The

@@ -1,0 +1,5 @@
+{
+  "payload": "{\"schemaVersion\":2,\"feed\":\"host\",\"target\":\"production\",\"policyRevision\":9,\"policyDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"generatedAt\":\"2026-11-08T00:00:00.000Z\",\"expiresAt\":\"2027-01-07T00:00:00.000Z\",\"latest\":\"1.2.3\",\"versions\":[]}\n",
+  "publicKey": "RWQQCsXDWXjpgZxb0NovFIrnc3wSY5GdUybS4bqRktKi4W5TXphENLR8",
+  "signature": "untrusted comment: signature from minisign secret key\nRUQQCsXDWXjpgQTHKWueleZQp2jhhwhpXYIOmRcBsVtHxrbBTjSbY8lpRTJuVb/hhpYdr66fLFyfA3wQ/J81Wlc0Otx1rjsYGQw=\ntrusted comment: timestamp:1794173204\tfile:payload\thashed\nu00PhIwNc7Zkl4sUZKD2XQNjFaTwE5x0TA1Z7L6mtN1r8bESxDQ89e9qjeXj464WmfaOIgswudp6h5zeAZ2BCw==\n"
+}

@@ -81,4 +81,5 @@ export const ONE_PERSONAL_MAIN_BOT_DIRECTORY: StandaloneBotsDirectory = {
 export const EMPTY_DIRECTORY_STATE = {
   directory: { model: EMPTY_HOME_BOTS_MODEL, setups: [] },
   settled: false,
+  botsListed: false,
 };

@@ -1,8 +1,13 @@
 import type { ReactNode } from "react";
 import { toast } from "sonner";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
-  sandboxSettingsSteps,
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  sandboxSupportReference,
+  type SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
+import {
+  sandboxSettingsEvidence,
+  sandboxSettingsFailed,
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
 import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
@@ -21,7 +26,13 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  SandboxOperationError,
+  sandboxFailureMessageFor,
+  type SandboxFailureReader,
+} from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useSampledNow } from "@/lib/relative-time";
@@ -32,6 +43,7 @@ import {
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   SANDBOX_LIST_FAILED,
+  sandboxCreditShortLine,
   sandboxVerbFailureLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -126,6 +138,35 @@ function withOperationFailure(
   };
 }
 
+/**
+ * While ownership is unknown, a credits refusal from any pot but the team's reads
+ * as it does for that reader, with no amount told as the person's own.
+ */
+function operationFailureMessage(
+  error: Error,
+  reader: SandboxFailureReader,
+  ownerKnown: boolean,
+): string {
+  if (!(error instanceof SandboxOperationError)) return error.message;
+  const { failure } = error;
+  if (
+    !ownerKnown &&
+    failure.kind === "refused" &&
+    failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&
+    failure.reason !== "unverified" &&
+    failure.reason !== "unsupported-subscription" &&
+    failure.creditSource !== "team"
+  ) {
+    return sandboxCreditShortLine(
+      null,
+      failure.creditSource ?? null,
+      failure.shortfallMc,
+      { waking: true, context: "sentence" },
+    );
+  }
+  return sandboxFailureMessageFor(failure, error.message, reader);
+}
+
 function SandboxDetailsSections(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
@@ -135,6 +176,8 @@ function SandboxDetailsSections(props: {
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const configurations = useSandboxConfigurations();
+  const configuration = sandboxConfigurationOf(summary, configurations);
+  const buysTeamCredits = useOffersAddCredits(configuration);
   const now = useSampledNow();
   const entry = sandboxDetailsEntry({
     summary,
@@ -145,10 +188,7 @@ function SandboxDetailsSections(props: {
     viewerUserId,
     // Personal only once every team answered: a team row from a server
     // that names no creator is never the viewer's.
-    personal:
-      configurations.complete &&
-      sandboxConfigurationOf(summary, configurations.configurations)?.kind ===
-        "personal",
+    personal: configurations.complete && configuration?.kind === "personal",
     now,
   });
   const clipboard = useClipboardCopy({
@@ -191,13 +231,21 @@ function SandboxDetailsSections(props: {
               data-testid="sandbox-details-operation-failure"
             >
               <p>
-                {sandboxVerbFailureLine(
-                  operation.verb,
-                  summary.displayName,
-                  operation.reference,
+                {sandboxVerbFailureLine(operation.verb, summary.displayName)}
+              </p>
+              <p>
+                {operationFailureMessage(
+                  operation.error,
+                  {
+                    buysTeamCredits,
+                    teamName:
+                      configuration?.kind === "team"
+                        ? configuration.teamName
+                        : null,
+                  },
+                  configuration !== null,
                 )}
               </p>
-              <p>{operation.error.message}</p>
               <p>{`Support reference: ${operation.reference}`}</p>
             </li>
           ) : null}
@@ -263,9 +311,19 @@ function SandboxSettingsDeliverySection(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
   const status = useSandboxSettingsStatus(props.summary).data;
-  if (status === undefined || props.summary.state !== "awake") return null;
-  const steps = sandboxSettingsStepsLine(sandboxSettingsSteps(status.items));
-  const unused = status.items.filter((item) => item.status === "not_used");
+  if (props.summary.state !== "awake") return null;
+  const items = status?.items ?? [];
+  const steps = sandboxSettingsStepsLine(
+    sandboxSettingsEvidence(items, props.summary.guestConfigured),
+  );
+  const unused = items.filter((item) => item.status === "not_used");
+  // The Support reference row above names a reference only for a mapped
+  // failure code; a settings failure without one is SBX-0520.
+  const reference =
+    (props.summary.guestConfigured === false || sandboxSettingsFailed(items)) &&
+    sandboxSupportReference(props.summary.failureCode) === null
+      ? "SBX-0520"
+      : null;
   if (steps.length === 0 && unused.length === 0) return null;
   return (
     <section
@@ -275,6 +333,11 @@ function SandboxSettingsDeliverySection(props: {
     >
       <h3 className="text-ui-sm font-medium">Settings delivery</h3>
       {steps.length === 0 ? null : <p className="text-ui-xs">{steps}</p>}
+      {reference === null ? null : (
+        <p className="text-ui-xs text-muted-foreground">
+          {`Support reference: ${reference}`}
+        </p>
+      )}
       {unused.length === 0 ? null : (
         <ul className="flex list-none flex-col gap-1 p-0 text-ui-xs text-muted-foreground">
           {unused.map((item) => (

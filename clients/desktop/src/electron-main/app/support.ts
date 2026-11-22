@@ -1,3 +1,4 @@
+import type { ProcessMetricsSnapshot } from "../../ipc-contracts/platform-types";
 import { app, shell } from "electron";
 import { randomUUID } from "node:crypto";
 import {
@@ -58,7 +59,11 @@ import {
   type FingerprintOccurrence,
 } from "./report-ledger";
 import { buildPublicDraftFields } from "./support-public-draft";
-import { deepScrubSupportValue, scrubSupportText } from "./support-scrubber";
+import {
+  deepScrubSupportValue,
+  scrubLogTail,
+  scrubSupportText,
+} from "@traycer/protocol/utils/text/support-scrub";
 import {
   earlierHostLogRecords,
   earlierHostLogSection,
@@ -1113,7 +1118,8 @@ function tailOfLines(
   // scrubber's regexes miss the remainder, and the byte budget itself must
   // measure what will actually ship (the scrubbed text), not the raw text -
   // ticket 09's "field bounds enforced after scrubbing, never before".
-  const scrubbed = scrubSupportText(tail);
+  // DEBUG entries are dropped here too: they may carry account ids.
+  const scrubbed = scrubLogTail(tail);
   const truncatedByByteCount = Buffer.byteLength(scrubbed, "utf8") > maxBytes;
   return {
     content: truncateToTrailingBytes(scrubbed, maxBytes),
@@ -1526,7 +1532,7 @@ function watchSentrySendOutcome(eventId: string): {
  * not just this one.
  */
 function flattenAppMetricsForSentry(
-  appMetrics: ReadonlyArray<Electron.ProcessMetric>,
+  appMetrics: ProcessMetricsSnapshot["appMetrics"],
 ): Record<string, unknown> {
   // Spread into a fresh object literal (numeric-string keys: "0", "1", ...)
   // rather than returning the mapped array directly - Sentry's `Contexts`
@@ -1539,7 +1545,7 @@ function flattenAppMetricsForSentry(
       type: metric.type,
       pid: metric.pid,
       name: metric.name ?? metric.serviceName ?? null,
-      cpuPercent: metric.cpu.percentCPUUsage,
+      cpuSharePercent: metric.cpu.cpuSharePercent,
       cpuIdleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
       memoryWorkingSetKb: metric.memory.workingSetSize,
       memoryPeakWorkingSetKb: metric.memory.peakWorkingSetSize,

@@ -135,6 +135,16 @@ export default defineConfig((): UserConfig => {
       // manual restart. Default dev keeps live reload (`hmr: true`).
       hmr: noWatch ? false : true,
       watch: noWatch ? null : undefined,
+      // Stand-in soundtrack stems served from outside every repository
+      // (`gui-app/src/lib/soundtrack/dev-manifest.ts`). Same origin, because the
+      // renderer's CSP admits no other plain-http origin and a plain file server
+      // sends no CORS headers. The dev server only: a build has no proxy.
+      proxy: {
+        "/__soundtrack-dev": {
+          target: "http://localhost:8765",
+          rewrite: (path) => path.replace(/^\/__soundtrack-dev/, ""),
+        },
+      },
     },
   };
 });

@@ -157,6 +157,7 @@ function RunningTerminal(props: {
         onClick={() => {
           const target = openTile(
             tileIntent(tile, { epicId: scope.epicId }, "explicit", "direct_ui"),
+            "user",
           );
           if (target !== null) props.onNavigate();
         }}

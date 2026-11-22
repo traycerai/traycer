@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { describeLogError, log } from "./logger";
 import { isSentryEnabled } from "./crash-reporter-state";
 import type {
+  ProcessMetricsSnapshot,
   RendererJsHeapBreakdown,
   RendererJsHeapIsolate,
 } from "../../ipc-contracts/platform-types";
@@ -21,15 +22,16 @@ import type {
  * with `app.getAppMetrics()` (per child process: type, pid, cpu, memory).
  * Renderer attaches the result to bug reports.
  */
-export async function handleGetMetrics(): Promise<{
-  readonly main: Electron.ProcessMemoryInfo;
-  readonly appMetrics: ReadonlyArray<Electron.ProcessMetric>;
-  readonly cpuUsage: NodeJS.CpuUsage;
-}> {
+export async function handleGetMetrics(): Promise<ProcessMetricsSnapshot> {
   const memory = await process.getProcessMemoryInfo();
   return {
     main: memory,
-    appMetrics: app.getAppMetrics(),
+    // Electron reports machine share here, unlike the host's per-core CPU.
+    // Rename at the shared GUI/report producer so the unit is explicit.
+    appMetrics: app.getAppMetrics().map((metric) => {
+      const { percentCPUUsage, ...cpu } = metric.cpu;
+      return { ...metric, cpu: { ...cpu, cpuSharePercent: percentCPUUsage } };
+    }),
     cpuUsage: process.cpuUsage(),
   };
 }

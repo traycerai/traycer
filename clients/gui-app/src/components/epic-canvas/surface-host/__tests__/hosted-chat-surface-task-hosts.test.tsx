@@ -217,6 +217,7 @@ describe("a hosted chat tile reads through the epic session's host", () => {
         geometryAnchorElement: document.createElement("div"),
         panePortalContainer: null,
         isPaneFocusedNow: () => false,
+        mobileOpenTarget: null,
       },
     });
 
@@ -232,7 +233,7 @@ describe("a hosted chat tile reads through the epic session's host", () => {
       );
     });
     expect(screen.getByTestId("sandbox-line").textContent).toContain(
-      "after resting. Its files are gone; this chat stays readable.",
+      "after its idle period. Its files are gone; this chat stays readable.",
     );
     await vi.waitFor(() => {
       expect(screen.getByTestId("collaborators").textContent).toBe(

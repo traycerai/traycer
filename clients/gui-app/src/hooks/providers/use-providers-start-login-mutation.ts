@@ -27,13 +27,17 @@ export function useProvidersStartLogin(): StartLoginMutationResult {
 }
 
 /** Client-scoped variant - lets a caller outside `HostRuntimeContext` (e.g.
- *  the picker's tab-scoped "Create new profile" flow) target an explicit
+ *  the picker's tab-scoped "Add a profile" flow) target an explicit
  *  host instead of the app-wide default. */
 export function useProvidersStartLoginForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): StartLoginMutationResult {
   return useHostScopedMutationForClient(client, {
     method: "providers.startLogin",
+    requiredHostMethodVersion: (request) =>
+      request.target === null
+        ? null
+        : { method: "providers.startLogin", version: { major: 1, minor: 5 } },
     mutationKey: providersMutationKeys.startLogin(),
     errorMessage: "Couldn't start the sign-in flow.",
     invalidateMethods: [],

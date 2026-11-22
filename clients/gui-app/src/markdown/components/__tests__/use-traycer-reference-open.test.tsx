@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCallback, type MouseEvent } from "react";
 import { useTraycerReferenceOpenHandler } from "@/markdown/components/use-traycer-reference-open";
+import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
@@ -9,6 +10,7 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 const testState = vi.hoisted(() => ({
@@ -19,7 +21,13 @@ const testState = vi.hoisted(() => ({
     name: "Spec One",
     hostId: "host-1",
   } satisfies EpicNodeRef,
-  openTile: vi.fn((_intent: TileOpenIntent): NestedFocusTarget | null => null),
+  openTile: vi.fn(
+    (
+      _intent: TileOpenIntent,
+      _provenance: NestedFocusProvenance,
+    ): NestedFocusTarget | null => null,
+  ),
+  navigateToTabIntent: vi.fn<(navigate: unknown, intent: unknown) => void>(),
   openEpicHandle: {
     epicId: "epic-1",
     store: {
@@ -30,6 +38,11 @@ const testState = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
+}));
+
+vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+  navigateToTabIntent: testState.navigateToTabIntent,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
@@ -55,14 +68,20 @@ describe("useTraycerReferenceOpenHandler", () => {
     // The spy runs the REAL seam, so the store still transitions and the
     // recorded intent is the thing under test.
     testState.openTile.mockImplementation(
-      (intent: TileOpenIntent): NestedFocusTarget | null =>
+      (
+        intent: TileOpenIntent,
+        provenance: NestedFocusProvenance,
+      ): NestedFocusTarget | null =>
         openTileWithNavigation(
           intent,
           (_epicId, _tabId, prepare) => prepare(),
-          MANUAL_TILE_OPEN,
+          // Forwarded, never hardcoded: a double that supplied its own claim
+          // would pass whatever the caller got wrong.
+          { ...MANUAL_TILE_OPEN, provenance },
         ),
     );
     testState.openTile.mockClear();
+    testState.navigateToTabIntent.mockClear();
   });
 
   afterEach(cleanup);
@@ -72,7 +91,7 @@ describe("useTraycerReferenceOpenHandler", () => {
       .getState()
       .openEpicTab("epic-1", "Epic");
 
-    render(<ReferenceButton />);
+    render(<ReferenceButton epicId="epic-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Open reference" }));
 
@@ -81,15 +100,18 @@ describe("useTraycerReferenceOpenHandler", () => {
     // A click on a reference is a SINGLE gesture on the epic, de-duped, with
     // the click's modifier triple attached: preview-vs-permanent is then the
     // resolver's call, not this hook's.
-    expect(testState.openTile).toHaveBeenCalledWith({
-      node: testState.testRef,
-      target: { epicId: "epic-1" },
-      gesture: "single",
-      modifiers: { shift: false, alt: false, middle: false },
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+    expect(testState.openTile).toHaveBeenCalledWith(
+      {
+        node: testState.testRef,
+        target: { epicId: "epic-1" },
+        gesture: "single",
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      "user",
+    );
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     if (canvas?.root?.kind !== "pane") throw new Error("expected pane");
     const activeTile =
@@ -101,11 +123,39 @@ describe("useTraycerReferenceOpenHandler", () => {
       hostId: testState.testRef.hostId,
     } satisfies Partial<EpicNodeRef>);
   });
+
+  it("leaves a cross-task reference without a Tracy origin outside a transcript", () => {
+    render(<ReferenceButton epicId="epic-2" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open reference" }));
+
+    expect(testState.navigateToTabIntent.mock.calls[0]?.[1]).toMatchObject({
+      kind: "open-epic",
+      epicId: "epic-2",
+      tracyOrigin: null,
+    });
+  });
+
+  it("hands the controller the transcript's bot for a cross-task reference drawn in a Tracy transcript", () => {
+    render(
+      <TracyTranscriptOriginScope botId="bot-1">
+        <ReferenceButton epicId="epic-2" />
+      </TracyTranscriptOriginScope>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open reference" }));
+
+    expect(testState.navigateToTabIntent.mock.calls[0]?.[1]).toMatchObject({
+      kind: "open-epic",
+      epicId: "epic-2",
+      tracyOrigin: { botId: "bot-1" },
+    });
+  });
 });
 
-function ReferenceButton() {
+function ReferenceButton(props: { readonly epicId: string }) {
   const { onOpen } = useTraycerReferenceOpenHandler({
-    epicId: "epic-1",
+    epicId: props.epicId,
     nodeId: testState.testRef.id,
     requiresNode: true,
   });

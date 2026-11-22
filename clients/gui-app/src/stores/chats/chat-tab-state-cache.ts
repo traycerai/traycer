@@ -323,7 +323,7 @@ function slicePartCuttingAt(
 
 /**
  * `restoreChatTabState` for a tile that is mounting, where the result seeds
- * the list's `initialScrollAtEnd` / `initialScrollIndex`.
+ * the list's initial position.
  *
  * A free scroll that was SAVED without an anchor names no row to restore to:
  * the list would mount at scroll 0, the top of the transcript, with no follow
@@ -331,7 +331,9 @@ function slicePartCuttingAt(
  *
  * A saved anchor that does not resolve yet is not that shape. It may be a row
  * the transcript has not hydrated (an empty or partial one), which the
- * pending-hydration restore replays once it arrives, so it is left to it.
+ * pending-hydration restore replays once it arrives, so it is left to it. The
+ * answer stays free-scrolling with no anchor, and the mount parks at the tail
+ * while it waits (`initialParkAtEnd`).
  *
  * Only mounting wants this. A kept-alive tile that is shown again replays
  * through `restoreChatTabState` itself, where an anchorless free scroll means
@@ -342,10 +344,27 @@ export function restoreChatTabStateForMount(
   rowKeys: ReadonlyArray<string>,
 ): SavedChatTabScrollState {
   const restored = restoreChatTabState(identity, rowKeys);
+  const saved = peekSavedChatTabState(identity);
+  // A legacy index can point at row zero of a different snapshot. It is not
+  // the missing saved row: park at the tail while hydration answers for it.
+  if (
+    saved?.mode === "free-scrolling" &&
+    saved.anchorMessageId !== null &&
+    saved.anchorRowKey === undefined &&
+    !rowKeys.includes(saved.anchorMessageId) &&
+    savedChatTabAnchorRowKey(saved, rowKeys) === saved.anchorMessageId &&
+    !savedAnchorTurnWasSplit(saved, rowKeys)
+  ) {
+    return {
+      mode: saved.mode,
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 0,
+    };
+  }
   if (restored.mode !== "free-scrolling" || restored.anchorMessageId !== null) {
     return restored;
   }
-  const saved = peekSavedChatTabState(identity);
   if (saved !== null && saved.anchorMessageId !== null) return restored;
   return DEFAULT_CHAT_TAB_SCROLL_STATE;
 }

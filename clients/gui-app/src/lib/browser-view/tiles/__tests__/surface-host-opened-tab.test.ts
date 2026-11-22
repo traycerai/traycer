@@ -253,6 +253,7 @@ describe("surfaceHostOpenedTab", () => {
       EPIC,
       VIEW_TAB_ID,
       expect.any(Function),
+      "automatic",
     );
     expect(lastNavigationTarget).toEqual({
       paneId,
@@ -306,6 +307,7 @@ describe("surfaceHostOpenedTab", () => {
       EPIC,
       VIEW_TAB_ID,
       expect.any(Function),
+      "automatic",
     );
     expect(canvas().activePaneId).toBe(presentingPaneId);
     expect(tileCount()).toBe(2);

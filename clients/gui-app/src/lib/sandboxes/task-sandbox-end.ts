@@ -20,9 +20,9 @@ function taskSandboxEndCause(end: TaskSandboxEnd): string {
         ? "after its idle period"
         : `after ${end.idleMinutes} idle minutes`;
     case "resting":
-      return "after resting";
+      return "after its idle period";
     case "day-30":
-      return "after 30 days frozen";
+      return "after 30 days out of credits";
     case "failure":
       return "after a failure";
     case "erasure":

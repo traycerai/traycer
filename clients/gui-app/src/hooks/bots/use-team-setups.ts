@@ -10,8 +10,9 @@ import {
 
 /**
  * A team whose main bot is still to be set up (Tracy Bots T67): the team has
- * no live bot, and its onboarding names the bot it will have (`setup`). Its
- * channel opens on that bot's id before the bot exists.
+ * no live bot, and its onboarding names the bot it will have (`setup`),
+ * still needing a host or with a computer of the team's own joining (T141).
+ * Its channel opens on that bot's id before the bot exists.
  */
 export interface TeamSetup {
   readonly environmentId: string;
@@ -102,8 +103,9 @@ export function useTeamSetups(input: {
     ? NO_SETUPS
     : teams.flatMap((team, index): TeamSetup[] => {
         const setup = reads[index]?.data?.setup ?? null;
-        // A live setup's bot exists: its channel is the bot's own (T67b).
-        if (setup === null || setup.state !== "needs_host") return [];
+        // A live setup's bot exists: its channel is the bot's own (T67b). A
+        // setup whose machine is joining (T141) still has no bot.
+        if (setup === null || setup.state === "live") return [];
         return [
           {
             environmentId: team.environmentId,

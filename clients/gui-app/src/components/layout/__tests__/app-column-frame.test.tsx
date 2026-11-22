@@ -5,7 +5,10 @@ import {
   AppColumnFrame,
   type AppColumnFrameProps,
 } from "@/components/layout/app-column-frame";
-import type { AppColumnChrome } from "@/components/layout/header/app-title-band-kind";
+import {
+  PHONE_SHELL_STRIP_CHROME,
+  type AppColumnChrome,
+} from "@/components/layout/header/app-title-band-kind";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import { usePublishSheetJoin } from "@/components/layout/tabs/sheet-join-context";
 import type { SheetJoinPane } from "@/components/layout/tabs/side-strip/side-tab-join";
@@ -43,7 +46,6 @@ function renderFrameWith(
     ...chrome,
     columnRef: () => undefined,
     header: <header data-testid="header-slot" />,
-    voiceTopRow: <div data-testid="voice-top-row-slot" />,
     strip: <nav data-testid="strip-slot" />,
     banners: <div data-testid="banners-slot" />,
     surface: <div data-testid="surface-slot" />,
@@ -109,20 +111,27 @@ describe("AppColumnFrame", () => {
     );
   });
 
-  it("seats the voice top row first in the content column, over the banners and <main>, beside a side strip and under the top header", () => {
-    renderFrame(TOP);
-    const topRow = screen.getByTestId("voice-top-row-slot");
-    expect(precedes(screen.getByTestId("header-slot"), topRow)).toBe(true);
-    expect(precedes(topRow, screen.getByTestId("banners-slot"))).toBe(true);
-    cleanup();
+  it("seats the phone shell's header in the content column beside the strip, not above the row", () => {
+    const column = renderFrame(PHONE_SHELL_STRIP_CHROME);
 
-    renderFrame(LEFT_NONE);
-    const sideRow = screen.getByTestId("voice-top-row-slot");
-    expect(sideRow.parentElement).toBe(
-      screen.getByTestId("strip-slot").nextElementSibling,
-    );
-    expect(sideRow.nextElementSibling).toBe(screen.getByTestId("banners-slot"));
+    const strip = screen.getByTestId("strip-slot");
+    const header = screen.getByTestId("header-slot");
+    expect(column.firstElementChild).not.toBe(header);
+    expect(strip.nextElementSibling?.contains(header)).toBe(true);
+    expect(precedes(header, screen.getByRole("main"))).toBe(true);
   });
+
+  it.each([LEFT_NONE, RIGHT_BAND])(
+    "starts the content column with the banners beside a side strip, reserving nothing above them ($titleBand)",
+    (chrome) => {
+      renderFrame(chrome);
+
+      const content = screen.getByRole("main").parentElement;
+      expect(content?.firstElementChild).toBe(
+        screen.getByTestId("banners-slot"),
+      );
+    },
+  );
 
   it("puts a right strip after <main>, and still frames the surface plainly", () => {
     renderFrame(RIGHT_BAND);

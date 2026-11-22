@@ -30,7 +30,6 @@ describe("agent.sendMessage@1.1 registry", () => {
       }),
     ).not.toThrow();
     const line = hostRpcRegistry["agent.sendMessage"][1];
-    expect(line.latestMinor).toBe(1);
     expect(line.versions[0].contract).toBe(agentSendMessageV10);
     expect(line.versions[1].contract).toBe(agentSendMessageV11);
     expect(line.versions[1].upgradeFromPreviousVersion).toBe(

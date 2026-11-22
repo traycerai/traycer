@@ -95,6 +95,12 @@ const TRAYCER_HOST_MODELS = {
   models: [modelOption("traycer", "traycer-default")],
 };
 
+// The store reads the provider rows for the model providers a person hid
+// from the pickers. Nothing here turns that on, so the rows stay absent and
+// the catalog these cases assert on is the whole one.
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: undefined, isError: false }),
+}));
 // The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   // The query's own shape: a read that has not answered is pending, whether
@@ -166,7 +172,8 @@ vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
     profileId,
 }));
 
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
+import { renderHookWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
@@ -267,7 +274,7 @@ function renderLandingToolbar(
   onSettingsChange: ((settings: ChatRunSettings) => void) | null,
   pick: ChatRunSettings,
 ) {
-  return renderHook(() =>
+  return renderHookWithQueryClient(() =>
     useComposerToolbarStore(
       "landing",
       fallbackSeedSource(pick, HOST_CLIENT),
@@ -418,7 +425,7 @@ describe("a composer with a sandbox staged (E19)", () => {
     // The gate reads the harness the send carries, as the landing composer does.
     const stage = readStagedSandbox(SURFACE);
     if (stage === null) throw new Error("the stage was not recorded");
-    const gate = renderHook(() =>
+    const gate = renderHookWithQueryClient(() =>
       useStagedSendSignInCheck({
         harnessId: pickedRunSettings(store.getState()).harnessId,
         modelSlug: pickedRunSettings(store.getState()).model,
@@ -542,7 +549,7 @@ describe("the staged gate's model check against the sandbox's list read", () => 
     useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
     const stage = readStagedSandbox(SURFACE);
     if (stage === null) throw new Error("the stage was not recorded");
-    const gate = renderHook(() =>
+    const gate = renderHookWithQueryClient(() =>
       useStagedSendSignInCheck({
         harnessId: "traycer",
         modelSlug: "trc-a",

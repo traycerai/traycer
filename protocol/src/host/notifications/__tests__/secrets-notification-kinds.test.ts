@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   HOST_NOTIFICATION_PENDING_PROMPT_KINDS,
-  HOST_NOTIFICATION_SECRET_EXPORT_KINDS,
   formatHostNotificationPresentation,
   hostNotificationEntrySchemaV22,
   hostNotificationEntrySchemaV23,
@@ -183,17 +182,10 @@ describe("secrets notification payloads", () => {
     expect(parsed.protocol).toBeNull();
   });
 
-  it("parses an export payload with a presigned_url export kind", () => {
-    expect(HOST_NOTIFICATION_SECRET_EXPORT_KINDS).toContain("presigned_url");
+  it("parses an export payload, whatever export kind it carries", () => {
     const parsed =
       hostNotificationSecretExportMintedPayloadSchema.parse(EXPORT_PAYLOAD);
     expect(parsed.exportKind).toBe("presigned_url");
-  });
-
-  it("parses an export payload whose export kind this build does not list", () => {
-    expect(HOST_NOTIFICATION_SECRET_EXPORT_KINDS).not.toContain(
-      "signed_cookie",
-    );
     expect(
       hostNotificationSecretExportMintedPayloadSchema.safeParse({
         ...EXPORT_PAYLOAD,

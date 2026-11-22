@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { retireAtBotLifetimeEdge } from "@/lib/bots/bot-lifetime";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
@@ -9,6 +10,7 @@ import {
   type BotTabLanding,
 } from "@/stores/bots/bot-tab-landing-store";
 import { useMobileTabOriginStore } from "@/stores/epics/mobile-tab-origin-store";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 
 /**
  * The source store behind the one Tracy surface of a window (decision 150):
@@ -26,8 +28,16 @@ import { useMobileTabOriginStore } from "@/stores/epics/mobile-tab-origin-store"
  * - `visitedBotIds` are the channels shown since the surface opened, whose
  *   rail, drafts, surface actions and landing are kept across switches and
  *   forgotten when the bot goes away or the surface closes. Session-only.
+ * - `goneReports` are the bots this surface's host has shown to be gone (a
+ *   deleted bot, or one missing from a list that answered after carrying
+ *   it), each with when the list it was reported against answered. Back and
+ *   forward skip a gone bot's history entries and the history prunes them
+ *   (`isHistoryEntryDead`). Only a list that answered after the report and
+ *   carries the bot takes it back out: the list a bot was reported against
+ *   still carries it and proves nothing. Closing the surface forgets them
+ *   all, since nothing then stands behind the claim. Session-only.
  *
- * Persisted in localStorage (except `visitedBotIds`), so a restart restores
+ * Persisted in localStorage (except `visitedBotIds` and `goneReports`), so a restart restores
  * the surface on its host and its last channel: one record in the browser,
  * one per window on the desktop (`bindTracySurfaceToWindow`).
  */
@@ -36,15 +46,35 @@ interface TracySurfaceState {
   readonly hostId: string | null;
   readonly botId: string | null;
   readonly visitedBotIds: ReadonlyArray<string>;
+  readonly goneReports: Readonly<Record<string, number>>;
   /** Opens the surface bound to `hostId`; an open surface keeps its host. */
   readonly openSurface: (hostId: string) => void;
   /** Commits the selected channel. */
   readonly selectChannel: (botId: string | null) => void;
-  /** Moves an open surface to `hostId`. */
+  /**
+   * Shows the selected channel itself: Messages, with no session in its
+   * place and Threads left. The rail beside it stays as it is.
+   */
+  readonly showChannel: () => void;
+  /**
+   * Moves an open surface to `hostId`. Every landing asked of it was asked of
+   * the host it leaves, and is withdrawn.
+   */
   readonly rebind: (hostId: string) => void;
   readonly markVisited: (botId: string) => void;
-  /** Forgets a visited bot's per-channel state; it is no longer visited. */
-  readonly forgetBot: (botId: string) => void;
+  /**
+   * A bot shown to be gone against the list that answered at `listedAt`: its
+   * per-channel state is forgotten with it.
+   */
+  readonly forgetBot: (botId: string, listedAt: number) => void;
+  /**
+   * The list that answered at `listedAt` carries `botIds`: none of them
+   * reported gone against an earlier list is gone.
+   */
+  readonly settleListedBots: (
+    botIds: ReadonlySet<string>,
+    listedAt: number,
+  ) => void;
   /** Closes the surface, forgetting every visited bot's state. */
   readonly closeSurface: () => void;
 }
@@ -87,19 +117,35 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
       hostId: null,
       botId: null,
       visitedBotIds: [],
+      goneReports: {},
       openSurface: (hostId) => {
         if (get().open) return;
         actedOnSinceBind = true;
         set({ open: true, hostId });
       },
       selectChannel: (botId) => {
-        if (get().botId === botId) return;
+        const previous = get().botId;
+        if (previous === botId) return;
         actedOnSinceBind = true;
+        // A channel is selected on Messages with no session in its place,
+        // whatever was last kept for it, and the one left keeps neither;
+        // selecting one leaves Threads.
+        const place = useTracyPlaceStore.getState();
+        if (previous !== null) place.closeBot(previous);
+        if (botId !== null) place.closeBot(botId);
+        place.setThreadsShown(false);
         set({ botId });
+      },
+      showChannel: () => {
+        const { botId } = get();
+        const place = useTracyPlaceStore.getState();
+        if (botId !== null) place.closeBot(botId);
+        place.setThreadsShown(false);
       },
       rebind: (hostId) => {
         const state = get();
         if (!state.open || state.hostId === hostId) return;
+        retireTracyLandings();
         set({ hostId });
       },
       markVisited: (botId) => {
@@ -107,24 +153,48 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
         if (visited.includes(botId)) return;
         set({ visitedBotIds: [...visited, botId] });
       },
-      forgetBot: (botId) => {
+      forgetBot: (botId, listedAt) => {
         stagedLandings.delete(botId);
         forgetBotState(botId);
         useMobileTabOriginStore.getState().forgetBot(botId);
-        const visited = get().visitedBotIds;
-        if (!visited.includes(botId)) return;
-        set({ visitedBotIds: visited.filter((id) => id !== botId) });
+        const { visitedBotIds: visited, goneReports: gone } = get();
+        if (
+          !visited.includes(botId) &&
+          Object.hasOwn(gone, botId) &&
+          gone[botId] === listedAt
+        ) {
+          return;
+        }
+        set({
+          visitedBotIds: visited.filter((id) => id !== botId),
+          goneReports: { ...gone, [botId]: listedAt },
+        });
+      },
+      settleListedBots: (botIds, listedAt) => {
+        const gone = get().goneReports;
+        const kept = Object.fromEntries(
+          Object.entries(gone).filter(([botId, reportedAt]) =>
+            goneReportStands(reportedAt, botIds.has(botId), listedAt),
+          ),
+        );
+        if (Object.keys(kept).length === Object.keys(gone).length) return;
+        set({ goneReports: kept });
       },
       closeSurface: () => {
         const state = get();
-        for (const [botId, landing] of [...stagedLandings]) {
-          releaseTracyLanding(botId, landing);
-        }
-        for (const botId of state.visitedBotIds) forgetBotState(botId);
+        retireTracyLandings();
+        for (const botId of state.visitedBotIds) closeBotState(botId);
         useMobileTabOriginStore.getState().clearAll();
-        if (!state.open && state.visitedBotIds.length === 0) return;
+        useTracyPlaceStore.getState().closeSurface();
+        if (
+          !state.open &&
+          state.visitedBotIds.length === 0 &&
+          Object.keys(state.goneReports).length === 0
+        ) {
+          return;
+        }
         actedOnSinceBind = true;
-        set({ open: false, hostId: null, visitedBotIds: [] });
+        set({ open: false, hostId: null, visitedBotIds: [], goneReports: {} });
       },
     }),
     {
@@ -147,12 +217,48 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
 /**
  * Landings the surface asked for, by bot id, for channels that have not shown
  * since: a channel that shows owns its landing from then on
- * (`handTracyLandingToChannel`), one whose navigation never landed is
- * released (`releaseTracyLanding`), and closing the surface releases every
- * one left. A visited channel is no exception: its pane is not mounted while
- * another channel shows, so nothing else would withdraw it. Session-only.
+ * (`handTracyLandingToChannel`), and one whose navigation never landed is
+ * released (`releaseTracyLanding`). A visited channel is no exception: its
+ * pane is not mounted while another channel shows, so nothing else would
+ * withdraw it. Session-only.
  */
 const stagedLandings = new Map<string, BotTabLanding>();
+
+/**
+ * How many times the surface has withdrawn its landings. An opening asked
+ * for at one count has lost its landing at any later one, whether or not the
+ * surface is on the same host again.
+ *
+ * Eight writes set the surface's host, and two of them withdraw: `rebind` to
+ * another host and `closeSurface`. Another account signing in withdraws too
+ * and writes no host. The other six move the host and withdraw nothing:
+ * `openSurface`, the store's own hydration (its migration included),
+ * `adoptLegacyActiveBotTab`, `bindTracySurfaceToWindow` reading the window's
+ * record back, `bindTracySurfaceToWindow` writing the closed surface, and
+ * `settleTracySurfaceAdoption`. Whoever holds an opening across those
+ * compares `tracySurfaceHostId` as well as this count.
+ */
+let landingsRetired = 0;
+
+export function tracyLandingsRetired(): number {
+  return landingsRetired;
+}
+
+/**
+ * Withdraws every landing asked of the surface, staged or already its
+ * channel's to spend. Each was asked for under one account, of one surface
+ * host: once the account changes, the surface moves to another host or it
+ * closes, a channel that shows or reads its thread list afterwards has
+ * nothing of them to land. So does an opening of the surface that was held
+ * and then refused: the surface may still show its channel.
+ */
+export function retireTracyLandings(): void {
+  landingsRetired += 1;
+  stagedLandings.clear();
+  useBotTabLandingStore.getState().clearAll();
+}
+
+retireAtBotLifetimeEdge(retireTracyLandings);
 
 /**
  * Asks `botId`'s channel to land at `landing` when it shows, before the
@@ -177,8 +283,8 @@ export function handTracyLandingToChannel(
 
 /**
  * Withdraws a staged `landing` whose channel never showed: its navigation was
- * refused or superseded, or the surface closed. A newer request for the same
- * channel, staged or not, is left alone.
+ * refused or superseded. A newer request for the same channel, staged or
+ * not, is left alone.
  */
 export function releaseTracyLanding(
   botId: string,
@@ -192,14 +298,35 @@ export function releaseTracyLanding(
 }
 
 /**
- * A bot's rail, unsent drafts, surface actions and unspent landing: the state
- * kept per channel while the surface shows it.
+ * A bot's rail, card answers, surface actions and unspent landing: the state
+ * kept per channel while the surface shows it. What its message boxes hold
+ * unsent outlives the surface (Tracy Bots T158).
  */
-function forgetBotState(botId: string): void {
+function closeBotState(botId: string): void {
   useBotOpenThreadStore.getState().setRail(botId, null);
-  useBotDraftsStore.getState().forgetBot(botId);
+  useTracyPlaceStore.getState().closeBot(botId);
+  useBotDraftsStore.getState().closeBot(botId);
   useBotSurfaceActionsStore.getState().forgetBot(botId);
   useBotTabLandingStore.getState().clear(botId);
+}
+
+/**
+ * Whether a bot's gone report, made against the list that answered at
+ * `reportedAt`, stands against the list that answered at `listedAt`: only a
+ * list that answered later and carries the bot takes it away.
+ */
+export function goneReportStands(
+  reportedAt: number,
+  carried: boolean,
+  listedAt: number,
+): boolean {
+  return !(carried && listedAt > reportedAt);
+}
+
+/** All the bot's state, its message boxes' drafts included: it is gone. */
+function forgetBotState(botId: string): void {
+  closeBotState(botId);
+  useBotDraftsStore.getState().forgetBot(botId);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -423,7 +550,7 @@ export function tracySurfaceHostId(): string | null {
 /**
  * Before the surface is opened from a list or the fixed entry: an open
  * surface keeps its host unless this client can no longer dial it (a restored
- * surface, a host gone since), and then it moves to `hostId`, this window's
+ * surface, a host gone since), and then it moves to the supplied serving
  * host. `isConnectable` is `null` while the directory has not answered, which
  * says nothing about the surface's host, so it keeps it.
  */

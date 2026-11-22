@@ -113,12 +113,14 @@ function renderMinimap() {
         bottomInset={0}
         inViewRefreshRef={{ current: () => undefined }}
         listRef={makeListRef({ scroll: 1050, scrollLength: 160 })}
+        atEndRef={{ current: false }}
         rows={transcriptListRows({
           splitLongTurns: true,
           window: null,
           rendered: makeTranscript(12),
         })}
         transcriptWindow={null}
+        senderFirst={false}
         onSelect={vi.fn<(messageId: string) => void>()}
         side="right"
         topOffsetAdjustmentRef={{ current: 0 }}

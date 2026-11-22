@@ -13,11 +13,14 @@ import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
+import type { HeaderTab } from "@/stores/tabs/types";
 import type { SideTabLiveAgents } from "../agent-meter";
 import {
   promptEntriesOf,
+  sectionTaskCount,
   stripTaskRowOf,
   type StripSection,
+  type StripTabEntry,
 } from "../strip-sections";
 
 function indicator(
@@ -237,5 +240,76 @@ describe("promptEntriesOf", () => {
       { feedId: "orphan-old", reason: "reply", count: 2 },
       { feedId: "epic-less", reason: "approval", count: 1 },
     ]);
+  });
+});
+
+describe("sectionTaskCount", () => {
+  function epicTab(epicId: string): HeaderTab {
+    return {
+      kind: "epic",
+      id: `tab-${epicId}`,
+      epicId,
+      hostId: null,
+      route: `/epics/${epicId}`,
+      name: epicId,
+      icon: null,
+      canClose: true,
+      canDuplicate: true,
+      canOpenInNewWindow: true,
+    };
+  }
+
+  function tabEntry(
+    epicId: string,
+    stripIndex: number,
+    section: StripSection,
+    state: {
+      readonly flags: Partial<NotificationIndicatorState>;
+      readonly live: SideTabLiveAgents;
+    },
+  ): StripTabEntry {
+    return {
+      kind: "tabs",
+      itemId: `tab-${epicId}`,
+      stripIndex,
+      section,
+      group: null,
+      members: [
+        {
+          tab: epicTab(epicId),
+          row: stripTaskRowOf({
+            indicator: indicator(state.flags),
+            agents: state.live,
+            needsYou: [],
+            reviewTimes: NO_TIMES,
+          }),
+        },
+      ],
+    };
+  }
+
+  it("counts a Needs you entry only when a member waits on the person, and every entry of another section", () => {
+    const waiting = tabEntry("waiting", 0, "needs-you", {
+      flags: { pendingApproval: true },
+      live: agents(0, 0),
+    });
+    // A row `holdInPlace` keeps in Needs you after its wait ended.
+    const held = tabEntry("held", 1, "needs-you", {
+      flags: {},
+      live: agents(1, 0),
+    });
+
+    expect(
+      sectionTaskCount({ section: "needs-you", entries: [waiting, held] }),
+    ).toBe(1);
+    expect(
+      sectionTaskCount({
+        section: "working",
+        entries: [
+          { ...waiting, section: "working" },
+          { ...held, section: "working" },
+        ],
+      }),
+    ).toBe(2);
   });
 });

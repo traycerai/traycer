@@ -1,18 +1,23 @@
+import { createDeferred } from "@/components/comments/__tests__/comment-submit-test-support";
 import type { ReactNode } from "react";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StepUpCredential } from "@/lib/auth/step-up-flow";
 import { StepUpRequiredError } from "@/lib/auth/step-up-flow";
 import type { StepUpPromptRequest } from "@/lib/auth/step-up-prompt";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 
 /**
  * Captures the active step-up prompt so tests can cancel/verify without driving
@@ -21,9 +26,13 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const dialogState = vi.hoisted<{
   request: StepUpPromptRequest | null;
   onCancel: (() => void) | null;
+  onVerified: ((credential: StepUpCredential) => void) | null;
+  onPrompt: (() => void) | null;
 }>(() => ({
   request: null,
   onCancel: null,
+  onVerified: null,
+  onPrompt: null,
 }));
 
 const revokeMutateAsync = vi.hoisted(() =>
@@ -52,7 +61,9 @@ const sessionsState = vi.hoisted<{
   fetchStatus: "idle",
 }));
 
-const signOutMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const signOutMock = vi.hoisted(() =>
+  vi.fn<() => Promise<boolean>>(() => Promise.resolve(true)),
+);
 
 vi.mock("@/hooks/auth/use-user-sessions-query", () => ({
   useAuthFetchUserSessions: () => ({
@@ -78,6 +89,7 @@ vi.mock("@/hooks/auth/use-revoke-all-sessions-mutation", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
+  useAuthService: () => ({ signOut: signOutMock }),
   useHostBinding: () => ({
     auth: { signOut: signOutMock },
   }),
@@ -90,7 +102,9 @@ vi.mock("@/components/auth/step-up-challenge-dialog", () => ({
     readonly onCancel: () => void;
   }): ReactNode => {
     dialogState.request = props.request;
+    if (props.request !== null) dialogState.onPrompt?.();
     dialogState.onCancel = props.onCancel;
+    dialogState.onVerified = props.onVerified;
     return null;
   },
 }));
@@ -126,6 +140,29 @@ function makeSession(
 /** Per-row sign-out (not "Sign out everywhere"). */
 function sessionSignOutButton(): HTMLElement {
   return screen.getByRole("button", { name: /^Sign out$/ });
+}
+
+function render(children: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return renderUi(
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+  );
+}
+
+function renderWithSignOutDialog(): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  renderUi(
+    <QueryClientProvider client={queryClient}>
+      <>
+        <DevicesSessionsPanel />
+        <SignOutConfirmDialog />
+      </>
+    </QueryClientProvider>,
+  );
 }
 
 function signIn(): void {
@@ -167,11 +204,15 @@ describe("<DevicesSessionsPanel />", () => {
   beforeEach(() => {
     dialogState.request = null;
     dialogState.onCancel = null;
+    dialogState.onVerified = null;
+    dialogState.onPrompt = null;
     revokeMutateAsync.mockReset();
     revokeMutateAsync.mockRejectedValue(new StepUpRequiredError());
     revokeAllMutateAsync.mockReset();
     revokeAllMutateAsync.mockResolvedValue({ ok: true });
     signOutMock.mockReset();
+    signOutMock.mockResolvedValue(true);
+    useSignOutConfirmStore.getState().setOpen(false);
     sessionsState.sessions = [
       makeSession({ familyId: "family-other", current: false }),
     ];
@@ -184,6 +225,7 @@ describe("<DevicesSessionsPanel />", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    useSignOutConfirmStore.getState().setOpen(false);
     signOut();
   });
 
@@ -202,11 +244,26 @@ describe("<DevicesSessionsPanel />", () => {
     expect(
       screen.getByText("Created 25 Oct 2025 · Last seen 25 Aug 08:35"),
     ).toBeTruthy();
+    expect(
+      screen.getByText("MacBook Pro / macOS / App 1.2.3 / San Francisco"),
+    ).toBeTruthy();
+    expect(screen.getByText("Desktop").getAttribute("data-variant")).toBe(
+      "outline",
+    );
+    expect(screen.getByText("Session")).toBeTruthy();
   });
 
-  it("renders the sessions section description with the expanded client list", () => {
+  it("restores the client-list sentence under Signed-in sessions", () => {
     render(<DevicesSessionsPanel />);
 
+    expect(
+      screen.getByText(
+        "Review where your account is signed in and remove access you no longer recognize.",
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("heading", { name: "Signed-in sessions" }),
+    ).toBeDefined();
     expect(
       screen.getByText(
         "Browser, desktop, CLI, extension, and host access for this account.",
@@ -214,7 +271,7 @@ describe("<DevicesSessionsPanel />", () => {
     ).toBeDefined();
   });
 
-  it("labels the active credential as this session", () => {
+  it("titles the current row This session and leaves that phrase off the timeline", () => {
     sessionsState.sessions = [
       makeSession({ familyId: "family-current", current: true }),
     ];
@@ -222,24 +279,84 @@ describe("<DevicesSessionsPanel />", () => {
     render(<DevicesSessionsPanel />);
 
     expect(screen.getByText("This session")).toBeDefined();
+    const timeline = screen.getByText(/^Created /);
+    expect(timeline.textContent).toMatch(/^Created .* · Last seen /);
+    expect(timeline.textContent).not.toContain("This session");
     expect(screen.queryByText("This device")).toBeNull();
+    expect(screen.queryByText("Session")).toBeNull();
   });
 
-  it("includes session location in the display line", () => {
+  it("badges a revoked row Signed out without prefixing the timeline", () => {
     sessionsState.sessions = [
       makeSession({
-        familyId: "family-loc",
+        familyId: "family-revoked",
+        current: false,
+        revoked: true,
+        revokedAt: "2026-07-08T11:00:00.000Z",
+      }),
+    ];
+
+    render(<DevicesSessionsPanel />);
+
+    expect(screen.getByText("Session")).toBeDefined();
+    const kind = screen.getByText("Desktop");
+    expect(kind.getAttribute("data-slot")).toBe("badge");
+    expect(kind.getAttribute("data-variant")).toBe("outline");
+    const signedOut = screen.getByText("Signed out");
+    expect(signedOut.getAttribute("data-slot")).toBe("badge");
+    expect(signedOut.getAttribute("data-variant")).toBe("muted");
+    const timeline = screen.getByText(/^Created /);
+    expect(timeline.textContent).toMatch(/^Created .+ · Signed out /);
+    expect(timeline.textContent).not.toContain("This session");
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("shows name, platform, app version, location, and the timeline without Details", () => {
+    sessionsState.sessions = [
+      makeSession({
+        familyId: "family-current",
+        current: true,
         displayLabel: "Office laptop",
         platform: "macOS",
         appVersion: "2.0.0",
         location: "Berlin",
       }),
+      makeSession({
+        familyId: "family-older",
+        current: false,
+        displayLabel: "Home desktop",
+        platform: "Windows",
+        appVersion: "1.4.0",
+        location: "Austin",
+      }),
     ];
     render(<DevicesSessionsPanel />);
 
-    expect(
-      screen.getByText("Office laptop / macOS / App 2.0.0 / Berlin"),
-    ).toBeDefined();
+    expect(screen.getByText("This session")).toBeDefined();
+    expect(screen.getByText("Session")).toBeDefined();
+    const currentFacts = screen.getByText(
+      "Office laptop / macOS / App 2.0.0 / Berlin",
+    );
+    const olderFacts = screen.getByText(
+      "Home desktop / Windows / App 1.4.0 / Austin",
+    );
+    expect(currentFacts.closest("details")).toBeNull();
+    expect(olderFacts.closest("details")).toBeNull();
+    const timelines = screen.getAllByText(/^Created /);
+    expect(timelines).toHaveLength(2);
+    for (const line of timelines) {
+      expect(line.textContent).toMatch(/^Created .* · Last seen /);
+      expect(line.textContent).not.toContain("This session");
+      expect(line.closest("details")).toBeNull();
+    }
+    expect(screen.queryByText("Details")).toBeNull();
+    expect(screen.queryByRole("img")).toBeNull();
+    const kindBadges = screen.getAllByText("Desktop");
+    expect(kindBadges).toHaveLength(2);
+    for (const badge of kindBadges) {
+      expect(badge.getAttribute("data-slot")).toBe("badge");
+      expect(badge.getAttribute("data-variant")).toBe("outline");
+    }
   });
 
   it("omits null or blank location without a stray separator", () => {
@@ -250,6 +367,7 @@ describe("<DevicesSessionsPanel />", () => {
         platform: "linux",
         appVersion: null,
         location: null,
+        clientKind: "cli",
       }),
       makeSession({
         familyId: "family-blank-loc",
@@ -257,17 +375,85 @@ describe("<DevicesSessionsPanel />", () => {
         platform: "Windows",
         appVersion: null,
         location: "   ",
+        clientKind: "web",
       }),
     ];
     render(<DevicesSessionsPanel />);
 
     expect(screen.getByText("CLI session / linux")).toBeDefined();
     expect(screen.getByText("Web session / Windows")).toBeDefined();
+    expect(screen.getByText("CLI").getAttribute("data-variant")).toBe(
+      "outline",
+    );
+    expect(screen.getByText("Web").getAttribute("data-variant")).toBe(
+      "outline",
+    );
+    expect(screen.queryByRole("img")).toBeNull();
     expect(screen.queryByText(/ \/ $/)).toBeNull();
     expect(screen.queryByText(/\/\s*\//)).toBeNull();
+    expect(screen.queryByText(/ · · /)).toBeNull();
+    expect(screen.queryByText(/App /)).toBeNull();
+    expect(screen.getAllByText(/^Created /)).toHaveLength(2);
   });
 
-  it("uses a neutral icon and honest labels for explicit and unrecognized client kinds", () => {
+  it("names each known client kind on an outline badge, not the facts line", () => {
+    sessionsState.sessions = [
+      makeSession({
+        familyId: "family-extension",
+        clientKind: "extension",
+        displayLabel: "Extension window",
+      }),
+      makeSession({
+        familyId: "family-mobile",
+        clientKind: "mobile",
+        displayLabel: "Phone",
+      }),
+      makeSession({
+        familyId: "family-host",
+        clientKind: "host",
+        displayLabel: "Build host",
+      }),
+    ];
+    render(<DevicesSessionsPanel />);
+
+    expect(screen.queryByRole("img")).toBeNull();
+    for (const [label, client] of [
+      ["Extension window", "Extension"],
+      ["Phone", "Mobile app"],
+      ["Build host", "Host"],
+    ] as const) {
+      const line = screen.getByText(
+        `${label} / macOS / App 1.2.3 / San Francisco`,
+      );
+      expect(line.closest("details")).toBeNull();
+      const badge = screen.getByText(client);
+      expect(badge.getAttribute("data-slot")).toBe("badge");
+      expect(badge.getAttribute("data-variant")).toBe("outline");
+    }
+    expect(screen.getAllByText(/^Created /)).toHaveLength(3);
+  });
+
+  it("says session details are unavailable when name, platform, and location are empty", () => {
+    sessionsState.sessions = [
+      makeSession({
+        familyId: "family-empty",
+        displayLabel: "   ",
+        platform: null,
+        location: "",
+        appVersion: null,
+      }),
+    ];
+    render(<DevicesSessionsPanel />);
+
+    expect(screen.getByText("Session details unavailable")).toBeDefined();
+    expect(screen.getByText("Desktop")).toBeDefined();
+    expect(screen.getByText(/^Created /)).toBeDefined();
+    expect(screen.queryByText("macOS")).toBeNull();
+    expect(screen.queryByText("San Francisco")).toBeNull();
+    expect(screen.queryByText(/App /)).toBeNull();
+  });
+
+  it("names an unrecognized client on a badge and leaves the icon decorative", () => {
     sessionsState.sessions = [
       makeSession({ familyId: "family-unknown", clientKind: "unknown" }),
       makeSession({
@@ -277,7 +463,18 @@ describe("<DevicesSessionsPanel />", () => {
     ];
     const { container } = render(<DevicesSessionsPanel />);
 
-    expect(screen.getAllByText("Unknown client")).toHaveLength(2);
+    expect(screen.queryByRole("img")).toBeNull();
+    const badges = screen.getAllByText("Unknown client");
+    expect(badges).toHaveLength(2);
+    for (const badge of badges) {
+      expect(badge.getAttribute("data-slot")).toBe("badge");
+      expect(badge.getAttribute("data-variant")).toBe("outline");
+    }
+    expect(
+      screen.getAllByText("MacBook Pro / macOS / App 1.2.3 / San Francisco"),
+    ).toHaveLength(2);
+    expect(container.querySelector("[role='img']")).toBeNull();
+    expect(container.querySelector("[aria-label='Unknown client']")).toBeNull();
     expect(
       container.querySelectorAll("svg.lucide-circle-question-mark"),
     ).toHaveLength(2);
@@ -314,4 +511,77 @@ describe("<DevicesSessionsPanel />", () => {
       screen.getByText("Couldn't reach Traycer to sign out this session."),
     ).toBeDefined();
   });
+
+  it.each(["current session", "all sessions"] as const)(
+    "keeps a local sign-out retry after a successful %s revoke",
+    async (scope) => {
+      if (scope === "current session") {
+        sessionsState.sessions = [
+          makeSession({ familyId: "local-session", current: true }),
+        ];
+        revokeMutateAsync.mockImplementation(({ familyId }) =>
+          Promise.resolve({
+            familyId,
+            revoked: true,
+          }),
+        );
+      }
+      const firstAttempt = createDeferred<void>();
+      const secondAttempt = createDeferred<void>();
+      const promptReady = createDeferred<void>();
+      dialogState.onPrompt = () => promptReady.resolve();
+      signOutMock
+        .mockImplementationOnce(() => {
+          firstAttempt.resolve();
+          return Promise.resolve(false);
+        })
+        .mockImplementationOnce(() => {
+          secondAttempt.resolve();
+          return Promise.resolve(true);
+        });
+      renderWithSignOutDialog();
+
+      fireEvent.click(
+        scope === "current session"
+          ? sessionSignOutButton()
+          : screen.getByRole("button", { name: "Sign out everywhere" }),
+      );
+      if (scope === "all sessions") {
+        await act(async () => {
+          await promptReady.promise;
+        });
+        act(() => {
+          dialogState.onVerified?.({ expiresAtMs: Date.now() + 10_000 });
+        });
+      }
+
+      await act(async () => {
+        await firstAttempt.promise;
+      });
+      expect(signOutMock).toHaveBeenCalledTimes(1);
+      expect(await screen.findByRole("alert")).toBeDefined();
+      expect(screen.getByRole("alert").textContent).toBe(
+        "Couldn't sign out. Please try again.",
+      );
+
+      const sharedDialog = screen.getByTestId("confirm-destructive-dialog");
+      fireEvent.click(
+        within(sharedDialog).getByRole("button", { name: "Sign out" }),
+      );
+      await act(async () => {
+        await secondAttempt.promise;
+      });
+      expect(signOutMock).toHaveBeenCalledTimes(2);
+      await waitFor(() => {
+        expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+      });
+
+      expect(revokeMutateAsync).toHaveBeenCalledTimes(
+        scope === "current session" ? 1 : 0,
+      );
+      expect(revokeAllMutateAsync).toHaveBeenCalledTimes(
+        scope === "all sessions" ? 1 : 0,
+      );
+    },
+  );
 });

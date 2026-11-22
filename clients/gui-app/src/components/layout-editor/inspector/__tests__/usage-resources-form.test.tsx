@@ -312,7 +312,11 @@ describe("the rows a Compact reading ignores are disabled, never removed", () =>
         agentRows: false,
       });
     });
-    setArrangement({ usageHost: "header", resourceHost: "header" });
+    setArrangement({
+      usageHost: "header",
+      resourceHost: "header",
+      tabStripPlacement: "top",
+    });
     render(<StatusBarSurface />);
 
     expect(drawn("usageLimits").percentShows).toBe("disabled");
@@ -343,7 +347,7 @@ describe("the rows a Compact reading ignores are disabled, never removed", () =>
         density: "detailed",
       });
     });
-    setArrangement({ usageHost: "header" });
+    setArrangement({ usageHost: "header", tabStripPlacement: "top" });
     render(<StatusBarSurface />);
 
     // Detailed in the tab strip is the strip's own form, with no calm profile.
@@ -393,7 +397,7 @@ describe("the rows a Compact reading ignores are disabled, never removed", () =>
       ),
     ).toBeTruthy();
 
-    setArrangement({ usageHost: "header" });
+    setArrangement({ usageHost: "header", tabStripPlacement: "top" });
     expect(
       within(section("usageLimits")).getByText(
         "Auto is compact in the top tab strip.",
@@ -458,6 +462,7 @@ describe("each reading's Show switch", () => {
 
 describe("the Location picker", () => {
   it("is drawn as the window the tab strip is in, one radio per spot", () => {
+    setArrangement({ tabStripPlacement: "top" });
     render(<StatusBarSurface />);
     const picker = within(section("usageLimits")).getByRole("radiogroup", {
       name: "Usage limits location",

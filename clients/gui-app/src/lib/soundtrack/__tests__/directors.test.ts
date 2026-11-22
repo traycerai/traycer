@@ -6,7 +6,8 @@ import {
   type MixPlan,
 } from "../directors";
 import type { MixSignals } from "../signals";
-import { AQUILO_1, type VariableTrack } from "../variable-sound";
+import type { VariableTrack } from "../variable-sound";
+import { AQUILO_1 } from "./aquilo-1";
 
 const QUIET: MixSignals = {
   view: "home",
@@ -25,8 +26,8 @@ const AQUILO_CONTEXT: MixContext = {
   state: AQUILO_1.states[0],
 };
 
-// Layers A and C only: the names a plan lifts B and D by are absent.
-const TRACK_WITHOUT_B_AND_D: VariableTrack = {
+// Layers A (no role) and C (motif) only: no pad and no texture to move.
+const TRACK_WITHOUT_PAD_AND_TEXTURE: VariableTrack = {
   ...AQUILO_1,
   layers: AQUILO_1.layers.filter(
     (layer) => layer.name === "A" || layer.name === "C",
@@ -134,8 +135,8 @@ describe("RulesDirector layer count", () => {
   });
 });
 
-describe("RulesDirector layers B, C and D and the dim", () => {
-  it("holds B on while a row blocks, and lifts it with it", () => {
+describe("RulesDirector layer roles and the dim", () => {
+  it("holds the pad layer on while a row blocks, and lifts it with it", () => {
     const blocked = rules.plan(signalsOf({ blocking: 1 }), AQUILO_CONTEXT);
     const clear = rules.plan(QUIET, AQUILO_CONTEXT);
     expect(blocked.heldLayers).toEqual([1]);
@@ -145,7 +146,7 @@ describe("RulesDirector layers B, C and D and the dim", () => {
     );
   });
 
-  it("dims the mix and lifts D to full while a row failed, and lets go with it", () => {
+  it("dims the mix and lifts the texture layer to full while a row failed, and lets go with it", () => {
     const failed = rules.plan(signalsOf({ failure: 1 }), AQUILO_CONTEXT);
     const clear = rules.plan(QUIET, AQUILO_CONTEXT);
     expect(failed.dim).toBe(true);
@@ -155,17 +156,17 @@ describe("RulesDirector layers B, C and D and the dim", () => {
     );
   });
 
-  it("lifts C while a done row counts, and lets go with it", () => {
+  it("lifts the motif layer while a done row counts, and lets go with it", () => {
     const done = rules.plan(signalsOf({ done: 1 }), AQUILO_CONTEXT);
     const clear = rules.plan(QUIET, AQUILO_CONTEXT);
     expect(gainOf(done, AQUILO_1, "C")).toBeGreaterThan(
       gainOf(clear, AQUILO_1, "C"),
     );
-    // The others stay where intensity puts them: only C answers to done.
+    // A layer with no role stays at 1: only the motif answers to done.
     expect(gainOf(done, AQUILO_1, "A")).toBe(1);
   });
 
-  it("raises D with intensity while nothing has failed", () => {
+  it("raises the texture layer with intensity while nothing has failed", () => {
     const busy = rules.plan(signalsOf({ working: 3 }), AQUILO_CONTEXT);
     const clear = rules.plan(QUIET, AQUILO_CONTEXT);
     expect(gainOf(busy, AQUILO_1, "D")).toBeGreaterThan(
@@ -173,16 +174,62 @@ describe("RulesDirector layers B, C and D and the dim", () => {
     );
   });
 
-  it("answers one gain per layer, and holds nothing, on a track without B and D", () => {
+  it("answers one gain per layer, and holds nothing, on a track without a pad or a texture", () => {
     const plan = rules.plan(signalsOf({ blocking: 1, failure: 1, done: 1 }), {
-      track: TRACK_WITHOUT_B_AND_D,
-      state: TRACK_WITHOUT_B_AND_D.states[0],
+      track: TRACK_WITHOUT_PAD_AND_TEXTURE,
+      state: TRACK_WITHOUT_PAD_AND_TEXTURE.states[0],
     });
     expect(plan.heldLayers).toEqual([]);
     expect(plan.layerGains).toHaveLength(2);
-    expect(gainOf(plan, TRACK_WITHOUT_B_AND_D, "A")).toBe(1);
-    expect(gainOf(plan, TRACK_WITHOUT_B_AND_D, "C")).toBeGreaterThan(1);
+    expect(gainOf(plan, TRACK_WITHOUT_PAD_AND_TEXTURE, "A")).toBe(1);
+    expect(gainOf(plan, TRACK_WITHOUT_PAD_AND_TEXTURE, "C")).toBeGreaterThan(1);
     // The dim belongs to the mix and not to a layer, so it stands.
     expect(plan.dim).toBe(true);
+  });
+
+  it("holds nothing and leaves a layer with no role at 1 under blocking, when the layer is named B", () => {
+    const roleless: VariableTrack = {
+      ...AQUILO_1,
+      layers: AQUILO_1.layers.map((layer) =>
+        layer.name === "B" ? { ...layer, role: null } : layer,
+      ),
+    };
+    const plan = rules.plan(signalsOf({ blocking: 1 }), {
+      track: roleless,
+      state: roleless.states[0],
+    });
+    expect(plan.heldLayers).toEqual([]);
+    expect(gainOf(plan, roleless, "B")).toBe(1);
+  });
+
+  it("holds and lifts a pad layer whatever its name is", () => {
+    const renamed: VariableTrack = {
+      ...AQUILO_1,
+      layers: AQUILO_1.layers.map((layer) =>
+        layer.name === "B" ? { ...layer, name: "AA" } : layer,
+      ),
+    };
+    const context = { track: renamed, state: renamed.states[0] };
+    const blocked = rules.plan(signalsOf({ blocking: 1 }), context);
+    const clear = rules.plan(QUIET, context);
+    expect(blocked.heldLayers).toEqual([1]);
+    expect(gainOf(blocked, renamed, "AA")).toBeGreaterThan(
+      gainOf(clear, renamed, "AA"),
+    );
+  });
+
+  it("never holds or moves an event layer, under blocking, done and failure together", () => {
+    const withEvent: VariableTrack = {
+      ...AQUILO_1,
+      layers: AQUILO_1.layers.map((layer) =>
+        layer.name === "C" ? { ...layer, role: "event" } : layer,
+      ),
+    };
+    const plan = rules.plan(signalsOf({ blocking: 1, done: 1, failure: 1 }), {
+      track: withEvent,
+      state: withEvent.states[0],
+    });
+    expect(plan.heldLayers).toEqual([1]);
+    expect(gainOf(plan, withEvent, "C")).toBe(1);
   });
 });

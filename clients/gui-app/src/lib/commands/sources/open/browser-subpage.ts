@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import {
@@ -72,10 +73,16 @@ function useBrowserHostItems(
   // `pickableHostOptions`); the pinned host always keeps its row.
   const hosts = pickableHostOptions(options.hosts, hostPin.selection).map(
     (host) => {
+      const state = hostOptionStatusWord(
+        host,
+        AVAILABLE_HOST_ROW_SURFACE_STATE,
+      );
       const status = hostChoiceStatus(
         hostPin.selection === host.hostId,
         host.isActive,
-        hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE),
+        state !== null && host.sandbox?.frozen
+          ? `${state} · ${HOST_FROZEN_WORD}`
+          : state,
       );
       const item = {
         ...openerActionLeaf({

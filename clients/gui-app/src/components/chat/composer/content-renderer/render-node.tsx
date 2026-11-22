@@ -12,12 +12,15 @@ import {
   slashCommandLabelFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
+import { fileAttachmentAttrsOf } from "@/lib/composer/file-attachments";
 import { cn } from "@/lib/utils";
 
 import { applyMarks } from "./render-marks";
+import { FileAttachmentTranscriptChip } from "./file-attachment-transcript-chip";
 import type { ComposerContentRenderContext } from "./types";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { ownValue } from "@/lib/own-value";
 const SKIPPED_NODES = new Set(["attachmentGroup"]);
 
 type NodeRenderer = (
@@ -123,6 +126,21 @@ function renderImageAttachment(
   );
 }
 
+function renderFileAttachment(
+  node: JsonContent,
+  key: string,
+  context: ComposerContentRenderContext,
+): ReactNode {
+  return (
+    <FileAttachmentTranscriptChip
+      key={key}
+      attrs={fileAttachmentAttrsOf(node.attrs)}
+      fallbackName={stringValue(node.attrs?.fileName) ?? "File"}
+      classNames={context.profile.inlineChipClassNames}
+    />
+  );
+}
+
 function renderCodeBlock(
   node: JsonContent,
   key: string,
@@ -162,6 +180,7 @@ const RENDERERS: Partial<Record<string, NodeRenderer>> = {
   mention: renderMention,
   slashCommand: renderSlashCommand,
   imageAttachment: renderImageAttachment,
+  fileAttachment: renderFileAttachment,
   bulletList: (node, key, context) =>
     context.profile.renderBulletList({
       children: (
@@ -233,7 +252,7 @@ export function RenderedComposerNode(props: {
   const type = node.type ?? "text";
   if (SKIPPED_NODES.has(type)) return null;
 
-  const renderer = RENDERERS[type];
+  const renderer = ownValue(RENDERERS, type);
   if (renderer !== undefined) return renderer(node, nodeKey, context);
 
   const children = node.content;

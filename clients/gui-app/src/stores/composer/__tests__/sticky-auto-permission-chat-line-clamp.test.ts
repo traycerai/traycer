@@ -65,8 +65,10 @@ function createStickyAutoStore(
     keepsUnavailablePick: false,
     harnesses: [AUTO_HONORING_CLAUDE],
     modelsHarnessId: "claude",
+    modelsProfileId: null,
     models: [],
     modelsLoaded: true,
+    modelsFailed: false,
     tuiOnly: false,
   });
   return store;
@@ -130,8 +132,10 @@ describe("composer-toolbar-store: the sticky clamp consults BOTH the catalog lin
       keepsUnavailablePick: false,
       harnesses: [AUTO_HONORING_CLAUDE],
       modelsHarnessId: "claude",
+      modelsProfileId: null,
       models: [],
       modelsLoaded: true,
+      modelsFailed: false,
       tuiOnly: false,
     };
     const store = createComposerToolbarStore({

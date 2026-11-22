@@ -1,7 +1,9 @@
 import { isDocumentAssetPath } from "@/lib/assets/image-extension-allowlist";
 import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { use, useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
+import { BotDeliveredMessage } from "@/components/bots/bot-delivered-message";
+import { BotSessionContext } from "@/components/bots/bot-session-context";
 import { formatWorkedFor } from "@/lib/format-duration";
 import type {
   BackgroundEventEnding,
@@ -13,7 +15,7 @@ import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { managedCommandNoun } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
-import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useChatContainerId } from "@/components/chat/chat-container-context";
 import { useManagedCommandPresence } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -74,21 +76,46 @@ function triggerKey(trigger: AutonomousResumeTrigger): string {
   return `${trigger.kind}:${trigger.managedCommand?.commandId ?? "none"}:${trigger.blockId}:${trigger.title}:${trigger.status}`;
 }
 
+/**
+ * In one of a bot's sessions, a trigger that carried a member's message draws
+ * that message (Tracy Bots T159) in place of its card, with the card's foot
+ * under it when it is the last; every other trigger, and every trigger outside
+ * a bot's session, draws its card.
+ */
 export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
   const { triggers } = props;
+  const session = use(BotSessionContext);
   const lastIndex = triggers.length - 1;
 
   return (
     <div className="flex flex-col gap-2">
-      {triggers.map((trigger, index) => (
-        <ResumeCompletionCard
-          key={triggerKey(trigger)}
-          trigger={trigger}
-          variant={props.variant}
-          ending={index === lastIndex ? props.ending : null}
-          folded={index === lastIndex ? props.folded : NO_FOLDED_EVENTS}
-        />
-      ))}
+      {triggers.map((trigger, index) => {
+        const ending = index === lastIndex ? props.ending : null;
+        const folded = index === lastIndex ? props.folded : NO_FOLDED_EVENTS;
+        // Defaulted key: a row validated structurally off an older host's
+        // line never wrote it.
+        const delivered = trigger.conversationMessage ?? null;
+        return session === null || delivered === null ? (
+          <ResumeCompletionCard
+            key={triggerKey(trigger)}
+            trigger={trigger}
+            variant={props.variant}
+            ending={ending}
+            folded={folded}
+          />
+        ) : (
+          <BotDeliveredMessage
+            key={triggerKey(trigger)}
+            delivered={delivered}
+            access={session}
+            foot={
+              ending === null && folded.length === 0 ? null : (
+                <BackgroundEventFooter ending={ending} folded={folded} />
+              )
+            }
+          />
+        );
+      })}
     </div>
   );
 }
@@ -463,7 +490,7 @@ function ResumeManagedCommandDoor(props: {
   readonly variant: "card" | "row";
 }) {
   const managedCommand = props.trigger.managedCommand;
-  const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
+  const epicId = useChatContainerId();
   const transcript = useMaybeChatTranscript();
   // The host the digest named as the shell's, or null for a shell the chat's
   // own host produced. Normalized BEFORE anything reads it: a body that

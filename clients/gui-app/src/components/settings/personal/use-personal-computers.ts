@@ -8,10 +8,13 @@ import {
   hostRunsPersonal,
 } from "@/components/settings/environment/environment-picker-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+} from "@/components/settings/host-scope/use-host-scope";
 
 /**
- * The computers running Personal, as the page chip counts them: the person's
+ * The computers running Personal, as the host list counts them: the person's
  * computers (no sandbox) whose own status names Personal and that are not a
  * Local row. Each holds a copy of Personal's values. None is read while
  * `enabled` is false.
@@ -24,7 +27,7 @@ export interface PersonalComputers {
 }
 
 export function usePersonalComputers(enabled: boolean): PersonalComputers {
-  const scope = useHostScope();
+  const scope = useHostScopeFor(WINDOW_HOST_SELECTION);
   const computers = useMemo(
     () => (enabled ? scope.hosts.filter(isEnvironmentComputer) : []),
     [enabled, scope.hosts],

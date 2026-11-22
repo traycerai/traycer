@@ -1,121 +1,712 @@
-import type { ReactNode } from "react";
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "@/components/settings/environment/configuration-source";
+import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
+import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
+import { TeamGiveDialog } from "@/components/settings/panels/team-give-dialog";
+import { useMayChangeTeamConfiguration } from "@/hooks/environment/use-may-change-team-configuration";
+import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
-import { OverviewCardDatedLines } from "@/components/settings/environment/overview-card-dated-lines";
-import { onSettingsDate } from "@/lib/settings/settings-date";
+import {
+  isStaleLocalPick,
+  localPickerRow,
+} from "@/components/settings/environment/environment-picker-model";
 import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
-import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
-import { Button } from "@/components/ui/button";
+import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
+import {
+  hostSettingsRowModel,
+  type HostSettingsRowModel,
+  type HostSettingsRowOption,
+} from "@/components/settings/panels/host-overview-settings-card-model";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
+import { SettingsRow } from "@/components/settings/settings-row";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
+import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import {
+  useHostNegotiatedMethodVersions,
+  type NegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
+import {
+  useHostMethodSupport,
+  useHostMethodSchemaVersion,
+} from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  environmentPickValue,
+  PERSONAL_PICK,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+
+/** A give whose start answered: the team it names and the line its receipt shows. */
+export interface StartedGive {
+  readonly teamId: string;
+  readonly line: string;
+}
 
 /**
- * The Overview's settings card: whether this computer's settings are its
- * own, moving, or moved, and the lines other tickets draw from their own
- * files: the dated lines (`OverviewCardDatedLines`) and the `Details` line
- * (`OverviewCardDetailsLine`). Drawn above the Overview's tabs, so it reads
- * on whichever tab is showing (`HostOverviewSettingsCardSlot`).
+ * The give and claim receipt line. It is held above the card, because the owner
+ * change restarts the computer and the card unmounts while the host is away.
  */
+export interface OwnershipReceipt {
+  readonly line: string | null;
+  readonly show: (line: string) => void;
+  readonly giveStarted: (give: StartedGive) => void;
+}
+
+/** The named host's settings place, above the Overview's tabs. */
 export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
-  readonly status: EnvironmentStatusResponseV11;
+  readonly status: EnvironmentStatusResponseV11 | null;
+  readonly binding: EnvironmentHostBinding | null;
+  readonly owner: HostOwnerPrincipal | null;
+  readonly isLocalMachine: boolean;
+  readonly receipt: OwnershipReceipt;
 }): ReactNode {
+  const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
+  const [stopOpen, setStopOpen] = useState(false);
+  const hostIds = useMemo(() => [props.hostId], [props.hostId]);
+  const statusVersion =
+    useHostNegotiatedMethodVersions(hostIds, "environment.status").get(
+      props.hostId,
+    ) ?? null;
+  const model = hostSettingsRowModel(
+    props.status,
+    props.binding,
+    props.hostName,
+  );
+  const railPick =
+    model.kind === "loading" || props.status === null
+      ? null
+      : settingsRailPick({
+          model,
+          hostId: props.hostId,
+          hostName: props.hostName,
+          status: props.status,
+          version: statusVersion,
+        });
+  useMatchEnvironmentRail(railPick);
+  if (model.kind === "loading" || props.status === null) {
+    return (
+      <>
+        <SettingsRow
+          row={HOST_OVERVIEW.definitions.settingsRow}
+          control={
+            <Skeleton
+              className="h-7 w-[18ch]"
+              role="status"
+              aria-label="Reading"
+            />
+          }
+        />
+        <TransferReceipt value={props.receipt.line} />
+      </>
+    );
+  }
   const lineProps = {
     client: props.client,
     hostId: props.hostId,
     hostName: props.hostName,
     status: props.status,
   };
-  const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  const state = hostSettingsCardState(props.status);
+  const teamOwner = props.owner?.kind === "team" ? props.owner : null;
+  if (model.kind === "team" || teamOwner !== null) {
+    return (
+      <>
+        <TeamOwnedHostSettingsRow
+          {...lineProps}
+          owner={teamOwner}
+          binding={props.binding}
+          fallback={model.kind === "team" ? model : null}
+          isLocalMachine={props.isLocalMachine}
+          onClaimed={props.receipt.show}
+        />
+        <TransferReceipt value={props.receipt.line} />
+      </>
+    );
+  }
+  if (model.kind === "progress") {
+    return (
+      <>
+        <SettingsRow
+          row={HOST_OVERVIEW.definitions.settingsRow}
+          status={
+            <div className="flex flex-wrap items-center gap-1">
+              <MoveProgressLine {...lineProps} progress={model.progress} />
+              {model.progress.kind === "move_stopped" ? (
+                <OverviewCardDetailsLine {...lineProps} />
+              ) : null}
+            </div>
+          }
+          control={
+            <FixedSettingsSource
+              value={
+                model.progress.kind === "moving" ? "Personal" : props.hostName
+              }
+            />
+          }
+        />
+        <TransferReceipt value={props.receipt.line} />
+      </>
+    );
+  }
   return (
-    <div
-      className="flex flex-col gap-2 rounded-md border border-border/60 px-3 py-2 text-ui-sm empty:hidden"
-      data-testid="host-settings-card"
-    >
-      {/* One line: `Settings on this computer only. · Details · Move to
-          Personal`. */}
-      {state.kind === "local" ? (
-        <div className="flex flex-wrap items-center gap-1">
-          <span data-testid="host-settings-card-local">
-            Settings on this computer only.
+    <>
+      <div className="shrink-0" data-testid="host-settings-source">
+        <SettingsRow
+          row={HOST_OVERVIEW.definitions.settingsRow}
+          status={
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>{model.description}</span>
+              <OverviewCardDetailsLine {...lineProps} />
+            </div>
+          }
+          control={
+            <EnvironmentSourceControl
+              client={props.client}
+              hostId={props.hostId}
+              hostName={props.hostName}
+              owner={props.owner}
+              currentEnvironmentId={
+                props.binding?.environment.environmentId ?? null
+              }
+              receipt={props.receipt}
+              value={model.value}
+              options={model.options}
+              onChoose={(option) => {
+                if (option.action === "move") {
+                  openMoveSheet({
+                    hostId: props.hostId,
+                    hostName: props.hostName,
+                  });
+                } else if (option.action === "stop_sharing") {
+                  setStopOpen(true);
+                }
+              }}
+            />
+          }
+        />
+      </div>
+      <StopSharingSession
+        client={props.client}
+        hostId={props.hostId}
+        hostName={props.hostName}
+        open={stopOpen}
+        onOpenChange={setStopOpen}
+      />
+      <TransferReceipt value={props.receipt.line} />
+    </>
+  );
+}
+
+function TeamOwnedHostSettingsRow(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly status: EnvironmentStatusResponseV11;
+  readonly owner: Extract<HostOwnerPrincipal, { readonly kind: "team" }> | null;
+  readonly binding: EnvironmentHostBinding | null;
+  readonly fallback: Extract<
+    HostSettingsRowModel,
+    { readonly kind: "team" }
+  > | null;
+  readonly isLocalMachine: boolean;
+  readonly onClaimed: (receipt: string) => void;
+}): ReactNode {
+  return (
+    <SettingsRow
+      row={HOST_OVERVIEW.definitions.settingsRow}
+      status={
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>
+            {props.owner === null
+              ? props.fallback?.description
+              : `This computer belongs to ${props.owner.name}.`}
           </span>
-          <OverviewCardDetailsLine {...lineProps} />
-          <Button
-            type="button"
+          <OverviewCardDetailsLine
+            client={props.client}
+            hostId={props.hostId}
+            hostName={props.hostName}
+            status={props.status}
+          />
+        </div>
+      }
+      control={
+        <div className="flex flex-wrap items-center gap-2">
+          <FixedSettingsSource
+            value={props.owner?.name ?? props.fallback?.label ?? "Team"}
+          />
+          {props.isLocalMachine &&
+          props.owner !== null &&
+          props.binding !== null ? (
+            <ClaimLocalTeamComputer
+              environmentId={props.binding.environment.environmentId}
+              hostId={props.hostId}
+              hostName={props.hostName}
+              onClaimed={props.onClaimed}
+            />
+          ) : null}
+        </div>
+      }
+    />
+  );
+}
+
+function ClaimLocalTeamComputer(props: {
+  readonly environmentId: string;
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly onClaimed: (receipt: string) => void;
+}): ReactNode {
+  const mayClaim = useMayChangeTeamConfiguration(props.environmentId);
+  const [open, setOpen] = useState(false);
+  const mutation = useTeamComputerClaim(props.environmentId, () => {
+    props.onClaimed(
+      "This computer is now yours. The team can no longer run work on it.",
+    );
+    setOpen(false);
+  });
+  if (!mayClaim) return null;
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          mutation.reset();
+          setOpen(true);
+        }}
+      >
+        Claim this computer
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!mutation.isPending) setOpen(next);
+        }}
+      >
+        <DialogContent className="w-full sm:max-w-prose">
+          <DialogHeader>
+            <DialogTitle>Claim {props.hostName}?</DialogTitle>
+            <DialogDescription>
+              This computer will become yours. The team will lose access to it.
+            </DialogDescription>
+          </DialogHeader>
+          <ClaimRunningWork
+            hostId={props.hostId}
+            environmentId={props.environmentId}
+          />
+          {mutation.isError ? (
+            <p role="alert" className="text-ui-sm text-destructive">
+              {mutation.error.message}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={mutation.isPending}
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate(props.hostId)}
+            >
+              {mutation.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="team-computer-claim-progress"
+                  variant={undefined}
+                />
+              ) : null}
+              Claim this computer
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/** Keep the settings value in the same control while it cannot be changed. */
+function FixedSettingsSource(props: { readonly value: string }): ReactNode {
+  return (
+    <Select value={props.value} disabled>
+      <TooltipWrapper
+        label={props.value}
+        side="top"
+        sideOffset={undefined}
+        align="end"
+      >
+        <span className="max-w-full">
+          <SelectTrigger
             size="sm"
-            variant="outline"
-            data-testid="host-settings-card-move"
-            onClick={() =>
-              openMoveSheet({ hostId: props.hostId, hostName: props.hostName })
-            }
+            aria-label="Environment"
+            className="max-w-[40vw] sm:max-w-64"
           >
-            {state.verb === "finish_moving"
-              ? "Finish moving"
-              : "Move to Personal"}
-          </Button>
-        </div>
+            <SelectValue />
+          </SelectTrigger>
+        </span>
+      </TooltipWrapper>
+      <SelectContent align="end">
+        <SelectItem value={props.value}>
+          <EnvironmentOptionLabel label={props.value} detail={null} />
+        </SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+interface EnvironmentSourceSelectProps {
+  readonly value: HostSettingsRowOption["value"];
+  readonly options: readonly HostSettingsRowOption[];
+  readonly onChoose: (option: HostSettingsRowOption) => void;
+}
+
+function EnvironmentSourceControl(
+  props: EnvironmentSourceSelectProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly hostId: string;
+    readonly hostName: string;
+    readonly owner: HostOwnerPrincipal | null;
+    readonly currentEnvironmentId: string | null;
+    readonly receipt: OwnershipReceipt;
+  },
+): ReactNode {
+  const planVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    "environment.move.plan",
+  );
+  const mayTransfer = props.owner?.kind === "user" && planVersion?.major === 2;
+  return mayTransfer ? (
+    <TeamEnvironmentSourceControl {...props} />
+  ) : (
+    <EnvironmentSourceSelect
+      {...props}
+      teams={[]}
+      onChooseTeam={() => undefined}
+    />
+  );
+}
+
+function TeamEnvironmentSourceControl(
+  props: EnvironmentSourceSelectProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly hostId: string;
+    readonly hostName: string;
+    readonly currentEnvironmentId: string | null;
+    readonly receipt: OwnershipReceipt;
+  },
+): ReactNode {
+  const environments = useEnvironmentListQuery(true);
+  const teams = (environments.data?.environments ?? []).filter(
+    (environment) =>
+      environment.ownerKind === "organization" &&
+      mayChangeConfiguration(configurationRoleOf(environment)),
+  );
+  const [selected, setSelected] = useState<EnvironmentDescriptorV11 | null>(
+    null,
+  );
+  return (
+    <>
+      {environments.isError ? (
+        <TeamReadFailed
+          message="Couldn't load teams."
+          onRetry={() => void environments.refetch()}
+        />
       ) : null}
-      {state.kind === "moving" || state.kind === "move_stopped" ? (
-        <MoveProgressLine {...lineProps} progress={state} />
-      ) : null}
-      {/* While moving the progress line carries the card's `Details`, and
-          after a move the dated line does: `Moved to Personal on 12 Oct ·
-          Details`. */}
-      {state.kind === "moved" ? (
-        <div className="flex flex-wrap items-center gap-1">
-          <p data-testid="host-settings-card-moved">
-            Moved to Personal {onSettingsDate(state.acceptedAt)}
-          </p>
-          <OverviewCardDetailsLine {...lineProps} />
-        </div>
-      ) : null}
-      <OverviewCardDatedLines {...lineProps} />
-      {state.kind === "moved" ||
-      state.kind === "moving" ||
-      state.kind === "move_stopped" ||
-      state.kind === "local" ? null : (
-        <OverviewCardDetailsLine {...lineProps} />
+      <EnvironmentSourceSelect
+        {...props}
+        teams={teams}
+        onChooseTeam={setSelected}
+      />
+      {selected === null ? null : (
+        <TeamGiveDialog
+          key={selected.environmentId}
+          client={props.client}
+          hostId={props.hostId}
+          hostName={props.hostName}
+          currentEnvironmentId={props.currentEnvironmentId}
+          team={selected}
+          onClose={() => setSelected(null)}
+          onStarted={(team) => {
+            props.receipt.giveStarted({
+              teamId: team.ownerId,
+              line: givenLine(props.hostName, team),
+            });
+          }}
+          onGiven={(team) => {
+            props.receipt.show(givenLine(props.hostName, team));
+            setSelected(null);
+          }}
+        />
       )}
-    </div>
+    </>
+  );
+}
+
+function givenLine(hostName: string, team: EnvironmentDescriptorV11): string {
+  return `${hostName} now belongs to ${team.label}. Any Admin or Editor of the team can claim it as their own.`;
+}
+
+function EnvironmentSourceSelect(
+  props: EnvironmentSourceSelectProps & {
+    readonly teams: readonly EnvironmentDescriptorV11[];
+    readonly onChooseTeam: (team: EnvironmentDescriptorV11) => void;
+  },
+): ReactNode {
+  const current = props.options.find((option) => option.value === props.value);
+  return (
+    <Select
+      value={props.value}
+      onValueChange={(value) => {
+        const team = props.teams.find(
+          (item) => `team:${item.environmentId}` === value,
+        );
+        if (team !== undefined) {
+          props.onChooseTeam(team);
+          return;
+        }
+        const option = props.options.find((item) => item.value === value);
+        if (option === undefined || value === props.value) return;
+        props.onChoose(option);
+      }}
+    >
+      <TooltipWrapper
+        label={current === undefined ? null : current.label}
+        side="top"
+        sideOffset={undefined}
+        align="end"
+      >
+        <span className="max-w-full">
+          <SelectTrigger
+            size="sm"
+            aria-label="Environment"
+            className="max-w-[40vw] sm:max-w-64"
+          >
+            <SelectValue />
+          </SelectTrigger>
+        </span>
+      </TooltipWrapper>
+      <SelectContent align="end">
+        {props.teams.map((team) => (
+          <SelectItem
+            key={team.environmentId}
+            value={`team:${team.environmentId}`}
+          >
+            <EnvironmentOptionLabel
+              label={team.label}
+              detail="Use this computer for the team"
+            />
+          </SelectItem>
+        ))}
+        {props.options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            <EnvironmentOptionLabel
+              label={option.label}
+              detail={option.detail}
+            />
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function EnvironmentOptionLabel(props: {
+  readonly label: string;
+  readonly detail: string | null;
+}): ReactNode {
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-0.5">
+      <span className="truncate">{props.label}</span>
+      {props.detail === null ? null : (
+        <span className="text-ui-xs text-muted-foreground in-data-[slot=select-trigger]:hidden">
+          {props.detail}
+        </span>
+      )}
+    </span>
   );
 }
 
 /**
- * The settings card where the Overview draws it, above the tabs: read through
- * the picked host, and nothing while the host cannot be read, predates
- * `environment.status`, or is a team's (whose own lines `Access and setup`
- * names under the team).
+ * The rail follows a resolved source. A loading row and a failed read pass
+ * null and leave the dropdown where the person put it.
  */
+function railFollowKey(pick: EnvironmentPick): string {
+  if (pick.kind === "local") {
+    return `${environmentPickValue(pick)}:${pick.hostName}`;
+  }
+  return environmentPickValue(pick);
+}
+
+/**
+ * Writes the host's source into the rail once per source. The source is
+ * remembered even when the rail already shows it, so a pick made afterwards
+ * is never replaced by it. A stale Local pick arrives as null and is never
+ * written.
+ */
+function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
+  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const current = useSettingsEnvironmentPickStore(
+    (state) => state.pick ?? state.defaultPick,
+  );
+  const nextKey = pick === null ? null : railFollowKey(pick);
+  const currentKey = railFollowKey(current);
+  const held = useRef<string | null>(null);
+  useEffect(() => {
+    if (pick === null || nextKey === null) return;
+    if (held.current === nextKey) return;
+    held.current = nextKey;
+    if (nextKey !== currentKey) setPick(pick);
+  }, [pick, nextKey, currentKey, setPick]);
+}
+
+/**
+ * A Local pick the Environment dropdown would keep. One it would drop
+ * (`isStaleLocalPick`: no Local row, or a row that needs an update) is not
+ * written. The stopped-move row still shows the computer's name; the rail
+ * stays where it is, because Personal is not what that row shows.
+ */
+function selectableLocalPick(
+  hostId: string,
+  hostName: string,
+  status: EnvironmentStatusResponseV11,
+  version: NegotiatedMethodVersion,
+): EnvironmentPick | null {
+  const pick: EnvironmentPick = { kind: "local", hostId, hostName };
+  const row = localPickerRow({ hostId, name: hostName }, status, version);
+  const stale = isStaleLocalPick(
+    pick,
+    {
+      localRows: row === null ? [] : [row],
+      defaultPick: PERSONAL_PICK,
+    },
+    new Map([[hostId, status]]),
+  );
+  return stale ? null : pick;
+}
+
+function settingsRailPick(input: {
+  readonly model: Exclude<HostSettingsRowModel, { kind: "loading" }>;
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly status: EnvironmentStatusResponseV11;
+  readonly version: NegotiatedMethodVersion;
+}): EnvironmentPick | null {
+  const { model, hostId, hostName, status, version } = input;
+  if (model.kind === "team") {
+    return { kind: "team", environmentId: model.environmentId };
+  }
+  if (model.kind === "progress") {
+    return model.progress.kind === "moving"
+      ? PERSONAL_PICK
+      : selectableLocalPick(hostId, hostName, status, version);
+  }
+  return model.value === "local"
+    ? selectableLocalPick(hostId, hostName, status, version)
+    : PERSONAL_PICK;
+}
+
+/** A failed read shows nothing. Pending reads reserve the control. */
 export function HostOverviewSettingsCardSlot(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly hostName: string;
   readonly usable: boolean;
+  readonly owner: HostOwnerPrincipal | null;
+  readonly isLocalMachine: boolean;
+  readonly receipt: OwnershipReceipt;
+  /** The card shows again after a time it could not: the host is back. */
+  readonly onReturn: () => void;
 }): ReactNode {
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const status = useEnvironmentStatusRead(
     props.client,
     props.hostId,
     props.usable,
   );
-  if (
+  const bindingSupport = useHostMethodSupport(
+    props.hostId,
+    readsHostBindingsFromPool()
+      ? "environment.binding.read"
+      : "environment.host.read",
+  );
+  const binding = useEnvironmentHostReadQuery(
+    props.client,
+    props.hostId,
+    props.usable && bindingSupport === true,
+  );
+  const hidden =
+    !props.usable ||
     props.client === null ||
     props.hostId === null ||
-    status.data === null ||
-    status.data.principal?.kind === "team"
-  ) {
-    return null;
-  }
+    status.supported === false ||
+    status.isError ||
+    (bindingSupport === false && binding.kind !== "own_settings") ||
+    binding.kind === "failed" ||
+    (binding.kind === "binding" && binding.query.isError);
+  const wasHidden = useRef(hidden);
+  const { onReturn } = props;
+  useEffect(() => {
+    if (wasHidden.current && !hidden) onReturn();
+    wasHidden.current = hidden;
+  }, [hidden, onReturn]);
+  if (hidden) return null;
   return (
     <HostOverviewSettingsCard
+      key={JSON.stringify([props.hostId, userId])}
       client={props.client}
       hostId={props.hostId}
       hostName={props.hostName}
       status={status.data}
+      binding={binding.kind === "binding" ? (binding.query.data ?? null) : null}
+      owner={props.owner}
+      isLocalMachine={props.isLocalMachine}
+      receipt={props.receipt}
     />
+  );
+}
+
+function TransferReceipt(props: { readonly value: string | null }): ReactNode {
+  return props.value === null ? null : (
+    <p role="status" className="text-ui-sm">
+      {props.value}
+    </p>
   );
 }

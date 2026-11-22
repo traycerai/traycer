@@ -20,7 +20,10 @@ import {
   type RequestContext,
 } from "@traycer/protocol/auth/request-context";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
-import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
+import {
+  AUTHENTICATED_USER_FIXTURE_ID,
+  createAuthenticatedUserFixture,
+} from "../../test-fixtures/authenticated-user";
 import type {
   WebSocketCloseEvent,
   WebSocketErrorEvent,
@@ -112,6 +115,7 @@ function makeWsStreamClient(
     endpoint: () => mockLocalHostEntry,
     hostId: mockLocalHostEntry.hostId,
     bearer: () => ctx?.credentials ?? null,
+    userId: AUTHENTICATED_USER_FIXTURE_ID,
     auth: null,
     clock: null,
     hostCredentialMint: null,
@@ -418,13 +422,65 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     sockets[0].fireText({
       kind: "permissionChanged",
       epicId: "epic-1",
-      permissionRole: "viewer",
+      permissionRole: "editor",
       hasBinaryPayload: false,
     });
 
     expect(recorder.updates).toHaveLength(1);
     expect(recorder.awareness).toHaveLength(1);
-    expect(recorder.permissionChanges).toEqual(["viewer"]);
+    expect(recorder.permissionChanges).toEqual(["editor"]);
+    client.close();
+  });
+
+  it("delivers a permission frame naming the viewer role as editor, the access it gives", () => {
+    const { factory, sockets } = makeFactory();
+    const recorder = makeRecorder();
+    const client = new EpicStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
+    });
+    completeHandshake(sockets[0]);
+
+    sockets[0].fireText({
+      kind: "permissionChanged",
+      epicId: "epic-1",
+      permissionRole: "viewer",
+      hasBinaryPayload: false,
+    });
+
+    expect(recorder.permissionChanges).toEqual(["editor"]);
+    client.close();
+  });
+
+  it("delivers a role nothing recognises as no role, never as a grant", () => {
+    const { factory, sockets } = makeFactory();
+    const recorder = makeRecorder();
+    const client = new EpicStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
+    });
+    completeHandshake(sockets[0]);
+
+    // A value a newer host invented. Whether the transport drops the frame or
+    // hands it on, it must never arrive as a role somebody holds.
+    sockets[0].fireText(
+      Object.assign(
+        {
+          kind: "permissionChanged" as const,
+          epicId: "epic-1",
+          hasBinaryPayload: false as const,
+        },
+        { permissionRole: "supervisor" },
+      ),
+    );
+
+    expect(recorder.permissionChanges.every((role) => role === null)).toBe(
+      true,
+    );
     client.close();
   });
 

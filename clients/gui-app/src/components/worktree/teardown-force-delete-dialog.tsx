@@ -32,10 +32,10 @@ export function TeardownForceDeleteDialog(props: {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,34rem)] overflow-hidden sm:max-w-xl"
+        className="flex w-[min(92vw,34rem)] flex-col overflow-hidden sm:max-w-xl"
         data-testid="teardown-force-delete-dialog"
       >
-        <div className="flex min-w-0 items-start gap-3 p-5">
+        <div className="flex min-w-0 shrink-0 items-start gap-3 p-5">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
             <AlertTriangle className="size-4" aria-hidden />
           </div>
@@ -49,11 +49,11 @@ export function TeardownForceDeleteDialog(props: {
             </DialogDescription>
           </div>
         </div>
-        <div className="min-w-0 px-5 pb-4">
+        <div className="min-h-0 min-w-0 overflow-y-auto px-5 pb-4">
           <TeardownDisclosure holders={props.holders} agentNames={agentNames} />
         </div>
         <div
-          className="flex min-w-0 flex-wrap justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3"
+          className="flex min-w-0 shrink-0 flex-wrap justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3"
           data-testid="teardown-force-delete-footer"
         >
           <Button

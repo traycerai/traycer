@@ -687,7 +687,7 @@ describe("SwitcherBrowsersList over the task-wide catalog", () => {
 
     expect(
       screen.getByTestId("browser-device-group-host-1").textContent,
-    ).toContain("Local");
+    ).toContain("Home Mac");
     expect(
       screen.getByTestId("browser-device-group-host-2").textContent,
     ).toContain("Work Mac");
@@ -707,7 +707,7 @@ describe("SwitcherBrowsersList over the task-wide catalog", () => {
     await user.click(screen.getByTestId("switcher-browsers-filter"));
     await user.click(
       await screen.findByRole("menuitemcheckbox", {
-        name: "Show offline devices",
+        name: "Show offline hosts",
       }),
     );
 

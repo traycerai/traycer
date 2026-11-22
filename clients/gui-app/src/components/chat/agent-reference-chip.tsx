@@ -5,7 +5,7 @@ import {
   type AgentReferenceResolution,
   type AgentTreeRecord,
 } from "@/components/chat/agent-reference-resolution";
-import { TaskReferenceChip } from "@/components/chat/task-reference-chip";
+import { ThreadReferenceChip } from "@/components/chat/thread-reference-chip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useEpicAgentOpenRef } from "@/hooks/epic/use-epic-agent-open-ref";
@@ -29,10 +29,10 @@ interface AgentReferenceChipProps {
 
 /**
  * Markdown turns any id-shaped token into one of these. An agent or role
- * claim of the open epic it names wins; otherwise it is a task's chip or the
- * id as written ({@link TaskReferenceChip}), which is also all it can be with
- * no open epic behind it (a bot's channel, the layout editor's sample
- * transcript).
+ * claim of the open epic it names wins; otherwise it is a thread's, a task's
+ * chip or the id as written ({@link ThreadReferenceChip}), which is also all
+ * it can be with no open epic behind it (a bot's channel, the layout editor's
+ * sample transcript).
  */
 export function AgentReferenceChip(props: AgentReferenceChipProps) {
   return (
@@ -101,16 +101,19 @@ function AgentReferenceButton(props: {
   });
   const openAgent = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      openTile({
-        node: buildOpenRef(),
-        target: { epicId: props.epicId },
-        // A chip is a button, like every other agent-opening control here.
-        gesture: "explicit",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: buildOpenRef(),
+          target: { epicId: props.epicId },
+          // A chip is a button, like every other agent-opening control here.
+          gesture: "explicit",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [props.epicId, buildOpenRef, openTile],
   );
@@ -142,6 +145,6 @@ function AgentReferenceButton(props: {
 
 function notAnAgent(props: AgentReferenceChipProps) {
   return (
-    <TaskReferenceChip referenceId={props.agentId} display={props.display} />
+    <ThreadReferenceChip referenceId={props.agentId} display={props.display} />
   );
 }

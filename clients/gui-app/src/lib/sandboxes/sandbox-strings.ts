@@ -11,6 +11,7 @@ import type {
   SandboxCreditSource,
   SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   formatCredits,
   formatCreditsRequired,
@@ -22,7 +23,13 @@ import {
  * as shown against it, so changing a clause's words re-opens the block for
  * everyone once.
  */
-export const CONSEQUENCES_WORDING_VERSION = 1;
+export const CONSEQUENCES_WORDING_VERSION = 4;
+
+export const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
+
+export const SANDBOX_SETUP_CHARGES =
+  "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.";
 
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
@@ -111,10 +118,7 @@ export function collapsedConfigurationsLabel(
 }
 
 /** The search field above a host list. */
-export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
-
-/** The chip and row title of the machine this app runs on. */
-export const THIS_COMPUTER = "This computer";
+export const SEARCH_HOSTS_PLACEHOLDER = "Search computers";
 
 /** A computer row's status: it answers. */
 export const COMPUTER_ACTIVE = "Active";
@@ -141,7 +145,7 @@ export function computerSubLine(parts: readonly (string | null)[]): string {
 }
 
 /** The sub-line of a computer whose settings are not in Personal yet. */
-export const LOCAL_SUB_LINE = "Local · its own settings, not in Personal yet";
+export const LOCAL_SUB_LINE = "Local · runs its own settings, not Personal's";
 
 /** The search found nothing of the viewer's. */
 export function noHostMatchesLine(term: string): string {
@@ -152,16 +156,21 @@ export const NO_MATCH_ELSEWHERE_LINE =
 
 // ── Money ─────────────────────────────────────────────────────────────────
 
-/** `uses your credits` / `uses your Acme credits`. */
+/** A team's sandbox is paid from the team's credits whoever woke it, so every sentence names the team. */
+export function teamPossessive(teamName: string): string {
+  return `${teamName}'s`;
+}
+
+/** `uses your credits` / `uses Acme's credits`. */
 export function usesCreditsClause(
   configuration: SandboxConfigurationCopy,
 ): string {
   return configuration.kind === "personal"
     ? "uses your credits"
-    : `uses your ${configuration.teamName} credits`;
+    : `uses ${teamPossessive(configuration.teamName)} credits`;
 }
 
-/** The cost line: `$0.12 an hour while awake · uses your Acme credits`. */
+/** The cost line: `$0.12 an hour while awake · uses Acme's credits`. */
 export function costLine(
   priceMcPerHour: number,
   configuration: SandboxConfigurationCopy,
@@ -192,7 +201,7 @@ export function hourlyRate(mcPerHour: number): string {
 
 /**
  * A sandbox's rates: `$0.21 an hour while awake · under $0.01 an hour while
- * resting`. Resting is the higher of the suspended and stopped storage
+ * suspended or stopped`. The second figure is the higher of the two storage
  * rates, so the figure never understates either.
  */
 export function awakeAndRestingRates(price: {
@@ -200,7 +209,7 @@ export function awakeAndRestingRates(price: {
   readonly suspendedMc: number;
   readonly stoppedMc: number;
 }): string {
-  return `${hourlyRate(price.awakeMc)} while awake · ${hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))} while resting`;
+  return `${hourlyRate(price.awakeMc)} while awake · ${hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))} while suspended or stopped`;
 }
 
 /** The chip's short price: `$0.12/h`. */
@@ -227,6 +236,36 @@ export function needsCreditsRow(priceMcPerHour: number): string {
 
 export const ADD_CREDITS_LINK = "Add credits ↗";
 
+/** Not shown yet: `shown` is the one switch that shows it. */
+export const ONLY_TEAM_ADMINS_CAN_ADD_CREDITS =
+  "Only team admins can add credits.";
+export const ONLY_TEAM_ADMINS_LINE: { readonly shown: boolean } = {
+  shown: false,
+};
+
+// Only a team's Admin can buy its credits, so anyone else reads these instead of
+// being told to add credits. A wake refused by an older server, which does not say
+// whose credits were short, keeps the add-credits sentence.
+
+export function teamCreditsRanOutLine(teamName: string): string {
+  return `${teamPossessive(teamName)} credits ran out.`;
+}
+
+export function teamSandboxOutOfCreditsLine(teamName: string): string {
+  return `${SANDBOX_OUT_OF_CREDITS} ${teamPossessive(teamName)} bundle is out.`;
+}
+
+export function teamOutOfCreditsHeadline(teamName: string): string {
+  return `Paused: ${teamName} is out of credits`;
+}
+
+export function onceTeamHasCreditsLine(teamName: string): string {
+  return `This sandbox ran out of credits, which ended the turn. Once ${teamName} has credits again, send a message to pick up where it stopped.`;
+}
+
+export const TEAM_CREDITS_DONT_COVER_AN_HOUR =
+  "The team's credits don't cover an hour of this sandbox.";
+
 // ── The consequences block ────────────────────────────────────────────────
 
 /** The audience clause: the task has or may gain readers beyond the person. */
@@ -235,7 +274,7 @@ export function audienceClause(
 ): string {
   return configuration.kind === "personal"
     ? "Chats and files in this task are visible to everyone in the task."
-    : `Chats and files in this task are visible to everyone in the task, who may be outside ${configuration.teamName}.`;
+    : "Chats and files in this task are visible to everyone in the task, who may be outside the team.";
 }
 
 /**
@@ -252,20 +291,18 @@ export function reachRemedyLine(teamName: string): string {
   return `To work together, start this agent on a host in ${teamName}.`;
 }
 
-/** The team clause. */
-export function teamClause(teamName: string): string {
-  return `Everyone in ${teamName} can use it, and agents here run as the host: another member's agent can read what yours can.`;
+/**
+ * Who else can use a team sandbox, and what their agent can read.
+ * Payment stays on the price line, beside the standing cost.
+ */
+export function teamAccessClause(teamName: string): string {
+  return `Everyone in ${teamName} can use it; another member's agent can read what yours can.`;
 }
 
 export const RESTING_STORAGE_CLAUSE =
-  "Storage while it rests, on the same credits until another member wakes it.";
+  "Storage while it's suspended or stopped, on the same credits.";
 export function restingStorageClause(): string {
   return RESTING_STORAGE_CLAUSE;
-}
-
-export const SHARED_USE_CLAUSE = "Other members can use it while you pay.";
-export function sharedUseClause(): string {
-  return SHARED_USE_CLAUSE;
 }
 
 /** The move clause: `computer` still holds settings not in Personal yet. */
@@ -299,29 +336,38 @@ export function wakeString(suspendFidelity: string): string | null {
   }
 }
 
-/** `Suspends after 30 idle min · destroyed after 7 resting days`. */
+/** `Suspends after 30 idle min · destroyed after 7 days suspended or stopped`. */
 export function idleAndRestingLine(
   idleMinutes: number,
   destroyAfterRestingMinutes: number | null,
 ): string {
-  const idle = `Suspends after ${idleMinutes} idle min`;
+  const idle = idleLine(idleMinutes);
   // `0` is never, as the server spells it.
   return destroyAfterRestingMinutes === null || destroyAfterRestingMinutes === 0
     ? `${idle} · ${KEPT_UNTIL_YOU_DESTROY_IT}`
-    : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)}`;
+    : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)} suspended or stopped`;
 }
 
-/** `7 resting days`, `12 resting hours`, `45 resting minutes`. */
+/**
+ * `Suspends after 30 idle min`: the idle half alone, for a row whose resting
+ * policy says nothing about how long it is kept, as a withdrawn row's does
+ * not. The two share this clause so they cannot drift apart.
+ */
+export function idleLine(idleMinutes: number): string {
+  return `Suspends after ${idleMinutes} idle min`;
+}
+
+/** `7 days`, `12 hours`, `45 minutes`. */
 export function restingPeriodLabel(minutes: number): string {
   if (minutes % (24 * 60) === 0) {
     const days = minutes / (24 * 60);
-    return `${days} resting ${days === 1 ? "day" : "days"}`;
+    return `${days} ${days === 1 ? "day" : "days"}`;
   }
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
-    return `${hours} resting ${hours === 1 ? "hour" : "hours"}`;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
   }
-  return `${minutes} resting ${minutes === 1 ? "minute" : "minutes"}`;
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
 export const KEPT_UNTIL_YOU_DESTROY_IT = "kept until you destroy it";
@@ -331,8 +377,8 @@ export const CHANGE_LABEL = "Change";
 
 /**
  * The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`.
- * `priceIsFrom` reads the price as a lower bound (`from $0.12/h`): the
- * balance is short, or the price is the region's smallest shape's.
+ * `priceIsFrom` reads the price as a lower bound (`from $0.12/h`): the price
+ * is the region's smallest shape's, not an exact catalogue price.
  */
 export function stagedChipLabel(args: {
   readonly configuration: SandboxConfigurationCopy;
@@ -406,24 +452,50 @@ function notEnoughCreditsText(
   return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
-/** Short for an hour on a team allowance; `null` names no amount. */
-export function teamAllowanceShortLine(
+/**
+ * Short for an hour of a team's sandbox, which the team's credits pay;
+ * `null` names no amount.
+ */
+export function teamCreditsShortLine(
   teamName: string,
   shortfallMc: number | null,
 ): string {
+  const whose = teamPossessive(teamName);
   if (shortfallMc === null) {
-    return `Your ${teamName} allowance is too short to start this sandbox for an hour.`;
+    return `${whose} credits don't cover an hour of this sandbox.`;
   }
   const amount = formatSandboxDollarsRequired(shortfallMc);
-  return `Your ${teamName} allowance is short ${amount}. ${amount} more starts this sandbox for an hour.`;
+  return `${whose} credits are short ${amount}. ${amount} more starts this sandbox for an hour.`;
+}
+
+function knownTeamName(
+  configuration: SandboxConfigurationCopy | null,
+): string | null {
+  return configuration?.kind === "team" ? configuration.teamName : null;
 }
 
 /**
  * A spend refusal names the pot checked, with amounts rounded up for top-up.
  * Sentence/clause context is independent of whether this starts or wakes.
+ * `configuration` is `null` where the app does not know whose sandbox it is:
+ * nothing is then told as the person's own, neither their balance nor an
+ * amount for them to add, and a team pot reads as no team configuration
+ * known.
  */
 export function sandboxCreditShortLine(
-  configuration: SandboxConfigurationCopy,
+  configuration: SandboxConfigurationCopy | null,
+  creditSource: SandboxCreditSource | null,
+  shortfallMc: number | null,
+  options: SandboxCreditLineOptions,
+): string {
+  if (configuration === null && creditSource !== "team") {
+    return notEnoughCreditsText(null, options);
+  }
+  return potCreditShortLine(configuration, creditSource, shortfallMc, options);
+}
+
+function potCreditShortLine(
+  configuration: SandboxConfigurationCopy | null,
   creditSource: SandboxCreditSource | null,
   shortfallMc: number | null,
   options: SandboxCreditLineOptions,
@@ -433,17 +505,25 @@ export function sandboxCreditShortLine(
     return notEnoughCreditsText(shortfallMc, options);
   }
   const allowance = creditSource === "team-allowance";
-  const whose = context === "sentence" ? "Your" : "your";
+  const sentence = context === "sentence";
+  const whose = sentence ? "Your" : "your";
   // The refusal names the pot; the configuration only supplies the team's
   // name. A refusal from a team pot with no team configuration known (the
   // directory had no row) still says it was the team's, never the person's.
+  // A member's allowance is the member's own; the team's credits are the
+  // team's, whoever woke the sandbox.
+  const teamName = knownTeamName(configuration);
   let pot = `${whose} credits`;
-  if (creditSource !== "personal") {
-    if (configuration.kind === "team") {
-      pot = `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`;
-    } else {
-      pot = `${whose} ${allowance ? "team allowance" : "team's credits"}`;
-    }
+  if (allowance) {
+    pot =
+      teamName === null
+        ? `${whose} team allowance`
+        : `${whose} ${teamName} allowance`;
+  } else if (creditSource === "team") {
+    pot =
+      teamName === null
+        ? `${whose} team's credits`
+        : `${teamPossessive(teamName)} credits`;
   }
   if (shortfallMc === null) {
     if (!waking && allowance)
@@ -618,23 +698,8 @@ export function sandboxVerbPendingLine(
 export function sandboxVerbFailureLine(
   verb: SandboxLifecycleVerb | "destroy",
   name: string,
-  reference: string,
 ): string {
-  const sentence =
-    verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
-  return `${sentence} · ${reference}`;
-}
-
-export const COMPUTE_CHARGED_WHILE_AWAKE =
-  "Compute is charged while it is awake.";
-
-/** A settings failure's line once its sandbox is no longer awake: no claim it is. */
-export function settingsDidntApplyOnLine(
-  configuration: string,
-  name: string,
-  reference: string,
-): string {
-  return `${configuration}'s settings didn't apply on ${name} · ${reference}`;
+  return verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
 }
 
 export const RETRY_APPLYING = "Retry applying";
@@ -642,7 +707,7 @@ export const STOP = "Stop";
 
 /** The settled line's idle rule, with the configured period. */
 export function idleRuleLine(idleMinutes: number): string {
-  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
+  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it's suspended or stopped.`;
 }
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────
@@ -682,9 +747,19 @@ export const FILES_NOT_RECOVERABLE =
   "Files on this sandbox cannot be recovered; published chats stay readable.";
 
 /** Keep's preview before it acts. */
+const KEEP_STOPS_DELETING = "Stops deleting itself when idle.";
+
 export function keepPreviewLine(restingDays: number, date: string): string {
-  return `Stops deleting itself when idle. Destroyed after ${restingDays} resting days instead, on ${date} if it rests from now. Paid by you while awake.`;
+  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} days instead, on ${date} if it's suspended or stopped from now on.`;
 }
+
+/**
+ * The Keep preview for a row whose withdrawal, not its resting policy,
+ * decides how long it is kept: the resting sentence is left out rather than
+ * naming a destroy the resting pass will not perform. The payer is stated
+ * separately by the dialog from the current wake.
+ */
+export const KEEP_PREVIEW_WITHDRAWN = KEEP_STOPS_DELETING;
 
 export function alreadyDestroyedLine(name: string): string {
   return `${name} was already destroyed`;
@@ -705,6 +780,7 @@ export function hoverTaskConfiguration(teamName: string | null): string {
   return `a sandbox of ${teamName ?? "a team"}`;
 }
 
+/** Other agents on this computer, named in one sentence. */
 export function hoverAlsoInTask(names: string): string {
   return `Also in this task on it: ${names}`;
 }

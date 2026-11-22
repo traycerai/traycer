@@ -43,6 +43,10 @@ const bakedConfig = {
   // to the matching host/CLI release version. Dev and dogfood bundle flows
   // keep it null so local archives or explicit `--release` remain in charge.
   supportedHostVersion: null as string | null,
+  // Release builds stamp the verified authority revision; source builds have no floor.
+  hostFeedFloor: null as string | null,
+  cliFeedFloor: null as string | null,
+  releaseCdnBaseUrl: "https://releases.traycer.ai",
   // Rolling releases are target-scoped. Staging clients must never fall back
   // to production merely because both manifests use the same asset name.
   hostDiscoveryTag: "released-host-versions",
@@ -83,12 +87,17 @@ export function configuredReleaseRepo(): string {
   return repo.length === 0 ? DEFAULT_RELEASE_REPO : repo;
 }
 
-export function releaseManifestUrl(manifestTag: string): string {
-  return `https://github.com/${configuredReleaseRepo()}/releases/download/${manifestTag}/versions.json`;
+export type ReleaseFeed = "host" | "cli";
+
+export function signedFeedUrls(feed: ReleaseFeed): readonly string[] {
+  const tag = feed === "host" ? config.hostDiscoveryTag : config.cliFeedTag;
+  const github = `https://github.com/${configuredReleaseRepo()}/releases/download/${tag}/versions.signed.json`;
+  const cdnBase = config.releaseCdnBaseUrl.replace(/\/+$/, "");
+  return cdnBase.length === 0
+    ? [github]
+    : [`${cdnBase}/${feed}/versions.signed.json`, github];
 }
 
-// Host release registry. The canonical `versions.json` is published as an
-// asset on the rolling `released-host-versions` GitHub Release of config.releaseRepo.
-// Production and staging stamp distinct rolling tags; dev hosts come from the
-// working tree.
-export const hostRegistryUrl = releaseManifestUrl(config.hostDiscoveryTag);
+export function releaseFeedTarget(): "production" | "staging" {
+  return config.environment === "staging" ? "staging" : "production";
+}

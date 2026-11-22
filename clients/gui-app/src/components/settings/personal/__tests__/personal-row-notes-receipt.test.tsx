@@ -14,7 +14,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 });
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,7 +26,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
@@ -49,7 +49,6 @@ import {
 
 const HOST_ID = "host-a";
 const HOST_NAME = "dev-box";
-const OFFLINE_LINE = "Changes apply on dev-box when it reconnects.";
 
 afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -72,7 +71,7 @@ function RowNotesProbe(): ReactNode {
 /**
  * The page under the host runtime Settings gives it: the real provider, and
  * the scope's client re-provided the way a host-scoped panel does, so the
- * page's own chip reads the same host the page does.
+ * page reads the same host the panel does.
  */
 function ScopedHostRuntime(props: {
   readonly handlers: MockHandlerMap<HostRpcRegistry>;
@@ -124,12 +123,18 @@ function ScopedBinding(props: { readonly children: ReactNode }): ReactNode {
 interface MountedPage {
   /** Change what the host answers, then make the page read it again. */
   readonly hostNowAnswers: (
-    status: EnvironmentStatusResponseV11,
+    status: EnvironmentStatusResponseV13,
   ) => Promise<void>;
 }
 
-function mountPageOver(first: EnvironmentStatusResponseV11): MountedPage {
-  const answer: { current: EnvironmentStatusResponseV11 } = { current: first };
+function reachabilityOf(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const reachability: unknown = Reflect.get(data, "reachability");
+  return typeof reachability === "string" ? reachability : null;
+}
+
+function mountPageOver(first: EnvironmentStatusResponseV13): MountedPage {
+  const answer: { current: EnvironmentStatusResponseV13 } = { current: first };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () => answer.current,
     "environment.localOverrides": () => ({ overrides: [] }),
@@ -165,8 +170,23 @@ function mountPageOver(first: EnvironmentStatusResponseV11): MountedPage {
   );
   return {
     hostNowAnswers: async (status) => {
+      const changedAt = Date.now();
       answer.current = status;
       await queryClient.invalidateQueries();
+      // The page's own read now holds the new answer, and it has rendered.
+      await vi.waitFor(() => {
+        expect(
+          queryClient
+            .getQueryCache()
+            .getAll()
+            .some(
+              (query) =>
+                query.state.dataUpdatedAt >= changedAt &&
+                reachabilityOf(query.state.data) === status.reachability,
+            ),
+        ).toBe(true);
+      });
+      await act(async () => {});
     },
   };
 }
@@ -178,13 +198,8 @@ function notes(): string[] {
     .sort();
 }
 
-/** The page's status line, or null while the page has nothing to say. */
-function statusLine(): string | null {
-  return screen.queryByTestId("personal-page-status")?.textContent ?? null;
-}
-
 function waitingEdit(
-  reachability: EnvironmentStatusResponseV11["reachability"],
+  reachability: EnvironmentStatusResponseV13["reachability"],
 ) {
   return environmentStatusFixture({
     reachability,
@@ -193,14 +208,11 @@ function waitingEdit(
 }
 
 describe("an edit made while the host is out of reach", () => {
-  it("is Pending, with the page saying changes wait for the reconnect, until the receipt is accepted", async () => {
+  it("is Pending, with no delivery line on the page, until the receipt is accepted", async () => {
     const page = mountPageOver(waitingEdit("reconnecting"));
     await vi.waitFor(() => {
       expect(notes()).toEqual(["EDITED: pending"]);
     });
-    expect(
-      (await screen.findByTestId("personal-page-status")).textContent,
-    ).toBe(OFFLINE_LINE);
 
     await page.hostNowAnswers(
       environmentStatusFixture({
@@ -218,7 +230,6 @@ describe("an edit made while the host is out of reach", () => {
     await vi.waitFor(() => {
       expect(notes()).toEqual([]);
     });
-    expect(statusLine()).not.toBe(OFFLINE_LINE);
   });
 
   it("stays Pending across a reconnect that has not yet delivered its receipt", async () => {
@@ -229,9 +240,6 @@ describe("an edit made while the host is out of reach", () => {
 
     await page.hostNowAnswers(waitingEdit("connected"));
 
-    await vi.waitFor(() => {
-      expect(statusLine()).not.toBe(OFFLINE_LINE);
-    });
     expect(notes()).toEqual(["EDITED: pending"]);
   });
 

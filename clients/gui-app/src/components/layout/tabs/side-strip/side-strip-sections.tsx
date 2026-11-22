@@ -1,4 +1,4 @@
-import { use, useEffect, useMemo, type ReactNode } from "react";
+import { use, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useActiveHeaderTab } from "@/components/epic-canvas/dnd/dnd-store";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
@@ -30,7 +30,14 @@ import { StripNeedsYouChip } from "./strip-needs-you-chip";
 import { StripRowMotion } from "./strip-row-motion";
 import { StripSectionHeader } from "./strip-section-header";
 import { useStripSectionFolded } from "./strip-section-fold";
-import { holdInPlace, useStripSectionHolds } from "./strip-section-hold";
+import {
+  holdInPlace,
+  type StripSectionHold,
+  useCurrentSectionHold,
+  useReleasedSectionHolds,
+  useStripPointerInside,
+  useStripSectionHolds,
+} from "./strip-section-hold";
 import { sectionStyleOf, twoLineStatusOf } from "./strip-section-row";
 import {
   sectionSegmentsOf,
@@ -62,7 +69,10 @@ import { StripSectionsContext } from "./strip-sections-context";
  *
  * A task that changes section slides there and glows, unless the pointer is on
  * its row or keyboard focus is, in which case it stays until the person leaves
- * it. Arrivals in Needs you are announced, and while that section's header is
+ * it. The current task's row rises with its state and never sinks: it stays
+ * in the most urgent section it has been in until another task is opened,
+ * and then until the pointer is out of the list, so no row moves under it.
+ * Needs you counts only the tasks still waiting on the person. Arrivals in Needs you are announced, and while that section's header is
  * out of view the header stuck on top holds a "↑ N need you" chip.
  */
 export function SideStripSections(props: {
@@ -79,10 +89,34 @@ export function SideStripSections(props: {
     props;
   const assigned = use(StripSectionsContext);
   const holds = useStripSectionHolds(scroller);
-  const sections = useMemo(
-    () => holdInPlace(assigned, holds),
-    [assigned, holds],
+  // The rows waiting from the last render: a waiting row opened again is
+  // still drawn where it waits, which is where its hold as the current one starts.
+  const [heldOver, setHeldOver] = useState<ReadonlyArray<StripSectionHold>>([]);
+  const current = useCurrentSectionHold(
+    assigned,
+    controller.layoutItems,
+    controller.activeItemId,
+    heldOver.length === 0 ? holds : [...heldOver, ...holds],
   );
+  const released = useReleasedSectionHolds(
+    current,
+    assigned,
+    useStripPointerInside(scroller),
+    holds,
+  );
+  if (released !== heldOver) setHeldOver(released);
+  // A row the person is on is held where it is drawn, over the current task's hold.
+  const sections = useMemo(
+    () =>
+      holdInPlace(assigned, [
+        ...released,
+        ...(current === null ? [] : [current]),
+        ...holds,
+      ]),
+    [assigned, released, current, holds],
+  );
+  // The current task's row is drawn by being the current one.
+  const held = useMemo(() => [...released, ...holds], [released, holds]);
   const announcement = useNeedsYouAnnouncement(assigned);
   const slide = useMotionEnabled();
   const { keys, offsets } = useMemo(() => visualOrderOf(sections), [sections]);
@@ -113,13 +147,12 @@ export function SideStripSections(props: {
         )
       : sections;
   // The chip rides in the header in front on the top edge, never in one
-  // being pushed out from under it.
+  // being pushed out from under it, and only while a task waits: a row only
+  // held in Needs you is nothing to go back up for.
+  const waiting = needsYou === undefined ? 0 : sectionTaskCount(needsYou);
   const chip =
-    needsYouAbove && scroller !== null && needsYou !== undefined ? (
-      <StripNeedsYouChip
-        scroller={scroller}
-        count={sectionTaskCount(needsYou)}
-      />
+    needsYouAbove && scroller !== null && waiting > 0 ? (
+      <StripNeedsYouChip scroller={scroller} count={waiting} />
     ) : null;
   return (
     <>
@@ -131,6 +164,7 @@ export function SideStripSections(props: {
             variant={variant}
             chip={group.section === stuck ? chip : null}
             memberOffsets={offsets}
+            held={held}
             controller={controller}
             handlers={handlers}
           />
@@ -161,10 +195,12 @@ function StripSectionRows(props: {
   readonly chip: ReactNode | null;
   /** Tabs drawn before each item, for its Alt-digit badge. */
   readonly memberOffsets: ReadonlyMap<string, number>;
+  /** The rows a hold keeps where they are drawn, this section's among them. */
+  readonly held: ReadonlyArray<StripSectionHold>;
   readonly controller: TabStripController;
   readonly handlers: SideStripHandlers;
 }): ReactNode {
-  const { group, variant, memberOffsets, controller, handlers } = props;
+  const { group, variant, memberOffsets, held, controller, handlers } = props;
   const rail = variant === "collapsed";
   const [folded] = useStripSectionFolded(group.section);
   const draggedItemId = useActiveHeaderTab()?.stripItemId ?? null;
@@ -172,15 +208,19 @@ function StripSectionRows(props: {
     (entry): entry is StripTabEntry => entry.kind === "tabs",
   );
   // A folded section keeps the current task's row, so the person still sees
-  // where they are; the header's count is still the whole section's. The rail
-  // has no header to fold from, so it draws every tile.
+  // where they are, and every row a hold keeps in it: one waiting there, under
+  // the pointer or holding keyboard focus, which no other section would draw.
+  // The header's count is still the whole section's. The rail has no header to
+  // fold from, so it draws every tile.
   let shown: ReadonlyArray<StripSectionEntry> = group.entries;
   if (rail) {
     shown = tabEntries;
   } else if (folded) {
     shown = group.entries.filter(
       (entry) =>
-        entry.kind === "tabs" && entry.itemId === controller.activeItemId,
+        entry.kind === "tabs" &&
+        (entry.itemId === controller.activeItemId ||
+          held.some((hold) => hold.itemId === entry.itemId)),
     );
   }
   // A tab dragged inside this section reorders among the tabs it draws, so its

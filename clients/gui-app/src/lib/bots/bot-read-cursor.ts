@@ -47,23 +47,17 @@ export function channelBold(
 
 /**
  * Whether a thread has new replies for the person: they follow it, and its
- * newest reply is past their cursor. The newest reply is the later of what
- * the host says and the thread list's `lastReplyAt`, which is the same
- * row's time. An unfollowed thread never has new replies.
+ * newest readable reply is past their cursor. Count the same concrete row
+ * that reading can acknowledge, never a summary timestamp with no target.
+ * An unfollowed thread never has new replies.
  */
 export function threadHasNewReplies(
   read: BotReadCursorReadResponse | undefined,
   threadId: string,
-  lastReplyAt: number | null,
   following: boolean,
 ): boolean {
   if (!following || read === undefined) return false;
-  const latest = positionOf(read.latest, threadId)?.seq ?? null;
-  const newest =
-    latest === null || lastReplyAt === null
-      ? (latest ?? lastReplyAt)
-      : Math.max(latest, lastReplyAt);
-  return pastCursor(newest, positionOf(read.cursors, threadId));
+  return advanceTarget(read, threadId) !== null;
 }
 
 /**

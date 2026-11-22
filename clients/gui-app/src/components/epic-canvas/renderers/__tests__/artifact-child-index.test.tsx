@@ -10,6 +10,7 @@ import {
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
@@ -39,7 +40,12 @@ const dnd = vi.hoisted(() => ({
 }));
 
 const navigation = vi.hoisted(() => ({
-  openTile: vi.fn((_intent: TileOpenIntent): NestedFocusTarget | null => null),
+  openTile: vi.fn(
+    (
+      _intent: TileOpenIntent,
+      _provenance: NestedFocusProvenance,
+    ): NestedFocusTarget | null => null,
+  ),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -111,11 +117,16 @@ describe("<ArtifactChildIndex />", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     nestedFocusBoundaryMock.navigateNested.mockClear();
     navigation.openTile.mockImplementation(
-      (intent: TileOpenIntent): NestedFocusTarget | null =>
+      (
+        intent: TileOpenIntent,
+        provenance: NestedFocusProvenance,
+      ): NestedFocusTarget | null =>
         openTileWithNavigation(
           intent,
           nestedFocusBoundaryMock.navigateNested,
-          MANUAL_TILE_OPEN,
+          // Forwarded, never hardcoded: a double that supplied its own claim
+          // would pass whatever the caller got wrong.
+          { ...MANUAL_TILE_OPEN, provenance },
         ),
     );
     projection.childIdsByParent = {};
@@ -183,11 +194,16 @@ describe("<ArtifactChildIndex />", () => {
           hostId: "host-1",
         }) as EpicCanvasTileRef,
       }),
+      "user",
     );
+    // The claim reaches the BOUNDARY, not just the hook: the double above
+    // forwards whatever it is handed, so this is the click's own authority
+    // arriving where a pending artifact request would be retired.
     expect(nestedFocusBoundaryMock.navigateNested).toHaveBeenCalledWith(
       "epic-1",
       viewTabId,
       expect.any(Function),
+      "user",
     );
     const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
     if (canvas?.root?.kind !== "pane") throw new Error("expected pane");

@@ -43,13 +43,17 @@ move together or the app half-changes shell:
   those tiers apply at every width. Any other raw query is not reached: key it
   on the resolved layout, or override it in `index.native.css`.
 
-The phone layout means the same screens at every width: the menu button and
-drawer for level 1, the tab switcher for level 2, one full-width pane. There is
-no rail, no level-2 column and no second tile in the installed app, on a tablet
-or in landscape. Text and page width caps from the desktop layout are lifted in
-`index.native.css`. A touch stylus makes the emulator and pen phones report
-`(pointer: fine)`, so the installed app treats its pointer as coarse by decision
-(`use-coarse-pointer.ts`, the `pointer-*` variants in `index.native.css`).
+The phone shell is the same at every width; what the width earns is read by
+one rule, `lib/layout/mobile-layout-form.ts`: level 1 (the tasks and Tracy) as
+the drawer, the desktop strip's rail or the expanded strip; level 2 (a task's
+tiles, Tracy's bots) as the bottom sheet, a menu under the current item's name
+or a column beside the content; and one or two content tiles. Where a task's
+column fits, the person can fold it into the menu and back
+(`mobile-tile-column-store.ts`), as they collapse the strip. Text and page
+width caps from the desktop layout are lifted in `index.native.css`. A touch
+stylus makes the emulator and pen phones report `(pointer: fine)`, so the
+installed app treats its pointer as coarse by decision (`use-coarse-pointer.ts`,
+the `pointer-*` variants in `index.native.css`).
 
 A window under 560px tall in landscape has room for little else, so the
 `max-md:short-landscape:` variant keeps the chat transcript and the home composer
@@ -59,8 +63,8 @@ surfaces above it give way.
 Both platforms rotate freely, tablets as well as phones. iOS lists all four
 orientations in **both** `Info.plist` and `Info-Dev.plist` (Debug builds use the
 latter), and omits `UIRequiresFullScreen`, so an iPad can also give the app a
-Split View or Stage Manager window, which draws the same phone layout. Android
-sets no `android:screenOrientation`.
+Split View or Stage Manager window: layout reads the width it gets, never a
+device. Android sets no `android:screenOrientation`.
 
 ## Host and auth invariants
 

@@ -1,5 +1,5 @@
 import {
-  type HostNotificationCloudEntryV26,
+  type HostNotificationCloudEntryV28,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -38,7 +38,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationCloudEntryV26,
+  entry: HostNotificationCloudEntryV28,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -50,14 +50,13 @@ export function formatHostNotificationPresentation(
       const context = notificationContext(agentName, title);
       const reason = known === null ? null : knownStoppedReason(known);
       const providerId = known === null ? null : knownProviderId(known);
-      const backgroundWorkRunning =
-        known === null ? false : knownBackgroundWorkRunning(known);
+      const pending = known === null ? "none" : knownAgentStoppedPending(known);
       const unverified = known === null ? false : knownUnverified(known);
       const status = agentStoppedStatus(
         entry.outcome,
         reason,
         providerId,
-        backgroundWorkRunning,
+        pending,
         unverified,
       );
       return {
@@ -84,6 +83,11 @@ export function formatHostNotificationPresentation(
       return {
         title,
         body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Question waiting", "Question resolved")}`,
+      };
+    case "feedback.drafted":
+      return {
+        title,
+        body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Feedback draft to review", "Feedback draft reviewed")}`,
       };
     case "host.operation.finished":
       return hostOperationFinishedPresentation(
@@ -115,6 +119,25 @@ export function formatHostNotificationPresentation(
       };
     case "secret.rotated":
       return secretRotatedPresentation(known);
+    case "access.readonly.retired":
+      if (known?.kind !== "readonly_access_retired") {
+        return {
+          title: "Read-only access removed",
+          body: "Ask the task owner or team admin for access again.",
+        };
+      }
+      if (known.scope === "task") {
+        return {
+          title: "Read-only task access removed",
+          body: `Your read-only grant to ${known.taskTitle} was removed. Ask the task owner for access again. Other access you have is unchanged.`,
+        };
+      }
+      return {
+        title: known.invitation
+          ? "Read-only team invitation removed"
+          : "Read-only team membership removed",
+        body: `Your read-only ${known.invitation ? "invitation to" : "membership in"} ${known.teamName} was removed. Ask the team admin for access again. Other access you have is unchanged.`,
+      };
     case "team.member.removed":
     case "team.member.joined":
     case "team.policy.unapplied":
@@ -369,7 +392,12 @@ function environmentNotificationPresentation(
   }
 }
 
-/** A role read off a payload as a string; a role newer than this build reads as-is. */
+/**
+ * A role read off a payload as a string; a role newer than this build reads
+ * as-is. `viewer` is retired and no notice reports a move to or from it any
+ * more, but a notice written before the retirement still names it, and an old
+ * row renders the sentence it always did.
+ */
 function roleName(role: string): string {
   switch (role) {
     case "owner":
@@ -671,6 +699,7 @@ export function hostOperationKnownCopy(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     // The browser park row's copy is composed above from the entry itself, not
     // from the payload arm: `reason` is the body's context, never a title.
@@ -691,6 +720,7 @@ export function hostOperationKnownCopy(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
     // The host no longer writes the worktree operations; readers drop them.
@@ -775,6 +805,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
       return payload.taskTitle;
     case "worktree_deletion":
@@ -800,6 +831,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -813,6 +845,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
       return payload.agentName;
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -836,6 +869,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -845,6 +879,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
   switch (payload.kind) {
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
       return payload.chatTitle;
     case "chat":
@@ -872,6 +907,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -890,6 +926,7 @@ function knownStoppedReason(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -913,6 +950,7 @@ function knownStoppedReason(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -930,6 +968,7 @@ function knownProviderId(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -953,6 +992,7 @@ function knownProviderId(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -962,14 +1002,21 @@ function agentStoppedStatus(
   outcome: HostNotificationOutcome,
   reason: string | null,
   providerId: ProviderId | null,
-  backgroundWorkRunning: boolean,
+  pending: AgentStoppedPending,
   unverified: boolean,
 ): string {
   if (outcome === "errored") {
     return agentStoppedFailureStatus(reason, providerId);
   }
   if (outcome === "stopped") return "Stopped";
-  if (backgroundWorkRunning) return "Background work running";
+  switch (pending) {
+    case "own_work":
+      return "Replied, still working";
+    case "agent_reply":
+      return "Replied, waiting on another agent";
+    case "none":
+      break;
+  }
   if (unverified) return "Paused, not verified";
   return "Done";
 }
@@ -982,6 +1029,7 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -1005,21 +1053,27 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return false;
   }
 }
 
-function knownBackgroundWorkRunning(
+/** What a completed agent's row is still waiting on, if anything. */
+type AgentStoppedPending = "none" | "own_work" | "agent_reply";
+
+function knownAgentStoppedPending(
   payload: HostNotificationKnownPayload,
-): boolean {
+): AgentStoppedPending {
   switch (payload.kind) {
     case "chat":
     case "epic":
-      return payload.backgroundWorkRunning === true;
+      if (payload.backgroundWorkRunning !== true) return "none";
+      return payload.awaitingAgentReply === true ? "agent_reply" : "own_work";
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "feedback_draft":
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
@@ -1043,8 +1097,9 @@ function knownBackgroundWorkRunning(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
-      return false;
+      return "none";
   }
 }
 

@@ -3,7 +3,6 @@ import { LOG_LEVELS } from "@traycer/protocol/config/log-level";
 import { AGENT_WORKTREE_CREATE_POLICIES } from "@traycer/protocol/config/schema";
 import { SESSION_NAME_TEMPLATE_MAX_LENGTH } from "@traycer/protocol/config/session-name-template";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
-import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 
 /**
  * RPC payloads for the machine-user-global CLI config store.
@@ -36,12 +35,39 @@ export type ConfigShellGetResponse = z.infer<
   typeof configShellGetResponseSchema
 >;
 
+/** `args: null`: none remembered, so the default applies. */
+export const configShellGetResponseSchemaV11 = lazySchema(() =>
+  configShellGetResponseSchema.extend({
+    entries: z.array(configShellEntrySchema),
+  }),
+);
+export type ConfigShellGetResponseV11 = z.infer<
+  typeof configShellGetResponseSchemaV11
+>;
+
+/**
+ * The host computes the item from its own config and never writes the stated
+ * value over it; a difference waits in the review list. `not_stated`: the app
+ * expects no proposal.
+ */
+export const configShellSelectionSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("shell"),
+      path: shellPathSchema,
+      args: z.array(z.string()),
+    }),
+    z.object({ kind: z.literal("system_default") }),
+    z.object({ kind: z.literal("not_stated") }),
+  ]),
+);
+export type ConfigShellSelection = z.infer<typeof configShellSelectionSchema>;
+
 // A shell-set operation must change either the selected program or its args;
 // accepting `{ path: null, args: null }` would turn an RPC typo into a silent
 // config-file rewrite instead of matching the CLI command's validation.
 //
-// The v1.0 request, FROZEN as released (`host-v1.5.1`). v1.1 below adds the
-// executable-write grant; a hand copy, so the next field cannot reach it.
+// The v1.0 request is frozen as released (`host-v1.5.1`).
 export const configShellSetRequestSchemaV10 = lazySchema(() =>
   z.union([
     z.object({ path: shellPathSchema, args: shellArgsSchema }),
@@ -49,29 +75,45 @@ export const configShellSetRequestSchemaV10 = lazySchema(() =>
   ]),
 );
 
-/**
- * v1.1: the shell path and args select what starts, so the write reaches an
- * execution sink and carries the executable-write grant. Each arm
- * carries it; a v1.0 caller's request is upgraded with `null`.
- */
+/** v1.1 retains the shell path/arguments request after grant retirement. */
 export const configShellSetRequestSchema = lazySchema(() =>
   z.union([
     z.object({
       path: shellPathSchema,
       args: shellArgsSchema,
-      executableWriteGrant: executableWriteGrantSchema,
     }),
     z.object({
       path: z.null(),
       args: z.array(z.string()),
-      executableWriteGrant: executableWriteGrantSchema,
     }),
   ]),
 );
 export type ConfigShellSetRequest = z.infer<typeof configShellSetRequestSchema>;
+
 /**
- * The shell choice itself, without the transport's grant: what the Settings
- * editor produces and what the desktop's local CLI bridge writes.
+ * v1.2 adds `selection`. A switch that names no arguments takes the shell's
+ * remembered ones (`config.shell.get@1.1`'s `entries`), else
+ * `defaultShellArgs(path)`; "System default" is `system_default`.
+ */
+export const configShellSetRequestSchemaV12 = lazySchema(() =>
+  z.union([
+    z.object({
+      path: shellPathSchema,
+      args: shellArgsSchema,
+      selection: configShellSelectionSchema,
+    }),
+    z.object({
+      path: z.null(),
+      args: z.array(z.string()),
+      selection: configShellSelectionSchema,
+    }),
+  ]),
+);
+export type ConfigShellSetRequestV12 = z.infer<
+  typeof configShellSetRequestSchemaV12
+>;
+/**
+ * The shell choice the Settings editor produces and the local CLI bridge writes.
  */
 export type ConfigShellSetRequestV10 = z.infer<
   typeof configShellSetRequestSchemaV10
@@ -90,10 +132,8 @@ export type ConfigShellSetResponse = z.infer<
 /** The v1.0 request, FROZEN as released: empty. */
 export const configShellResetRequestSchemaV10 = emptyRequestSchema;
 
-/** v1.1: resetting the shell changes what starts, so it carries the grant. */
-export const configShellResetRequestSchema = lazySchema(() =>
-  z.object({ executableWriteGrant: executableWriteGrantSchema }),
-);
+/** v1.1 resets the selected shell. */
+export const configShellResetRequestSchema = lazySchema(() => z.object({}));
 export type ConfigShellResetRequest = z.infer<
   typeof configShellResetRequestSchema
 >;
@@ -112,14 +152,21 @@ export const configShellAddRequestSchemaV10 = lazySchema(() =>
   z.object({ path: shellPathSchema }),
 );
 
-/** v1.1: adds the executable-write grant. */
+/** v1.1 retains the selected shell request. */
 export const configShellAddRequestSchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type ConfigShellAddRequest = z.infer<typeof configShellAddRequestSchema>;
+
+/** Add selects the shell, so the app states `{ path, args: defaultShellArgs(path) }`. */
+export const configShellAddRequestSchemaV12 = lazySchema(() =>
+  configShellAddRequestSchema.extend({ selection: configShellSelectionSchema }),
+);
+export type ConfigShellAddRequestV12 = z.infer<
+  typeof configShellAddRequestSchemaV12
+>;
 
 export const configShellEntrySchema = lazySchema(() =>
   z.object({
@@ -146,15 +193,24 @@ export const configShellRemoveRequestSchemaV10 = lazySchema(() =>
   }),
 );
 
-/** v1.1: adds the executable-write grant. */
+/** v1.1 retains the selected shell request. */
 export const configShellRemoveRequestSchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type ConfigShellRemoveRequest = z.infer<
   typeof configShellRemoveRequestSchema
+>;
+
+/** `system_default` when `path` is the current shell, else `not_stated`. */
+export const configShellRemoveRequestSchemaV12 = lazySchema(() =>
+  configShellRemoveRequestSchema.extend({
+    selection: configShellSelectionSchema,
+  }),
+);
+export type ConfigShellRemoveRequestV12 = z.infer<
+  typeof configShellRemoveRequestSchemaV12
 >;
 
 export const configShellRemoveResponseSchema = lazySchema(() =>
@@ -174,15 +230,24 @@ export const configShellRevertArgsRequestSchemaV10 = lazySchema(() =>
   }),
 );
 
-/** v1.1: adds the executable-write grant. */
+/** v1.1 retains the selected shell request. */
 export const configShellRevertArgsRequestSchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type ConfigShellRevertArgsRequest = z.infer<
   typeof configShellRevertArgsRequestSchema
+>;
+
+/** `{ path, args: defaultShellArgs(path) }` when `path` is the current shell, else `not_stated`. */
+export const configShellRevertArgsRequestSchemaV12 = lazySchema(() =>
+  configShellRevertArgsRequestSchema.extend({
+    selection: configShellSelectionSchema,
+  }),
+);
+export type ConfigShellRevertArgsRequestV12 = z.infer<
+  typeof configShellRevertArgsRequestSchemaV12
 >;
 
 export const configShellRevertArgsResponseSchema = lazySchema(() =>
@@ -291,16 +356,11 @@ export const configEnvSetRequestSchemaV10 = lazySchema(() =>
   }),
 );
 
-/**
- * v1.1: a host-process variable can select what starts (a launch-sensitive
- * name), so the write carries the executable-write grant; whether a given key
- * reaches a sink is the host's decision, not the client's.
- */
+/** v1.1 sets or unsets a host-process variable. */
 export const configEnvSetRequestSchema = lazySchema(() =>
   z.object({
     key: envKeySchema,
     value: z.string().nullable(),
-    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type ConfigEnvSetRequest = z.infer<typeof configEnvSetRequestSchema>;
@@ -410,6 +470,138 @@ export type ConfigBrowserSetRequest = z.infer<
 export const configBrowserSetResponseSchema = configBrowserResponseSchema;
 export type ConfigBrowserSetResponse = z.infer<
   typeof configBrowserSetResponseSchema
+>;
+
+/**
+ * Reads whether the configuration this host runs lets its agents take part in
+ * its shared memories. Unlike the switches above this is not machine-global:
+ * it belongs to the configuration, so the answer is about the one the host
+ * serves now. A host serving none answers the value saved on this computer,
+ * `false` when nothing was saved, with `revision` and `environmentId` null.
+ */
+export const configAgentMemoriesGetRequestSchema = emptyRequestSchema;
+export type ConfigAgentMemoriesGetRequest = z.infer<
+  typeof configAgentMemoriesGetRequestSchema
+>;
+
+/**
+ * `revision` is the configuration revision this answer was read AT - how far
+ * the host's projection has got, not the item's own. A caller that has just
+ * written compares it with the revision its write was saved as: an `enabled`
+ * read below that revision is some earlier revision's answer, and matching
+ * what was asked for does not make it this write's. `null` before the host's
+ * first read of the configuration, and for a host serving none.
+ */
+export const configAgentMemoriesResponseSchema = lazySchema(() =>
+  z.object({
+    enabled: z.boolean(),
+    revision: z.number().int().nonnegative().nullable(),
+    /**
+     * The configuration the two above are ABOUT, read in the same snapshot
+     * as them. A host can rebind from one configuration to another
+     * without changing its id, so a caller comparing a read against its own
+     * write has to compare this too: a later configuration's revision and
+     * value say nothing about a write addressed to the one before it.
+     * `null` on a host serving none.
+     */
+    environmentId: z.string().min(1).nullable(),
+  }),
+);
+export type ConfigAgentMemoriesResponse = z.infer<
+  typeof configAgentMemoriesResponseSchema
+>;
+
+/**
+ * Turns shared memories for the configuration's agents on or off. The write
+ * goes to the configuration, which authorizes it; a refusal, a stale row or a
+ * held edit is an error, never a response. A host serving none saves it on
+ * this computer only, from minor 1: no configuration holds it and none
+ * authorizes it.
+ */
+export const configAgentMemoriesSetRequestSchema = lazySchema(() =>
+  z.object({
+    enabled: z.boolean(),
+  }),
+);
+export type ConfigAgentMemoriesSetRequest = z.infer<
+  typeof configAgentMemoriesSetRequestSchema
+>;
+
+/**
+ * What the host reads back for the configuration the write was addressed to.
+ * A `local_only` answer was addressed to none.
+ *
+ * `enabled` is that configuration's setting as this host reads it, never
+ * another's: a host that has moved to a different configuration answers
+ * `false`, the behaviour its agents have. In a `local_only` answer it is the
+ * value saved on this computer.
+ *
+ * `state` says how far the change has got, which the caller needs told apart
+ * because the four are different promises to the person:
+ *
+ * - `applied` - the configuration holds this change and this host has
+ *   received it, so `enabled` is this write's own state and the
+ *   configuration's agents behave accordingly.
+ * - `saved` - the configuration holds it; this host has not received it yet,
+ *   so `enabled` is still the state from before. It arrives on its own, and
+ *   the caller reads back rather than treating it as in force here.
+ * - `queued` - this computer is holding the edit to send, with no connection
+ *   to the configuration: it is not saved anywhere yet and in force nowhere.
+ * - `local_only` - this host serves no configuration: the change is saved on
+ *   this computer and in force here, nothing has been proposed, and there is
+ *   no receipt to wait for. When this computer is next bound to a
+ *   configuration, the host proposes the saved value to it; a proposal that
+ *   cannot be made leaves the value saved here only.
+ *
+ * `applied` is a claim about what this host READS, not a receipt for the
+ * write, and it is made only of the revision the configuration saved THIS
+ * write as: a host that reads the asked-for value at an older revision has
+ * not received this change and answers `saved`, because a later revision it
+ * has not received can still overturn what it reads. A host that has moved to
+ * another configuration answers `saved` too, rather than claiming a state it
+ * cannot see.
+ *
+ * `revision` is the configuration revision this write was saved as, for the
+ * caller to recognise it in a later read's `revision`. `null` when the write
+ * is only `queued`, which has been saved nowhere and so is no revision, and
+ * when the configuration's answer named none this host could read. A `null`
+ * revision is therefore not confirmable by a later read: the caller may say
+ * the change is waiting, and must not later claim it arrived. A `local_only`
+ * answer has no `revision`, `environmentId` or `uploadId` field at all.
+ */
+export const configAgentMemoriesSetResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    enabled: z.boolean(),
+    state: z.enum(["applied", "saved", "queued"]),
+    revision: z.number().int().nonnegative().nullable(),
+    /**
+     * The configuration this write was ADDRESSED to, named before it was
+     * sent. Part of the correspondence, not decoration: a host can rebind
+     * without changing its id, so a caller must match this against the
+     * `environmentId` of the read it later compares, or a new
+     * configuration's answer would resolve a write made to the old one.
+     */
+    environmentId: z.string().min(1),
+    /**
+     * The id this edit carries while it is held, so a caller can recognise it
+     * later in `environment.status` - as a refusal in `pendingUploads`, or as
+     * an `acceptedUploads` receipt naming the revision the configuration
+     * eventually saved it as. Only a `queued` write has one: a write already
+     * `saved` or `applied` carries its revision here instead, and nothing is
+     * waiting to be recognised.
+     */
+    uploadId: z.string().min(1).nullable(),
+  }),
+);
+/** A completed save on a computer with no known bound environment has no receipt. */
+export const configAgentMemoriesSetResponseSchema = lazySchema(() =>
+  z.union([
+    configAgentMemoriesSetResponseSchemaV10,
+    z.object({ state: z.literal("local_only"), enabled: z.boolean() }),
+  ]),
+);
+export type ConfigAgentMemoriesSetResponse = z.infer<
+  typeof configAgentMemoriesSetResponseSchema
 >;
 
 /**

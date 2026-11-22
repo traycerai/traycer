@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // `probeHostHealth` gates whether `host update` rolls back a swap. Its one
 // hard requirement is the binary-health / coordination-server(CS)-
-// reachability separation: it must never make a network call that could be
+// reachability separation: its default must never make a network call that could be
 // affected by a CS (or auth-service) blip. This suite exercises the
 // success/failure/backoff matrix with injected fakes and separately pins
 // the "no network calls beyond loopback TCP" guarantee by asserting the
@@ -34,17 +34,22 @@ vi.mock("../../store/cli-lock", async () => {
 });
 
 import { ownProcessStartIdentity } from "../../store/process-identity";
+import type { HostPidMetadata } from "../../host/pid-metadata";
 import { probeHostHealth } from "../health-probe";
 
 function sampleMetadata(
   overrides: Partial<{ pid: number; websocketUrl: string }>,
-) {
+): HostPidMetadata {
   return {
     pid: overrides.pid ?? 4242,
     hostId: "host-1",
     version: "1.0.0",
     websocketUrl: overrides.websocketUrl ?? "ws://127.0.0.1:41000/rpc",
     startedAt: "2026-01-01T00:00:00.000Z",
+    processStartIdentity: null,
+    processStartIdentityRead: "absent",
+    layer0: null,
+    layer0Slot: null,
   };
 }
 
@@ -62,6 +67,7 @@ describe("probeHostHealth", () => {
       environment: "production",
       checkProcessAlive,
       checkTcpReachable,
+      checkReadiness: null,
       totalBudgetMs: 1_000,
       retryDelayMs: 5,
     });
@@ -72,12 +78,80 @@ describe("probeHostHealth", () => {
     expect(mocks.readHostPidMetadataMock).toHaveBeenCalledTimes(1);
   });
 
+  it("requires the caller readiness edge after the pid and endpoint pass", async () => {
+    const metadata = sampleMetadata({ pid: 8181 });
+    mocks.readHostPidMetadataMock.mockResolvedValue(metadata);
+    const checkProcessAlive = vi.fn(() => true);
+    const checkTcpReachable = vi.fn(async () => true);
+    let releaseReadiness: (ready: boolean) => void = () => {
+      throw new Error("readiness callback was not held");
+    };
+    let markReadinessStarted: () => void = () => undefined;
+    const readinessStarted = new Promise<void>((resolve) => {
+      markReadinessStarted = resolve;
+    });
+    const readinessReply = new Promise<boolean>((resolve) => {
+      releaseReadiness = resolve;
+    });
+    const checkReadiness = vi.fn(
+      async (_received: HostPidMetadata, _remainingMs: number) => {
+        markReadinessStarted();
+        return await readinessReply;
+      },
+    );
+
+    let settled = false;
+    const resultPromise = probeHostHealth({
+      environment: "production",
+      checkProcessAlive,
+      checkTcpReachable,
+      checkReadiness,
+      totalBudgetMs: 1_000,
+      retryDelayMs: 1,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await readinessStarted;
+    expect(settled).toBe(false);
+    expect(checkReadiness).toHaveBeenCalledWith(metadata, expect.any(Number));
+    expect(checkReadiness.mock.calls[0]?.[1]).toBeGreaterThan(0);
+    expect(checkProcessAlive).toHaveBeenCalledWith(metadata.pid);
+    expect(checkTcpReachable).toHaveBeenCalledWith("127.0.0.1", 41000);
+
+    releaseReadiness(true);
+    await expect(resultPromise).resolves.toMatchObject({ healthy: true });
+  });
+
+  it("does not call an unhealthy replacement host ready", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(sampleMetadata({}));
+    const checkReadiness = vi.fn(
+      async (_received: HostPidMetadata, _remainingMs: number) => false,
+    );
+
+    const result = await probeHostHealth({
+      environment: "production",
+      checkProcessAlive: () => true,
+      checkTcpReachable: async () => true,
+      checkReadiness,
+      totalBudgetMs: 0,
+      retryDelayMs: 1,
+    });
+
+    expect(result).toEqual({
+      healthy: false,
+      detail: "host has not confirmed readiness",
+    });
+    expect(checkReadiness).toHaveBeenCalledTimes(1);
+  });
+
   it("reports unhealthy immediately when no pid metadata exists", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(null);
     const result = await probeHostHealth({
       environment: "production",
       checkProcessAlive: vi.fn(() => true),
       checkTcpReachable: vi.fn(async () => true),
+      checkReadiness: null,
       totalBudgetMs: 0,
       retryDelayMs: 5,
     });
@@ -92,6 +166,7 @@ describe("probeHostHealth", () => {
       environment: "production",
       checkProcessAlive: () => false,
       checkTcpReachable,
+      checkReadiness: null,
       totalBudgetMs: 0,
       retryDelayMs: 5,
     });
@@ -106,6 +181,7 @@ describe("probeHostHealth", () => {
       environment: "production",
       checkProcessAlive: () => true,
       checkTcpReachable: async () => false,
+      checkReadiness: null,
       totalBudgetMs: 0,
       retryDelayMs: 5,
     });
@@ -124,6 +200,7 @@ describe("probeHostHealth", () => {
       environment: "production",
       checkProcessAlive: () => true,
       checkTcpReachable,
+      checkReadiness: null,
       totalBudgetMs: 5_000,
       retryDelayMs: 1,
     });
@@ -138,6 +215,7 @@ describe("probeHostHealth", () => {
       environment: "production",
       checkProcessAlive: () => true,
       checkTcpReachable,
+      checkReadiness: null,
       totalBudgetMs: 20,
       retryDelayMs: 5,
     });
@@ -156,6 +234,7 @@ describe("probeHostHealth", () => {
       environment: "production",
       checkProcessAlive: () => true,
       checkTcpReachable: async () => true,
+      checkReadiness: null,
       totalBudgetMs: 0,
       retryDelayMs: 5,
     });
@@ -182,6 +261,7 @@ describe("probeHostHealth", () => {
       environment: "production",
       checkProcessAlive: null,
       checkTcpReachable: null,
+      checkReadiness: null,
       totalBudgetMs: 0,
       retryDelayMs: 5,
     });
@@ -210,6 +290,7 @@ describe("probeHostHealth judges the record's process by its creation stamp", ()
         environment: "production",
         checkProcessAlive: null,
         checkTcpReachable,
+        checkReadiness: null,
         totalBudgetMs: 0,
         retryDelayMs: 5,
       });
@@ -231,6 +312,7 @@ describe("probeHostHealth judges the record's process by its creation stamp", ()
         environment: "production",
         checkProcessAlive: null,
         checkTcpReachable: async () => true,
+        checkReadiness: null,
         totalBudgetMs: 0,
         retryDelayMs: 5,
       });

@@ -11,7 +11,6 @@ import {
   RETROSPECTIVE_DISCLOSURE,
   RETROSPECTIVE_GOT_IT,
   RETROSPECTIVE_HELD_COMMANDS,
-  RETROSPECTIVE_HELD_NOT_IN_USE,
   RETROSPECTIVE_MOVE_TO_PERSONAL,
   RETROSPECTIVE_RECORD_LINE,
   RETROSPECTIVE_SHARED_FROM_ROOM,
@@ -19,7 +18,6 @@ import {
   RETROSPECTIVE_STILL_ON_THIS_COMPUTER,
   RETROSPECTIVE_STOP_SHARING,
   HELD_COMMAND_CHOICES,
-  HELD_VALUE_CHOICES,
   NO_MOVE_SHEET_ACCEPTANCE,
   retrospectiveEvidenceLine,
   retrospectiveTitle,
@@ -68,7 +66,6 @@ export interface SharedInUseItem {
 export interface HeldRow {
   readonly heldId: string;
   readonly name: string;
-  readonly kind: "value" | "command";
   readonly detail: string;
 }
 
@@ -88,6 +85,8 @@ export function RetrospectiveSheet(props: {
   readonly held: readonly HeldRow[];
   readonly stillLocal: readonly StillLocalRow[];
   readonly heldPendingId: string | null;
+  /** Held rows whose Approve is unavailable: the live value moved under it. */
+  readonly heldApproveRefused: ReadonlySet<string>;
   /** A held-row choice the configuration refused, said under the rows. */
   readonly heldIssue: ConfigurationWriteIssue;
   /** Where the inventory's read is while it is read or once it fails. */
@@ -96,7 +95,12 @@ export function RetrospectiveSheet(props: {
   readonly onShown: () => void;
   readonly onAcknowledged: () => void;
   readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
-  readonly onMoveToPersonal: () => void;
+  /**
+   * `Move to Personal` under what is still on this computer; `null` hides it
+   * on a computer that runs a team's settings, which has nothing of the
+   * person's to move. The list stays.
+   */
+  readonly onMoveToPersonal: (() => void) | null;
   /**
    * `Stop using Personal on this computer`; `null` hides it, once the
    * computer has stopped (or its planes cannot say it still shares), leaving
@@ -115,9 +119,6 @@ export function RetrospectiveSheet(props: {
     shownForOpen.current = true;
     onShown();
   }, [open, inventoryReady, onShown]);
-
-  const valueHeld = props.held.filter((row) => row.kind === "value");
-  const commandHeld = props.held.filter((row) => row.kind === "command");
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -171,29 +172,18 @@ export function RetrospectiveSheet(props: {
                 {props.appliedOn.join(" · ")}
               </InventoryRow>
             ) : null}
-            {valueHeld.length > 0 ? (
-              <InventoryRow
-                term={RETROSPECTIVE_HELD_NOT_IN_USE}
-                testId="retrospective-held-values"
-              >
-                <HeldList
-                  rows={valueHeld}
-                  actions={HELD_VALUE_CHOICES}
-                  pendingId={props.heldPendingId}
-                  onHeldApply={props.onHeldApply}
-                />
-              </InventoryRow>
-            ) : null}
-            {commandHeld.length > 0 ? (
+            {props.held.length > 0 ? (
               <InventoryRow
                 term={RETROSPECTIVE_HELD_COMMANDS}
                 testId="retrospective-held-commands"
               >
                 <HeldList
-                  rows={commandHeld}
+                  rows={props.held}
                   actions={HELD_COMMAND_CHOICES}
                   pendingId={props.heldPendingId}
+                  approveRefused={props.heldApproveRefused}
                   onHeldApply={props.onHeldApply}
+                  renderDetails={null}
                 />
               </InventoryRow>
             ) : null}
@@ -208,15 +198,17 @@ export function RetrospectiveSheet(props: {
                       <li key={row.id}>{row.summary}</li>
                     ))}
                   </ul>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    data-testid="retrospective-move-to-personal"
-                    onClick={props.onMoveToPersonal}
-                  >
-                    {RETROSPECTIVE_MOVE_TO_PERSONAL}
-                  </Button>
+                  {props.onMoveToPersonal === null ? null : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      data-testid="retrospective-move-to-personal"
+                      onClick={props.onMoveToPersonal}
+                    >
+                      {RETROSPECTIVE_MOVE_TO_PERSONAL}
+                    </Button>
+                  )}
                 </div>
               </InventoryRow>
             ) : null}
@@ -320,11 +312,13 @@ function SharedInUseLink(props: {
   );
 }
 
-function HeldList(props: {
+export function HeldList(props: {
   readonly rows: readonly HeldRow[];
   readonly actions: readonly HeldChoiceAction[];
   readonly pendingId: string | null;
+  readonly approveRefused: ReadonlySet<string>;
   readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
+  readonly renderDetails: ((heldId: string) => ReactNode) | null;
 }): ReactNode {
   return (
     <ul className="flex flex-col gap-3">
@@ -347,6 +341,9 @@ function HeldList(props: {
                 />
               ) : null}
             </p>
+            {props.renderDetails === null
+              ? null
+              : props.renderDetails(row.heldId)}
             <div className="flex flex-wrap gap-1.5">
               {props.actions.map((action) => (
                 <Button
@@ -354,7 +351,11 @@ function HeldList(props: {
                   type="button"
                   size="xs"
                   variant={action.choice === "discard" ? "muted" : "outline"}
-                  disabled={props.pendingId !== null}
+                  disabled={
+                    props.pendingId !== null ||
+                    (action.choice === "approve" &&
+                      props.approveRefused.has(row.heldId))
+                  }
                   data-testid={`retrospective-held-${row.heldId}-${action.choice}`}
                   onClick={() => props.onHeldApply(row.heldId, action.choice)}
                 >

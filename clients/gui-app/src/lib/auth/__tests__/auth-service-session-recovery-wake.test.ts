@@ -202,7 +202,7 @@ describe("AuthService session recovery - wake mid-probe", () => {
     // alongside the `online` DOM event; `MockRunnerHost.emitSystemResumed()`
     // fires it synchronously, with none of the `online` path's 250ms
     // debounce to drive through fake timers.
-    host.emitSystemResumed({ backgroundedForMs: null });
+    host.emitSystemResumed({ backgroundedForMs: null, screenLocked: false });
 
     // Resolve the in-flight probe as a failure - the recovery tick's failure
     // tail runs `scheduleSessionRecovery("recovery:validate-network")` on its
@@ -358,7 +358,7 @@ describe("AuthService terminal verdicts and the recovery loop", () => {
     // A wake is evidence about the network, and this session did not stop
     // for the network. Past the recovery floor and its retries, nothing was
     // asked again - the server's verdict stands until a sign-in clears it.
-    host.emitSystemResumed({ backgroundedForMs: null });
+    host.emitSystemResumed({ backgroundedForMs: null, screenLocked: false });
     await vi.advanceTimersByTimeAsync(5_000);
     await advancePastAuthRetries();
     expect(useAuthStore.getState().status).toBe("unverified");

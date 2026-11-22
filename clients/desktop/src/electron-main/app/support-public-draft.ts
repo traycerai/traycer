@@ -11,7 +11,7 @@ import type {
   SupportReportFrequency,
   SupportReportType,
 } from "../../ipc-contracts/window-types";
-import { scrubSupportText } from "./support-scrubber";
+import { scrubSupportText } from "@traycer/protocol/utils/text/support-scrub";
 
 /**
  * Pure field composition + title derivation behind `support:buildPublicDraft`

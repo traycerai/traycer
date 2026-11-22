@@ -86,6 +86,18 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const githubMentionFiltersKey = (identity: string | null): string =>
   scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(identity));
 
+// Identity-scoped, so this account applies only its own holds; wiped on sign-out.
+export const settingsSaveMemoryKey = (identity: string | null): string =>
+  scopedPersistKey(STORE_KEYS.settingsSaveMemory, scopeBucket(identity));
+
+// What each bot channel's and thread's box holds unsent, by account. A box can
+// hold a member's private answer to a team bot's question, moved there when a
+// teammate answered first, so another account signed in on this profile never
+// reads it. Unlike the stores above, signing out keeps the bucket: a draft is
+// its only copy, and it comes back when its account signs in again.
+export const botBoxDraftsKey = (identity: string | null): string =>
+  scopedPersistKey(STORE_KEYS.botBoxDrafts, scopeBucket(identity));
+
 // The hostId this machine's OWN local host last published. Unscoped and
 // identity-free like the picker memory: it is a fact about this machine, not
 // about who is signed in. The directory uses it to keep the machine's own
@@ -257,6 +269,16 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
+  {
+    camelName: "settingsSaveMemory",
+    leaf: "settings-save-memory",
+    kind: "scoped",
+  },
+  // What each bot channel's and thread's message box holds unsent, by
+  // account (`botBoxDraftsKey`), kept on this device across closing Tracy and
+  // restarting (`bot-drafts-store.ts`). Image bytes live in the composer image
+  // store; the drafts name their hashes.
+  { camelName: "botBoxDrafts", leaf: "bot-box-drafts", kind: "scoped" },
 
   // ── Scoped non-zustand key families ──────────────────────────────────────
   {
@@ -440,7 +462,8 @@ export const PERSIST_STORES = [
   },
   // Imported tasks the user has not opened yet: the task list's unread dot.
   // Epic ids are cloud entities, so no host scoping; entries clear on first
-  // open and the set is small (one import run's worth at most).
+  // open. The record holds one entry per imported task not yet opened, and
+  // an import makes one task per session, so it can hold thousands.
   {
     camelName: "sessionImportUnseen",
     leaf: "session-import-unseen",
@@ -457,6 +480,14 @@ export const PERSIST_STORES = [
   {
     camelName: "featureAnnouncements",
     leaf: "feature-announcements",
+    kind: "static",
+  },
+  // What this install has done with the "share Traycer on X" nudge: its
+  // cooldown, showings and opt-out (`share-on-x-nudge-store.ts`). Machine-
+  // local for the same reason as the announcements above.
+  {
+    camelName: "shareOnXNudge",
+    leaf: "share-on-x-nudge",
     kind: "static",
   },
   // The tasks whose mirror line each person has seen, keyed by viewer and
@@ -480,11 +511,25 @@ export const PERSIST_STORES = [
     leaf: "sandbox-shape-memory",
     kind: "static",
   },
+  // The last verified picture and name of each account signed in here, for a
+  // restored session the credentials file cannot name
+  // (`verified-profile-cache-store.ts`).
+  {
+    camelName: "verifiedProfileCache",
+    leaf: "verified-profile-cache",
+    kind: "static",
+  },
   // The teams whose "Continue on a <team> host" caution each person has
   // confirmed (`team-continue-caution-seen-store.ts`).
   {
     camelName: "teamContinueCautionSeen",
     leaf: "team-continue-caution-seen",
+    kind: "static",
+  },
+  // Each claim notice is shown once per device.
+  {
+    camelName: "claimNoticesTold",
+    leaf: "claim-notices-told",
     kind: "static",
   },
   // The Tracy surface: whether it is open, the host it is bound to and its
@@ -509,6 +554,13 @@ export const PERSIST_STORES = [
   {
     camelName: "botColumnLayout",
     leaf: "bot-column-layout",
+    kind: "static",
+  },
+  // The last searches of the Tracy surface, one list per device
+  // (`bot-search-store.ts`).
+  {
+    camelName: "botSearchRecents",
+    leaf: "bot-search-recents",
     kind: "static",
   },
 
@@ -541,6 +593,12 @@ export const PERSIST_STORES = [
   {
     camelName: "liveChatCompletionAcknowledgementsChannel",
     leaf: "live-chat-completion-acknowledgements:v1",
+    kind: "channel",
+  },
+  // Each chime that starts, for a window other than the one playing it.
+  {
+    camelName: "notificationChimesChannel",
+    leaf: "notification-chimes:v1",
     kind: "channel",
   },
   // One monotonic key per displayed app-local notification version. Separate

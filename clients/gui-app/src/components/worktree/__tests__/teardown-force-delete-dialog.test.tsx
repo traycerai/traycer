@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { TeardownForceDeleteDialog } from "@/components/worktree/teardown-force-delete-dialog";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 
 const HOLDERS: readonly WorktreeBusyHolder[] = [
   {
@@ -106,6 +107,7 @@ describe("TeardownForceDeleteDialog", () => {
       />,
     );
     const dialog = screen.getByTestId("teardown-force-delete-dialog");
+    expectScrollableDialogLayout(dialog);
     const label = screen.getByTestId("teardown-holder-label");
     const footer = screen.getByTestId("teardown-force-delete-footer");
     const confirm = screen.getByTestId("teardown-force-delete-confirm");

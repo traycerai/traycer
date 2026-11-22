@@ -57,9 +57,8 @@ export type ModelMatch =
  * treat two rows sharing one as interchangeable for anything but a capability
  * read.
  *
- * Free-form `metadata` deliberately, not a schema field: it costs no protocol
- * version bump, and a host that doesn't publish it degrades to exact-only
- * matching, which is exactly today's behaviour.
+ * Kept in free-form adapter metadata; the agent-facing model summary projects
+ * it for display. A host that doesn't publish it degrades to exact-only matching.
  */
 export const RESOLVED_MODEL_METADATA_KEY = "resolvedModel";
 

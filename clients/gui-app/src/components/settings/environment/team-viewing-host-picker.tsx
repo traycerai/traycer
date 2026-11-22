@@ -1,3 +1,4 @@
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import type { ReactNode } from "react";
 import {
   Select,
@@ -59,7 +60,7 @@ export function TeamViewingHostSwitch(props: {
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
   const scope = useTeamViewingHost();
-  const hosts = scope.hosts.isError ? [] : (scope.hosts.data?.hosts ?? []);
+  const hosts = environmentReadData(scope.hosts)?.hosts ?? [];
   const viewing = scope.viewingHost;
   if (viewing === null || !canSwitchViewingHost(scope)) return null;
   return (

@@ -52,11 +52,11 @@ export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
        * `sm:max-w-sm` and leaves the cap standing.
        */}
       <DialogContent
-        className="sm:max-w-lg"
+        className="flex flex-col sm:max-w-lg"
         data-testid="epic-write-commands-dialog"
       >
-        <DialogTitle>Pending changes</DialogTitle>
-        <DialogDescription>
+        <DialogTitle className="shrink-0">Pending changes</DialogTitle>
+        <DialogDescription className="shrink-0">
           Changes this window has issued that the host has not finished
           answering, and the ones it answered but nobody has acknowledged yet.
         </DialogDescription>
@@ -68,7 +68,7 @@ export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
             Nothing outstanding.
           </p>
         ) : (
-          <ul className="flex w-full flex-col gap-2">
+          <ul className="flex min-h-0 min-w-0 w-full flex-col gap-2 overflow-y-auto">
             {commands.map((command) => (
               <li key={command.commandId}>
                 <WriteCommandRow

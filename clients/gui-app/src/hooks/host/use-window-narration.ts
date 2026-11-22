@@ -1,17 +1,35 @@
+import { useHostDoorState } from "@/stores/host/host-door-state-store";
 import { useMemo, useState } from "react";
 import {
   deriveWindowNarration,
+  doorCoverHostOf,
   findLease,
   isServingLease,
+  olderHostUpdateVariant,
   type WindowNarrationState,
 } from "@/lib/host/window-narration";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useHostDiscoveryConcluded } from "@/hooks/host/use-host-discovery-concluded";
+import {
+  useHostDiscoveryConcluded,
+  useHostDiscoveryFailed,
+} from "@/hooks/host/use-host-discovery-concluded";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { useHostClaim } from "@/hooks/host/use-host-claim";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { hostAppVersionFromDirectoryEntry } from "@/lib/host/version-skew-copy";
+
+export interface WindowNarrationReading {
+  readonly narration: WindowNarrationState;
+  readonly doorCoverHostId: string | null;
+}
 
 /**
  * The window narrator's verdict for THIS window.
@@ -26,8 +44,12 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
  * MOUNT ONCE PER WINDOW. The served latch below is component state, so a
  * second mount would carry a second, independently-armed latch - two answers
  * to "has this window ever worked". `WindowHostModalHost` is the only caller.
+ *
+ * `doorCoverHostId` is the host whose door cover the narration draws, read
+ * from the same input in the same mount, so the toast's question "is that
+ * host's cover on screen" has one answer with the narration's.
  */
-export function useWindowNarration(): WindowNarrationState {
+export function useWindowNarration(): WindowNarrationReading {
   const attached = useSelectionAuthorityAttached();
   const effectiveHostId = useEffectiveHostId();
   // Scalar selector: no `useShallow` needed, unlike a derived array/object.
@@ -35,6 +57,9 @@ export function useWindowNarration(): WindowNarrationState {
     (state) => state.targetHostId,
   );
   const leases = useHostLeases();
+  const updateCandidate = useHostDirectoryEntry(
+    effectiveHostId ?? targetHostId,
+  );
   // The NULL-TOLERANT read, deliberately: this hook mounts at the app root,
   // and the throwing `useRunnerHost` is exactly the RunnerHostProvider
   // coupling that once cost two root-route suites their whole tree (see
@@ -51,11 +76,16 @@ export function useWindowNarration(): WindowNarrationState {
   // local host looks like, so the entry answers null for exactly the interval
   // this arm is about and the grace would collapse in the state it exists for.
   const localHostId = useReactiveLocalHostId();
+  const doorState = useHostDoorState(effectiveHostId ?? targetHostId);
+  const hostClaim = useHostClaim(effectiveHostId ?? targetHostId, doorState);
   // WHETHER DISCOVERY HAS ANSWERED, which the authority's own projection
   // cannot say: its leases are a map over the fleet it has been given, so an
   // unanswered fleet and an empty account produce the identical empty list.
   // Subscribed rather than derived from the directory rows - see the hook.
   const discoveryConcluded = useHostDiscoveryConcluded();
+  // WHETHER THAT ANSWER WAS A FAILURE to read the host list, which turns the
+  // ∅ verdict from "your hosts are down" into "the list couldn't be loaded".
+  const discoveryFailed = useHostDiscoveryFailed();
 
   const servingNow =
     attached && isServingLease(findLease(leases, effectiveHostId));
@@ -76,27 +106,57 @@ export function useWindowNarration(): WindowNarrationState {
     setHasBeenServed(true);
   }
 
-  return useMemo(
-    () =>
-      deriveWindowNarration({
-        attached,
-        effectiveHostId,
-        targetHostId,
-        leases,
-        hasBeenServed,
-        localHostExpected,
-        discoveryConcluded,
-        localHostId,
-      }),
-    [
+  return useMemo<WindowNarrationReading>(() => {
+    if (
+      attached &&
+      updateCandidate !== null &&
+      hostDirectoryEntryNeedsUpdate(updateCandidate, MINIMUM_HOST_VERSION)
+    ) {
+      return {
+        narration: {
+          kind: "narrating",
+          cause:
+            hasBeenServed || effectiveHostId === null
+              ? "no-usable-host"
+              : "cold-start",
+          variant: olderHostUpdateVariant(
+            updateCandidate.hostId,
+            updateCandidate.hostId === targetHostId,
+            hostAppVersionFromDirectoryEntry(updateCandidate),
+          ),
+        },
+        doorCoverHostId: updateCandidate.hostId,
+      };
+    }
+    const input = {
       attached,
-      discoveryConcluded,
+      discoveryFailed,
       effectiveHostId,
-      hasBeenServed,
-      leases,
-      localHostExpected,
-      localHostId,
       targetHostId,
-    ],
-  );
+      leases,
+      hasBeenServed,
+      localHostExpected,
+      discoveryConcluded,
+      localHostId,
+      doorState,
+      hostClaim,
+    };
+    return {
+      narration: deriveWindowNarration(input),
+      doorCoverHostId: doorCoverHostOf(input),
+    };
+  }, [
+    attached,
+    discoveryConcluded,
+    discoveryFailed,
+    effectiveHostId,
+    hasBeenServed,
+    leases,
+    localHostExpected,
+    localHostId,
+    doorState,
+    hostClaim,
+    targetHostId,
+    updateCandidate,
+  ]);
 }

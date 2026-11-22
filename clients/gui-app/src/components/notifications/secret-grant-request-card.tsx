@@ -22,6 +22,10 @@ type GrantRequestDetail = Extract<
   { kind: "grant-request" }
 >;
 
+/** An approval label wraps inside the panel. The scope stays whole. */
+const APPROVAL_BUTTON_CLASS =
+  "h-auto max-w-full min-w-0 shrink justify-start text-start whitespace-normal break-words";
+
 /**
  * An agent's request for a secret, on its notification row: what it asked
  * for, where it would be used, which sandbox and why, and the three answers.
@@ -69,7 +73,7 @@ export function SecretGrantRequestCard(props: {
   return (
     <div
       data-testid="secret-grant-request-card"
-      className="flex flex-col gap-1.5 text-ui-xs"
+      className="flex w-full min-w-0 flex-col gap-1.5 text-ui-xs"
     >
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
         <dt className="text-muted-foreground">Secret</dt>
@@ -113,12 +117,13 @@ export function SecretGrantRequestCard(props: {
           className="flex flex-col gap-1.5"
         >
           <p>{confirmation}</p>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex w-full min-w-0 flex-wrap items-start gap-1.5">
             <Button
               type="button"
               size="sm"
               variant="default"
               disabled={decide.isPending}
+              className={APPROVAL_BUTTON_CLASS}
               data-testid="secret-grant-request-confirm-default-yes"
               onClick={() => answer("approve_default")}
             >
@@ -128,6 +133,7 @@ export function SecretGrantRequestCard(props: {
               type="button"
               size="sm"
               variant="ghost"
+              className={APPROVAL_BUTTON_CLASS}
               data-testid="secret-grant-request-confirm-default-cancel"
               onClick={() => setConfirmingDefault(false)}
             >
@@ -137,7 +143,7 @@ export function SecretGrantRequestCard(props: {
         </div>
       ) : null}
       {answerable && !confirmingDefault ? (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex w-full min-w-0 flex-wrap items-start gap-1.5">
           {secretGrantDecisions(detail.teamName).map(({ decision, label }) => (
             <Button
               key={decision}
@@ -145,6 +151,7 @@ export function SecretGrantRequestCard(props: {
               size="sm"
               variant={decisionVariant(decision)}
               disabled={decide.isPending}
+              className={APPROVAL_BUTTON_CLASS}
               data-testid={`secret-grant-request-${decision}`}
               onClick={() => answer(decision)}
             >

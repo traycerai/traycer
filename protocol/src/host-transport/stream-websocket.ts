@@ -14,6 +14,7 @@
 
 import type { DialPriority } from "./dial-priority";
 import type {
+  DialStartSignal,
   WebSocketCloseEvent,
   WebSocketErrorEvent,
   WebSocketOpenEvent,
@@ -39,7 +40,7 @@ export type StreamWebSocketMessageEvent =
  * the tagged message event - both sides of the stream carry paired text +
  * binary frames, so the text-only abstraction would not fit.
  */
-export interface StreamWebSocketLike {
+export interface StreamWebSocketLike extends DialStartSignal {
   onopen: ((event: WebSocketOpenEvent) => void) | null;
   onmessage: ((event: StreamWebSocketMessageEvent) => void) | null;
   onerror: ((event: WebSocketErrorEvent) => void) | null;
