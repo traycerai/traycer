@@ -4,18 +4,24 @@
  */
 export const ROW_CONFIRM_CEILING_MS = 5_000;
 
-/** `confirmed`, or `null` (no answer) once `ceilingMs` passes first. */
-export async function answeredWithin(
-  confirmed: Promise<boolean | null>,
+/** Resolves once `read` settles, or once `ceilingMs` passes first; never rejects. */
+export async function settledWithin(
+  read: Promise<unknown>,
   ceilingMs: number,
-): Promise<boolean | null> {
+): Promise<void> {
   let clearCeiling = (): void => undefined;
-  const ceiling = new Promise<null>((resolve) => {
-    const timer = setTimeout(() => resolve(null), ceilingMs);
+  const ceiling = new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ceilingMs);
     clearCeiling = () => clearTimeout(timer);
   });
   try {
-    return await Promise.race([confirmed, ceiling]);
+    await Promise.race([
+      read.then(
+        () => undefined,
+        () => undefined,
+      ),
+      ceiling,
+    ]);
   } finally {
     clearCeiling();
   }

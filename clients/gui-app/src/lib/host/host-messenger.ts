@@ -108,11 +108,11 @@ export interface BuildRawHostMessengerForTargetParams<
    */
   readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
   /**
-   * Asked before a remote attach whose open would carry the sign-in
+   * Waited on before a remote attach whose open would carry the sign-in
    * (`confirmRowWhenHidden`): `resolveTarget`'s row is current only while the
    * window applies registry changes.
    */
-  readonly confirmRowBeforeSignIn: () => Promise<boolean>;
+  readonly confirmRowBeforeSignIn: () => Promise<unknown>;
   readonly registry: Registry;
   /**
    * Reads the bearer the CURRENT request is authorized under. The remote
@@ -299,7 +299,7 @@ export interface BuildRuntimeHostMessengerParams<
    */
   readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
   /** See `BuildRawHostMessengerForTargetParams.confirmRowBeforeSignIn`. */
-  readonly confirmRowBeforeSignIn: () => Promise<boolean>;
+  readonly confirmRowBeforeSignIn: () => Promise<unknown>;
   /**
    * Auth recovery the remote transport uses when the host FATALs the shared
    * session `UNAUTHORIZED` (see `BuildRawHostMessengerForTargetParams.auth`).
@@ -372,7 +372,7 @@ class RuntimeHostMessenger<
 > implements IHostMessenger<Registry> {
   private readonly registry: Registry;
   private readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
-  private readonly confirmRowBeforeSignIn: () => Promise<boolean>;
+  private readonly confirmRowBeforeSignIn: () => Promise<unknown>;
   private readonly auth: StreamAuthRevalidator | null;
   private readonly authnBaseUrl: string;
   private readonly hostTokens: HostTokenSource;
