@@ -274,16 +274,10 @@ export type LeftPanelRailDropPosition = "before" | "after" | "combine";
 export type LeftPanelRailOrientation = "horizontal" | "vertical";
 
 /**
- * Canvas drop targets carry the view-tab (and, for the empty shell, the
- * epic) that owns them so the root-level commit can address the right
- * canvas without React context.
+ * Canvas drop targets carry the view-tab that owns them so the root-level
+ * commit can address the right canvas without React context.
  */
 export type EpicCanvasDropTargetData =
-  | {
-      readonly kind: "empty-shell";
-      readonly epicId: string;
-      readonly viewTabId: string;
-    }
   | {
       readonly kind: "artifact-tab";
       readonly viewTabId: string;
@@ -366,10 +360,6 @@ export type EpicCanvasDropPreview =
       readonly kind: "artifact-tab-group-body";
       readonly groupId: string;
       readonly position: DropPosition;
-    }
-  | {
-      readonly kind: "empty-shell";
-      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-rail";
@@ -550,10 +540,6 @@ export function getLeftPanelBodyDropId(
   panelId: string,
 ): string {
   return `left-panel-body-target:${epicId}:${panelId}`;
-}
-
-export function getEmptyShellDropId(epicId: string, tabId: string): string {
-  return `empty-shell:${epicId}:${tabId}`;
 }
 
 export function getSidebarReparentRowDropId(nodeId: string): string {
@@ -863,16 +849,6 @@ export function readEpicCanvasDropTargetData(
   value: unknown,
 ): EpicCanvasDropTargetData | null {
   if (!isRecord(value)) return null;
-  if (value.kind === "empty-shell") {
-    if (!isNonEmptyString(value.epicId) || !isNonEmptyString(value.viewTabId)) {
-      return null;
-    }
-    return {
-      kind: "empty-shell",
-      epicId: value.epicId,
-      viewTabId: value.viewTabId,
-    };
-  }
   const sidebarReparentTarget = readSidebarReparentDropTargetData(value);
   if (sidebarReparentTarget !== null) return sidebarReparentTarget;
   const leftPanelTarget = readLeftPanelDropTargetData(value);
@@ -1040,7 +1016,6 @@ export function getArtifactTabDropIndexFromPoint(
   rect: RectLike | null,
   pointerX: number,
 ): number | null {
-  if (target.kind === "empty-shell") return null;
   if (target.kind === "artifact-tab-group-body") return null;
   if (target.kind === "left-panel-rail-item") return null;
   if (target.kind === "left-panel-rail-list") return null;
@@ -1090,12 +1065,6 @@ export function getEpicCanvasDropPreview(
    */
   useNeutralCorridor: boolean,
 ): EpicCanvasDropPreview {
-  if (target.kind === "empty-shell") {
-    return {
-      kind: "empty-shell",
-      viewTabId: target.viewTabId,
-    };
-  }
   if (target.kind === "artifact-tab-group-body") {
     if (rect === null) {
       return {

@@ -138,10 +138,6 @@ vi.mock(
   }),
 );
 
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicHasArtifactRecords: () => false,
-}));
-
 vi.mock("@/lib/commands/registry", () => ({ getOpenerItems: () => [] }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
