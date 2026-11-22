@@ -385,7 +385,7 @@ describe("a window's remote sign-in with the real host directory", () => {
     expect(run.relay.openBearers).toEqual(["", ""]);
   }, 20_000);
 
-  it("joins a read already running and starts no second one beside it", async () => {
+  it("follows a read that started before its confirmation with one more read, after it and never beside it, and sends the sign-in once that one answers", async () => {
     const run = await startWithDirectory("push");
     skipPushWhileHidden(run);
     const running = run.directory.refresh();
@@ -393,13 +393,44 @@ describe("a window's remote sign-in with the real host directory", () => {
     run.call(confirmRowWhenHidden(() => run.directory));
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
     await attachParkedOnConfirmation(run);
-
+    // The running read began before this confirmation: it cannot answer it,
+    // and no second read starts beside it.
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(run.reads()).toBe(2);
+
     run.answerRead({
       kind: "hosts",
       entries: [run.rowOwnedBy({ kind: "user", id: USER_ID })],
     });
     await running;
+    // The one that follows starts after it settled; the sign-in still waits.
+    await vi.waitFor(() => expect(run.reads()).toBe(3), WAIT);
+    expect(run.confirmation.answered).toBe(0);
+    expect(run.relay.openBearers).toEqual([""]);
+    run.answerRead({
+      kind: "hosts",
+      entries: [run.rowOwnedBy({ kind: "user", id: USER_ID })],
+    });
+    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    expect(run.relay.openBearers).toEqual(["", SIGN_IN]);
+    expect(run.reads()).toBe(3);
+  }, 20_000);
+
+  it("joins a read that started after its confirmation began, and starts no extra one", async () => {
+    const run = await startWithDirectory("push");
+    skipPushWhileHidden(run);
+    run.call(confirmRowWhenHidden(() => run.directory));
+    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    await attachParkedOnConfirmation(run);
+    // Another reader asks while the confirmation's own read runs.
+    const refreshing = run.directory.refresh();
+    expect(run.reads()).toBe(2);
+
+    run.answerRead({
+      kind: "hosts",
+      entries: [run.rowOwnedBy({ kind: "user", id: USER_ID })],
+    });
+    await refreshing;
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
     expect(run.relay.openBearers).toEqual(["", SIGN_IN]);
     expect(run.reads()).toBe(2);
