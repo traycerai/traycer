@@ -7914,6 +7914,35 @@ describe("an owner that takes up each kind of retry request", () => {
     expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
   });
 
+  it("retries an answered refusal from a rehydrated pre-create stage with a fresh key", async () => {
+    seed({
+      ...SEEDED,
+      send: { epicConfirmed: true },
+      phase: "creating",
+      created: false,
+    });
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: { kind: "unverified", answered: true },
+    });
+    const previousId = readStagedSandbox(SURFACE)?.clientRequestId;
+    if (previousId === null || previousId === undefined) {
+      throw new Error("expected the failed create's key");
+    }
+    await reloadPendingSandboxStores();
+    mocks.createSandbox.mockResolvedValue(CREDITS_REFUSED);
+
+    const { id, handled } = await requestAndMount("retry-stage");
+
+    expect(handled).toEqual([id]);
+    await waitFor(() => {
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.createSandbox.mock.calls[0][0].clientRequestId).not.toBe(
+      previousId,
+    );
+    expect(mocks.wake).not.toHaveBeenCalled();
+  });
+
   it("runs Retry creation as one fresh create and acknowledges it", async () => {
     seed({
       ...SEEDED,

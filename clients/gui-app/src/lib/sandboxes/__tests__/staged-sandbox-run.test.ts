@@ -13,6 +13,7 @@ import {
 import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type {
+  SandboxCreateFetchResult,
   SandboxCatalogueFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
@@ -1206,6 +1207,30 @@ describe("runStagedSandbox on a resting sandbox", () => {
 });
 
 describe("runStagedSandbox guards", () => {
+  async function lateCreateAnswerAfterCancel(
+    answer: SandboxCreateFetchResult,
+  ) {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness({}, true);
+    let release = (_answer: SandboxCreateFetchResult): void => undefined;
+    const held = new Promise<SandboxCreateFetchResult>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(auth, "createSandbox").mockImplementationOnce(async (request) => {
+      auth.requests.push(request);
+      return held;
+    });
+    const cancelledSend = run(false, deps);
+    await vi.waitFor(() => {
+      expect(auth.requests).toHaveLength(1);
+    });
+    const oldId = auth.requests[0].clientRequestId;
+    useStagedSandboxStore.getState().cancel(surfaceKey);
+    release(answer);
+    await cancelledSend;
+    return { auth, deps, oldId };
+  }
+
   it("does nothing when nothing is staged, or the stage is already handing off", async () => {
     const { auth, deps } = harness({}, true);
     await run(false, deps);
@@ -1299,6 +1324,40 @@ describe("runStagedSandbox guards", () => {
       phase: "handoff",
       clientRequestId: auth.requests[1].clientRequestId,
     });
+  });
+
+  it("releases the key when a cancelled create later gets an answered refusal", async () => {
+    const { auth, deps, oldId } = await lateCreateAnswerAfterCancel({
+      ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+      reason: "unverified",
+    });
+
+    expect(stageOf()).toMatchObject({
+      phase: "staged",
+      clientRequestId: null,
+      failure: null,
+    });
+    await run(false, deps);
+
+    expect(auth.requests).toHaveLength(2);
+    expect(auth.requests[1]?.clientRequestId).not.toBe(oldId);
+  });
+
+  it("keeps the key when a cancelled create later gets a network error", async () => {
+    const { auth, deps, oldId } = await lateCreateAnswerAfterCancel({
+      kind: "network-error",
+      detail: "offline",
+    });
+
+    expect(stageOf()).toMatchObject({
+      phase: "staged",
+      clientRequestId: oldId,
+      failure: null,
+    });
+    await run(false, deps);
+
+    expect(auth.requests).toHaveLength(2);
+    expect(auth.requests[1]?.clientRequestId).toBe(oldId);
   });
 });
 

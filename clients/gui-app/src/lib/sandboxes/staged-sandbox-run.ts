@@ -515,19 +515,22 @@ async function startTarget(
   };
   if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
   const result = await createSandbox(request, deps);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return null;
+  const current = stillCurrent(surfaceKey, clientRequestId);
   if (result.kind !== "ok") {
-    fail(
-      surfaceKey,
-      createFailure(
-        result,
-        target.configuration.kind === "team"
-          ? target.configuration.teamName
-          : null,
-      ),
+    const failure = createFailure(
+      result,
+      target.configuration.kind === "team"
+        ? target.configuration.teamName
+        : null,
     );
+    if (current) {
+      fail(surfaceKey, failure);
+    } else {
+      releaseCancelledCreateKey(surfaceKey, clientRequestId, failure);
+    }
     return null;
   }
+  if (!current) return null;
   const { sandboxId, hostId } = result.accepted;
   if (!recordPendingSandboxStageCreated(surfaceKey, sandboxId)) return null;
   useStagedSandboxStore.getState().report(surfaceKey, {
@@ -538,6 +541,31 @@ async function startTarget(
     stepAt: deps.now(),
   });
   return { sandboxId, hostId };
+}
+
+/** A cancelled draft keeps its key until a refusal confirms nothing was created. */
+function releaseCancelledCreateKey(
+  surfaceKey: string,
+  clientRequestId: string,
+  failure: StagedSandboxFailure,
+): void {
+  const stage = readStagedSandbox(surfaceKey);
+  if (
+    stage === null ||
+    stage.phase !== "staged" ||
+    stage.clientRequestId !== clientRequestId ||
+    stage.createdSandboxId !== null ||
+    !pendingSandboxStageRunAllowed(surfaceKey) ||
+    !refusedBeforeCreate(failure, null)
+  ) {
+    return;
+  }
+  useStagedSandboxStore.getState().report(surfaceKey, {
+    clientRequestId: null,
+    createAttempt: null,
+    startedAt: null,
+    stepAt: null,
+  });
 }
 
 /**
