@@ -76,7 +76,7 @@ interface Rig {
 
 const directories: HostDirectoryService[] = [];
 
-async function startedHiddenWindow(): Promise<Rig> {
+async function startedWindow(hidden: boolean): Promise<Rig> {
   const host = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
@@ -103,7 +103,7 @@ async function startedHiddenWindow(): Promise<Rig> {
   });
   directories.push(directory);
   await directory.start();
-  __setBrowserDocumentHiddenForTests(true);
+  if (hidden) __setBrowserDocumentHiddenForTests(true);
   return {
     directory,
     reads,
@@ -125,6 +125,10 @@ async function startedHiddenWindow(): Promise<Rig> {
     },
     rowIds: async () => (await directory.list()).map((entry) => entry.hostId),
   };
+}
+
+function startedHiddenWindow(): Promise<Rig> {
+  return startedWindow(true);
 }
 
 /** Lets what a settled read or an elapsed ceiling resolves run; no timer is due at 0. */
@@ -233,5 +237,98 @@ describe("a hidden window's row confirmation waits for a read that started after
     expect(confirmation.resolved()).toBe(true);
     expect(await rig.rowIds()).toEqual(["row-3"]);
     expect(rig.reads.mostAtOnce()).toBe(1);
+  });
+});
+
+// A confirmation is satisfied only by a read, of the current era and current as
+// a read, that started at or after the later of the latest mark and, when the
+// document is hidden at the confirmation's start, the confirmation's own start.
+describe("a hidden window reads for every sign-in attach, and a confirmation waits on the condition, not on one read", () => {
+  it("(F2 a) starts a new read for a later attach in the same hidden span, though the earlier attach's read left no mark, and gets the row the computer moved to", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    const first = rig.confirm();
+    await drain();
+    expect(rig.reads.issued()).toBe(2);
+    rig.reads.answer(1, "personal-row");
+    await drain();
+    expect(first.resolved()).toBe(true);
+
+    // The window stays hidden; the computer moves to a team before the next push.
+    const second = rig.confirm();
+    await drain();
+
+    expect(second.resolved()).toBe(false);
+    expect(rig.reads.issued()).toBe(3);
+    rig.reads.answer(2, "team-row");
+    await drain();
+
+    expect(second.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["team-row"]);
+    expect(rig.reads.mostAtOnce()).toBe(1);
+  });
+
+  it("(F2 b) shares a read between two overlapping hidden attaches only when it started after each began, and follows with another read for the one that began later", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    const first = rig.confirm();
+    await drain();
+    // The first attach's read starts after it began. The second attach begins
+    // while that read is running, so that read started before it.
+    expect(rig.reads.issued()).toBe(2);
+    const second = rig.confirm();
+    await drain();
+    expect(rig.reads.issued()).toBe(2);
+
+    rig.reads.answer(1, "row-1");
+    await drain();
+
+    expect(first.resolved()).toBe(true);
+    expect(second.resolved()).toBe(false);
+    expect(rig.reads.issued()).toBe(3);
+    expect(rig.reads.running()).toBe(1);
+
+    rig.reads.answer(2, "row-2");
+    await drain();
+
+    expect(second.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["row-2"]);
+    expect(rig.reads.mostAtOnce()).toBe(1);
+  });
+
+  // A guard: a shown window that skipped nothing has a current row.
+  it("(F2 guard) returns at once, reading nothing, in a visible window with no mark outstanding", async () => {
+    const rig = await startedWindow(false);
+
+    const confirmation = rig.confirm();
+    await drain();
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(rig.reads.issued()).toBe(1);
+  });
+
+  it("(F4) resolves when the current read of the current era settles, not at the ceiling, though the read it first joined was retired by an era change and never settles", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    // The confirmation joins the era-1 read.
+    const confirmation = rig.confirm();
+    await drain();
+    expect(rig.reads.issued()).toBe(2);
+    // A rotation retires it; the era-2 read is the current one.
+    const era = rig.rotateCredential();
+    rig.directory.invalidateInFlightRefresh();
+    const eraTwoRead = rig.directory.refreshForEra({
+      identity: IDENTITY,
+      credentialGeneration: era,
+    });
+    expect(rig.reads.issued()).toBe(3);
+
+    rig.reads.answer(2, "era-two-row");
+    await eraTwoRead;
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(100).toBeLessThan(ROW_CONFIRM_CEILING_MS);
+    expect(confirmation.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["era-two-row"]);
   });
 });
