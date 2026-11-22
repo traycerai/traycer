@@ -331,4 +331,45 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(confirmation.resolved()).toBe(true);
     expect(await rig.rowIds()).toEqual(["era-two-row"]);
   });
+
+  // An era change is a mark: a read that started before a rotation never
+  // satisfies a confirmation after it, however the wake and the rotation order.
+  it("(era mark) keeps waiting for the current-era read when the credentials rotate between the earlier read's settlement and the confirmation's wake", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    const confirmation = rig.confirm();
+    await drain();
+    // The confirmation is pending on era-1 read A.
+    expect(rig.reads.issued()).toBe(2);
+    let rotated = false;
+    // A listener of the directory's refresh state runs inside A's settlement,
+    // after A is recorded as settled and before the confirmation's wake: the
+    // credentials rotate there, and the app starts the era-2 read.
+    const stop = rig.directory.onRefreshStateChange(() => {
+      if (rotated) return;
+      rotated = true;
+      const era = rig.rotateCredential();
+      rig.directory.invalidateInFlightRefresh();
+      void rig.directory.refreshForEra({
+        identity: IDENTITY,
+        credentialGeneration: era,
+      });
+    });
+
+    rig.reads.answer(1, "personal-row");
+    await drain();
+    stop.dispose();
+
+    // The wake has run; the era-2 read is still pending.
+    expect(rig.reads.issued()).toBe(3);
+    expect(rig.reads.running()).toBe(1);
+    expect(confirmation.resolved()).toBe(false);
+
+    rig.reads.answer(2, "team-row");
+    await drain();
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["team-row"]);
+    expect(rig.reads.issued()).toBe(3);
+  });
 });
