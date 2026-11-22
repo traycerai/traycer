@@ -419,6 +419,45 @@ describe("main resolves the browser.sessions host itself", () => {
     expect(directory.peek("host-previous")).toBeNull();
   });
 
+  it("does not answer a row confirmation from a read a reset followed, and answers on the next read it adopts", async () => {
+    const reads: Array<(result: HostListFetchResult) => void> = [];
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "bearer",
+      listRegisteredHosts: () =>
+        new Promise<HostListFetchResult>((resolve) => {
+          reads.push(resolve);
+        }),
+      now: () => now,
+    });
+    // The first read's adoption publishes, and the identity changes there:
+    // after the read was adopted, before the confirmation checks it.
+    let resetOnFirstAdoption = true;
+    directory.subscribe(() => {
+      if (!resetOnFirstAdoption) return;
+      resetOnFirstAdoption = false;
+      directory.reset();
+    });
+    let answer: boolean | null = null;
+    const confirming = directory.confirmRows().then((confirmed) => {
+      answer = confirmed;
+      return confirmed;
+    });
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+
+    reads[0](remoteResponse("host-1"));
+    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    expect(answer).toBeNull();
+    expect(directory.peek("host-1")).toBeNull();
+
+    reads[1](remoteResponse("host-2"));
+    await expect(confirming).resolves.toBe(true);
+    expect(reads).toHaveLength(2);
+    expect(directory.peek("host-2")).not.toBeNull();
+  });
+
   it("answers a looped unknown id from cache instead of amplifying it to authn", async () => {
     const listRegisteredHosts = vi.fn(() =>
       Promise.resolve(remoteResponse("host-2")),
