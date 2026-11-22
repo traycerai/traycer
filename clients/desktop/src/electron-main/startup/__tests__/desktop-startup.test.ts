@@ -591,7 +591,7 @@ function startupProbeDeclined(): {
     kind: "fatalError",
     details: {
       code: "UNAUTHORIZED",
-      reason: "Session grant verification failed: ERR_JWS_INVALID",
+      reason: "the host has not admitted this sign-in",
       doorReason: "not_admitted",
       retryable: false,
       incompatibleMethods: null,

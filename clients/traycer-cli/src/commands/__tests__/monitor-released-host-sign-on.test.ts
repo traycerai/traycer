@@ -7,7 +7,7 @@ import { runMonitor } from "../monitor";
 const USER_ID = "monitor-test-user";
 const HOST_ID = "11111111-1111-4111-8111-111111111111";
 const SIGN_IN = "monitor-test-sign-in";
-const TEAM_REFUSAL = "Session grant verification failed: ERR_JWS_INVALID";
+const TEAM_REFUSAL = "the host has not admitted this sign-in";
 const WAIT = { timeout: 2_000, interval: 10 };
 
 const monitorHarness = vi.hoisted(() => {
@@ -354,7 +354,6 @@ describe("traycer monitor local released-host sign-in", () => {
       NO_HOST_TOKEN_PROBE,
       token,
     ]);
-    expect(monitorHarness.sockets.map(openToken)).not.toContain(SIGN_IN);
 
     monitorHarness.state.reader.abort();
     await expect(running).resolves.toBeUndefined();

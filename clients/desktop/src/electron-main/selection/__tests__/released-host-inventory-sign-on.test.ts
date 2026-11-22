@@ -103,12 +103,12 @@ function expiredTokenRefusal(): string {
   });
 }
 
-function invalidSessionGrantRefusal(): string {
+function notAdmittedRefusal(): string {
   return JSON.stringify({
     kind: "fatalError",
     details: {
       code: "UNAUTHORIZED",
-      reason: "Session grant verification failed: ERR_JWS_INVALID",
+      reason: "the host has not admitted this sign-in",
       doorReason: "not_admitted",
       retryable: false,
       incompatibleMethods: null,
@@ -344,7 +344,7 @@ describe("desktop inventory push against a released local host", () => {
       expect(sentFramesOfKind(probe, "open")).toHaveLength(1),
     );
     expect(sentFramesOfKind(probe, "open")[0]?.token).toBe(NO_HOST_TOKEN_PROBE);
-    probe.fireMessage(invalidSessionGrantRefusal());
+    probe.fireMessage(notAdmittedRefusal());
     await vi.advanceTimersToNextTimerAsync();
 
     const admitted = await vi.waitFor(() => {
@@ -360,7 +360,6 @@ describe("desktop inventory push against a released local host", () => {
     admitted.fireMessage(openAckFrame([], null));
     await vi.waitFor(() => expect(opened.statuses).toContain("open"));
     expect(sentTokens()).toEqual([HOST_TOKEN, NO_HOST_TOKEN_PROBE, HOST_TOKEN]);
-    expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
     opened.close();
   });
 
@@ -454,7 +453,7 @@ describe("desktop inventory push against a released local host", () => {
     expect(sentFramesOfKind(firstProbe, "open")[0]?.token).toBe(
       NO_HOST_TOKEN_PROBE,
     );
-    firstProbe.fireMessage(invalidSessionGrantRefusal());
+    firstProbe.fireMessage(notAdmittedRefusal());
     await vi.waitFor(() =>
       expect(
         processReleasedHosts.probeDeclined(

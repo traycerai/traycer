@@ -369,7 +369,7 @@ describe("runtime host messenger release during dial", () => {
         },
       }),
     });
-    await expect(firstCall).rejects.toThrow();
+    await expect(firstCall).rejects.toThrow("host token expired");
 
     const secondCall = binding.messenger.request(
       "host.echo",
@@ -422,8 +422,6 @@ describe("runtime host messenger release during dial", () => {
         .map((frame) => frame.token),
     );
     expect(opens).toEqual([heldToken, heldToken]);
-    expect(opens).not.toContain("bearer-token");
-    expect(opens).not.toContain("no-host-only-token");
     binding.dispose();
   });
 

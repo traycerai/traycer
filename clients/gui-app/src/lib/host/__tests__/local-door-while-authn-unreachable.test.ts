@@ -479,60 +479,19 @@ describe("local stream while authn cannot mint", () => {
     clearHostDoorState(hostId);
     let allowFresh = false;
     let mintCalls = 0;
-    async function nextOpenWithToken(
-      afterSocketIndex: number,
+    // The dial at `index` must be the next one, carrying `expectedToken`.
+    async function openAt(
+      index: number,
       expectedToken: string,
-    ): Promise<{
-      readonly socket: FakeNativeWebSocket;
-      readonly index: number;
-    }> {
-      let index = afterSocketIndex + 1;
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        try {
-          await vi.waitFor(
-            () =>
-              expect(FakeNativeWebSocket.instances.length).toBeGreaterThan(
-                index,
-              ),
-            { timeout: 2_000, interval: 10 },
-          );
-        } catch {
-          const sequence = FakeNativeWebSocket.instances
-            .map((candidate, candidateIndex) => {
-              const tokens = sentFramesOfKind(candidate, "open").map(
-                (frame) => frame.token,
-              );
-              const closed =
-                candidate.closed === null
-                  ? "open"
-                  : JSON.stringify(candidate.closed);
-              return `${candidateIndex}:${tokens.join(",") || "no open"}:${closed}`;
-            })
-            .join(" | ");
-          throw new Error(
-            `expected ${expectedToken}; observed sockets ${sequence}`,
-          );
-        }
-        const candidate = FakeNativeWebSocket.instances.at(index);
-        if (candidate === undefined) throw new Error("dial missing");
-        const candidateIndex = index;
-        index += 1;
-        candidate.fireOpen();
-        const open = await vi.waitFor(() => {
-          const frame = sentFramesOfKind(candidate, "open").at(0);
-          if (frame !== undefined) return frame;
-          if (candidate.closed !== null) return null;
-          throw new Error("dial has neither opened nor closed");
-        });
-        if (open === null) {
-          await vi.advanceTimersToNextTimerAsync();
-          continue;
-        }
-        if (open.token === expectedToken)
-          return { socket: candidate, index: candidateIndex };
-        await vi.advanceTimersToNextTimerAsync();
-      }
-      throw new Error(`expected ${expectedToken}`);
+    ): Promise<FakeNativeWebSocket> {
+      await vi.waitFor(
+        () =>
+          expect(FakeNativeWebSocket.instances.length).toBeGreaterThan(index),
+        { timeout: 2_000, interval: 10 },
+      );
+      const socket = FakeNativeWebSocket.instances[index];
+      expect((await readOpen(socket)).token).toBe(expectedToken);
+      return socket;
     }
     const source = createHostTokenSource({
       persistence: createMemoryHostTokenPersistence(),
@@ -588,8 +547,7 @@ describe("local stream while authn cannot mint", () => {
     expect(sentFramesOfKind(probe, "open")[0].token).toBe(NO_HOST_TOKEN_PROBE);
     expect(hostDoorStateFor(hostId)?.kind).toBe("token-expired");
     probe.fireMessage(namedRefusal("owner_sign_in"));
-    const invitedDial = await nextOpenWithToken(1, SIGN_IN_TOKEN);
-    const invited = invitedDial.socket;
+    const invited = await openAt(2, SIGN_IN_TOKEN);
     invited.fireMessage(namedRefusal("token_expired"));
     await vi.waitFor(() => expect(refreshCalls).toBe(1));
     await vi.waitFor(() => expect(heard).toHaveLength(2));
@@ -600,19 +558,13 @@ describe("local stream while authn cannot mint", () => {
     expect(hostDoorStateFor(hostId)?.kind).toBe("token-expired");
     allowFresh = true;
     await vi.advanceTimersToNextTimerAsync();
-    const secondProbeDial = await nextOpenWithToken(
-      invitedDial.index,
-      NO_HOST_TOKEN_PROBE,
-    );
+    const secondProbe = await openAt(3, NO_HOST_TOKEN_PROBE);
     await vi.waitFor(() =>
       expect(source.current(USER_A, hostId)?.token).toBe(HOST_ONLY_AFTER_MINT),
     );
-    secondProbeDial.socket.fireMessage(namedRefusal("owner_sign_in"));
+    secondProbe.fireMessage(namedRefusal("owner_sign_in"));
     await vi.advanceTimersToNextTimerAsync();
-    const admittedDial = await nextOpenWithToken(
-      secondProbeDial.index,
-      HOST_ONLY_AFTER_MINT,
-    );
+    const admittedDial = await openAt(4, HOST_ONLY_AFTER_MINT);
     expect(sentTokens()).toEqual([
       expired.token,
       NO_HOST_TOKEN_PROBE,
@@ -620,7 +572,7 @@ describe("local stream while authn cannot mint", () => {
       NO_HOST_TOKEN_PROBE,
       HOST_ONLY_AFTER_MINT,
     ]);
-    admittedDial.socket.fireMessage(openAckFrame([], null));
+    admittedDial.fireMessage(openAckFrame([], null));
     await settle();
     expect(hostDoorStateFor(hostId)).toBeNull();
     session.close();
@@ -986,7 +938,6 @@ describe("local stream while authn cannot mint", () => {
     afterOutage.fireMessage(openAckFrame([], null));
     await settle();
     expect(sentTokens()).toEqual([expired.token, freshToken, freshToken]);
-    expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
     expect(hostDoorStateFor(hostId)).toBeNull();
     session.close();
     client.close("test complete");
@@ -1016,7 +967,6 @@ describe("local stream while authn cannot mint", () => {
     socket.fireMessage(namedRefusal("not_admitted"));
     await vi.waitFor(() => expect(heard).toHaveLength(1));
     expect(sentTokens()).toEqual([otherHostToken.token]);
-    expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
     expect(heard.map((details) => details.doorReason)).toEqual([
       "not_admitted",
     ]);
