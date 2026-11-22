@@ -61,7 +61,9 @@ export function useProvidersReadModelRoutesQuery(input: {
             // expiry refresh that immediately asks for another expired reply.
             resolvedModel: expiresAt > now ? route.resolvedModel : null,
             reportedModel:
-              route.validForMs > 0 ? route.resolvedModel : undefined,
+              route.resolvedModel !== null || route.validForMs > 0
+                ? route.resolvedModel
+                : undefined,
             expiresAt,
           };
         }),

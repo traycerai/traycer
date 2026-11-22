@@ -433,6 +433,13 @@ describe("catalog route for the selected profile's alias", () => {
     await waitFor(() => expect(succeeded(hook.client)).toBe(true));
     expect(hook.result.current.kind).toBe("hidden");
   });
+  it("keeps the warning when a disagreeing answer has no validity left", async () => {
+    mocks.read.mockImplementation(pending);
+    const hook = setup("/repo", catalogOpus);
+    expect(hook.result.current.kind).toBe("hidden");
+    act(() => resolveRead({ routes: [answer(null, "claude-fable-5-2", 0)] }));
+    await waitFor(() => expect(hook.result.current.kind).toBe("visible"));
+  });
   it("ignores a catalog value that names a gateway model", () => {
     const hook = setup("/repo", {
       ...DEFAULT,
