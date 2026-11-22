@@ -4,43 +4,41 @@ import { join } from "node:path";
 import type { Environment } from "../../config";
 import { log } from "./logger";
 
-// The off switch for one machine. There is no screen behind it: the port has
-// no password and every account on a shared machine can reach it, so a person
-// who does not want it writes `{ "remoteDebuggingPortEnabled": false }` here.
+// The opt-in for one machine. There is no screen behind it: the machine's
+// owner, or an agent acting for them, writes
+// `{ "remoteDebuggingPortEnabled": true }` here once. Off by default because
+// the port has no password and reaches every page the app hosts. Opting in
+// grants nothing new: the same account can already relaunch the app with
+// `--remote-debugging-port`, and the user-data folder is owner-only, so other
+// accounts cannot write this file.
 const PREFERENCE_FILE_NAME = "remote-debugging-port.json";
 
 /**
- * Staging builds open a DevTools port on every start so an agent
- * investigating a reported bug can see the running app as the user sees it,
- * without the user relaunching it with a flag. Production, and any
- * environment this file does not know, never opens one.
+ * Only staging builds may open a DevTools port, so an agent investigating a
+ * reported bug can see the running app as the user sees it, across relaunches
+ * from the Dock. Production, and any environment this file does not know,
+ * never opens one.
  */
 function debuggingPortAllowed(environment: Environment): boolean {
   return environment === "staging";
 }
 
-function turnedOffOnThisMachine(): boolean {
+function turnedOnOnThisMachine(): boolean {
   let preference: unknown;
   try {
     preference = JSON.parse(
       readFileSync(join(app.getPath("userData"), PREFERENCE_FILE_NAME), "utf8"),
     );
-  } catch (err) {
-    // No file is the usual case. Nothing in the app writes this file, so one
-    // that is there but unreadable was written by a person turning the port
-    // off, and a typo in it must not leave the port open.
-    return !isFileMissing(err);
+  } catch {
+    // No file, or one that cannot be read or parsed: the port stays off.
+    return false;
   }
   return (
     typeof preference === "object" &&
     preference !== null &&
     "remoteDebuggingPortEnabled" in preference &&
-    preference.remoteDebuggingPortEnabled === false
+    preference.remoteDebuggingPortEnabled === true
   );
-}
-
-function isFileMissing(err: unknown): boolean {
-  return err instanceof Error && "code" in err && err.code === "ENOENT";
 }
 
 /**
@@ -63,7 +61,7 @@ export function applyRemoteDebuggingPortPreference(
   ) {
     return;
   }
-  if (turnedOffOnThisMachine()) return;
+  if (!turnedOnOnThisMachine()) return;
   app.commandLine.appendSwitch("remote-debugging-port", "0");
   log.info(
     "[debugging-port] requested a DevTools port; read it from DevToolsActivePort in the user-data folder",
