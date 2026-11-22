@@ -56,8 +56,9 @@ export function moveAcceptanceOpen(
  * accept while first start is registering or moving, its `awaiting_consent`
  * read included: a Retry or a restart runs first start from registering, and
  * its moving stage may read `awaiting_consent` before it finds the
- * acceptance, though nobody is asked. `applying` comes after the upload has
- * ended, so it is read from `setup` alone, whatever the record says.
+ * acceptance, though nobody is asked. Every other stage is read from `setup`
+ * alone, whatever the record says: `applying` comes after the upload has
+ * ended, and a stage this app does not know is not one the record covers.
  */
 export function moveIsPastTheAccept(
   status: EnvironmentStatusResponseV13,
@@ -66,9 +67,8 @@ export function moveIsPastTheAccept(
   if (setup === null) return false;
   if (
     moveAcceptanceOpen(status) &&
-    setup.stage !== "applying" &&
-    setup.state !== "done" &&
-    setup.stage !== "done"
+    (setup.stage === "registering" || setup.stage === "moving_settings") &&
+    setup.state !== "done"
   )
     return true;
   return (

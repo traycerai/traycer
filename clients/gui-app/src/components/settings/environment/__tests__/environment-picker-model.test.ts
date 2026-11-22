@@ -417,6 +417,16 @@ describe("the Local row of an accepted move", () => {
       { stage: "done", state: "done" },
       moveAttemptFixture("done"),
     ],
+    [
+      "a stage this app does not know, running, record running",
+      { stage: "verifying", state: "running" },
+      moveAttemptFixture("running"),
+    ],
+    [
+      "a stage this app does not know, stalled, record retry",
+      { stage: "verifying", state: "stalled" },
+      moveAttemptFixture("retry"),
+    ],
   ])("keeps Move to Personal in %s", (_name, setup, move) => {
     expect(localRowOf(unboundMoveStatusFixture(setup, move))).toMatchObject({
       kind: "local",
