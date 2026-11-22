@@ -8,12 +8,18 @@ import {
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import { SESSION_CAPABILITY_CREDENTIAL_UPDATE } from "@traycer/protocol/host-transport/mux";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/create-remote-transport";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
+import { RemoteMuxTestPeer } from "@traycer-clients/shared/host-transport/__tests__/remote-mux-test-peer";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { createDesktopHostTokenSource } from "../../../renderer-shell/desktop-host-tokens";
 import {
@@ -770,4 +776,201 @@ describe("main's broadcast of a kept host-token write", () => {
     expect(asking.current(USER, HOST)).toEqual(reissued);
     expect(sibling.current(USER, HOST)).toEqual(reissued);
   });
+});
+
+describe("a window's one announce for a token main wrote and handed it back", () => {
+  const USER = "user-a";
+  const HOST = "host-one-announce";
+  const INITIAL = tokenIssuedAt("initial", 1_000);
+  const BEFORE = tokenIssuedAt("before", 1_500);
+  const MINTED = tokenIssuedAt("minted", 2_000);
+  const AFTER = tokenIssuedAt("after", 3_000);
+
+  afterEach(() => {
+    retireAllRemoteSessions();
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * One window over main's real handlers and real broadcast, holding a relay
+   * session to the host. `holdChanges` keeps main's change events from
+   * reaching the window until `deliverHeld`, so the reply to the window's own
+   * ask can arrive first.
+   */
+  async function windowWithRelaySession(main: HostTokenSource): Promise<{
+    readonly tokens: HostTokenSource;
+    readonly peer: RemoteMuxTestPeer;
+    readonly holdChanges: () => void;
+    readonly deliverHeld: () => void;
+    readonly close: () => void;
+  }> {
+    let holding = false;
+    const held: HostTokenBridgeChange[] = [];
+    const subscribers = new Set<(change: HostTokenBridgeChange) => void>();
+    const deliver = (change: HostTokenBridgeChange): void => {
+      for (const subscriber of Array.from(subscribers)) subscriber(change);
+    };
+    registerForWindow(main, USER, {
+      ...window,
+      webContents: {
+        send: (channel: string, payload: unknown): void => {
+          if (channel !== RunnerHostEvent.hostTokensChange) return;
+          if (!isBridgeChange(payload)) throw new Error("malformed change");
+          if (holding) held.push(payload);
+          else deliver(payload);
+        },
+      },
+    });
+    const tokens = createDesktopHostTokenSource({
+      era: (userId) => main.era(userId),
+      obtain: async (userId, hostId, fresh, expectedEra, owner) => {
+        const reply: unknown = await invokeHandler(
+          RunnerHostInvoke.hostTokensObtain,
+        )(RENDERER, userId, hostId, fresh, expectedEra, owner);
+        return {
+          outcome: Reflect.get(Object(reply), "outcome"),
+          held: Reflect.get(Object(reply), "held") === true,
+          era: Reflect.get(Object(reply), "era"),
+        };
+      },
+      renew: async (userId) => ({
+        renewal: { kind: "already-current" },
+        era: main.era(userId),
+      }),
+      adopt: async (userId, hostId, token, expectedEra, owner) => {
+        const reply: unknown = await invokeHandler(
+          RunnerHostInvoke.hostTokensAdopt,
+        )(RENDERER, userId, hostId, token, expectedEra, owner);
+        return {
+          kept: Reflect.get(Object(reply), "kept") === true,
+          era: Reflect.get(Object(reply), "era"),
+        };
+      },
+      forgetUser: async (userId) => ({ era: main.era(userId) }),
+      snapshot: async () => {
+        const reply: unknown = await invokeHandler(
+          RunnerHostInvoke.hostTokensSnapshot,
+        )(RENDERER);
+        return {
+          userId: Reflect.get(Object(reply), "userId"),
+          era: Reflect.get(Object(reply), "era"),
+          tokens: Reflect.get(Object(reply), "tokens"),
+        };
+      },
+      subscribe: (next) => {
+        subscribers.add(next);
+        return { dispose: () => subscribers.delete(next) };
+      },
+    });
+    await tokens.whenLoaded();
+
+    const peer = new RemoteMuxTestPeer();
+    peer.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({
+              grant: "relay-pass",
+              role: "client",
+              expires_in: 300,
+              session_grant: INITIAL.token,
+              session_grant_expires_in: 3_600,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+    const built = createRemoteHostTransport({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
+      hostId: HOST,
+      userId: USER,
+      relayAttachUrl: "wss://relay.invalid/attach",
+      authnBaseUrl: "https://authn.invalid",
+      hostPublicKey: peer.hostPublicKey,
+      bearer: () => ({
+        getBearerToken: () => "sign-in-token",
+        identity: { userId: USER },
+      }),
+      hostTokens: tokens,
+      door: null,
+      onState: () => undefined,
+      cloudAuthorized: () => true,
+      auth: null,
+      clock: null,
+      rpcRegistry: hostRpcRegistry,
+      streamRegistry: hostStreamRpcRegistry,
+      webSocketFactory: peer.factory,
+      requestId: () => "req-one-announce",
+      proactiveWakeEligible: false,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    if (built === null) throw new Error("expected a built remote transport");
+    built.session.start();
+    await vi.waitFor(() => expect(built.session.isReady()).toBe(true));
+    return {
+      tokens,
+      peer,
+      holdChanges: () => {
+        holding = true;
+      },
+      deliverHeld: () => {
+        holding = false;
+        for (const change of held.splice(0)) deliver(change);
+      },
+      close: () => built.session.close(),
+    };
+  }
+
+  it.each([
+    { name: "main's change event, then the reply", replyFirst: false },
+    { name: "the reply, then main's change event", replyFirst: true },
+  ])(
+    "announces the token once, and sends the relay session one credential update, for $name",
+    async ({ replyFirst }) => {
+      const main = createHostTokenSource({
+        persistence: createMemoryHostTokenPersistence(),
+        mint: () => Promise.resolve({ kind: "ok", token: MINTED }),
+        signIn: () => "sign-in-token",
+        now: () => 1_000_000,
+      });
+      const window = await windowWithRelaySession(main);
+      try {
+        const lastUpdateIs = (token: HostToken) => () =>
+          expect(window.peer.credentialUpdates.at(-1)).toEqual({
+            bearer: token.token,
+          });
+        // Whatever the session's own opening sent has landed: a later token
+        // is the last update the peer sees, and the peer reads them in order.
+        await main.adopt(USER, HOST, BEFORE, main.era(USER), () => true);
+        await vi.waitFor(lastUpdateIs(BEFORE));
+        const updatesBefore = window.peer.credentialUpdates.length;
+        const announced: Array<string | null> = [];
+        window.tokens.subscribe(({ userId, hostId }) => {
+          if (userId === USER && hostId === HOST)
+            announced.push(window.tokens.current(USER, HOST)?.token ?? null);
+        });
+
+        if (replyFirst) window.holdChanges();
+        const outcome = await window.tokens.obtain(USER, HOST, true, {
+          signal: null,
+          owner: null,
+        });
+        window.deliverHeld();
+
+        expect(outcome).toEqual({ kind: "ok", token: MINTED });
+        expect(announced).toEqual([MINTED.token]);
+        // The update for a later token follows every update the first one
+        // caused, so its arrival means no more can come for the first.
+        await main.adopt(USER, HOST, AFTER, main.era(USER), () => true);
+        await vi.waitFor(lastUpdateIs(AFTER));
+        expect(window.peer.credentialUpdates).toHaveLength(updatesBefore + 2);
+      } finally {
+        window.close();
+      }
+    },
+  );
 });
