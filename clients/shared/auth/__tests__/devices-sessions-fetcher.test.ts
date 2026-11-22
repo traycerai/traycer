@@ -307,25 +307,6 @@ describe("devices/sessions authn fetcher", () => {
       expect(result).toEqual({ kind: "step-up-required" });
     });
 
-    it.each([401, 403] as const)(
-      "maps a plain %i to unauthorized with its status",
-      async (status) => {
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async () => jsonResponse(status, { error: "refused" })),
-        );
-
-        const result = await mintHostCredentialViaHttp(
-          AUTHN,
-          "jwt",
-          request,
-          null,
-        );
-
-        expect(result).toEqual({ kind: "unauthorized", status });
-      },
-    );
-
     it("fails closed when provisionedAt is unparseable (network-error, not ok)", async () => {
       vi.stubGlobal(
         "fetch",

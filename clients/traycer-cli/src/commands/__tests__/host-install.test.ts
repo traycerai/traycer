@@ -1245,11 +1245,6 @@ describe("buildHostInstallCommand", () => {
       "stops before anything is installed when $label at the token's mint",
       async ({ answer, error }) => {
         const mintRequests = stubMintAnswer(answer);
-        // A 401 on the mint asks for the stored sign-in's one refresh; it is
-        // refused here, so the mint's own refusal is the answer.
-        mocks.createStoreBackedRevalidatorMock.mockReturnValue({
-          revalidateCurrentContext: async () => "rejected",
-        });
         mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
         mocks.createServiceInstallLifecycleMock.mockReturnValue(
           sampleLifecycleHandle(),

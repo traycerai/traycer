@@ -196,8 +196,6 @@ async function deleteWithHostToken(
       unavailableNote:
         "continuing without a host credential — it will stop working when this connection ends.",
       onUnauthorized: null,
-      renewSignIn: async () =>
-        (await session.tokens.refreshSignIn()) === "rotated",
     }),
     // Provisioning here is opportunistic; adoption is never verified.
     onHostCredentialState: null,

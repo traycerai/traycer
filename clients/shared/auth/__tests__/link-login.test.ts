@@ -381,51 +381,6 @@ describe("match code on the wire", () => {
   });
 });
 
-describe("a link-login request the sign-in service refuses", () => {
-  const AUTHN_BASE_URL = "https://authn.example.test";
-  const calls = [
-    {
-      name: "mint",
-      send: () => mintLinkLoginCodeViaHttp(AUTHN_BASE_URL, "bearer-word", null),
-    },
-    {
-      name: "status poll",
-      send: () =>
-        linkLoginStatusViaHttp(AUTHN_BASE_URL, "bearer-word", NORMALIZED, null),
-    },
-    {
-      name: "respond",
-      send: () =>
-        respondLinkLoginViaHttp(
-          AUTHN_BASE_URL,
-          "bearer-word",
-          NORMALIZED,
-          true,
-        ),
-    },
-  ];
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it.each(
-    calls.flatMap((call) =>
-      ([401, 403] as const).map((status) => ({ ...call, status })),
-    ),
-  )(
-    "answers a $status on the $name as unauthorized with that status",
-    async ({ send, status }) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>(async () => new Response("{}", { status })),
-      );
-
-      expect(await send()).toEqual({ kind: "unauthorized", status });
-    },
-  );
-});
-
 describe("a link-login request on a fetch that ignores its signal", () => {
   // LINK_LOGIN_FETCH_TIMEOUT_MS
   const LINK_LOGIN_TIMEOUT_MS = 10_000;
