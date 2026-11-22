@@ -5405,6 +5405,57 @@ describe("WsStreamClient host credential provisioning", () => {
     });
   });
 
+  it("mints nothing from an armed retry while the host withholds the capability, and once when it offers it", async () => {
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
+      .mockResolvedValue({ kind: "unavailable" });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    // Call 1 arms the retry and gives the attempt marker back.
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // The redial reports needs-reauth with the capability withheld.
+    sockets[0].socket.fireClose(1000, "drop", false);
+    const withheld = await nthSocket(sockets, 1);
+    withheld.fireOpen();
+    await pollUntil(
+      "reconnected socket to send its open frame",
+      () => withheld.textSent.length > 0,
+    );
+    const open = JSON.parse(withheld.textSent[0]) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    withheld.fireText({
+      ...streamOpenAck(open.manifest, undefined),
+      hostCredentialState: "needs-reauth",
+    });
+    await flush();
+
+    // Past the floor + jitter ceiling: the armed retry fires and mints nothing.
+    await wait(1_600);
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // The next ack that offers the capability mints, once.
+    withheld.fireClose(1000, "drop", false);
+    const offered = await nthSocket(sockets, 2);
+    completeProvisionHandshake(offered, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(2);
+
+    session.close();
+  });
+
   it("skips mint when hostId is not a UUID (marks attempted, no OTP)", async () => {
     const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
