@@ -22,7 +22,10 @@ import type {
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { RegisteredHostsChange } from "@traycer-clients/shared/platform/runner-host";
-import { ROW_CONFIRM_CEILING_MS } from "@traycer-clients/shared/host-transport/row-confirmation";
+import {
+  ROW_CONFIRM_CEILING_MS,
+  type RowConfirmationAttach,
+} from "@traycer-clients/shared/host-transport/row-confirmation";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
 import { FakeRelayHost } from "@traycer-clients/shared/host-transport/remote/__tests__/fake-relay-host";
@@ -156,7 +159,7 @@ function personalRow(
 function callThroughMessenger(input: {
   readonly hostId: string;
   readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
-  readonly confirm: () => Promise<unknown>;
+  readonly confirm: (attach: RowConfirmationAttach) => Promise<unknown>;
   readonly disposers: Array<() => void>;
 }): void {
   const { hostId, resolveTarget, confirm, disposers } = input;
@@ -235,7 +238,9 @@ describe("a window's remote sign-in with the real host directory", () => {
     readonly rowOwnedBy: (
       owner: RemoteHostDirectoryEntry["owner"],
     ) => RemoteHostDirectoryEntry;
-    readonly call: (confirm: () => Promise<unknown>) => void;
+    readonly call: (
+      confirm: (attach: RowConfirmationAttach) => Promise<unknown>,
+    ) => void;
     /** The confirmation the attach asked for: how often, and how many of those answered. */
     readonly confirmation: { asked: number; answered: number };
   }> {
@@ -307,9 +312,9 @@ describe("a window's remote sign-in with the real host directory", () => {
         callThroughMessenger({
           hostId,
           resolveTarget: (id) => directory.findById(id),
-          confirm: () => {
+          confirm: (attach) => {
             confirmation.asked += 1;
-            return confirm().finally(() => {
+            return confirm(attach).finally(() => {
               confirmation.answered += 1;
             });
           },

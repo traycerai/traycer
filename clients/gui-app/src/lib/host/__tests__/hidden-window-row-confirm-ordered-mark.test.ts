@@ -20,6 +20,21 @@ import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibilit
 
 const IDENTITY = "user-a";
 
+/** A remote attach's confirmation, which lives no longer than the attach is current. */
+function confirmWhileCurrent(
+  directory: HostDirectoryService,
+  current: () => boolean,
+): { readonly resolved: () => boolean } {
+  const confirmation: (attach: {
+    readonly current: () => boolean;
+  }) => Promise<void> = confirmRowWhenHidden(() => directory);
+  let resolved = false;
+  void confirmation({ current }).then(() => {
+    resolved = true;
+  });
+  return { resolved: () => resolved };
+}
+
 /** Each `GET /api/v3/hosts` the directory issues, settled by the test. */
 interface HeldReads {
   readonly fetcher: RemoteHostFetcher;
@@ -73,6 +88,10 @@ interface Rig {
   readonly currentCredential: () => number;
   /** The confirmation a remote attach starts, and whether it has resolved. */
   readonly confirm: () => { readonly resolved: () => boolean };
+  /** The same, for an attach that is current only while `current` says so. */
+  readonly confirmWhileCurrent: (current: () => boolean) => {
+    readonly resolved: () => boolean;
+  };
   readonly rowIds: () => Promise<string[]>;
 }
 
@@ -124,13 +143,8 @@ async function startedWindow(hidden: boolean): Promise<Rig> {
       return credential;
     },
     currentCredential: () => credential,
-    confirm: () => {
-      let resolved = false;
-      void confirmRowWhenHidden(() => directory)().then(() => {
-        resolved = true;
-      });
-      return { resolved: () => resolved };
-    },
+    confirm: () => confirmWhileCurrent(directory, () => true),
+    confirmWhileCurrent: (current) => confirmWhileCurrent(directory, current),
     rowIds: async () => (await directory.list()).map((entry) => entry.hostId),
   };
 }
@@ -416,5 +430,56 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(confirmation.resolved()).toBe(true);
     expect(await rig.rowIds()).toEqual(["second-person-row"]);
     expect(rig.reads.issued()).toBe(3);
+  });
+
+  // A confirmation's loop lives no longer than the attach: once the attach is
+  // no longer current, no read is started or joined for it, whatever account
+  // is current by then.
+  it("(attach ended, rotation) starts no read and resolves when the attach is no longer current, though a rotation follows while its read is held", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    let live = true;
+    const confirmation = rig.confirmWhileCurrent(() => live);
+    await drain();
+    // Read A is held.
+    expect(rig.reads.issued()).toBe(2);
+
+    live = false;
+    rig.rotateCredential();
+    rig.directory.invalidateInFlightRefresh();
+    await drain();
+
+    expect(rig.reads.issued()).toBe(2);
+    expect(confirmation.resolved()).toBe(true);
+
+    rig.reads.answer(1, "row-a");
+    await drain();
+
+    expect(rig.reads.issued()).toBe(2);
+    expect(rig.reads.running()).toBe(0);
+  });
+
+  it("(attach ended, identity change) resolves without waiting for the incoming person's read when the attach is no longer current, and starts no read of its own", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    let live = true;
+    const confirmation = rig.confirmWhileCurrent(() => live);
+    await drain();
+    expect(rig.reads.issued()).toBe(2);
+
+    live = false;
+    const era = rig.switchIdentity("user-b");
+    // The app's own read for the incoming person, as HostRuntime starts it.
+    void rig.directory.refreshForEra({
+      identity: "user-b",
+      credentialGeneration: era,
+    });
+    expect(rig.reads.issued()).toBe(3);
+    rig.reads.answer(1, "first-person-row");
+    await drain();
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(rig.reads.issued()).toBe(3);
+    expect(rig.reads.running()).toBe(1);
   });
 });
