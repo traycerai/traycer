@@ -448,7 +448,7 @@ describe("desktop host-token source snapshot", () => {
     // Main may hold a token for this computer: no token is missing yet, so the
     // stream presents none and does not probe, and a call waits for the read.
     expect(tokens.loaded()).toBe(false);
-    expect(bearer(HOST_ID)).toBeNull();
+    expect(bearer(HOST_ID, () => true)).toBeNull();
     expect(authnDidNotAnswer(tracked, USER_ID, HOST_ID)).toBe(false);
     expect(await Promise.race([unary, Promise.resolve("waiting")])).toBe(
       "waiting",
@@ -458,7 +458,9 @@ describe("desktop host-token source snapshot", () => {
     await tokens.whenLoaded();
 
     expect(tokens.loaded()).toBe(true);
-    expect(bearer(HOST_ID)?.getBearerToken()).toBe(HOST_TOKEN.token);
+    expect(bearer(HOST_ID, () => true)?.getBearerToken()).toBe(
+      HOST_TOKEN.token,
+    );
     expect((await unary)?.getBearerToken()).toBe(HOST_TOKEN.token);
   });
 
@@ -517,7 +519,7 @@ describe("desktop host-token source snapshot", () => {
         () => signInLease,
         HOST_ID,
         () => undefined,
-      )(HOST_ID),
+      )(HOST_ID, () => true),
     ).toBeNull();
   });
 });
