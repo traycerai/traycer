@@ -62,21 +62,33 @@ function processHeldRefusals(instance: HostInstance): Map<string, string> {
 }
 
 /**
- * One mint request per host and sign-in at a time for this process: every
+ * One mint request per host process and sign-in at a time for this process: every
  * unary call builds its own tokens, so without it each call that found no
  * usable token sent its own. The request ends when its last asker stops
  * waiting, or on its own timeout. Each asker stops on its own signal, as when
  * the request was its own, or, with none, when the call that asked ends; it is
  * not cut short by another call's. A signal outlives its call only where the
  * command means it to (a give's budget, which its next try joins); no request
- * outlives every asker that wants it.
+ * outlives every asker that wants it. Kept on the host process observed when
+ * the mint starts, so a replacement never joins its predecessor's.
  */
 interface MintFlight {
   readonly answer: Promise<HostTokenMintOutcome>;
   readonly controller: AbortController;
   askers: number;
 }
-const mintFlights = new Map<string, MintFlight>();
+const mintFlightsByProcess = new WeakMap<
+  HostInstance,
+  Map<string, MintFlight>
+>();
+function processMintFlights(instance: HostInstance): Map<string, MintFlight> {
+  let flights = mintFlightsByProcess.get(instance);
+  if (flights === undefined) {
+    flights = new Map();
+    mintFlightsByProcess.set(instance, flights);
+  }
+  return flights;
+}
 
 // What an asker whose signal ended was told when the request was its own.
 const abandonedMint = (signal: AbortSignal): HostTokenMintOutcome => ({
@@ -95,6 +107,9 @@ function sharedMint(
   const exits = [signal ?? callEnded];
   const gone = exits.find((exit) => exit.aborted);
   if (gone !== undefined) return Promise.resolve(abandonedMint(gone));
+  const mintFlights = processMintFlights(
+    processReleasedHosts.currentInstance(hostId),
+  );
   const key = `${hostId}\u0000${signInToken}`;
   let flight = mintFlights.get(key);
   if (flight === undefined) {
