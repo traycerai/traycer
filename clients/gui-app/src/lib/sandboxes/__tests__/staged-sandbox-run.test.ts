@@ -382,7 +382,7 @@ describe("runStagedSandbox refusals", () => {
 
     await run(false, deps);
 
-    expect(stageOf().failure).toEqual({ kind: "unverified" });
+    expect(stageOf().failure).toEqual({ kind: "unverified", answered: false });
   });
 
   it("maps insufficient_credit to the credits failure with the shortfall", async () => {
@@ -416,7 +416,7 @@ describe("runStagedSandbox refusals", () => {
         ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
         reason: "unverified",
       },
-      { kind: "unverified" },
+      { kind: "unverified", answered: true },
     ],
     [
       "a shape the region does not offer",
@@ -431,7 +431,7 @@ describe("runStagedSandbox refusals", () => {
     [
       "a request that never completed",
       { kind: "network-error" as const, detail: "offline" },
-      { kind: "unverified" },
+      { kind: "unverified", answered: false },
     ],
   ] as const)("maps %s", (_name, failure, expected) => {
     expect(createFailure(failure, null)).toEqual(expected);

@@ -164,7 +164,12 @@ describe("staged sandbox store", () => {
       keeps: false,
     },
     {
-      failure: { kind: "unverified" } as const,
+      failure: { kind: "unverified", answered: false } as const,
+      target: NEW_TARGET,
+      keeps: true,
+    },
+    {
+      failure: { kind: "unverified", answered: undefined } as const,
       target: NEW_TARGET,
       keeps: true,
     },

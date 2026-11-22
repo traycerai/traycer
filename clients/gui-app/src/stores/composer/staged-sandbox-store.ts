@@ -75,7 +75,8 @@ export type StagedSandboxFailure =
       readonly shortfallMc: number | null;
       readonly creditSource?: "personal" | "team-allowance" | "team" | null;
     }
-  | { readonly kind: "unverified" }
+  /** Older persisted failures leave `answered` undefined. */
+  | { readonly kind: "unverified"; readonly answered: boolean | undefined }
   | { readonly kind: "shape" }
   | { readonly kind: "unavailable" }
   /** Refused for any other reason; the sentence is the refusal copy. */
@@ -168,10 +169,11 @@ export interface StagedSandbox {
 }
 
 /**
- * A refusal the server answered before anything was created. Any other
- * failure may follow an accepted, billed create (an answer that never came,
- * a sandbox that failed on its way up); so does any failure once a sandbox
- * was accepted, such as one frozen for credits while it settles.
+ * A refusal the server answered before anything was created, an unverified
+ * balance check included. Any other failure may follow an accepted, billed
+ * create (an answer that never came, a sandbox that failed on its way up);
+ * so does any failure once a sandbox was accepted, such as one frozen for
+ * credits while it settles.
  */
 export function refusedBeforeCreate(
   failure: StagedSandboxFailure,
@@ -185,6 +187,7 @@ export function refusedBeforeCreate(
     case "refused":
       return true;
     case "unverified":
+      return failure.answered === true;
     case "failed":
     case "settings":
     case "timed-out":
@@ -200,8 +203,9 @@ export function refusedBeforeCreate(
 
 /**
  * Whether the stage's next action takes a new create key: it never started
- * one, the server refused that one before creating anything, or the sandbox
- * that key created failed (naming it again answers with the same failed row).
+ * one, the server refused that one before creating anything (including an
+ * unverified balance check), or the sandbox that key created failed (naming
+ * it again answers with the same failed row).
  * Every other stage may have an accepted, billed create behind it on its way,
  * which the next action names again so the server answers with the same row.
  * A wake failure keeps that sandbox, including one originally picked as New.

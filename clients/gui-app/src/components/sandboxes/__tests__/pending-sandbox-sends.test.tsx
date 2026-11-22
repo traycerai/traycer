@@ -7773,7 +7773,7 @@ describe("a retry-family button chosen in a window that does not own the send", 
       label: "Retry after a refusal",
       action: "retry-stage",
       testId: "sandbox-refusal-retry",
-      failure: { kind: "unverified" },
+      failure: { kind: "unverified", answered: false },
       shape: { phase: "handoff", created: true, elapsedSeconds: 24 },
     },
     {
@@ -7904,7 +7904,7 @@ describe("an owner that takes up each kind of retry request", () => {
   it("takes a refusal Retry as the readiness plan, acknowledges it and creates no other sandbox", async () => {
     seed(SEEDED);
     useStagedSandboxStore.getState().report(SURFACE, {
-      failure: { kind: "unverified" },
+      failure: { kind: "unverified", answered: false },
     });
     const { id, handled } = await requestAndMount("retry-stage");
 

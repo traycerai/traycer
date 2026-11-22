@@ -159,7 +159,7 @@ function buttonLabels(line: HTMLElement): string[] {
 describe("withdrawing a message from every refusal or failure", () => {
   const failures: readonly StagedSandboxFailure[] = [
     { kind: "credits", shortfallMc: 120 },
-    { kind: "unverified" },
+    { kind: "unverified", answered: false },
     { kind: "shape" },
     { kind: "unavailable" },
     { kind: "refused", message: "Try another region" },
@@ -368,22 +368,25 @@ describe("SandboxSetupLine's refusal for credits", () => {
   });
 });
 
-describe("SandboxSetupLine's refusal whose answer never came", () => {
-  it("keeps Retry beside Use This computer", () => {
-    const line = mountRefusal(
-      { kind: "personal" },
-      { kind: "unverified" },
-      false,
-      ACTIONS,
-    );
+describe("SandboxSetupLine's refusal for an unverified balance", () => {
+  it.each([false, true])(
+    "keeps the balance check copy and Retry for answered=%s",
+    (answered) => {
+      const line = mountRefusal(
+        { kind: "personal" },
+        { kind: "unverified", answered },
+        false,
+        ACTIONS,
+      );
 
-    expect(line.textContent).toContain("Couldn't verify your balance.");
-    expect(buttonLabels(line)).toEqual([
-      "Retry",
-      "Use This computer",
-      "Cancel the message",
-    ]);
-  });
+      expect(line.textContent).toContain("Couldn't verify your balance.");
+      expect(buttonLabels(line)).toEqual([
+        "Retry",
+        "Use This computer",
+        "Cancel the message",
+      ]);
+    },
+  );
 });
 
 describe("SandboxSetupLine's agent refusals", () => {

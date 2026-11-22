@@ -621,7 +621,7 @@ export function createFailure(
   if (failure.kind === "refused") {
     if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT) {
       return failure.reason === "unverified"
-        ? { kind: "unverified" }
+        ? { kind: "unverified", answered: true }
         : {
             kind: "credits",
             shortfallMc: failure.shortfallMc,
@@ -635,7 +635,9 @@ export function createFailure(
       return { kind: "unavailable" };
     }
   }
-  if (failure.kind === "network-error") return { kind: "unverified" };
+  if (failure.kind === "network-error") {
+    return { kind: "unverified", answered: false };
+  }
   return {
     kind: "refused",
     message: sandboxCreateFailureMessage(failure, teamName),

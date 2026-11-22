@@ -957,7 +957,7 @@ describe("useStagedSandboxSend's line after a refusal", () => {
   });
 
   it("retries a create whose answer never came under its own key", () => {
-    stageRefused({ kind: "unverified" });
+    stageRefused({ kind: "unverified", answered: false });
     mount(vi.fn());
 
     fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
@@ -1620,6 +1620,17 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     expect(second).toBe(first);
   });
 
+  it("makes a new create after the server refused an unverified balance", async () => {
+    mocks.createSandbox.mockResolvedValue({
+      ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+      reason: "unverified",
+    });
+
+    const [first, second] = await sendAgainAfter("unverified");
+
+    expect(second).not.toBe(first);
+  });
+
   it("makes a new create after the sandbox the last one made failed", () => {
     stageCreated("booting", {
       kind: "failed",
@@ -1697,7 +1708,7 @@ describe("startStagedTerminal", () => {
     },
     {
       stage: "unverified",
-      failure: { kind: "unverified" } as const,
+      failure: { kind: "unverified", answered: undefined } as const,
       kind: "taken",
       starts: false,
     },
@@ -1895,7 +1906,7 @@ function TabComposer(props: {
 
 describe("useStagedSandboxSend after the sending tab is gone", () => {
   it("hands off another tab's Retry once the tab whose send failed closed", async () => {
-    stageCreated("creating", { kind: "unverified" });
+    stageCreated("creating", { kind: "unverified", answered: false });
     useStagedSandboxStore.getState().report(SURFACE, {
       createdSandboxId: null,
       createdHostId: null,
