@@ -81,6 +81,7 @@ import {
   STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
 } from "@traycer/protocol/framework/stream-ws-protocol";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { processReleasedHosts } from "../released-sign-on";
 
 /**
  * StubWebSocket - fully scriptable `StreamWebSocketLike` mirror of the
@@ -5349,6 +5350,59 @@ describe("WsStreamClient host credential provisioning", () => {
     ]);
     expect(mints.mint).toHaveBeenCalledTimes(1);
     session.close();
+  });
+
+  describe("a host process replaced after the asking session subscribed", () => {
+    // A host id of its own: the process-wide host memory is shared, and the
+    // replacement observed here must not reach another test's host.
+    const HOST_REPLACED: HostDirectoryEntry = {
+      ...HOST_A,
+      hostId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    };
+
+    /** The session subscribed to the earlier process, the host replaced, no frame since. */
+    async function replacedWhileMinting(state: "missing" | "needs-reauth") {
+      processReleasedHosts.observeInstance(HOST_REPLACED.hostId, "100");
+      const mints = heldMints(1);
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClient({
+        factory,
+        mint: mints.mint,
+        endpoint: () => HOST_REPLACED,
+        authToken: undefined,
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+      completeProvisionHandshake(sockets[0].socket, state);
+      await flush();
+      expect(mints.mint).toHaveBeenCalledTimes(1);
+
+      processReleasedHosts.observeInstance(HOST_REPLACED.hostId, "200");
+      mints.resolve(
+        0,
+        provisioned({ token: "late-credential", refreshToken: "late-refresh" }),
+      );
+      await flush();
+      return { client, sockets, session };
+    }
+
+    it("sends a needs-reauth credential to no socket of the replaced process, and discards it", async () => {
+      const { client, sockets, session } =
+        await replacedWhileMinting("needs-reauth");
+
+      expect(allProvisionFrames(sockets)).toEqual([]);
+      expect(pendingMap(client).has(HOST_REPLACED.hostId)).toBe(false);
+      session.close();
+    });
+
+    it("sends a missing-state credential to no socket of the replaced process, and keeps holding it", async () => {
+      const { client, sockets, session } =
+        await replacedWhileMinting("missing");
+
+      expect(allProvisionFrames(sockets)).toEqual([]);
+      expect(pendingMap(client).has(HOST_REPLACED.hostId)).toBe(true);
+      session.close();
+    });
   });
 
   it("skips mint when hostId is not a UUID (marks attempted, no OTP)", async () => {
