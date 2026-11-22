@@ -128,7 +128,7 @@ describe("PROCESS_PROFILE_LOGIN_IO.readLines", () => {
   });
 });
 
-describe("PROCESS_PROFILE_LOGIN_IO.signInRequests.recordSignInRequest", () => {
+describe("PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest", () => {
   const STORED_TOKEN = "stored-bearer";
   const STORED_HEADER = `Bearer ${STORED_TOKEN}`;
   const REFRESHED_HEADER = `Bearer ${REFRESHED_TOKEN}`;
@@ -323,6 +323,34 @@ describe("PROCESS_PROFILE_LOGIN_IO.signInRequests.recordSignInRequest", () => {
       STORED_SIGN_IN_REFRESH_PATH,
       RECORD_PATH,
       RECORD_PATH,
+    ]);
+  });
+
+  it("answers unauthorized, and sends nothing, for a record after the stored sign-in was removed", async () => {
+    const client = PROCESS_PROFILE_LOGIN_IO.openSignInRequests();
+    const send = (): Promise<SignInRequestRecordAnswer> =>
+      client.recordSignInRequest(REQUEST, new AbortController().signal);
+
+    expect(await send()).toEqual({ kind: "recorded" });
+    await removeStoredSignIn();
+    expect(await send()).toEqual({ kind: "unauthorized" });
+
+    expect(calls).toEqual([{ pathname: RECORD_PATH, bearer: STORED_HEADER }]);
+  });
+
+  it("sends a record after another sign-in replaced the stored one on that account's token, with no refresh", async () => {
+    const otherHeader = "Bearer other-account-bearer";
+    const client = PROCESS_PROFILE_LOGIN_IO.openSignInRequests();
+    const send = (): Promise<SignInRequestRecordAnswer> =>
+      client.recordSignInRequest(REQUEST, new AbortController().signal);
+
+    expect(await send()).toEqual({ kind: "recorded" });
+    await seedStoredSignIn("other-account-bearer", "member-2");
+    expect(await send()).toEqual({ kind: "recorded" });
+
+    expect(calls).toEqual([
+      { pathname: RECORD_PATH, bearer: STORED_HEADER },
+      { pathname: RECORD_PATH, bearer: otherHeader },
     ]);
   });
 });
