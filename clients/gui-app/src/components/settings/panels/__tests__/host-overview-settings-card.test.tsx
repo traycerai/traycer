@@ -1869,6 +1869,78 @@ describe("<HostOverviewSettingsCard /> follows the rail", () => {
   });
 });
 
+/**
+ * Applying comes after the upload has ended, so the open record does not carry
+ * the guard there: every surface reads `setup` and the planes, as it did before
+ * the record was read.
+ */
+const APPLYING_CASES = ["running", "stalled", "failed"].flatMap((state) =>
+  (["running", "retry"] as const).map((move) => [state, move] as const),
+);
+
+describe("a move whose record is open while setup is applying", () => {
+  it.each(APPLYING_CASES)(
+    "reads a computer whose planes are local as a Local row while applying is %s and the host's move is in state %s",
+    (state, move) => {
+      const status = unboundMoveStatusFixture(
+        { stage: "applying", state },
+        moveAttemptFixture(move),
+      );
+
+      expect(hostSettingsCardState(status)).toEqual({
+        kind: "local",
+        verb: "move_to_personal",
+      });
+      expect(
+        hostSettingsRowModel(status, PERSONAL_BINDING, "Old laptop"),
+      ).toMatchObject({ kind: "select", value: "local" });
+    },
+  );
+
+  it.each(APPLYING_CASES)(
+    "draws the settings row, not the move's progress, while applying is %s and the host's move is in state %s",
+    (state, move) => {
+      renderCard(
+        unboundMoveStatusFixture(
+          { stage: "applying", state },
+          moveAttemptFixture(move),
+        ),
+        {},
+      );
+
+      expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
+      expect(
+        screen.queryByTestId("host-settings-card-move-stopped"),
+      ).toBeNull();
+      expect(screen.getByTestId("host-settings-source").textContent).toContain(
+        "Runs its own settings",
+      );
+    },
+  );
+
+  it("leaves the rail on the computer's own settings while applying runs with the move's record open", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    renderCard(
+      unboundMoveStatusFixture(
+        { stage: "applying", state: "running" },
+        moveAttemptFixture("running"),
+      ),
+      {},
+    );
+
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "local",
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+    });
+  });
+});
+
 describe("<HostOverviewSettingsCard /> for a move accepted before authn bound this computer", () => {
   it.each(ACCEPTED_MOVE_CASES)(
     "shows the move's progress with no row to move again in %s while its state is %s",

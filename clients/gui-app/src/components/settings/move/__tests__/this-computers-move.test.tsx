@@ -187,6 +187,23 @@ describe("useThisComputersMove", () => {
       },
     );
 
+    it.each(
+      ["running", "stalled", "failed"].flatMap((state) =>
+        (["running", "retry"] as const).map((move) => [state, move] as const),
+      ),
+    )(
+      "reads not_moved once applying is %s, whichever open record the host serves (%s)",
+      async (state, move) => {
+        await settlesToServingMove(
+          unboundMoveStatusFixture(
+            { stage: "applying", state },
+            moveAttemptFixture(move),
+          ),
+          "not_moved",
+        );
+      },
+    );
+
     it("still invites a first computer whose move was never accepted", async () => {
       await settlesToServingMove(
         {
