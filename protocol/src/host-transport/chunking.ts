@@ -873,6 +873,15 @@ export class ChunkPacer {
     return true;
   }
 
+  /**
+   * Charges bytes a frame sent beyond what {@link tryConsume} took for it. The
+   * budget may go below zero, and the next frame waits for the refill.
+   */
+  charge(extraBytes: number): void {
+    this.refill();
+    this.byteTokens -= extraBytes;
+  }
+
   /** How long until a frame of `frameBytes` could pass `tryConsume`. */
   msUntilAvailable(frameBytes: number): number {
     this.refill();

@@ -141,12 +141,30 @@ export class ResumeLedger {
     const copy = new Uint8Array(plaintext);
     this.frames.set(index, copy);
     this.retainedBytes += copy.byteLength;
+    this.evictOverBound();
+    return index;
+  }
+
+  /**
+   * Retain `plaintext` as frame `index`, when a resend wrote that frame
+   * differently: the ring holds what was sent. A frame no longer retained
+   * stays out. Only the byte bound evicts.
+   */
+  replace(index: number, plaintext: Uint8Array): void {
+    const retained = this.frames.get(index);
+    if (retained === undefined) return;
+    const copy = new Uint8Array(plaintext);
+    this.frames.set(index, copy);
+    this.retainedBytes += copy.byteLength - retained.byteLength;
+    this.evictOverBound();
+  }
+
+  private evictOverBound(): void {
     for (const [oldIndex, frame] of this.frames) {
       if (this.retainedBytes <= RESUME_RING_BYTES) break;
       this.frames.delete(oldIndex);
       this.retainedBytes -= frame.byteLength;
     }
-    return index;
   }
 
   /**

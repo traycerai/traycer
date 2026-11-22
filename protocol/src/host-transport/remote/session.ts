@@ -2935,7 +2935,8 @@ export class RemoteSession<
     channel: MuxChannel,
   ): ActiveConnection {
     const scheduler = new PriorityScheduler({
-      write: (frame) => this.writeFrame(generation, frame),
+      write: (frame, reportSent) =>
+        this.writeFrame(generation, frame, reportSent),
       onWriteError: () =>
         this.handleConnectionLost(
           generation,
@@ -5076,9 +5077,12 @@ export class RemoteSession<
     this.clearResumeAckTimer();
     exchange.answered = true;
     connection.admittedExchanges = exchange.id;
+    // The gap is the retained run from `received`, in order.
+    let resentIndex = received;
     connection.scheduler.resumeAfterResend(
       gap.frames,
-      (muxFrame) => this.writeResentFrame(generation, muxFrame),
+      (muxFrame, reportSent) =>
+        this.writeResentFrame(generation, muxFrame, resentIndex++, reportSent),
       () => this.completeResume(connection, gap.frames.length),
     );
   }
@@ -6694,9 +6698,11 @@ export class RemoteSession<
     };
   }
 
+  /** Writes `frame`, reporting the bytes it hands the socket. */
   private async writeFrame(
     generation: number,
     frame: EncodeMuxFrameInput,
+    reportSent: (bytes: number) => void,
   ): Promise<void> {
     if (!this.isCurrent(generation)) {
       return;
@@ -6733,18 +6739,27 @@ export class RemoteSession<
     if (pending !== undefined) {
       pending.sealed = true;
     }
-    await this.sealAndSend(generation, connection, plaintext, sealedBearer);
+    await this.sealAndSend(
+      generation,
+      connection,
+      plaintext,
+      sealedBearer,
+      reportSent,
+    );
   }
 
   /**
    * One gap frame: re-sealed under a fresh Noise counter, never re-counted. A
    * credential update carries the bearer read now, under its own seq: the host
    * never counted the gap (it starts at the host's `received`), so it has seen
-   * no encoding of this frame, and its sequence gate reads only the seq.
+   * no encoding of this frame, and its sequence gate reads only the seq. The
+   * ledger then holds what was written, at the frame's `index`.
    */
   private async writeResentFrame(
     generation: number,
     muxFrame: Uint8Array,
+    index: number,
+    reportSent: (bytes: number) => void,
   ): Promise<void> {
     const connection = this.connection;
     if (!this.isCurrent(generation) || connection === null) {
@@ -6752,7 +6767,13 @@ export class RemoteSession<
     }
     if (muxFrame[1] !== MuxFrameType.CREDENTIAL_UPDATE) {
       // An `open` is never in a gap: only a ready session relinks.
-      await this.sealAndSend(generation, connection, muxFrame, null);
+      await this.sealAndSend(
+        generation,
+        connection,
+        muxFrame,
+        null,
+        reportSent,
+      );
       return;
     }
     const frame = decodeMuxFrame(muxFrame);
@@ -6767,11 +6788,17 @@ export class RemoteSession<
       this.dropUnwritableCredential(generation);
       return;
     }
+    let resent = muxFrame;
+    if (write.frame !== frame) {
+      resent = encodeMuxFrame(write.frame);
+      connection.ledger.replace(index, resent);
+    }
     await this.sealAndSend(
       generation,
       connection,
-      write.frame === frame ? muxFrame : encodeMuxFrame(write.frame),
+      resent,
       write.bearer,
+      reportSent,
     );
   }
 
@@ -6845,11 +6872,13 @@ export class RemoteSession<
     );
   }
 
+  /** Seals and sends `muxFrame`, reporting its bytes once it reaches the socket. */
   private async sealAndSend(
     generation: number,
     connection: ActiveConnection,
     muxFrame: Uint8Array,
     sealedBearer: string | null,
+    reportSent: (bytes: number) => void,
   ): Promise<void> {
     const leg = connection.socket;
     // A frame whose leg went while it sealed is in the ledger, sealed or not:
@@ -6887,6 +6916,8 @@ export class RemoteSession<
     if (subscribeStreamId !== null) {
       this.subscriptions.get(subscribeStreamId)?.noteOpenRequestSent();
     }
+    // Charged whatever `sendData` answers: the bytes may have left.
+    reportSent(muxFrame.byteLength);
     if (!connection.socket.sendData(sealed)) {
       this.handleLegLost(generation, "write-failed", "host-transport-plane");
     }
