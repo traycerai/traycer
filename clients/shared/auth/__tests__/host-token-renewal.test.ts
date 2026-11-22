@@ -1303,7 +1303,7 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
     expect(mints).toHaveLength(0);
   });
 
-  it("marks a renewal's host delayed when it joined an owned mint declined because that process was replaced, and mints again on the next renewal", async () => {
+  it("holds the token a renewal joined, and publishes no delay for the host, when the owned mint's own write was declined because its process was replaced", async () => {
     const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
     let observedNow = "process-a";
     const owned = source.obtain(USER_ID, HOST_ID, true, {
@@ -1316,12 +1316,39 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
     observedNow = "process-b";
 
     mints[0].answer({ kind: "ok", token: LATER });
+
+    // The owned asker's own answer is the retired attempt's: its token, unwritten by it.
+    await expect(owned).resolves.toEqual({ kind: "ok", token: LATER });
+    // The renewal is for the person and host id, whichever process is observed: it
+    // writes the token it was told under its own rule (era and order), and the
+    // host is not delayed.
+    await expect(renewing).resolves.toEqual({
+      kind: "renewed",
+      delayed: [],
+    });
+    expect(source.current(USER_ID, HOST_ID)).toEqual(LATER);
+  });
+
+  it("reports the host delayed when the mint a renewal joined answered unavailable, though its process was replaced", async () => {
+    const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
+    let observedNow = "process-a";
+    const owned = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: { hostId: HOST_ID, observed: "process-a" },
+      observedNow: () => observedNow,
+    });
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    const renewing = source.renew(USER_ID, [HOST_ID]);
+    observedNow = "process-b";
+
+    mints[0].answer({ kind: "unavailable", detail: "authn did not answer" });
     await owned;
 
     await expect(renewing).resolves.toEqual({
       kind: "renewed",
       delayed: [HOST_ID],
     });
+    expect(source.current(USER_ID, HOST_ID)).toBeNull();
     const next = source.renew(USER_ID, [HOST_ID]);
     await vi.waitFor(() => expect(mints).toHaveLength(2));
     mints[1].answer({ kind: "ok", token: LATER });
