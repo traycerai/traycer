@@ -152,6 +152,7 @@ function startCall(
 ): Driven {
   let issued = 0;
   const binding = buildRuntimeHostMessenger({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     registry,
     resolveTarget: (hostId) => (hostId === entry.hostId ? entry : null),
     auth: recovery,

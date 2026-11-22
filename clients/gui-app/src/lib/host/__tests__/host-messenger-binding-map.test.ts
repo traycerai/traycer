@@ -181,6 +181,7 @@ function harness() {
   ];
   const hostTokens = inertHostTokenSource();
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     registry: hostRpcRegistry,
     resolveTarget: (hostId) =>
       entries().find((entry) => entry.hostId === hostId) ?? null,
