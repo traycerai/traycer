@@ -309,7 +309,11 @@ describe("the hostTokensAdopt handler", () => {
     registerFor(main, "user-a");
     const bridge: HostTokensBridgeSurface = {
       era: (userId) => main.era(userId),
-      obtain: async () => ({ outcome: { kind: "no-sign-in" }, era: 0 }),
+      obtain: async () => ({
+        outcome: { kind: "no-sign-in" },
+        era: 0,
+        held: false,
+      }),
       renew: async () => ({ renewal: { kind: "no-sign-in" }, era: 0 }),
       adopt: async (userId, hostId, token, expectedEra, owner) => {
         // Main's real handler, over the same arguments the IPC carries.
@@ -321,7 +325,10 @@ describe("the hostTokensAdopt handler", () => {
           expectedEra,
           owner,
         );
-        return { era: Reflect.get(Object(reply), "era") };
+        return {
+          era: Reflect.get(Object(reply), "era"),
+          kept: Reflect.get(Object(reply), "kept") === true,
+        };
       },
       forgetUser: async (userId) => ({ era: main.era(userId) }),
       snapshot: async () => ({

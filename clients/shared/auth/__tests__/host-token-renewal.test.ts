@@ -17,6 +17,7 @@ import {
   createMemoryHostTokenPersistence,
   type HostTokenRenewal,
   type HostTokenMintOutcome,
+  type HostTokenSource,
 } from "../host-token-source";
 import { mintHostTokenViaHttp } from "../../host-transport/remote/grant-client";
 import {
@@ -577,7 +578,7 @@ describe("how a pair's last mint ended", () => {
   const HOST_ID = "computer-last-failure";
   const hosts = createReleasedHostMemory();
   const owner = hosts.currentInstance(HOST_ID);
-  const ask = { signal: null, owner };
+  const ask = { signal: null, owner, observedNow: () => owner.observed };
 
   it("is forgotten when the person's era moves, and a late answer from the old era does not set it", async () => {
     const oldEraAnswer = deferred<HostTokenMintOutcome>();

@@ -559,16 +559,18 @@ function doorHarness(): DoorHarness {
           resolve(created);
         });
       }),
-    ready: tokens.adopt(
-      USER_ID,
-      HOST_ID,
-      {
-        token: HELD_TOKEN,
-        expiresAtMs: heldExpiresAtMs,
-      },
-      tokens.era(USER_ID),
-      () => true,
-    ),
+    ready: tokens
+      .adopt(
+        USER_ID,
+        HOST_ID,
+        {
+          token: HELD_TOKEN,
+          expiresAtMs: heldExpiresAtMs,
+        },
+        tokens.era(USER_ID),
+        () => true,
+      )
+      .then(() => undefined),
   };
 }
 
