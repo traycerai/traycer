@@ -1245,7 +1245,15 @@ export class WsStreamClient<
       }, holdForMs),
     };
     this.pendingProvisions.set(hostId, pending);
-    this.flushPendingProvision(hostId);
+    if (this.flushPendingProvision(hostId) || state !== "needs-reauth") return;
+    // A needs-reauth hand-over is never held for a later connection. Clearing
+    // the marker lets the next needs-reauth ack that offers the capability mint
+    // again; a `missing` hand-over (first enrolment) stays held as above.
+    this.discardPendingProvision(hostId);
+    this.provisionAttemptedHostIds.delete(hostId);
+    console.warn(
+      `[stream] discarded a needs-reauth host credential no live session could take (client=${this.instanceId}, host=${hostId})`,
+    );
   }
 
   private onPendingProvisionExpired(hostId: string): void {
@@ -2476,6 +2484,8 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    * capability, and this connection is bound to the very host the credential was
    * minted for - a client can hold sessions against several hosts at once, and
    * the credential names its host in a claim the wrong host would reject anyway.
+   * Refuses too when the process this socket opened to is no longer the host's
+   * current one: the ingress fence drops such a socket only on its next frame.
    */
   pushHostCredentialProvision(
     hostId: string,
@@ -2493,6 +2503,10 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       return false;
     }
     if (this.openFrameHostId !== hostId) {
+      return false;
+    }
+    const owner = this.socketOwner;
+    if (owner === null || !this.config.hosts.isCurrent(owner)) {
       return false;
     }
     const socket = this.activeSocket;
