@@ -1,6 +1,5 @@
 import { ImageOff, X } from "lucide-react";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
-import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -22,7 +21,6 @@ interface AnnotationCardProps {
   readonly onRemove: ((annotationId: string) => void) | null;
   readonly imageFetcher: ScopedImageBytesFetcher;
   readonly sessionObjectUrl: (hash: string) => string | null;
-  readonly targetControl?: ReactNode;
 }
 
 export function BrowserAnnotationCard(props: AnnotationCardProps) {
@@ -179,7 +177,6 @@ function CanvasAnnotationCard(
             {label}
           </span>
         </TooltipWrapper>
-        {props.targetControl}
       </div>
       {props.onRemove === null ? null : (
         <Button
