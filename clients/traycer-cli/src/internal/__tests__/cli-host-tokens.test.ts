@@ -25,7 +25,9 @@ const state = vi.hoisted(() => {
   const revalidate = vi.fn();
   const dispose = vi.fn();
   // While set, the stand-in revalidator's adopting read reports it was reached and waits to be released.
-  const adoption: { hold: { reached: () => void; released: Promise<void> } | null } = {
+  const adoption: {
+    hold: { reached: () => void; released: Promise<void> } | null;
+  } = {
     hold: null,
   };
   const mint = vi.fn(async () => {
