@@ -343,7 +343,7 @@ export async function callHostRpcWithAgentCredential<
         ? NO_RETRY_TRANSPORT_POLICY
         : DEFAULT_TRANSPORT_RETRY_POLICY,
       dispatch,
-      () => false,
+      async () => false,
     );
   } catch (err) {
     const refusal = finalRefusalOf(err);
