@@ -33,7 +33,11 @@ import {
 } from "../../../../shared/host-transport/host-messenger";
 import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
-import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
+import type {
+  CredentialsMutationStore,
+  MutationResult,
+} from "@traycer/protocol/config/credentials-mutation";
+import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
 import { config } from "../../config";
 import {
@@ -254,9 +258,23 @@ const createStoreMock = vi.mocked(createCliCredentialsStore);
 // The on-401 revalidator drives `store.rotate`; the rest of the store surface is
 // unused by host-rpc, so stub it and steer `rotate` per-test.
 const rotateMock = vi.fn();
+// The store's `read` serves what its `rotate` landed once it has answered, and
+// before that the signed-in credentials the file's setup gives: the adopting
+// read after a landed save installs them in the lease.
+let landed: StoredCredentials | null = null;
+const SIGNED_IN: StoredCredentials = {
+  token: "tok-1",
+  refreshToken: "tok-1-refresh",
+  savedAt: "2026-01-01T00:00:00.000Z",
+  user: { id: "u1", email: "a@b.c", name: "A" },
+};
 const fakeStore: CredentialsMutationStore = {
-  read: vi.fn(),
-  rotate: rotateMock,
+  read: vi.fn(async () => landed ?? SIGNED_IN),
+  rotate: vi.fn(async (...args: unknown[]): Promise<MutationResult> => {
+    const result: MutationResult = await rotateMock(...args);
+    landed = result.credentials;
+    return result;
+  }),
   signIn: vi.fn(),
   signOut: vi.fn(),
   signOutIfToken: vi.fn(),
@@ -331,6 +349,7 @@ beforeEach(async () => {
   requestMock.mockReset();
   fetchMock.mockReset();
   rotateMock.mockReset();
+  landed = null;
   presentedHostTokens.length = 0;
   agentEnvironment.capability = undefined;
   agentEnvironment.agentId = undefined;
