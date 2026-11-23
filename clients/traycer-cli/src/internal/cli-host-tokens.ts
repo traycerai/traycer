@@ -90,6 +90,10 @@ function processMintFlights(instance: HostInstance): Map<string, MintFlight> {
   return flights;
 }
 
+// The sign-in each mint request was sent with, read by its answer's recovery:
+// a refusal refreshes only the sign-in it was refused for.
+const mintSentWith = new WeakMap<HostTokenMintOutcome, string>();
+
 // What an asker whose signal ended was told when the request was its own.
 const abandonedMint = (signal: AbortSignal): HostTokenMintOutcome => ({
   kind: "unavailable",
@@ -122,7 +126,12 @@ function sharedMint(
         hostId,
         signInToken,
         controller.signal,
-      ).finally(() => {
+      )
+        .then((outcome) => {
+          mintSentWith.set(outcome, signInToken);
+          return outcome;
+        })
+        .finally(() => {
         if (mintFlights.get(key) === started) mintFlights.delete(key);
       }),
     };
@@ -385,7 +394,21 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   let refreshRefused = false;
   let refreshedSinceLastMint = false;
   let refusedAfterRefresh = false;
+  // The session or command these tokens belong to has ended: no rotation
+  // starts for it. A refresh already entered is left to finish.
+  const sessionEnded = (): boolean =>
+    callEnded.signal.aborted || signIn.signal?.aborted === true;
+  // Whether a refused mint was sent with a sign-in since replaced: then nothing
+  // is refreshed, and the mint is asked again on the stored one.
+  const refusedSignInReplaced = (refused: HostTokenMintOutcome): boolean => {
+    const sentWith = mintSentWith.get(refused);
+    return sentWith !== undefined && sentWith !== readLeaseBearer(signIn.lease);
+  };
+  // The sign-in the latest refused mint was sent with, for the transports'
+  // recovery, which is asked to refresh with no outcome in hand.
+  let lastRefused: HostTokenMintOutcome | null = null;
   const refreshSignIn = async (): Promise<SignInRotation> => {
+    if (sessionEnded()) return "network-error";
     const outcome = await signIn.refresh();
     if (outcome === "rejected") refreshRefused = true;
     if (outcome === "rotated" || outcome === "adopted") {
@@ -434,6 +457,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         }
         if (outlived(owner, startedAt)) return outcome;
         if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
+        if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
         if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
           refusedAfterRefresh = true;
         if (outcome.kind === "ok") refusedAfterRefresh = false;
@@ -465,8 +489,13 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     },
   };
   const signInRejected = (): boolean => refreshRefused || refusedAfterRefresh;
+  // A refused mint's recovery: nothing is refreshed for a sign-in already
+  // replaced, and the mint is asked again as after a sibling's rotation.
   const signInRecovery = {
-    revalidateForReconnect: refreshSignIn,
+    revalidateForReconnect: (): Promise<SignInRotation> =>
+      lastRefused !== null && refusedSignInReplaced(lastRefused)
+        ? Promise.resolve("adopted")
+        : refreshSignIn(),
   };
   const bearerOf = (hostId: string): OpenFrameBearerSource => ({
     identity: { userId },
@@ -528,7 +557,9 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // Refreshed once and asked once more. Only a refused refresh or a second 401 rejects
   // the sign-in; an unreachable refresh leaves it unjudged. A sibling's rotation
   // adopted from the store is no refresh of this one: a 401 after it still earns
-  // the one authn answers.
+  // the one authn answers. A refusal of a sign-in since replaced refreshes
+  // nothing and asks again on the stored one, judging nothing. The recovery is
+  // its asker's: once that call or the session has ended, it starts no rotation.
   const recoverRefusedSignIn = async (
     owner: HostInstance,
     first: CliHostTokenFailure,
@@ -536,7 +567,14 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     signal: AbortSignal | null,
   ): Promise<CliHostBearer> => {
     const hostId = owner.hostId;
-    const refreshed = await refreshSignIn();
+    if (signal?.aborted === true || sessionEnded())
+      return answer(hostId, {
+        kind: "unavailable",
+        detail: "sign-in refresh not started: its caller ended",
+      });
+    const refreshed = refusedSignInReplaced(first)
+      ? "replaced"
+      : await refreshSignIn();
     if (refreshed === "network-error")
       return answer(hostId, {
         kind: "unavailable",
@@ -553,7 +591,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       observedNow: () => hosts.currentInstance(hostId).observed,
     });
     if (second.kind !== "sign-in-rejected") return answer(hostId, second);
-    if (refreshed === "adopted")
+    if (refreshed === "adopted" || refreshed === "replaced")
       return recoverRefusedSignIn(owner, second, startedAt, signal);
     report(owner, second, startedAt);
     return answer(hostId, second);
