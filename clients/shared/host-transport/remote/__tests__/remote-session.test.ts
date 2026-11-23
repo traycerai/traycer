@@ -4189,13 +4189,6 @@ describe("RemoteSession wake", () => {
         ? { kind: "fatal", details: retryableDropDetails() }
         : { kind: "ack" };
     const session = buildSession(relay, lease, null);
-    const stream = session.subscribe("cursor.subscribe", { cursor: null });
-    if (!signalsBackoff(stream)) throw new Error("a stream tells of backoff");
-    let backoffs = 0;
-    stream.onBackoffEntered(() => {
-      backoffs += 1;
-    });
-    stream.onStatusChange((st) => { process.stderr.write(`DBG status ${st}\n`); });
     try {
       session.start();
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
