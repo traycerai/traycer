@@ -457,7 +457,7 @@ describe("a request whose starter's exit ended while another handle's ask joined
     }
   });
 
-  it("stores the ended starter's token when the host process is not observed yet, and the earlier refusal is not outlived", async () => {
+  it("lets an ended starter's own kept purchase outlive the earlier refusal when the host process is not observed yet, and stores its token", async () => {
     const { answeredToJoiner, refusalsEndingCommand, handles } =
       await starterEndsJoinerLives(false);
     try {
@@ -465,10 +465,50 @@ describe("a request whose starter's exit ended while another handle's ask joined
       expect(harness.table.get(userId)?.get(hostId)?.token).toBe(
         "host-token-bought-1",
       );
-      // No purchase is recorded for a process nobody observed: the refusal ends the command.
-      expect(refusalsEndingCommand).toEqual([hostId]);
+      // The starter's own write is the kept one and moves the purchase mark, live or not: the earlier refusal ends no command.
+      expect(refusalsEndingCommand).toEqual([]);
       await expectNoWaiterLeft(handles[3]);
     } finally {
+      for (const handle of handles) handle.dispose();
+    }
+  });
+
+  it("lets a disposed handle's kept purchase outlive the earlier refusal when its ask's own signal still lives and a known owner's joiner waits", async () => {
+    const handles = await handlesOf(4, true);
+    const [earlier, starter, joiner] = handles;
+    const commandSignal = new AbortController();
+    try {
+      const refusalsEndingCommand: string[] = [];
+      earlier.tokens.onRefusalEndingCommand((evidence) => {
+        refusalsEndingCommand.push(evidence.hostId);
+      });
+      const askedEarlier = earlier.tokens.mintFresh(hostId, null);
+      await untilSent(1);
+      await storedSignInMovesOn(starter);
+      const askedByStarter = starter.tokens.mintFresh(
+        hostId,
+        commandSignal.signal,
+      );
+      await untilSent(2);
+      const askedByJoiner = joiner.tokens.mintFresh(hostId, null);
+      await flush();
+      expect(harness.mints).toHaveLength(2);
+
+      // The starter's handle is disposed; its ask's own signal still lives, so its write is not fenced and lands first.
+      starter.dispose();
+      await flush();
+      answerWithToken(1);
+      expect(tokenOf(await askedByJoiner)).toBe("host-token-bought-1");
+      await askedByStarter;
+      expect(harness.mints[1]?.abortedWhenAnswered).toBe(false);
+
+      harness.mints[0]?.answer({ kind: "not-a-member" });
+      await askedEarlier;
+      // Ordered before the starter's kept purchase, the refusal ends no command.
+      expect(refusalsEndingCommand).toEqual([]);
+      await expectNoWaiterLeft(handles[3]);
+    } finally {
+      commandSignal.abort();
       for (const handle of handles) handle.dispose();
     }
   });
