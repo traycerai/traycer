@@ -461,7 +461,10 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         // The comparison comes first: a refusal of a sign-in already replaced
         // when its answer arrived is not the stored one's. It judges, spends
         // and reports nothing; its asker retries on the stored sign-in.
-        if (outcome.kind === "sign-in-rejected" && refusedSignInReplaced(outcome))
+        if (
+          outcome.kind === "sign-in-rejected" &&
+          refusedSignInReplaced(outcome)
+        )
           return outcome;
         if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
           refusedAfterRefresh = true;
