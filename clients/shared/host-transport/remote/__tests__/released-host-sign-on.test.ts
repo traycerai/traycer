@@ -1395,6 +1395,61 @@ describe("released personal host, remote door", () => {
   }, 20_000);
 });
 
+describe("a sign-in refresh spent on an admitted connection", () => {
+  it("leaves the next fresh dial its own refresh when the admitted connection's refreshed sign-in is refused on the dial that follows", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door } = recordingDoor();
+    // The host admits the person's sign-in once, and refuses every other open
+    // the released way.
+    relay.decideOpen = (_grant, openIndex) =>
+      openIndex === 1
+        ? { kind: "ack" }
+        : { kind: "fatal", details: releasedRefusal() };
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    let refreshes = 0;
+    const session = openSession(
+      relay,
+      signIn,
+      {
+        ...personal,
+        recovery: {
+          revalidateForReconnect: () => {
+            refreshes += 1;
+            signIn.rotate(`sign-in-${refreshes}`);
+            return Promise.resolve("rotated");
+          },
+        },
+      },
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+      expect(refreshes).toBe(0);
+
+      // The admitted connection's sign-in is refused: its refresh is the
+      // connection's own, spent on its own sequence.
+      await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, releasedRefusal());
+      await vi.waitFor(() => expect(refreshes).toBe(1), WAIT);
+      // The redial presents the refreshed sign-in and is refused: a fresh dial
+      // sequence, whose first refusal gets its own refresh.
+      await vi.waitFor(
+        () => expect(relay.openBearers).toContain("sign-in-1"),
+        WAIT,
+      );
+
+      await vi.waitFor(() => expect(refreshes).toBe(2), WAIT);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 30_000);
+});
+
 describe("an attach decides once whether its open carries the sign-in", () => {
   it("opens with the host-only token, and reads no row, when another transport has the sign-in admitted only while this attach's grant is in flight", async () => {
     const relay = new FakeRelayHost();
