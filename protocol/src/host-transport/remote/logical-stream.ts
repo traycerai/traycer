@@ -391,7 +391,12 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
       return;
     }
     this.disposed = true;
-    this.transition("closed", { kind: "fatalError", details }, null, null);
+    this.transition(
+      "closed",
+      { kind: "fatalError", details, signInVerdict: null },
+      null,
+      null,
+    );
   }
 
   private transition(

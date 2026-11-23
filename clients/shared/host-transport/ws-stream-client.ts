@@ -117,6 +117,7 @@ import {
   type ReleasedSignOn,
   type SignInAuthority,
   type SignInRecovery,
+  type SignInVerdict,
   type SignInWriteCheck,
 } from "./released-sign-on";
 import { NO_MINT_CALLER, type MintCaller } from "../auth/host-token-lease";
@@ -361,6 +362,7 @@ function createInertStreamSession(closedReason: string): IStreamSession {
               incompatibleMethods: null,
               upgradeGuidance: null,
             },
+            signInVerdict: null,
           },
           null,
           null,
@@ -1872,8 +1874,26 @@ const WAKE_PROBE_TIMEOUT_MS = 5_000;
 interface DialSequence {
   readonly owner: HostInstance | null;
   spent: boolean;
-  running: Promise<RevalidateOutcome> | null;
+  running: Promise<SignInRefusalAnswer> | null;
 }
+
+/**
+ * How a refusal recovered, in the stream's own names. `adopted`: the lease now
+ * presents a sign-in other than the refused one, which authn did not rotate,
+ * so it redials as a rotation does and counts nothing toward the no-progress
+ * bound. `refusal-unjudged`: a spent recovery judged the refusal neither
+ * rejected nor outlived; it backs off with the streak untouched. A
+ * `SignInVerdict` is a rejection of the sign-in it names, which the terminal
+ * close carries.
+ */
+type SignInRefusalAnswer =
+  | RevalidateOutcome
+  | "adopted"
+  | "refusal-unjudged"
+  | SignInVerdict;
+
+/** A refusal's recovery, as `revalidateThenReconnect` awaits it. */
+type RefusalRecovery = () => Promise<SignInRefusalAnswer>;
 
 /** The host instance whose answer made `authority`. */
 function authorityOwner(authority: SignInAuthority): HostInstance {
@@ -2056,13 +2076,6 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    * whose refusal consults it.
    */
   private dialSequence: DialSequence | null = null;
-  /**
-   * The dial count of the refusal whose spent recovery judged it neither
-   * rejected nor outlived by a newer held sign-in ("refusal-unjudged"), or
-   * `null`. Its `network-error` answer backs off without touching the
-   * no-progress streak: no rotation happened, and none was lost to the network.
-   */
-  private unjudgedRefusalAt: number | null = null;
   /**
    * The live session this connection has announced to the selection authority,
    * or `null` while it has none.
@@ -2655,7 +2668,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
         return;
       if (readiness.kind === "reprobe") {
         this.grantMintAbort = null;
-        if (this.grantReprobed) this.goTerminal(readiness.fatal);
+        if (this.grantReprobed) this.goTerminal(readiness.fatal, null);
         else {
           this.grantReprobed = true;
           this.connect();
@@ -2669,7 +2682,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
           return;
         }
         this.grantMintAbort = null;
-        if (readiness.kind === "refused") this.goTerminal(readiness.fatal);
+        if (readiness.kind === "refused") this.goTerminal(readiness.fatal, null);
         else
           this.dropAndReconnect(
             readiness.retryCause ?? teamMembershipUnavailable(),
@@ -2700,7 +2713,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       }
       this.grantMintAbort = null;
       if (provision.kind === "refused") {
-        this.goTerminal(provision.fatal);
+        this.goTerminal(provision.fatal, null);
         return;
       }
       if (provision.kind === "unavailable") {
@@ -3165,7 +3178,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       this.teardownSocket(1000, "mirror-incompatible");
       this.transitionTo(
         "closed",
-        { kind: "fatalError", details: compat.details },
+        { kind: "fatalError", details: compat.details, signInVerdict: null },
         null,
       );
       return;
@@ -3397,7 +3410,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     refused: string | null,
     askedAt: number,
     recovery: SignInRecovery,
-  ): Promise<RevalidateOutcome> {
+  ): Promise<SignInRefusalAnswer> {
     const current = this.dialSequence;
     const sequence: DialSequence =
       current !== null && current.owner === refusedBy
@@ -3420,7 +3433,6 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
             ? this.judgeSpentRefusal(
                 sequence,
                 refused,
-                askedAt,
                 stillWanted,
                 () => judge(refusal),
               )
@@ -3432,14 +3444,17 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       sequence.running = judging;
       return judging;
     }
-    const running: Promise<RevalidateOutcome> = Promise.resolve()
+    const running: Promise<SignInRefusalAnswer> = Promise.resolve()
       .then(() =>
         stillWanted() && refusedBy !== null
           ? recovery.revalidateForReconnect(refusedBy, refusal, stillWanted)
           : ("network-error" as const),
       )
-      .then((outcome): RevalidateOutcome => {
-        if (outcome === "adopted") return "rotated";
+      .then((outcome): SignInRefusalAnswer => {
+        // An adoption the lease does not present is no progress: it is
+        // answered as a rotation that left the sign-in where it was.
+        if (outcome === "adopted")
+          return this.heldSignInMovedFrom(refused) ? "adopted" : "rotated";
         // The refusing process was replaced while the recovery ran: the redial
         // reads the current one, and nothing is spent.
         if (outcome === "process-replaced") return "network-error";
@@ -3456,30 +3471,35 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
   /**
    * Answers a refusal after its sequence's refresh was spent, by the
    * recovery's own judgement of the refused sign-in, which adopts the stored
-   * sign-in before it judges. `rotated` only when the lease now holds a
-   * sign-in other than the one refused. A refusal judged neither rejected nor
-   * outlived is "refusal-unjudged": the sequence is released, so the next
-   * attempt makes its one refresh, and the answer backs off with the
-   * no-progress streak untouched. Rotations alone count toward the bound.
-   * A judgement that throws is judged not rejected.
+   * sign-in before it judges. `adopted` when the lease now holds a sign-in
+   * other than the one refused. A refusal judged neither rejected nor outlived
+   * is `refusal-unjudged`: the sequence is released, so the next attempt makes
+   * its one refresh. Rotations alone count toward the bound. A judgement that
+   * throws is judged not rejected.
    */
   private async judgeSpentRefusal(
     sequence: DialSequence,
     refused: string | null,
-    askedAt: number,
     stillWanted: () => boolean,
     judge: () => Promise<boolean> | boolean,
-  ): Promise<RevalidateOutcome> {
+  ): Promise<SignInRefusalAnswer> {
     const rejected = await Promise.resolve()
       .then(judge)
       .catch(() => false);
     if (!stillWanted()) return "network-error";
-    if (rejected) return "rejected";
-    const held = this.heldSignIn();
-    if (refused !== null && held !== null && held !== refused) return "rotated";
+    if (rejected) {
+      const signIn = hostSignInKey(refused);
+      return signIn === null ? "rejected" : { kind: "sign-in-rejected", signIn };
+    }
+    if (this.heldSignInMovedFrom(refused)) return "adopted";
     if (this.dialSequence === sequence) this.dialSequence = null;
-    this.unjudgedRefusalAt = askedAt;
-    return "network-error";
+    return "refusal-unjudged";
+  }
+
+  /** Whether the lease now holds a sign-in, and one other than `refused`. */
+  private heldSignInMovedFrom(refused: string | null): boolean {
+    const held = this.heldSignIn();
+    return refused !== null && held !== null && held !== refused;
   }
 
   private answerInvitedSignIn(): void {
@@ -3689,10 +3709,13 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       !this.usesSessionGrant &&
       this.config.auth !== null
     ) {
-      this.handleUnauthorizedFatalError(details, this.config.auth);
+      const auth = this.config.auth;
+      this.handleUnauthorizedFatalError(details, () =>
+        revalidateStream(auth, details),
+      );
       return;
     }
-    this.goTerminal(details);
+    this.goTerminal(details, null);
   }
 
   /**
@@ -3747,7 +3770,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     markReleasedSignInRefusal(details);
     this.planNext("sign-in-next");
     if (recovery === null) {
-      this.goTerminal(details);
+      this.goTerminal(details, null);
       return;
     }
     this.answerSignInRefusal(details, this.socketOwner, recovery);
@@ -3802,7 +3825,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     }
     // Refused as expired, the invited sign-in is the person's: no door hears it.
     if (recovery === null) {
-      this.goTerminal(details);
+      this.goTerminal(details, null);
       return;
     }
     // Reads the refused plan as a refused sign-in before the plan moves on.
@@ -3824,8 +3847,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     recovery: SignInRecovery,
   ): void {
     const refused = this.usesSessionGrant ? null : this.presentedToken;
-    const held = this.heldSignIn();
-    if (refused !== null && held !== null && held !== refused) {
+    if (this.heldSignInMovedFrom(refused)) {
       this.teardownSocket(1000, "sign-in-adopted");
       this.slowClientReconnectStreak = 0;
       this.lastCloseWasSlowClient = false;
@@ -3866,15 +3888,13 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
   private signInRefusalRecovery(
     refusedBy: HostInstance | null,
     recovery: SignInRecovery,
-  ): StreamAuthRevalidator {
+  ): RefusalRecovery {
     if (!this.usesSessionGrant && this.presentedToken === null)
-      return { revalidateForReconnect: () => Promise.resolve("rotated") };
+      return () => Promise.resolve("rotated");
     const refused = this.usesSessionGrant ? null : this.presentedToken;
     const askedAt = this.dialsStarted;
-    return {
-      revalidateForReconnect: () =>
-        this.refreshSignInWithinBudget(refusedBy, refused, askedAt, recovery),
-    };
+    return () =>
+      this.refreshSignInWithinBudget(refusedBy, refused, askedAt, recovery);
   }
 
   /**
@@ -3967,7 +3987,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    */
   private handleUnauthorizedFatalError(
     details: FatalErrorDetails,
-    auth: StreamAuthRevalidator,
+    recover: RefusalRecovery,
   ): void {
     if (this.disposed) {
       return;
@@ -3996,7 +4016,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     this.resetForReconnect(null);
 
     void this.revalidateThenReconnect(
-      auth,
+      recover,
       details,
       rejectedToken,
       rejectedHostId,
@@ -4006,7 +4026,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
   }
 
   private async revalidateThenReconnect(
-    auth: StreamAuthRevalidator,
+    recover: RefusalRecovery,
     details: FatalErrorDetails,
     rejectedToken: string | null,
     rejectedHostId: string | null,
@@ -4019,7 +4039,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     refusedSignIn: boolean,
   ): Promise<void> {
     const askedAt = this.dialsStarted;
-    const outcome = await this.revalidateWithinBudget(auth, details);
+    const outcome = await this.revalidateWithinBudget(recover);
     // A dial started meanwhile (a wake) owns the stream now: its own answers
     // decide, never this refresh's.
     if (this.disposed || this.dialsStarted !== askedAt) {
@@ -4028,7 +4048,9 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     // Wake-recovery trace: which way the overnight-expired-bearer revalidation
     // resolved, so an on-device wake shows whether the fresh bearer landed.
     console.debug(
-      `[stream] UNAUTHORIZED revalidate outcome=${outcome} method=${String(
+      `[stream] UNAUTHORIZED revalidate outcome=${
+        typeof outcome === "object" ? outcome.kind : outcome
+      } method=${String(
         this.config.method,
       )}`,
     );
@@ -4036,7 +4058,9 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     // that host has not been dialed yet: redial without counting.
     const countsForDialedHost =
       this.config.endpoint()?.hostId === this.noProgressHostId;
-    if (outcome === "rejected") {
+    // A verdict names the sign-in it judged, and the terminal close carries it.
+    const signInVerdict = typeof outcome === "object" ? outcome : null;
+    if (outcome === "rejected" || signInVerdict !== null) {
       // A rejection that left this client's person signed in is an answer
       // about the instance that refused. Once that instance is replaced, it
       // ends nothing by itself: it counts toward the host's bound like any
@@ -4063,7 +4087,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
                   this.config.method,
                 )}); reload required`,
             );
-            this.goTerminal(details);
+            this.goTerminal(details, signInVerdict);
             return;
           }
         }
@@ -4072,7 +4096,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       }
       // The credential was rejected (revoked / dead refresh token); the
       // revalidator has already signed out. Stop retrying.
-      this.goTerminal(details);
+      this.goTerminal(details, signInVerdict);
       return;
     }
     if (outcome === "local-plane-retained") {
@@ -4101,14 +4125,15 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
             `UNAUTHORIZED reconnects on a session with no cloud verdict ` +
             `(method=${String(this.config.method)}); reload required`,
         );
-        this.goTerminal(details);
+        this.goTerminal(details, null);
         return;
       }
       this.enterBackoff();
       return;
     }
-    if (outcome === "network-error" && this.unjudgedRefusalAt === askedAt) {
-      this.unjudgedRefusalAt = null;
+    if (outcome === "refusal-unjudged") {
+      // No rotation happened, and none was lost to the network: the streak
+      // neither moves nor resets.
       this.enterBackoff();
       return;
     }
@@ -4122,7 +4147,8 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       this.enterBackoff();
       return;
     }
-    // outcome === "rotated": authn accepts the credential. If the bearer the
+    // outcome === "rotated" or "adopted": authn accepts the credential, or the
+    // lease took a sibling's newer sign-in. If the bearer the
     // NEXT dial will carry is still the one the host just rejected, no
     // progress was made (authn validates it but the host keeps rejecting —
     // clock skew / config mismatch). Bound that loop so we don't hammer authn
@@ -4150,7 +4176,8 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
         this.enterBackoff();
         return;
       }
-      this.noProgressUnauthorizedReconnects += 1;
+      // An adoption the lease presents asked authn nothing and counts nothing.
+      if (outcome === "rotated") this.noProgressUnauthorizedReconnects += 1;
       if (
         this.noProgressUnauthorizedReconnects >=
         MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS
@@ -4163,7 +4190,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
               this.config.method,
             )}); reload required`,
         );
-        this.goTerminal(details);
+        this.goTerminal(details, null);
         return;
       }
       // A refused sign-in authn rotated is counted, yet its redial carries the
@@ -4187,11 +4214,10 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    * it as transient and let the normal reconnect backoff retry.
    */
   private async revalidateWithinBudget(
-    auth: StreamAuthRevalidator,
-    refusal: FatalErrorDetails,
-  ): Promise<RevalidateOutcome> {
+    recover: RefusalRecovery,
+  ): Promise<SignInRefusalAnswer> {
     let timer: TimerHandle | null = null;
-    const budget = new Promise<RevalidateOutcome>((resolve) => {
+    const budget = new Promise<SignInRefusalAnswer>((resolve) => {
       timer = setTimeout(() => resolve("network-error"), REVALIDATE_TIMEOUT_MS);
     });
     // Invoke inside a promise chain, never bare — see the twin in
@@ -4200,8 +4226,8 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     // budget timer, and surface as an unhandled rejection instead of the
     // "network-error" this method promises for a thrown revalidation.
     const revalidation = Promise.resolve()
-      .then(() => revalidateStream(auth, refusal))
-      .catch((): RevalidateOutcome => "network-error");
+      .then(recover)
+      .catch((): SignInRefusalAnswer => "network-error");
     try {
       return await Promise.race([revalidation, budget]);
     } finally {
@@ -4338,7 +4364,10 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    * close the socket, and surface the close reason. Used for non-recoverable
    * fatalErrors and the bounded/rejected `UNAUTHORIZED` outcomes.
    */
-  private goTerminal(details: FatalErrorDetails): void {
+  private goTerminal(
+    details: FatalErrorDetails,
+    signInVerdict: SignInVerdict | null,
+  ): void {
     if (this.disposed) return;
     // Denial stays terminal until an explicit membership/ownership change.
     // Retain only the caller's subscription so that signal can restart it.
@@ -4350,7 +4379,16 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     }
     this.teardownTimers();
     this.teardownSocket(1000, "host-fatal-error");
-    this.transitionTo("closed", { kind: "fatalError", details }, null);
+    this.transitionTo(
+      "closed",
+      {
+        kind: "fatalError",
+        details,
+        signInVerdict:
+          signInVerdict === null ? null : { signIn: signInVerdict.signIn },
+      },
+      null,
+    );
   }
 
   private handleSocketError(): void {

@@ -1,11 +1,13 @@
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
+  acquireCliSignIn,
   cliReleasedSignOn,
-  createCliHostTokens,
   observeHostInstance,
   replacedAsNetworkError,
-  type CliHostTokenFailure,
+  type CliHostRefusal,
+  type CliRefusalEvidence,
+  type CliSignInHandle,
 } from "../internal/cli-host-tokens";
 import {
   hostStreamRpcRegistry,
@@ -17,10 +19,7 @@ import {
   processReleasedHosts,
   type HostInstance,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
-import {
-  MutableBearerLease,
-  readLeaseBearer,
-} from "../../../shared/auth/bearer-source";
+import { readLeaseBearer } from "../../../shared/auth/bearer-source";
 import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
@@ -41,12 +40,6 @@ import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transpor
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import type { HostAuth } from "../internal/host-auth";
-import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
-import {
-  createCliCredentialsStore,
-  createStoreBackedRevalidator,
-  type SignInRotationResult,
-} from "../store/credentials-store";
 import { errorFromUnknown, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 import {
@@ -190,12 +183,6 @@ const VERIFY_BACKOFF_MAX_MS = 2_000;
 // the full deadline before printing that it cannot be credentialed.
 const SILENT_OPEN_CONFIRMATIONS = 3;
 
-type ProbeRevalidator = {
-  revalidateCurrentContext(): Promise<RevalidateOutcome>;
-  rotateSignIn(): Promise<SignInRotationResult>;
-  adoptStoredSignIn(): Promise<void>;
-};
-
 type AckObservation =
   | { readonly kind: "state"; readonly state: HostCredentialState }
   | { readonly kind: "opened-silent" }
@@ -226,7 +213,7 @@ export async function provisionInstalledHostCredential(
   // between two acquisitions would leak the earlier one. `finally` releases
   // whatever was actually obtained.
   let poll: NodeJS.Timeout | null = null;
-  let store: CredentialsMutationStore | null = null;
+  let signIn: CliSignInHandle | null = null;
   let client: WsStreamClient<HostStreamRpcRegistry> | null = null;
   // The most recent revalidation, awaited (bounded) before returning so a
   // refresh this probe started does not outlive the call.
@@ -319,12 +306,13 @@ export async function provisionInstalledHostCredential(
   // occasional ack losing the race with the grace timer cannot accumulate
   // into a false "this host has no credential capability" verdict.
   let consecutiveSilentOpens = 0;
-  // A mint refusal that ends the command (`CliHostTokens.onRefusalEndingCommand`),
-  // and the wake-up of the lap waiting on an ack that can now never come.
-  let mintRefusal: CliHostTokenFailure | null = null;
+  // Evidence of a mint refusal that may end the command
+  // (`CliHostTokens.onRefusalEndingCommand`), never its verdict: the lap that
+  // sees it asks the gate. And the wake-up of the lap waiting on an ack that
+  // may now never come.
+  let reportedRefusal: CliRefusalEvidence | null = null;
   let wakeOnMintRefusal: (() => void) | null = null;
   let stopMintRefusals: () => void = () => undefined;
-  const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
   // A CANCELABLE deadline, not `sleep()`: an uncleared
   // `setTimeout` keeps the Node event loop alive, and the CLI exits by
@@ -347,6 +335,11 @@ export async function provisionInstalledHostCredential(
     poll = setInterval(() => {
       void refreshEndpoint();
     }, ENDPOINT_POLL_MS);
+    // The person's one sign-in and token instance in this process; this
+    // probe's asks end with its abort. The tokens on disk are read by then,
+    // so the first dial presents the held one.
+    signIn = await acquireCliSignIn(options.auth, probeAbort.signal);
+    const { lease, revalidator, tokens } = signIn;
 
     const innerMint = createCliHostCredentialMintFlow({
       authnBaseUrl: options.auth.authnBaseUrl,
@@ -367,49 +360,23 @@ export async function provisionInstalledHostCredential(
         mintRefusedSignIn = mintSentWith;
       },
     });
-    // The stored access token has a ~4h TTL, so an ordinary "already signed
-    // in" install routinely starts this probe on an EXPIRED bearer - the
-    // common case, not an edge one. `auth: null` (correct only for a client
-    // that has no revalidator) would make that first UNAUTHORIZED terminal,
-    // and the host would never be minted for at all. Route reconnect recovery
-    // through the same locked, single-flight `rotate` the monitor uses, so a
-    // probe refresh and a concurrent desktop refresh cannot double-spend the
-    // refresh token.
-    store = createCliCredentialsStore();
-    // Named narrowing, as `monitor` does: the factory's return intersects
-    // `AuthRevalidator`, whose `revalidateCurrentContext` is declared
-    // `Promise<unknown>` for the unary path that ignores it, and the call
-    // otherwise resolves to that looser overload.
-    const revalidator: ProbeRevalidator = createStoreBackedRevalidator({
-      store,
-      lease,
-      signal: probeAbort.signal,
-    });
     // The stored sign-in is spent at authn; the host sees this CLI's host-only
     // token, or the sign-in only as `cliReleasedSignOn` allows.
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: () => revalidator.rotateSignIn(),
-      adoptStored: () => revalidator.adoptStoredSignIn(),
-      signal: probeAbort.signal,
-    });
     const releasedSignOn = cliReleasedSignOn(lease, tokens);
-    // The tokens on disk, so the first dial presents the held one.
-    await tokens.whenLoaded();
     // A refusal no token or sign-in can follow ends the probe at once rather
     // than waiting out its budget. A `not-admitted` (a computer with no row
     // answers a bare 404) a sign-in may still follow is left to the stream,
     // and explains the end only if that does not provision the host.
-    stopMintRefusals = tokens.onRefusalEndingCommand((hostId, failure) => {
-      if (endpoint?.hostId !== hostId) return;
+    stopMintRefusals = tokens.onRefusalEndingCommand((evidence) => {
+      if (endpoint?.hostId !== evidence.hostId) return;
       options.logger.warn("Host credential provisioning token mint refused", {
         environment: options.environment,
-        failure: failure.kind,
+        failure: evidence.failure.kind,
       });
-      mintRefusal = failure;
+      reportedRefusal = evidence;
       if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
     });
-    const deferredNotAdmitted = (): CliHostTokenFailure | null =>
+    const deferredNotAdmitted = (): CliHostRefusal | null =>
       endpoint === null ? null : tokens.deferredNotAdmitted(endpoint.hostId);
     // Recovery of a refused token, as on every other CLI open: one fresh
     // token and one more open, and a second refusal is final. A refusal is
@@ -426,6 +393,14 @@ export async function provisionInstalledHostCredential(
     // still cover a rotation; read by the recovery after its last await.
     const probeWanted = (): boolean =>
       !probeAbort.signal.aborted && remaining() > 0;
+    // The stored access token has a ~4h TTL, so an ordinary "already signed
+    // in" install routinely starts this probe on an EXPIRED bearer - the
+    // common case, not an edge one. `auth: null` (correct only for a client
+    // that has no revalidator) would make that first UNAUTHORIZED terminal,
+    // and the host would never be minted for at all. Route reconnect recovery
+    // through the person's one locked, single-flight `rotate`, as the monitor does, so a
+    // probe refresh and a concurrent desktop refresh cannot double-spend the
+    // refresh token.
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () =>
         recoverHostToken(endpoint?.hostId ?? null, (recovery) =>
@@ -443,7 +418,7 @@ export async function provisionInstalledHostCredential(
             endpoint?.hostId !== owner.hostId);
         return left &&
           outcome === "rejected" &&
-          !(await tokens.signInRejectedNow(null))
+          (await tokens.signInRejectionNow(null)) === null
           ? "network-error"
           : outcome;
       },
@@ -565,20 +540,54 @@ export async function provisionInstalledHostCredential(
           mintUnavailable = true;
         },
       );
-    // One place decides every non-`active` exit, so the loop end, the bound,
-    // and a fatal close can never drift apart on what they report.
-    const settledOutcome =
-      async (): Promise<HostCredentialProvisionOutcome> => {
-        // First: a dead sign-in explains every other symptom below it (the
-        // stream never opens, nothing is ever minted) and is the only one that
-        // does not self-heal, so it must not be reported as "unreachable". The
-        // sign-in judged is the one stored when this reads the file, so a
-        // confirmation's refused sign-in counts only while it is still stored.
-        if (await tokens.signInRejectedNow(null)) {
+    // What ends the probe now, judged once and returned in the same turn. First:
+    // a dead sign-in explains every other symptom (the stream never opens,
+    // nothing is ever minted) and is the only one that does not self-heal, so it
+    // must not be reported as "unreachable". The sign-in judged is the one
+    // stored when this reads the file, so a confirmation's refused sign-in
+    // counts only while it is still stored. Then the gate's ending for a
+    // reported mint refusal; `null` when nothing ends the probe.
+    const endingOutcomeNow =
+      async (): Promise<HostCredentialProvisionOutcome | null> => {
+        if ((await tokens.signInRejectionNow(null)) !== null)
           return { kind: "unauthorized" };
+        const ending =
+          endpoint === null
+            ? null
+            : await tokens.refusalEndingCommandNow(endpoint.hostId);
+        if (ending === null) return null;
+        return ending.kind === "sign-in-rejected"
+          ? { kind: "unauthorized" }
+          : mintRefusalOutcome(ending.failure);
+      };
+    // One place decides every non-`active` exit, so the loop end, the bound,
+    // and a fatal close can never drift apart on what they report. A fatal
+    // close that nothing observed this run accounts for (no dead sign-in, no
+    // mint history, no capability gap) is reported for what it is: the host
+    // answered, so "the host did not come up" would be false on its face.
+    // `hostAnswered` is deliberately not consulted there: contact alone
+    // explains nothing.
+    const settledOutcome = async (
+      closedFatally: boolean,
+    ): Promise<HostCredentialProvisionOutcome> => {
+        const ended = await endingOutcomeNow();
+        if (ended !== null) return ended;
+        const deferred = deferredNotAdmitted();
+        if (deferred !== null) return mintRefusalOutcome(deferred);
+        if (
+          closedFatally &&
+          !mintUnavailable &&
+          !mintProvisioned &&
+          !mintInvoked &&
+          !mintWithheld &&
+          !sawSilentOpen
+        ) {
+          return {
+            kind: "error",
+            message:
+              "the host closed the connection before authorization was confirmed",
+          };
         }
-        const refusal = mintRefusal ?? deferredNotAdmitted();
-        if (refusal !== null) return mintRefusalOutcome(refusal);
         if (mintUnavailable) {
           return { kind: "mint-unavailable" };
         }
@@ -625,32 +634,22 @@ export async function provisionInstalledHostCredential(
     const settleAfterRecovery =
       async (): Promise<HostCredentialProvisionOutcome> => {
         await waitForInFlightRevalidation();
-        return await settledOutcome();
+        return await settledOutcome(false);
       };
-    // True when NOTHING observed this run accounts for how it ended - no
-    // dead sign-in, no mint history, no capability gap. Deliberately does
-    // not consult `hostAnswered`: this asks "is the outcome unexplained?",
-    // and contact alone explains nothing. It is exactly the condition under
-    // which `settledOutcome` would have reported `unreachable` before the
-    // `hostAnswered` fallback existed, which is what the fatal-close arm
-    // needs to decide whether the close code is the most informative thing
-    // this probe can report.
-    const nothingExplainsTheClose = async (): Promise<boolean> =>
-      !(await tokens.signInRejectedNow(null)) &&
-      mintRefusal === null &&
-      deferredNotAdmitted() === null &&
-      !mintUnavailable &&
-      !mintProvisioned &&
-      !mintInvoked &&
-      !mintWithheld &&
-      !sawSilentOpen;
     let verifyBackoffMs = VERIFY_BACKOFF_INITIAL_MS;
     for (;;) {
       const remainingMs = remaining();
       if (remainingMs <= 0) {
         break;
       }
-      if (mintRefusal !== null) return await settleAfterRecovery();
+      // A reported refusal ends the probe only if the gate still says so once
+      // the recovery has answered; withdrawn, the probe goes on.
+      if (reportedRefusal !== null) {
+        reportedRefusal = null;
+        await waitForInFlightRevalidation();
+        const ended = await endingOutcomeNow();
+        if (ended !== null) return ended;
+      }
       const { observation, session } = await observeNextAck(
         activeClient,
         (resolver) => {
@@ -811,24 +810,11 @@ export async function provisionInstalledHostCredential(
               return { kind: "unsupported" };
             }
             // Any other terminal fatal still PROVES the host answered - a
-            // frame carried it. When nothing above explains the close (no
-            // rejected sign-in, no mint history), "the host did not come up"
-            // would be false on its face; report the close for what it is.
-            //
-            // Asked directly rather than by testing `settledOutcome()` for
-            // `unreachable`: the `hostAnswered` fallback also resolves an
-            // otherwise-unexplained probe, so keying off the returned kind
-            // would swallow this close the moment a reconnect revalidation
-            // had fired. Its code stays in the structured diagnostic above.
+            // frame carried it; `settledOutcome` reports the close when nothing
+            // else explains it. Its code stays in the structured diagnostic
+            // above.
             await waitForInFlightRevalidation();
-            if (await nothingExplainsTheClose()) {
-              return {
-                kind: "error",
-                message:
-                  "the host closed the connection before authorization was confirmed",
-              };
-            }
-            return await settledOutcome();
+            return await settledOutcome(true);
           }
           return await settleAfterRecovery();
         }
@@ -888,11 +874,9 @@ export async function provisionInstalledHostCredential(
     // controller's declaration), so this cannot rewrite what the probe
     // already decided to report.
     probeAbort.abort();
-    // Stops any `commit-failed` continuation timer a revalidation armed;
-    // without it the process keeps a timer alive past the probe.
-    if (store !== null) {
-      store.dispose();
-    }
+    // Ends this probe's asks and listeners; the last holder's release stops
+    // any `commit-failed` continuation timer a revalidation armed.
+    signIn?.dispose();
   }
 }
 
@@ -901,10 +885,9 @@ export async function provisionInstalledHostCredential(
  * membership refusal; anything else is a handoff that did not complete.
  */
 function mintRefusalOutcome(
-  failure: CliHostTokenFailure,
+  failure: CliHostRefusal,
 ): HostCredentialProvisionOutcome {
-  if (failure.kind === "sign-in-rejected" || failure.kind === "no-sign-in")
-    return { kind: "unauthorized" };
+  if (failure.kind === "no-sign-in") return { kind: "unauthorized" };
   if (failure.kind === "not-a-member")
     return {
       kind: "error",
@@ -975,7 +958,12 @@ function observeNextAck(
         finish(
           {
             kind: "fatal",
-            reason: { kind: "fatalError", details: retryCause },
+            // A retry cause judges no sign-in.
+            reason: {
+              kind: "fatalError",
+              details: retryCause,
+              signInVerdict: null,
+            },
           },
           true,
         );

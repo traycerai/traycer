@@ -670,10 +670,13 @@ export class WsRpcClient<
                     )
                     .then((answer) =>
                       // A replaced refusing process: the call fails with the
-                      // refusal, as with a refresh that did not reach authn.
+                      // refusal, as with a refresh that did not reach authn. A
+                      // verdict on the sign-in fails it as a rejection does.
                       answer === "process-replaced"
                         ? ("network-error" as const)
-                        : answer,
+                        : typeof answer === "object"
+                          ? ("rejected" as const)
+                          : answer,
                     )
                     .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
@@ -762,10 +765,13 @@ export class WsRpcClient<
                     )
                     .then((answer) =>
                       // A replaced refusing process: the call fails with the
-                      // refusal, as with a refresh that did not reach authn.
+                      // refusal, as with a refresh that did not reach authn. A
+                      // verdict on the sign-in fails it as a rejection does.
                       answer === "process-replaced"
                         ? ("network-error" as const)
-                        : answer,
+                        : typeof answer === "object"
+                          ? ("rejected" as const)
+                          : answer,
                     )
                     .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);

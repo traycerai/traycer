@@ -8,7 +8,7 @@ import {
 import { requireCliHostSession } from "./cli-host-tokens";
 import {
   hostDoorRefusalCliError,
-  hostTokenFailureCliError,
+  refusalEndingCliError,
   signedOutCliError,
 } from "./host-door-words";
 /**
@@ -229,10 +229,15 @@ export async function openLocalStreamClient(): Promise<{
     maxBackoffMs: STREAM_MAX_BACKOFF_MS,
     clientIdentity: CLI_CLIENT_IDENTITY,
   });
-  stopRefusals = tokens.onRefusalEndingCommand((refusedHostId, failure) => {
-    if (refusedHostId !== hostId || refusalEndingReads.has(client)) return;
-    refusalEndingReads.set(client, hostTokenFailureCliError(failure));
-    client.close("host-token-refused");
+  // A reported refusal is evidence; the gate decides, and the read ends in
+  // the same turn as its answer.
+  stopRefusals = tokens.onRefusalEndingCommand((evidence) => {
+    if (evidence.hostId !== hostId || refusalEndingReads.has(client)) return;
+    void tokens.refusalEndingCommandNow(hostId).then((ending) => {
+      if (ending === null || refusalEndingReads.has(client)) return;
+      refusalEndingReads.set(client, refusalEndingCliError(ending));
+      client.close("host-token-refused");
+    });
   });
   return { client, endpoint };
 }
@@ -352,7 +357,7 @@ export function readBotSnapshot(
         const fatalError = isReleasedSignInRefusal(details)
           ? readFailed()
           : (namedTeamAdmissionCliError(details) ??
-            hostDoorRefusalCliError(details, false, readFailed) ??
+            hostDoorRefusalCliError(details, null, readFailed) ??
             localTeamAdmissionCliError(details) ??
             readFailed());
         finish(() => reject(fatalError));

@@ -822,8 +822,10 @@ function revalidatorWithBounds(
               report,
             )
           : spent();
-      // The refresh refused: the sign-in is the reason.
-      if (recovered === "rejected") return "sign-in-rejected";
+      // The refresh refused, or the recovery judged the sign-in rejected: the
+      // sign-in is the reason.
+      if (recovered === "rejected" || typeof recovered === "object")
+        return "sign-in-rejected";
       // A refresh declined for a replaced process answers as a mint lost to
       // it does.
       return recovered;

@@ -8,7 +8,8 @@ import {
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import {
   requireCliHostSession,
-  type CliHostTokenFailure,
+  type CliRefusalEvidence,
+  type SignInRejection,
 } from "./cli-host-tokens";
 import {
   isReleasedSignInRefusal,
@@ -18,7 +19,7 @@ import {
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   hostDoorRefusalCliError,
-  hostTokenFailureCliError,
+  refusalEndingCliError,
   signedOutCliError,
 } from "./host-door-words";
 import {
@@ -36,10 +37,7 @@ import {
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import type { OpenFrameBearerSource } from "../../../shared/auth/bearer-source";
 import type { RefusalAwareAuthRevalidator } from "../../../shared/auth/bearer-revalidator";
-import {
-  isRefusalAfterRejectedSignIn,
-  markRefusalAfterRejectedSignIn,
-} from "./sign-in-rejection";
+import { markRefusalAfterRejectedSignIn } from "./sign-in-rejection";
 import {
   createAuthAwareMessenger,
   type AuthRecoveryScope,
@@ -343,7 +341,7 @@ export async function callHostRpcWithAgentCredential<
         ? NO_RETRY_TRANSPORT_POLICY
         : DEFAULT_TRANSPORT_RETRY_POLICY,
       dispatch,
-      async () => false,
+      async () => null,
     );
   } catch (err) {
     const refusal = finalRefusalOf(err);
@@ -470,15 +468,13 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     endpoint.hostId,
     dispatch.signal,
   );
-  // The call dials at once and the mint runs beside it. A refusal that ends
-  // the command fails it as it did when the mint came first, unless the call
-  // was answered anyway.
-  const ended: { refusal: CliHostTokenFailure | null } = { refusal: null };
-  const stopRefusals = session.tokens.onRefusalEndingCommand(
-    (hostId, failure) => {
-      if (hostId === endpoint.hostId) ended.refusal ??= failure;
-    },
-  );
+  // The call dials at once and the mint runs beside it. A refusal that may
+  // end the command is kept as evidence only: unless the call was answered
+  // anyway, the gate decides what ends it.
+  const ended: { refusal: CliRefusalEvidence | null } = { refusal: null };
+  const stopRefusals = session.tokens.onRefusalEndingCommand((evidence) => {
+    if (evidence.hostId === endpoint.hostId) ended.refusal ??= evidence;
+  });
   try {
     return await requestWithHostToken(
       method,
@@ -499,26 +495,39 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       },
       retryPolicy,
       dispatch,
-      () => session.tokens.signInRejectedNow(null),
+      () => session.tokens.signInRejectionNow(null),
     );
   } catch (err) {
-    const refusal = ended.refusal;
-    if (refusal === null) throw err;
+    if (ended.refusal === null) throw err;
+    // The one judgement for this exit, and the exit in the same turn as it.
+    const ending = await session.tokens.refusalEndingCommandNow(
+      endpoint.hostId,
+    );
+    if (ending === null) throw err;
     createCliLogger(config.environment).warn(
       "Host RPC blocked: no host-only token",
       {
         environment: config.environment,
         method,
         hostId: endpoint.hostId,
-        mintOutcome: refusal.kind,
+        mintOutcome:
+          ending.kind === "sign-in-rejected"
+            ? ending.kind
+            : ending.failure.kind,
       },
     );
-    throw hostTokenFailureCliError(refusal);
+    throw refusalEndingCliError(ending);
   } finally {
     stopRefusals();
     session.dispose();
   }
 }
+
+/**
+ * The gate's judgement for a refusal the call threw in the same turn: only a
+ * refusal judged so is worded as a rejected sign-in.
+ */
+const rejectionOfRefusal = new WeakMap<HostRpcError, SignInRejection>();
 
 /** This machine's host, reached with this CLI's host-only token. */
 interface LocalHostDoor {
@@ -542,7 +551,7 @@ async function requestWithHostToken<
   localDoor: LocalHostDoor | null,
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
-  signInRejected: () => Promise<boolean>,
+  signInRejection: () => Promise<SignInRejection | null>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const client = new WsRpcClient<HostRpcRegistry>({
@@ -647,10 +656,15 @@ async function requestWithHostToken<
     return response;
   } catch (err) {
     const refusal = finalRefusalOf(err);
-    // The verdict is read after the credentials file is: a sign-in another
-    // process saved since is not the one this call's failure blames.
-    if (refusal instanceof HostRpcError && (await signInRejected())) {
-      markRefusalAfterRejectedSignIn(refusal);
+    // The gate's judgement, read after the credentials file is and attached
+    // to the refusal thrown in the same turn: a sign-in another process saved
+    // since is not the one this call's failure blames.
+    if (refusal instanceof HostRpcError) {
+      const rejection = await signInRejection();
+      if (rejection !== null) {
+        markRefusalAfterRejectedSignIn(refusal);
+        rejectionOfRefusal.set(refusal, rejection);
+      }
     }
     const error = errorFromUnknown(err);
     logger.debug("Host RPC failed; propagating to command boundary", {
@@ -1010,10 +1024,10 @@ export function releasedSignInRefusalCliError(reason: string): CliError {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
-  const signInRejected = isRefusalAfterRejectedSignIn(err);
+  const rejection = rejectionOfRefusal.get(err) ?? null;
   // A released host refused this person's sign-in: its own sentence, as the
   // released CLI printed it. Only a dead sign-in says more.
-  if (!signInRejected && isReleasedSignInRefusal(err))
+  if (rejection === null && isReleasedSignInRefusal(err))
     return releasedSignInRefusalCliError(err.message);
   // A capability cannot be repaired by the stored sign-in or a host-token mint.
   const doorRefusal = isRefusalOfAgentSessionCapability(err)
@@ -1022,7 +1036,7 @@ function mapHostRpcError(err: HostRpcError): CliError {
   const doorError =
     doorRefusal === null
       ? null
-      : hostDoorRefusalCliError(doorRefusal, signInRejected, () =>
+      : hostDoorRefusalCliError(doorRefusal, rejection, () =>
           unexpectedHostCliError(err),
         );
   if (doorError !== null) return doorError;

@@ -46,7 +46,15 @@ export type StreamCloseReason =
   | {
       readonly kind: "fatalError";
       readonly details: FatalErrorDetails;
+      /** Set only when this close is a sign-in verdict; every other fatal close sets null. */
+      readonly signInVerdict: StreamSignInVerdict | null;
     };
+
+/** A judged sign-in, as a stream's terminal close names it. */
+export interface StreamSignInVerdict {
+  /** hostSignInKey of the sign-in judged rejected. */
+  readonly signIn: string;
+}
 
 /**
  * Whether a close reason PROVES the connected host cannot serve this session's

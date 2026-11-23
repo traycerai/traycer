@@ -14,16 +14,25 @@ import { isUsableHostToken } from "../auth/host-token-store";
 import { hostDoorStateOfRefusal } from "./host-door-state";
 import type { HostRequestAuthority } from "./host-messenger";
 
+/** A recovery's judgement that the person's sign-in is rejected. */
+export interface SignInVerdict {
+  readonly kind: "sign-in-rejected";
+  /** hostSignInKey of the sign-in authn's answer judged. */
+  readonly signIn: string;
+}
+
 /**
  * A sign-in recovery's answer. `"process-replaced"`: it refreshed nothing
  * because the host process it was asked for has been replaced. It spends no
  * refresh budget, and every transport answers it as `"network-error"`; only
- * the CLI's monitor counts it.
+ * the CLI's monitor counts it. A {@link SignInVerdict} comes only from the
+ * CLI's recovery; every transport answers it as `"rejected"`.
  */
 export type SignInRecoveryOutcome =
   | RevalidateOutcome
   | "adopted"
-  | "process-replaced";
+  | "process-replaced"
+  | SignInVerdict;
 
 /**
  * The person's sign-in recovery as a transport sees it. `"adopted"` means a

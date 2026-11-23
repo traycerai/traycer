@@ -10,7 +10,7 @@ import {
 } from "../internal/cli-host-tokens";
 import {
   hostDoorRefusalCliError,
-  hostTokenFailureCliError,
+  refusalEndingCliError,
   signedOutCliError,
 } from "../internal/host-door-words";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/host-messenger";
@@ -228,16 +228,18 @@ async function deleteWithHostToken(
     clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
-  // A mint refusal that ends the command ends it with that refusal's line,
-  // while the host has admitted no open of it. Once one was, the delete may be
-  // running, and its own answer ends the command.
-  const stopRefusals = tokens.onRefusalEndingCommand(
-    (refusedHostId, failure) => {
-      if (refusedHostId !== hostId || admitted || ended.error !== null) return;
-      ended.error = hostTokenFailureCliError(failure);
+  // A mint refusal that ends the command ends it with the gate's line, decided
+  // in the same turn as the close, while the host has admitted no open of it.
+  // Once one was, the delete may be running, and its own answer ends the
+  // command.
+  const stopRefusals = tokens.onRefusalEndingCommand((evidence) => {
+    if (evidence.hostId !== hostId || admitted || ended.error !== null) return;
+    void tokens.refusalEndingCommandNow(hostId).then((ending) => {
+      if (ending === null || admitted || ended.error !== null) return;
+      ended.error = refusalEndingCliError(ending);
       client.close("host-token-refused");
-    },
-  );
+    });
+  });
   try {
     const attempt = await runDeleteCommand(worktreePath, ctx, client);
     if (ended.error !== null) throw ended.error;
@@ -712,7 +714,7 @@ export function fatalCloseToCliError(details: FatalErrorDetails): CliError {
   if (isReleasedSignInRefusal(details)) return fatalCloseByCode(details);
   return (
     namedTeamAdmissionCliError(details) ??
-    hostDoorRefusalCliError(details, false, () => fatalCloseByCode(details)) ??
+    hostDoorRefusalCliError(details, null, () => fatalCloseByCode(details)) ??
     localTeamAdmissionCliError(details) ??
     fatalCloseByCode(details)
   );

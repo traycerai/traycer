@@ -266,8 +266,6 @@ export class RemoteSession<
   StreamRegistry extends
     import("@traycer/protocol/framework/versioned-stream-rpc").VersionedStreamRpcRegistry,
 > extends ProtocolRemoteSession<RpcRegistry, StreamRegistry> {
-  private readonly credentialUpdate: CredentialUpdateGate;
-
   constructor(
     options:
       | RemoteSessionOptions<RpcRegistry, StreamRegistry>
@@ -275,15 +273,15 @@ export class RemoteSession<
   ) {
     let closed = false;
     const closeHooks: Array<() => void> = [];
-    const built = toProtocolSessionOptions(options, {
-      closed: () => closed,
-      onClose: (hook) => {
-        if (closed) hook();
-        else closeHooks.push(hook);
-      },
-    });
-    super(built.options);
-    this.credentialUpdate = built.credentialUpdate;
+    super(
+      toProtocolSessionOptions(options, {
+        closed: () => closed,
+        onClose: (hook) => {
+          if (closed) hook();
+          else closeHooks.push(hook);
+        },
+      }),
+    );
     // Caller close and terminal fatal both end here.
     this.onClosed(() => {
       closed = true;
@@ -302,12 +300,6 @@ export class RemoteSession<
         installRemoteTrafficDebugSurface();
       }
     }
-  }
-
-  override notifyBearerRotated(): void {
-    this.credentialUpdate(() => {
-      super.notifyBearerRotated();
-    });
   }
 }
 
@@ -338,18 +330,7 @@ function hostTokenOpenAuth(
 interface HostTokenSessionDial {
   readonly auth: RemoteSessionAuth;
   readonly grantProvider: AttemptGrantProvider;
-  readonly credentialUpdate: CredentialUpdateGate;
 }
-
-/**
- * Runs `send`, the protocol session's credential push, now or once what the
- * push needs first is done. `send` reads the bearer itself, at its write.
- */
-type CredentialUpdateGate = (send: () => void) => void;
-
-const SEND_NOW: CredentialUpdateGate = (send) => {
-  send();
-};
 
 /** The adapter's view of its own session's end. */
 interface SessionLifetime {
@@ -590,7 +571,6 @@ function createHostTokenRemoteSessionAuth(
   );
   return {
     grantProvider: tracking.grantProvider,
-    credentialUpdate: SEND_NOW,
     auth: {
       missingOpenAuthCause: "missing-host-token",
       readOpenAuth: () => {
@@ -771,7 +751,11 @@ function createReleasedSignOnSessionAuth(
         recovery
           .revalidateForReconnect(sequence.owner, null, stillAsked)
           .then((outcome) =>
-            outcome === "process-replaced" ? "network-error" : outcome,
+            outcome === "process-replaced"
+              ? "network-error"
+              : typeof outcome === "object"
+                ? "rejected"
+                : outcome,
           ),
       stillAsked,
     );
@@ -914,30 +898,7 @@ function createReleasedSignOnSessionAuth(
       },
     },
   };
-  /** The one row confirmation renewals during it share, while it runs. */
-  let updateConfirming = false;
-  // An update that would carry the sign-in waits for one read of the row, as
-  // an attach does; the push then reads its bearer from the row that read
-  // left. A failed or late read leaves the row last read.
-  const credentialUpdate: CredentialUpdateGate = (send) => {
-    if (updateConfirming) return;
-    if (confirmRow === null || !(plan.kind === "sign-in" && signInGoesNow())) {
-      send();
-      return;
-    }
-    updateConfirming = true;
-    void confirmRow({ current: () => !lifetime.closed() })
-      .catch(() => undefined)
-      .then(() => {
-        updateConfirming = false;
-        if (!lifetime.closed()) send();
-      });
-  };
-  return {
-    auth: sessionAuth,
-    grantProvider: tracking.grantProvider,
-    credentialUpdate,
-  };
+  return { auth: sessionAuth, grantProvider: tracking.grantProvider };
 }
 
 /**
@@ -979,12 +940,9 @@ function toProtocolSessionOptions<
     | RemoteSessionOptions<RpcRegistry, StreamRegistry>
     | PoolSessionOptions<RpcRegistry, StreamRegistry>,
   lifetime: SessionLifetime,
-): {
-  readonly options:
-    | ProtocolRemoteSessionOptions<RpcRegistry, StreamRegistry>
-    | ProtocolPoolSessionOptions<RpcRegistry, StreamRegistry>;
-  readonly credentialUpdate: CredentialUpdateGate;
-} {
+):
+  | ProtocolRemoteSessionOptions<RpcRegistry, StreamRegistry>
+  | ProtocolPoolSessionOptions<RpcRegistry, StreamRegistry> {
   const clientWiring = {
     onNegotiatedMethods: recordNegotiatedHostManifest,
     onNegotiatedStreamMethodVersions: recordNegotiatedStreamMethodVersions,
@@ -994,12 +952,9 @@ function toProtocolSessionOptions<
   if ("poolUrl" in options) {
     const { bearer, auth, ...coreOptions } = options;
     return {
-      options: {
-        ...coreOptions,
-        ...clientWiring,
-        auth: createClientPoolSessionAuth(bearer, auth),
-      },
-      credentialUpdate: SEND_NOW,
+      ...coreOptions,
+      ...clientWiring,
+      auth: createClientPoolSessionAuth(bearer, auth),
     };
   }
   const { hostToken, auth, door, releasedSignOn, ...coreOptions } = options;
@@ -1013,12 +968,9 @@ function toProtocolSessionOptions<
     lifetime,
   );
   return {
-    options: {
-      ...coreOptions,
-      ...clientWiring,
-      grantProvider: dial.grantProvider,
-      auth: dial.auth,
-    },
-    credentialUpdate: dial.credentialUpdate,
+    ...coreOptions,
+    ...clientWiring,
+    grantProvider: dial.grantProvider,
+    auth: dial.auth,
   };
 }

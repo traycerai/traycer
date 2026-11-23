@@ -2,16 +2,16 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import {
   hostDoorRefusalCliError,
-  hostTokenFailureCliError,
+  refusalEndingCliError,
 } from "../internal/host-door-words";
 import {
+  acquireCliSignIn,
   cliReleasedSignOn,
-  createCliHostTokens,
   observeHostInstance,
-  type CliHostTokenFailure,
-  type HostProcess,
-  type SignInRevalidator,
   type CliMintRefusalListener,
+  type CliRefusalEnding,
+  type HostProcess,
+  type SignInRejection,
 } from "../internal/cli-host-tokens";
 import type { DoorAdmissionRelease } from "../../../shared/host-transport/host-door-state";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
@@ -20,7 +20,9 @@ import {
   processReleasedHosts,
   type HostInstance,
   type ReleasedSignOn,
+  type SignInRefusal,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
+import type { StreamSignInVerdict } from "@traycer/protocol/host-transport/stream-session";
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
 import {
   hostStreamRpcRegistry,
@@ -37,12 +39,10 @@ import {
 import type { RoleAwarenessEvent } from "@traycer/protocol/host/agent/roles";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
-  MutableBearerLease,
   readLeaseBearer,
   type BearerSourceProvider,
 } from "../../../shared/auth/bearer-source";
 import type { HostCredentialMintFlow } from "../../../shared/host-transport/host-credential-mint-flow";
-import type { RevalidateOutcome } from "../../../shared/auth/bearer-revalidator";
 import type { HostTokenRecoveryOutcome } from "../../../shared/auth/host-token-lease";
 import {
   createProactiveRefreshScheduler,
@@ -83,10 +83,6 @@ import {
   writeStdout,
   writeStdoutForAck,
 } from "../runner/std-write";
-import {
-  createCliCredentialsStore,
-  createStoreBackedRevalidator,
-} from "../store/credentials-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
@@ -319,12 +315,14 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     await runInboxSubscription(
       client,
       // No host reported this refusal of a host-only token: the close is the
-      // released sign-in's own end, which no host-only token recovers.
-      (details) => {
+      // released sign-in's own end, which no host-only token recovers. It is
+      // a sign-in verdict only when the close says so.
+      (details, verdict) => {
         const owner = refusedBy.get(details);
-        return owner === undefined
-          ? Promise.resolve<RevalidateOutcome>("rejected")
-          : credential.recover(owner.hostId, details);
+        if (owner !== undefined) return credential.recover(owner.hostId, details);
+        return Promise.resolve<HostTokenRecoveryOutcome>(
+          verdict === null ? "rejected" : "sign-in-rejected",
+        );
       },
       // A refusal no door heard is the current stream's own end. One the door
       // heard is still the monitor's while its host process is the one
@@ -340,11 +338,18 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           watching,
         };
       },
-      () => credential.signInRejectedNow(),
+      (refusal) => credential.signInRejectionNow(refusal),
+      // A reported refusal is evidence; the gate decides, and the monitor ends
+      // in the same turn as its answer.
       (listener) =>
-        credential.onRefusalEndingCommand((hostId, failure) => {
-          if (endpoint?.hostId === hostId)
-            listener(failure, tookReleasedWay(hostId));
+        credential.onRefusalEndingCommand((evidence) => {
+          if (endpoint?.hostId !== evidence.hostId) return;
+          void credential
+            .refusalEndingNow(evidence.hostId)
+            .then((ending) => {
+              if (ending !== null && endpoint?.hostId === evidence.hostId)
+                listener(ending, tookReleasedWay(evidence.hostId));
+            });
         }),
       credential.presented,
       agentCredential,
@@ -382,8 +387,14 @@ interface MonitorCredential {
    * its mint began before now.
    */
   readonly admitted: (instance: HostInstance) => DoorAdmissionRelease;
-  /** See `CliHostTokens.signInRejectedNow`: the file is read first. */
-  readonly signInRejectedNow: () => Promise<boolean>;
+  /** See `CliHostTokens.signInRejectionNow`: the gate, after the file is read. */
+  readonly signInRejectionNow: (
+    refusal: SignInRefusal | null,
+  ) => Promise<SignInRejection | null>;
+  /** See `CliHostTokens.refusalEndingCommandNow`. */
+  readonly refusalEndingNow: (
+    hostId: string,
+  ) => Promise<CliRefusalEnding | null>;
   /** See `CliHostTokens.onRefusalEndingCommand`. */
   readonly onRefusalEndingCommand: (
     listener: CliMintRefusalListener,
@@ -424,29 +435,15 @@ async function signInMonitorCredential(
     agentId: target.agentId,
     epicId: target.epicId,
   });
-  const lease = new MutableBearerLease(auth.token, auth.userId);
-  // Refreshes of the sign-in (when authn refuses it for a mint, and ahead of
-  // its TTL) route through the locked `rotate` (§7) so a monitor refresh and a
-  // concurrent desktop refresh can never double-spend the single-use refresh
-  // token. One store for the monitor's lifetime - its background continuation
-  // timer can land a `commit-failed` spend while the monitor keeps running -
-  // disposed by `stopUpkeep`.
-  const store = createCliCredentialsStore();
-  // `signal: null`: the monitor's revalidator lives as long as the command
-  // itself - there is no earlier deadline to cancel a rotation against.
-  const revalidator: SignInRevalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-    signal: null,
-  });
-  const hostTokens = createCliHostTokens({
-    lease,
-    refresh: () => revalidator.rotateSignIn(),
-    adoptStored: () => revalidator.adoptStoredSignIn(),
-    signal: null,
-  });
-  // The tokens on disk, so the first dial presents the held one.
-  await hostTokens.whenLoaded();
+  // The person's one sign-in and token instance in this process. Refreshes of
+  // the sign-in (when authn refuses it for a mint, and ahead of its TTL) route
+  // through its locked `rotate` (§7), so a monitor refresh and a concurrent
+  // desktop refresh can never double-spend the single-use refresh token.
+  // `signal: null`: held as long as the command itself, released by
+  // `stopUpkeep`. The tokens on disk are read by then, so the first dial
+  // presents the held one.
+  const signIn = await acquireCliSignIn(auth, null);
+  const { lease, tokens: hostTokens } = signIn;
   let refreshScheduler: { readonly stop: () => void } | null = null;
   return {
     presented: "host-token",
@@ -457,7 +454,8 @@ async function signInMonitorCredential(
     recover: (hostId, details) =>
       hostTokens.streamRecovery(hostId).revalidateRefused(details, () => true),
     admitted: (instance) => hostTokens.admitted(instance),
-    signInRejectedNow: () => hostTokens.signInRejectedNow(null),
+    signInRejectionNow: (refusal) => hostTokens.signInRejectionNow(refusal),
+    refusalEndingNow: (hostId) => hostTokens.refusalEndingCommandNow(hostId),
     onRefusalEndingCommand: (listener) =>
       hostTokens.onRefusalEndingCommand(listener),
     releasedSignOn: cliReleasedSignOn(lease, hostTokens),
@@ -511,8 +509,7 @@ async function signInMonitorCredential(
     },
     stopUpkeep: () => {
       refreshScheduler?.stop();
-      hostTokens.dispose();
-      store.dispose();
+      signIn.dispose();
     },
   };
 }
@@ -530,7 +527,8 @@ function capabilityMonitorCredential(
     bearer: () => capability.streamBearer,
     recover: () => capability.streamRecovery(),
     admitted: () => () => undefined,
-    signInRejectedNow: () => Promise.resolve(false),
+    signInRejectionNow: () => Promise.resolve(null),
+    refusalEndingNow: () => Promise.resolve(null),
     onRefusalEndingCommand: () => () => undefined,
     hostCredentialMint: null,
     releasedSignOn: null,
@@ -543,6 +541,7 @@ type InboxTarget = { readonly agentId: string; readonly epicId: string };
 
 type InboxRecovery = (
   details: FatalErrorDetails,
+  verdict: StreamSignInVerdict | null,
 ) => Promise<HostTokenRecoveryOutcome>;
 
 /**
@@ -558,7 +557,7 @@ interface InboxRefusal {
 type InboxRefusalOf = (details: FatalErrorDetails) => InboxRefusal | null;
 
 type InboxMintRefusals = (
-  listener: (failure: CliHostTokenFailure, tookReleasedWay: boolean) => void,
+  listener: (ending: CliRefusalEnding, tookReleasedWay: boolean) => void,
 ) => () => void;
 
 /** The released monitor's line for a sign-in authn rejected. */
@@ -578,8 +577,11 @@ const SESSION_EXPIRED_LINE =
  *   - `network-error` → transient; keep the bearer and re-subscribe after a
  *                       delay (don't kill a long-running monitor on a flaky link);
  *   - `rejected`      → terminal, with the door's line: sign-in advice only
- *                       when `signInRejectedNow` says this machine is signed
- *                       out in fact.
+ *                       when the gate (`signInRejectionNow`) judges the
+ *                       stored sign-in rejected.
+ *   - `sign-in-rejected` → a sign-in verdict, from a host-token mint or the
+ *                       released close's typed verdict: terminal only while
+ *                       the gate still judges it; otherwise a redial.
  * Once the host process that refused has been replaced, or the monitor has
  * moved to another host, only a `rotated` step still counts (per host id) and
  * a signed-out person still ends it; otherwise the monitor re-subscribes after
@@ -598,7 +600,9 @@ function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   recover: InboxRecovery,
   refusalOf: InboxRefusalOf,
-  signedOutNow: () => Promise<boolean>,
+  signInRejection: (
+    refusal: SignInRefusal | null,
+  ) => Promise<SignInRejection | null>,
   mintRefusals: InboxMintRefusals,
   presented: "host-token" | "agent-capability",
   credential: AgentCommandCredential,
@@ -763,7 +767,7 @@ function runInboxSubscription(
           epicId: target.epicId,
         });
         fail(
-          hostDoorRefusalCliError(details, false, hostClosed) ??
+          hostDoorRefusalCliError(details, null, hostClosed) ??
             localTeamAdmissionCliError(details) ??
             hostClosed(),
         );
@@ -771,7 +775,8 @@ function runInboxSubscription(
       }
       // The recovery never throws (it maps failures to an outcome), so this
       // await can't reject the swallowed handler promise into a hang.
-      const outcome = await recover(details);
+      const verdict = reason.signInVerdict;
+      const outcome = await recover(details, verdict);
       if (settled) {
         return;
       }
@@ -881,11 +886,16 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
-      // The exit is judged after the verdict read, against the process and
-      // host watched then: a sign-in saved elsewhere meanwhile is not signed
-      // out, and a process replaced meanwhile is not the one that refused.
-      // Nothing read before the await decides after it.
-      const signedOut = await signedOutNow();
+      // The exit is judged by the gate, against the process and host watched
+      // then: a sign-in saved elsewhere meanwhile is not signed out, and a
+      // process replaced meanwhile is not the one that refused. A typed verdict
+      // is judged as the sign-in it names. Nothing read before the await
+      // decides after it.
+      const rejection = await signInRejection(
+        outcome === "sign-in-rejected" && verdict !== null
+          ? { signIn: verdict.signIn, order: null }
+          : null,
+      );
       if (settled) return;
       const refusalNow = refusalOf(details);
       const leftNow = refusalNow !== null && !refusalNow.current;
@@ -893,7 +903,7 @@ function runInboxSubscription(
       // or a purchase on it landed) is no terminal effect: the monitor redials
       // on the live sign-in after the ordinary delay, as after a transient,
       // and counts nothing.
-      if (outcome === "sign-in-rejected" && !signedOut) {
+      if (outcome === "sign-in-rejected" && rejection === null) {
         if (moved(refusalNow)) return;
         logger.debug("Monitor sign-in verdict withdrawn; retry scheduled", {
           environment: config.environment,
@@ -904,7 +914,7 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
-      if (leftNow && !signedOut) {
+      if (leftNow && rejection === null) {
         // A replaced process's host-tied rejection ends nothing by itself, but
         // counts one step toward the same bound.
         if (
@@ -921,7 +931,7 @@ function runInboxSubscription(
       if (isReleasedSignInRefusal(details)) {
         fail(
           new Error(
-            signedOut
+            rejection !== null
               ? SESSION_EXPIRED_LINE
               : `traycer monitor: ${details.reason} — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
           ),
@@ -929,7 +939,8 @@ function runInboxSubscription(
         return;
       }
       fail(
-        hostDoorRefusalCliError(details, signedOut, hostClosed) ?? hostClosed(),
+        hostDoorRefusalCliError(details, rejection, hostClosed) ??
+          hostClosed(),
       );
     };
 
@@ -940,17 +951,18 @@ function runInboxSubscription(
     readerClosed.addEventListener("abort", stopForClosedReader, {
       once: true,
     });
-    stopMintRefusals = mintRefusals((failure, tookReleasedWay) => {
+    stopMintRefusals = mintRefusals((ending, tookReleasedWay) => {
       logger.warn("Monitor host-only token mint refused", {
         environment: config.environment,
-        failure: failure.kind,
+        failure:
+          ending.kind === "sign-in-rejected" ? ending.kind : ending.failure.kind,
         agentId: target.agentId,
         epicId: target.epicId,
       });
       fail(
-        failure.kind === "sign-in-rejected" && tookReleasedWay
+        ending.kind === "sign-in-rejected" && tookReleasedWay
           ? new Error(SESSION_EXPIRED_LINE)
-          : hostTokenFailureCliError(failure),
+          : refusalEndingCliError(ending),
       );
     });
     subscribe();
