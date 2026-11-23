@@ -197,6 +197,8 @@ const mocks = vi.hoisted(() => {
         return {
           outcome,
           installed: outcome === "rotated" ? args.lease.getBearerToken() : null,
+          refused: outcome === "rejected" ? args.lease.getBearerToken() : null,
+          accepted: null,
         };
       },
     }),
@@ -375,7 +377,7 @@ function makeOptions(
     auth: {
       token: "test-bearer-token",
       authnBaseUrl: "https://authn.test",
-      userId: "user-1",
+      userId: caseUserId,
     },
     deadlineMs: 2_000,
     progress: () => undefined,
@@ -442,13 +444,19 @@ function fatalReason(reason: string, code: string): StreamCloseReason {
 
 let clearIntervalSpy: MockInstance;
 
+// A person no earlier case used: the process-scope judge of a sign-in is kept per person.
+let caseUserId = "";
+let caseUserCount = 0;
+
 beforeEach(() => {
+  caseUserCount += 1;
+  caseUserId = `user-${caseUserCount}`;
   mocks.callOrder = [];
   mocks.sessions = [];
   mocks.capturedOptions = null;
   mocks.hostTokenTable = new Map([
     [
-      "user-1",
+      caseUserId,
       new Map([
         [
           "host-1",
@@ -750,7 +758,7 @@ describe("provisionInstalledHostCredential", () => {
     });
     mocks.hostTokenTable = new Map([
       [
-        "user-1",
+        caseUserId,
         new Map([
           [hostA, held("token-for-a")],
           [hostB, held("token-for-b")],
@@ -770,16 +778,15 @@ describe("provisionInstalledHostCredential", () => {
         void (async (): Promise<void> => {
           const options = capturedClientOptions();
           // A dial to host A is waiting; the poll now reads host B's pid file.
-          const readsBefore = mocks.readHostPidMetadataMock.mock.calls.length;
-          mocks.readHostPidMetadataMock.mockResolvedValue({
-            ...localHostMetadata(),
-            hostId: hostB,
+          // The test goes on at the poll's second read of it: an event, not a time budget.
+          const secondRead = createDeferred<void>();
+          let readsOfB = 0;
+          mocks.readHostPidMetadataMock.mockImplementation(async () => {
+            readsOfB += 1;
+            if (readsOfB === 2) secondRead.resolve();
+            return { ...localHostMetadata(), hostId: hostB };
           });
-          await vi.waitFor(() =>
-            expect(
-              mocks.readHostPidMetadataMock.mock.calls.length,
-            ).toBeGreaterThanOrEqual(readsBefore + 2),
-          );
+          await secondRead.promise;
           // The poll reads again only after its previous read is recorded, so
           // the second read after the change proves the first was.
           presented.a = options.bearer(hostA)?.getBearerToken() ?? null;

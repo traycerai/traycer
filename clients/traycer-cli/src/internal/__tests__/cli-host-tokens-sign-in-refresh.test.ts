@@ -25,7 +25,9 @@ import type { SignInRotationResult } from "../../store/credentials-store";
 // and answered by the test, and a fake credentials refresh that counts its
 // rotations and rotates the lease as the credentials store does.
 
-const USER_ID = "user-1";
+// A person no earlier case used: the process-scope judge of a sign-in is kept per person.
+let USER_ID = "";
+let userCount = 0;
 const SIGN_IN_A = "sign-in-a";
 const SIBLING_SIGN_IN = "sign-in-sibling";
 const ROTATED_SIGN_IN = "sign-in-rotated";
@@ -152,6 +154,8 @@ beforeEach(() => {
   createdSources.splice(0);
   harness.table = new Map();
   hostCount += 1;
+  userCount += 1;
+  USER_ID = `user-${userCount}`;
   // A host process's flights and memory are kept per host id.
   hostId = `55555555-5555-4555-8555-${String(hostCount).padStart(12, "0")}`;
   processReleasedHosts.forgetAll();
@@ -173,7 +177,12 @@ function countingRefresh(lease: MutableBearerLease): {
     refresh: async () => {
       rotations += 1;
       lease.rotate(rotatedTo(rotations));
-      return { outcome: "rotated", installed: rotatedTo(rotations) };
+      return {
+        outcome: "rotated",
+        installed: rotatedTo(rotations),
+        refused: null,
+        accepted: rotatedTo(rotations),
+      };
     },
     rotations: () => rotations,
     rotatedTo,
@@ -442,11 +451,21 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
           // continuation of the rotation runs.
           lease.rotate(ROTATED_SIGN_IN);
           lease.rotate(SIBLING_SIGN_IN);
-          return { outcome: "rotated", installed: ROTATED_SIGN_IN };
+          return {
+            outcome: "rotated",
+            installed: ROTATED_SIGN_IN,
+            refused: null,
+            accepted: ROTATED_SIGN_IN,
+          };
         }
         await refreshOfCHeld;
         lease.rotate(REFRESHED_SIGN_IN);
-        return { outcome: "rotated", installed: REFRESHED_SIGN_IN };
+        return {
+          outcome: "rotated",
+          installed: REFRESHED_SIGN_IN,
+          refused: null,
+          accepted: REFRESHED_SIGN_IN,
+        };
       },
       adoptStored: async () => undefined,
       signal: null,
@@ -607,7 +626,12 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
         lease,
         signal: null,
       }).rotateSignIn(),
-    ).resolves.toEqual({ outcome: "adopted", installed: null });
+    ).resolves.toEqual({
+      outcome: "adopted",
+      installed: null,
+      refused: null,
+      accepted: null,
+    });
     expect(lease.getBearerToken()).toBe(SIBLING_SIGN_IN);
 
     // The read, begun before, is released: its snapshot is older than the lease.
@@ -709,7 +733,9 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       incompatibleMethods: null,
       upgradeGuidance: null,
     };
-    const recovering = tokens.streamRecovery(hostId).revalidateRefused(refusal);
+    const recovering = tokens
+      .streamRecovery(hostId)
+      .revalidateRefused(refusal, () => true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
     expect(harness.mints[0]?.signIn).toBe(SIGN_IN_A);
 

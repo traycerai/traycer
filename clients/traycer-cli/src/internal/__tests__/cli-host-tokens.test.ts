@@ -118,6 +118,8 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
           return {
             outcome,
             installed: outcome === "rotated" ? lease.getBearerToken() : null,
+            refused: outcome === "rejected" ? lease.getBearerToken() : null,
+            accepted: outcome === "rotated" ? lease.getBearerToken() : null,
           };
         },
       }),
@@ -155,7 +157,13 @@ const params = {
   scope: "user" as const,
 };
 
+// A person no earlier case used: the process-scope judge of a sign-in is kept per person.
+let userId = "";
+let userCount = 0;
+
 beforeEach(() => {
+  userCount += 1;
+  userId = `user-${userCount}`;
   state.mintOutcomes.length = 0;
   state.table = new Map();
   state.requests.mockReset();
@@ -165,7 +173,7 @@ beforeEach(() => {
   resolveAuthMock.mockResolvedValue({
     token: "signin",
     authnBaseUrl: "https://authn.test",
-    userId: "user-1",
+    userId,
   });
 });
 
@@ -241,8 +249,13 @@ describe("createCliHostTokens refusals that end a command", () => {
     try {
       nameReason("host-same-millisecond");
       const tokens = createCliHostTokens({
-        lease: new MutableBearerLease("signin", "user-1"),
-        refresh: async () => ({ outcome: "network-error", installed: null }),
+        lease: new MutableBearerLease("signin", userId),
+        refresh: async () => ({
+          outcome: "network-error",
+          installed: null,
+          refused: null,
+          accepted: null,
+        }),
         adoptStored: async () => undefined,
         signal: null,
       });
@@ -253,7 +266,9 @@ describe("createCliHostTokens refusals that end a command", () => {
       });
       // An open is admitted and its connection leaves; a mint then starts in
       // the same millisecond and authn has no row for it.
-      tokens.admitted("host-same-millisecond")();
+      tokens.admitted(
+        processReleasedHosts.currentInstance("host-same-millisecond"),
+      )();
       state.mintOutcomes.push({ kind: "not-admitted" });
 
       await tokens.mintFresh("host-same-millisecond", null);
@@ -269,8 +284,13 @@ describe("createCliHostTokens refusals that end a command", () => {
     processReleasedHosts.observeInstance(hostId, "process-a");
     const ending: string[] = [];
     const tokens = createCliHostTokens({
-      lease: new MutableBearerLease("signin", "user-1"),
-      refresh: async () => ({ outcome: "network-error", installed: null }),
+      lease: new MutableBearerLease("signin", userId),
+      refresh: async () => ({
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
       adoptStored: async () => undefined,
       signal: null,
     });

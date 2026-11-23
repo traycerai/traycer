@@ -20,7 +20,10 @@ import { createCliCredentialsStore } from "../../store/credentials-store";
 import { runMonitor } from "../monitor";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
-const USER_ID = "monitor-test-user";
+// A person no earlier case used: the process-scope judge of a sign-in is kept per person, so
+// cases that share sign-in values stay apart by their person.
+let USER_ID = "";
+let userCount = 0;
 let hostCount = 0;
 
 /** A computer id no earlier test used: a named reason is remembered per computer for the whole process. */
@@ -107,6 +110,8 @@ const monitorHarness = vi.hoisted(() => {
       realRevalidator: false,
       /** What the scripted credentials store answered each `rotate`, in order: the first is a sibling's pair adopted, later ones refresh. */
       rotations: [] as string[],
+      /** What the scripted credentials store reads: the pair its last `rotate` answered, `null` before one. */
+      scriptedFile: null as StoredCredentials | null,
       /** The command's proactive upkeep, as its scheduler was given it: run when a test chooses, not at its own time. */
       upkeep: null as (() => Promise<unknown>) | null,
       /** The stored sign-in the command holds, as its revalidator was given it. */
@@ -117,6 +122,13 @@ const monitorHarness = vi.hoisted(() => {
       refreshed: [] as string[],
       /** When set, a real rotation is held after its locked result, until the test releases it. */
       rotationHold: null as {
+        readonly reached: () => void;
+        readonly release: Promise<void>;
+      } | null,
+      /** When set, the next adopting read of the scripted revalidator is held until the test releases it; one read takes it. */
+      adoptHold: null as {
+        /** Adopting reads let through before the one held. */
+        skip: number;
         readonly reached: () => void;
         readonly release: Promise<void>;
       } | null,
@@ -270,15 +282,21 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
             monitorHarness.state.rotations.push(
               adopted ? "superseded" : "applied",
             );
+            const token = adopted
+              ? "adopted-expired-token"
+              : monitorHarness.state.refreshedSignIn;
+            monitorHarness.state.scriptedFile = {
+              token,
+              refreshToken: `rt-${token}`,
+              savedAt: "2026-01-01T00:00:00.000Z",
+              user: { id: USER_ID, email: "user@example.test", name: "User" },
+            };
             return {
               outcome: adopted ? "superseded" : "applied",
-              credentials: {
-                token: adopted
-                  ? "adopted-expired-token"
-                  : monitorHarness.state.refreshedSignIn,
-              },
+              credentials: { token },
             };
           },
+          read: async () => monitorHarness.state.scriptedFile,
         };
       const real = actual.createCliCredentialsStore();
       const hold = monitorHarness.state.rotationHold;
@@ -302,16 +320,42 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
         ? actual.createStoreBackedRevalidator(args)
         : {
             revalidateCurrentContext: async () => monitorHarness.state.refresh,
-            adoptStoredSignIn: async () => undefined,
+            adoptStoredSignIn: async () => {
+              const hold = monitorHarness.state.adoptHold;
+              if (hold === null) return;
+              if (hold.skip > 0) {
+                hold.skip -= 1;
+                return;
+              }
+              monitorHarness.state.adoptHold = null;
+              hold.reached();
+              await hold.release;
+            },
             // The fake rotates no lease: a rotation it accepts installed the
             // sign-in the lease holds, which the next mint is sent with.
-            rotateSignIn: async () => ({
-              outcome: monitorHarness.state.refresh,
-              installed:
-                monitorHarness.state.refresh === "rotated"
-                  ? args.lease.getBearerToken()
-                  : null,
-            }),
+            rotateSignIn: async () => {
+              const outcome = monitorHarness.state.refresh;
+              if (outcome === "rotated")
+                return {
+                  outcome,
+                  installed: args.lease.getBearerToken(),
+                  refused: null,
+                  accepted: args.lease.getBearerToken(),
+                };
+              if (outcome === "rejected")
+                return {
+                  outcome,
+                  installed: null,
+                  refused: args.lease.getBearerToken(),
+                  accepted: null,
+                };
+              return {
+                outcome,
+                installed: null,
+                refused: null,
+                accepted: null,
+              };
+            },
           };
     },
   };
@@ -539,6 +583,10 @@ beforeEach(() => {
   monitorHarness.state.pid = 1;
   monitorHarness.state.startedAt = "2026-01-01T00:00:00.000Z";
   monitorHarness.state.hostId = nextHostId();
+  userCount += 1;
+  USER_ID = `monitor-test-user-${userCount}`;
+  monitorHarness.state.scriptedFile = null;
+  monitorHarness.state.adoptHold = null;
   monitorHarness.state.grantResponse = () =>
     Promise.resolve(new Response("authn unavailable", { status: 503 }));
   processReleasedHosts.forgetAll();
@@ -1237,6 +1285,118 @@ describe("traycer monitor local released-host sign-in", () => {
       });
     });
 
+    /**
+     * Four laps, each a host-token refusal whose mint authn refuses (a known refusal), with the host
+     * replaced while the `skipReads + 1`th adopting read after that refusal is held, then released.
+     */
+    async function lapsWithHostReplacedInRead(
+      skipReads: number,
+    ): Promise<void> {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      monitorHarness.state.refresh = "rotated";
+      const mints = holdMints();
+      startMonitor();
+      let answered = 0;
+      for (let attempt = 0; attempt < 4 && ended === null; attempt += 1) {
+        // Each lap's redial comes on the stream's own cadence: advance to it, answering what is asked.
+        for (
+          let step = 0;
+          step < 400 &&
+          ended === null &&
+          monitorHarness.sockets.length <= attempt;
+          step += 1
+        ) {
+          await vi.advanceTimersByTimeAsync(250);
+          if (monitorHarness.grantHosts.length > answered) {
+            mints.answer(answered, grantedToken(`fresh-${answered}`));
+            answered += 1;
+          }
+        }
+        if (ended !== null) break;
+        const socket = await socketAt(attempt);
+        await readOpen(socket);
+        socket.fireFrame(fatal("token_expired", "host token expired"));
+        await vi.waitFor(
+          () => expect(monitorHarness.grantHosts).toHaveLength(answered + 1),
+          WAIT,
+        );
+        // The refusal is the person's sign-in refused: its recovery reads the file first, held here.
+        let reachedHold = false;
+        let releaseHold = (): void => undefined;
+        monitorHarness.state.adoptHold = {
+          skip: skipReads,
+          reached: () => {
+            reachedHold = true;
+          },
+          release: new Promise<void>((resolve) => {
+            releaseHold = resolve;
+          }),
+        };
+        mints.answer(answered, new Response("rejected", { status: 401 }));
+        answered += 1;
+        // The recovery waits in its read, or (nothing to wait on) has gone on to ask again.
+        await vi.waitFor(
+          () =>
+            expect(
+              reachedHold || monitorHarness.grantHosts.length > answered,
+            ).toBe(true),
+          WAIT,
+        );
+        await replaceHostProcess();
+        releaseHold();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      for (let step = 0; step < 400 && ended === null; step += 1) {
+        await vi.advanceTimersByTimeAsync(250);
+        if (monitorHarness.grantHosts.length > answered) {
+          mints.answer(answered, grantedToken(`fresh-${answered}`));
+          answered += 1;
+        }
+      }
+
+      expect(ended?.error).toMatchObject({
+        message: expect.stringContaining("session rejected after 4 refreshes"),
+      });
+    }
+
+    it("ends on the refresh bound after the same laps when the host is replaced in the tracker's read after each known refusal (owner-mismatch path)", async () => {
+      await lapsWithHostReplacedInRead(0);
+    });
+
+    it("ends on the refresh bound after the same laps when the host is replaced in the recovery's own read after each counted known refusal (isCurrent re-check)", async () => {
+      await lapsWithHostReplacedInRead(1);
+    });
+
+    it("keeps retrying through four laps whose mints fail with an outage, and does not end on the refresh bound", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      const mints = holdMints();
+      startMonitor();
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        // Each lap's redial comes on the stream's own cadence, which grows: advance to it.
+        for (
+          let step = 0;
+          step < 400 && monitorHarness.sockets.length <= attempt;
+          step += 1
+        ) {
+          await vi.advanceTimersByTimeAsync(250);
+        }
+        const socket = await socketAt(attempt);
+        await readOpen(socket);
+        socket.fireFrame(fatal("token_expired", "host token expired"));
+        await vi.waitFor(
+          () => expect(monitorHarness.grantHosts).toHaveLength(attempt + 1),
+          WAIT,
+        );
+        // The process is the same one: only authn is unreachable.
+        mints.answer(attempt, new Response("unavailable", { status: 503 }));
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(ended).toBeNull();
+      expect(await outcomeOf()).toBe("running");
+      expect(monitorHarness.exits).toEqual([]);
+    });
+
     it("ends for a replaced process when the person's sign-in itself is rejected", async () => {
       holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
       monitorHarness.state.refresh = "rejected";
@@ -1252,6 +1412,23 @@ describe("traycer monitor local released-host sign-in", () => {
       await replaceHostProcess();
 
       mints.answer(0, new Response("rejected", { status: 401 }));
+
+      // The same recovery asks again for the replacement at once: its own authn request is refused too, and so is the refresh.
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(2),
+        WAIT,
+      );
+      mints.answer(1, new Response("rejected", { status: 401 }));
+      // The lap lost to the replacement is counted and the monitor re-subscribes after its own retry delay.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const replacement = await socketAt(1);
+      await readOpen(replacement);
+      replacement.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(3),
+        WAIT,
+      );
+      mints.answer(2, new Response("rejected", { status: 401 }));
 
       await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
       expect(ended?.error).toMatchObject({
