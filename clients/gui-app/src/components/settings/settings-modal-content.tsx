@@ -41,13 +41,13 @@ import { CreditsSettingsPanel } from "@/components/settings/panels/credits-setti
 import { SandboxesSettingsPanel } from "@/components/settings/environment/sandboxes-page-slot";
 import { EnvironmentPickUpkeep } from "@/components/settings/environment-picker";
 import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
+import { PageOrNotOnComputer } from "@/components/settings/environment/page-not-on-computer";
 import { StorageSettingsPanel } from "@/components/settings/environment/storage-settings-panel";
 import { MembersSettingsPanel } from "@/components/settings/environment/members-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
-import { useDrawnSection } from "@/components/settings/personal/use-old-host-local-pick";
 import "./settings-search.css";
 
 export interface SettingsModalContentProps {
@@ -144,10 +144,15 @@ const SETTINGS_PANELS = {
   members: MembersSettingsPanel,
 } satisfies Record<SettingsSectionId, () => ReactNode>;
 
+/**
+ * The one place every road to a page ends: a link, the palette, search, a
+ * deep link, a remembered route, the default pick and a pick change all render
+ * `section` here, and its body answers for the pick (`useSectionAnswer`).
+ */
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
-  const section = useDrawnSection(props.section);
+  const { section } = props;
   // The one mount point for the settings-search reveal watcher, and the reason
   // it sits here rather than in either surface: both the modal and the routed
   // tab render their panel THROUGH this function, so one watcher covers both
@@ -157,12 +162,14 @@ export function SettingsPanelForSection(props: {
   return (
     <SettingsSectionContext value={section}>
       <EnvironmentPickUpkeep />
-      {/* Outside the frame: a Local pick's offer page reads no configuration. */}
-      <LocalMovePageOr section={section}>
-        <PersonalPageFrame section={section}>
-          <Panel />
-        </PersonalPageFrame>
-      </LocalMovePageOr>
+      <PageOrNotOnComputer section={section}>
+        {/* Outside the frame: a Local pick's offer page reads no configuration. */}
+        <LocalMovePageOr section={section}>
+          <PersonalPageFrame section={section}>
+            <Panel />
+          </PersonalPageFrame>
+        </LocalMovePageOr>
+      </PageOrNotOnComputer>
     </SettingsSectionContext>
   );
 }

@@ -230,14 +230,22 @@ function noScopedHostWrite(): void {
 }
 
 export function usePersonalHostScope(): HostScope {
-  const pick = useEnvironmentPick();
-  const localHostId = pick.kind === "local" ? pick.hostId : null;
+  return usePickHostScope(useEnvironmentPick());
+}
+
+/** The host `pick`'s pages read through: a Local row's computer, else the window's. */
+export function usePickHostScope(pick: EnvironmentPick): HostScope {
+  return useHostScopeForHostId(pick.kind === "local" ? pick.hostId : null);
+}
+
+/** A read-only scope on `hostId`, or on the window's host for `null`. */
+export function useHostScopeForHostId(hostId: string | null): HostScope {
   const selection = useMemo(
     (): HostScopeSelection => ({
-      scopedHostId: localHostId,
+      scopedHostId: hostId,
       setScopedHostId: noScopedHostWrite,
     }),
-    [localHostId],
+    [hostId],
   );
   return useHostScopeFor(selection);
 }

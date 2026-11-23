@@ -945,9 +945,10 @@ Account; the rest is the app itself.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
   Permissions, Memories (id `agent-memories`), Agents (id `agents`:
   tabs Selection guide and Definitions), Model routing, Variables & shells
-  (id `shell`), Secrets, Sandboxes, Storage, and Members on a team; a Local
-  row shows only Providers, Permissions, Agents,
-  Model routing, Variables & shells and Secrets. Browser agent access is the
+  (id `shell`), Secrets, Sandboxes, Storage, and Members on a team; Personal
+  and a Local row list every one of these but Members. The kind of pick alone
+  decides the rows (`environmentSectionShown`), so the rail never changes
+  shape when a host answers. Browser agent access is the
   Browser tab of Permissions (a region below the policy on a team, whose page
   has no tabs). `agent-definitions`,
   `browser-agent-access` and `machine-setup` are retired
@@ -1396,31 +1397,30 @@ is one more thing to skip past.
 
 Environment picker names also wrap in full. A computer whose host serves no
 `environment.status` (a released host from before the Environment group) gets
-the not-moved Local row, “its own settings, not in Personal yet”, with no Move
-verb, and the window opens on it. Its pages are that host's own and editable,
-as that release drew them (`HostOwnPageFrame`): only Providers, Permissions,
-Agents (the guide alone), Model routing and Variables & shells. No other page
-is reached: search and the command palette list none (the palette reads the
-window host's manifest while nothing is picked and no default is stored, so it
-lists none before Settings has opened either), picking the row moves to
-Providers, and a link, a deep link, a remembered route or a window that opens
-on the row draws Providers where the other page was named, so the page never
-mounts (`SettingsPanelForSection`), and the rail highlights Providers then
-(`useDrawnSection`). Every other Environment section, Machine setup and the
-retired ones included, is drawn as Providers too (`oldHostSectionShown`). The
-phone crumb and the palette's current-page check read the page drawn. In-app
-entries to a page the pick lacks are not offered: Providers' “Open Secrets”
-and the secret-grant card's Secrets button (`useSectionOffered`, over
-`pickOffersSection`, the one predicate the rail and `moveEnvironmentPick` use
-as well). Getting started's Secrets card resets the pick to the window's
-default before it opens Secrets, so it asks about that default
-(`useDefaultOffersSection`), not the pick in effect: in an old host's window it
-is absent whatever the pick is, and leaves the checklist and its count. The
-pick is never switched on the person's behalf. A Personal pick is never
-touched. The picker is given the section a link named, not the one drawn,
-so picking Personal after a link to Secrets opens Secrets. While the window
-host's handshake has not arrived, the rail still lists every row, as it did
-before; they drop once it lands. A host
+a Local row reading “its own settings, update to move to Personal”
+(`LOCAL_ROW_OLD_HOST`), with no Move verb, and the window opens on it. Its pages
+are that host's own and editable, as that release drew them
+(`HostOwnPageFrame`): Providers, Permissions, Agents (the guide alone), Model
+routing and Variables & shells (`oldHostSectionShown`). The rail, search and the
+command palette list the same rows as for any Local pick. Every road (a rail
+row, a link, the palette, search, a deep link, a remembered route, a pick
+change) ends at the section it names, and the surface never moves: the URL,
+heading, rail highlight and phone crumb all name that section. Its body
+answers in place (`SettingsPanelForSection`): the page, “Connecting to
+{computer}…” while the picked computer has not answered, or the not-available
+card, “Not on {computer}” · “Update {computer} to use {page}.” with Update now
+where an update applies, or “{computer} isn't connected to this app.” for a
+computer the window's host list does not name. Members under a non-team pick
+reads “Only a team has members”; a person removed from the team they were
+reading stays on that section under Personal. In-app links are always
+offered: Providers' “Open Secrets” and the secret-grant card's Secrets
+button open Secrets, and its body answers. Getting started's Secrets card
+resets the pick to the window's default before it opens Secrets, so it asks
+whether that default serves Secrets
+(`useSectionServed(useDefaultEnvironmentPick(), "secrets") === "served"`), not
+the pick in effect: absent while the default is unknown, absent for an old
+host's Local default, and never shown and then taken away. The pick is never
+switched on the person's behalf. A Personal pick is never touched. A host
 whose `environment.status` is 1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
 
 **Nothing in the host group is local-only any more.** Shell and Diagnostics

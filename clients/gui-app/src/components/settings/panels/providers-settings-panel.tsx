@@ -140,7 +140,6 @@ type ProviderId = ProviderCliState["providerId"];
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
-import { useSectionOffered } from "@/components/settings/personal/use-old-host-local-pick";
 import { EnvironmentProviderMcpTab } from "@/components/settings/environment/environment-provider-mcp-tab";
 import {
   EnvironmentProviderSkillsTab,
@@ -644,10 +643,6 @@ function ProvidersSettingsPanelInner({
  * resolve the ambient host instead of the one the page names.
  */
 function OpenSecretsLink(): ReactNode {
-  // Not offered where the pick draws no Secrets page: the press would only
-  // change the URL.
-  const offered = useSectionOffered("secrets");
-  if (!offered) return null;
   return (
     <Button
       type="button"

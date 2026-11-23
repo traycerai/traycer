@@ -9,7 +9,7 @@ import {
   type LocalRowVerb,
 } from "@/components/settings/environment/local-row-cohort";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import { LOCAL_ROW_NOT_MOVED } from "@/components/settings/move/cohort-rows";
+import { LOCAL_ROW_OLD_HOST } from "@/components/settings/move/cohort-rows";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   PERSONAL_PICK,
@@ -70,8 +70,8 @@ export function isEnvironmentComputer(
  * and its wording comes from those planes (`localRowCohort`). An unfinished
  * setup with no known configuration keeps a separate setup row, so the person
  * can still open the computer and finish or retry it. A host that serves
- * no `environment.status` runs its own settings and has nothing to move from
- * here: its Local row reads as not moved, with no verb. A host whose
+ * no `environment.status` runs its own settings and cannot move until it is
+ * updated: its Local row says so, with no verb. A host whose
  * `environment.status` is 1.0 reports no planes at all, so one that has not
  * reached `applying` gets the greyed `needs an update` row instead; one that
  * has is already shared and has no row. A host that has not answered, or not
@@ -87,7 +87,7 @@ export function localPickerRow(
       kind: "local",
       hostId: host.hostId,
       name: host.name,
-      subtitle: LOCAL_ROW_NOT_MOVED,
+      subtitle: LOCAL_ROW_OLD_HOST,
       verb: null,
       needsUpdate: false,
       defaultsToLocal: true,

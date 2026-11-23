@@ -1,4 +1,5 @@
 import { Activity, memo, type ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -68,6 +69,7 @@ export function HostScopeGate(props: {
     const selection = scope.vanishedSelection;
     return (
       <HostScopeNotice
+        icon={null}
         tone="warn"
         title={`${selection.name} is no longer here.`}
         detail={null}
@@ -91,6 +93,7 @@ export function HostScopeGate(props: {
   if (scope.status === "vanished") {
     return (
       <HostScopeNotice
+        icon={null}
         tone="warn"
         title={`${hostLabelAtSentenceStart(scope.hostLabel)} is no longer registered`}
         detail="It was removed from your account, or signed out. Nothing here can act on it."
@@ -119,6 +122,7 @@ export function HostScopeGate(props: {
   if (scope.host === null && scope.listsFailed) {
     return (
       <HostScopeNotice
+        icon={null}
         tone="warn"
         title="Couldn't load your hosts"
         detail="The list of hosts on your account didn't come back. Nothing here is missing — it just hasn't loaded."
@@ -200,6 +204,7 @@ function HostUpdateNeededNotice(props: {
 }): ReactNode {
   return (
     <HostScopeNotice
+      icon={null}
       tone="warn"
       title={HOST_UPDATE_SKEW_COPY.title}
       detail={HOST_UPDATE_REQUIRED_DETAIL}
@@ -226,6 +231,7 @@ function EmptyHostNotice(props: { readonly scope: HostScope }): ReactNode {
   const { scope } = props;
   return (
     <HostScopeNotice
+      icon={null}
       tone="idle"
       title={scope.isLoading ? "Finding your hosts…" : "No hosts yet"}
       detail={
@@ -273,13 +279,15 @@ const FrozenWhileConcealed = memo(
   (_prev, next) => !next.usable,
 );
 
-function UnreachableNotice(props: {
+/** The notice a scope's page shows while its host cannot be reached. */
+export function UnreachableNotice(props: {
   readonly scope: HostScope;
   readonly host: HostScopeOption;
 }): ReactNode {
   const { scope, host } = props;
   return (
     <HostScopeNotice
+      icon={null}
       tone="warn"
       title={`Can't reach ${host.name} from here`}
       // The two causes read the same to a user but have different fixes, so
@@ -319,7 +327,12 @@ function UnreachableNotice(props: {
   );
 }
 
-function HostScopeNotice(props: {
+/**
+ * The card a host-scoped page shows in place of its body. `icon` is the page's
+ * own rail icon where the card stands for that page, `null` elsewhere.
+ */
+export function HostScopeNotice(props: {
+  readonly icon: LucideIcon | null;
   readonly tone: "warn" | "idle";
   readonly title: string;
   readonly detail: string | null;
@@ -335,6 +348,9 @@ function HostScopeNotice(props: {
       className="flex w-full min-w-0 flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
       data-testid={props.testId}
     >
+      {props.icon === null ? null : (
+        <props.icon aria-hidden className="size-5 text-muted-foreground" />
+      )}
       <div
         className={cn(
           "font-medium text-ui-sm",
