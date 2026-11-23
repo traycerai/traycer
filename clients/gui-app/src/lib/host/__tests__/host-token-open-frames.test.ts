@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostTokenRevalidator } from "@traycer-clients/shared/auth/host-token-lease";
+import type { CliHostTokenSessionRevalidator } from "@traycer-clients/shared/auth/host-token-lease";
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
@@ -37,7 +37,8 @@ type HostTokenRevalidatorDependencies = Parameters<
 >[0];
 
 const { revalidateRefusedSpy } = vi.hoisted(() => ({
-  revalidateRefusedSpy: vi.fn<HostTokenRevalidator["revalidateRefused"]>(),
+  revalidateRefusedSpy:
+    vi.fn<CliHostTokenSessionRevalidator["revalidateRefused"]>(),
 }));
 
 vi.mock(
@@ -51,10 +52,10 @@ vi.mock(
       ...actual,
       hostTokenRevalidator: (deps: HostTokenRevalidatorDependencies) => {
         const real = actual.hostTokenRevalidator(deps);
-        const revalidateRefused: HostTokenRevalidator["revalidateRefused"] =
-          async (refusal) => {
-            await revalidateRefusedSpy(refusal);
-            return real.revalidateRefused(refusal);
+        const revalidateRefused: CliHostTokenSessionRevalidator["revalidateRefused"] =
+          async (refusal, stillWanted) => {
+            await revalidateRefusedSpy(refusal, stillWanted);
+            return real.revalidateRefused(refusal, stillWanted);
           };
         return {
           ...real,
