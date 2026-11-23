@@ -460,12 +460,19 @@ export function createHostTokenSource(deps: {
     },
   );
   const listeners = new Set<(change: HostTokenChange) => void>();
-  // Per flight key: the latest mint, which an ask with no owner joins; the
-  // mint an ask with no owner started (a renewal), which every ask joins; the
-  // mint an owner not yet observed started, which only such owners join; and
-  // each observed process's own, under `ownerKey`. An observed owner never
-  // joins a mint started for an owner not yet observed, nor the reverse.
-  const latestFlight = new Map<string, Promise<OrderedMintAnswer>>();
+  // Per flight key: every mint still running, in start order, of which an ask
+  // with no owner joins the newest; the mint an ask with no owner started (a
+  // renewal), which every ask joins; the mint an owner not yet observed
+  // started, which only such owners join; and each observed process's own,
+  // under `ownerKey`. An observed owner never joins a mint started for an
+  // owner not yet observed, nor the reverse.
+  const runningFlights = new Map<string, Promise<OrderedMintAnswer>[]>();
+  const newestRunning = (
+    flightKey: string,
+  ): Promise<OrderedMintAnswer> | undefined => {
+    const running = runningFlights.get(flightKey);
+    return running?.[running.length - 1];
+  };
   const renewFlights = new Map<string, Promise<OrderedMintAnswer>>();
   const unknownFlights = new Map<string, Promise<OrderedMintAnswer>>();
   const observedFlights = new Map<string, Promise<OrderedMintAnswer>>();
@@ -641,7 +648,7 @@ export function createHostTokenSource(deps: {
     sentLatest.set(key, mark);
     const running =
       asker.kind === "none"
-        ? latestFlight.get(flightKey)
+        ? newestRunning(flightKey)
         : asker.kind === "unknown"
           ? (unknownFlights.get(flightKey) ?? renewFlights.get(flightKey))
           : (observedFlights.get(ownerKey(flightKey, asker.observed)) ??
@@ -757,14 +764,19 @@ export function createHostTokenSource(deps: {
         observedFlights.get(ownerKey(flightKey, asker.observed)) === attempt
       )
         observedFlights.delete(ownerKey(flightKey, asker.observed));
-      if (latestFlight.get(flightKey) === attempt)
-        latestFlight.delete(flightKey);
+      const stillRunning = runningFlights.get(flightKey);
+      const at = stillRunning?.indexOf(attempt) ?? -1;
+      if (stillRunning === undefined || at === -1) return;
+      stillRunning.splice(at, 1);
+      if (stillRunning.length === 0) runningFlights.delete(flightKey);
     };
     void starterAnswer.then(leave, leave);
     if (asker.kind === "none") renewFlights.set(flightKey, attempt);
     else if (asker.kind === "unknown") unknownFlights.set(flightKey, attempt);
     else observedFlights.set(ownerKey(flightKey, asker.observed), attempt);
-    latestFlight.set(flightKey, attempt);
+    const startedBefore = runningFlights.get(flightKey);
+    if (startedBefore === undefined) runningFlights.set(flightKey, [attempt]);
+    else startedBefore.push(attempt);
     return { sentWith: mark, outcome: starterAnswer };
   };
 
