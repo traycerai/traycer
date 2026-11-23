@@ -16,7 +16,9 @@ import { config } from "../../config";
 // and admits the sign-in. Authn is the stubbed `fetch`; the socket factory
 // never dials.
 
-const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
+// The person this case signs in as, one no earlier case used: the process-scope
+// judge of a sign-in is kept per person.
+let USER_ID = nextCasePerson().userId;
 const HOST_ID = "11111111-1111-4111-8111-111111111111";
 const HOST_TOKEN = "host-only-token";
 const SIGN_IN = "person-sign-in";
@@ -219,6 +221,7 @@ import {
   type HostCredentialProvisionOutcome,
 } from "../credential-provisioning";
 import { noopLogger } from "../../logger";
+import { nextCasePerson } from "../../internal/__tests__/case-person-test-support";
 
 function readObject(raw: string): Record<string, unknown> | null {
   const value: unknown = JSON.parse(raw);
@@ -455,6 +458,7 @@ async function probe(
 }
 
 beforeEach(() => {
+  USER_ID = nextCasePerson().userId;
   releasedMemory.install(createReleasedHostMemory());
   harness.sockets.splice(0);
   harness.listeners.clear();

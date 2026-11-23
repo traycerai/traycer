@@ -22,6 +22,7 @@ import {
   toAgentCliError,
 } from "../host-rpc";
 import { requireCliHostSession } from "../cli-host-tokens";
+import { nextCasePerson } from "./case-person-test-support";
 
 // A refused sign-in's recovery, as the CLI wires it (the real token source, the
 // real credentials store over a file in a temp directory, the real stream and
@@ -29,7 +30,9 @@ import { requireCliHostSession } from "../cli-host-tokens";
 // The caller that asked for the recovery ends while that read is held: nothing
 // may start a rotation afterwards, neither a refresh at authn nor the store's.
 
-const USER_ID = "user-1";
+// The person this case signs in as, one no earlier case used: the process-scope
+// judge of a sign-in is kept per person.
+let USER_ID = nextCasePerson().userId;
 const SIGN_IN = "still-wanted-sign-in";
 const HELD_TOKEN = "still-wanted-held-host-token";
 const WAIT = { timeout: 2_000, interval: 10 };
@@ -176,6 +179,7 @@ let hostId = "";
 let workDir = "";
 
 beforeEach(async () => {
+  USER_ID = nextCasePerson().userId;
   harness.sockets.splice(0);
   harness.state.readHold = null;
   harness.state.readsTaken = 0;

@@ -16,6 +16,7 @@ import {
 import { createCliHostTokens } from "../cli-host-tokens";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
+import { nextCasePerson } from "./case-person-test-support";
 
 const state = vi.hoisted(() => {
   const requests = vi.fn();
@@ -165,11 +166,9 @@ const params = {
 
 // A person no earlier case used: the process-scope judge of a sign-in is kept per person.
 let userId = "";
-let userCount = 0;
 
 beforeEach(() => {
-  userCount += 1;
-  userId = `user-${userCount}`;
+  userId = nextCasePerson().userId;
   state.mintOutcomes.length = 0;
   state.table = new Map();
   state.requests.mockReset();

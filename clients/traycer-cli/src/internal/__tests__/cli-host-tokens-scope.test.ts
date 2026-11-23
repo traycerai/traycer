@@ -18,6 +18,7 @@ import {
 import { createCliHostTokens } from "../cli-host-tokens";
 import { nameReason } from "./released-memory-test-support";
 import { SIGN_OUT_ARMS, standSignOutArm } from "./sign-out-arms-test-support";
+import { nextCasePerson } from "./case-person-test-support";
 
 // Model P, J, L and N through the CLI's real token path: a token session that
 // has ended starts no authn request; a terminal effect is re-checked against the
@@ -25,7 +26,9 @@ import { SIGN_OUT_ARMS, standSignOutArm } from "./sign-out-arms-test-support";
 // Every interleaving is gated on an event (a held load, rotation or read), with
 // real timers: no sleeps, no turn counts.
 
-const USER_ID = "user-1";
+// The person this case signs in as, one no earlier case used: the process-scope
+// judge of a sign-in is kept per person.
+let USER_ID = nextCasePerson().userId;
 const SIGN_IN_A = "sign-in-a";
 const SIGN_IN_B = "sign-in-b";
 
@@ -170,6 +173,7 @@ let hostId = "";
 let workDir = "";
 
 beforeEach(async () => {
+  USER_ID = nextCasePerson().userId;
   harness.mints.splice(0);
   harness.answerFor = () => "ok";
   harness.table = new Map();

@@ -19,6 +19,7 @@ import {
 } from "../../store/credentials-store";
 import { createCliHostTokens, type CliHostTokens } from "../cli-host-tokens";
 import type { SignInRotationResult } from "../../store/credentials-store";
+import { nextCasePerson } from "./case-person-test-support";
 
 // The real token path (`createCliHostTokens`: its single-flight mints, its
 // recovery and its sign-in judge) against a fake authn, whose first mint is held
@@ -27,7 +28,6 @@ import type { SignInRotationResult } from "../../store/credentials-store";
 
 // A person no earlier case used: the process-scope judge of a sign-in is kept per person.
 let USER_ID = "";
-let userCount = 0;
 const SIGN_IN_A = "sign-in-a";
 const SIBLING_SIGN_IN = "sign-in-sibling";
 const ROTATED_SIGN_IN = "sign-in-rotated";
@@ -154,8 +154,7 @@ beforeEach(() => {
   createdSources.splice(0);
   harness.table = new Map();
   hostCount += 1;
-  userCount += 1;
-  USER_ID = `user-${userCount}`;
+  USER_ID = nextCasePerson().userId;
   // A host process's flights and memory are kept per host id.
   hostId = `55555555-5555-4555-8555-${String(hostCount).padStart(12, "0")}`;
   processReleasedHosts.forgetAll();

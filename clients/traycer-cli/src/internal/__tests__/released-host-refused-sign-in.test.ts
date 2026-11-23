@@ -4,12 +4,15 @@ import { processReleasedHosts } from "@traycer-clients/shared/host-transport/rel
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
+import { nextCasePerson } from "./case-person-test-support";
 
 // The unary call, over the real client and its real recovery, against a host
 // whose answers a scripted socket gives. Authn is a stubbed refresh and a
 // token table; no host is dialed.
 
-const USER_ID = "user-1";
+// The person this case signs in as, one no earlier case used: the process-scope
+// judge of a sign-in is kept per person.
+let USER_ID = nextCasePerson().userId;
 const SIGN_IN = "unary-sign-in";
 const HELD_TOKEN = "unary-held-host-token";
 /** The fake clock steps, and the longest the client may take to write an OPEN once its socket is open. */
@@ -148,6 +151,7 @@ const params = {
 };
 
 beforeEach(() => {
+  USER_ID = nextCasePerson().userId;
   vi.useFakeTimers();
   harness.sockets.splice(0);
   harness.state.refresh = "network-error";

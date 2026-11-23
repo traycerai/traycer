@@ -23,6 +23,7 @@ import {
   stubStdin,
 } from "../../commands/__tests__/hook-test-helpers";
 import { resolveHostAuth } from "../host-auth";
+import { nextCasePerson, type CasePerson } from "./case-person-test-support";
 import { hostTokenFailureCliError } from "../host-door-words";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import {
@@ -262,14 +263,18 @@ const rotateMock = vi.fn();
 // before that the signed-in credentials the file's setup gives: the adopting
 // read after a landed save installs them in the lease.
 let landed: StoredCredentials | null = null;
-const SIGNED_IN: StoredCredentials = {
-  token: "tok-1",
-  refreshToken: "tok-1-refresh",
-  savedAt: "2026-01-01T00:00:00.000Z",
-  user: { id: "u1", email: "a@b.c", name: "A" },
-};
+// The person this case signs in as; a new one per case (see `nextCasePerson`).
+let person: CasePerson = nextCasePerson();
+function signedIn(): StoredCredentials {
+  return {
+    token: person.signIn,
+    refreshToken: `${person.signIn}-refresh`,
+    savedAt: "2026-01-01T00:00:00.000Z",
+    user: { id: person.userId, email: "a@b.c", name: "A" },
+  };
+}
 const fakeStore: CredentialsMutationStore = {
-  read: vi.fn(async () => landed ?? SIGNED_IN),
+  read: vi.fn(async () => landed ?? signedIn()),
   rotate: vi.fn(async (...args: unknown[]): Promise<MutationResult> => {
     const result: MutationResult = await rotateMock(...args);
     landed = result.credentials;
@@ -350,6 +355,7 @@ beforeEach(async () => {
   fetchMock.mockReset();
   rotateMock.mockReset();
   landed = null;
+  person = nextCasePerson();
   presentedHostTokens.length = 0;
   agentEnvironment.capability = undefined;
   agentEnvironment.agentId = undefined;
@@ -368,9 +374,9 @@ beforeEach(async () => {
   );
   vi.stubGlobal("fetch", fetchMock);
   resolveAuthMock.mockResolvedValue({
-    token: "tok-1",
+    token: person.signIn,
     authnBaseUrl: "https://authn.test",
-    userId: "u1",
+    userId: person.userId,
   });
   pidMock.mockResolvedValue({
     pid: 1,
@@ -555,7 +561,7 @@ describe("callHostRpc", () => {
             websocketUrl: "ws://127.0.0.1:9/rpc",
           },
           bearer: expect.objectContaining({
-            identity: { userId: "u1" },
+            identity: { userId: person.userId },
           }),
           abortSignal: expect.any(AbortSignal),
         }),
@@ -577,7 +583,7 @@ describe("callHostRpc", () => {
     await persistence.update((table) => {
       const users = new Map(table);
       users.set(
-        "u1",
+        person.userId,
         new Map([
           [
             "d1",
@@ -615,9 +621,9 @@ describe("callHostRpc", () => {
     const saved = await readFile(path, "utf8");
     expect(JSON.parse(saved)).toMatchObject({
       version: 1,
-      users: { u1: { d1: { token: "host-token-1" } } },
+      users: { [person.userId]: { d1: { token: "host-token-1" } } },
     });
-    expect(saved).not.toContain("tok-1");
+    expect(saved).not.toContain(person.signIn);
   });
 
   it("dials with an attestation window that outlasts the host's post-openAck deadline", async () => {
@@ -778,7 +784,7 @@ describe("callHostRpc", () => {
         token: "tok-2",
         refreshToken: "tok-2-refresh",
         savedAt: "2026-01-01T00:00:00.000Z",
-        user: { id: "u1", email: "a@b.c", name: "A" },
+        user: { id: person.userId, email: "a@b.c", name: "A" },
       },
       rejection: null,
       diskPressure: "clear",
@@ -794,7 +800,10 @@ describe("callHostRpc", () => {
     expect(result).toEqual({ agents: [] });
     expect(rotateMock).toHaveBeenCalledTimes(1);
     expect(rotateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedUserId: "u1", expectedToken: "tok-1" }),
+      expect.objectContaining({
+        expectedUserId: person.userId,
+        expectedToken: person.signIn,
+      }),
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(presentedHostTokens).toEqual(["host-token-after-refresh"]);
@@ -836,7 +845,7 @@ describe("callHostRpc", () => {
     await persistence.update((table) => {
       const users = new Map(table);
       users.set(
-        "u1",
+        person.userId,
         new Map([
           [
             "d1",

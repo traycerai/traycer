@@ -19,11 +19,11 @@ import type { Environment } from "../../runner/environment";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import { runMonitor } from "../monitor";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import { nextCasePerson } from "../../internal/__tests__/case-person-test-support";
 
 // A person no earlier case used: the process-scope judge of a sign-in is kept per person, so
 // cases that share sign-in values stay apart by their person.
 let USER_ID = "";
-let userCount = 0;
 let hostCount = 0;
 
 /** A computer id no earlier test used: a named reason is remembered per computer for the whole process. */
@@ -636,8 +636,7 @@ beforeEach(() => {
   monitorHarness.state.pid = 1;
   monitorHarness.state.startedAt = "2026-01-01T00:00:00.000Z";
   monitorHarness.state.hostId = nextHostId();
-  userCount += 1;
-  USER_ID = `monitor-test-user-${userCount}`;
+  USER_ID = nextCasePerson().userId;
   monitorHarness.state.scriptedFile = null;
   monitorHarness.state.adoptHold = null;
   monitorHarness.state.recovered = false;

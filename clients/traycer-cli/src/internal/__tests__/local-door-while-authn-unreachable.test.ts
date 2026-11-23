@@ -36,8 +36,11 @@ import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import { UNWORDED_MINT_REFUSAL_MESSAGE } from "../host-door-words";
 import type { HostAuth } from "../host-auth";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import { nextCasePerson } from "./case-person-test-support";
 
-const USER_ID = "user-1";
+// The person this case signs in as, one no earlier case used: the process-scope
+// judge of a sign-in is kept per person.
+let USER_ID = nextCasePerson().userId;
 const HOST_ID = "11111111-1111-4111-8111-111111111111";
 const SIGN_IN = "person-sign-in";
 const ENDPOINT = { hostId: HOST_ID, websocketUrl: "ws://127.0.0.1:9/rpc" };
@@ -177,6 +180,9 @@ vi.mock("../../../../shared/host-transport/whatwg-ws-factory", () => ({
   }),
 }));
 
+// The person the mocked sign-in resolves to, set per case.
+const mockedPerson = vi.hoisted(() => ({ userId: "" }));
+
 vi.mock("../host-auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../host-auth")>();
   return {
@@ -184,7 +190,7 @@ vi.mock("../host-auth", async (importOriginal) => {
     resolveHostAuth: async (): Promise<HostAuth> => ({
       token: "person-sign-in",
       authnBaseUrl: "https://authn.test",
-      userId: "user-1",
+      userId: mockedPerson.userId,
     }),
   };
 });
@@ -545,6 +551,8 @@ async function openStream(session: CliHostSession): Promise<void> {
 }
 
 beforeEach(() => {
+  USER_ID = nextCasePerson().userId;
+  mockedPerson.userId = USER_ID;
   releasedMemory.install(createReleasedHostMemory());
   harness.sockets.splice(0);
   harness.state.mode = "unavailable";

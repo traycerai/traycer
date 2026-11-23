@@ -10,6 +10,10 @@ import { runMonitor } from "../monitor";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import {
+  nextCasePerson,
+  type CasePerson,
+} from "../../internal/__tests__/case-person-test-support";
 
 type FakeSession = {
   statusChange: ((status: string, reason: unknown) => void) | null;
@@ -242,11 +246,11 @@ async function waitForMintCount(count: number) {
   await vi.waitFor(() => expect(state.mint).toHaveBeenCalledTimes(count));
 }
 
-// A person no earlier case used: the process-scope judge of a sign-in is kept per person.
-let caseUserCount = 0;
+// The person this case signs in as, one no earlier case used.
+let person: CasePerson = nextCasePerson();
 
 beforeEach(() => {
-  caseUserCount += 1;
+  person = nextCasePerson();
   vi.useFakeTimers();
   state.sessions.length = 0;
   state.streamOptions.length = 0;
@@ -261,7 +265,7 @@ beforeEach(() => {
   resolveAuthMock.mockResolvedValue({
     token: "signin",
     authnBaseUrl: "https://authn.test",
-    userId: `user-${caseUserCount}`,
+    userId: person.userId,
   });
   pidMock.mockResolvedValue({
     pid: 1,

@@ -24,6 +24,10 @@ import { createOutput } from "../../runner/output";
 import type { CommandContext } from "../../runner/runner";
 import { resolveRuntimeContext } from "../../runner/runtime";
 import {
+  nextCasePerson,
+  type CasePerson,
+} from "../../internal/__tests__/case-person-test-support";
+import {
   neuterActions,
   parseCommand,
   resolveCommandPath,
@@ -327,11 +331,11 @@ function expectNoAckCall(): void {
   ).toBe(false);
 }
 
-// A person no earlier case used: the process-scope judge of a sign-in is kept per person.
-let caseUserCount = 0;
+// The person this case signs in as, one no earlier case used.
+let person: CasePerson = nextCasePerson();
 
 beforeEach(async () => {
-  caseUserCount += 1;
+  person = nextCasePerson();
   testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-monitor-"));
   vi.useFakeTimers();
   sessions.length = 0;
@@ -363,7 +367,7 @@ beforeEach(async () => {
   resolveAuthMock.mockResolvedValue({
     token: "tok-1",
     authnBaseUrl: "https://authn.test",
-    userId: `u${caseUserCount}`,
+    userId: person.userId,
   });
   resolveAuthMock.mockClear();
   pidMock.mockReset();

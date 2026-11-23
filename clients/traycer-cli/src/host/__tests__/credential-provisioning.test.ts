@@ -332,6 +332,7 @@ import {
 } from "../credential-provisioning";
 import { noopLogger } from "../../logger";
 import { formatCredentialProvisionNote } from "../install-auth";
+import { nextCasePerson } from "../../internal/__tests__/case-person-test-support";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -467,11 +468,9 @@ let clearIntervalSpy: MockInstance;
 
 // A person no earlier case used: the process-scope judge of a sign-in is kept per person.
 let caseUserId = "";
-let caseUserCount = 0;
 
 beforeEach(() => {
-  caseUserCount += 1;
-  caseUserId = `user-${caseUserCount}`;
+  caseUserId = nextCasePerson().userId;
   mocks.callOrder = [];
   mocks.sessions = [];
   mocks.capturedOptions = null;

@@ -30,6 +30,10 @@ import {
   taskCreateKeyRecordPath,
   writeTaskCreateKey,
 } from "../../store/task-create-keys";
+import {
+  nextCasePerson,
+  type CasePerson,
+} from "../../internal/__tests__/case-person-test-support";
 
 const keysDir = vi.hoisted(() => ({ current: "" }));
 const fetchMock = vi.hoisted(() => vi.fn());
@@ -118,12 +122,17 @@ const landed = vi.hoisted(() => {
   const holder: { credentials: object | null } = { credentials: null };
   return holder;
 });
-const SIGNED_IN = {
-  token: "tok",
-  refreshToken: "tok-refresh",
-  savedAt: "2026-01-01T00:00:00.000Z",
-  user: { id: "u1", email: "a@b.c", name: "A" },
-};
+// The person this case signs in as, one no earlier case used: the process-scope
+// judge of a sign-in is kept per person.
+let person: CasePerson = nextCasePerson();
+function signedIn(): object {
+  return {
+    token: "tok",
+    refreshToken: "tok-refresh",
+    savedAt: "2026-01-01T00:00:00.000Z",
+    user: { id: person.userId, email: "a@b.c", name: "A" },
+  };
+}
 
 vi.mock("../../store/credentials-store", async (importOriginal) => {
   const actual =
@@ -132,7 +141,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     ...actual,
     createCliCredentialsStore: () => ({
       dispose: () => undefined,
-      read: async (): Promise<unknown> => landed.credentials ?? SIGNED_IN,
+      read: async (): Promise<unknown> => landed.credentials ?? signedIn(),
       rotate: async (...args: unknown[]): Promise<unknown> => {
         const result: unknown = await storeRotate(...args);
         const credentials: unknown = Reflect.get(Object(result), "credentials");
@@ -160,7 +169,11 @@ const endpointMock = vi.mocked(resolveEndpoint);
 const rpcMock = vi.mocked(callHostRpcAtResolvedEndpoint);
 const writeKeyMock = vi.mocked(writeTaskCreateKey);
 
-const AUTH = { token: "tok", authnBaseUrl: "https://authn.test", userId: "u1" };
+let AUTH = {
+  token: "tok",
+  authnBaseUrl: "https://authn.test",
+  userId: person.userId,
+};
 const ENDPOINT = { hostId: "host-1", websocketUrl: "ws://127.0.0.1:9/rpc" };
 const CREATED = { roomInfo: null, task: null, initialTurnStarted: false };
 
@@ -286,6 +299,8 @@ async function recordFiles(): Promise<string[]> {
 }
 
 beforeEach(async () => {
+  person = nextCasePerson();
+  AUTH = { ...AUTH, userId: person.userId };
   keysDir.current = await mkdtemp(join(tmpdir(), "task-create-cmd-"));
   vi.stubEnv("TRAYCER_AGENT_ID", "");
   vi.stubEnv("TRAYCER_EPIC_ID", "");
@@ -331,7 +346,7 @@ describe("task create: the request", () => {
     expect(request.epic).toMatchObject({
       title: "Nightly triage",
       initialUserPrompt: "Summarise last night's failures",
-      createdBy: "u1",
+      createdBy: person.userId,
     });
     expect(request.repoIdentifiers).toEqual([{ owner: "acme", repo: "app" }]);
     expect(request.workspaces).toEqual([
@@ -347,7 +362,7 @@ describe("task create: the request", () => {
       worktreeIntent: null,
     });
     expect(chat.initialMessage).toMatchObject({
-      sender: { type: "user", userId: "u1" },
+      sender: { type: "user", userId: person.userId },
       accountContext: { type: "PERSONAL" },
       sentFromHostId: "host-1",
       content: {
@@ -528,7 +543,7 @@ describe("task create --idempotency-key", () => {
   });
 
   it("exits non-zero naming the ids and the record for an intent with no done, without a send", async () => {
-    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
     await writeTaskCreateKey(path, {
       state: "intent",
       taskId: "task-crashed",
@@ -545,7 +560,7 @@ describe("task create --idempotency-key", () => {
   });
 
   it("creates past a record older than 24 hours", async () => {
-    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
     await writeTaskCreateKey(path, {
       state: "intent",
       taskId: "task-old",
@@ -684,7 +699,7 @@ describe("task create --idempotency-key", () => {
     const sent = sentRequest(0);
     expect(error.message).toContain(sent.epic.id);
     expect(error.message).toContain(
-      taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1"),
+      taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1"),
     );
     expect(error.details).toMatchObject({ taskId: sent.epic.id });
   });
@@ -707,7 +722,7 @@ describe("task create --idempotency-key", () => {
     expect(error.message).not.toMatch(/delete/i);
     expect(error.details).toMatchObject({ taskId: sent.epic.id });
 
-    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
     };
@@ -781,7 +796,7 @@ describe("task create: a refusal answered after an earlier send", () => {
 
     await rejection(run({ idempotencyKey: "slot-1" }));
 
-    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
     };
@@ -799,7 +814,7 @@ describe("task create: a refusal answered after an earlier send", () => {
     // A usable host-only token is held, so the first dial presents it with no mint.
     heldTokens.table = new Map([
       [
-        "u1",
+        person.userId,
         new Map([
           [
             "host-1",
@@ -822,7 +837,7 @@ describe("task create: a refusal answered after an earlier send", () => {
         token: "tok-2",
         refreshToken: "tok-2-refresh",
         savedAt: "2026-01-01T00:00:00.000Z",
-        user: { id: "u1", email: "a@b.c", name: "A" },
+        user: { id: person.userId, email: "a@b.c", name: "A" },
       },
     });
     // The held host-only token is refused before the request frame. The
@@ -852,7 +867,7 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(socketRequest).toHaveBeenCalledTimes(2);
     expect(storeRotate).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
     };
@@ -883,7 +898,7 @@ describe("task create: a refusal answered after an earlier send", () => {
 
     const error = await rejection(run({ idempotencyKey: "slot-1" }));
 
-    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
     expect(error.message).toContain(path);
     expect(socketRequest).toHaveBeenCalledTimes(1);
     // No mint by construction: only the dial asks for a host-only token, and the socket client is the test's stub that never dials.
@@ -938,7 +953,7 @@ describe("task create: a signed-out Terminal login", () => {
   }
 
   async function storedFingerprint(key: string): Promise<string> {
-    const path = taskCreateKeyRecordPath(keysDir.current, "u1", key);
+    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, key);
     const written = JSON.parse(await readFile(path, "utf8")) as {
       fingerprint: string;
     };

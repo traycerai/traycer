@@ -25,6 +25,7 @@ import {
   REQUEST_ID,
   userRow,
 } from "./bot-test-support";
+import { nextCasePerson } from "../../internal/__tests__/case-person-test-support";
 
 /**
  * Each command here runs its real code over the real stream client, against a
@@ -33,7 +34,9 @@ import {
  * finding its credential; after the first `open` it is a drop.
  */
 
-const USER_ID = "pre-open-user";
+// The person this case signs in as, one no earlier case used: the process-scope
+// judge of a sign-in is kept per person.
+let USER_ID = nextCasePerson().userId;
 const SIGN_IN = "pre-open-sign-in";
 const HELD_TOKEN = "pre-open-held-host-token";
 const WAIT = { timeout: 2_000, interval: 10 };
@@ -255,6 +258,7 @@ type Socket = InstanceType<typeof harness.ScriptSocket>;
 let hostCount = 0;
 
 beforeEach(() => {
+  USER_ID = nextCasePerson().userId;
   vi.useFakeTimers();
   harness.sockets.splice(0);
   harness.state.hostTokenTable = new Map();

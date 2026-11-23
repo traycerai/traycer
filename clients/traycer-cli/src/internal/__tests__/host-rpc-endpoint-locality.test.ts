@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
+import { nextCasePerson } from "./case-person-test-support";
 
 // The call to an explicit endpoint, over the real client, against a socket
 // factory that records every dial. Authn is a token table and a mint that
 // records what it is asked; no host is dialed.
 
-const USER_ID = "user-1";
+// The person this case signs in as, one no earlier case used: the process-scope
+// judge of a sign-in is kept per person.
+let USER_ID = nextCasePerson().userId;
 const SIGN_IN = "locality-sign-in";
 const HELD_TOKEN = "locality-held-host-token";
 const HOST_ID = "44444444-4444-4444-8444-444444444444";
@@ -127,6 +130,7 @@ const params = {
 };
 
 beforeEach(() => {
+  USER_ID = nextCasePerson().userId;
   vi.useFakeTimers();
   harness.sockets.splice(0);
   harness.dialedUrls.splice(0);
