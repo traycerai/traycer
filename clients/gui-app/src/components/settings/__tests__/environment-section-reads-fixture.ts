@@ -1,3 +1,4 @@
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { EnvironmentPickerModel } from "@/components/settings/environment/environment-picker-model";
@@ -31,6 +32,11 @@ export const pickerDefaultPick: { current: EnvironmentPick } = {
   current: UNRESOLVED_PICK,
 };
 
+/** Each computer's answered status; none has a Local row. */
+export const pickerStatuses: {
+  current: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>;
+} = { current: new Map() };
+
 export const windowHostRunsPersonalModule = {
   useWindowHostRunsPersonal: (): boolean | null =>
     windowHostRunsPersonal.current,
@@ -49,14 +55,17 @@ export const personalHostScopeModule = {
   },
 };
 
-/** The picker model resolving `pickerDefaultPick`, with no computer rows. */
+/**
+ * The picker model resolving `pickerDefaultPick`, with no computer rows, over
+ * `pickerStatuses`.
+ */
 export const environmentStatusModelModule = {
   useEnvironmentStatusModel: (): {
     readonly picker: EnvironmentPickerModel;
-    readonly statuses: ReadonlyMap<string, null>;
+    readonly statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>;
   } => ({
     picker: { localRows: [], defaultPick: pickerDefaultPick.current },
-    statuses: new Map(),
+    statuses: pickerStatuses.current,
   }),
 };
 
@@ -64,4 +73,5 @@ export function resetEnvironmentSectionReads(): void {
   windowHostRunsPersonal.current = false;
   personalHostScopeOverrides.current = {};
   pickerDefaultPick.current = UNRESOLVED_PICK;
+  pickerStatuses.current = new Map();
 }

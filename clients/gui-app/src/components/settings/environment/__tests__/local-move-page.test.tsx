@@ -100,7 +100,7 @@ afterEach(() => {
   pickerModelMock.statuses.clear();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
-    staleLocalHostIds: [],
+    gone: null,
   });
 });
 
@@ -266,9 +266,6 @@ describe("LocalMovePageOr", () => {
 
       expect(await screen.findByTestId("real-skills-panel")).toBeTruthy();
       expect(screen.queryByTestId("local-move-page")).toBeNull();
-      expect(
-        useSettingsEnvironmentPickStore.getState().staleLocalHostIds,
-      ).toEqual([HOST_ID]);
     },
   );
 });

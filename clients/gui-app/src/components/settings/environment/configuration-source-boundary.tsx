@@ -281,7 +281,9 @@ function useGoneConfiguration(input: {
   const { target, listed, settled, listedAt, section } = input;
   const invitations = useEnvironmentInvitationsQuery();
   const entryHash = useEnvironmentInvitationsEntryHash();
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const markPickGone = useSettingsEnvironmentPickStore(
+    (state) => state.markPickGone,
+  );
   // A removed team is in no list, so the label this page read a moment ago is
   // the only thing left that can name it.
   const [read, setRead] = useState<ReadLabel | null>(null);
@@ -437,14 +439,15 @@ function useGoneConfiguration(input: {
     //
     // The selection is a store every page and the picker's trigger read, so
     // it moves after the render that found the team gone, never during it. It
-    // moves whether or not the team can be named: no page can read it.
+    // moves whether or not the team can be named: no page can read it. The
+    // pick itself stays; it reads as Personal for the rest of the window.
     moveEnvironmentPick({
       next: PERSONAL_PICK,
       activeSection: section,
-      setPick,
+      setPick: markPickGone,
       moveSurface: moveEnvironmentSurface.onServerFact,
     });
-  }, [goneId, label, section, setPick]);
+  }, [goneId, label, section, markPickGone]);
 
   return { invitation };
 }

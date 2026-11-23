@@ -19,6 +19,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const reads = vi.hoisted(() => ({
@@ -132,15 +133,19 @@ async function flushEffects(): Promise<void> {
 
 beforeEach(() => {
   reads.statuses.clear();
+  // The window's own host, as the picker's scope names it.
+  useSelectionAuthorityStore.setState({ effectiveHostId: "old" });
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
+    gone: null,
   });
 });
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  useSelectionAuthorityStore.getState().reset();
 });
 
 describe("the Overview row and the Environment dropdown on a stopped move", () => {

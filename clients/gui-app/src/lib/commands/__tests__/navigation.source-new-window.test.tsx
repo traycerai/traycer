@@ -31,8 +31,10 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import {
   personalHostScopeOverrides,
   pickerDefaultPick,
+  pickerStatuses,
   resetEnvironmentSectionReads,
 } from "@/components/settings/__tests__/environment-section-reads-fixture";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
   captureRoot,
   mountSettingsSubpage,
@@ -71,6 +73,7 @@ describe("navigationSource, in a window Settings has not opened", () => {
       pick: null,
       defaultPick: UNRESOLVED_PICK,
       defaultHostId: null,
+      gone: null,
     });
     useSelectionAuthorityStore.getState().reset();
     resetNegotiatedManifests();
@@ -96,6 +99,25 @@ describe("navigationSource, in a window Settings has not opened", () => {
     pickerDefaultPick.current = TEAM_PICK;
 
     expectOfferedWithoutFlash(secretsOffered());
+  });
+
+  it("offers what the default offers from the first render, for a Local pick on a computer that has moved", () => {
+    // The old laptop is not in the window's host list, so its own pick would
+    // not list Secrets; the default, Personal on the cloud road, does.
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "old", hostName: "Old laptop" },
+    });
+    pickerStatuses.current = new Map([
+      [
+        "old",
+        environmentStatusFixture({ setup: { stage: "done", state: "done" } }),
+      ],
+    ]);
+    pickerDefaultPick.current = PERSONAL_PICK;
+
+    const history = secretsOffered();
+    expect(history.length).toBeGreaterThan(0);
+    expect(history).not.toContain(false);
   });
 
   it("re-resolves the default for a new window host and lists Secrets", () => {

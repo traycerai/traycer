@@ -10,7 +10,14 @@ vi.mock("sonner", () => ({
   ),
 }));
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { useSyncExternalStore, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -48,13 +55,19 @@ import {
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { SettingsSurface } from "@/components/settings/settings-surface";
-import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import {
+  PERSONAL_PICK,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
 import {
   mountTeamPage,
   configurationItem,
@@ -211,7 +224,9 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
+    gone: null,
   });
+  pickReader = null;
 });
 
 const PERSONAL: EnvironmentDescriptorV11 = {
@@ -392,6 +407,19 @@ async function expectOwnershipConsumers(options: {
   }
 }
 
+/**
+ * The pick every Environment page reads, through `useEnvironmentPick`,
+ * mounted once per case: a `waitFor` re-runs on every DOM change, and a
+ * mount is one.
+ */
+let pickReader: {
+  readonly result: { readonly current: EnvironmentPick };
+} | null = null;
+function windowPick(): EnvironmentPick {
+  pickReader ??= renderHook(() => useEnvironmentPick());
+  return pickReader.result.current;
+}
+
 function mountConfigurationPermissionBoundary(options: {
   readonly target: CloudConfigurationTarget;
   readonly environments: readonly EnvironmentDescriptorV11[];
@@ -526,12 +554,12 @@ describe("a team the environment list no longer carries", () => {
     await rerenderList();
 
     // The selection moves off a team no page can read, which is what unmounts
-    // the page the removal happened on.
-    await waitFor(() =>
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-        PERSONAL_PICK,
-      ),
-    );
+    // the page the removal happened on. The pick itself is not rewritten.
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK));
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
     // The sentence outlives that page, and is raised once under the team's own
     // id, so a remount or a re-read of the same removal cannot stack it.
     expect(hoisted.toasts).toEqual([
@@ -556,11 +584,7 @@ describe("a team the environment list no longer carries", () => {
     });
     await rerenderList();
 
-    await waitFor(() =>
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-        PERSONAL_PICK,
-      ),
-    );
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK));
     // A pick made on another computer: the selection still moves, because no
     // page can read it, but no removal is claimed from a team never seen.
     expect(hoisted.toasts).toEqual([]);
@@ -583,7 +607,7 @@ describe("a team the environment list no longer carries", () => {
     ).toBeNull();
     // An invitation is not a membership: the selection stays, so the trigger
     // and the Review keep naming the same team.
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -632,7 +656,7 @@ describe("a team the environment list no longer carries", () => {
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Review" })).toBeTruthy();
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -691,7 +715,7 @@ describe("a team the environment list no longer carries", () => {
       await screen.findByText("These settings are no longer available."),
     ).toBeTruthy();
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -753,13 +777,9 @@ describe("a team the environment list no longer carries", () => {
       </HeldValueHostRuntime>,
       { wrapper: harness.Wrapper },
     );
-    await waitFor(
-      () =>
-        expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-          PERSONAL_PICK,
-        ),
-      { timeout: 5000 },
-    );
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK), {
+      timeout: 5000,
+    });
   }
 
   it("swaps the section in place when the person is looking at Settings", async () => {
@@ -832,13 +852,9 @@ describe("a team the environment list no longer carries", () => {
     // The removal settles through a cancel and a read of its own, so the wait
     // is generous: what this case is about is which page the person lands on,
     // never how quickly.
-    await waitFor(
-      () =>
-        expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-          PERSONAL_PICK,
-        ),
-      { timeout: 5000 },
-    );
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK), {
+      timeout: 5000,
+    });
     expect(surface.openSettings).not.toHaveBeenCalled();
     expect(surface.setSection).not.toHaveBeenCalled();
     expect(surface.remember).not.toHaveBeenCalled();
@@ -901,7 +917,7 @@ describe("a team the environment list no longer carries", () => {
       });
     });
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -983,7 +999,7 @@ describe("a team the environment list no longer carries", () => {
       ),
     ).toBeTruthy();
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -1045,9 +1061,7 @@ describe("a team the environment list no longer carries", () => {
           ]),
         { timeout: 5000 },
       );
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-        PERSONAL_PICK,
-      );
+      expect(windowPick()).toEqual(PERSONAL_PICK);
       // No request count here, unlike the cases above: a held clock makes
       // `timeUntilStale` zero, so every read is perpetually stale and the
       // harness refetches more than the design asks for. That is the frozen
@@ -1135,7 +1149,7 @@ describe("a team the environment list no longer carries", () => {
       ).toBeTruthy();
 
       expect(hoisted.toasts).toEqual([]);
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      expect(windowPick()).toEqual({
         kind: "team",
         environmentId: "env-a",
       });
@@ -1151,9 +1165,7 @@ describe("a team the environment list no longer carries", () => {
           },
         ]),
       );
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-        PERSONAL_PICK,
-      );
+      expect(windowPick()).toEqual(PERSONAL_PICK);
     } finally {
       clock.mockRestore();
     }
@@ -1212,7 +1224,7 @@ describe("a team the environment list no longer carries", () => {
     // asks once, whether or not the one before it got an answer.
     expect(asked).toBe(3);
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });

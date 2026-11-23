@@ -77,7 +77,11 @@ export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
         environment.pick?.kind === "local" &&
         environment.pick.hostId === previous
       ) {
-        environment.setPick({ ...environment.pick, hostId: next });
+        // The same computer under its new id, not a new pick: one that had
+        // gone stays gone.
+        useSettingsEnvironmentPickStore.setState({
+          pick: { ...environment.pick, hostId: next },
+        });
       }
       if (
         environment.defaultPick.kind === "local" &&

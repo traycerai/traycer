@@ -846,8 +846,11 @@ binding path and offers no status retry; its observer reads again when the
 route returns. Unresolved picks ignore Personal membership results, including
 cached hosts.
 
-The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
-decides each Environment page's source, one rule per pick. A team reads the
+The Environment dropdown shows `useEnvironmentPickerModel()`'s pick, which
+judges each computer's status as it renders; pages read `useEnvironmentPick()`,
+which the dropdown keeps current before paint. A pick seen gone (a Local pick
+whose computer moved, a team the person left) stays gone for the window.
+`PersonalPageFrame` decides each Environment page's source, one rule per pick. A team reads the
 cloud. A Local row reads that computer's own host pages. Personal reads the
 cloud unless the window's host runs Personal by the dropdown's own rule
 (`hostRunsPersonal`: it reports Personal and has no Local row), when that

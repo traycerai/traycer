@@ -252,6 +252,7 @@ beforeEach(() => {
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
+    gone: null,
   });
   useMoveSheetStore.setState({ target: null });
   useSettingsHostScopeStore.getState().reset();
@@ -479,18 +480,51 @@ describe("<EnvironmentPicker />", () => {
     answer("old", null, V11);
     renderPicker("mac");
     expect(
-      useSettingsEnvironmentPickStore.getState().staleLocalHostIds,
-    ).toEqual([]);
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Old laptop");
     cleanup();
 
     answer("old", running, V11);
     renderPicker("mac");
-    expect(
-      useSettingsEnvironmentPickStore.getState().staleLocalHostIds,
-    ).toEqual(["old"]);
     const trigger = screen.getByTestId("environment-picker-trigger");
     expect(trigger.textContent).not.toContain("Old laptop");
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(pick);
+  });
+
+  it("stays on the default once a picked computer has moved, after it has its own settings again", () => {
+    const pick = {
+      kind: "local",
+      hostId: "old",
+      hostName: "Old laptop",
+    } as const;
+    useSettingsEnvironmentPickStore.setState({ pick });
+    answer("mac", running, V11);
+    answer("old", running, V11);
+    const view = renderPicker("mac");
+    const trigger = screen.getByTestId("environment-picker-trigger");
+    expect(trigger.textContent).toBe("Personal");
+
+    answer("old", awaiting, V11);
+    view.rerender(pickerElement("mac"));
+    expect(trigger.textContent).toBe("Personal");
+    openMenu();
+    expect(screen.getByTestId("environment-picker-local-old")).toBeTruthy();
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(pick);
+  });
+
+  it("reads the computer when the person picks it again after it has its own settings back", () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "old", hostName: "Old laptop" },
+    });
+    answer("old", running, V11);
+    const view = renderPicker("mac");
+    answer("old", awaiting, V11);
+    view.rerender(pickerElement("mac"));
+    openMenu();
+    fireEvent.click(screen.getByTestId("environment-picker-local-old"));
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Old laptop");
   });
 
   it("keeps an unresolved setup computer selected until it reports Personal", async () => {
@@ -526,9 +560,6 @@ describe("<EnvironmentPicker />", () => {
     answer("mac", running, V11);
     view.rerender(pickerElement("mac"));
     await waitFor(() => {
-      expect(
-        useSettingsEnvironmentPickStore.getState().staleLocalHostIds,
-      ).toEqual(["mac"]);
       expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
         PERSONAL_PICK,
       );

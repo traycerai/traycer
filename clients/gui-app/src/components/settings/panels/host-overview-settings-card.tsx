@@ -65,7 +65,10 @@ import {
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
 
 /** A give whose start answered: the team it names and the line its receipt shows. */
 export interface StartedGive {
@@ -583,9 +586,7 @@ function railFollowKey(pick: EnvironmentPick): string {
  */
 function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
-  const current = useSettingsEnvironmentPickStore(
-    (state) => state.pick ?? state.defaultPick,
-  );
+  const current = useEnvironmentPick();
   const nextKey = pick === null ? null : railFollowKey(pick);
   const currentKey = railFollowKey(current);
   const held = useRef<string | null>(null);
@@ -598,10 +599,11 @@ function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
 }
 
 /**
- * A Local pick the Environment dropdown would keep. One it would drop
- * (`isStaleLocalPick`: no Local row, or a row that needs an update) is not
- * written. The stopped-move row still shows the computer's name; the rail
- * stays where it is, because Personal is not what that row shows.
+ * A Local pick on a computer that still has its Local row. One with no row,
+ * or a row that needs an update (`isStaleLocalPick`), is not written: the
+ * window reads it as the default. The stopped-move row still shows the
+ * computer's name; the rail stays where it is, because Personal is not what
+ * that row shows.
  */
 function selectableLocalPick(
   hostId: string,
