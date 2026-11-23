@@ -2057,6 +2057,13 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    */
   private dialSequence: DialSequence | null = null;
   /**
+   * The dial count of the refusal whose spent recovery judged it neither
+   * rejected nor outlived by a newer held sign-in ("refusal-unjudged"), or
+   * `null`. Its `network-error` answer backs off without touching the
+   * no-progress streak: no rotation happened, and none was lost to the network.
+   */
+  private unjudgedRefusalAt: number | null = null;
+  /**
    * The live session this connection has announced to the selection authority,
    * or `null` while it has none.
    *
@@ -3364,10 +3371,12 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
 
   /**
    * Refreshes the sign-in the host instance `refusedBy` refused, within its
-   * dial sequence's budget. Once spent it answers `rotated` with no refresh,
-   * which counts as no progress for a refused sign-in
-   * (`revalidateThenReconnect`), so the bound ends the sequence without a
-   * report. A refusal while the sequence's refresh runs joins it. Only an
+   * dial sequence's budget. Once spent, a recovery that judges sign-ins answers
+   * through that judgement (`judgeSpentRefusal`); one that does not answers
+   * `rotated` with no refresh, which counts as no progress for a refused
+   * sign-in (`revalidateThenReconnect`), so the bound ends the sequence without
+   * a report. A refusal while the sequence's refresh or judgement runs joins
+   * it. Only an
    * answer from authn spends it, and only for the sequence it started under:
    * a sibling's rotation adopted from the store is redialed on like a
    * rotation, and the next refusal may still make one real refresh. A refresh
@@ -3387,13 +3396,34 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
         ? current
         : { owner: refusedBy, spent: false, running: null };
     this.dialSequence = sequence;
-    if (sequence.spent) return Promise.resolve("rotated");
     if (sequence.running !== null) return sequence.running;
+    const judge = recovery.signInRejectedFor;
+    if (sequence.spent && judge === undefined)
+      return Promise.resolve("rotated");
     const stillWanted = (): boolean =>
       !this.disposed && this.dialsStarted === askedAt;
     // A host's refusal of the person's sign-in, not a mint: no mint order.
     const signIn = hostSignInKey(refused);
     const refusal = signIn === null ? null : { signIn, order: null };
+    if (sequence.spent && judge !== undefined) {
+      const judging = Promise.resolve()
+        .then(() =>
+          stillWanted() && refusedBy !== null
+            ? this.judgeSpentRefusal(
+                sequence,
+                refused,
+                askedAt,
+                stillWanted,
+                () => judge(refusal),
+              )
+            : ("network-error" as const),
+        )
+        .finally(() => {
+          if (sequence.running === judging) sequence.running = null;
+        });
+      sequence.running = judging;
+      return judging;
+    }
     const running: Promise<RevalidateOutcome> = Promise.resolve()
       .then(() =>
         stillWanted() && refusedBy !== null
@@ -3413,6 +3443,35 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       });
     sequence.running = running;
     return running;
+  }
+
+  /**
+   * Answers a refusal after its sequence's refresh was spent, by the
+   * recovery's own judgement of the refused sign-in, which adopts the stored
+   * sign-in before it judges. `rotated` only when the lease now holds a
+   * sign-in other than the one refused. A refusal judged neither rejected nor
+   * outlived is "refusal-unjudged": the sequence is released, so the next
+   * attempt makes its one refresh, and the answer backs off with the
+   * no-progress streak untouched. Rotations alone count toward the bound.
+   * A judgement that throws is judged not rejected.
+   */
+  private async judgeSpentRefusal(
+    sequence: DialSequence,
+    refused: string | null,
+    askedAt: number,
+    stillWanted: () => boolean,
+    judge: () => Promise<boolean> | boolean,
+  ): Promise<RevalidateOutcome> {
+    const rejected = await Promise.resolve()
+      .then(judge)
+      .catch(() => false);
+    if (!stillWanted()) return "network-error";
+    if (rejected) return "rejected";
+    const held = this.heldSignIn();
+    if (refused !== null && held !== null && held !== refused) return "rotated";
+    if (this.dialSequence === sequence) this.dialSequence = null;
+    this.unjudgedRefusalAt = askedAt;
+    return "network-error";
   }
 
   private answerInvitedSignIn(): void {
@@ -4037,6 +4096,11 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
         this.goTerminal(details);
         return;
       }
+      this.enterBackoff();
+      return;
+    }
+    if (outcome === "network-error" && this.unjudgedRefusalAt === askedAt) {
+      this.unjudgedRefusalAt = null;
       this.enterBackoff();
       return;
     }

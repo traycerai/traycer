@@ -499,7 +499,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       },
       retryPolicy,
       dispatch,
-      () => session.tokens.signInRejected(),
+      () => session.tokens.signInRejectedNow(null),
     );
   } catch (err) {
     const refusal = ended.refusal;
@@ -542,7 +542,7 @@ async function requestWithHostToken<
   localDoor: LocalHostDoor | null,
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
-  signInRejected: () => boolean,
+  signInRejected: () => Promise<boolean>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const client = new WsRpcClient<HostRpcRegistry>({
@@ -647,7 +647,9 @@ async function requestWithHostToken<
     return response;
   } catch (err) {
     const refusal = finalRefusalOf(err);
-    if (signInRejected() && refusal instanceof HostRpcError) {
+    // The verdict is read after the credentials file is: a sign-in another
+    // process saved since is not the one this call's failure blames.
+    if (refusal instanceof HostRpcError && (await signInRejected())) {
       markRefusalAfterRejectedSignIn(refusal);
     }
     const error = errorFromUnknown(err);

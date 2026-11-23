@@ -49,12 +49,14 @@ export interface SignInRecovery {
     stillWanted: () => boolean,
   ): Promise<SignInRecoveryOutcome>;
   /**
-   * Whether `refusal` is judged a rejected sign-in now: a spent recovery
-   * answers terminally only then. Read after the asker's last await. A
-   * recovery without it is answered as one that judges every refusal
-   * rejected.
+   * Whether `refusal` is judged a rejected sign-in now, read after the stored
+   * sign-in is adopted: a spent recovery answers terminally only then. Asked
+   * after the asker's last await. Without it, the lease judges every refusal
+   * rejected, and the stream keeps its spent answer as before.
    */
-  readonly signInRejectedFor?: (refusal: SignInRefusal | null) => boolean;
+  readonly signInRejectedFor?: (
+    refusal: SignInRefusal | null,
+  ) => Promise<boolean>;
 }
 
 /**

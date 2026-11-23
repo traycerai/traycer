@@ -39,14 +39,19 @@ export type HostTokenSessionRevalidator = {
 };
 
 /**
- * A recovery's outcome before it leaves the lease: `"process-replaced"` is a
+ * A recovery's outcome before it leaves the lease. `"process-replaced"` is a
  * mint lost to a replacement of the host process it was for, told apart from
- * a mint that could not reach authn. Only the CLI's revalidator hands it out;
- * every other entry answers it as `"network-error"`.
+ * a mint that could not reach authn. `"sign-in-rejected"` is a rejection whose
+ * reason is the person's sign-in, told apart from one about the host. Only the
+ * CLI's revalidator hands them out; every other entry answers them as
+ * `"network-error"` and `"rejected"`.
  */
-export type HostTokenRecoveryOutcome = RevalidateOutcome | "process-replaced";
+export type HostTokenRecoveryOutcome =
+  | RevalidateOutcome
+  | "process-replaced"
+  | "sign-in-rejected";
 
-/** The CLI's session revalidator: {@link HostTokenSessionRevalidator}, with a mint lost to a replacement told apart. */
+/** The CLI's session revalidator: {@link HostTokenSessionRevalidator}, with a mint lost to a replacement and a rejected sign-in told apart. */
 export type CliHostTokenSessionRevalidator = {
   readonly revalidateForReconnect: (
     stillWanted: () => boolean,
@@ -67,11 +72,14 @@ interface RecoveringRevalidator {
 }
 
 // A transport reads a mint lost to a replacement as it reads any mint that
-// produced nothing: it redials, and the redial reads the current process.
+// produced nothing (it redials, and the redial reads the current process), and
+// a rejected sign-in as any rejection.
 function transportOutcome(
   outcome: HostTokenRecoveryOutcome,
 ): RevalidateOutcome {
-  return outcome === "process-replaced" ? "network-error" : outcome;
+  if (outcome === "process-replaced") return "network-error";
+  if (outcome === "sign-in-rejected") return "rejected";
+  return outcome;
 }
 
 function transportRevalidator(
@@ -505,6 +513,12 @@ interface ReplacementBounds {
     refusal: SignInRefusal | null,
     stillWanted: () => boolean,
   ) => Promise<SignInRecoveryOutcome> | null;
+  /**
+   * Gives the next attempt its own refresh: asked when a spent recovery
+   * answers transient for a refusal not judged rejected. The allowance is one
+   * attempt's, not the host process's for ever.
+   */
+  readonly releaseSignInRefresh: () => void;
 }
 
 type HostTokenRevalidatorDeps = {
@@ -537,6 +551,11 @@ interface RevalidatorMints {
     ask: HostTokenAsk & { readonly owner: HostInstance },
   ) => Promise<IdentifiedHostTokenMint>;
   readonly signInKey: () => string | null;
+  /**
+   * Whether the sign-in a mint would present has moved from `presented`, so
+   * another pass is no repeat of one nothing changed.
+   */
+  readonly moved: (presented: string | null) => boolean;
 }
 
 // Tokens that identify no refusal (the app's, desktop main's, a relay's): an
@@ -552,6 +571,9 @@ function unidentifiedMints(
       owner: ask.owner,
     }),
     signInKey: () => null,
+    // Nothing here names a sign-in to compare: the recovery's own rotation is
+    // its answer, as it always was.
+    moved: () => true,
   };
 }
 
@@ -560,6 +582,7 @@ function identifiedMints(deps: IdentifyingRevalidatorDeps): RevalidatorMints {
     obtainIdentified: (userId, hostId, ask) =>
       deps.tokens.obtainIdentified(userId, hostId, true, ask),
     signInKey: deps.signInKey,
+    moved: (presented) => deps.signInKey() !== presented,
   };
 }
 
@@ -688,6 +711,9 @@ function recoverySequence(owner: HostInstance): RecoverySequence {
       running = refresh;
       return refresh;
     },
+    releaseSignInRefresh: () => {
+      if (running === null) spent = false;
+    },
   };
 }
 
@@ -765,29 +791,42 @@ function revalidatorWithBounds(
           ? null
           : { signIn: answered.signIn, order: answered.order };
       // A spent recovery ends terminally only on the recovery's own judgement,
-      // read here after every await; otherwise it reports and writes nothing.
-      // Only the CLI judges a sign-in: every other recovery keeps the
-      // terminal answer it gave before the judgement existed.
-      const spent = (): RevalidateOutcome =>
-        (recovery.signInRejectedFor?.(refusal) ?? true)
-          ? "rejected"
-          : "network-error";
+      // which adopts the stored sign-in first and is read after every await;
+      // otherwise it reports and writes nothing, and the next attempt gets
+      // its own refresh. Only the CLI judges a sign-in: every other recovery
+      // keeps the terminal answer it gave before the judgement existed.
+      const spent = async (): Promise<HostTokenRecoveryOutcome> => {
+        const judged =
+          recovery.signInRejectedFor === undefined
+            ? true
+            : await recovery.signInRejectedFor(refusal);
+        if (judged) return "sign-in-rejected";
+        bounds.releaseSignInRefresh();
+        return "network-error";
+      };
       if (signInRetried) return spent();
       const refresh = bounds.refreshSignIn(recovery, owner, refusal, caller);
       if (refresh === null) return spent();
       const recovered = await refresh;
-      // An adopted rotation mints as a rotated one does, and leaves the
-      // refresh to the next refusal of the sign-in; only once the sign-in a
-      // mint presents has moved, so no pass repeats with nothing changed.
-      if (recovered === "adopted")
-        return mints.signInKey() !== presented
-          ? mintFresh(userId, false, eraRetried, bounds, owner, report)
+      // A rotation, adopted or the recovery's own, mints again only once the
+      // sign-in a mint presents has moved, so no pass repeats with nothing
+      // changed. An adopted one leaves the refresh to the next refusal.
+      if (recovered === "adopted" || recovered === "rotated")
+        return mints.moved(presented)
+          ? mintFresh(
+              userId,
+              recovered === "rotated",
+              eraRetried,
+              bounds,
+              owner,
+              report,
+            )
           : spent();
+      // The refresh refused: the sign-in is the reason.
+      if (recovered === "rejected") return "sign-in-rejected";
       // A refresh declined for a replaced process answers as a mint lost to
       // it does.
-      return recovered === "rotated"
-        ? mintFresh(userId, true, eraRetried, bounds, owner, report)
-        : recovered;
+      return recovered;
     }
     const state = stateOfFailedMint(
       outcome,
@@ -895,6 +934,8 @@ export function hostTokenUnaryRevalidator(deps: {
           notAdmitted,
           refreshSignIn: (signInRecovery, asked, refusal, stillWanted) =>
             signInRecovery.revalidateForReconnect(asked, refusal, stillWanted),
+          // `signInRetried` bounds a call; there is no sequence to release.
+          releaseSignInRefresh: () => undefined,
         },
       };
       boundsByOwner.set(owner, own);

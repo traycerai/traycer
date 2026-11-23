@@ -251,15 +251,38 @@ export function createStoreBackedRevalidator(args: {
           // adoption. The read serves the committed pair, or this process's
           // overlay of a commit-failed one, or whatever is newer by then.
           await adoptStoredSignIn();
-          // A sibling's rotation adopted is no sign-in this save wrote.
-          return result.outcome === "superseded"
-            ? { outcome: "adopted", installed: null, refused: null, accepted }
-            : {
-                outcome: "rotated",
-                installed: result.credentials.token,
+          // A landed save the read did not install: read once more, on the
+          // same serialised path (a read that starts after this one).
+          if (lease.getBearerToken() === current) await adoptStoredSignIn();
+          {
+            const held = lease.getBearerToken();
+            // Still nothing installed: the lease presents what was refused,
+            // so this is no progress. Transient; what authn accepted stays.
+            if (held === current)
+              return {
+                outcome: "network-error",
+                installed: null,
                 refused: null,
                 accepted,
               };
+            // "rotated" only while the lease holds the sign-in this save
+            // wrote. A sibling's rotation adopted, or one newer than this
+            // save, is no sign-in this save wrote.
+            return result.outcome !== "superseded" &&
+              held === result.credentials.token
+              ? {
+                  outcome: "rotated",
+                  installed: result.credentials.token,
+                  refused: null,
+                  accepted,
+                }
+              : {
+                  outcome: "adopted",
+                  installed: null,
+                  refused: null,
+                  accepted,
+                };
+          }
         case "refresh-network":
         case "lock-busy":
         case "spend-pending":

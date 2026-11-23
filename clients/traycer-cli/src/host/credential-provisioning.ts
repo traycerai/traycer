@@ -230,9 +230,7 @@ export async function provisionInstalledHostCredential(
   let client: WsStreamClient<HostStreamRpcRegistry> | null = null;
   // The most recent revalidation, awaited (bounded) before returning so a
   // refresh this probe started does not outlive the call.
-  let inFlightRevalidation: Promise<RevalidateOutcome> | null = null;
-  // Set when a revalidation came back terminally `rejected`.
-  let credentialRejected = false;
+  let inFlightRevalidation: Promise<unknown> | null = null;
 
   // The endpoint provider is synchronous, so a poller keeps a mutable slot
   // fresh (the monitor's pattern): the freshly-started host writes its pid
@@ -332,7 +330,7 @@ export async function provisionInstalledHostCredential(
   // recovery won.
   const waitForInFlightRevalidation = async (): Promise<void> => {
     if (inFlightRevalidation === null) return;
-    const pending: Promise<RevalidateOutcome> = inFlightRevalidation;
+    const pending: Promise<unknown> = inFlightRevalidation;
     const bound = cancelableDelay(remaining());
     try {
       await Promise.race([pending.catch(() => undefined), bound.promise]);
@@ -440,7 +438,9 @@ export async function provisionInstalledHostCredential(
           owner !== undefined &&
           (!processReleasedHosts.isCurrent(owner) ||
             endpoint?.hostId !== owner.hostId);
-        return left && outcome === "rejected" && !tokens.signInRejected()
+        return left &&
+          outcome === "rejected" &&
+          !(await tokens.signInRejectedNow(null))
           ? "network-error"
           : outcome;
       },
@@ -564,62 +564,65 @@ export async function provisionInstalledHostCredential(
       );
     // One place decides every non-`active` exit, so the loop end, the bound,
     // and a fatal close can never drift apart on what they report.
-    const settledOutcome = (): HostCredentialProvisionOutcome => {
-      // First: a dead sign-in explains every other symptom below it (the
-      // stream never opens, nothing is ever minted) and is the only one that
-      // does not self-heal, so it must not be reported as "unreachable".
-      if (credentialRejected || tokens.signInRejected()) {
-        return { kind: "unauthorized" };
-      }
-      const refusal = mintRefusal ?? deferredNotAdmitted();
-      if (refusal !== null) return mintRefusalOutcome(refusal);
-      if (mintUnavailable) {
-        return { kind: "mint-unavailable" };
-      }
-      // `not-adopted` claims a credential existed and was pushed (or held for
-      // delivery), so it needs the mint to have definitively PROVISIONED. A
-      // mint still pending at the deadline proved neither - "the handoff did
-      // not complete" is all that is known, which is `mint-unavailable`'s
-      // line, not an adoption failure the host can be blamed for.
-      if (mintProvisioned) {
-        return { kind: "not-adopted" };
-      }
-      if (mintInvoked) {
-        return { kind: "mint-unavailable" };
-      }
-      // Both mean the host WAS reached and cannot be credentialed by this
-      // client: it opened without ever reporting a state, or it reported a
-      // non-active state whose mint the client withheld (version mismatch or
-      // a non-UUID host id).
-      if (mintWithheld || sawSilentOpen) {
-        return { kind: "unsupported" };
-      }
-      // The door refused with its reason (a claimed host that has not read
-      // its owner yet) and has admitted no open since: the host answered and
-      // did not take the credential in time.
-      if (doorRetried) {
-        return { kind: "not-adopted" };
-      }
-      // The host spoke to us but never got as far as reporting a credential
-      // state - the shape of an expired stored bearer whose refresh could
-      // not complete (authn unreachable), where the host answers
-      // UNAUTHORIZED, the revalidation returns a transient failure, and the
-      // stream just reconnects until the budget runs out. `unreachable`
-      // would say "the host did not respond in time" about a host that
-      // answered every single dial; what actually failed is the handoff, and
-      // that is `mint-unavailable`'s line - a later client with a live token
-      // mints for it normally.
-      if (hostAnswered) {
-        return { kind: "mint-unavailable" };
-      }
-      return { kind: "unreachable" };
-    };
+    const settledOutcome =
+      async (): Promise<HostCredentialProvisionOutcome> => {
+        // First: a dead sign-in explains every other symptom below it (the
+        // stream never opens, nothing is ever minted) and is the only one that
+        // does not self-heal, so it must not be reported as "unreachable". The
+        // sign-in judged is the one stored when this reads the file, so a
+        // confirmation's refused sign-in counts only while it is still stored.
+        if (await tokens.signInRejectedNow(null)) {
+          return { kind: "unauthorized" };
+        }
+        const refusal = mintRefusal ?? deferredNotAdmitted();
+        if (refusal !== null) return mintRefusalOutcome(refusal);
+        if (mintUnavailable) {
+          return { kind: "mint-unavailable" };
+        }
+        // `not-adopted` claims a credential existed and was pushed (or held for
+        // delivery), so it needs the mint to have definitively PROVISIONED. A
+        // mint still pending at the deadline proved neither - "the handoff did
+        // not complete" is all that is known, which is `mint-unavailable`'s
+        // line, not an adoption failure the host can be blamed for.
+        if (mintProvisioned) {
+          return { kind: "not-adopted" };
+        }
+        if (mintInvoked) {
+          return { kind: "mint-unavailable" };
+        }
+        // Both mean the host WAS reached and cannot be credentialed by this
+        // client: it opened without ever reporting a state, or it reported a
+        // non-active state whose mint the client withheld (version mismatch or
+        // a non-UUID host id).
+        if (mintWithheld || sawSilentOpen) {
+          return { kind: "unsupported" };
+        }
+        // The door refused with its reason (a claimed host that has not read
+        // its owner yet) and has admitted no open since: the host answered and
+        // did not take the credential in time.
+        if (doorRetried) {
+          return { kind: "not-adopted" };
+        }
+        // The host spoke to us but never got as far as reporting a credential
+        // state - the shape of an expired stored bearer whose refresh could
+        // not complete (authn unreachable), where the host answers
+        // UNAUTHORIZED, the revalidation returns a transient failure, and the
+        // stream just reconnects until the budget runs out. `unreachable`
+        // would say "the host did not respond in time" about a host that
+        // answered every single dial; what actually failed is the handoff, and
+        // that is `mint-unavailable`'s line - a later client with a live token
+        // mints for it normally.
+        if (hostAnswered) {
+          return { kind: "mint-unavailable" };
+        }
+        return { kind: "unreachable" };
+      };
     // Read once an in-flight recovery has answered or the bound passed, so a sign-in
     // refused inside the bound reads as refused. One after the bound is not seen.
     const settleAfterRecovery =
       async (): Promise<HostCredentialProvisionOutcome> => {
         await waitForInFlightRevalidation();
-        return settledOutcome();
+        return await settledOutcome();
       };
     // True when NOTHING observed this run accounts for how it ended - no
     // dead sign-in, no mint history, no capability gap. Deliberately does
@@ -629,9 +632,8 @@ export async function provisionInstalledHostCredential(
     // `hostAnswered` fallback existed, which is what the fatal-close arm
     // needs to decide whether the close code is the most informative thing
     // this probe can report.
-    const nothingExplainsTheClose = (): boolean =>
-      !credentialRejected &&
-      !tokens.signInRejected() &&
+    const nothingExplainsTheClose = async (): Promise<boolean> =>
+      !(await tokens.signInRejectedNow(null)) &&
       mintRefusal === null &&
       deferredNotAdmitted() === null &&
       !mintUnavailable &&
@@ -744,25 +746,18 @@ export async function provisionInstalledHostCredential(
           // first adopts the credentials file's sign-in, which is the stored
           // one; every condition is read again after that read.
           const confirmDue = (): boolean =>
-            mintUnauthorized &&
-            !mintUnauthorizedConfirmed &&
-            !credentialRejected &&
-            remaining() > 0;
+            mintUnauthorized && !mintUnauthorizedConfirmed && remaining() > 0;
           if (confirmDue()) await revalidator.adoptStoredSignIn();
           if (confirmDue() && readLeaseBearer(lease) === mintRefusedSignIn) {
             // Latched BEFORE awaiting: the rotation is the side effect being
             // guarded, so a second lap must not slip past this branch while
             // the first is still settling.
             mintUnauthorizedConfirmed = true;
-            // Recorded on the rotation itself, so an answer that lands after
-            // this lap stopped waiting still reaches the outcome read at the
-            // exit, inside the bound.
-            const confirm = revalidator
-              .revalidateCurrentContext()
-              .then((outcome) => {
-                if (outcome === "rejected") credentialRejected = true;
-                return outcome;
-              });
+            // Through the one writer of the rotation's facts, so a refused
+            // refresh is the sign-in's verdict at the exit (read there, about
+            // the sign-in stored then) and an accepted one is its provenance.
+            // The exit waits on it inside the bound.
+            const confirm = tokens.refreshSignIn();
             inFlightRevalidation = confirm;
             const confirmBound = cancelableDelay(remaining());
             try {
@@ -823,14 +818,14 @@ export async function provisionInstalledHostCredential(
             // would swallow this close the moment a reconnect revalidation
             // had fired. Its code stays in the structured diagnostic above.
             await waitForInFlightRevalidation();
-            if (nothingExplainsTheClose()) {
+            if (await nothingExplainsTheClose()) {
               return {
                 kind: "error",
                 message:
                   "the host closed the connection before authorization was confirmed",
               };
             }
-            return settledOutcome();
+            return await settledOutcome();
           }
           return await settleAfterRecovery();
         }

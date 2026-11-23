@@ -24,7 +24,8 @@ import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
  * verdict on the CURRENT sign-in: `validateToken`, then `rotateLiveSession`
  * only on `rejected`. A host's refusal judges nothing here, so a stale one
  * costs one validate and rotates nothing. A stream that closed may be among
- * the flight's callers; the stream discards its late answer.
+ * the flight's callers; the stream discards its late answer. It gives no
+ * `signInRejectedFor`, so a spent recovery ends here as it always did.
  */
 export function createStreamAuthRevalidator(
   authService: AuthService,
@@ -105,8 +106,5 @@ export function createStreamAuthRevalidator(
     // Only the server pool opens with the sign-in; a host-only token recovers through
     // `revalidateForReconnect` alone.
     revalidateRefused: () => revalidate(),
-    // The app's spent branches end as they did: in the app a refusal judges
-    // nothing, and its own auth layer decides the sign-in.
-    signInRejectedFor: () => true,
   };
 }
