@@ -75,21 +75,65 @@ function processHeldRefusals(instance: HostInstance): Map<string, string> {
 /**
  * One mint request per host process and sign-in at a time for this process:
  * every handle's asks share the person's one source, and the request is
- * shared further by sign-in. The request ends when its last asker stops
- * waiting, or on its own timeout. Each asker stops on its own exit (see
- * `askSignal`): its own signal, else its caller's, else, with none, its
- * handle's dispose; it is not cut short by another handle's. A signal
- * outlives its call only where the command means it to (a give's budget,
- * which its next try joins); no request outlives every asker that wants it.
- * Kept on the host process observed when the mint starts, so a replacement
- * never joins its predecessor's.
+ * shared further by sign-in. The request ends when the person's last ask for
+ * its host id stops waiting (see `waitForMint`), or on its own timeout. Kept
+ * on the host process observed when the mint starts, so a replacement never
+ * joins its predecessor's.
  */
 interface MintFlight {
   readonly answer: Promise<HostTokenMintOutcome>;
-  readonly controller: AbortController;
   /** The order drawn as this flight's request was sent; every joiner gets it. */
   readonly order: number;
-  askers: number;
+  /** Aborts the request, and no later ask joins it. */
+  readonly abort: (reason: unknown) => void;
+}
+
+/**
+ * The one count of asks waiting on a person's mints for one host id in this
+ * process, and the requests running for them. Every ask enters in `askFor`,
+ * above the source's join, so a joiner the source answers from another's
+ * request counts as its starter does. Each leaves exactly once: on its
+ * answer, or on its own exit (see `askSignal`: its own signal, else its
+ * caller's, else, with none, its handle's dispose; never another handle's).
+ * A signal outlives its call only where the command means it to (a give's
+ * budget, which its next try joins). When the count reaches zero, for any
+ * reason, every request still running for that person and host id is
+ * aborted, on every sign-in and every host process: no request outlives
+ * every ask that wants it. Keyed by host id, not sign-in, since the source
+ * reads the sign-in it sends with only after its table load: a request sent
+ * with an earlier sign-in runs on while an ask on a later one still waits.
+ */
+interface MintWaiters {
+  count: number;
+  readonly running: Set<MintFlight>;
+}
+const mintWaiters = new Map<string, MintWaiters>();
+const waitersKey = (userId: string, hostId: string): string =>
+  `${userId}\u0000${hostId}`;
+
+/** Enters one ask; the returned leave counts only its first call. */
+function waitForMint(
+  userId: string,
+  hostId: string,
+): (exit: AbortSignal | null) => void {
+  const key = waitersKey(userId, hostId);
+  let waiting = mintWaiters.get(key);
+  if (waiting === undefined) {
+    waiting = { count: 0, running: new Set() };
+    mintWaiters.set(key, waiting);
+  }
+  const entered = waiting;
+  entered.count += 1;
+  let left = false;
+  return (exit) => {
+    if (left) return;
+    left = true;
+    entered.count -= 1;
+    if (entered.count > 0) return;
+    if (mintWaiters.get(key) === entered) mintWaiters.delete(key);
+    for (const flight of Array.from(entered.running))
+      flight.abort(exit?.reason);
+  };
 }
 const mintFlightsByProcess = new WeakMap<
   HostInstance,
@@ -180,16 +224,15 @@ const unsentMint = (exit: AbortSignal): OrderedMintAnswer => ({
  */
 const startGates = new WeakMap<AbortSignal, AbortSignal>();
 
-// `signal` is the ask's exit: the asker leaves the request when it ends.
+// `signal` is the ask's exit. Its asker counts in `waitForMint`, which alone
+// ends the request; an exit that has ended neither joins nor starts one.
 function sharedMint(
   userId: string,
   hostId: string,
   signInToken: string,
   signal: AbortSignal | null,
 ): Promise<OrderedMintAnswer> {
-  const exits = signal === null ? [] : [signal];
-  const gone = exits.find((exit) => exit.aborted);
-  if (gone !== undefined) return Promise.resolve(unsentMint(gone));
+  if (signal?.aborted === true) return Promise.resolve(unsentMint(signal));
   const mintFlights = processMintFlights(
     processReleasedHosts.currentInstance(hostId),
   );
@@ -198,10 +241,9 @@ function sharedMint(
   if (flight === undefined) {
     const gate = signal === null ? undefined : startGates.get(signal);
     if (gate?.aborted === true) return Promise.resolve(unsentMint(gate));
+    const waiting = mintWaiters.get(waitersKey(userId, hostId));
     const controller = new AbortController();
     const started: MintFlight = {
-      controller,
-      askers: 0,
       order: drawHostMintOrder(),
       answer: mintHostTokenViaHttp(
         config.authnBaseUrl,
@@ -219,45 +261,24 @@ function sharedMint(
         })
         .finally(() => {
           if (mintFlights.get(key) === started) mintFlights.delete(key);
+          waiting?.running.delete(started);
         }),
+      abort: (reason) => {
+        if (mintFlights.get(key) === started) mintFlights.delete(key);
+        controller.abort(reason);
+      },
     };
     // Settled for nobody once every asker has left.
     started.answer.catch(() => undefined);
     mintFlights.set(key, started);
+    waiting?.running.add(started);
     flight = started;
   }
   const running = flight;
-  running.askers += 1;
-  return new Promise<OrderedMintAnswer>((resolve, reject) => {
-    const listeners = new Map<AbortSignal, () => void>();
-    const detach = (): void => {
-      for (const [exit, listener] of listeners)
-        exit.removeEventListener("abort", listener);
-    };
-    for (const exit of exits) {
-      const leave = (): void => {
-        detach();
-        running.askers -= 1;
-        if (running.askers === 0) {
-          if (mintFlights.get(key) === running) mintFlights.delete(key);
-          running.controller.abort(exit.reason);
-        }
-        resolve(unsentMint(exit));
-      };
-      listeners.set(exit, leave);
-      exit.addEventListener("abort", leave, { once: true });
-    }
-    running.answer.then(
-      (outcome) => {
-        detach();
-        resolve({ outcome, order: running.order });
-      },
-      (cause: unknown) => {
-        detach();
-        reject(cause);
-      },
-    );
-  });
+  return running.answer.then((outcome) => ({
+    outcome,
+    order: running.order,
+  }));
 }
 
 export interface SignInRevalidator {
@@ -650,6 +671,13 @@ function createPersonTokens(
   stored.bindSignInSync(adoptStored);
   // The key of the sign-in stored now: the lease's, which follows the file.
   const storedKey = (): string | null => hostSignInKey(readLeaseBearer(lease));
+  // The host process an ask observes now. An ask whose exit has ended (the
+  // one it leaves its count on, see `waitForMint`) observes none, so the
+  // source's own check declines its write and its purchase. An ask whose
+  // process is not yet observed has no such check: it writes.
+  const observedFor =
+    (hostId: string, exit: AbortSignal | null) => (): string | null =>
+      exit?.aborted === true ? null : hosts.currentInstance(hostId).observed;
   // The exit that ended an ask, or its handle's stop: an ask whose handle has
   // ended is answered as abandoned, though its request runs on for others.
   const endedExit = (
@@ -664,7 +692,7 @@ function createPersonTokens(
   // One refresh of the stored sign-in at a time for the person: a caller
   // while one runs for the same stored sign-in joins it, and every caller is
   // answered with its one result. The refresh runs on its own controller,
-  // aborted only once every caller has left (as `sharedMint`'s request is):
+  // aborted only once every caller has left (as a mint request is):
   // no caller's stop cancels another's refresh, and a lone caller's stop
   // still cancels its lock wait and fetch at once. A caller whose stop ends
   // leaves as a refresh that never started answers, "network-error"; its
@@ -784,15 +812,19 @@ function createPersonTokens(
     askedOwner: HostInstance | null,
   ): Promise<Asked> => {
     let owner = askedOwner ?? hosts.currentInstance(hostId);
+    // Counted from here, above the source's join, and left on its answer or
+    // its own exit, whichever comes first: an ask whose exit ends is
+    // answered as abandoned at once, whoever started the request it rides.
     const askFor = (
       asker: HostInstance,
       freshAsk: boolean,
-    ): Promise<Answered> =>
-      stored
+    ): Promise<Answered> => {
+      const leave = waitForMint(id, hostId);
+      const answered = stored
         .obtainIdentified(id, hostId, freshAsk, {
           signal,
           owner: asker,
-          observedNow: () => hosts.currentInstance(hostId).observed,
+          observedNow: observedFor(hostId, signal),
         })
         .catch((): Answered => ({
           outcome: { kind: "unavailable", detail: "host-only token not saved" },
@@ -800,6 +832,27 @@ function createPersonTokens(
           order: null,
           purchase: null,
         }));
+      if (signal === null) return answered.finally(() => leave(null));
+      const exit = signal;
+      return new Promise<Answered>((resolve) => {
+        const ended = (): void => {
+          leave(exit);
+          resolve({
+            outcome: abandonedMint(exit),
+            signIn: null,
+            order: null,
+            purchase: null,
+          });
+        };
+        if (exit.aborted) ended();
+        else exit.addEventListener("abort", ended, { once: true });
+        void answered.then((result) => {
+          exit.removeEventListener("abort", ended);
+          leave(null);
+          resolve(result);
+        });
+      });
+    };
     let freshAsk = fresh;
     let replaced = false;
     for (;;) {
@@ -938,7 +991,7 @@ function createPersonTokens(
         : {
             signal,
             owner,
-            observedNow: () => hosts.currentInstance(hostId).observed,
+            observedNow: observedFor(hostId, signal),
           };
     ownAsks.add(ask);
     askHandles.set(ask, handle);
