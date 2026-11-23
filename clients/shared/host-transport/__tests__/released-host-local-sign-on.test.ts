@@ -2797,6 +2797,37 @@ describe("released personal host, local stream", () => {
       expect(refusals).toEqual([]);
     });
 
+    it("writes no open, and credits nothing, on a socket dialed to the earlier process when the replacement is observed before the socket opens", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const hosts = createReleasedHostMemory();
+      hosts.observeInstance(HOST_ID, "100");
+      const { factory, sockets } = makeStubSocketFactory();
+      const { door, admitted } = streamRecordingDoor();
+      const client = makeStreamClient(
+        factory,
+        new MutableBearerLease(HOST_TOKEN, USER_ID),
+        signOnWithMemory(
+          PERSONAL_ROW,
+          new MutableBearerLease(SIGN_IN, USER_ID),
+          hosts,
+        ),
+        door,
+      );
+      subscribe(client);
+      // The socket is dialed to the first process and has not opened yet.
+      await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+
+      hosts.observeInstance(HOST_ID, "200");
+      sockets[0].fireOpen();
+
+      // Nothing is written to a socket dialed to a process no longer current:
+      // the redial, after the loss delay, is the replacement's own open.
+      expect(sockets[0].textSent).toEqual([]);
+      await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+      expect((await openFrame(sockets[1])).token).toBe(HOST_TOKEN);
+      expect(admitted).toEqual([]);
+    });
+
     it("writes the host-only token, never the sign-in, when the host is replaced between the bare refusal that planned the sign-in and its open", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       const hosts = createReleasedHostMemory();
