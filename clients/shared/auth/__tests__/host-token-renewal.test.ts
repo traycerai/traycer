@@ -496,9 +496,11 @@ describe("host-token revalidation after an era changes", () => {
       signIn: (userId) => (userId === USER_A ? "sign-in-a" : null),
       now: () => Date.now(),
     });
+    const hosts = createReleasedHostMemory();
     const revalidator = hostTokenRevalidator({
-      tokens,
-      hosts: createReleasedHostMemory(),
+      tokens: trackHostTokenMints(tokens, hosts),
+      signInKey: () => tokens.signInKey(USER_A),
+      hosts,
       currentUserId: () => USER_A,
       hostId: "era-retry-host",
       signInRecovery: null,
@@ -543,9 +545,11 @@ describe("host-token revalidation after an era changes", () => {
       signIn: (userId) => (userId === USER_A ? "sign-in-a" : null),
       now: () => Date.now(),
     });
+    const hosts = createReleasedHostMemory();
     const revalidator = hostTokenRevalidator({
-      tokens,
-      hosts: createReleasedHostMemory(),
+      tokens: trackHostTokenMints(tokens, hosts),
+      signInKey: () => tokens.signInKey(USER_A),
+      hosts,
       currentUserId: () => currentUserId,
       hostId: "era-retry-host",
       signInRecovery: null,
@@ -980,6 +984,58 @@ describe("a recovery's bounds across host process instances", () => {
     await expect(refusedCall()).resolves.toBe("rotated");
     expect(mints).toHaveLength(2);
     expect(reports).toEqual([]);
+  });
+
+  it("leaves the replacement process's spent bounds alone when an admission of the process it replaced arrives late", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "process-p");
+    const instanceP = hosts.currentInstance(HOST_ID);
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "sign-in-rejected" }),
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => Date.now(),
+    });
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      { token: "held-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      source.era(USER_ID),
+      () => true,
+    );
+    // Every refresh authn is asked for answers rotated at once: it spends the sequence's allowance.
+    let refreshes = 0;
+    const stream = hostTokenStreamAuth(
+      {
+        tokens: trackHostTokenMints(source, hosts),
+        hosts,
+        currentUserId: () => USER_ID,
+        hostId: HOST_ID,
+        signInRecovery: {
+          revalidateForReconnect: () => {
+            refreshes += 1;
+            return Promise.resolve("rotated");
+          },
+        },
+        onState: () => undefined,
+        now: () => Date.now(),
+      },
+      null,
+    );
+    const revalidator = stream.auth(() => true);
+    // P's sequence refreshes once.
+    await revalidator.revalidateRefused(REFUSED_NOT_ADMITTED);
+    expect(refreshes).toBe(1);
+    // P is replaced by Q, whose sequence spends its own allowance.
+    hosts.observeInstance(HOST_ID, "process-q");
+    await revalidator.revalidateRefused(REFUSED_NOT_ADMITTED);
+    expect(refreshes).toBe(2);
+
+    // P's admission arrives late: it is not Q's, and resets nothing of Q's.
+    stream.door.admitted(instanceP);
+    await revalidator.revalidateRefused(REFUSED_NOT_ADMITTED);
+
+    expect(refreshes).toBe(2);
   });
 });
 

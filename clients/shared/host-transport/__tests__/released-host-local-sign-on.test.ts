@@ -61,16 +61,19 @@ import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
   type HostTokenMintOutcome,
+  hostSignInKey,
 } from "../../auth/host-token-source";
 import type { HostToken } from "../../auth/host-token-store";
 import {
   createReleasedHostMemory,
   releasedSignOnForLocalRow,
   signInForLocalRow,
+  type HostInstance,
   type ReleasedHostMemory,
   type ReleasedSignOn,
   type ReleasedSignOnRow,
   type SignInRecovery,
+  type SignInRefusal,
 } from "../released-sign-on";
 import {
   makeStubSocketFactory,
@@ -1720,8 +1723,8 @@ describe("released personal host, local stream", () => {
       const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
       const asked: Array<string | null> = [];
       const { sockets } = releasedStream(signIn, {
-        revalidateForReconnect: (refused) => {
-          asked.push(refused);
+        revalidateForReconnect: (_owner, refusal) => {
+          asked.push(refusal === null ? null : refusal.signIn);
           // The store held a sibling's sign-in: it is taken, authn is not asked.
           signIn.rotate("sign-in-of-a-sibling");
           return Promise.resolve("adopted");
@@ -1736,7 +1739,7 @@ describe("released personal host, local stream", () => {
       sockets[1].fireText(releasedRefusal());
       await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
 
-      expect(asked).toEqual([SIGN_IN]);
+      expect(asked).toEqual([hostSignInKey(SIGN_IN)]);
       expect((await openFrame(sockets[2])).token).toBe("sign-in-of-a-sibling");
     });
 
@@ -1747,8 +1750,8 @@ describe("released personal host, local stream", () => {
         asked: Array<string | null>,
       ): Promise<ReleasedStreamRig> {
         const rig = releasedStream(signIn, {
-          revalidateForReconnect: (refused) => {
-            asked.push(refused);
+          revalidateForReconnect: (_owner, refusal) => {
+            asked.push(refusal === null ? null : refusal.signIn);
             return Promise.resolve("rotated");
           },
         });
@@ -1798,7 +1801,10 @@ describe("released personal host, local stream", () => {
         // The sign-in the lease holds is now refused itself: the recovery is asked,
         // for that sign-in, and its refresh is the sequence's first.
         sockets[5].fireText(releasedRefusal());
-        await vi.waitFor(() => expect(asked).toEqual([presented]), WAIT);
+        await vi.waitFor(
+          () => expect(asked).toEqual([hostSignInKey(presented)]),
+          WAIT,
+        );
         await vi.waitFor(() => expect(sockets).toHaveLength(7), WAIT);
         expect(statuses).not.toContain("closed");
       });
@@ -1811,7 +1817,10 @@ describe("released personal host, local stream", () => {
 
         // The sign-in the lease holds is refused: the sequence's one refresh is spent.
         sockets[1].fireText(releasedRefusal());
-        await vi.waitFor(() => expect(asked).toEqual([SIGN_IN]), WAIT);
+        await vi.waitFor(
+          () => expect(asked).toEqual([hostSignInKey(SIGN_IN)]),
+          WAIT,
+        );
         await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
         expect((await openFrame(sockets[2])).token).toBe(SIGN_IN);
 
@@ -1825,7 +1834,7 @@ describe("released personal host, local stream", () => {
         await vi.waitFor(() => expect(sockets).toHaveLength(5), WAIT);
         expect((await openFrame(sockets[4])).token).toBe("sign-in-c");
 
-        expect(asked).toEqual([SIGN_IN]);
+        expect(asked).toEqual([hostSignInKey(SIGN_IN)]);
       });
 
       it("asks the recovery as it does today when the lease holds no bearer", async () => {
@@ -1837,7 +1846,10 @@ describe("released personal host, local stream", () => {
         signIn.rotate("");
         sockets[1].fireText(releasedRefusal());
 
-        await vi.waitFor(() => expect(asked).toEqual([SIGN_IN]), WAIT);
+        await vi.waitFor(
+          () => expect(asked).toEqual([hostSignInKey(SIGN_IN)]),
+          WAIT,
+        );
       });
     });
 
@@ -1891,8 +1903,8 @@ describe("released personal host, local stream", () => {
         const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
         const asked: Array<string | null> = [];
         const { client, sockets, statuses } = releasedStream(signIn, {
-          revalidateForReconnect: (refused) => {
-            asked.push(refused);
+          revalidateForReconnect: (_owner, refusal) => {
+            asked.push(refusal === null ? null : refusal.signIn);
             signIn.rotate("sign-in-refreshed");
             return Promise.resolve("rotated");
           },
@@ -1941,7 +1953,7 @@ describe("released personal host, local stream", () => {
         sockets[2].fireText(releasedRefusal());
         await vi.waitFor(() => expect(sockets).toHaveLength(4), WAIT);
 
-        expect(asked).toEqual([REPLACED_BY]);
+        expect(asked).toEqual([hostSignInKey(REPLACED_BY)]);
         expect((await openFrame(sockets[3])).token).toBe("sign-in-refreshed");
       });
     });
@@ -4780,7 +4792,8 @@ describe("released personal host, local unary", () => {
     const driven = driveUnaryRefresh(new MutableBearerLease(SIGN_IN, USER_ID), {
       // A recovery that reads the stored sign-in before it rotates asks last, after that await.
       revalidateForReconnect: async (
-        _refused: string | null,
+        _owner: HostInstance,
+        _refusal: SignInRefusal | null,
         stillWanted: () => boolean,
       ): Promise<RevalidateOutcome> => {
         started += 1;

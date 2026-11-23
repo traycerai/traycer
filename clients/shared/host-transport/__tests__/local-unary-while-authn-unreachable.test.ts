@@ -14,6 +14,7 @@ import {
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
+  hostSignInKey,
   type HostTokenMintOutcome,
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
@@ -1400,8 +1401,8 @@ describe("a sign-in is written only where its row and its host still allow it", 
       return {
         asked,
         recovery: {
-          revalidateForReconnect: (refused) => {
-            asked.push(refused ?? "null");
+          revalidateForReconnect: (_owner, refusal) => {
+            asked.push(refusal === null ? "null" : refusal.signIn);
             return Promise.resolve("adopted");
           },
         },
@@ -1465,7 +1466,7 @@ describe("a sign-in is written only where its row and its host still allow it", 
         signInSocket.fireMessage(refusal());
         await vi.waitFor(() => expect(adopting.asked).toHaveLength(1), WAIT);
 
-        expect(adopting.asked).toEqual([SIGN_IN]);
+        expect(adopting.asked).toEqual([hostSignInKey(SIGN_IN)]);
       },
     );
 
@@ -1544,7 +1545,7 @@ describe("a sign-in is written only where its row and its host still allow it", 
       signInSocket.fireMessage(releasedRefusal());
       await vi.waitFor(() => expect(adopting.asked).toHaveLength(1), WAIT);
 
-      expect(adopting.asked).toEqual([SIGN_IN]);
+      expect(adopting.asked).toEqual([hostSignInKey(SIGN_IN)]);
     });
 
     describe("every refusal of a sign-in the lease has replaced is answered adopted, however many follow", () => {
@@ -1591,8 +1592,8 @@ describe("a sign-in is written only where its row and its host still allow it", 
         const adopting = adoptingRecovery();
         // The recovery rotates nothing: the lease moves as siblings' refreshes do.
         const { driven, lease } = await onSignIn({
-          revalidateForReconnect: (refused) => {
-            adopting.asked.push(refused ?? "null");
+          revalidateForReconnect: (_owner, refusal) => {
+            adopting.asked.push(refusal === null ? "null" : refusal.signIn);
             return Promise.resolve("rotated");
           },
         });
@@ -1620,8 +1621,8 @@ describe("a sign-in is written only where its row and its host still allow it", 
       it("retries a stale refusal on the held sign-in after the call's one refresh was spent, and throws nothing stale", async () => {
         const asked: string[] = [];
         const { driven, lease } = await onSignIn({
-          revalidateForReconnect: (refused) => {
-            asked.push(refused ?? "null");
+          revalidateForReconnect: (_owner, refusal) => {
+            asked.push(refusal === null ? "null" : refusal.signIn);
             // The refresh authn answered: the lease holds its result.
             lease().rotate("sign-in-b");
             return Promise.resolve("rotated");
@@ -1643,7 +1644,7 @@ describe("a sign-in is written only where its row and its host still allow it", 
         ackAndEcho(last, open);
         await answerEcho(last);
 
-        expect(asked).toEqual([SIGN_IN]);
+        expect(asked).toEqual([hostSignInKey(SIGN_IN)]);
         expect(await driven.settled).toMatchObject({ kind: "fulfilled" });
       });
     });
