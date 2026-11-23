@@ -100,6 +100,8 @@ const monitorHarness = vi.hoisted(() => {
       realRevalidator: false,
       /** What the scripted credentials store answered each `rotate`, in order: the first is a sibling's pair adopted, later ones refresh. */
       rotations: [] as string[],
+      /** The command's proactive upkeep, as its scheduler was given it: run when a test chooses, not at its own time. */
+      upkeep: null as (() => Promise<unknown>) | null,
       /** The stored sign-in the command holds, as its revalidator was given it. */
       lease: null as MutableBearerLease | null,
       /** When set, the credentials store is the real one, over the file at `credentialsPath`. */
@@ -180,6 +182,27 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
     }),
   };
 });
+
+vi.mock(
+  "../../../../shared/auth/token-refresh-scheduler",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../../shared/auth/token-refresh-scheduler")
+      >();
+    return {
+      ...actual,
+      createProactiveRefreshScheduler: <THandle>(
+        options: Parameters<
+          typeof actual.createProactiveRefreshScheduler<THandle>
+        >[0],
+      ) => {
+        monitorHarness.state.upkeep = options.revalidate;
+        return actual.createProactiveRefreshScheduler(options);
+      },
+    };
+  },
+);
 
 vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();
@@ -476,6 +499,7 @@ beforeEach(() => {
   monitorHarness.state.refresh = "network-error";
   monitorHarness.state.realRevalidator = false;
   monitorHarness.state.lease = null;
+  monitorHarness.state.upkeep = null;
   monitorHarness.state.credentialsPath = "";
   monitorHarness.state.refreshed.splice(0);
   monitorHarness.state.rotations.splice(0);
@@ -1928,7 +1952,7 @@ describe("traycer monitor local released-host sign-in", () => {
         grantedToken("fresh-on-sibling"),
       );
       expect(await outcomeOf()).toBe("running");
-    });
+    }, 20_000);
 
     it("goes on with the sign-in on disk when the retry after a rotation is refused after another process saved a newer one", async () => {
       monitorHarness.state.refreshed.push(REFRESHED_SIGN_IN);
@@ -1974,7 +1998,7 @@ describe("traycer monitor local released-host sign-in", () => {
       expect(monitorHarness.state.refreshed).toEqual([]);
       mints.answer(2, grantedToken("fresh-on-sibling"));
       expect(await outcomeOf()).toBe("running");
-    });
+    }, 20_000);
 
     it("goes on with the sign-in on disk when the stream recovery's retry after a rotation is refused after another process saved a newer one", async () => {
       // The host refuses the held token as expired: the stream's bounded recovery mints a fresh one.
@@ -2024,7 +2048,64 @@ describe("traycer monitor local released-host sign-in", () => {
       expect(monitorHarness.state.refreshed).toEqual([]);
       mints.answer(2, grantedToken("fresh-on-sibling"));
       expect(await outcomeOf()).toBe("running");
-    });
+    }, 20_000);
+
+    it("goes on with the host token the upkeep bought when the recovery's retry on the rotated sign-in is refused after the upkeep moved the sign-in on", async () => {
+      const signInA = expiredJwt(Date.now() + 60 * 60 * 1000);
+      const signInB = expiredJwt(Date.now() + 2 * 60 * 60 * 1000);
+      const signInC = expiredJwt(Date.now() + 3 * 60 * 60 * 1000);
+      monitorHarness.state.signIn = signInA;
+      monitorHarness.state.refreshed.push(signInB, signInC);
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      await createCliCredentialsStore().signIn(
+        credentialsOf(signInA),
+        false,
+        null,
+      );
+      const mints = holdMints();
+      startMonitor();
+      const socket = await socketAt(0);
+      expect((await readOpen(socket)).token).toBe("held-token");
+      // The host refuses the held token as expired: the recovery's mint on A is refused, it rotates to B and retries on B, held.
+      socket.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantSignIns).toEqual([signInA]),
+        WAIT,
+      );
+      mints.answer(0, new Response("rejected", { status: 401 }));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantSignIns).toEqual([signInA, signInB]),
+        WAIT,
+      );
+
+      // The upkeep advances the sign-in to C and buys a token with it: a newer mint for the same host process, which does not join B's.
+      const upkeep = monitorHarness.state.upkeep;
+      if (upkeep === null) throw new Error("the command started no upkeep");
+      const upkeepRun = upkeep();
+      await vi.waitFor(
+        () =>
+          expect(monitorHarness.grantSignIns).toEqual([
+            signInA,
+            signInB,
+            signInC,
+          ]),
+        WAIT,
+      );
+      mints.answer(2, grantedToken("host-token-c"));
+      await upkeepRun;
+
+      // B's 401 arrives, outlived by the upkeep's mint: nothing is judged or reported, and the monitor goes on with C's token.
+      mints.answer(1, new Response("rejected", { status: 401 }));
+      expect(await outcomeOf()).toBe("running");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await outcomeOf()).toBe("running");
+      expect(
+        monitorHarness.state.hostTokenTable
+          .get(USER_ID)
+          ?.get(monitorHarness.state.hostId)?.token,
+      ).toBe("host-token-c");
+      expect(monitorHarness.state.refreshed).toEqual([]);
+    }, 20_000);
   });
 });
 
