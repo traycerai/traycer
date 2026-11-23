@@ -153,18 +153,27 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     ...actual,
     createCliCredentialsStore: vi.fn(() => ({ dispose: vi.fn() })),
     createStoreBackedRevalidator: vi.fn(
-      ({ lease }: { readonly lease: { getBearerToken(): string } }) => ({
+      ({
+        lease,
+      }: {
+        readonly lease: {
+          getBearerToken(): string;
+          rotate(token: string): void;
+        };
+      }) => ({
         revalidateCurrentContext: state.revalidate,
         adoptStoredSignIn: async () => undefined,
-        // The fake rotates no lease: a rotation it accepts installed the
-        // sign-in the lease holds, which the next mint is sent with.
+        // A rotation it accepts installs a distinct sign-in, which the next mint is sent with.
         rotateSignIn: async () => {
+          const tried = lease.getBearerToken();
           const outcome: unknown = await state.revalidate();
+          const installed = outcome === "rotated" ? `${tried}+rotated` : null;
+          if (installed !== null) lease.rotate(installed);
           return {
             outcome,
-            installed: outcome === "rotated" ? lease.getBearerToken() : null,
-            refused: outcome === "rejected" ? lease.getBearerToken() : null,
-            accepted: outcome === "rotated" ? lease.getBearerToken() : null,
+            installed,
+            refused: outcome === "rejected" ? tried : null,
+            accepted: installed,
           };
         },
       }),

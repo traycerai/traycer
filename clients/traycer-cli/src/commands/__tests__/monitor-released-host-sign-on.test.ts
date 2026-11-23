@@ -345,17 +345,19 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
               hold.reached();
               await hold.release;
             },
-            // The fake rotates no lease: a rotation it accepts installed the
-            // sign-in the lease holds, which the next mint is sent with.
+            // A rotation it accepts installs a distinct sign-in, which the next mint is sent with.
             rotateSignIn: async () => {
               const outcome = monitorHarness.state.refresh;
-              if (outcome === "rotated")
+              if (outcome === "rotated") {
+                const installed = `${args.lease.getBearerToken()}+rotated`;
+                if (args.lease instanceof Lease) args.lease.rotate(installed);
                 return {
                   outcome,
-                  installed: args.lease.getBearerToken(),
+                  installed,
                   refused: null,
-                  accepted: args.lease.getBearerToken(),
+                  accepted: installed,
                 };
+              }
               if (outcome === "rejected")
                 return {
                   outcome,
