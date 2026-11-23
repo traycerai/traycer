@@ -258,7 +258,8 @@ export interface WsStreamClientOptions<
    * short-lived provisioning probe (CLI `host install`) is who needs it.
    */
   readonly onHostCredentialState:
-    ((hostId: string, state: HostCredentialState) => void) | null;
+    | ((hostId: string, state: HostCredentialState) => void)
+    | null;
   /**
    * Where this transport's observations reach the selection authority.
    *
