@@ -9,6 +9,10 @@ import { processReleasedHosts } from "@traycer-clients/shared/host-transport/rel
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import { buildProgramWithAgentRoles } from "../../index";
+import {
+  SIGN_OUT_ARMS,
+  standSignOutArm,
+} from "../../internal/__tests__/sign-out-arms-test-support";
 import { completeCredentialsReserve } from "../../internal/__tests__/credentials-reserve-test-support";
 import type { AuthTokenRefreshResult } from "../../../../shared/auth/auth-validation";
 import type { Environment } from "../../runner/environment";
@@ -29,6 +33,9 @@ const TEAM_REFUSAL = "the host has not admitted this sign-in";
 const WAIT = { timeout: 2_000, interval: 10 };
 /** When the proactive upkeep refreshes the sign-in, after the command starts (never before 60 s). */
 const UPKEEP_FIRES_AT_MS = 68_500;
+
+/** What the test queues in `refreshed` for authn refusing the refresh. */
+const REFRESH_REJECTED = "refresh-rejected";
 
 const monitorHarness = vi.hoisted(() => {
   class ScriptSocket {
@@ -106,8 +113,13 @@ const monitorHarness = vi.hoisted(() => {
       lease: null as MutableBearerLease | null,
       /** When set, the credentials store is the real one, over the file at `credentialsPath`. */
       credentialsPath: "",
-      /** The sign-ins authn's refresh hands out to the real store, in the order asked. */
+      /** The sign-ins authn's refresh hands out to the real store, in the order asked; `REFRESH_REJECTED` is its refusal. */
       refreshed: [] as string[],
+      /** When set, a real rotation is held after its locked result, until the test releases it. */
+      rotationHold: null as {
+        readonly reached: () => void;
+        readonly release: Promise<void>;
+      } | null,
       /** What refreshing the stored sign-in answers. */
       refresh: "network-error" as "network-error" | "rotated" | "rejected",
       /** What authn answers a host-token mint with. */
@@ -230,6 +242,11 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
       const token = monitorHarness.state.refreshed.shift();
       if (token === undefined)
         throw new Error("authn was asked for a refresh no test expected");
+      if (token === REFRESH_REJECTED)
+        return {
+          kind: "rejected",
+          rejection: { kind: "credential", revocation: null },
+        };
       return { kind: "refreshed", token, refreshToken: `rt-${token}` };
     },
   };
@@ -242,28 +259,41 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     await import("@traycer-clients/shared/auth/bearer-source");
   return {
     ...actual,
-    createCliCredentialsStore: () =>
-      monitorHarness.state.credentialsPath !== ""
-        ? actual.createCliCredentialsStore()
-        : {
-            dispose: () => undefined,
-            rotate: async () => {
-              const adopted =
-                monitorHarness.state.rotations.length === 0 &&
-                monitorHarness.state.firstRotation === "superseded";
-              monitorHarness.state.rotations.push(
-                adopted ? "superseded" : "applied",
-              );
-              return {
-                outcome: adopted ? "superseded" : "applied",
-                credentials: {
-                  token: adopted
-                    ? "adopted-expired-token"
-                    : monitorHarness.state.refreshedSignIn,
-                },
-              };
-            },
+    createCliCredentialsStore: () => {
+      if (monitorHarness.state.credentialsPath === "")
+        return {
+          dispose: () => undefined,
+          rotate: async () => {
+            const adopted =
+              monitorHarness.state.rotations.length === 0 &&
+              monitorHarness.state.firstRotation === "superseded";
+            monitorHarness.state.rotations.push(
+              adopted ? "superseded" : "applied",
+            );
+            return {
+              outcome: adopted ? "superseded" : "applied",
+              credentials: {
+                token: adopted
+                  ? "adopted-expired-token"
+                  : monitorHarness.state.refreshedSignIn,
+              },
+            };
           },
+        };
+      const real = actual.createCliCredentialsStore();
+      const hold = monitorHarness.state.rotationHold;
+      return hold === null
+        ? real
+        : {
+            ...real,
+            rotate: async (args: Parameters<typeof real.rotate>[0]) => {
+              const result = await real.rotate(args);
+              hold.reached();
+              await hold.release;
+              return result;
+            },
+          };
+    },
     createStoreBackedRevalidator: (
       args: Parameters<typeof actual.createStoreBackedRevalidator>[0],
     ) => {
@@ -2100,6 +2130,88 @@ describe("traycer monitor local released-host sign-in", () => {
       ).toBe("host-token-c");
       expect(monitorHarness.state.refreshed).toEqual([]);
     });
+
+    it("goes on with the sign-in on disk when another process saves one before the monitor reads a rotation authn refused", async () => {
+      // The host refuses the held token as expired: the recovery's mint on A is refused and its rotation is
+      // refused by authn. The locked rotation is held after it answered "rejected" for A.
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      monitorHarness.state.refreshed.push(REFRESH_REJECTED);
+      await seedCredentials(SIGN_IN);
+      let reached = (): void => undefined;
+      const rejectedForA = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      let open = (): void => undefined;
+      const released = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      monitorHarness.state.rotationHold = { reached, release: released };
+      const mints = holdMints();
+      startMonitor();
+      const socket = await socketAt(0);
+      expect((await readOpen(socket)).token).toBe("held-token");
+      socket.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantSignIns).toEqual([SIGN_IN]),
+        WAIT,
+      );
+      mints.answer(0, new Response("rejected", { status: 401 }));
+      await rejectedForA;
+
+      // Another process saves B before the monitor reads the verdict: it is not signed out, and it asks again on B.
+      await saveFromAnotherProcess(SIBLING_SIGN_IN);
+      open();
+      await vi.waitFor(
+        () =>
+          expect(monitorHarness.grantSignIns).toEqual([
+            SIGN_IN,
+            SIBLING_SIGN_IN,
+          ]),
+        WAIT,
+      );
+      expect(await outcomeOf()).toBe("running");
+      mints.answer(1, grantedToken("fresh-on-sibling"));
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    // A guard: the monitor's exit line for a sign-in nothing can refresh is the one it printed before.
+    it.each(SIGN_OUT_ARMS)(
+      "ends with the stored-credential line when the file is in the %s arm",
+      async (arm) => {
+        holdUsableTokens(
+          new Map([[monitorHarness.state.hostId, "held-token"]]),
+        );
+        await seedCredentials(SIGN_IN);
+        const otherProcess = createCliCredentialsStore();
+        try {
+          await standSignOutArm(arm, {
+            credentialsPath: monitorHarness.state.credentialsPath,
+            otherProcess,
+            credentials: credentialsOf(SIGN_IN),
+          });
+        } finally {
+          otherProcess.dispose();
+        }
+        const mints = holdMints();
+        startMonitor();
+        const socket = await socketAt(0);
+        expect((await readOpen(socket)).token).toBe("held-token");
+        socket.fireFrame(fatal("token_expired", "host token expired"));
+        await vi.waitFor(
+          () => expect(monitorHarness.grantSignIns).toEqual([SIGN_IN]),
+          WAIT,
+        );
+        mints.answer(0, new Response("rejected", { status: 401 }));
+
+        await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+        expect(ended?.error).toMatchObject({
+          code: CLI_ERROR_CODES.AUTH_REJECTED,
+          message:
+            "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+          exitCode: 1,
+        });
+      },
+    );
   });
 });
 
