@@ -1,4 +1,11 @@
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -81,6 +88,10 @@ beforeEach(async () => {
   h.home = await mkdtemp(join(tmpdir(), "traycer-cli-config-"));
   h.passwdShell = undefined;
   h.passwdThrows = false;
+});
+
+afterEach(async () => {
+  await rm(h.home, { recursive: true, force: true });
 });
 
 async function writeRaw(contents: string): Promise<void> {
