@@ -6,6 +6,7 @@ import type {
   ChatQueueState,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatSendRestore,
@@ -17,6 +18,7 @@ import {
   hasUnconfirmedQueueEdit,
   queueEditContentMatches,
   queueEditRecordsInCustody,
+  queueEditWorktreeIntent,
   queueItemsInFlight,
   withoutReturnedQueueEditsForRow,
   type QueueEditEvidence,
@@ -94,6 +96,32 @@ function hashedImages(...hashes: ReadonlyArray<string>): JsonContent {
     "look",
     hashes.map((hash) => ({ hash, inline: false })),
   );
+}
+
+function localIntent(...paths: ReadonlyArray<string>): WorktreeIntent {
+  return {
+    entries: paths.map((workspacePath) => ({
+      kind: "local",
+      workspacePath,
+      repoIdentifier: null,
+      isPrimary: false,
+    })),
+  };
+}
+
+function worktreeIntentFor(path: string): WorktreeIntent {
+  return {
+    entries: [
+      {
+        kind: "worktree",
+        workspacePath: path,
+        repoIdentifier: null,
+        isPrimary: false,
+        branch: { type: "existing", name: "feature" },
+        scripts: null,
+      },
+    ],
+  };
 }
 
 const ORIGINAL = textDoc("original text");
@@ -1442,5 +1470,103 @@ describe("queueItemsInFlight", () => {
     );
     // The sibling with an id proves the scan ran; only it appears.
     expect([...inFlight.keys()]).toEqual(["row"]);
+  });
+});
+
+describe("queueEditWorktreeIntent", () => {
+  it("is null when nothing was picked", () => {
+    expect(queueEditWorktreeIntent(null, localIntent("/a"))).toBeNull();
+  });
+
+  it("drops a pick equal to the row's own choice for that folder, so it is no change", () => {
+    expect(
+      queueEditWorktreeIntent(localIntent("/a"), localIntent("/a")),
+    ).toBeNull();
+  });
+
+  it("keeps a pick that differs from the row's own choice for the folder", () => {
+    expect(
+      queueEditWorktreeIntent(localIntent("/a"), worktreeIntentFor("/a")),
+    ).toEqual(localIntent("/a"));
+  });
+
+  it("keeps a pick for a folder the row has no choice for", () => {
+    expect(queueEditWorktreeIntent(localIntent("/a"), null)).toEqual(
+      localIntent("/a"),
+    );
+  });
+
+  it("keeps only the folders that differ when the picks are mixed", () => {
+    expect(
+      queueEditWorktreeIntent(
+        {
+          entries: [...localIntent("/a").entries, ...localIntent("/b").entries],
+        },
+        {
+          entries: [
+            ...localIntent("/a").entries,
+            ...worktreeIntentFor("/b").entries,
+          ],
+        },
+      ),
+    ).toEqual(localIntent("/b"));
+  });
+});
+
+describe("a queue edit that carries folders", () => {
+  it("returns the folders with the text when the host refuses the edit", () => {
+    const folders = localIntent("/a");
+    const fold = foldQueueEditAck(
+      recordsOf(record({ worktreeIntent: folders }, "save")),
+      {
+        clientActionId: EDIT_ACTION_ID,
+        status: "rejected",
+        reason: "The queued prompt is no longer pending.",
+        code: null,
+      },
+    );
+    expect(fold.settlements).toEqual([
+      expect.objectContaining({
+        kind: "content_returned",
+        worktreeIntent: folders,
+      }),
+    ]);
+  });
+
+  describe("when the host never answered", () => {
+    const folders = localIntent("/a");
+    const unanswered = record(
+      { worktreeIntent: folders, followUpIsNoOp: true },
+      "save",
+    );
+
+    it("is handed back, record retained, while the row shows the text but not the folders", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(unanswered),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({ items: [rowHolding(EDITED, {})], messages: [] }),
+      });
+      expect(fold.settlements).toEqual([
+        expect.objectContaining({
+          kind: "content_returned",
+          cause: "unconfirmed",
+          worktreeIntent: folders,
+        }),
+      ]);
+      expect(fold.records[EDIT_ACTION_ID]?.edit).toBe("unconfirmed");
+    });
+
+    it("is applied, with nothing settled, when the row shows the text and the folders", () => {
+      const fold = accountForQueueEdits({
+        records: recordsOf(unanswered),
+        sweptActionIds: BOTH_SWEPT,
+        evidence: evidence({
+          items: [rowHolding(EDITED, { worktreeIntent: folders })],
+          messages: [],
+        }),
+      });
+      expect(fold.settlements).toEqual([]);
+      expect(fold.records).toEqual({});
+    });
   });
 });

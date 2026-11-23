@@ -45,6 +45,7 @@ import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
+  queueEditStagingKey,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
@@ -614,6 +615,56 @@ describe("an idle chat's folder whose owed worktree failed", () => {
         worktreeStagingKeyString(CHAT_STAGING_KEY)
       ],
     ).toBeUndefined();
+  });
+});
+
+describe("an idle chat while a queued message is edited", () => {
+  const EDIT_KEY = queueEditStagingKey(
+    "host-test",
+    "epic-1",
+    "owner-1",
+    "queue-item-1",
+  );
+
+  beforeEach(() => {
+    seedResolvedBindingMetadata();
+    // The chat still owes a worktree for alpha, so Local is a change.
+    inFlightWorktreeIntent = {
+      entries: [newWorktreeIntent("/repo/alpha", "polite-turtle")],
+    };
+  });
+
+  it("stages a Local pick in the edit's own slot, not on the binding or the chat's slot", async () => {
+    queueEdit = { queueItemId: "queue-item-1", readOnly: false };
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-trigger"));
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-local"));
+
+    expect(mutationMocks.setEntryMode).not.toHaveBeenCalled();
+    const staged = useWorktreeIntentStagingStore.getState().intentByKey;
+    expect(staged[worktreeStagingKeyString(EDIT_KEY)]?.entries).toMatchObject([
+      { kind: "local", workspacePath: "/repo/alpha" },
+    ]);
+    expect(staged[worktreeStagingKeyString(CHAT_STAGING_KEY)]).toBeUndefined();
+  });
+
+  it("shows the note and no folder controls when the edit is read-only", async () => {
+    queueEdit = { queueItemId: "queue-item-1", readOnly: true };
+    renderBoundSurface("chat", true, null, BINDING);
+
+    fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+
+    expect(
+      (await screen.findByTestId("workspace-readonly-note")).textContent,
+    ).toBe("Update this host to change a queued message's folders.");
+    const triggers = screen.getAllByTestId("folder-location-trigger");
+    for (const trigger of triggers) {
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
+    }
+    fireEvent.click(triggers[0]);
+    expect(screen.queryByTestId("folder-location-local")).toBeNull();
   });
 });
 
