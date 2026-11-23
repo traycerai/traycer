@@ -427,9 +427,12 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     const sentWith = mintSentWith.get(refused);
     return sentWith === undefined || sentWith === installedByRefresh;
   };
-  // The sign-in the latest refused mint was sent with, for the transports'
-  // recovery, which is asked to refresh with no outcome in hand.
-  let lastRefused: HostTokenMintOutcome | null = null;
+  // Each host process's latest mint outcome while it is a refusal that left
+  // the tracker: what that host's recovery, asked with no outcome in hand, is
+  // for. Kept per host process instance, as its recovery is (`recoveries`),
+  // so it never outlives the process it belongs to; any later outcome for
+  // that process, a token bought above all, clears it.
+  const latestRefusal = new WeakMap<HostInstance, HostTokenMintOutcome>();
   const refreshSignIn = async (): Promise<SignInRotation> => {
     if (sessionEnded()) return "network-error";
     const { outcome, installed } = await signIn.refresh();
@@ -516,7 +519,9 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         // Only what is not a refusal may leave unrecorded once overtaken.
         if (outcome.kind !== "sign-in-rejected" && outlived(owner, startedAt))
           return outcome;
-        if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
+        if (outcome.kind === "sign-in-rejected")
+          latestRefusal.set(owner, outcome);
+        else latestRefusal.delete(owner);
         if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
         // Only an answer to a mint sent with the sign-in our rotation installed
         // changes what the judge holds for that rotation; a token on an older
@@ -579,19 +584,21 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // After the file read the asker may have gone: it is asked last, beside the
   // session's own end in refreshSignIn, and a recovery nobody wants rotates
   // nothing.
-  const signInRecovery = {
+  // Each host process's recovery reads only that process's own refusal; with
+  // none, the refused sign-in is unknown and it refreshes the stored one.
+  const signInRecoveryFor = (instance: HostInstance) => ({
     revalidateForReconnect: async (
       _presented: string | null,
       stillWanted: () => boolean,
     ): Promise<SignInRotation> => {
-      const refused = lastRefused;
-      if (refused === null || !mintSentWith.has(refused))
+      const refused = latestRefusal.get(instance);
+      if (refused === undefined || !mintSentWith.has(refused))
         return refreshSignIn();
       await signIn.adoptStored();
       if (refusedSignInReplaced(refused)) return "adopted";
       return stillWanted() ? refreshSignIn() : "network-error";
     },
-  };
+  });
   const bearerOf = (hostId: string): OpenFrameBearerSource => ({
     identity: { userId },
     getBearerToken: () => source.current(userId, hostId)?.token ?? "",
@@ -628,7 +635,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         hosts,
         currentUserId: () => userId,
         hostId,
-        signInRecovery,
+        signInRecovery: signInRecoveryFor(instance),
         onState,
         now: Date.now,
       });
