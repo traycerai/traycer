@@ -166,14 +166,7 @@ export function WorkspaceSummaryTrigger(
             data-testid="workspace-readonly-folders-popover"
             onOpenAutoFocus={(event) => event.preventDefault()}
           >
-            {readOnlyNote === undefined ? null : (
-              <p
-                className="px-3 pt-2 text-ui-xs text-muted-foreground"
-                data-testid="workspace-readonly-note"
-              >
-                {readOnlyNote}
-              </p>
-            )}
+            <ReadOnlyNote note={readOnlyNote} />
             <WorkspaceFolderRows
               items={items}
               trailingSlot={null}
@@ -203,6 +196,18 @@ export function WorkspaceSummaryTrigger(
   }
 
   return trigger;
+}
+
+function ReadOnlyNote(props: { readonly note: string | undefined }) {
+  if (props.note === undefined) return null;
+  return (
+    <p
+      className="px-3 pt-2 text-ui-xs text-muted-foreground"
+      data-testid="workspace-readonly-note"
+    >
+      {props.note}
+    </p>
+  );
 }
 
 function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
