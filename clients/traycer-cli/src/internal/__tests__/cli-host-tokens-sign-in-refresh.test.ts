@@ -4,8 +4,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
-import type { HostTokenMintOutcome } from "../../../../shared/auth/host-token-source";
+import type {
+  HostTokenMintOutcome,
+  HostTokenSource,
+} from "../../../../shared/auth/host-token-source";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
+import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import type { Environment } from "../../runner/environment";
 import {
@@ -45,6 +49,28 @@ const credentialsFile = vi.hoisted(() => ({
   /** The sign-ins authn's refresh hands out, in the order asked. */
   refreshed: [] as string[],
 }));
+
+const createdSources = vi.hoisted(() => [] as HostTokenSource[]);
+
+vi.mock(
+  "../../../../shared/auth/host-token-source",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../../shared/auth/host-token-source")
+      >();
+    return {
+      ...actual,
+      createHostTokenSource: (
+        options: Parameters<typeof actual.createHostTokenSource>[0],
+      ): HostTokenSource => {
+        const source = actual.createHostTokenSource(options);
+        createdSources.push(source);
+        return source;
+      },
+    };
+  },
+);
 
 vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();
@@ -125,6 +151,7 @@ let hostId = "";
 beforeEach(() => {
   harness.mints.splice(0);
   harness.hold = 1;
+  createdSources.splice(0);
   harness.table = new Map();
   hostCount += 1;
   // A host process's flights and memory are kept per host id.
@@ -543,4 +570,119 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     store.dispose();
     otherProcess.dispose();
   });
+
+  it("leaves the lease on the sign-in a rotation installed while the adopting read was held", async () => {
+    const store = createCliCredentialsStore();
+    const otherProcess = createCliCredentialsStore();
+    // The file holds B and this lease holds A: the read snapshots B.
+    await store.signIn(credentialsOf(ROTATED_SIGN_IN), false, null);
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const snapshotTaken: { resolve: () => void } = { resolve: () => undefined };
+    const snapshotWasTaken = new Promise<void>((resolve) => {
+      snapshotTaken.resolve = resolve;
+    });
+    const releaseRead: { resolve: () => void } = { resolve: () => undefined };
+    const readHeld = new Promise<void>((resolve) => {
+      releaseRead.resolve = resolve;
+    });
+    const heldRead: CredentialsMutationStore = {
+      ...store,
+      read: async () => {
+        const snapshot = await store.read();
+        snapshotTaken.resolve();
+        await readHeld;
+        return snapshot;
+      },
+    };
+    const adopting = createStoreBackedRevalidator({
+      store: heldRead,
+      lease,
+      signal: null,
+    }).adoptStoredSignIn();
+    await snapshotWasTaken;
+
+    // Meanwhile a rotation installs C in the lease: another process saved C and the rotation adopts it.
+    await otherProcess.signIn(credentialsOf(SIBLING_SIGN_IN), false, null);
+    await expect(
+      createStoreBackedRevalidator({
+        store,
+        lease,
+        signal: null,
+      }).rotateSignIn(),
+    ).resolves.toEqual({ outcome: "adopted", installed: null });
+    expect(lease.getBearerToken()).toBe(SIBLING_SIGN_IN);
+
+    // The read, begun before, is released: its snapshot is older than the lease.
+    releaseRead.resolve();
+    await adopting;
+    expect(lease.getBearerToken()).toBe(SIBLING_SIGN_IN);
+    store.dispose();
+    otherProcess.dispose();
+  });
+
+  it("takes the sign-in on disk before the source records a refusal of the sign-in the mint was sent with", async () => {
+    const signInA = unsignedJwtExpiring(Date.now() + 60 * 60 * 1000);
+    const signInB = unsignedJwtExpiring(Date.now() + 2 * 60 * 60 * 1000);
+    const store = createCliCredentialsStore();
+    const otherProcess = createCliCredentialsStore();
+    await store.signIn(credentialsOf(signInA), false, null);
+    const lease = new MutableBearerLease(signInA, USER_ID);
+    const revalidator = createStoreBackedRevalidator({
+      store,
+      lease,
+      signal: null,
+    });
+    // How the refused mint stands in the source when the lease is about to be synced with the file.
+    const recordedWhenSyncing: Array<string | null> = [];
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => revalidator.rotateSignIn(),
+      adoptStored: async () => {
+        recordedWhenSyncing.push(
+          createdSources[0]?.lastFailureOf(
+            USER_ID,
+            processReleasedHosts.currentInstance(hostId),
+          ) ?? null,
+        );
+        await revalidator.adoptStoredSignIn();
+      },
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    const reports: string[] = [];
+    tokens.onRefusalEndingCommand((reportedHostId) => {
+      reports.push(reportedHostId);
+    });
+    const minting = tokens.hostBearerFor(hostId, true);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+    expect(harness.mints[0]?.signIn).toBe(signInA);
+
+    // Another process saves B while the mint on A is out; the lease still holds A when A's 401 arrives.
+    await otherProcess.signIn(credentialsOf(signInB), false, null);
+    expect(lease.getBearerToken()).toBe(signInA);
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    expect(await minting).not.toBeNull();
+
+    // No refusal of A was on record when the lease was synced; the lease holds B and the next mint presented B.
+    expect(recordedWhenSyncing.length).toBeGreaterThan(0);
+    expect(recordedWhenSyncing.every((failure) => failure === null)).toBe(true);
+    expect(lease.getBearerToken()).toBe(signInB);
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([signInA, signInB]);
+    expect(tokens.signInRejected()).toBe(false);
+    expect(reports).toEqual([]);
+    tokens.dispose();
+    store.dispose();
+    otherProcess.dispose();
+  });
 });
+
+/** A sign-in with a readable end and no signature: its key is the end, as authn's sign-ins carry. */
+function unsignedJwtExpiring(endMs: number): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString(
+    "base64url",
+  );
+  const payload = Buffer.from(
+    JSON.stringify({ exp: Math.floor(endMs / 1000) }),
+  ).toString("base64url");
+  return `${header}.${payload}.`;
+}
