@@ -114,6 +114,7 @@ export interface PendingSendFacts {
   readonly observation: PendingSandboxObservation;
   readonly retryAction: PendingStageRetryAction;
   readonly retryObservation: PendingSendObservation;
+  readonly retryAttemptSuperseded?: boolean;
   readonly current: boolean;
   readonly accountActive: boolean;
   readonly owns: boolean;
@@ -144,6 +145,7 @@ export const UNKNOWN_PENDING_SEND_FACTS: PendingSendFacts = {
   observation: { kind: "none" },
   retryAction: "send-again",
   retryObservation: "observe",
+  retryAttemptSuperseded: false,
   current: false,
   accountActive: false,
   owns: false,
@@ -1121,6 +1123,8 @@ function consumeRetry(
   state: PendingSendState,
   facts: PendingSendFacts,
 ): PendingSendTransition {
+  if (facts.retryAttemptSuperseded)
+    return result(state, ["acknowledge-retry"], facts);
   const event = PENDING_STAGE_RETRY_EVENTS[facts.retryAction];
   const requested = activeTransition(state, event, facts);
   const decision = requested.effects.includes("retry")

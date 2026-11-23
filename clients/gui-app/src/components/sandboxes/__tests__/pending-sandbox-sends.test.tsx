@@ -72,6 +72,10 @@ import {
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type {
+  SandboxCreateRequest,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 import {
@@ -102,11 +106,6 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-
-import type {
-  SandboxCreateRequest,
-  SandboxSummary,
-} from "@traycer/protocol/host/sandbox-control";
 
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -153,6 +152,7 @@ import {
   readStagedSandbox,
   stagedRetryKey,
   useStagedSandboxStore,
+  type StagedSandbox,
   type StagedSandboxFailure,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -8042,6 +8042,52 @@ describe("a retry-family button chosen in a window that does not own the send", 
     },
   ] as const;
 
+  function failedCreateRow(id: string, displayName: string): SandboxSummary {
+    return sandboxSummaryFixture({
+      id,
+      hostId: SANDBOX_HOST,
+      environmentId: "env-acme",
+      state: "failed",
+      failureCode: "PROVIDER_CREATE_FAILED",
+      createdByTaskId: "origin-task",
+      displayName,
+    });
+  }
+
+  function retryPayloadFor(row: SandboxSummary): SandboxCreateRequest {
+    return {
+      os: row.os,
+      cpus: row.cpus,
+      memoryMb: row.memoryMb,
+      diskMb: row.diskMb,
+      region: row.region,
+      displayName: row.displayName,
+      idleMinutes: row.idleMinutes,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: row.environmentId,
+      destroyAfterRestingMinutes: row.destroyAfterRestingMinutes ?? 0,
+      createdByTaskId: row.createdByTaskId,
+      clientRequestId: `retry:${row.id}`,
+    };
+  }
+
+  function failedCreateResponse(row: SandboxSummary) {
+    return {
+      kind: "refused" as const,
+      status: 502 as const,
+      code: "provider_failed" as const,
+      reason: null,
+      shortfallMc: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message: null,
+      sandboxId: row.id,
+      sandbox: row,
+    };
+  }
+
   it.each(CASES)(
     "$label writes a request and runs nothing here",
     async ({ action, testId, failure, shape }) => {
@@ -8242,90 +8288,292 @@ describe("a retry-family button chosen in a window that does not own the send", 
     },
   );
 
-  it("carries an HTTP 502 failed row through a queued Retry creation into its request", async () => {
-    seed({ ...SEEDED, phase: "creating", created: true });
-    useStagedSandboxStore.getState().report(SURFACE, {
-      failure: { kind: "failed", code: "create", step: "creating" },
-    });
+  it("keeps a queued named-502 Retry pending when its first owner observation is blocked, then posts its captured request after reopening", async () => {
+    userSignedIn();
+    const failedRow = failedCreateRow("sbx_failed_502", "origin/main hook");
+    const retryRequest = retryPayloadFor(failedRow);
     mocks.createSandbox
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(failedCreateResponse(failedRow))
+      .mockImplementation(() => Promise.resolve(CREDITS_REFUSED));
+    seed({ ...SEEDED, phase: "creating", created: false });
+
+    let ownerLocks = installImmediateExclusiveLocks();
+    let ownerView = mount();
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
         kind: "refused",
-        status: 502,
-        code: "provider_failed",
-        reason: null,
-        shortfallMc: null,
-        newRateMcPerHour: null,
-        currentAwakeBurnMcPerHour: null,
-        message: null,
-        sandboxId: "sbx_failed_502",
-        sandbox: sandboxSummaryFixture({
-          id: "sbx_failed_502",
-          hostId: SANDBOX_HOST,
-          state: "failed",
-          failureCode: "PROVIDER_CREATE_FAILED",
-          createdByTaskId: "origin-task",
-          displayName: "origin/main hook",
-        }),
-      })
-      .mockResolvedValue(CREDITS_REFUSED);
+        sandboxId: failedRow.id,
+      });
+      expect(stagedRunActive(SURFACE)).toBe(false);
+    });
+    expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+    const firstCall = mocks.createSandbox.mock.calls.at(0);
+    if (firstCall === undefined || firstCall[0].clientRequestId === null)
+      throw new Error("expected the first create attempt key");
+    const firstRequest = firstCall[0];
+    const observedCreateKey = firstRequest.clientRequestId;
+
+    ownerView.unmount();
+    ownerLocks();
+    await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(false));
 
     const restoreQueued = queueBehindForeignHolder();
     const queuedView = mount();
+    let retryId: string | undefined;
     try {
       fireEvent.click(
         await screen.findByTestId("sandbox-setup-retry-creation"),
       );
-      await waitFor(() =>
-        expect(readStagedSandbox(SURFACE)?.retryRequest).toMatchObject({
+      await waitFor(() => {
+        const request = readStagedSandbox(SURFACE)?.retryRequest;
+        expect(request).toMatchObject({
           action: "retry-creation",
-          createKey: `retry:${SANDBOX_ID}`,
-        }),
-      );
-      expect(mocks.createSandbox).not.toHaveBeenCalled();
+          createKey: retryRequest.clientRequestId,
+          observedCreateKey,
+          retryCreate: retryRequest,
+        });
+        retryId = request?.id;
+      });
+      expect(retryId).toBeDefined();
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     } finally {
       queuedView.unmount();
       restoreQueued();
     }
 
-    const owner = installImmediateExclusiveLocks();
+    await reloadPendingSandboxStores();
+    ownerLocks = installImmediateExclusiveLocks();
+    const originalHoldObservation =
+      usePendingSandboxSendStore.getState().holdObservation;
+    let blockedFirstObservation = false;
+    usePendingSandboxSendStore.setState({
+      holdObservation: (id, plan) => {
+        if (!blockedFirstObservation) {
+          blockedFirstObservation = true;
+          return null;
+        }
+        return originalHoldObservation(id, plan);
+      },
+    });
+    ownerView = mount();
     try {
-      await reloadPendingSandboxStores();
-      const view = mount();
-      await waitFor(() =>
-        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
-          kind: "refused",
-          sandboxId: "sbx_failed_502",
-        }),
-      );
-      const shown = readStagedSandbox(SURFACE);
-      if (shown === null) throw new Error("expected the failed stage");
-      const shownIdentity = shown.clientRequestId;
-      const retryKey = stagedRetryKey(shown);
-      expect(retryKey).toBe("retry:sbx_failed_502");
-      fireEvent.click(
-        await screen.findByTestId("sandbox-setup-retry-creation"),
-      );
-      await waitFor(() =>
+      await waitFor(() => expect(blockedFirstObservation).toBe(true));
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        retryRequest: {
+          id: retryId,
+          observedCreateKey,
+          createKey: retryRequest.clientRequestId,
+          retryCreate: retryRequest,
+        },
+      });
+      expect(readStagedSandbox(SURFACE)?.retryHandledId).not.toBe(retryId);
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+    } finally {
+      ownerView.unmount();
+      usePendingSandboxSendStore.setState({
+        holdObservation: originalHoldObservation,
+      });
+      ownerLocks();
+    }
+
+    await reloadPendingSandboxStores();
+    ownerLocks = installImmediateExclusiveLocks();
+    const requestAtPost: SandboxCreateRequest[] = [];
+    const stageAtPost: Array<StagedSandbox | null> = [];
+    mocks.createSandbox.mockImplementation((request) => {
+      requestAtPost.push(request);
+      stageAtPost.push(readStagedSandbox(SURFACE));
+      return Promise.resolve(CREDITS_REFUSED);
+    });
+    ownerView = mount();
+    try {
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(retryId);
         expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
           kind: "credits",
-        }),
-      );
-      expect(
-        mocks.createSandbox.mock.calls.map(([request]) => request),
-      ).toMatchObject([
-        { clientRequestId: `retry:${SANDBOX_ID}` },
-        {
-          clientRequestId: retryKey,
-          createdByTaskId: "origin-task",
-          displayName: "origin/main hook",
-        },
-      ]);
-      expect(readStagedSandbox(SURFACE)?.clientRequestId).toBe(shownIdentity);
-      view.unmount();
+        });
+      });
+      expect(requestAtPost).toEqual([retryRequest]);
+      expect(stageAtPost[0]).toMatchObject({
+        lastCreateKey: retryRequest.clientRequestId,
+        lastRetryCreate: retryRequest,
+        retryHandledId: retryId,
+      });
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(2);
     } finally {
-      owner();
+      ownerView.unmount();
+      ownerLocks();
     }
   });
+
+  it.each(["early delivery", "late delivery"] as const)(
+    "keeps row H after %s of a captured Retry for row F",
+    async (deliveryOrder) => {
+      userSignedIn();
+      const rowF = failedCreateRow("sbx_failed_f", "origin/F");
+      const rowG = failedCreateRow("sbx_failed_g", "origin/G");
+      const rowH = failedCreateRow("sbx_failed_h", "origin/H");
+      const retryF = retryPayloadFor(rowF);
+      const retryG = retryPayloadFor(rowG);
+      mocks.createSandbox
+        .mockResolvedValueOnce(failedCreateResponse(rowF))
+        .mockResolvedValueOnce(failedCreateResponse(rowG))
+        .mockResolvedValueOnce(failedCreateResponse(rowH))
+        .mockResolvedValue(CREDITS_REFUSED);
+      seed({ ...SEEDED, phase: "creating", created: false });
+
+      let ownerLocks = installImmediateExclusiveLocks();
+      let ownerView = mount();
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+          kind: "refused",
+          sandboxId: rowF.id,
+        });
+        expect(stagedRunActive(SURFACE)).toBe(false);
+      });
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+      const firstCall = mocks.createSandbox.mock.calls.at(0);
+      if (firstCall === undefined || firstCall[0].clientRequestId === null)
+        throw new Error("expected the first create attempt key");
+      const firstRequest = firstCall[0];
+      const firstAttemptKey = firstRequest.clientRequestId;
+      ownerView.unmount();
+      ownerLocks();
+      await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(false));
+
+      const restoreQueued = queueBehindForeignHolder();
+      const queuedView = mount();
+      const originalRequestRetry =
+        useStagedSandboxStore.getState().requestRetry;
+      const capturedPress: {
+        args: Parameters<typeof originalRequestRetry> | null;
+      } = { args: null };
+      let queuedRetryId: string | undefined;
+      if (deliveryOrder === "late delivery")
+        useStagedSandboxStore.setState({
+          requestRetry: (...args) => {
+            capturedPress.args = args;
+            return Promise.resolve(null);
+          },
+        });
+      try {
+        fireEvent.click(
+          await screen.findByTestId("sandbox-setup-retry-creation"),
+        );
+        if (deliveryOrder === "early delivery") {
+          await waitFor(() => {
+            const request = readStagedSandbox(SURFACE)?.retryRequest;
+            expect(request).toMatchObject({
+              action: "retry-creation",
+              createKey: retryF.clientRequestId,
+              observedCreateKey: firstAttemptKey,
+              retryCreate: retryF,
+            });
+            queuedRetryId = request?.id;
+          });
+        } else {
+          await waitFor(() => expect(capturedPress.args).not.toBeNull());
+          expect(capturedPress.args?.[3]).toMatchObject({
+            createKey: retryF.clientRequestId,
+            observedCreateKey: firstAttemptKey,
+            retryCreate: retryF,
+          });
+        }
+        expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+      } finally {
+        queuedView.unmount();
+        useStagedSandboxStore.setState({ requestRetry: originalRequestRetry });
+        restoreQueued();
+      }
+
+      await reloadPendingSandboxStores();
+      ownerLocks = installImmediateExclusiveLocks();
+      ownerView = mount();
+      try {
+        if (deliveryOrder === "early delivery") {
+          await waitFor(() => {
+            expect(queuedRetryId).toBeDefined();
+            expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(
+              queuedRetryId,
+            );
+            expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+              kind: "refused",
+              sandboxId: rowG.id,
+            });
+          });
+          expect(mocks.createSandbox).toHaveBeenCalledTimes(2);
+          expect(mocks.createSandbox.mock.calls[1]?.[0]).toEqual(retryF);
+        } else {
+          fireEvent.click(
+            await screen.findByTestId("sandbox-setup-retry-creation"),
+          );
+          await waitFor(() => {
+            expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+              kind: "refused",
+              sandboxId: rowG.id,
+            });
+            expect(mocks.createSandbox).toHaveBeenCalledTimes(2);
+          });
+          expect(mocks.createSandbox.mock.calls[1]?.[0]).toEqual(retryF);
+        }
+
+        fireEvent.click(
+          await screen.findByTestId("sandbox-setup-retry-creation"),
+        );
+        await waitFor(() => {
+          expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+            kind: "refused",
+            sandboxId: rowH.id,
+          });
+          expect(stagedRunActive(SURFACE)).toBe(false);
+        });
+        expect(mocks.createSandbox).toHaveBeenCalledTimes(3);
+        expect(mocks.createSandbox.mock.calls[2]?.[0]).toEqual(retryG);
+
+        if (deliveryOrder === "late delivery") {
+          const press = capturedPress.args;
+          if (press === null) throw new Error("expected the captured F press");
+          const [surfaceKey, userId, action, savedPress] = press;
+          const staleRetry = { id: null as string | null };
+          await act(async () => {
+            staleRetry.id = await useStagedSandboxStore
+              .getState()
+              .requestRetry(surfaceKey, userId, action, savedPress);
+          });
+          if (staleRetry.id === null)
+            throw new Error("expected the stale Retry mailbox entry");
+          await waitFor(() => {
+            expect(readStagedSandbox(SURFACE)?.retryHandledId).toBe(
+              staleRetry.id,
+            );
+            expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+              kind: "refused",
+              sandboxId: rowH.id,
+            });
+          });
+        }
+
+        expect(mocks.createSandbox).toHaveBeenCalledTimes(3);
+        expect(
+          mocks.createSandbox.mock.calls.map(([request]) => request),
+        ).toEqual([firstRequest, retryF, retryG]);
+        expect(readStagedSandbox(SURFACE)).toMatchObject({
+          failure: { kind: "refused", sandboxId: rowH.id },
+          lastCreateKey: retryG.clientRequestId,
+          lastRetryCreate: retryG,
+        });
+        expect(
+          screen
+            .getByTestId("sandbox-refusal-line")
+            .getAttribute("data-refusal"),
+        ).toBe("refused");
+        expect(screen.getByTestId("sandbox-setup-retry-creation")).toBeTruthy();
+      } finally {
+        ownerView.unmount();
+        ownerLocks();
+      }
+    },
+  );
 
   it("offers no queued Retry creation for a named HTTP 402 denial", async () => {
     seed({ ...SEEDED, phase: "creating", created: false });

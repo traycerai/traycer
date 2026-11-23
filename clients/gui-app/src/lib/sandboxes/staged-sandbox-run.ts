@@ -57,9 +57,12 @@ import {
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { pendingStageAttemptCurrent } from "@/lib/sandboxes/pending-stage-storage";
 import {
   handoffOwnerLive,
+  PENDING_SEND_SURFACE_PREFIX,
   readStagedSandbox,
+  stagedCreateAttemptKey,
   useStagedSandboxStore,
   type StagedSandbox,
   type StagedSandboxFailure,
@@ -105,16 +108,44 @@ export interface StagedSandboxRunDeps {
   readonly sleep: (ms: number) => Promise<void>;
 }
 
-/**
- * Each surface's live run in this window, by the `clientRequestId` it
- * drives: a repeat of that send joins it, and a new send replaces it (the
- * old run sees it is no longer current and stops).
- */
-const running = new Map<string, string>();
+interface StagedRunIdentity {
+  readonly surfaceKey: string;
+  readonly clientRequestId: string;
+  readonly createKey: string;
+}
+
+/** A repeat joins its attempt, and a newer attempt supersedes an old run. */
+const running = new Map<string, StagedRunIdentity>();
+
+function stageMatchesRun(
+  stage: StagedSandbox,
+  run: StagedRunIdentity,
+): boolean {
+  return (
+    stage.clientRequestId === run.clientRequestId &&
+    stagedCreateAttemptKey(stage) === run.createKey
+  );
+}
+
+function pendingStageMatchesStorage(
+  surfaceKey: string,
+  stage: StagedSandbox,
+): boolean {
+  return (
+    !surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX) ||
+    pendingStageAttemptCurrent(
+      surfaceKey,
+      stage.clientRequestId,
+      stagedCreateAttemptKey(stage),
+    )
+  );
+}
 
 /** Whether a run in this window is driving the surface's stage. */
 export function stagedRunActive(surfaceKey: string): boolean {
-  return running.has(surfaceKey);
+  const run = running.get(surfaceKey);
+  const stage = readStagedSandbox(surfaceKey);
+  return run !== undefined && (stage === null || stageMatchesRun(stage, run));
 }
 
 /**
@@ -136,10 +167,11 @@ export async function runStagedSandbox(
   if (
     stage === null ||
     stage.phase === "handoff" ||
+    !pendingStageMatchesStorage(surfaceKey, stage) ||
     !pendingSandboxStageRunAllowed(surfaceKey)
   )
     return;
-  if (running.get(surfaceKey) === stage.clientRequestId) {
+  if (stagedRunActive(surfaceKey)) {
     // The run this key drives is still on its way: a repeat joins it, and a
     // send after Cancel takes it up again (it is current once more), rather
     // than a second run racing it on the same key. Its step and times stay
@@ -155,14 +187,17 @@ export async function runStagedSandbox(
   if (clientRequestId === null) return;
   const active = readStagedSandbox(surfaceKey);
   if (active?.clientRequestId !== clientRequestId) return;
-  running.set(surfaceKey, clientRequestId);
+  const attempt: StagedRunIdentity = {
+    surfaceKey,
+    clientRequestId,
+    createKey: active.lastCreateKey ?? clientRequestId,
+  };
+  running.set(surfaceKey, attempt);
   try {
     await drivePreparedRun(
       {
-        surfaceKey,
-        clientRequestId,
         ...request,
-        createKey: active.lastCreateKey ?? clientRequestId,
+        ...attempt,
         retryCreate: active.lastRetryCreate,
       },
       stage,
@@ -170,7 +205,7 @@ export async function runStagedSandbox(
       deps,
     );
   } finally {
-    if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
+    if (running.get(surfaceKey) === attempt) running.delete(surfaceKey);
   }
 }
 
@@ -183,7 +218,7 @@ async function drivePreparedRun(
 ): Promise<void> {
   const { surfaceKey, clientRequestId } = run;
   const prepared = await prepareRun(run, stage, made, deps);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return;
+  if (!stillCurrent(run)) return;
   if (prepared === null) {
     fail(surfaceKey, { kind: "unavailable" });
     return;
@@ -215,7 +250,7 @@ async function drivePreparedRun(
     });
   }
   await settle(
-    { surfaceKey, clientRequestId, started, deps },
+    { ...run, started, deps },
     stage.target.kind === "existing" ? deps.now() : budgetFrom,
     prepared.budgetMs,
   );
@@ -251,8 +286,7 @@ async function prepareRun(
           environmentId: null,
           budgetMs: attempt?.budgetMs ?? STAGED_CREATE_BUDGET_MS,
         };
-  if (prepared === null || !stillCurrent(run.surfaceKey, run.clientRequestId))
-    return null;
+  if (prepared === null || !stillCurrent(run)) return null;
   const startedAt = run.resume
     ? (attempt?.startedAt ?? stage.startedAt ?? deps.now())
     : deps.now();
@@ -333,19 +367,18 @@ function stagedWakeGesture(stage: StagedSandbox): SandboxVerbGesture {
 
 /** Reports a wake only for the current run, preserving its original action. */
 async function wakeCurrentStage(
-  surfaceKey: string,
-  clientRequestId: string,
+  run: StagedRunIdentity,
   hostId: string,
   deps: StagedSandboxRunDeps,
 ): Promise<boolean> {
+  const { surfaceKey } = run;
   const stage = readStagedSandbox(surfaceKey);
-  if (stage === null || !stillCurrent(surfaceKey, clientRequestId))
-    return false;
+  if (stage === null || !stillCurrent(run)) return false;
   report(surfaceKey, "booting", deps.now());
   const boundary = holdPendingSandboxStageObservation(surfaceKey);
   if (boundary === null) return false;
   const answered = await deps.wake(hostId, stagedWakeGesture(stage));
-  if (!stillCurrent(surfaceKey, clientRequestId)) return false;
+  if (!stillCurrent(run)) return false;
   const awake =
     answered === true ||
     (typeof answered === "object" && answered?.kind === "awake");
@@ -388,12 +421,14 @@ function stagedWakeFailure(
 }
 
 /** Whether the run is still the one the stage holds (not cancelled or retried). */
-function stillCurrent(surfaceKey: string, clientRequestId: string): boolean {
+function stillCurrent(run: StagedRunIdentity): boolean {
+  const { surfaceKey } = run;
   const stage = readStagedSandbox(surfaceKey);
   return (
     stage !== null &&
     stage.phase === "creating" &&
-    stage.clientRequestId === clientRequestId &&
+    stageMatchesRun(stage, run) &&
+    pendingStageMatchesStorage(surfaceKey, stage) &&
     pendingSandboxStageRunAllowed(surfaceKey)
   );
 }
@@ -424,13 +459,13 @@ export interface StagedRunRequest {
   /** The press's chosen key; a re-drive keeps the stage's last attempted key. */
   readonly createKey: string | null;
   readonly retryCreate?: SandboxCreateRequest;
+  readonly observedCreateKey?: string | null;
+  readonly retryRequestId?: string;
 }
 
 /** Which run a step belongs to, and what its create adds. */
-interface StagedRun extends Omit<StagedRunRequest, "createKey"> {
-  readonly surfaceKey: string;
-  readonly clientRequestId: string;
-  readonly createKey: string;
+interface StagedRun
+  extends Omit<StagedRunRequest, "createKey">, StagedRunIdentity {
   readonly environmentId: string | null;
 }
 
@@ -453,12 +488,7 @@ async function startStagedRun(
   if (
     stage.failure?.kind === "failed" &&
     stage.failure.code === "wake" &&
-    !(await wakeCurrentStage(
-      run.surfaceKey,
-      run.clientRequestId,
-      made.hostId,
-      deps,
-    ))
+    !(await wakeCurrentStage(run, made.hostId, deps))
   ) {
     return null;
   }
@@ -470,19 +500,14 @@ async function startExistingTarget(
   target: Extract<StagedSandboxTarget, { kind: "existing" }>,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const { surfaceKey, clientRequestId } = run;
+  const { surfaceKey } = run;
   useStagedSandboxStore.getState().report(surfaceKey, {
     createdSandboxId: target.sandboxId,
     createdHostId: target.hostId,
     step: "booting",
     stepAt: deps.now(),
   });
-  const awake = await wakeCurrentStage(
-    surfaceKey,
-    clientRequestId,
-    target.hostId,
-    deps,
-  );
+  const awake = await wakeCurrentStage(run, target.hostId, deps);
   return awake ? { sandboxId: target.sandboxId, hostId: target.hostId } : null;
 }
 
@@ -491,13 +516,13 @@ async function startCreateTarget(
   target: Extract<StagedSandboxTarget, { kind: "new" }>,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const { surfaceKey, clientRequestId, taskId, environmentId, createKey } = run;
+  const { surfaceKey, taskId, environmentId, createKey } = run;
   // Give an older persisted blank stage one name, retained across retries.
   const name = stagedSandboxName(target.name);
   if (name !== target.name) {
     useStagedSandboxStore.getState().setTarget(surfaceKey, { ...target, name });
   }
-  if (!stillCurrent(surfaceKey, clientRequestId)) return null;
+  if (!stillCurrent(run)) return null;
   // Older stages without a saved retry payload rebuild the POST from their pick.
   const request: SandboxCreateRequest = run.retryCreate ?? {
     os: target.shape.os,
@@ -521,7 +546,7 @@ async function startCreateTarget(
   };
   if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
   const result = await createSandbox(request, deps);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return null;
+  if (!stillCurrent(run)) return null;
   return recordStageCreateAnswer(surfaceKey, request, result, {
     teamName:
       target.configuration.kind === "team"
@@ -705,9 +730,7 @@ export function createFailure(
   };
 }
 
-interface SandboxSettlement {
-  readonly surfaceKey: string;
-  readonly clientRequestId: string;
+interface SandboxSettlement extends StagedRunIdentity {
   readonly started: StartedSandbox;
   readonly deps: StagedSandboxRunDeps;
 }
@@ -721,16 +744,16 @@ async function settle(
   budgetFrom: number,
   budgetMs: number,
 ): Promise<void> {
-  const { surfaceKey, clientRequestId, started, deps } = input;
+  const { surfaceKey, started, deps } = input;
   const deadline = budgetFrom + budgetMs;
   while (deps.now() < deadline) {
-    if (!stillCurrent(surfaceKey, clientRequestId)) return;
+    if (!stillCurrent(input)) return;
     const row = await readRow(deps, started.sandboxId, surfaceKey);
-    if (!stillCurrent(surfaceKey, clientRequestId)) return;
+    if (!stillCurrent(input)) return;
     if ((await settleRow(input, row)) === "finished") return;
     await deps.sleep(POLL_INTERVAL_MS);
   }
-  if (!stillCurrent(surfaceKey, clientRequestId)) return;
+  if (!stillCurrent(input)) return;
   fail(surfaceKey, {
     kind: "timed-out",
     step: readStagedSandbox(surfaceKey)?.step ?? "booting",
@@ -742,7 +765,7 @@ async function settleRow(
   input: SandboxSettlement,
   row: SandboxSummary | null | undefined,
 ): Promise<"waiting" | "finished"> {
-  const { surfaceKey, clientRequestId, started, deps } = input;
+  const { surfaceKey, started, deps } = input;
   if (row === undefined) return "waiting";
   useStagedSandboxStore
     .getState()
@@ -758,12 +781,7 @@ async function settleRow(
       fail(surfaceKey, { kind: "rested" });
       return "finished";
     }
-    const awake = await wakeCurrentStage(
-      surfaceKey,
-      clientRequestId,
-      started.hostId,
-      deps,
-    );
+    const awake = await wakeCurrentStage(input, started.hostId, deps);
     return awake ? "waiting" : "finished";
   }
   const verdict = settleVerdict(row);
@@ -789,9 +807,9 @@ async function settleRow(
 async function settleSettings(
   input: SandboxSettlement,
 ): Promise<"waiting" | "finished"> {
-  const { surfaceKey, clientRequestId, started, deps } = input;
+  const { surfaceKey, started, deps } = input;
   const settings = await deps.readSettings(started.hostId);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return "finished";
+  if (!stillCurrent(input)) return "finished";
   if (settings === null) return "waiting";
   if (settings !== "unsupported" && sandboxSettingsFailed(settings.items)) {
     fail(surfaceKey, {

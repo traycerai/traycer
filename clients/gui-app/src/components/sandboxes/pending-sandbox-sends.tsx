@@ -40,7 +40,11 @@ import type {
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
-import type { PendingStagePress } from "@/lib/sandboxes/pending-stage-storage";
+import {
+  pendingStageAttemptCurrent,
+  type PendingStagePress,
+  type PendingStageRetryRequest,
+} from "@/lib/sandboxes/pending-stage-storage";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -200,6 +204,7 @@ import {
   holdHandoffOwner,
   readStagedSandbox,
   newStagedSandboxKey,
+  stagedCreateAttemptKey,
   stagedCreateRetryPayload,
   stagedFailedSandboxId,
   stagedRetryKey,
@@ -484,7 +489,7 @@ function executePendingStageRun(
   send: PendingSandboxSend,
   stage: StagedSandbox,
   runner: StagedSandboxRunner,
-  press: PendingStagePress | null,
+  press: (PendingStagePress & { readonly retryRequestId?: string }) | null,
 ): void {
   const surfaceKey = pendingSendSurfaceKey(send.id);
   if (send.request.kind === "terminal" && !stage.openTerminal)
@@ -495,6 +500,8 @@ function executePendingStageRun(
       press === null && stage.phase === "creating" && stage.failure === null,
     createKey: press?.createKey ?? null,
     retryCreate: press?.retryCreate,
+    observedCreateKey: press?.observedCreateKey,
+    retryRequestId: press?.retryRequestId,
   });
 }
 
@@ -667,12 +674,53 @@ interface PendingStageObservation {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly press: PendingStagePress | null;
+  readonly retryRequestId?: string;
   readonly decision: PendingSendTransition;
   /** The row the decision observed; a withdrawal keeps a resting sandbox. */
   readonly rowState: HostSandboxState | null;
 }
 
-/** Resolve and acknowledge the current mailbox before executing any accepted intent. */
+function stageObservationCurrent(
+  surfaceKey: string,
+  shown: StagedSandbox | null,
+  stopStage: StagedSandbox | undefined,
+): boolean {
+  const current = readStagedSandbox(surfaceKey);
+  const stage = current ?? stopStage ?? null;
+  if (stage === null || shown === null) return stage === shown;
+  return (
+    stage.clientRequestId === shown.clientRequestId &&
+    stagedCreateAttemptKey(stage) === stagedCreateAttemptKey(shown) &&
+    stage.createdSandboxId === shown.createdSandboxId &&
+    stage.createdHostId === shown.createdHostId &&
+    (current === null ||
+      pendingStageAttemptCurrent(
+        surfaceKey,
+        current.clientRequestId,
+        stagedCreateAttemptKey(current),
+      ))
+  );
+}
+
+/** A mailbox press names what the other window saw, independent of its arrival time. */
+function mailboxAttemptMatches(
+  stage: StagedSandbox,
+  retry: PendingStageRetryRequest,
+): boolean {
+  const currentKey = stagedCreateAttemptKey(stage);
+  if (retry.observedCreateKey !== undefined)
+    return retry.observedCreateKey === currentKey;
+  // Older mailboxes only carried the requested key. An explicit key must
+  // still be the key this attempt would send for that action.
+  if (retry.createKey === null || retry.createKey === undefined) return true;
+  const expected =
+    retry.action === "retry-stage" || retry.action === "retry-creation"
+      ? stagedRetryKey(stage)
+      : currentKey;
+  return retry.createKey === expected;
+}
+
+/** Resolve the current mailbox without writing its acknowledgement yet. */
 function pendingStageObservation(
   id: string,
   captured: StagedSandbox,
@@ -684,7 +732,11 @@ function pendingStageObservation(
   const send = sends[id];
   const surfaceKey = pendingSendSurfaceKey(id);
   const stage = readStagedSandbox(surfaceKey);
-  if (stage === null) return null;
+  if (
+    stage === null ||
+    !stageObservationCurrent(surfaceKey, captured, undefined)
+  )
+    return null;
   const retry = stage.retryRequest;
   const requestedRetry =
     retry !== undefined &&
@@ -699,46 +751,27 @@ function pendingStageObservation(
     pendingSandboxSendFacts(id, {
       ...environment,
       stageStatus: stage.phase,
-      stageCurrent:
-        stage.clientRequestId === captured.clientRequestId &&
-        stage.createdHostId === captured.createdHostId &&
-        stage.phase === "handoff",
+      stageCurrent: stage.phase === "handoff",
       retryAction: action,
       retryObservation: event,
+      retryAttemptSuperseded:
+        requestedRetry && !mailboxAttemptMatches(stage, retry),
     }),
   );
-  if (!acknowledgePendingStageRetry(surfaceKey, retry?.id, decision))
-    return null;
   return {
     send,
     stage,
     press: requestedRetry
-      ? { createKey: retry.createKey ?? null, retryCreate: retry.retryCreate }
+      ? {
+          createKey: retry.createKey ?? null,
+          retryCreate: retry.retryCreate,
+          observedCreateKey: retry.observedCreateKey,
+        }
       : null,
+    retryRequestId: requestedRetry ? retry.id : undefined,
     decision,
     rowState,
   };
-}
-
-/** A failed acknowledgement may hold an accepted action, never a refused observation. */
-function acknowledgePendingStageRetry(
-  surfaceKey: string,
-  requestId: string | undefined,
-  decision: PendingSendTransition,
-): boolean {
-  if (
-    !decision.effects.includes("acknowledge-retry") ||
-    requestId === undefined
-  )
-    return true;
-  try {
-    useStagedSandboxStore
-      .getState()
-      .report(surfaceKey, { retryHandledId: requestId });
-    return true;
-  } catch {
-    return !decision.effects.includes("retry");
-  }
 }
 
 /** Stage work needs the captured failure; readiness retries may clear only its projection. */
@@ -755,12 +788,27 @@ function executePendingStageDecision(
   )
     return true;
   const running = decision.effects.includes("run-stage");
-  if (retry && !running)
-    useStagedSandboxStore
+  const surfaceKey = pendingSendSurfaceKey(send.id);
+  const retryRequestId = decision.effects.includes("acknowledge-retry")
+    ? plan.retryRequestId
+    : undefined;
+  if (retryRequestId !== undefined && !(retry && running)) {
+    const saved = useStagedSandboxStore
       .getState()
-      .report(pendingSendSurfaceKey(send.id), { failure: null });
+      .acknowledgeRetry(surfaceKey, retryRequestId, retry);
+    if (!saved && retry) return true;
+  } else if (retry && !running) {
+    useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+  }
   if (running) {
-    executePendingStageRun(send, stage, runner, retry ? press : null);
+    // Accepted run intent stays in the mailbox until begin commits its key,
+    // payload, and acknowledgement to the stage's record together.
+    executePendingStageRun(
+      send,
+      stage,
+      runner,
+      retry && press !== null ? { ...press, retryRequestId } : null,
+    );
     return true;
   }
   if (
@@ -1247,6 +1295,7 @@ function useWatchedSandboxRow(
         );
   useEffect(() => {
     if (send === null || decision === null) return;
+    if (!stageObservationCurrent(surfaceKey, stage, send.stopStage)) return;
     projectSandboxBlocker(surfaceKey, decision.state.blocker, row.failure);
     if (
       environment.stageRested &&
@@ -2826,9 +2875,15 @@ function usePendingStagedSendRetry(
       const press: PendingStagePress = {
         createKey,
         retryCreate: stagedCreateRetryPayload(shownStage, createKey),
+        observedCreateKey: stagedCreateAttemptKey(shownStage),
       };
       const publish =
         action === "send-again" || !ownsPendingSandboxSend(send.id);
+      if (
+        !publish &&
+        !stageObservationCurrent(surfaceKey, shownStage, undefined)
+      )
+        return;
       const plan = transitionPendingSend(
         pendingSendState(sends[send.id], stageBlocker(current)),
         publish ? "request-retry" : PENDING_STAGE_RETRY_EVENTS[action],

@@ -13,6 +13,8 @@ import type { PendingStageRetryAction } from "./pending-sandbox-send-transition"
 export interface PendingStagePress {
   readonly createKey: string | null;
   readonly retryCreate?: SandboxCreateRequest;
+  /** The attempt visible when the person chose Retry. */
+  readonly observedCreateKey?: string | null;
 }
 
 export interface PendingStageRetryRequest {
@@ -22,6 +24,8 @@ export interface PendingStageRetryRequest {
   readonly clientRequestId: string | null;
   readonly createKey?: string | null;
   readonly retryCreate?: SandboxCreateRequest;
+  /** Missing in mailbox entries written before attempt scope was recorded. */
+  readonly observedCreateKey?: string | null;
 }
 
 export interface PendingDispatchRetryRequest {
@@ -39,6 +43,38 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function parse(value: string | null): unknown {
   return value === null ? null : JSON.parse(value);
+}
+
+/** The stage's record is the commit point for a mailbox action. */
+export function readPendingStageRecord(
+  surfaceKey: string,
+): Readonly<Record<string, unknown>> | null {
+  try {
+    const stage = parse(
+      localStorage.getItem(
+        recordMapStorageKey(
+          persistKey(STORE_KEYS.stagedSandboxSend),
+          surfaceKey,
+        ),
+      ),
+    );
+    return record(stage) ? stage : null;
+  } catch {
+    return null;
+  }
+}
+
+export function pendingStageAttemptCurrent(
+  surfaceKey: string,
+  stageId: string | null,
+  createKey: string | null,
+): boolean {
+  const stage = readPendingStageRecord(surfaceKey);
+  return (
+    stage !== null &&
+    stage.clientRequestId === stageId &&
+    (stage.lastCreateKey ?? stage.clientRequestId) === createKey
+  );
 }
 
 function retryFor(stage: Record<string, unknown>, value: unknown): boolean {
@@ -202,6 +238,7 @@ export function requestPendingStageRetry(
       userId,
       clientRequestId,
       createKey: input.createKey,
+      observedCreateKey: input.observedCreateKey,
       ...(input.retryCreate === undefined
         ? {}
         : { retryCreate: input.retryCreate }),

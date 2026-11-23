@@ -25,6 +25,7 @@ import type {
 } from "@traycer/protocol/host/sandbox-control";
 import type {
   SandboxCatalogueFetchResult,
+  SandboxCreateFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -1541,6 +1542,74 @@ describe("runStagedSandbox guards", () => {
     await Promise.all([run(null, deps), run(null, deps)]);
 
     expect(auth.requests).toHaveLength(1);
+  });
+
+  it("keeps a newer failed row when an older held create returns a named 502", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness({}, true);
+    let resolveCreate = (_result: SandboxCreateFetchResult): void => undefined;
+    const heldResult = new Promise<SandboxCreateFetchResult>((resolve) => {
+      resolveCreate = resolve;
+    });
+    vi.spyOn(auth, "createSandbox").mockImplementationOnce((request) => {
+      auth.requests.push(request);
+      return heldResult;
+    });
+
+    const oldRun = run(null, deps);
+    await vi.waitFor(() => expect(auth.requests).toHaveLength(1));
+    const oldRequest = auth.requests.at(0);
+    const stageIdentity = stageOf().clientRequestId;
+    if (
+      oldRequest === undefined ||
+      oldRequest.clientRequestId === null ||
+      stageIdentity === null
+    )
+      throw new Error("expected the held create identity");
+
+    const newerKey = "retry:sbx_newer";
+    const newerRetry: SandboxCreateRequest = {
+      ...oldRequest,
+      displayName: "row H",
+      clientRequestId: newerKey,
+    };
+    expect(
+      useStagedSandboxStore.getState().begin(surfaceKey, 1_000_001, {
+        resume: false,
+        createKey: newerKey,
+        retryCreate: newerRetry,
+      }),
+    ).toBe(stageIdentity);
+    const newerFailure = {
+      kind: "failed" as const,
+      code: "newer-row",
+      step: "creating" as const,
+      sandboxId: "sbx_newer",
+      retryCreate: newerRetry,
+    };
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      failure: newerFailure,
+    });
+    expect(stageOf()).toMatchObject({
+      clientRequestId: stageIdentity,
+      lastCreateKey: newerKey,
+      lastRetryCreate: newerRetry,
+      failure: newerFailure,
+    });
+
+    resolveCreate({
+      ...refusal(502, SANDBOX_REFUSAL_CODE_PROVIDER_FAILED),
+      sandboxId: "sbx_stale",
+    });
+    await oldRun;
+
+    expect(auth.requests).toHaveLength(1);
+    expect(stageOf()).toMatchObject({
+      clientRequestId: stageIdentity,
+      lastCreateKey: newerKey,
+      lastRetryCreate: newerRetry,
+      failure: newerFailure,
+    });
   });
 
   it("takes up a cancelled send's create still in flight on the next send, instead of racing it with a second run", async () => {
