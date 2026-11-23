@@ -1616,24 +1616,38 @@ describe("useStagedSandboxSend's send after a failed create", () => {
       false,
     ],
     ["503 BACKEND_PRESSURE", refusal(503, "BACKEND_PRESSURE"), false],
-    ["409 sandbox_transition_conflict", refusal(409, "sandbox_transition_conflict"), false],
+    [
+      "409 sandbox_transition_conflict",
+      refusal(409, "sandbox_transition_conflict"),
+      false,
+    ],
     ["500 INTERNAL_ERROR", refusal(500, "INTERNAL_ERROR"), false],
     ["network error", "network-error", false],
     [
       "402 insufficient_credit with an unverified balance",
-      { ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT), reason: "unverified" },
+      {
+        ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+        reason: "unverified",
+      },
       true,
     ],
-    ["402 insufficient_credit denied", refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT), true],
+    [
+      "402 insufficient_credit denied",
+      refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+      true,
+    ],
     ["400 shape_not_offered", refusal(400, "shape_not_offered"), true],
     ["503 provider_unavailable", refusal(503, "provider_unavailable"), true],
     ["404 sandbox_not_found", refusal(404, "sandbox_not_found"), true],
     ["502 provider_failed", refusal(502, "provider_failed"), true],
-  ] as const)("uses the right next create key after %s", async (_name, answer, fresh) => {
-    const [first, second] = await sendAgainAfter(answer, true);
+  ] as const)(
+    "uses the right next create key after %s",
+    async (_name, answer, fresh) => {
+      const [first, second] = await sendAgainAfter(answer, true);
 
-    expect(second === first).toBe(!fresh);
-  });
+      expect(second === first).toBe(!fresh);
+    },
+  );
 
   it("offers Add credits and no Retry after a credit refusal", async () => {
     await sendAgainAfter(

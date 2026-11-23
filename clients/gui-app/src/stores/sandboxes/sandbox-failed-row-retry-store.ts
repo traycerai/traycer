@@ -24,8 +24,8 @@ interface SandboxFailedRowRetryState {
  * This store is per window (renderer); not shared across windows or
  * persisted across a restart.
  */
-export const useSandboxFailedRowRetryStore = create<SandboxFailedRowRetryState>()(
-  (set, get) => ({
+export const useSandboxFailedRowRetryStore =
+  create<SandboxFailedRowRetryState>()((set, get) => ({
     byAccountAndRow: {},
     claim: (accountAndRow) => {
       if (accountAndRow === null) return uuidv4();
@@ -51,5 +51,4 @@ export const useSandboxFailedRowRetryStore = create<SandboxFailedRowRetryState>(
         return { byAccountAndRow: next };
       });
     },
-  }),
-);
+  }));
