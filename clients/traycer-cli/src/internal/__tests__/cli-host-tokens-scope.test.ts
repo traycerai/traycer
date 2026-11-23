@@ -339,7 +339,7 @@ describe("a terminal effect re-checks the credentials file first (L)", () => {
       SIGN_IN_B,
     ]);
     expect(answered.kind).toBe("ok");
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     tokens.dispose();
     store.dispose();
     otherProcess.dispose();
@@ -377,7 +377,7 @@ describe("a terminal effect re-checks the credentials file first (L)", () => {
       SIGN_IN_A,
       SIGN_IN_B,
     ]);
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     tokens.dispose();
     store.dispose();
     otherProcess.dispose();
@@ -424,7 +424,7 @@ describe("a refused rotation of the sign-in the command started with (v5)", () =
 
     // Authn refused the refresh of A: one report, made after an adopting read that followed the rotation.
     expect(reports).toEqual([hostId]);
-    expect(tokens.signInRejected()).toBe(true);
+    expect(await tokens.signInRejectedNow(null)).toBe(true);
     const rotated = events.lastIndexOf("rotated");
     expect(rotated).toBeGreaterThan(-1);
     expect(events.slice(rotated + 1, events.indexOf("report"))).toContain(
@@ -463,7 +463,7 @@ describe("a rotation no refresh can follow reads signed out (v5)", () => {
 
       await tokens.mintFresh(hostId, null);
 
-      expect(tokens.signInRejected()).toBe(true);
+      expect(await tokens.signInRejectedNow(null)).toBe(true);
       tokens.dispose();
       store.dispose();
       otherProcess.dispose();

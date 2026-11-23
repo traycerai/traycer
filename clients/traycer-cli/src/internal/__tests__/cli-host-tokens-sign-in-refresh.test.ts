@@ -243,7 +243,7 @@ describe("a mint refusal's recovery refreshes only the sign-in it was refused fo
       SIBLING_SIGN_IN,
     ]);
     expect(bearer).not.toBeNull();
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
   });
 });
 
@@ -308,7 +308,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
 
     // It judged nothing: no rejection is recorded against the stored sign-in,
     // nothing is reported, and nothing was refreshed beyond the accepted refresh.
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
     expect(credentials.rotations()).toBe(1);
     // The one retry went out on the stored sign-in.
@@ -321,7 +321,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     });
     const bearer = await minting;
     expect(bearer).not.toBeNull();
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
   });
 
@@ -355,7 +355,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     await minting;
 
     expect(reports).toEqual([]);
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     // Once more, on C, with no further refresh.
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([
       SIGN_IN_A,
@@ -407,20 +407,20 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     harness.mints[1]?.answer({ kind: "sign-in-rejected" });
     await vi.waitFor(() => expect(harness.mints).toHaveLength(3));
     expect(harness.mints[2]?.signIn).toBe(SIBLING_SIGN_IN);
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(refreshesStarted).toHaveLength(1);
 
     // C's own 401 arrives: the first refusal of C, so C is refreshed, once. While
     // that refresh is pending the refusal has judged nothing.
     harness.mints[2]?.answer({ kind: "sign-in-rejected" });
     await vi.waitFor(() => expect(refreshesStarted).toHaveLength(2));
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
     releaseRefreshOfC.release();
     const bearer = await minting;
 
     expect(bearer).not.toBeNull();
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
     expect(refreshesStarted).toHaveLength(2);
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([
@@ -488,13 +488,13 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     // nothing is judged and nothing is reported.
     harness.mints[1]?.answer({ kind: "sign-in-rejected" });
     await vi.waitFor(() => expect(refreshesStarted).toHaveLength(2));
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
     releaseRefreshOfC.release();
     const bearer = await minting;
 
     expect(bearer).not.toBeNull();
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
     expect(refreshesStarted).toHaveLength(2);
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([
@@ -568,7 +568,7 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     await vi.waitFor(() => expect(harness.mints).toHaveLength(3));
     expect(harness.mints[2]?.signIn).toBe(SIBLING_SIGN_IN);
     expect(lease.getBearerToken()).toBe(SIBLING_SIGN_IN);
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
 
     harness.mints[2]?.answer({
@@ -576,7 +576,7 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       token: { token: "host-token-c", expiresAtMs: Date.now() + 3_600_000 },
     });
     expect(await minting).not.toBeNull();
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([
       SIGN_IN_A,
@@ -693,7 +693,7 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       signInA,
       signInB,
     ]);
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
     tokens.dispose();
     store.dispose();
@@ -757,7 +757,7 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       SIBLING_SIGN_IN,
     ]);
     expect(credentialsFile.refreshed).toEqual([]);
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(reports).toEqual([]);
     tokens.dispose();
     store.dispose();
@@ -883,7 +883,7 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     if (answered.kind === "ok")
       expect(answered.bearer.getBearerToken()).toBe("host-token-2");
     expect(reports).toEqual([]);
-    expect(tokens.signInRejected()).toBe(false);
+    expect(await tokens.signInRejectedNow(null)).toBe(false);
     expect(credentialsFile.refreshed).toEqual([ROTATED_SIGN_IN]);
     expect(lease.getBearerToken()).toBe(SIGN_IN_A);
     expect(harness.mints).toHaveLength(2);
@@ -951,7 +951,7 @@ describe("only a mint sent with the sign-in our rotation installed changes the j
       harness.mints[1]?.answer({ kind: "sign-in-rejected" });
       await y;
 
-      expect(tokens.signInRejected()).toBe(true);
+      expect(await tokens.signInRejectedNow(null)).toBe(true);
       expect(rotations()).toBe(1);
       expect(harness.mints).toHaveLength(2);
     },
@@ -962,12 +962,12 @@ describe("only a mint sent with the sign-in our rotation installed changes the j
 
     harness.mints[1]?.answer({ kind: "sign-in-rejected" });
     await y;
-    expect(tokens.signInRejected()).toBe(true);
+    expect(await tokens.signInRejectedNow(null)).toBe(true);
 
     harness.mints[0]?.answer(XS_TOKEN);
     await x;
 
-    expect(tokens.signInRejected()).toBe(true);
+    expect(await tokens.signInRejectedNow(null)).toBe(true);
     expect(rotations()).toBe(1);
   });
 });
