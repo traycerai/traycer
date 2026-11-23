@@ -64,6 +64,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useEnvironmentPick,
   useSettingsEnvironmentPickStore,
@@ -224,8 +225,10 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
+    defaultHostId: null,
     gone: null,
   });
+  useSelectionAuthorityStore.setState({ effectiveHostId: null });
   pickReader = null;
 });
 
@@ -588,6 +591,36 @@ describe("a team the environment list no longer carries", () => {
     // A pick made on another computer: the selection still moves, because no
     // page can read it, but no removal is claimed from a team never seen.
     expect(hoisted.toasts).toEqual([]);
+  });
+
+  it("lands on Personal, not this computer's own settings, when this computer has a Local row", async () => {
+    // The window's host, which defaults to its own Local row. Rendered without
+    // the held-value runtime, whose runner has no local host and would publish
+    // a window with no host.
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+      defaultPick: {
+        kind: "local",
+        hostId: mockLocalHostEntry.hostId,
+        hostName: mockLocalHostEntry.label,
+      },
+      defaultHostId: mockLocalHostEntry.hostId,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [PERSONAL] }),
+    });
+    answerInvitations(() => ({ invitations: [] }));
+    render(
+      <PersonalPageFrame section="secrets">
+        <Probe />
+      </PersonalPageFrame>,
+      { wrapper: harness.Wrapper },
+    );
+
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK));
   });
 
   it("offers Review for a team that has invited the person back", async () => {

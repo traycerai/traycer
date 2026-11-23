@@ -102,8 +102,15 @@ describe("navigationSource, in a window Settings has not opened", () => {
   });
 
   it("offers what the default offers from the first render, for a Local pick on a computer that has moved", () => {
-    // The old laptop is not in the window's host list, so its own pick would
-    // not list Secrets; the default, Personal on the cloud road, does.
+    // The old laptop is in the window's host list, with its status keyed by
+    // that list as in the app. It serves no Secrets of its own, so its pick
+    // would not list Secrets; the default, Personal on the cloud road, does.
+    personalHostScopeOverrides.current = {
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: "old", name: "Old laptop" }),
+      ],
+    };
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "old", hostName: "Old laptop" },
     });

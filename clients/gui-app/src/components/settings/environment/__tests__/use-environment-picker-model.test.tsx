@@ -46,7 +46,6 @@ const OLD_LAPTOP: EnvironmentPick = {
   hostName: "Old laptop",
 };
 const oldLaptop = hostScopeOptionFixture({ hostId: "old", name: "Old laptop" });
-const scope = hostScopeFixture({ host: oldLaptop });
 const mac = hostScopeOptionFixture({ hostId: "mac", name: "MacBook Pro" });
 /** This window is the MacBook, and the account lists the old laptop too. */
 const listingOld = hostScopeFixture({ host: mac, hosts: [mac, oldLaptop] });
@@ -92,11 +91,14 @@ afterEach(() => {
 
 describe("useEnvironmentPickerModel's pick", () => {
   it("reads a stale Local pick as the default on the first render, and leaves it stored", () => {
-    facts.statuses = new Map([["old", moved]]);
+    facts.statuses = new Map([
+      ["mac", running],
+      ["old", moved],
+    ]);
     useSettingsEnvironmentPickStore.setState({ pick: OLD_LAPTOP });
     const picks: EnvironmentPick[] = [];
     renderHook(() => {
-      const model = useEnvironmentPickerModel(scope);
+      const model = useEnvironmentPickerModel(listingOld);
       picks.push(model.pick);
       return model;
     });
