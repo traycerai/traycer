@@ -1122,3 +1122,90 @@ describe("main's obtain reply says whether main kept the refusal it answers with
     expect(Reflect.get(Object(reply), "recorded")).toBe(recorded);
   });
 });
+
+describe("main's obtain handler answers a mint whose token it could not save", () => {
+  const USER = "user-a";
+  const jwtExpiring = (exp: number): string =>
+    `header.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.signature`;
+  const SAVED_TOKEN: HostToken = {
+    token: "token-main-could-not-save",
+    expiresAtMs: 9_000_000_000,
+  };
+
+  /** A main whose first mint answers not-a-member and whose second answers a token it cannot save. */
+  function mainWhoseSecondSaveFails(host: string): HostTokenSource {
+    const answers: HostTokenMintOutcome[] = [
+      { kind: "not-a-member" },
+      { kind: "ok", token: SAVED_TOKEN },
+    ];
+    let mints = 0;
+    const persistence = createMemoryHostTokenPersistence();
+    const main = createHostTokenSource({
+      persistence: {
+        load: () => persistence.load(),
+        update: (change) =>
+          mints >= 2
+            ? Promise.reject(new Error("the token could not be saved"))
+            : persistence.update(change),
+      },
+      mint: () => {
+        const answer = answers[mints];
+        mints += 1;
+        return Promise.resolve(answer);
+      },
+      signIn: (userId) => (userId === USER ? jwtExpiring(2_000_000) : null),
+      now: () => 1_000_000,
+    });
+    registerFor(main, USER);
+    processReleasedHosts.observeInstance(host, "process-a");
+    return main;
+  }
+
+  it("replies unavailable, recorded and not held, instead of rejecting, on the ask after an earlier not-a-member", async () => {
+    const host = "host-save-fails-reply";
+    const main = mainWhoseSecondSaveFails(host);
+    const ask = (): Promise<unknown> =>
+      Promise.resolve(
+        invokeHandler(RunnerHostInvoke.hostTokensObtain)(
+          RENDERER,
+          USER,
+          host,
+          true,
+          main.era(USER),
+          { observed: "process-a" },
+        ),
+      );
+    const first = await ask();
+    expect(Reflect.get(Object(first), "outcome")).toEqual({
+      kind: "not-a-member",
+    });
+
+    const reply = await ask();
+
+    expect(Reflect.get(Object(reply), "outcome")).toMatchObject({
+      kind: "unavailable",
+    });
+    expect(Reflect.get(Object(reply), "recorded")).toBe(true);
+    expect(Reflect.get(Object(reply), "held")).toBe(false);
+  });
+
+  it("leaves the window over that handler holding unavailable, not its earlier not-a-member", async () => {
+    const host = "host-save-fails-window";
+    const main = mainWhoseSecondSaveFails(host);
+    const window = windowOverMain(main);
+    const owner = { hostId: host, observed: "process-a" };
+    const ask = (): Promise<HostTokenMintOutcome> =>
+      window.obtain(USER, host, true, {
+        signal: null,
+        owner,
+        observedNow: () => "process-a",
+      });
+
+    await expect(ask()).resolves.toEqual({ kind: "not-a-member" });
+    expect(window.lastFailureOf(USER, owner)).toBe("not-a-member");
+
+    await expect(ask()).resolves.toMatchObject({ kind: "unavailable" });
+
+    expect(window.lastFailureOf(USER, owner)).toBe("unavailable");
+  });
+});
