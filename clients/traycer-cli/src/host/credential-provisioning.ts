@@ -649,6 +649,7 @@ export async function provisionInstalledHostCredential(
         await waitForInFlightRevalidation();
         const ended = await endingOutcomeNow();
         if (ended !== null) return ended;
+        continue;
       }
       const { observation, session } = await observeNextAck(
         activeClient,
