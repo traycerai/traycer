@@ -128,7 +128,7 @@ const harness = vi.hoisted(() => ({
   obtainCalls: 0,
   boundExceeded: false,
   storedSignIn: (): string => "",
-  signInRejected: (): boolean => false,
+  signInRejected: (): Promise<boolean> => Promise.resolve(false),
 }));
 
 const credentialsFile = vi.hoisted(() => ({
@@ -239,6 +239,7 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
                     later.seq > refusalOf.seq &&
                     later.given?.kind === "ok",
                 ));
+            const judged = await harness.signInRejected();
             harness.events.push({
               kind: "left",
               hostId,
@@ -248,9 +249,9 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
                 (request) =>
                   request.signIn === OURS && request.given?.kind === "ok",
               ),
-              judged: harness.signInRejected(),
+              judged,
             });
-            harness.onLeave?.(harness.signInRejected());
+            harness.onLeave?.(judged);
             return outcome;
           },
         },
@@ -728,14 +729,17 @@ const nonTestRotations = (): number =>
   ).length;
 
 /** The model's claims after a step, each named by the step. */
-function checkModel(open: OpenTokens, step: string): void {
+async function checkModel(open: OpenTokens, step: string): Promise<void> {
   expect(open.mismatches, `${step}: signInRejected() as outcomes left`).toEqual(
     [],
   );
-  const expected = open.model.rejected();
-  expect(open.tokens.signInRejected(), `${step}: signInRejected()`).toBe(
-    expected,
-  );
+  // The verdict is defined only after an adopting read, and none completes
+  // while a read hold is armed, so a step run under one compares everything but it.
+  if (harness.readGate === null)
+    expect(
+      await open.tokens.signInRejectedNow(null),
+      `${step}: signInRejected()`,
+    ).toBe(open.model.rejected());
   expect(
     nonTestRotations(),
     `${step}: rotations started beyond those a counting, non-final refusal earns`,
@@ -754,7 +758,7 @@ async function step(
 ): Promise<void> {
   await action();
   await quiet();
-  checkModel(open, name);
+  await checkModel(open, name);
 }
 
 const answerRequest = (
@@ -827,7 +831,7 @@ async function openTokensLoading(): Promise<OpenTokens> {
       counted(adoptAfterGate(() => revalidator.adoptStoredSignIn())),
     signal: null,
   });
-  harness.signInRejected = () => tokens.signInRejected();
+  harness.signInRejected = () => tokens.signInRejectedNow(null);
   const reports: string[] = [];
   tokens.onRefusalEndingCommand((reportedHostId) => {
     reports.push(reportedHostId);
@@ -930,7 +934,7 @@ describe.each(scenarios)(
         harness.storedSignIn() === OURS &&
         left.some((event) => event.refusalOf?.signIn === OURS);
       expect({
-        rejected: tokens.signInRejected(),
+        rejected: await tokens.signInRejectedNow(null),
         permitted: judgedByTheRule,
       }).not.toEqual({ rejected: true, permitted: false });
       // (3) No rotation starts for a refusal the rule excludes: each rotation
@@ -1632,7 +1636,7 @@ describe("model: the lease's spent branch", () => {
     ).toBe(1);
     // C persists in being refused: the retry's refusal is the first of C
     // after our own rotation, with nothing bought on it, and is final.
-    await expect(next).resolves.toBe("rejected");
+    await expect(next).resolves.toBe("sign-in-rejected");
 
     // One more attempt: refusals persist, so nothing rotates again, and each
     // attempt makes one request.
@@ -1654,7 +1658,7 @@ describe("model: the lease's spent branch", () => {
       harness.requests.length - requestsAtBound,
       "authn requests stay bounded",
     ).toBe(1);
-    await expect(last).resolves.toBe("rejected");
+    await expect(last).resolves.toBe("sign-in-rejected");
     await finish(open);
   });
 });
