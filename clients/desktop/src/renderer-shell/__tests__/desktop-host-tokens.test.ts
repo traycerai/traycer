@@ -978,3 +978,37 @@ describe("a window records a refused mint only when main kept it under main's cu
     },
   );
 });
+
+describe("a window whose main could not save a token holds the outcome main holds", () => {
+  it("answers lastFailureOf as unavailable, not as the earlier not-a-member, after main's obtain rejects", async () => {
+    const { bridge } = bridgeFixture();
+    let asks = 0;
+    Reflect.set(bridge, "obtain", async () => {
+      asks += 1;
+      if (asks > 1) throw new Error("the token could not be saved");
+      return {
+        outcome: { kind: "not-a-member" },
+        era: 0,
+        held: false,
+        recorded: true,
+        signIn: FIXED_SIGN_IN_KEY,
+      };
+    });
+    const tokens = createDesktopHostTokenSource(bridge);
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "100");
+    const owner = hosts.currentInstance(HOST_ID);
+    const ask = (): Promise<HostTokenMintOutcome> =>
+      tokens.obtain(USER_ID, HOST_ID, true, {
+        signal: null,
+        owner,
+        observedNow: () => owner.observed,
+      });
+
+    await expect(ask()).resolves.toEqual({ kind: "not-a-member" });
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("not-a-member");
+    await expect(ask()).rejects.toThrow("the token could not be saved");
+
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("unavailable");
+  });
+});
