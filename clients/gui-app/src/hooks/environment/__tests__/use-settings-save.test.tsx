@@ -859,7 +859,7 @@ function promotedLocalProposal(
 function localSaveIdsResponse(
   localSaveIds: readonly string[],
 ): PromotedLocalProposalsResponse {
-  return { proposals: [], localSaveIds };
+  return { proposals: [], localSaveIds: [...localSaveIds] };
 }
 
 function localPromotionReviewAnswer(
@@ -1257,7 +1257,7 @@ describe("settings-save callers", () => {
       await result.current.mutateAsync(setTarget("new-value"));
     });
 
-    expect(records()[0]?.os).toBe(expectedOs);
+    expect(records()[0]).toMatchObject({ os: expectedOs });
   });
 
   it.each([

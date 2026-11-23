@@ -89,6 +89,7 @@ export interface HostRequestAuthority {
  * positional tails that drift apart as the seam grows.
  */
 export interface HostRequestOptions {
+  readonly requestId?: string | undefined;
   readonly idempotencyKey: string | null;
   readonly authority: HostRequestAuthority;
   /**

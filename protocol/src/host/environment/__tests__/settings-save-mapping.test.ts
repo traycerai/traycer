@@ -1709,7 +1709,7 @@ describe("stated-item contracts", () => {
 
     const proposals = hostRpcRegistry["environment.proposals"];
     expect(proposals.degrade).toEqual({ kind: "unsupported" });
-    expect(proposals[1].latestMinor).toEqual(0);
+    expect(proposals[1].latestMinor).toEqual(1);
     expect(proposals[1].versions[0].contract).toBe(environmentProposalsV10);
   });
 

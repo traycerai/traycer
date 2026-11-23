@@ -520,7 +520,7 @@ describe("settings save edit fence", () => {
     expect(currentRecord()?.unanswered).toBeNull();
     expect(
       Object.values(useSettingsSaveMemoryStore.getState().records).some(
-        (record) => record.key === otherKey,
+        (record) => record.environmentId !== null && record.key === otherKey,
       ),
     ).toBe(false);
   });

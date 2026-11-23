@@ -536,6 +536,7 @@ function sendHostStatus(session: HostSession): Promise<unknown> {
     undefined,
     false,
     null,
+    undefined,
   );
 }
 
