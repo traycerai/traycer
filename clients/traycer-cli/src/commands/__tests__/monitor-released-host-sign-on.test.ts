@@ -1,10 +1,18 @@
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as realDelay } from "node:timers/promises";
 import type { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import { buildProgramWithAgentRoles } from "../../index";
+import type { AuthTokenRefreshResult } from "../../../../shared/auth/auth-validation";
+import type { Environment } from "../../runner/environment";
+import { createCliCredentialsStore } from "../../store/credentials-store";
 import { runMonitor } from "../monitor";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
@@ -94,6 +102,10 @@ const monitorHarness = vi.hoisted(() => {
       rotations: [] as string[],
       /** The stored sign-in the command holds, as its revalidator was given it. */
       lease: null as MutableBearerLease | null,
+      /** When set, the credentials store is the real one, over the file at `credentialsPath`. */
+      credentialsPath: "",
+      /** The sign-ins authn's refresh hands out to the real store, in the order asked. */
+      refreshed: [] as string[],
       /** What refreshing the stored sign-in answers. */
       refresh: "network-error" as "network-error" | "rotated" | "rejected",
       /** What authn answers a host-token mint with. */
@@ -169,6 +181,37 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
   };
 });
 
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return {
+    ...actual,
+    cliCredentialsPath: (environment: Environment): string =>
+      monitorHarness.state.credentialsPath === ""
+        ? actual.cliCredentialsPath(environment)
+        : monitorHarness.state.credentialsPath,
+  };
+});
+
+vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/auth-validation")
+    >();
+  return {
+    ...actual,
+    refreshOnceAbortable: async (
+      args: Parameters<typeof actual.refreshOnceAbortable>[0],
+    ): Promise<AuthTokenRefreshResult> => {
+      if (monitorHarness.state.credentialsPath === "")
+        return actual.refreshOnceAbortable(args);
+      const token = monitorHarness.state.refreshed.shift();
+      if (token === undefined)
+        throw new Error("authn was asked for a refresh no test expected");
+      return { kind: "refreshed", token, refreshToken: `rt-${token}` };
+    },
+  };
+});
+
 vi.mock("../../store/credentials-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../store/credentials-store")>();
@@ -176,7 +219,10 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     await import("@traycer-clients/shared/auth/bearer-source");
   return {
     ...actual,
-    createCliCredentialsStore: () => ({
+    createCliCredentialsStore: () =>
+      monitorHarness.state.credentialsPath !== ""
+        ? actual.createCliCredentialsStore()
+        : {
       dispose: () => undefined,
       rotate: async () => {
         const adopted =
@@ -192,7 +238,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
           },
         };
       },
-    }),
+    },
     createStoreBackedRevalidator: (
       args: Parameters<typeof actual.createStoreBackedRevalidator>[0],
     ) => {
@@ -201,6 +247,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
         ? actual.createStoreBackedRevalidator(args)
         : {
             revalidateCurrentContext: async () => monitorHarness.state.refresh,
+            adoptStoredSignIn: async () => undefined,
             // The fake rotates no lease: a rotation it accepts installed the
             // sign-in the lease holds, which the next mint is sent with.
             rotateSignIn: async () => ({
@@ -427,6 +474,8 @@ beforeEach(() => {
   monitorHarness.state.refresh = "network-error";
   monitorHarness.state.realRevalidator = false;
   monitorHarness.state.lease = null;
+  monitorHarness.state.credentialsPath = "";
+  monitorHarness.state.refreshed.splice(0);
   monitorHarness.state.rotations.splice(0);
   monitorHarness.state.signIn = SIGN_IN;
   monitorHarness.state.firstRotation = "superseded";
@@ -1788,51 +1837,90 @@ describe("traycer monitor local released-host sign-in", () => {
     });
   });
 
-  describe("a refusal of a sign-in that is no longer the stored one", () => {
+  describe("a refusal of a sign-in another process has since saved over", () => {
     const SIBLING_SIGN_IN = "sibling-sign-in";
-    const LATER_SIGN_IN = "later-sign-in";
     const REFRESHED_SIGN_IN = "refreshed-token";
+    let workDir = "";
 
-    function storedSignIn(): MutableBearerLease {
-      const lease = monitorHarness.state.lease;
-      if (lease === null) throw new Error("the command held no sign-in");
-      return lease;
+    beforeEach(async () => {
+      workDir = await mkdtemp(join(tmpdir(), "traycer-monitor-sibling-"));
+      monitorHarness.state.credentialsPath = join(workDir, "credentials");
+      monitorHarness.state.realRevalidator = true;
+    });
+
+    afterEach(async () => {
+      await rm(workDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
+    });
+
+    const credentialsOf = (token: string): StoredCredentials => ({
+      token,
+      refreshToken: `rt-${token}`,
+      savedAt: "2026-01-01T00:00:00.000Z",
+      user: { id: USER_ID, email: "user@example.test", name: "User" },
+    });
+
+    /** The command's own handle on the file holds what it last saved; this one is another process's. */
+    async function saveFromAnotherProcess(token: string): Promise<void> {
+      const otherProcess = createCliCredentialsStore();
+      try {
+        await otherProcess.signIn(credentialsOf(token), false, null);
+      } finally {
+        otherProcess.dispose();
+      }
     }
 
-    it("neither ends nor reads a sign-out when the proactive upkeep's mint is refused after a sibling stored another sign-in", async () => {
+    function leaseSignIn(): string {
+      const lease = monitorHarness.state.lease;
+      if (lease === null) throw new Error("the command held no sign-in");
+      return lease.getBearerToken();
+    }
+
+    it("goes on with the sign-in on disk when the proactive upkeep's mint is refused after another process saved a newer one", async () => {
       // The upkeep refreshes the sign-in and buys a token with the refreshed one.
       const oldSignIn = expiredJwt(
         Date.now() + 10 * 60 * 1000 + UPKEEP_FIRES_AT_MS,
       );
       const refreshed = expiredJwt(Date.now() + 8 * 60 * 60 * 1000);
       monitorHarness.state.signIn = oldSignIn;
-      monitorHarness.state.refreshedSignIn = refreshed;
-      monitorHarness.state.firstRotation = "applied";
-      monitorHarness.state.realRevalidator = true;
+      monitorHarness.state.refreshed.push(refreshed);
+      await createCliCredentialsStore().signIn(
+        credentialsOf(oldSignIn),
+        false,
+        null,
+      );
       const mints = holdMints();
       startMonitor();
       await socketAt(0);
+      // The refresh runs under the file lock, whose I/O is real: each step lets it progress.
       for (
         let step = 0;
         step < 400 && !monitorHarness.grantSignIns.includes(refreshed);
         step += 1
       ) {
         await vi.advanceTimersByTimeAsync(250);
+        await realDelay(5);
       }
       const upkeepMint = monitorHarness.grantSignIns.indexOf(refreshed);
       expect(upkeepMint).toBeGreaterThan(-1);
 
-      // A sibling stores another sign-in while the upkeep's mint is out.
-      storedSignIn().rotate(SIBLING_SIGN_IN);
+      // Another process saves a newer sign-in while the upkeep's mint is out; this lease still holds the refreshed one.
+      await saveFromAnotherProcess(SIBLING_SIGN_IN);
+      expect(leaseSignIn()).toBe(refreshed);
       mints.answer(upkeepMint, new Response("rejected", { status: 401 }));
 
-      // The command asks again on the stored sign-in, and nothing is judged.
+      // The command takes the sign-in on disk and asks again on it; nothing is judged.
       await vi.waitFor(
         () => expect(monitorHarness.grantSignIns.at(-1)).toBe(SIBLING_SIGN_IN),
         WAIT,
       );
+      expect(leaseSignIn()).toBe(SIBLING_SIGN_IN);
       expect(await outcomeOf()).toBe("running");
-      expect(monitorHarness.state.rotations).toEqual(["applied"]);
+      expect(monitorHarness.state.refreshed).toEqual([]);
       mints.answer(
         monitorHarness.grantSignIns.length - 1,
         grantedToken("fresh-on-sibling"),
@@ -1840,9 +1928,13 @@ describe("traycer monitor local released-host sign-in", () => {
       expect(await outcomeOf()).toBe("running");
     });
 
-    it("goes on with the stored sign-in when the retry after a rotation is refused after a sibling stored another one", async () => {
-      monitorHarness.state.firstRotation = "applied";
-      monitorHarness.state.realRevalidator = true;
+    it("goes on with the sign-in on disk when the retry after a rotation is refused after another process saved a newer one", async () => {
+      monitorHarness.state.refreshed.push(REFRESHED_SIGN_IN);
+      await createCliCredentialsStore().signIn(
+        credentialsOf(SIGN_IN),
+        false,
+        null,
+      );
       const mints = holdMints();
       startMonitor();
       await socketAt(0);
@@ -1851,7 +1943,7 @@ describe("traycer monitor local released-host sign-in", () => {
         WAIT,
       );
 
-      // The first refusal rotates the sign-in and the retry goes out on the rotated one.
+      // The first refusal rotates the sign-in under the lock and the retry goes out on the rotated one.
       mints.answer(0, new Response("rejected", { status: 401 }));
       await vi.waitFor(
         () =>
@@ -1861,8 +1953,9 @@ describe("traycer monitor local released-host sign-in", () => {
           ]),
         WAIT,
       );
-      // A sibling stores another sign-in while the retry is out, and the retry is refused.
-      storedSignIn().rotate(LATER_SIGN_IN);
+      // Another process saves a newer sign-in while the retry is out; this lease still holds the rotated one.
+      await saveFromAnotherProcess(SIBLING_SIGN_IN);
+      expect(leaseSignIn()).toBe(REFRESHED_SIGN_IN);
       mints.answer(1, new Response("rejected", { status: 401 }));
 
       await vi.waitFor(
@@ -1870,13 +1963,14 @@ describe("traycer monitor local released-host sign-in", () => {
           expect(monitorHarness.grantSignIns).toEqual([
             SIGN_IN,
             REFRESHED_SIGN_IN,
-            LATER_SIGN_IN,
+            SIBLING_SIGN_IN,
           ]),
         WAIT,
       );
+      expect(leaseSignIn()).toBe(SIBLING_SIGN_IN);
       expect(await outcomeOf()).toBe("running");
-      expect(monitorHarness.state.rotations).toEqual(["applied"]);
-      mints.answer(2, grantedToken("fresh-on-later"));
+      expect(monitorHarness.state.refreshed).toEqual([]);
+      mints.answer(2, grantedToken("fresh-on-sibling"));
       expect(await outcomeOf()).toBe("running");
     });
   });
