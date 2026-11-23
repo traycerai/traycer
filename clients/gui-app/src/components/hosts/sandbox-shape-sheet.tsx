@@ -304,45 +304,44 @@ function diskOfForm(
   return { diskMb };
 }
 
-/** The disk a size option will use when selected. */
-function diskGbForRung(
-  form: ShapeForm,
-  provider: SandboxCatalogueProvider,
-  rung: SandboxShapeRung,
-  selectedRungGrows: boolean,
-): string {
-  const listedDiskGb = String(rung.diskMb / MB_PER_GIB);
-  if (rung.grows === undefined) return listedDiskGb;
-  const chosenDiskGb = selectedRungGrows ? form.diskGb : form.growingDiskGb;
-  if (!selectedRungGrows && "problem" in diskOfForm(chosenDiskGb, provider)) {
-    return listedDiskGb;
-  }
-  // A remembered disk can name a fixed sibling of the growing option.
-  const selected = stageRungForSize(provider.shapes ?? [], {
-    cpus: rung.cpus,
-    memoryMb: rung.memoryMb,
-    diskMb: Number(chosenDiskGb) * MB_PER_GIB,
-  });
-  return selected !== null && selected.grows === undefined
-    ? listedDiskGb
-    : chosenDiskGb;
-}
-
 function rungKey(rung: SandboxShapeRung): string {
   const kind = rung.grows === undefined ? "fixed" : "growing";
   return `${rung.cpus}:${rung.memoryMb}:${rung.diskMb}:${kind}`;
 }
 
-function selectableFormRungs(
-  shapes: readonly SandboxShapeRung[] | null,
+interface FormSizeOption {
+  readonly rung: SandboxShapeRung;
+  readonly diskGb: string;
+}
+
+/** Only offer sizes their proposed disk can actually select. */
+function selectableFormSizes(
+  provider: SandboxCatalogueProvider,
   selected: SandboxShapeRung | null,
-): readonly SandboxShapeRung[] | null {
+  growingDiskGb: string,
+): readonly FormSizeOption[] | null {
+  const shapes = provider.shapes;
   if (shapes === null) return null;
-  const rungs = selectableStageRungs(shapes);
-  // A resized growing start can still be selected when its listed disk names a fixed sibling.
-  return selected === null || rungs.includes(selected)
-    ? rungs
-    : [...rungs, selected];
+  // An active growing input keeps its draft disk while it is invalid.
+  const useGrowingDisk =
+    selected?.grows !== undefined ||
+    "diskMb" in diskOfForm(growingDiskGb, provider);
+  const growingDiskMb = Number(growingDiskGb) * MB_PER_GIB;
+  // A duplicate listed geometry can still offer a distinct resized request.
+  const candidates = new Set([...selectableStageRungs(shapes), ...shapes]);
+  const options: FormSizeOption[] = [];
+  for (const rung of candidates) {
+    if (
+      rung.grows !== undefined &&
+      useGrowingDisk &&
+      stageRungForSize(shapes, { ...rung, diskMb: growingDiskMb }) === rung
+    ) {
+      options.push({ rung, diskGb: growingDiskGb });
+    } else if (stageRungForSize(shapes, rung) === rung) {
+      options.push({ rung, diskGb: String(rung.diskMb / MB_PER_GIB) });
+    }
+  }
+  return options;
 }
 
 function resolveRung(
@@ -487,7 +486,12 @@ function ShapeSheetForm(props: {
   }
   const selection = resolveRung(form, provider.shapes);
   const selectedRungGrows = selection.grows;
-  const selectableRungs = selectableFormRungs(provider.shapes, selection.rung);
+  const growingDiskGb = selectedRungGrows ? form.diskGb : form.growingDiskGb;
+  const sizeOptions = selectableFormSizes(
+    provider,
+    selection.rung,
+    growingDiskGb,
+  );
   const result = shapeOfForm(form, provider, selection.rung);
   const shape = "shape" in result ? result.shape : null;
   const price = shape === null ? null : stagePrice(props.catalogue, shape);
@@ -561,7 +565,7 @@ function ShapeSheetForm(props: {
               setForm({ ...form, region: value });
             }}
           />
-          {selectableRungs === null ? (
+          {sizeOptions === null ? (
             <>
               <ShapeNumber
                 id={`${ids}-cpus`}
@@ -613,29 +617,20 @@ function ShapeSheetForm(props: {
                   id={`${ids}-size`}
                   label="Size"
                   value={selection.value}
-                  options={selectableRungs.map((rung) => ({
+                  options={sizeOptions.map(({ rung, diskGb }) => ({
                     value: rungKey(rung),
-                    label: rungLabel(
-                      props.catalogue,
-                      form,
-                      rung,
-                      diskGbForRung(form, provider, rung, selectedRungGrows),
-                    ),
+                    label: rungLabel(props.catalogue, form, rung, diskGb),
                   }))}
                   onChange={(value) => {
-                    const rung = selectableRungs.find(
-                      (candidate) => rungKey(candidate) === value,
+                    const option = sizeOptions.find(
+                      ({ rung }) => rungKey(rung) === value,
                     );
-                    if (rung === undefined) return;
+                    if (option === undefined) return;
+                    const { rung, diskGb } = option;
                     setSizeCommitted(true);
                     const fields = {
                       ...rungFields(rung),
-                      diskGb: diskGbForRung(
-                        form,
-                        provider,
-                        rung,
-                        selectedRungGrows,
-                      ),
+                      diskGb,
                     };
                     if (rung.grows === undefined) {
                       setForm({

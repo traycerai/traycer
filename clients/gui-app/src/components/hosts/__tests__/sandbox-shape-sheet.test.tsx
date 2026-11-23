@@ -625,6 +625,12 @@ describe("<SandboxShapeSheet />", () => {
     expect(disk.value).toBe("80");
 
     fireEvent.click(size);
+    const initialOptions = screen.getAllByRole("option");
+    const initialOptionLabels = initialOptions.map(
+      (option) => option.textContent,
+    );
+    expect(initialOptions).toHaveLength(2);
+    expect(new Set(initialOptionLabels).size).toBe(2);
     const fixedOption = screen.getByRole("option", {
       name: /2 vCPU · 4 GB · 50 GB · \$0\.10\/h/,
     });
@@ -637,6 +643,103 @@ describe("<SandboxShapeSheet />", () => {
       cpus: 2,
       memoryMb: 4 * GIB,
       diskMb: 50 * GIB,
+    });
+
+    fireEvent.click(size);
+    const returnOptions = screen.getAllByRole("option");
+    expect(returnOptions).toHaveLength(2);
+    expect(
+      new Set(returnOptions.map((option) => option.textContent)).size,
+    ).toBe(2);
+    fireEvent.click(screen.getByRole("option", { name: /grows to/ }));
+    const restoredDisk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(restoredDisk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(restoredDisk.value).toBe("80");
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+    expect(onUseShape.mock.calls[1]?.[0]).toMatchObject({
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 80 * GIB,
+    });
+  });
+
+  it("omits a shadowed rung after selecting its fixed sibling", () => {
+    const base = growingWithFixedSiblingCatalogue({
+      fixedDiskGb: 50,
+      fixedAwakeMc: 100,
+      growingFirst: false,
+    });
+    const [provider] = base.providers;
+    const shapes = provider.shapes;
+    if (shapes === null) throw new Error("Expected listed size rungs");
+    const [fixed, growing50] = shapes;
+    catalogueInUse = {
+      ...base,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            fixed,
+            growing50,
+            {
+              ...growing50,
+              diskMb: 60 * GIB,
+              default: false,
+              grows: { cpus: 8, memoryMb: 32 * GIB },
+            },
+          ],
+        },
+      ],
+    };
+    const onUseShape = vi.fn();
+    renderSheetWithInitialShape(onUseShape, {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 80 * GIB,
+      region: "us-east",
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 10_080,
+    });
+
+    const size = screen.getByRole("combobox", { name: "Size" });
+    expect(size.textContent).toContain("grows to 16 vCPU · 64 GB");
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(disk.value).toBe("80");
+    fireEvent.click(size);
+    fireEvent.click(
+      screen.getByRole("option", { name: /2 vCPU · 4 GB · 50 GB/ }),
+    );
+    expect(screen.queryByRole("spinbutton", { name: "Disk (GB)" })).toBeNull();
+    expect(size.textContent).toContain("2 vCPU · 4 GB · 50 GB · $0.10/h");
+
+    fireEvent.click(size);
+
+    const optionLabels = screen
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(optionLabels).toHaveLength(2);
+    expect(optionLabels[0]).toContain("2 vCPU · 4 GB · 50 GB");
+    expect(optionLabels[1]).toContain("grows to 16 vCPU · 64 GB");
+
+    fireEvent.click(
+      screen.getByRole("option", { name: /grows to 16 vCPU · 64 GB/ }),
+    );
+    const restoredDisk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(restoredDisk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(restoredDisk.value).toBe("80");
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 80 * GIB,
     });
   });
 
