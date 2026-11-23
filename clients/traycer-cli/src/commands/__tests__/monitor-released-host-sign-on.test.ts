@@ -1975,6 +1975,56 @@ describe("traycer monitor local released-host sign-in", () => {
       mints.answer(2, grantedToken("fresh-on-sibling"));
       expect(await outcomeOf()).toBe("running");
     });
+
+    it("goes on with the sign-in on disk when the stream recovery's retry after a rotation is refused after another process saved a newer one", async () => {
+      // The host refuses the held token as expired: the stream's bounded recovery mints a fresh one.
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      monitorHarness.state.refreshed.push(REFRESHED_SIGN_IN);
+      await createCliCredentialsStore().signIn(
+        credentialsOf(SIGN_IN),
+        false,
+        null,
+      );
+      const mints = holdMints();
+      startMonitor();
+      const socket = await socketAt(0);
+      expect((await readOpen(socket)).token).toBe("held-token");
+      socket.fireFrame(fatal("token_expired", "host token expired"));
+
+      // The first mint is refused; the recovery rotates under the lock and retries on the rotated sign-in.
+      await vi.waitFor(
+        () => expect(monitorHarness.grantSignIns).toEqual([SIGN_IN]),
+        WAIT,
+      );
+      mints.answer(0, new Response("rejected", { status: 401 }));
+      await vi.waitFor(
+        () =>
+          expect(monitorHarness.grantSignIns).toEqual([
+            SIGN_IN,
+            REFRESHED_SIGN_IN,
+          ]),
+        WAIT,
+      );
+      // Another process saves a newer sign-in while the retry is out, and the retry is refused.
+      await saveFromAnotherProcess(SIBLING_SIGN_IN);
+      mints.answer(1, new Response("rejected", { status: 401 }));
+
+      // The recovery is not answered "rejected": it mints on the sign-in on disk, and the monitor runs on.
+      await vi.waitFor(
+        () =>
+          expect(monitorHarness.grantSignIns).toEqual([
+            SIGN_IN,
+            REFRESHED_SIGN_IN,
+            SIBLING_SIGN_IN,
+          ]),
+        WAIT,
+      );
+      expect(leaseSignIn()).toBe(SIBLING_SIGN_IN);
+      expect(await outcomeOf()).toBe("running");
+      expect(monitorHarness.state.refreshed).toEqual([]);
+      mints.answer(2, grantedToken("fresh-on-sibling"));
+      expect(await outcomeOf()).toBe("running");
+    });
   });
 });
 
