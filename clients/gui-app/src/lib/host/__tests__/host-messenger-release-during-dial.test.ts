@@ -211,6 +211,7 @@ describe("runtime host messenger release during dial", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     let issued = 0;
     const binding = buildRuntimeHostMessenger<typeof registry>({
+      confirmRowBeforeSignIn: () => Promise.resolve(true),
       registry,
       resolveTarget: (hostId) =>
         hostId === localEntry.hostId ? localEntry : null,
@@ -327,8 +328,10 @@ describe("runtime host messenger release during dial", () => {
       teamEntry.hostId,
       { token: heldToken, expiresAtMs: Date.now() - 11 * 60_000 },
       hostTokens.era(bearer.identity.userId),
+      () => true,
     );
     const binding = buildRuntimeHostMessenger<typeof registry>({
+      confirmRowBeforeSignIn: () => Promise.resolve(true),
       registry,
       resolveTarget: (hostId) =>
         hostId === teamEntry.hostId ? teamEntry : null,
@@ -448,6 +451,7 @@ describe("runtime host messenger release during dial", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     let issued = 0;
     const binding = buildRuntimeHostMessenger<typeof registry>({
+      confirmRowBeforeSignIn: () => Promise.resolve(true),
       registry,
       resolveTarget: (hostId) =>
         hostId === localEntry.hostId ? localEntry : null,

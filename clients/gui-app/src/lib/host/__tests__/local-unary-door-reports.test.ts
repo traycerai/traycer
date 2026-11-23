@@ -24,6 +24,7 @@ import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import {
   defineRpcContract,
   defineVersionedRpcRegistry,
+  UNARY_CAPABILITY_PERSISTENT_SESSION,
 } from "@traycer/protocol/framework/index";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -44,11 +45,11 @@ function fieldOf(value: object, key: string): unknown {
   return found;
 }
 
-/** Lets queued promise work and zero-delay timers run, on real timers. */
-function tick(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 10);
-  });
+function frameOf(raw: string): object {
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null)
+    throw new Error("the frame was not an object");
+  return parsed;
 }
 
 const NO_HOST_TOKEN_MESSAGE = "No host-only token is held for this host";
@@ -109,6 +110,20 @@ function notAdmittedRefusal(): string {
   });
 }
 
+function membershipRemovedRefusal(): string {
+  return JSON.stringify({
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "current-host-refusal",
+      doorReason: "membership_removed",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
 function entryFor(
   hostId: string,
   owner: HostOwnerPrincipal,
@@ -137,6 +152,7 @@ function startCall(
 ): Driven {
   let issued = 0;
   const binding = buildRuntimeHostMessenger({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     registry,
     resolveTarget: (hostId) => (hostId === entry.hostId ? entry : null),
     auth: recovery,
@@ -197,6 +213,7 @@ async function heldTokenSource(hostId: string): Promise<HostTokenSource> {
     hostId,
     { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
     source.era(USER_A),
+    () => true,
   );
   return source;
 }
@@ -386,12 +403,18 @@ describe("a unary call's reports to the app's door", () => {
       });
       if (stream === null) throw new Error("local stream client did not build");
       const session = stream.subscribe("epic.subscribe", { epicId: "epic-a" });
+      // Registered before the dial is answered, so the admission cannot be missed.
+      const admitted = new Promise<void>((resolve) => {
+        session.onStatusChange((status) => {
+          if (status === "open") resolve();
+        });
+      });
       disposers.push(() => {
         session.close();
         stream.close("test teardown");
       });
       await answerDial(2, openAckFrame([], null));
-      await tick();
+      await admitted;
 
       answers[0]("rejected");
       expect(await driven.call).toMatchObject({ kind: "rejected" });
@@ -408,11 +431,11 @@ describe("a unary call's reports to the app's door", () => {
       expect(await answerDial(0, notAdmittedRefusal())).toBe(
         NO_HOST_TOKEN_PROBE,
       );
-      await tick();
+      // The call is waiting on the slow mint: it asked, and nothing settled it.
+      await vi.waitFor(() => expect(mints.asked()).toBeGreaterThanOrEqual(1));
       expect(driven.settled()).toBe(false);
 
       const minted = "team-host-token-after-slow-mint";
-      await vi.waitFor(() => expect(mints.asked()).toBeGreaterThanOrEqual(1));
       mints.answer({
         kind: "ok",
         token: { token: minted, expiresAtMs: Date.now() + 60_000 },
@@ -464,6 +487,85 @@ describe("a unary call's reports to the app's door", () => {
     });
   });
 
+  describe("an answer from a host process that was since replaced", () => {
+    it("starts no revalidation and raises no state when it refuses the held token as not admitted", async () => {
+      const hostId = "unary-stale-not-admitted";
+      processReleasedHosts.observeInstance(hostId, "100");
+      const mints = heldMints();
+      await mints.source.adopt(
+        USER_A,
+        hostId,
+        { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
+        mints.source.era(USER_A),
+        () => true,
+      );
+      let revalidations = 0;
+      const driven = begin(personal(hostId), mints.source, {
+        revalidateForReconnect: () => {
+          revalidations += 1;
+          return Promise.resolve("rotated");
+        },
+      });
+      expect(await answerDial(0, null)).toBe(HOST_TOKEN);
+      processReleasedHosts.observeInstance(hostId, "200");
+      FakeNativeWebSocket.instances[0].fireMessage(notAdmittedRefusal());
+      await vi.waitFor(() =>
+        expect(
+          driven.settled() || FakeNativeWebSocket.instances.length > 1,
+        ).toBe(true),
+      );
+      expect(revalidations).toBe(0);
+      expect(mints.asked()).toBe(0);
+      expect(hostDoorStateFor(hostId)).toBeNull();
+      expect(FakeNativeWebSocket.instances.length).toBeGreaterThan(1);
+      expect(driven.settled()).toBe(false);
+    });
+
+    it("never hides the replacement's refusal behind a connection its predecessor was admitted on and never closed", async () => {
+      const hostId = "unary-stale-admission";
+      processReleasedHosts.observeInstance(hostId, "100");
+      const first = begin(
+        personal(hostId),
+        await heldTokenSource(hostId),
+        null,
+      );
+      expect(await answerDial(0, null)).toBe(HOST_TOKEN);
+      const predecessor = FakeNativeWebSocket.instances[0];
+      const open = frameOf(predecessor.sent[0]);
+      predecessor.fireMessage(
+        JSON.stringify({
+          kind: "openAck",
+          manifest: fieldOf(open, "manifest"),
+          optionalManifest: fieldOf(open, "optionalManifest"),
+          capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(predecessor.sent.length).toBeGreaterThanOrEqual(2),
+      );
+      const request = frameOf(predecessor.sent[1]);
+      predecessor.fireMessage(
+        JSON.stringify({
+          kind: "response",
+          requestId: fieldOf(request, "requestId"),
+          method: fieldOf(request, "method"),
+          schemaVersion: fieldOf(request, "schemaVersion"),
+          result: { echoed: "hi" },
+          error: null,
+        }),
+      );
+      expect(await first.call).toMatchObject({ kind: "fulfilled" });
+
+      // The predecessor's socket stays open: its close never arrives.
+      processReleasedHosts.observeInstance(hostId, "200");
+      begin(personal(hostId), await heldTokenSource(hostId), null);
+      expect(await answerDial(1, membershipRemovedRefusal())).toBe(HOST_TOKEN);
+      await vi.waitFor(() =>
+        expect(hostDoorStateFor(hostId)?.kind).toBe("membership-removed"),
+      );
+    });
+  });
+
   describe("a named-reason mark ends with the host's local process instance, never with a bare refusal", () => {
     const hostId = "unary-named-reason-instance";
     const snapshot = (pid: number): LocalHostSnapshot => ({
@@ -508,7 +610,10 @@ describe("a unary call's reports to the app's door", () => {
 
     it("sends the sign-in after a bare refusal once the same host id is published under a new pid", async () => {
       const host = await directoryAt(100);
-      processReleasedHosts.refusedNamingReason(hostId);
+      processReleasedHosts.refusedNamingReason(
+        processReleasedHosts.currentInstance(hostId),
+        false,
+      );
       host.setLocalHost(snapshot(200));
       const driven = begin(
         personal(hostId),
@@ -522,7 +627,10 @@ describe("a unary call's reports to the app's door", () => {
 
     it("sends the sign-in once the host id returns under a new pid after another host was the local one", async () => {
       const host = await directoryAt(100);
-      processReleasedHosts.refusedNamingReason(hostId);
+      processReleasedHosts.refusedNamingReason(
+        processReleasedHosts.currentInstance(hostId),
+        false,
+      );
       host.setLocalHost({
         ...snapshot(7),
         hostId: "unary-named-reason-other-local-host",
@@ -540,7 +648,10 @@ describe("a unary call's reports to the app's door", () => {
 
     it("sends no sign-in when the host id returns under the same pid after another host was the local one (control)", async () => {
       const host = await directoryAt(100);
-      processReleasedHosts.refusedNamingReason(hostId);
+      processReleasedHosts.refusedNamingReason(
+        processReleasedHosts.currentInstance(hostId),
+        false,
+      );
       host.setLocalHost({
         ...snapshot(7),
         hostId: "unary-named-reason-other-local-host",
@@ -558,7 +669,10 @@ describe("a unary call's reports to the app's door", () => {
 
     it("sends no sign-in after the same bare refusal while the published pid is unchanged (control)", async () => {
       const host = await directoryAt(100);
-      processReleasedHosts.refusedNamingReason(hostId);
+      processReleasedHosts.refusedNamingReason(
+        processReleasedHosts.currentInstance(hostId),
+        false,
+      );
       host.setLocalHost(snapshot(100));
       const driven = begin(
         personal(hostId),

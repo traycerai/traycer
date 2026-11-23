@@ -316,6 +316,9 @@ describe("main's released-host memory follows the local host's process instance"
     readonly restartAs: (pid: number) => void;
     readonly publish: (hostId: string, pid: number) => void;
     readonly named: () => boolean;
+    /** An answer of the process that was the host at registration, reaching the memory late. */
+    readonly lateRefusalFromFirstProcess: () => void;
+    readonly refusalFromCurrentProcess: () => void;
   }> {
     const { registerBrowserViewIpc } = await import("../browser-view-ipc");
     const { processReleasedHosts } =
@@ -336,8 +339,18 @@ describe("main's released-host memory follows the local host's process instance"
     const bridge = makeBridge({}, host);
     registerBrowserViewIpc(bridge as never);
     disposers.push(...bridge.disposeFns);
-    processReleasedHosts.refusedNamingReason(HOST_ID);
+    const firstProcess = processReleasedHosts.currentInstance(HOST_ID);
+    processReleasedHosts.refusedNamingReason(firstProcess, false);
     return {
+      lateRefusalFromFirstProcess: () => {
+        processReleasedHosts.refusedNamingReason(firstProcess, false);
+      },
+      refusalFromCurrentProcess: () => {
+        processReleasedHosts.refusedNamingReason(
+          processReleasedHosts.currentInstance(HOST_ID),
+          false,
+        );
+      },
       restartAs: (pid) => {
         publishSnapshot(HOST_ID, pid);
       },
@@ -365,6 +378,21 @@ describe("main's released-host memory follows the local host's process instance"
     const host = await registerWithHost(100);
     host.publish("another-local-host", 7);
     host.restartAs(100);
+    expect(host.named()).toBe(true);
+  });
+
+  it("ignores a refusal the earlier process's socket delivers after the restart", async () => {
+    const host = await registerWithHost(100);
+    host.restartAs(200);
+    expect(host.named()).toBe(false);
+    host.lateRefusalFromFirstProcess();
+    expect(host.named()).toBe(false);
+  });
+
+  it("marks the host for a refusal the restarted process itself gave (control)", async () => {
+    const host = await registerWithHost(100);
+    host.restartAs(200);
+    host.refusalFromCurrentProcess();
     expect(host.named()).toBe(true);
   });
 

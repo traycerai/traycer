@@ -130,6 +130,7 @@ import {
 import {
   encodeResumeFrame,
   parseResumeFrame,
+  RESUME_RING_BYTES,
   ResumeLedger,
   type ResumeGapReport,
 } from "@traycer/protocol/host-transport/resume-ledger";
@@ -140,7 +141,10 @@ import {
 } from "@traycer/protocol/framework/client-identity";
 import {
   ChunkReassembler,
+  BULK_CHUNK_SIZE_BYTES,
   ChunkReassemblyError,
+  COMPRESSION_MIN_PAYLOAD_BYTES,
+  encodeMuxMessageBody,
   MuxFrameOverExpansionError,
   STREAM_FRAME_NOT_ALLOWED_CODE,
   StreamFrameNotAllowedError,
@@ -163,8 +167,8 @@ import {
 } from "./relay-socket";
 import type {
   AttachGrant,
-  AttachGrantProvider,
   AttachGrantProvision,
+  AttemptGrantProvider,
 } from "./grant";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 import {
@@ -538,7 +542,7 @@ export interface RemoteSessionOptions<
   /** Host static X25519 public key for the NK handshake (registry-published). */
   readonly hostStaticPublicKey: Uint8Array;
   /** Mints a fresh single-use `role:"client"` attach grant per attach + reauth. */
-  readonly grantProvider: AttachGrantProvider;
+  readonly grantProvider: AttemptGrantProvider;
   /** Supplies the encrypted in-channel identity proof and recovery policy. */
   readonly auth: RemoteSessionAuth;
   /**
@@ -626,7 +630,7 @@ type SessionDial =
       readonly kind: "relay";
       readonly attachBaseUrl: string;
       readonly hostStaticPublicKey: Uint8Array;
-      readonly grantProvider: AttachGrantProvider;
+      readonly grantProvider: AttemptGrantProvider;
       readonly auth: RemoteSessionAuth;
     }
   | {
@@ -953,6 +957,18 @@ interface ActiveConnection {
    */
   hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
+  /**
+   * The bearer each `open` and credential-update frame of this connection
+   * carries while it is queued and unwritten, by its control-stream seq:
+   * taken out at its write, so it holds no more than the queue does.
+   */
+  readonly unsentBearers: Map<number, string>;
+  /**
+   * The bearer of each written chunk of a credential update too long for one
+   * frame, by seq, newest last: no single chunk holds it, and a resend needs
+   * it. Holds no more chunks than the resume ledger can.
+   */
+  readonly writtenChunkBearers: Map<number, string>;
   cloudVerdictUpdateSupported: boolean;
   idempotencyKeySupported: boolean;
   /**
@@ -2268,15 +2284,19 @@ export class RemoteSession<
     if (bearer === null) {
       return;
     }
-    this.enqueueMessage(connection, {
-      type: MuxFrameType.CREDENTIAL_UPDATE,
-      streamId: SESSION_CONTROL_STREAM_ID,
-      qos: QosClass.INTERACTIVE,
-      json: {
-        bearer,
-      } satisfies CredentialUpdatePayload,
-      binary: null,
-    });
+    this.enqueueCredentialFrame(
+      connection,
+      {
+        type: MuxFrameType.CREDENTIAL_UPDATE,
+        streamId: SESSION_CONTROL_STREAM_ID,
+        qos: QosClass.INTERACTIVE,
+        json: {
+          bearer,
+        } satisfies CredentialUpdatePayload,
+        binary: null,
+      },
+      bearer,
+    );
   }
 
   /**
@@ -2632,8 +2652,13 @@ export class RemoteSession<
       return;
     }
     const grantRequestedAt = Date.now();
-    const provision = await dial.grantProvider();
-    if (generation !== this.connectGeneration || this.isClosed()) {
+    const attachCurrent = (): boolean =>
+      generation === this.connectGeneration && !this.isClosed();
+    const provision = await dial.grantProvider({
+      current: attachCurrent,
+      leg: "dial",
+    });
+    if (!attachCurrent()) {
       return;
     }
     if (provision.kind !== "ok") {
@@ -2698,7 +2723,10 @@ export class RemoteSession<
     // `handleConnectionLost` funnel, which observes the host's own plane.
     this.reportEvidenceOutcome(this.dialAttemptId(generation), "indeterminate");
     this.markStreamsReconnecting(provision.retryCause ?? null);
-    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      "backoff",
+    );
     this.dialFailures.recordFailure({
       cause: `could not mint an attach grant: ${provision.detail}`,
       // The per-attempt text goes in the CONTEXT, never the cause: a server
@@ -2724,7 +2752,7 @@ export class RemoteSession<
    */
   private beginClaimDial(
     connection: ActiveConnection,
-    grantProvider: AttachGrantProvider,
+    grantProvider: AttemptGrantProvider,
     attachBaseUrl: string,
   ): void {
     const { generation } = connection;
@@ -2743,7 +2771,10 @@ export class RemoteSession<
     };
     void (async () => {
       const grantRequestedAt = Date.now();
-      const provision = await grantProvider();
+      const provision = await grantProvider({
+        current: ownsSession,
+        leg: "admitted",
+      });
       if (!ownsSession()) {
         return;
       }
@@ -2904,7 +2935,8 @@ export class RemoteSession<
     channel: MuxChannel,
   ): ActiveConnection {
     const scheduler = new PriorityScheduler({
-      write: (frame) => this.writeFrame(generation, frame),
+      write: (frame, reportSent) =>
+        this.writeFrame(generation, frame, reportSent),
       onWriteError: () =>
         this.handleConnectionLost(
           generation,
@@ -2928,6 +2960,8 @@ export class RemoteSession<
       hostManifest: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
+      unsentBearers: new Map(),
+      writtenChunkBearers: new Map(),
       cloudVerdictUpdateSupported: false,
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
@@ -3416,13 +3450,17 @@ export class RemoteSession<
       // dropped while unverified come back authorized.
       cloudAuthorized: sentCloudAuthorized,
     };
-    this.enqueueMessage(connection, {
-      type: MuxFrameType.OPEN,
-      streamId: SESSION_CONTROL_STREAM_ID,
-      qos: QosClass.INTERACTIVE,
-      json: { ...open },
-      binary: null,
-    });
+    this.enqueueCredentialFrame(
+      connection,
+      {
+        type: MuxFrameType.OPEN,
+        streamId: SESSION_CONTROL_STREAM_ID,
+        qos: QosClass.INTERACTIVE,
+        json: { ...open },
+        binary: null,
+      },
+      openAuth.bearer,
+    );
   }
 
   private dispatchInbound(
@@ -4771,6 +4809,10 @@ export class RemoteSession<
       }
     }
     this.markStreamsReconnecting(null);
+    // A park before ready moves only when something outside changes (the
+    // host attaches, a caller forces a redial, the socket drops): a wait for
+    // the streams. A ready connection's detach is not: its streams are held.
+    if (this.isParkedBeforeReady()) this.notifyBackoffEntered();
     this.takeHostDownEdge();
   }
 
@@ -5035,9 +5077,12 @@ export class RemoteSession<
     this.clearResumeAckTimer();
     exchange.answered = true;
     connection.admittedExchanges = exchange.id;
+    // The gap is the retained run from `received`, in order.
+    let resentIndex = received;
     connection.scheduler.resumeAfterResend(
       gap.frames,
-      (muxFrame) => this.writeResentFrame(generation, muxFrame),
+      (muxFrame, reportSent) =>
+        this.writeResentFrame(generation, muxFrame, resentIndex++, reportSent),
       () => this.completeResume(connection, gap.frames.length),
     );
   }
@@ -5285,7 +5330,10 @@ export class RemoteSession<
     cause: string,
     provenance: ConnectionLossProvenance,
   ): void {
-    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      "backoff",
+    );
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
     // THE host-plane funnel: every relay-socket close, Noise/handshake
     // rejection, `peer_gone`, and phase timeout arrives here. This is the one
@@ -5779,7 +5827,10 @@ export class RemoteSession<
     }
     if (outcome === "network-error") {
       this.noProgressUnauthorizedReconnects = 0;
-      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+      const retryInMs = this.scheduleReconnectForFailedGeneration(
+        generation,
+        "backoff",
+      );
       this.dialFailures.recordFailure({
         cause:
           "the host rejected the session bearer (UNAUTHORIZED) and revalidating the credential hit a network error",
@@ -5797,10 +5848,14 @@ export class RemoteSession<
     // progress was made (authn validates it but the host keeps rejecting -
     // clock skew / config mismatch). Bound that loop; otherwise reset and
     // redial with the fresh token.
+    // A credential that moved on makes this the recovery's own timed redial;
+    // the same one again is a wait like any other.
+    let redial: "backoff" | "recovery" = "recovery";
     if (
       rejectedBearer !== null &&
       this.options.auth.currentFingerprint() === rejectedBearer
     ) {
+      redial = "backoff";
       // The clock, not the credential. The revalidation that just resolved is
       // itself an authn round trip, so its `Date` header has already reached
       // the tracker - if our clock is running FAST, this streak is measuring a
@@ -5827,7 +5882,10 @@ export class RemoteSession<
     } else {
       this.noProgressUnauthorizedReconnects = 0;
     }
-    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      redial,
+    );
     this.dialFailures.recordFailure({
       cause:
         "the host rejected the session bearer (UNAUTHORIZED); redialing after credential revalidation",
@@ -5911,6 +5969,8 @@ export class RemoteSession<
       this.resumeFromClockPark();
     });
     this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
+    // Nothing redials until the clock is corrected: a wait for the streams.
+    this.notifyBackoffEntered();
     // Through `isClosed()`, not a bare `this.phase === "closed"`. The early
     // return at the top of this method narrows `phase` to exclude `"closed"`,
     // and the checker does not know the call above can re-enter and change it -
@@ -6342,10 +6402,26 @@ export class RemoteSession<
    * UNAUTHORIZED revalidation arms - so whether a recorded demand is honored
    * cannot depend on which lander a failure happens to take.
    */
-  private scheduleReconnectForFailedGeneration(generation: number): number {
+  private scheduleReconnectForFailedGeneration(
+    generation: number,
+    redial: "backoff" | "recovery",
+  ): number {
+    const forced = this.pendingForceGeneration === generation;
     const retryInMs = this.scheduleReconnect();
     this.consumePendingForce(generation);
+    // Classifies the wait for the streams; it changes no delay. A recovery's
+    // own timed redial (a credential that moved on) and a redial pulled to
+    // now are not a wait.
+    if (redial === "backoff" && retryInMs > 0 && !forced)
+      this.notifyBackoffEntered();
     return retryInMs;
+  }
+
+  /** {@link LogicalStream.onBackoffEntered}, for every subscribed stream. */
+  private notifyBackoffEntered(): void {
+    for (const stream of this.subscriptions.values()) {
+      stream.notifyBackoffEntered();
+    }
   }
 
   /**
@@ -6432,7 +6508,10 @@ export class RemoteSession<
       return;
     }
     this.dropConnection("connect-path-threw", null, false);
-    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      "backoff",
+    );
     this.dialFailures.recordFailure({
       cause: `the connect path threw before dialing: ${
         cause instanceof Error ? cause.message : String(cause)
@@ -6483,12 +6562,15 @@ export class RemoteSession<
       return;
     }
     const leg = connection.socket;
-    const provision = await dial.grantProvider();
     // The grant was for that leg, and a claim's ack restarts this loop.
-    if (
-      !this.isLegCurrent(connection, leg) ||
-      !(this.phase === "ready" || this.isParkedBeforeReady())
-    ) {
+    const legCurrent = (): boolean =>
+      this.isLegCurrent(connection, leg) &&
+      (this.phase === "ready" || this.isParkedBeforeReady());
+    const provision = await dial.grantProvider({
+      current: legCurrent,
+      leg: "admitted",
+    });
+    if (!legCurrent()) {
       return;
     }
     if (provision.kind === "ok") {
@@ -6616,9 +6698,11 @@ export class RemoteSession<
     };
   }
 
+  /** Writes `frame`, reporting the bytes it hands the socket. */
   private async writeFrame(
     generation: number,
     frame: EncodeMuxFrameInput,
+    reportSent: (bytes: number) => void,
   ): Promise<void> {
     if (!this.isCurrent(generation)) {
       return;
@@ -6627,34 +6711,178 @@ export class RemoteSession<
     if (connection === null) {
       return;
     }
-    const plaintext = encodeMuxFrame(frame);
-    // Appended before the seal, in pull order: the scheduler runs one write at
-    // a time, so ring order is wire order, and a write that fails below leaves
-    // the frame in the gap rather than nowhere.
+    // Taken here: once written, a frame is resent only from the ledger, whose
+    // bytes carry the bearer themselves.
+    const carried = this.takeUnsentBearer(connection, frame);
+    let written: EncodeMuxFrameInput = frame;
+    let sealedBearer = carried;
+    if (frame.type === MuxFrameType.CREDENTIAL_UPDATE) {
+      const write =
+        carried === null
+          ? null
+          : this.credentialWriteNow(connection, frame, carried);
+      if (write === null) {
+        this.dropUnwritableCredential(generation);
+        return;
+      }
+      written = write.frame;
+      sealedBearer = write.bearer;
+      if (frame.chunked)
+        rememberChunkBearer(connection, frame.seq, write.bearer);
+    }
+    const plaintext = encodeMuxFrame(written);
+    // The bytes about to be sealed are appended before the seal, in pull order:
+    // the scheduler runs one write at a time, so ring order is wire order, and
+    // a write that fails below leaves the frame in the gap rather than nowhere.
     connection.ledger.append(plaintext);
     const pending = this.pendingUnary.get(frame.streamId);
     if (pending !== undefined) {
       pending.sealed = true;
     }
-    await this.sealAndSend(generation, connection, plaintext);
+    await this.sealAndSend(
+      generation,
+      connection,
+      plaintext,
+      sealedBearer,
+      reportSent,
+      null,
+    );
   }
 
-  /** One gap frame: re-sealed under a fresh Noise counter, never re-counted. */
+  /**
+   * One gap frame: re-sealed under a fresh Noise counter, never re-counted. A
+   * credential update carries the bearer read now, under its own seq: the host
+   * never counted the gap (it starts at the host's `received`), so it has seen
+   * no encoding of this frame, and its sequence gate reads only the seq. The
+   * ledger takes a rewrite at the frame's `index` only as it is sent.
+   */
   private async writeResentFrame(
     generation: number,
     muxFrame: Uint8Array,
+    index: number,
+    reportSent: (bytes: number) => void,
   ): Promise<void> {
     const connection = this.connection;
     if (!this.isCurrent(generation) || connection === null) {
       return;
     }
-    await this.sealAndSend(generation, connection, muxFrame);
+    if (muxFrame[1] !== MuxFrameType.CREDENTIAL_UPDATE) {
+      // An `open` is never in a gap: only a ready session relinks.
+      await this.sealAndSend(
+        generation,
+        connection,
+        muxFrame,
+        null,
+        reportSent,
+        null,
+      );
+      return;
+    }
+    const frame = decodeMuxFrame(muxFrame);
+    const carried = frame.chunked
+      ? (connection.writtenChunkBearers.get(frame.seq) ?? null)
+      : writtenCredentialBearer(frame);
+    const write =
+      carried === null
+        ? null
+        : this.credentialWriteNow(connection, frame, carried);
+    if (write === null) {
+      this.dropUnwritableCredential(generation);
+      return;
+    }
+    const rewritten = write.frame !== frame;
+    await this.sealAndSend(
+      generation,
+      connection,
+      rewritten ? encodeMuxFrame(write.frame) : muxFrame,
+      write.bearer,
+      reportSent,
+      rewritten ? index : null,
+    );
   }
 
+  /**
+   * A credential update as written now, under the seq it drew: the bearer is
+   * read at this write, not at its enqueue, so a row or owner that changed in
+   * between is honoured. The bearer `carried` writes `frame` itself, as
+   * enqueued. A new one is written only into one unchunked, uncompressed frame
+   * whose new body `enqueueMessage` would frame the same way: one chunk, and,
+   * where the connection compresses bodies, under the size at which a frame is
+   * compressed. `null` where nothing correct fits the seq: no bearer, or
+   * another framing that would need a new one.
+   */
+  private credentialWriteNow(
+    connection: ActiveConnection,
+    frame: EncodeMuxFrameInput,
+    carried: string,
+  ): { readonly frame: EncodeMuxFrameInput; readonly bearer: string } | null {
+    const bearer = this.options.auth.readCredentialUpdateBearer();
+    if (bearer === null) return null;
+    if (bearer === carried) return { frame, bearer };
+    const binary = encodeMuxMessageBody(
+      { bearer } satisfies CredentialUpdatePayload,
+      null,
+    );
+    if (
+      frame.chunked ||
+      frame.compressed ||
+      binary.byteLength > BULK_CHUNK_SIZE_BYTES ||
+      (connection.bodyCompressionSupported &&
+        binary.byteLength >= COMPRESSION_MIN_PAYLOAD_BYTES)
+    )
+      return null;
+    return { frame: { ...frame, json: null, binary }, bearer };
+  }
+
+  /** Enqueues an `open` or credential update, recording its bearer by seq. */
+  private enqueueCredentialFrame(
+    connection: ActiveConnection,
+    message: OutboundMessage,
+    bearer: string,
+  ): void {
+    this.enqueueMessageWithSeq(connection, message, () => {
+      const seq = this.nextSeq(SESSION_CONTROL_STREAM_ID);
+      connection.unsentBearers.set(seq, bearer);
+      return seq;
+    });
+  }
+
+  /** The bearer an unsent `open` or credential update carries, taken out. */
+  private takeUnsentBearer(
+    connection: ActiveConnection,
+    frame: EncodeMuxFrameInput,
+  ): string | null {
+    if (frame.streamId !== SESSION_CONTROL_STREAM_ID) return null;
+    const bearer = connection.unsentBearers.get(frame.seq);
+    if (bearer === undefined) return null;
+    connection.unsentBearers.delete(frame.seq);
+    return bearer;
+  }
+
+  /**
+   * Nothing may be written under a seq already drawn: the connection ends,
+   * and the next one starts a fresh ledger, with no resume.
+   */
+  private dropUnwritableCredential(generation: number): void {
+    this.handleConnectionLost(
+      generation,
+      "the session's credential can no longer be written",
+      "not-host-evidence",
+    );
+  }
+
+  /**
+   * Seals and sends `muxFrame`, reporting its bytes once it reaches the
+   * socket. `replacesIndex` names the ledger entry the bytes rewrite, recorded
+   * in the same step as the send.
+   */
   private async sealAndSend(
     generation: number,
     connection: ActiveConnection,
     muxFrame: Uint8Array,
+    sealedBearer: string | null,
+    reportSent: (bytes: number) => void,
+    replacesIndex: number | null,
   ): Promise<void> {
     const leg = connection.socket;
     // A frame whose leg went while it sealed is in the ledger, sealed or not:
@@ -6672,6 +6900,26 @@ export class RemoteSession<
     if (!this.isLegCurrent(connection, leg)) {
       return;
     }
+    // A sealed `open` or credential update can be neither read again nor
+    // skipped: one whose credential may no longer be written ends the
+    // connection, and the next dial reads its own.
+    if (
+      sealedBearer !== null &&
+      this.dial.kind === "relay" &&
+      this.dial.auth.sealedStillWritable?.(sealedBearer) === false
+    ) {
+      this.dropUnwritableCredential(generation);
+      return;
+    }
+    // A rewrite reaches the ledger only as it is sent; one that would evict a
+    // retained frame to fit is not sent, and its entry stands.
+    if (
+      replacesIndex !== null &&
+      !connection.ledger.replace(replacesIndex, muxFrame)
+    ) {
+      this.dropUnwritableCredential(generation);
+      return;
+    }
     // A SUBSCRIBE is sent from here on, whatever `sendData` answers: the host
     // may act on a write that reports failure. Before here (a seal that
     // rejected, a leg that went while it sealed) nothing left this client, so
@@ -6681,6 +6929,8 @@ export class RemoteSession<
     if (subscribeStreamId !== null) {
       this.subscriptions.get(subscribeStreamId)?.noteOpenRequestSent();
     }
+    // Charged whatever `sendData` answers: the bytes may have left.
+    reportSent(muxFrame.byteLength);
     if (!connection.socket.sendData(sealed)) {
       this.handleLegLost(generation, "write-failed", "host-transport-plane");
     }
@@ -7405,6 +7655,7 @@ export class RemoteSession<
       this.openSubscription(connection, stream);
     }, delay);
     this.streamReopenTimers.set(streamId, timer);
+    stream.notifyBackoffEntered();
   }
 
   /**
@@ -7469,6 +7720,35 @@ export class RemoteSession<
 // -----------------------------------------------------------------------------
 // Module helpers
 // -----------------------------------------------------------------------------
+
+/**
+ * The most chunks of credential updates the resume ledger can hold at once:
+ * every chunk but a message's last is a full chunk, and the ledger keeps no
+ * more than {@link RESUME_RING_BYTES}; the oldest message kept may be down to
+ * its last chunk.
+ */
+const CREDENTIAL_CHUNKS_RESENDABLE =
+  2 * Math.floor(RESUME_RING_BYTES / BULK_CHUNK_SIZE_BYTES) + 1;
+
+function rememberChunkBearer(
+  connection: ActiveConnection,
+  seq: number,
+  bearer: string,
+): void {
+  const remembered = connection.writtenChunkBearers;
+  remembered.set(seq, bearer);
+  for (const oldest of remembered.keys()) {
+    if (remembered.size <= CREDENTIAL_CHUNKS_RESENDABLE) break;
+    remembered.delete(oldest);
+  }
+}
+
+/** The bearer a written single-frame credential update carries, read back from it. */
+function writtenCredentialBearer(frame: MuxFrame): string | null {
+  const message = new ChunkReassembler(undefined).accept(frame);
+  const bearer: unknown = message?.json?.bearer;
+  return typeof bearer === "string" ? bearer : null;
+}
 
 /**
  * Cap on consecutive `UNAUTHORIZED` session-fatal recoveries where the

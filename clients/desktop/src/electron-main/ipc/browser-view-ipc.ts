@@ -619,24 +619,22 @@ export function registerBrowserViewIpc(
     return { token, userId: profile.userId };
   };
 
-  // This process's released-host memory forgets what a host named once that
-  // host's local process instance changed: the same id under another pid than
-  // this process last saw for that id. Never on an absent host, and never on a
-  // refusal. The snapshot carries no start time, so a pid the same host id
-  // reuses goes unseen and that host keeps its named mark.
-  const localHostPids = new Map<string, number>();
-  const initialHost = bridge.options.host.getSnapshot();
-  if (initialHost !== null)
-    localHostPids.set(initialHost.hostId, initialHost.pid);
-  const forgetRestartedHostNames = (): void => {
+  // This process's released-host memory learns each local host's process
+  // instance, as its pid. The same id under another pid is a restarted host,
+  // and nothing the earlier process answered applies to it, including answers
+  // still in flight on its sockets. An absent host is not an instance. The
+  // snapshot carries no start time, so a pid that the same host id reuses
+  // goes unseen.
+  const observeHostInstance = (): void => {
     const snapshot = bridge.options.host.getSnapshot();
-    if (snapshot === null) return;
-    const seen = localHostPids.get(snapshot.hostId);
-    if (seen !== undefined && seen !== snapshot.pid)
-      processReleasedHosts.forgetNamed(snapshot.hostId);
-    localHostPids.set(snapshot.hostId, snapshot.pid);
+    if (snapshot !== null)
+      processReleasedHosts.observeInstance(
+        snapshot.hostId,
+        String(snapshot.pid),
+      );
   };
-  bridge.options.host.on("change", forgetRestartedHostNames);
+  observeHostInstance();
+  bridge.options.host.on("change", observeHostInstance);
 
   const browserSessionsDirectory = createBrowserSessionsHostDirectory({
     authnBaseUrl: () => bridge.options.authnBaseUrl,
@@ -662,7 +660,8 @@ export function registerBrowserViewIpc(
       authnBaseUrl: () => bridge.options.authnBaseUrl,
       endpoint: () => browserSessionsDirectory.endpoint(target.hostId),
       liveRow: () => browserSessionsDirectory.peek(target.hostId),
-      confirmRow: () => browserSessionsDirectory.confirmRows(),
+      confirmRow: (stillWaiting) =>
+        browserSessionsDirectory.confirmRows(stillWaiting),
       bearer: () => {
         const principal = jarPlanePrincipal();
         if (principal === null) return null;
@@ -1304,7 +1303,7 @@ export function registerBrowserViewIpc(
   );
 
   bridge.disposeFns.push(() => {
-    bridge.options.host.off("change", forgetRestartedHostNames);
+    bridge.options.host.off("change", observeHostInstance);
     // Before the manager goes: no answer can arrive once the plane is down,
     // and an unanswered dangerous download must not stay on disk.
     discardHeldBrowserViewDownloads();

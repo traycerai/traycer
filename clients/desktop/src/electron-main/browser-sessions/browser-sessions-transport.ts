@@ -12,7 +12,6 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
-  hostTokenHeldPastExpiry,
   hostTokenStreamAuth,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
@@ -42,6 +41,7 @@ import {
   releasedSignOnForLocalRow,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
+import { confirmRowWithin } from "@traycer-clients/shared/host-transport/row-confirmation";
 import {
   DEFAULT_DIAL_TIMEOUT_MS,
   DEFAULT_INITIAL_BACKOFF_MS,
@@ -99,11 +99,14 @@ export interface BrowserSessionsHostDirectory {
   invalidate(hostId: string): void;
   /**
    * Reads the registry again now, keeping the cached rows while it runs, and
-   * answers whether a read that STARTED after this call completed: `false` on
-   * a failed read, or with no bearer to read with. One already running may
-   * predate the question, so it is waited out first. Never throttled.
+   * answers whether a read that STARTED after this call, and after the latest
+   * `reset`, completed: `false` on a failed read, or with no bearer to read
+   * with. One already running may predate the question, so it is waited out
+   * first, and a `reset` during the read is followed by another. Before each
+   * read it asks `stillWaiting`; once that is false it starts none and answers
+   * `false`. Never throttled.
    */
-  confirmRows(): Promise<boolean>;
+  confirmRows(stillWaiting: () => boolean): Promise<boolean>;
   /**
    * Drops the whole cached registry, and the cooldown that guards refetching
    * it, because the identity it was read for has changed.
@@ -112,7 +115,8 @@ export interface BrowserSessionsHostDirectory {
    * was given - but the cache is keyed by host id alone, so a sign-out or an
    * account switch would otherwise let the next account dial the previous
    * account's row for the same id. The cooldown goes with it: a fresh identity
-   * is exactly the moment one read is owed rather than deferred.
+   * is exactly the moment one read is owed rather than deferred. A read still
+   * in flight was made for the previous identity, so its answer is dropped.
    */
   reset(): void;
 }
@@ -165,16 +169,22 @@ export function createBrowserSessionsHostDirectory(
   let forced = false;
   /** Registry reads that completed and were adopted. */
   let readsAdopted = 0;
+  /**
+   * Bumped by `reset`. A read started under an earlier identity answers for
+   * that identity: it is not adopted, joined or counted against the floor.
+   */
+  let generation = 0;
   const listeners = new Set<() => void>();
 
   const refresh = async (): Promise<void> => {
+    const startedIn = generation;
     const bearerToken = deps.bearerToken();
     if (bearerToken === null) return;
     const result = await deps.listRegisteredHosts(
       deps.authnBaseUrl(),
       bearerToken,
     );
-    if (result.kind !== "ok") return;
+    if (startedIn !== generation || result.kind !== "ok") return;
     const next = new Map<string, HostDirectoryEntry>();
     for (const item of result.response.hosts) {
       next.set(
@@ -219,7 +229,9 @@ export function createBrowserSessionsHostDirectory(
         // Stamped on every completed ATTEMPT, not on success. The floor
         // exists because a miss is renderer-triggered, and an unhealthy authn
         // is exactly when a loop of unknown ids would otherwise become one
-        // request each - the failure a rate limit is most needed for.
+        // request each - the failure a rate limit is most needed for. Only
+        // the read still in flight: one a `reset` set aside stamps nothing.
+        if (inFlight !== started) return;
         lastRefreshAt = deps.now();
         inFlight = null;
       });
@@ -253,19 +265,33 @@ export function createBrowserSessionsHostDirectory(
       cachedRemote.delete(hostId);
       forced = true;
     },
-    confirmRows: async () => {
-      const running = inFlight;
-      if (running !== null) await running;
-      const before = readsAdopted;
-      forced = true;
-      await refreshOnce();
-      return readsAdopted > before;
+    confirmRows: async (stillWaiting) => {
+      // A `reset` is a mark: a read started before one answers for the
+      // identity before it, so another read follows, checked against the
+      // generation as it stands once the read has settled. The loop lives no
+      // longer than its confirmation: past that it starts no read, under any
+      // identity.
+      for (;;) {
+        const running = inFlight;
+        if (running !== null) await running;
+        if (!stillWaiting()) return false;
+        const before = readsAdopted;
+        const startedIn = generation;
+        forced = true;
+        await refreshOnce();
+        if (generation === startedIn) return readsAdopted > before;
+      }
     },
     reset: () => {
+      generation += 1;
+      inFlight = null;
       cachedRemote = new Map();
       lastRefreshAt = null;
       forced = true;
     },
+    // The local entry wins. Main reaches a host id through the relay only when
+    // it has no local entry for that id. Main then observes no process for the
+    // id, so its `HostInstance` stays as the local path last left it.
     endpoint: (hostId) => {
       const entry = localEntryFor(hostId) ?? cachedRemote.get(hostId) ?? null;
       if (
@@ -333,7 +359,7 @@ export interface BrowserSessionsTransportDeps {
    * keeps current, so a remote attach that would carry the sign-in reads the
    * registry again first; a local door never waits on it.
    */
-  readonly confirmRow: () => Promise<boolean>;
+  readonly confirmRow: (stillWaiting: () => boolean) => Promise<boolean>;
   readonly appVersion: string | null;
   /** Main's host-only tokens; the sign-in goes only where `opensReleasedWay` allows. */
   readonly hostTokens: HostTokenSource;
@@ -390,8 +416,10 @@ export function openBrowserSessionsTransport(
         const row = deps.liveRow();
         return row !== null && opensReleasedWay(row, userId);
       },
-      confirmRowBeforeSignIn: () =>
-        answeredWithin(deps.confirmRow(), ROW_CONFIRM_CEILING_MS),
+      // A read that committed has moved the row `liveRow` reads; a failed
+      // read, or none by the ceiling, leaves the row last read.
+      confirmRowBeforeSignIn: (attach) =>
+        confirmRowWithin(deps.confirmRow, attach),
       door: null,
       onState: ignoreHostTokenState,
       cloudAuthorized: deps.cloudAuthorized,
@@ -415,7 +443,7 @@ export function openBrowserSessionsTransport(
       },
     };
   }
-  const hostTokens = trackHostTokenMints(deps.hostTokens);
+  const hostTokens = trackHostTokenMints(deps.hostTokens, processReleasedHosts);
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     hostId: target.hostId,
@@ -425,11 +453,6 @@ export function openBrowserSessionsTransport(
       deps.bearer,
       target.hostId,
       ignoreHostTokenState,
-    ),
-    presentsHeldPastExpiry: hostTokenHeldPastExpiry(
-      hostTokens,
-      deps.bearer,
-      target.hostId,
     ),
     // Main never refreshes the sign-in, so a refused one ends the stream too.
     releasedSignOn: releasedSignOnForLocalRow(
@@ -445,6 +468,7 @@ export function openBrowserSessionsTransport(
     ...hostTokenStreamAuth(
       {
         tokens: hostTokens,
+        hosts: processReleasedHosts,
         currentUserId: () => deps.bearer()?.identity.userId ?? null,
         hostId: target.hostId,
         signInRecovery: null,
@@ -482,29 +506,6 @@ export function openBrowserSessionsTransport(
 
 /** Main draws no state of a host; the renderer's own connections raise it. */
 function ignoreHostTokenState(): void {}
-
-/**
- * How long a remote attach that would carry the sign-in waits for the row to
- * be read again. At the ceiling it goes without the sign-in.
- */
-const ROW_CONFIRM_CEILING_MS = 5_000;
-
-/** `confirmed`, or `false` once `ceilingMs` passes first. */
-async function answeredWithin(
-  confirmed: Promise<boolean>,
-  ceilingMs: number,
-): Promise<boolean> {
-  let clearCeiling = (): void => undefined;
-  const ceiling = new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), ceilingMs);
-    clearCeiling = () => clearTimeout(timer);
-  });
-  try {
-    return await Promise.race([confirmed, ceiling]);
-  } finally {
-    clearCeiling();
-  }
-}
 
 /**
  * Which jar transport `target` may have, or `null` for none. The two lanes

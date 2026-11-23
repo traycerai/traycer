@@ -26,6 +26,12 @@ export type HostTokenSessionRevalidator = HostTokenRevalidator & {
   readonly admitted: () => void;
 };
 import type {
+  HostInstance,
+  ReleasedHostMemory,
+  SignInRecovery,
+} from "../host-transport/released-sign-on";
+import type {
+  HostTokenMintFailure,
   HostTokenMintOutcome,
   HostTokenSource,
 } from "./host-token-source";
@@ -34,34 +40,42 @@ import { isUsableHostToken, type HostToken } from "./host-token-store";
 /** A door's tokens, with whether the stored ones are read yet. */
 export type HostTokenAccess = Pick<
   HostTokenSource,
-  "current" | "obtain" | "loaded" | "whenLoaded"
+  "current" | "obtain" | "loaded" | "whenLoaded" | "lastFailureOf"
 >;
 
-type HostTokenMintFailure = Exclude<
-  HostTokenMintOutcome,
-  { readonly kind: "ok" }
->["kind"];
+/** The process instances a door's mints and marks belong to. */
+export type HostInstanceOwners = Pick<
+  ReleasedHostMemory,
+  "currentInstance" | "isCurrent"
+>;
 
 /**
- * A local door's token source, which remembers how the last mint for each pair
- * ended, and which held token the host itself refused as expired.
+ * A local door's token source, answering for the host's current process
+ * instance: how its last mint ended, and which held token it refused as
+ * expired. Both belong to the instance, so a replaced one starts with neither.
  */
-export interface TrackedHostTokens extends HostTokenAccess {
-  /** `null` until a mint failed, and again once one succeeds. */
-  readonly lastMintFailure: (
+export interface TrackedHostTokens extends Pick<
+  HostTokenAccess,
+  "current" | "obtain" | "loaded" | "whenLoaded"
+> {
+  readonly hosts: HostInstanceOwners;
+  /** `lastFailureOf` for the host's current instance. */
+  readonly lastFailure: (
     userId: string,
     hostId: string,
   ) => HostTokenMintFailure | null;
   /**
-   * The host refused `presented` as expired: it reads authn reachable, so
-   * presenting that token again cannot open. Any other token, one minted while
-   * the refusal was on its way included, is not affected.
+   * `instance` refused `presented` as expired: it reads authn reachable, so
+   * presenting that token to it again cannot open. Any other token, one minted
+   * while the refusal was on its way included, and any other instance, is not
+   * affected.
    */
   readonly noteHeldRefused: (
+    instance: HostInstance,
     userId: string,
-    hostId: string,
     presented: string,
   ) => void;
+  /** Whether the host's current instance refused the held token. */
   readonly heldRefused: (userId: string, hostId: string) => boolean;
   /**
    * The refusal noted above makes way only for the owner's sign-in. Where that
@@ -73,31 +87,34 @@ export interface TrackedHostTokens extends HostTokenAccess {
 
 export function trackHostTokenMints(
   tokens: HostTokenAccess,
+  hosts: HostInstanceOwners,
 ): TrackedHostTokens {
-  const failures = new Map<string, HostTokenMintFailure>();
-  const refusedHeld = new Map<string, string>();
-  const keyOf = (userId: string, hostId: string): string =>
-    `${userId}\u0000${hostId}`;
+  const refusedHeld = new WeakMap<HostInstance, Map<string, string>>();
   return {
+    hosts,
     current: (userId, hostId) => tokens.current(userId, hostId),
     loaded: () => tokens.loaded(),
     whenLoaded: () => tokens.whenLoaded(),
-    obtain: async (userId, hostId, fresh, signal) => {
-      const outcome = await tokens.obtain(userId, hostId, fresh, signal);
-      if (outcome.kind === "ok") failures.delete(keyOf(userId, hostId));
-      else failures.set(keyOf(userId, hostId), outcome.kind);
-      return outcome;
-    },
-    lastMintFailure: (userId, hostId) =>
-      failures.get(keyOf(userId, hostId)) ?? null,
-    noteHeldRefused: (userId, hostId, presented) => {
-      refusedHeld.set(keyOf(userId, hostId), presented);
+    obtain: (userId, hostId, fresh, ask) =>
+      tokens.obtain(userId, hostId, fresh, ask),
+    lastFailure: (userId, hostId) =>
+      tokens.lastFailureOf(userId, hosts.currentInstance(hostId)),
+    noteHeldRefused: (instance, userId, presented) => {
+      if (!hosts.isCurrent(instance)) return;
+      let byUser = refusedHeld.get(instance);
+      if (byUser === undefined) {
+        byUser = new Map();
+        refusedHeld.set(instance, byUser);
+      }
+      byUser.set(userId, presented);
     },
     forgetHeldRefused: (userId, hostId) => {
-      refusedHeld.delete(keyOf(userId, hostId));
+      refusedHeld.get(hosts.currentInstance(hostId))?.delete(userId);
     },
     heldRefused: (userId, hostId) => {
-      const refused = refusedHeld.get(keyOf(userId, hostId));
+      const refused = refusedHeld
+        .get(hosts.currentInstance(hostId))
+        ?.get(userId);
       return (
         refused !== undefined &&
         tokens.current(userId, hostId)?.token === refused
@@ -124,7 +141,7 @@ export function authnDidNotAnswer(
   hostId: string,
 ): boolean {
   if (!tokens.loaded()) return false;
-  const failure = tokens.lastMintFailure(userId, hostId);
+  const failure = tokens.lastFailure(userId, hostId);
   return (
     failure === null ||
     failure === "superseded" ||
@@ -152,29 +169,38 @@ export function heldWhileAuthnUnreachable(
     : null;
 }
 
-/** For `WsStreamClientOptions.presentsHeldPastExpiry` on a local door's stream. */
-export function hostTokenHeldPastExpiry(
-  tokens: TrackedHostTokens,
-  signIn: BearerSourceProvider,
-  hostId: string,
-): () => boolean {
-  return () => {
-    const userId = signIn()?.identity.userId ?? null;
-    return (
-      userId !== null &&
-      heldWhileAuthnUnreachable(tokens, userId, hostId) !== null
-    );
-  };
-}
-
-/**
- * Where a failed mint's state goes. Each surface passes its own sink, bound to
- * its own lifetime: a mint whose asker has gone reports nothing for it.
- */
+/** Where a failed mint's state goes. */
 export type HostTokenStateSink = (
   hostId: string,
   kind: HostDoorStateKind,
 ) => void;
+
+/**
+ * Whether a caller that asked for a mint is still live: a subscription that
+ * closed, or a call that was aborted, is not, and a shared client that merely
+ * stays open is no caller. A mint's state is reported only while its caller
+ * is live; callers that join one mint each report on their own, so it shows
+ * while any of them is live.
+ */
+export type MintCaller = () => boolean;
+
+/** For a read made on no caller's behalf: a mint it starts reports nothing. */
+export const NO_MINT_CALLER: MintCaller = () => false;
+
+const ALWAYS_LIVE: MintCaller = () => true;
+
+// A mint's report: delivered only while the process instance it started under
+// is still the host's and a caller that asked for it is live.
+function mintReport(
+  onState: HostTokenStateSink,
+  hosts: HostInstanceOwners,
+  owner: HostInstance,
+  caller: MintCaller,
+): HostTokenStateSink {
+  return (hostId, kind) => {
+    if (hosts.isCurrent(owner) && caller()) onState(hostId, kind);
+  };
+}
 
 // A token is held and past its end: one the host refused as expired reads the
 // same as the stream's recovery reads it, never as no token at all.
@@ -198,15 +224,42 @@ function stateOfFailedMint(
   return null;
 }
 
-// Starts a mint and reports its failure, unless a held token is still presented
-// after it.
+// The held token goes as it is: usable by this clock and not refused by the host.
+function presentsHeldAsIs(
+  tokens: TrackedHostTokens,
+  userId: string,
+  hostId: string,
+): boolean {
+  return (
+    !tokens.heldRefused(userId, hostId) &&
+    isUsableHostToken(tokens.current(userId, hostId), Date.now())
+  );
+}
+
+// Starts a mint for the host's current instance, read as the dial or call asks
+// for its credential: the attempt's own. Its failure is
+// reported through `mintReport`, unless a held token is still presented after
+// it. A held token the host refused is replaced however usable it reads: a
+// mint that is not fresh would hand it back.
 function mintInBackground(
   tokens: TrackedHostTokens,
   userId: string,
   hostId: string,
   onState: HostTokenStateSink,
+  caller: MintCaller,
 ): Promise<HostTokenMintOutcome> {
-  const minted = tokens.obtain(userId, hostId, false, null);
+  const owner = tokens.hosts.currentInstance(hostId);
+  const report = mintReport(onState, tokens.hosts, owner, caller);
+  const minted = tokens.obtain(
+    userId,
+    hostId,
+    tokens.heldRefused(userId, hostId),
+    {
+      signal: null,
+      owner,
+      observedNow: () => tokens.hosts.currentInstance(hostId).observed,
+    },
+  );
   void minted.then(
     (outcome) => {
       if (outcome.kind === "ok") return;
@@ -215,7 +268,7 @@ function mintInBackground(
         outcome,
         holdsExpiredToken(tokens, userId, hostId),
       );
-      if (state !== null) onState(hostId, state);
+      if (state !== null) report(hostId, state);
     },
     () => undefined,
   );
@@ -229,21 +282,25 @@ function mintInBackground(
 // tokens are read it is `null` too, and the stream waits out its reconnect.
 //
 // Asked with the host the stream's socket was selected for: `hostId`'s token goes
-// only to `hostId`, and any other host is answered `null`.
+// only to `hostId`, and any other host is answered `null`. A held token the host
+// refused counts as none. `caller` is the stream session the read is for.
 export function hostTokenBearer(
   tokens: TrackedHostTokens,
   signIn: BearerSourceProvider,
   hostId: string,
   onState: HostTokenStateSink,
-): (selectedHostId: string) => OpenFrameBearerSource | null {
+): (
+  selectedHostId: string,
+  caller: MintCaller,
+) => OpenFrameBearerSource | null {
   const leases = new WeakMap<OpenFrameBearerSource, OpenFrameBearerSource>();
-  return (selectedHostId) => {
+  return (selectedHostId, caller) => {
     if (selectedHostId !== hostId) return null;
     const signInLease = signIn();
     if (signInLease === null) return null;
     const userId = signInLease.identity.userId;
-    if (!isUsableHostToken(tokens.current(userId, hostId), Date.now())) {
-      void mintInBackground(tokens, userId, hostId, onState);
+    if (!presentsHeldAsIs(tokens, userId, hostId)) {
+      void mintInBackground(tokens, userId, hostId, onState, caller);
       if (heldWhileAuthnUnreachable(tokens, userId, hostId) === null)
         return null;
     }
@@ -266,7 +323,8 @@ export function hostTokenBearer(
  * is `null` at once (the call probes). `true` is asked only after a current
  * host named its reason for the probe: the mint is awaited, and only a token
  * it bought is presented. Either waits first for the stored tokens to be
- * read, a local wait.
+ * read, a local wait. A held token the host refused counts as none. The call
+ * is the mint's caller: nothing is reported once `callSignal` is aborted.
  */
 export function hostTokenBearerFor(
   tokens: TrackedHostTokens,
@@ -278,23 +336,25 @@ export function hostTokenBearerFor(
   callSignal: AbortSignal,
 ) => Promise<OpenFrameBearerSource | null> {
   return async (hostId, signIn, waitForMint, callSignal) => {
-    // The call's own report: nothing once it is aborted.
-    const callState: HostTokenStateSink = (stateHostId, kind) => {
-      if (!callSignal.aborted) onState(stateHostId, kind);
-    };
     if (!tokens.loaded()) await tokens.whenLoaded();
     const userId = signIn.identity.userId;
     const lease: OpenFrameBearerSource = {
       identity: { userId },
       getBearerToken: () => tokens.current(userId, hostId)?.token ?? "",
     };
-    if (isUsableHostToken(tokens.current(userId, hostId), Date.now()))
-      return lease;
-    const minted = mintInBackground(tokens, userId, hostId, callState);
+    if (presentsHeldAsIs(tokens, userId, hostId)) return lease;
+    const minted = mintInBackground(
+      tokens,
+      userId,
+      hostId,
+      onState,
+      () => !callSignal.aborted,
+    );
     if (!waitForMint)
       return heldWhileAuthnUnreachable(tokens, userId, hostId) === null
         ? null
         : lease;
+    // The lease carries no minted token: it reads the one held when it presents.
     return (await minted).kind === "ok" ? lease : null;
   };
 }
@@ -307,24 +367,21 @@ interface ReplacementBound {
   readonly retried: (userId: string, minted: string | null) => void;
 }
 
-function untilAdmittedBound(): ReplacementBound & {
-  readonly admitted: () => void;
-} {
+function untilAdmittedBound(): ReplacementBound {
   let retried = false;
   return {
     final: () => retried,
     retried: () => {
       retried = true;
     },
-    admitted: () => {
-      retried = false;
-    },
   };
 }
 
-function sameTokenBound(): ReplacementBound & {
+interface SameTokenBound extends ReplacementBound {
   readonly admitted: (userId: string, token: string) => void;
-} {
+}
+
+function sameTokenBound(): SameTokenBound {
   let minted: { readonly userId: string; readonly token: string } | null = null;
   return {
     final: (userId, held) =>
@@ -342,19 +399,26 @@ interface ReplacementBounds {
   readonly expiry: ReplacementBound;
   readonly notAdmitted: ReplacementBound;
   /**
-   * Whether a refresh of the sign-in, asked because authn refused it on a
-   * mint, may start: a session's dial sequence spends at most one, until an
-   * admission; each unary recovery spends its own.
+   * Refreshes the sign-in, asked because authn refused it on a mint, or `null`
+   * when the budget allows none. A session's dial sequence spends at most one
+   * refresh that authn answered (rotated or refused), until an admission, and
+   * a caller that asks while one runs joins it and shares its outcome; each
+   * unary recovery spends its own. A sibling's rotation taken from the store
+   * (`adopted`) was not authn's answer, and spends nothing.
    */
-  readonly signInRefresh: () => boolean;
+  readonly refreshSignIn: (
+    recovery: SignInRecovery,
+  ) => Promise<RevalidateOutcome | "adopted"> | null;
 }
 
 type HostTokenRevalidatorDeps = {
   readonly tokens: Pick<HostTokenAccess, "current" | "obtain">;
+  /** Whose mints these are: the host's instance when a recovery starts. */
+  readonly hosts: HostInstanceOwners;
   /** Who is signed in now; read for their id, never their credential. */
   readonly currentUserId: () => string | null;
   readonly hostId: string;
-  readonly signInRecovery: StreamAuthRevalidator | null;
+  readonly signInRecovery: SignInRecovery | null;
   readonly onState: HostTokenStateSink;
   readonly now: () => number;
 };
@@ -386,25 +450,27 @@ export function hostTokenSessionAuth(
 
 /**
  * A local stream's: its door hears which host each answer came from, and only
- * `deps.hostId`'s admission resets the recovery's bounds for that host.
+ * `deps.hostId`'s admission resets the recovery's bounds for that host. Its
+ * recovery is built per stream session, the caller of every mint it starts;
+ * every session of the client shares one set of bounds.
  */
 export function hostTokenStreamAuth(
   deps: HostTokenRevalidatorDeps,
   door: StreamDoorObserver | null,
 ): {
-  readonly auth: HostTokenSessionRevalidator;
+  readonly auth: (caller: MintCaller) => HostTokenRevalidator;
   readonly door: StreamDoorObserver;
 } {
-  const auth = hostTokenRevalidator(deps);
+  const recovery = boundedRecovery(deps);
   return {
-    auth,
+    auth: recovery.forCaller,
     door: {
-      refused: (details, hostId) => {
-        door?.refused(details, hostId);
+      refused: (details, instance) => {
+        door?.refused(details, instance);
       },
-      admitted: (hostId) => {
-        if (hostId === deps.hostId) auth.admitted();
-        return door?.admitted(hostId) ?? NOTHING_TO_RELEASE;
+      admitted: (instance) => {
+        if (instance.hostId === deps.hostId) recovery.admitted();
+        return door?.admitted(instance) ?? NOTHING_TO_RELEASE;
       },
     },
   };
@@ -412,66 +478,119 @@ export function hostTokenStreamAuth(
 
 // Keyed on `doorReason`, never on its code; a host's refusal never starts sign-in
 // recovery (only authn's 401 on the mint reaches `signInRecovery`). Build it through
-// `hostTokenSessionAuth`, or its bounds never reset.
+// `hostTokenSessionAuth`, or its bounds never reset. Its reports go to
+// `deps.onState` whoever is still waiting: its owner fences them itself.
 export function hostTokenRevalidator(
   deps: HostTokenRevalidatorDeps,
 ): HostTokenSessionRevalidator {
-  const expiry = untilAdmittedBound();
-  const notAdmitted = untilAdmittedBound();
-  let signInRefreshSpent = false;
+  const recovery = boundedRecovery(deps);
+  return { ...recovery.forCaller(ALWAYS_LIVE), admitted: recovery.admitted };
+}
+
+// A session's recovery sequence for one host process: its bounds and its
+// sign-in refresh, until an admission or another process replaces it. A
+// recovery writes only to the sequence it started in, so a late refresh never
+// spends a newer sequence, and a newer sequence never joins it: its own
+// refresh joins at the sign-in's revalidator.
+interface RecoverySequence extends ReplacementBounds {
+  readonly owner: HostInstance;
+}
+
+function recoverySequence(owner: HostInstance): RecoverySequence {
+  let spent = false;
+  let running: Promise<RevalidateOutcome | "adopted"> | null = null;
   return {
-    ...revalidatorWithBounds(deps, {
-      expiry,
-      notAdmitted,
-      signInRefresh: () => {
-        if (signInRefreshSpent) return false;
-        signInRefreshSpent = true;
-        return true;
-      },
-    }),
-    admitted: () => {
-      expiry.admitted();
-      notAdmitted.admitted();
-      signInRefreshSpent = false;
+    owner,
+    expiry: untilAdmittedBound(),
+    notAdmitted: untilAdmittedBound(),
+    refreshSignIn: (recovery) => {
+      if (running !== null) return running;
+      if (spent) return null;
+      const refresh = recovery
+        .revalidateForReconnect()
+        .then((outcome) => {
+          // Only a refresh authn answered spends: one that never reached
+          // it, or a sibling's rotation adopted from the store, does not.
+          if (outcome !== "network-error" && outcome !== "adopted")
+            spent = true;
+          return outcome;
+        })
+        .finally(() => {
+          if (running === refresh) running = null;
+        });
+      running = refresh;
+      return refresh;
     },
   };
 }
 
+function boundedRecovery(deps: HostTokenRevalidatorDeps): {
+  readonly forCaller: (caller: MintCaller) => HostTokenRevalidator;
+  readonly admitted: () => void;
+} {
+  // `null` until the next recovery starts one for the process it recovers.
+  let sequence: RecoverySequence | null = null;
+  const sequenceOf = (owner: HostInstance): ReplacementBounds => {
+    if (sequence?.owner !== owner) sequence = recoverySequence(owner);
+    return sequence;
+  };
+  return {
+    forCaller: (caller) => revalidatorWithBounds(deps, sequenceOf, caller),
+    admitted: () => {
+      sequence = null;
+    },
+  };
+}
+
+// Each recovery takes the host's current instance as its mints' owner and that
+// owner's bounds; every state it reports is for `caller` and that owner, and
+// dropped once either is gone.
 function revalidatorWithBounds(
   deps: HostTokenRevalidatorDeps,
-  bounds: ReplacementBounds,
+  boundsOf: (owner: HostInstance) => ReplacementBounds,
+  caller: MintCaller,
 ): HostTokenRevalidator {
   const mintFresh = async (
     userId: string,
     signInRetried: boolean,
     eraRetried: boolean,
+    bounds: ReplacementBounds,
+    owner: HostInstance,
+    report: HostTokenStateSink,
   ): Promise<RevalidateOutcome> => {
     const held = deps.tokens.current(userId, deps.hostId);
-    const outcome = await deps.tokens.obtain(userId, deps.hostId, true, null);
+    const outcome = await deps.tokens.obtain(userId, deps.hostId, true, {
+      signal: null,
+      owner,
+      observedNow: () => deps.hosts.currentInstance(deps.hostId).observed,
+    });
     if (outcome.kind === "ok") return "rotated";
-    if (outcome.kind === "no-sign-in") return "network-error";
+    // No mint started for a replaced process: the redial reads the current one.
+    if (outcome.kind === "no-sign-in" || outcome.kind === "process-replaced")
+      return "network-error";
     // The era ended: only the same person, signed in again, gets one more ask.
     if (outcome.kind === "superseded")
       return !eraRetried && deps.currentUserId() === userId
-        ? mintFresh(userId, signInRetried, true)
+        ? mintFresh(userId, signInRetried, true, bounds, owner, report)
         : "rejected";
     if (outcome.kind === "sign-in-rejected") {
-      if (
-        signInRetried ||
-        deps.signInRecovery === null ||
-        !bounds.signInRefresh()
-      )
-        return "rejected";
-      const recovered = await deps.signInRecovery.revalidateForReconnect();
+      if (signInRetried || deps.signInRecovery === null) return "rejected";
+      const refresh = bounds.refreshSignIn(deps.signInRecovery);
+      if (refresh === null) return "rejected";
+      const recovered = await refresh;
+      // An adopted rotation mints as a rotated one does, and leaves the
+      // refresh to the next refusal of the sign-in.
+      if (recovered === "adopted")
+        return mintFresh(userId, false, eraRetried, bounds, owner, report);
       return recovered === "rotated"
-        ? mintFresh(userId, true, eraRetried)
+        ? mintFresh(userId, true, eraRetried, bounds, owner, report)
         : recovered;
     }
     const state = stateOfFailedMint(
       outcome,
       held !== null && !isUsableHostToken(held, deps.now()),
     );
-    if (state !== null) deps.onState(deps.hostId, state);
+    if (state !== null) report(deps.hostId, state);
     return outcome.kind === "unavailable" ? "network-error" : "rejected";
   };
 
@@ -479,7 +598,12 @@ function revalidatorWithBounds(
     userId: string,
     refusal: FatalErrorDetails | null,
   ): Promise<RevalidateOutcome> => {
-    if (refusal === null) return mintFresh(userId, false, false);
+    const owner = deps.hosts.currentInstance(deps.hostId);
+    const bounds = boundsOf(owner);
+    const report = mintReport(deps.onState, deps.hosts, owner, caller);
+    const mint = (): Promise<RevalidateOutcome> =>
+      mintFresh(userId, false, false, bounds, owner, report);
+    if (refusal === null) return mint();
     const reason = readDoorReason(refusal.doorReason);
     if (reason === "token_expired") {
       // Refused as expired while this clock calls the token usable: another mint would be too.
@@ -490,7 +614,7 @@ function revalidatorWithBounds(
         bounds.expiry.final(userId, held.token)
       )
         return "rejected";
-      const outcome = await mintFresh(userId, false, false);
+      const outcome = await mint();
       // Only a minted token replaces the held one; after a failed mint the old one stays.
       if (outcome === "rotated")
         bounds.expiry.retried(
@@ -505,10 +629,10 @@ function revalidatorWithBounds(
         // The host refused a freshly minted token too. Its sink decides
         // whether that shows: the app's raises nothing while a connection to
         // that host is admitted.
-        deps.onState(deps.hostId, "not-admitted");
+        report(deps.hostId, "not-admitted");
         return "rejected";
       }
-      const outcome = await mintFresh(userId, false, false);
+      const outcome = await mint();
       if (outcome === "rotated")
         bounds.notAdmitted.retried(
           userId,
@@ -537,53 +661,66 @@ function revalidatorWithBounds(
 // token was checked unexpired just before it was sent.
 export function hostTokenUnaryRevalidator(deps: {
   readonly tokens: Pick<HostTokenAccess, "current" | "obtain">;
+  readonly hosts: HostInstanceOwners;
   readonly currentUserId: () => string | null;
-  readonly signInRecovery: StreamAuthRevalidator | null;
+  readonly signInRecovery: SignInRecovery | null;
   readonly onState: HostTokenStateSink;
   readonly now: () => number;
 }): Required<
   Pick<RefusalAwareAuthRevalidator, "revalidateRefusedBearer" | "admissionOf">
 > {
-  interface HostRecovery {
-    readonly revalidator: HostTokenRevalidator;
-    readonly admitted: (userId: string, token: string) => void;
+  interface ProcessBounds {
+    readonly expiry: SameTokenBound;
+    readonly notAdmitted: SameTokenBound;
+    readonly bounds: ReplacementBounds;
   }
-  const byHost = new Map<string, HostRecovery>();
-  const forHost = (hostId: string): HostRecovery => {
-    let recovery = byHost.get(hostId);
-    if (recovery === undefined) {
+  // Each host process's own bounds, so nothing a replaced process refused
+  // counts against the process that replaced it.
+  const boundsByOwner = new WeakMap<HostInstance, ProcessBounds>();
+  const boundsOf = (owner: HostInstance): ReplacementBounds => {
+    let own = boundsByOwner.get(owner);
+    if (own === undefined) {
       const expiry = sameTokenBound();
       const notAdmitted = sameTokenBound();
-      recovery = {
-        revalidator: revalidatorWithBounds(
-          { ...deps, hostId },
-          // A unary recovery is one call's: `signInRetried` bounds it to one.
-          { expiry, notAdmitted, signInRefresh: () => true },
-        ),
-        admitted: (userId, token) => {
-          expiry.admitted(userId, token);
-          notAdmitted.admitted(userId, token);
+      // A unary recovery is one call's: `signInRetried` bounds it to one.
+      own = {
+        expiry,
+        notAdmitted,
+        bounds: {
+          expiry,
+          notAdmitted,
+          refreshSignIn: (signInRecovery) =>
+            signInRecovery.revalidateForReconnect(),
         },
       };
-      byHost.set(hostId, recovery);
+      boundsByOwner.set(owner, own);
     }
-    return recovery;
+    return own.bounds;
   };
   return {
-    revalidateRefusedBearer: async (expected, hostId, refusal) => {
+    revalidateRefusedBearer: async (expected, hostId, refusal, callSignal) => {
       const userId = deps.currentUserId();
       if (userId === null) return "rejected";
       if (userId !== expected.identity.userId) return "superseded";
       if (refusal === null) return "rejected";
-      return forHost(hostId).revalidator.revalidateRefused(refusal);
+      // The call whose refusal it recovers is the caller of every mint it starts.
+      return revalidatorWithBounds(
+        { ...deps, hostId },
+        boundsOf,
+        () => !callSignal.aborted,
+      ).revalidateRefused(refusal);
     },
-    // Read as the call starts: a token minted while it ran is cleared only by a
-    // call that starts with it.
+    // Read as the call starts, with the host process the call is for: a token
+    // minted while it ran is cleared only by a call that starts with it.
     admissionOf: (expected, hostId) => {
       const userId = expected.identity.userId;
       const held = deps.tokens.current(userId, hostId)?.token ?? null;
+      const owner = deps.hosts.currentInstance(hostId);
       return () => {
-        if (held !== null) byHost.get(hostId)?.admitted(userId, held);
+        if (held === null) return;
+        const own = boundsByOwner.get(owner);
+        own?.expiry.admitted(userId, held);
+        own?.notAdmitted.admitted(userId, held);
       };
     },
   };

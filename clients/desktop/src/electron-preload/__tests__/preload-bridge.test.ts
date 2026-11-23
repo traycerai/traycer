@@ -18,6 +18,7 @@ import {
   hostTokenBearer,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
+import { createReleasedHostMemory } from "@traycer-clients/shared/host-transport/released-sign-on";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -1561,7 +1562,7 @@ describe("preload host-token era reads", () => {
       getBearerToken: () => "sign-in-token",
     };
     const bearer = hostTokenBearer(
-      trackHostTokenMints(tokens),
+      trackHostTokenMints(tokens, createReleasedHostMemory()),
       () => signInLease,
       hostId,
       () => undefined,
@@ -1569,7 +1570,7 @@ describe("preload host-token era reads", () => {
 
     expect(knownEra).toBe(0);
     expect(tokens.current("user-a", hostId)?.token).toBe("host-token");
-    expect(bearer(hostId)).not.toBeNull();
+    expect(bearer(hostId, () => true)).not.toBeNull();
     expect(fakeElectron.syncCalls).toHaveLength(callsBeforeReads);
   });
 
@@ -1588,7 +1589,10 @@ describe("preload host-token era reads", () => {
     const tokens = createDesktopHostTokenSource(bridge.hostTokens);
 
     await expect(
-      tokens.obtain("user-a", "computer-a", false, null),
+      tokens.obtain("user-a", "computer-a", false, {
+        signal: null,
+        owner: null,
+      }),
     ).resolves.toEqual({
       kind: "superseded",
     });

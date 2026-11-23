@@ -2626,6 +2626,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
           onCommandFailed: () => undefined,
           onUnsupported,
           onConnectionStatus,
+          onBackoffEntered: () => undefined,
         },
       });
       try {
@@ -4295,9 +4296,9 @@ describe("RemoteSession wake", () => {
     const dialStartedAt: number[] = [];
     const session = new RemoteSession({
       ...options,
-      grantProvider: () => {
+      grantProvider: (sequence, attempt) => {
         dialStartedAt.push(Date.now());
-        return options.grantProvider();
+        return options.grantProvider(sequence, attempt);
       },
       rpcRegistry: statusRpcRegistry(),
     });
@@ -4498,7 +4499,7 @@ describe("RemoteSession wake", () => {
       relayAttachUrl: "wss://relay.test/attach",
       authRecovery: "revalidate",
       authEpoch: "epoch-1",
-      openAuth: "user-bearer",
+      openAuth: "session-grant-or-sign-in",
     };
     const view = acquireRemoteSession(
       identity,
@@ -10996,9 +10997,9 @@ describe("RemoteSession refused attach grant", () => {
     const lease = new MutableBearerLease("user-bearer", "user-1");
     const session = new RemoteSession({
       ...buildSessionOptions(relay, lease, null),
-      grantProvider: () => {
+      grantProvider: (sequence, attempt) => {
         counts.provider += 1;
-        return provider();
+        return provider(sequence, attempt);
       },
       webSocketFactory: {
         create: (url, priority) => {
@@ -11325,6 +11326,7 @@ describe("RemoteSession: a start request sent and never answered", () => {
         onComplete: () => undefined,
         onFailed: () => undefined,
         onConnectionStatus: () => undefined,
+        onBackoffEntered: () => undefined,
       };
       const remove = new WorktreeDeleteStreamClient({
         wsStreamClient: streamClient,
@@ -11396,6 +11398,7 @@ describe("RemoteSession: a start request sent and never answered", () => {
         onCommandComplete: () => undefined,
         onCommandFailed: () => undefined,
         onUnsupported: () => undefined,
+        onBackoffEntered: () => undefined,
       };
       const batch = new WorktreeDeleteBatchStreamClient({
         wsStreamClient: streamClient,

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nameReason } from "./released-memory-test-support";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
 import {
@@ -9,8 +10,8 @@ import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rp
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
-import { processReleasedHosts } from "../../../../shared/host-transport/released-sign-on";
 import { createCliHostTokens } from "../cli-host-tokens";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 
 const state = vi.hoisted(() => {
@@ -105,6 +106,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: vi.fn(() => ({ dispose: state.dispose })),
     createStoreBackedRevalidator: vi.fn(() => ({
       revalidateCurrentContext: state.revalidate,
+      rotateSignIn: state.revalidate,
     })),
   };
 });
@@ -195,26 +197,6 @@ describe("callHostRpc host-token mint recovery", () => {
     expect(state.requests).not.toHaveBeenCalled();
   });
 
-  it("reports no host-only token, never the rejected line, when sign-in refresh cannot reach authn", async () => {
-    state.mintOutcomes.push({ kind: "sign-in-rejected" });
-    state.revalidate.mockResolvedValue("network-error");
-
-    const error = await toAgentCliError(
-      callHostRpcAtEndpoint("agent.list", params, endpoint),
-    ).then(
-      () => null,
-      (caught: unknown) => caught,
-    );
-    expect(error).toMatchObject({
-      message: "No host-only token is held for this host",
-      exitCode: 1,
-    });
-    expect(error).not.toMatchObject({ code: CLI_ERROR_CODES.AUTH_REJECTED });
-    expect(state.mint).toHaveBeenCalledTimes(1);
-    expect(state.revalidate).toHaveBeenCalledTimes(1);
-    expect(state.requests).not.toHaveBeenCalled();
-  });
-
   it.each(["token_expired", "not_admitted"] as const)(
     "does not send a third request when the replacement token is refused again for %s",
     async (doorReason) => {
@@ -243,7 +225,7 @@ describe("createCliHostTokens refusals that end a command", () => {
   it("ends the command on a not-admitted mint begun in the same millisecond as the admission before it, once that connection has left", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     try {
-      processReleasedHosts.refusedNamingReason("host-same-millisecond");
+      nameReason("host-same-millisecond");
       const tokens = createCliHostTokens({
         lease: new MutableBearerLease("signin", "user-1"),
         refresh: async () => "network-error",
@@ -265,5 +247,29 @@ describe("createCliHostTokens refusals that end a command", () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it("asks once more for the host process observed now when the process was replaced before the mint started, and the command goes on", async () => {
+    const hostId = "host-replaced-before-mint";
+    processReleasedHosts.observeInstance(hostId, "process-a");
+    const ending: string[] = [];
+    const tokens = createCliHostTokens({
+      lease: new MutableBearerLease("signin", "user-1"),
+      refresh: async () => "network-error",
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    tokens.onRefusalEndingCommand((id, failure) => {
+      ending.push(`${id}:${failure.kind}`);
+    });
+
+    // The host is replaced after the wrapper read the process it asks for and
+    // before the mint starts.
+    const minting = tokens.mintFresh(hostId, null);
+    processReleasedHosts.observeInstance(hostId, "process-b");
+
+    await expect(minting).resolves.toMatchObject({ kind: "ok" });
+    expect(state.mint).toHaveBeenCalledTimes(1);
+    expect(ending).toEqual([]);
   });
 });

@@ -1,6 +1,5 @@
 import {
   hostTokenBearer,
-  hostTokenHeldPastExpiry,
   hostTokenStreamAuth,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
@@ -461,7 +460,10 @@ export function createLocalHostInventoryStreamClient(deps: {
   return (endpoint, userId) => {
     if (hostVersionNeedsUpdate(endpoint.version, MINIMUM_HOST_VERSION))
       return null;
-    const hostTokens = trackHostTokenMints(deps.hostTokens);
+    const hostTokens = trackHostTokenMints(
+      deps.hostTokens,
+      processReleasedHosts,
+    );
     const client = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
@@ -481,11 +483,6 @@ export function createLocalHostInventoryStreamClient(deps: {
         endpoint.hostId,
         ignoreHostTokenState,
       ),
-      presentsHeldPastExpiry: hostTokenHeldPastExpiry(
-        hostTokens,
-        deps.bearer,
-        endpoint.hostId,
-      ),
       // Main never refreshes the sign-in, so a refused one ends the stream too.
       // It holds no row and reads none: the sign-in goes only after this dial
       // sequence's refusal showed the released level.
@@ -497,8 +494,8 @@ export function createLocalHostInventoryStreamClient(deps: {
           hostTokenUnobtainable(hostTokens, userId, hostId),
         ownerSignInEligible: (hostId) =>
           ownerSignInEligible(hostTokens, userId, hostId),
-        heldTokenRefused: (hostId, presented) =>
-          heldTokenRefused(hostTokens, userId, hostId, presented),
+        heldTokenRefused: (instance, presented) =>
+          heldTokenRefused(hostTokens, userId, instance, presented),
         forgetHeldRefusal: (hostId) =>
           hostTokens.forgetHeldRefused(userId, hostId),
         hosts: processReleasedHosts,
@@ -506,6 +503,7 @@ export function createLocalHostInventoryStreamClient(deps: {
       ...hostTokenStreamAuth(
         {
           tokens: hostTokens,
+          hosts: processReleasedHosts,
           currentUserId: () => deps.bearer()?.identity.userId ?? null,
           hostId: endpoint.hostId,
           signInRecovery: null,

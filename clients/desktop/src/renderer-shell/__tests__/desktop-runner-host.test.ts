@@ -287,9 +287,13 @@ function buildFakeBridge(
     })(),
     hostTokens: {
       era: (_userId: string) => 0,
-      obtain: async () => ({ outcome: { kind: "no-sign-in" }, era: 0 }),
+      obtain: async () => ({
+        outcome: { kind: "no-sign-in" },
+        era: 0,
+        held: false,
+      }),
       renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
-      adopt: async () => ({ era: 0 }),
+      adopt: async () => ({ era: 0, kept: false }),
       forgetUser: async () => ({ era: 0 }),
       snapshot: async () => ({ userId: null, era: 0, tokens: [] }),
       subscribe: () => ({ dispose: () => undefined }),

@@ -868,6 +868,9 @@ function startBatchDeleteCommand(
             onCommandComplete: () => settleCommand(REATTACHED_MESSAGE),
             onCommandFailed: (reason) => settleCommand(reason),
             onUnsupported: () => handOffToFallback(),
+            // The run waits through backoff as through any reconnect: only a
+            // terminal close ends it.
+            onBackoffEntered: () => {},
             onConnectionStatus: ({ status, reason, startSent }) => {
               command.startSent = startSent;
               // Only a terminal stream close BEFORE the command's terminal
@@ -1114,6 +1117,9 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
               closeDeleteClient(item.key);
               settle();
             },
+            // The run waits through backoff as through any reconnect: only a
+            // terminal close ends it.
+            onBackoffEntered: () => {},
             onConnectionStatus: (status, reason) => {
               // Only a terminal stream close BEFORE an app-level terminal frame
               // is an error. A drop before the request went out surfaces as

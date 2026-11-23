@@ -430,6 +430,22 @@ export async function callHostRpcAtEndpoint<
     );
     throw signedOutCliError();
   }
+  // The same check as `resolveEndpoint`: no token or sign-in goes to a URL
+  // that is not this machine's host, nor to none.
+  if (
+    endpoint.websocketUrl === null ||
+    !isValidLocalHostWebsocketUrl(endpoint.websocketUrl)
+  ) {
+    logger.warn(
+      "Host RPC explicit-endpoint call blocked; websocket URL invalid",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+      },
+    );
+    throw hostNotRunningCliError();
+  }
   return requestAtEndpoint(
     method,
     params,
@@ -538,6 +554,8 @@ async function requestWithHostToken<
             refused: () => undefined,
             admitted: localDoor.admitted,
           }),
+          // The CLI holds no row. Eligibility is this process's mint record and
+          // held token, read synchronously as they stand at the ask.
           releasedSignOnFor: (
             authority: HostRequestAuthority,
             cause: ReleasedUnaryCause,
@@ -550,17 +568,12 @@ async function requestWithHostToken<
               (cause === "owner-sign-in"
                 ? releasedSignOn.ownerSignInEligible(hostId)
                 : releasedSignOn.hostTokenUnobtainable(hostId));
-            return Promise.resolve(
-              signIn !== null && eligible
-                ? { bearer: signIn, recovery: releasedSignOn.recovery }
-                : null,
-            );
+            return signIn !== null && eligible
+              ? { bearer: signIn, recovery: releasedSignOn.recovery }
+              : null;
           },
-          heldTokenRefusedFor: (authority, presented) =>
-            localDoor.releasedSignOn.heldTokenRefused(
-              authority.endpoint.hostId,
-              presented,
-            ),
+          heldTokenRefusedFor: (_authority, presented, instance) =>
+            localDoor.releasedSignOn.heldTokenRefused(instance, presented),
           forgetHeldRefusalFor: (authority) =>
             localDoor.releasedSignOn.forgetHeldRefusal(
               authority.endpoint.hostId,
@@ -668,12 +681,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     logger.warn("Host RPC endpoint resolution failed; metadata missing", {
       environment: config.environment,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   if (publishedHostProcessGone(metadata)) {
     logger.warn(
@@ -684,24 +692,14 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
         pid: metadata.pid,
       },
     );
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
     logger.warn("Host RPC endpoint resolution failed; websocket URL invalid", {
       environment: config.environment,
       hostId: metadata.hostId,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   logger.debug("Host RPC endpoint resolved", {
     environment: config.environment,
@@ -709,6 +707,15 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     pid: metadata.pid,
   });
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+}
+
+function hostNotRunningCliError(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    message: "The host is not running. Run `traycer host ensure`.",
+    details: null,
+    exitCode: 1,
+  });
 }
 
 /**

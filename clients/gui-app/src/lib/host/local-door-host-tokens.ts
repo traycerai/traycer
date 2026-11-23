@@ -10,11 +10,12 @@ export function localDoorHostTokens(tokens: HostTokenAccess): HostTokenAccess {
     current: (userId, hostId) => tokens.current(userId, hostId),
     loaded: () => tokens.loaded(),
     whenLoaded: () => tokens.whenLoaded(),
-    obtain: async (userId, hostId, fresh, signal) => {
-      const outcome = await tokens.obtain(userId, hostId, fresh, signal);
+    lastFailureOf: (userId, owner) => tokens.lastFailureOf(userId, owner),
+    obtain: async (userId, hostId, fresh, ask) => {
+      const outcome = await tokens.obtain(userId, hostId, fresh, ask);
       if (outcome.kind !== "not-admitted") return outcome;
       if (!(await mintHostCredentialBeforeOpen(hostId))) return outcome;
-      return tokens.obtain(userId, hostId, true, signal);
+      return tokens.obtain(userId, hostId, true, ask);
     },
   };
 }

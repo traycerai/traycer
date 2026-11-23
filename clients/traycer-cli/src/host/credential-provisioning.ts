@@ -3,7 +3,7 @@ import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
   cliReleasedSignOn,
   createCliHostTokens,
-  watchHostInstances,
+  observeHostInstance,
   type CliHostTokenFailure,
 } from "../internal/cli-host-tokens";
 import {
@@ -11,6 +11,11 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  processReleasedHosts,
+  type HostInstance,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   MutableBearerLease,
   readLeaseBearer,
@@ -36,6 +41,7 @@ import type { CredentialsMutationStore } from "@traycer/protocol/config/credenti
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
+  type SignInRotation,
 } from "../store/credentials-store";
 import { errorFromUnknown, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
@@ -182,6 +188,7 @@ const SILENT_OPEN_CONFIRMATIONS = 3;
 
 type ProbeRevalidator = {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
+  rotateSignIn(): Promise<SignInRotation>;
 };
 
 type AckObservation =
@@ -229,13 +236,12 @@ export async function provisionInstalledHostCredential(
   // a momentarily-absent pid file keeps the last-known URL.
   let endpoint: HostTransportEndpoint | null = null;
   let pollInFlight = false;
-  const sawHostInstance = watchHostInstances();
   const refreshEndpoint = async (): Promise<void> => {
     if (pollInFlight) return;
     pollInFlight = true;
     try {
       const metadata = await readHostPidMetadata(options.environment);
-      if (metadata !== null) sawHostInstance(metadata);
+      if (metadata !== null) observeHostInstance(metadata);
       if (
         metadata !== null &&
         isValidLocalHostWebsocketUrl(metadata.websocketUrl)
@@ -368,7 +374,7 @@ export async function provisionInstalledHostCredential(
     // token, or the sign-in only as `cliReleasedSignOn` allows.
     const tokens = createCliHostTokens({
       lease,
-      refresh: () => revalidator.revalidateCurrentContext(),
+      refresh: () => revalidator.rotateSignIn(),
       signal: probeAbort.signal,
     });
     const releasedSignOn = cliReleasedSignOn(lease, tokens);
@@ -391,19 +397,34 @@ export async function provisionInstalledHostCredential(
       endpoint === null ? null : tokens.deferredNotAdmitted(endpoint.hostId);
     // Recovery of a refused token, as on every other CLI open: one fresh
     // token and one more open, and a second refusal is final. A refusal is
-    // read by the recovery of the host that refused, which the door named
-    // just before; a token found expired before its dial belongs to the host
-    // that dial selected, the current endpoint while it runs.
-    let refusedHostId: string | null = null;
+    // read by the recovery of the host process the door named for that very
+    // refusal, never an earlier attempt's. Once that process is replaced, or
+    // the endpoint has moved to another host, its rejection is not the
+    // replacement's: the stream reconnects on its backoff and asks the one
+    // there now. A `rotated` still counts and is paced by the stream as any
+    // other, and a signed-out person ends the run wherever it is. A token
+    // found expired before its dial belongs to the host that dial selected,
+    // the current endpoint while it runs.
+    const refusedBy = new WeakMap<FatalErrorDetails, HostInstance>();
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () =>
         recoverHostToken(endpoint?.hostId ?? null, (recovery) =>
           recovery.revalidateForReconnect(),
         ),
-      revalidateRefused: (refusal) =>
-        recoverHostToken(refusedHostId, (recovery) =>
-          recovery.revalidateRefused(refusal),
-        ),
+      revalidateRefused: async (refusal) => {
+        const owner = refusedBy.get(refusal);
+        const outcome = await recoverHostToken(
+          owner?.hostId ?? null,
+          (recovery) => recovery.revalidateRefused(refusal),
+        );
+        const left =
+          owner !== undefined &&
+          (!processReleasedHosts.isCurrent(owner) ||
+            endpoint?.hostId !== owner.hostId);
+        return left && outcome === "rejected" && !tokens.signInRejected()
+          ? "network-error"
+          : outcome;
+      },
     };
     const recoverHostToken = (
       hostId: string | null,
@@ -443,10 +464,6 @@ export async function provisionInstalledHostCredential(
       // socket was selected for: the stream then probes while authn has not
       // answered. Never the token of whatever `endpoint` names by then.
       bearer: (hostId) => tokens.streamBearer(hostId)(),
-      // Asked in the same synchronous dial that read `endpoint`: only the
-      // poll moves it, never within one dial.
-      presentsHeldPastExpiry: () =>
-        endpoint !== null && tokens.presentsHeldPastExpiry(endpoint.hostId),
       userId: lease.identity.userId,
       releasedSignOn,
       auth: streamAuth,
@@ -454,12 +471,12 @@ export async function provisionInstalledHostCredential(
       // is earned again after a good open, and fences off a `not-admitted` of
       // a mint begun before it.
       door: {
-        refused: (_details, hostId) => {
-          refusedHostId = hostId;
+        refused: (details, instance) => {
+          refusedBy.set(details, instance);
         },
-        admitted: (hostId) => {
+        admitted: (instance) => {
           doorRetried = false;
-          return tokens.admitted(hostId);
+          return tokens.admitted(instance.hostId);
         },
       },
       // No tracker wired yet on the CLI side: this is a short-lived

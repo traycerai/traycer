@@ -26,6 +26,7 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { createReleasedHostMemory } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
@@ -141,6 +142,7 @@ export async function unaryDoorHarness(
       expiresAtMs: now + 60_000,
     },
     tokens.era(UNARY_DOOR_USER_ID),
+    () => true,
   );
   const signInRecovery: StreamAuthRevalidator = {
     revalidateForReconnect: () => {
@@ -149,8 +151,10 @@ export async function unaryDoorHarness(
       return Promise.resolve("rotated");
     },
   };
+  const hosts = createReleasedHostMemory();
   const hostRecovery = hostTokenUnaryRevalidator({
     tokens,
+    hosts,
     currentUserId: () =>
       useAuthStore.getState().contextMetadata?.userId ?? null,
     signInRecovery,
@@ -166,13 +170,18 @@ export async function unaryDoorHarness(
     };
   const auth: RefusalAwareAuthRevalidator = {
     revalidateExpectedBearer,
-    revalidateRefusedBearer: (expected, hostId, refusal) => {
+    revalidateRefusedBearer: (expected, hostId, refusal, callSignal) => {
       if (hostId === POOL_DOOR_HOST_ID) {
         if (refusal !== null && refusal.code !== "UNAUTHORIZED")
           return Promise.resolve("rejected");
         return revalidateExpectedBearer(expected);
       }
-      return hostRecovery.revalidateRefusedBearer(expected, hostId, refusal);
+      return hostRecovery.revalidateRefusedBearer(
+        expected,
+        hostId,
+        refusal,
+        callSignal,
+      );
     },
     admissionOf: (expected, hostId) =>
       hostId === POOL_DOOR_HOST_ID
@@ -183,7 +192,7 @@ export async function unaryDoorHarness(
     options.hostId === POOL_DOOR_HOST_ID
       ? signInLease
       : await hostTokenBearerFor(
-          trackHostTokenMints(tokens),
+          trackHostTokenMints(tokens, hosts),
           noteHostTokenRefusal,
         )(options.hostId, signInLease, true, new AbortController().signal);
   if (bearer === null) throw new Error("expected a host-only token bearer");

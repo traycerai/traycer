@@ -39,7 +39,6 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
-  hostTokenHeldPastExpiry,
   hostTokenStreamAuth,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
@@ -47,7 +46,6 @@ import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-so
 import {
   appHostDoorObserver,
   appStreamDoorObserver,
-  hostTokenRefusalSinkWhile,
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
@@ -70,6 +68,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { getHostBindingSnapshot, useHostBinding } from "@/lib/host/runtime";
+import { confirmRowWhenHidden } from "@/lib/host/hidden-window-row-confirm";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
@@ -390,8 +389,11 @@ export function buildHostStreamClient(params: {
         params.target.hostId,
         params.userId,
       ),
-      // The renderer's directory is kept current by its own poll.
-      confirmRowBeforeSignIn: null,
+      // The same confirmation the runtime messenger passes: whichever consumer
+      // builds this `(hostId, userId)` session first sets it for all.
+      confirmRowBeforeSignIn: confirmRowWhenHidden(
+        () => getHostBindingSnapshot()?.directory ?? null,
+      ),
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -425,14 +427,12 @@ export function buildHostStreamClient(params: {
   const hostId = params.target.hostId;
   const localTokens = trackHostTokenMints(
     localDoorHostTokens(params.hostTokens),
+    processReleasedHosts,
   );
-  // A mint this client started reports nothing once it is closed (a one-shot
-  // stream that ended): a longer-lived surface's own next dial asks again.
-  let client: WsStreamClient<HostStreamRpcRegistry> | null = null;
-  const onState = hostTokenRefusalSinkWhile(
-    () => client === null || !client.isClosed(),
-  );
-  client = new WsStreamClient<HostStreamRpcRegistry>({
+  // A mint reports only while a session that asked for it is open (the client
+  // passes each session as the caller): a longer-lived surface's own next dial
+  // asks again.
+  return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
     // leg too. It was previously consulted only for the remote attach-grant
@@ -450,11 +450,11 @@ export function buildHostStreamClient(params: {
     // Epic open. See `stream-method-support-registry.ts`.
     hostId,
     endpoint: params.endpoint,
-    bearer: hostTokenBearer(localTokens, params.bearer, hostId, onState),
-    presentsHeldPastExpiry: hostTokenHeldPastExpiry(
+    bearer: hostTokenBearer(
       localTokens,
       params.bearer,
       hostId,
+      noteHostTokenRefusal,
     ),
     releasedSignOn: releasedSignOnForLocalRow(
       liveLocalRow(params.target),
@@ -473,10 +473,11 @@ export function buildHostStreamClient(params: {
     ...hostTokenStreamAuth(
       {
         tokens: localTokens,
+        hosts: processReleasedHosts,
         currentUserId: () => params.bearer()?.identity.userId ?? null,
         hostId,
         signInRecovery: params.auth,
-        onState,
+        onState: noteHostTokenRefusal,
         now: Date.now,
       },
       appStreamDoorObserver,
@@ -513,7 +514,6 @@ export function buildHostStreamClient(params: {
     maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
     clientIdentity: getGuiClientIdentity(),
   });
-  return client;
 }
 
 /**

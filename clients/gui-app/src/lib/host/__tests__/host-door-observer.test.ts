@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
   appHostDoorObserver,
@@ -60,7 +61,9 @@ describe("the app's door while the host has an admitted connection", () => {
   it("counts a stream's admission and a unary call's together, per host", () => {
     const hostId = freshHost("shared-count");
     const other = freshHost("other-host");
-    const releaseStream = appStreamDoorObserver.admitted(hostId);
+    const releaseStream = appStreamDoorObserver.admitted(
+      processReleasedHosts.currentInstance(hostId),
+    );
     const releaseCall = appHostDoorObserver(hostId).admitted();
 
     releaseStream();

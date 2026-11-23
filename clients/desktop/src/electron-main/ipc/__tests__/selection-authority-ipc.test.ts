@@ -945,6 +945,7 @@ describe("local auth-session restore", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       bridge.hostTokens.era("user-a"),
+      () => true,
     );
 
     const observedSnapshotVersions: Array<string | null> = [];

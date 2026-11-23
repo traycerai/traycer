@@ -135,6 +135,7 @@ async function openInventory(
     selectedHostId,
     { token: HOST_TOKEN, expiresAtMs: expiresAtMs ?? Date.now() + 60_000 },
     hostTokens.era(USER_A),
+    () => true,
   );
   const endpoint = {
     hostId: selectedHostId,
@@ -228,6 +229,7 @@ describe("desktop inventory push against a released local host", () => {
         hostId,
         { token, expiresAtMs: Date.now() + 60_000 },
         hostTokens.era(USER_A),
+        () => true,
       );
     }
     const first = {
@@ -657,6 +659,7 @@ async function openInventoryFor(input: {
       hostId,
       { token: input.hostToken, expiresAtMs: Date.now() + 60_000 },
       hostTokens.era(input.userId),
+      () => true,
     );
   }
   const endpoint = {

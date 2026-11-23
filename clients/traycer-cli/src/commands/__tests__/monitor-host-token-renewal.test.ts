@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  processReleasedHosts,
+  type HostInstance,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
+import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
-import { processReleasedHosts } from "../../../../shared/host-transport/released-sign-on";
 import { runMonitor } from "../monitor";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
@@ -15,8 +19,11 @@ type SchedulerOptions = { readonly revalidate: () => Promise<unknown> };
 type StreamOptions = {
   readonly bearer: (hostId: string) => { getBearerToken: () => string } | null;
   readonly door: {
-    readonly admitted: (hostId: string) => () => void;
-    readonly refused: (details: FatalErrorDetails, hostId: string) => void;
+    readonly admitted: (instance: HostInstance) => () => void;
+    readonly refused: (
+      details: FatalErrorDetails,
+      instance: HostInstance,
+    ) => void;
   };
 };
 
@@ -147,6 +154,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: vi.fn(() => ({ dispose: vi.fn() })),
     createStoreBackedRevalidator: vi.fn(() => ({
       revalidateCurrentContext: state.revalidate,
+      rotateSignIn: state.revalidate,
     })),
   };
 });
@@ -189,7 +197,10 @@ function refuseOpen(
     readonly details: FatalErrorDetails;
   },
 ): void {
-  options.door.refused(fatal.details, HOST_ID);
+  options.door.refused(
+    fatal.details,
+    processReleasedHosts.currentInstance(HOST_ID),
+  );
   state.sessions[index]?.statusChange?.("closed", fatal);
 }
 
@@ -349,7 +360,7 @@ describe("runMonitor host-token renewal", () => {
     async (_name, failure, code, hostNamedReason) => {
       state.minted.push(failure);
       const { result, options } = await startMonitor();
-      if (hostNamedReason) processReleasedHosts.refusedNamingReason("host-1");
+      if (hostNamedReason) nameReason("host-1");
       options.bearer(HOST_ID);
       await waitForMintCount(1);
 
@@ -391,7 +402,7 @@ describe("runMonitor host-token renewal", () => {
     options.bearer(HOST_ID);
     await waitForMintCount(1);
     // The stream records a refusal that names its reason before it reports it.
-    processReleasedHosts.refusedNamingReason("host-1");
+    nameReason("host-1");
     refuseOpen(0, options, unauthorizedFatal("not_admitted"));
     await waitForMintCount(2);
 
@@ -408,7 +419,7 @@ describe("runMonitor host-token renewal", () => {
     await waitForMintCount(2);
     await vi.waitFor(() => expect(state.sessions).toHaveLength(2));
 
-    options.door.admitted(HOST_ID);
+    options.door.admitted(processReleasedHosts.currentInstance(HOST_ID));
     refuseOpen(1, options, unauthorizedFatal("token_expired"));
     await waitForMintCount(3);
     await vi.waitFor(() => expect(state.sessions).toHaveLength(3));

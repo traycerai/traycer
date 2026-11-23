@@ -21,8 +21,9 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
-// The redial deadline of `run-worktree-cleanup.ts` (PRE_OPEN_REDIAL_DEADLINE_MS).
-const PRE_OPEN_REDIAL_DEADLINE_MS = 30_000;
+// No deadline bounds the cleanup's wait before the request is sent: it settles
+// only when the stream enters backoff (`onBackoffEntered`) or closes.
+const LONG_WAIT_MS = 10 * 60_000;
 
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
 // Recording every construction is what lets a test assert the migration's core
@@ -382,7 +383,7 @@ describe("runWorktreeCleanup on a current host", () => {
     expect(legacyMock.paths).toEqual([]);
   });
 
-  it("waits out a drop BEFORE the command was sent, and reports the paths failed once the redial deadline passes", async () => {
+  it("ignores every reconnecting BEFORE the command was sent, with no deadline, and reports the paths failed when the stream enters backoff", async () => {
     vi.useFakeTimers();
     try {
       const promise = runTaskCleanup(["/wt/a"]);
@@ -391,20 +392,48 @@ describe("runWorktreeCleanup on a current host", () => {
         settled = true;
       });
       // The subscribe frame never got to a socket, so nothing was attempted and
-      // there is nothing uncertain about it; the stream redials it.
+      // there is nothing uncertain about it; the stream is still dialing.
       commandCallbacks().onConnectionStatus(
         status("reconnecting", null, false),
       );
-      await vi.advanceTimersByTimeAsync(PRE_OPEN_REDIAL_DEADLINE_MS - 1);
+      commandCallbacks().onConnectionStatus(
+        status("reconnecting", null, false),
+      );
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
       expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1);
+      commandCallbacks().onBackoffEntered(false);
       await expect(promise).resolves.toEqual({
         removed: [],
         failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
         uncertain: [],
       });
       expect(legacyMock.paths).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores the stream entering backoff AFTER the command was sent, and settles it unconfirmed on the later drop", async () => {
+    vi.useFakeTimers();
+    try {
+      const promise = runTaskCleanup(["/wt/a"]);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      commandCallbacks().onConnectionStatus(status("connecting", null, true));
+      commandCallbacks().onBackoffEntered(true);
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
+      expect(settled).toBe(false);
+
+      commandCallbacks().onConnectionStatus(status("reconnecting", null, true));
+      await expect(promise).resolves.toEqual({
+        removed: [],
+        failed: [],
+        uncertain: ["/wt/a"],
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -499,19 +528,25 @@ describe("runWorktreeCleanup on an older host", () => {
   // (exactly one subscribe, no reconnect re-run), and let the overall promise
   // settle so the summary toast + cache invalidation still fire. Unchanged by
   // the migration: an older host has no command to keep running without us.
-  it("settles when a per-target stream drops and does not redial within the deadline", async () => {
+  it("ignores every reconnecting of a per-target stream before the request, with no deadline, and fails the paths when the stream enters backoff", async () => {
     vi.useFakeTimers();
     try {
       const promise = runTaskCleanup(["/wt/a"]);
       await reportUnsupported();
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
       legacyCallbacksFor("/wt/a").onConnectionStatus(
         "reconnecting",
         null,
         null,
         null,
       );
-      await vi.advanceTimersByTimeAsync(PRE_OPEN_REDIAL_DEADLINE_MS);
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
+      expect(settled).toBe(false);
 
+      legacyCallbacksFor("/wt/a").onBackoffEntered();
       await expect(promise).resolves.toEqual({
         removed: [],
         failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
@@ -519,6 +554,7 @@ describe("runWorktreeCleanup on an older host", () => {
       });
       expect(legacyMock.paths).toEqual(["/wt/a"]);
       expect(legacyMock.closeCount).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }

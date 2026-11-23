@@ -1,6 +1,7 @@
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   revalidateStream,
+  type RevalidateOutcome,
   type StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -19,17 +20,27 @@ import type {
   RemoteSessionOpenAuth,
 } from "@traycer/protocol/host-transport/remote/auth";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import type { AttachGrantProvider } from "@traycer/protocol/host-transport/remote/grant";
+import type {
+  AttachGrantAttempt,
+  AttachGrantProvision,
+  AttemptGrantProvider,
+} from "@traycer/protocol/host-transport/remote/grant";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import {
   isReleasedHostTokenRefusal,
+  processReleasedHosts,
+  signInMayBeWritten,
+  type HostInstance,
   type ReleasedSignOn,
+  type SignInAuthority,
+  type SignInWriteCheck,
 } from "../released-sign-on";
 import { OPEN_AUTHZ_SESSION_GRANT_VERSION } from "@traycer/protocol/host-transport/mux";
-import type {
-  DoorAdmissionRelease,
-  HostDoorObserver,
+import {
+  instanceDoor,
+  type DoorAdmissionRelease,
+  type HostDoorObserver,
 } from "../host-door-state";
 import type { RemoteTrafficSnapshot } from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
@@ -37,6 +48,7 @@ import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
 import { recordNegotiatedStreamMethodVersions } from "../negotiated-stream-version-registry";
 import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import { UNARY_RESPONSE_TIMEOUT_MS } from "./config";
+import type { RowConfirmationAttach } from "../row-confirmation";
 
 export type { IRemoteSession, SessionLivenessProbe };
 
@@ -170,12 +182,14 @@ export interface RemoteSessionOptions<
 > extends Omit<
   ProtocolRemoteSessionOptions<RpcRegistry, StreamRegistry>,
   | "auth"
+  | "grantProvider"
   | "onNegotiatedMethods"
   | "onNegotiatedStreamMethodVersions"
   | "evidence"
   | "servedStreamMajors"
   | "unaryResponseMs"
 > {
+  readonly grantProvider: SignInBudgetedGrantProvider;
   /**
    * The host-only token, for every host kind: `OPEN` presents it in `authz`
    * v2 with an EMPTY bearer, and a `CREDENTIAL_UPDATE` carries a renewed one
@@ -205,12 +219,16 @@ export interface RemoteReleasedSignOn extends ReleasedSignOn {
   readonly opensReleasedWay: () => boolean;
   /**
    * Where the row {@link opensReleasedWay} reads is a cache that nothing keeps
-   * current, a fresh read of it: asked before an attach whose open would carry
-   * the sign-in, and `false` (that attach goes without the sign-in) when the
-   * read failed or did not answer within its caller's ceiling. `null` where
-   * the row is kept current already.
+   * current, a fresh read of it, waited on before an attach whose open would
+   * carry the sign-in; it is handed that attach, bounds the wait, and starts
+   * no read once the bound passes or the attach ends (`confirmRowWithin`).
+   * Its answer is not read: the row then decides, and a read that failed or
+   * ran past the bound leaves the row last read. `null` where the row is kept
+   * current already.
    */
-  readonly confirmRow: (() => Promise<boolean>) | null;
+  readonly confirmRow:
+    | ((attach: RowConfirmationAttach) => Promise<unknown>)
+    | null;
 }
 
 /**
@@ -310,7 +328,7 @@ function hostTokenOpenAuth(
 
 interface HostTokenSessionDial {
   readonly auth: RemoteSessionAuth;
-  readonly grantProvider: AttachGrantProvider;
+  readonly grantProvider: AttemptGrantProvider;
 }
 
 /** The adapter's view of its own session's end. */
@@ -321,24 +339,132 @@ interface SessionLifetime {
 }
 
 /**
- * This session's place in the door's count of admitted connections: held from
- * the host's admission until the protocol session ends that connection, or
- * this session closes.
+ * A dial sequence: from the first attach after the session starts or a host
+ * admits it, through every redial a refusal causes, to the next admission. It
+ * holds the sequence's one sign-in refresh, shared by every sign-in
+ * revalidation made on its behalf: the attach grant's mint and the released
+ * sign-in's recovery.
+ *
+ * Spent only by a refresh authn answered. One that did not reach it
+ * (`network-error`) leaves it unspent, so an outage keeps the session on its
+ * ordinary backoff and the first answer after it still refreshes. A refresh
+ * writes only to the sequence it started under, so one that answers after an
+ * admission leaves the next sequence whole. The host-token lease's mint
+ * recovery keeps its own.
+ */
+export interface DialSequence {
+  /** The host instance this sequence dials. */
+  readonly owner: HostInstance;
+  /**
+   * Runs `refresh` unless this sequence has spent its refresh (`"spent"`). A
+   * refresh already running for this sequence is joined, never run twice.
+   * `"adopted"` (a sibling's rotation taken from the store) spends nothing:
+   * authn did not answer this sequence. Nor does an answer that finds no
+   * asker still asked (`stillAsked` of the starter and of every joiner): a
+   * retired attempt's answer leaves the budget to the next current one.
+   */
+  readonly spend: (
+    refresh: () => Promise<SignInRefreshOutcome>,
+    stillAsked: () => boolean,
+  ) => Promise<SignInRefreshOutcome | "spent">;
+}
+
+/**
+ * The relay's attach-grant mint, given the sequence whose refresh it may spend
+ * and the attach it is for: once `attempt.current()` is false, its answer
+ * reports nothing and spends nothing.
+ */
+export type SignInBudgetedGrantProvider = (
+  sequence: DialSequence,
+  attempt: AttachGrantAttempt,
+) => Promise<AttachGrantProvision>;
+
+type SignInRefreshOutcome = RevalidateOutcome | "adopted";
+
+function dialSequence(owner: HostInstance): DialSequence {
+  let spent = false;
+  let running: Promise<SignInRefreshOutcome> | null = null;
+  /** The askers of the running refresh: its starter and every joiner. */
+  const askers = new Set<() => boolean>();
+  return {
+    owner,
+    spend: (refresh, stillAsked) => {
+      if (spent) return Promise.resolve("spent");
+      askers.add(stillAsked);
+      if (running !== null) return running;
+      const own = refresh()
+        .then((outcome) => {
+          if (
+            outcome !== "network-error" &&
+            outcome !== "adopted" &&
+            [...askers].some((asked) => asked())
+          )
+            spent = true;
+          return outcome;
+        })
+        .finally(() => {
+          if (running === own) {
+            running = null;
+            askers.clear();
+          }
+        });
+      running = own;
+      return own;
+    },
+  };
+}
+
+/** Who a session's attaches act for, and the door their admissions credit. */
+interface AttachOwners {
+  /** The host instance an attach starting now dials. */
+  readonly current: () => HostInstance;
+  /** Credits an admission by `owner`; one that is not current credits nothing. */
+  readonly credit: (owner: HostInstance) => DoorAdmissionRelease;
+}
+
+/**
+ * This session's dial sequence, and its place in the door's count of admitted
+ * connections: held from the host's admission until the protocol session ends
+ * that connection, or this session closes.
  */
 interface AttachTracking {
-  readonly grantProvider: AttachGrantProvider;
-  readonly admitted: () => DoorAdmissionRelease;
+  readonly grantProvider: AttemptGrantProvider;
+  /**
+   * The live sequence for an answer from `owner`: begun at once where there is
+   * none, or where its instance was replaced. `null` for an answer from an
+   * instance that is no longer current, which spends nothing.
+   */
+  readonly sequence: (owner: HostInstance) => DialSequence | null;
+  readonly admitted: (owner: HostInstance) => DoorAdmissionRelease;
 }
 
 const NOTHING_ADMITTED: DoorAdmissionRelease = () => undefined;
 
 function trackAttaches(
-  grantProvider: AttachGrantProvider,
-  door: HostDoorObserver | null,
+  grantProvider: SignInBudgetedGrantProvider,
+  owners: AttachOwners,
   lifetime: SessionLifetime,
-  beforeGrant: () => Promise<void>,
+  beforeGrant: (attach: RowConfirmationAttach) => Promise<void>,
 ): AttachTracking {
   let release: DoorAdmissionRelease | null = null;
+  let live: DialSequence | null = null;
+  /**
+   * The admitted connection's own sequence: its legs' re-attaches and
+   * re-auths spend this one, never the next dial sequence's. Begun at each
+   * admission.
+   */
+  let admittedLeg: DialSequence | null = null;
+  const liveSequence = (): DialSequence => {
+    const owner = owners.current();
+    if (live === null || live.owner !== owner) live = dialSequence(owner);
+    return live;
+  };
+  const legSequence = (): DialSequence => {
+    const owner = owners.current();
+    if (admittedLeg === null || admittedLeg.owner !== owner)
+      admittedLeg = dialSequence(owner);
+    return admittedLeg;
+  };
   const leave = (): void => {
     const held = release;
     release = null;
@@ -346,14 +472,34 @@ function trackAttaches(
   };
   lifetime.onClose(leave);
   return {
-    grantProvider: async () => {
-      await beforeGrant();
-      return grantProvider();
+    grantProvider: async (attempt) => {
+      // The confirmation ends with the attach: retired, or its session closed.
+      await beforeGrant({
+        current: () => attempt.current() && !lifetime.closed(),
+      });
+      // A retired attach opens no sequence: the session discards its answer.
+      if (!attempt.current())
+        return {
+          kind: "unavailable",
+          detail: "the attach was retired while the row was confirmed",
+          context: "",
+        };
+      const sequence =
+        attempt.leg === "admitted" ? legSequence() : liveSequence();
+      return grantProvider(sequence, {
+        current: () => attempt.current() && sequence.owner === owners.current(),
+        leg: attempt.leg,
+      });
     },
-    admitted: () => {
+    sequence: (owner) => (owner === owners.current() ? liveSequence() : null),
+    admitted: (owner) => {
+      // An admission ends the sequence of the instance that gave it.
+      if (live !== null && live.owner === owner && owner === owners.current())
+        live = null;
+      if (owner === owners.current()) admittedLeg = dialSequence(owner);
       leave();
       if (lifetime.closed()) return NOTHING_ADMITTED;
-      const own = door?.admitted() ?? NOTHING_ADMITTED;
+      const own = owners.credit(owner);
       release = own;
       return () => {
         if (release === own) release = null;
@@ -365,7 +511,7 @@ function trackAttaches(
 
 function createHostTokenRemoteSessionAuth(
   hostId: string,
-  grantProvider: AttachGrantProvider,
+  grantProvider: SignInBudgetedGrantProvider,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: HostDoorObserver | null,
@@ -382,8 +528,14 @@ function createHostTokenRemoteSessionAuth(
       releasedSignOn,
       lifetime,
     );
-  const tracking = trackAttaches(grantProvider, door, lifetime, () =>
-    Promise.resolve(),
+  const tracking = trackAttaches(
+    grantProvider,
+    {
+      current: () => processReleasedHosts.currentInstance(hostId),
+      credit: () => door?.admitted() ?? NOTHING_ADMITTED,
+    },
+    lifetime,
+    () => Promise.resolve(),
   );
   return {
     grantProvider: tracking.grantProvider,
@@ -397,19 +549,29 @@ function createHostTokenRemoteSessionAuth(
         auth === null || auth === undefined
           ? null
           : (refusal) => revalidateStream(auth, refusal),
-      ...(door === null
-        ? {}
-        : {
-            door: {
-              refused: (details: FatalErrorDetails) => {
-                door?.refused(details);
-              },
-              admitted: tracking.admitted,
-            },
-          }),
+      // Present with no observer too: an admission ends the dial sequence.
+      door: {
+        refused: (details: FatalErrorDetails) => {
+          door?.refused(details);
+        },
+        admitted: () =>
+          tracking.admitted(processReleasedHosts.currentInstance(hostId)),
+      },
     },
   };
 }
+
+/**
+ * What the next open presents, and what the open that presented the sign-in
+ * was authorised by. Every frame that carries the sign-in asks
+ * `signInMayBeWritten` of its authority at that write.
+ */
+type SignInPlan =
+  | { readonly kind: "host-token" }
+  | { readonly kind: "sign-in-next"; readonly owner: HostInstance }
+  | { readonly kind: "sign-in"; readonly authority: SignInAuthority };
+
+const HOST_TOKEN_PLAN: SignInPlan = { kind: "host-token" };
 
 /**
  * A dial presents the host-only token first, unless this process remembers the
@@ -422,17 +584,9 @@ function createHostTokenRemoteSessionAuth(
  * carries the sign-in to it. A host that names its reason is never handed the
  * sign-in again.
  */
-/**
- * The no-progress key of every open that carries the sign-in. A refresh that
- * rotates the sign-in is no progress against a host that keeps refusing it
- * bare, so the session's bound ends that loop instead of spending a refresh
- * token on every lap. An open on the host-only token keys on the token.
- */
-const RELEASED_SIGN_IN_FINGERPRINT = "released-sign-in";
-
 function createReleasedSignOnSessionAuth(
   hostId: string,
-  grantProvider: AttachGrantProvider,
+  grantProvider: SignInBudgetedGrantProvider,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: HostDoorObserver | null,
@@ -441,11 +595,45 @@ function createReleasedSignOnSessionAuth(
 ): HostTokenSessionDial {
   const readSignIn = bearerReader(releasedSignOn.signIn);
   const hosts = releasedSignOn.hosts;
-  /** Whether this attach's row read was confirmed, where it must be (`confirmRow`). */
-  let rowConfirmed = true;
-  const rowAllows = (): boolean =>
-    rowConfirmed && releasedSignOn.opensReleasedWay();
-  let plan: "host-token" | "sign-in-next" | "sign-in" = "host-token";
+  // Every admission and refusal names the instance its open was dialed to; one
+  // from an instance this process has since seen replaced reaches no door.
+  const fencedDoor = instanceDoor(
+    {
+      admitted: () => door?.admitted() ?? NOTHING_ADMITTED,
+      refused: (details) => {
+        door?.refused(details);
+      },
+    },
+    hosts,
+  );
+  /**
+   * What the next open presents. A sign-in plan carries the instance it was
+   * made for, and acts only while that instance is current: a plan made for
+   * an instance this process has since seen replaced is dropped, and the new
+   * instance answers its own open first. A host reached only through the relay
+   * keeps one instance for the process's life.
+   */
+  let plan: SignInPlan = HOST_TOKEN_PLAN;
+  const writeCheck: SignInWriteCheck = {
+    hosts,
+    rowAllows: releasedSignOn.opensReleasedWay,
+    ownerSignInEligible: releasedSignOn.ownerSignInEligible,
+  };
+  /** The authority the next open's sign-in would rest on, if one is planned. */
+  const plannedAuthority = (): SignInAuthority | null =>
+    plan.kind === "sign-in-next"
+      ? { kind: "released", owner: plan.owner }
+      : null;
+  const signInPlanned = (): boolean =>
+    plan.kind === "sign-in-next" && hosts.isCurrent(plan.owner);
+  /** Whether a frame written now may carry the sign-in, and on what authority. */
+  const signInGoesNow = (): boolean => {
+    const authority =
+      plan.kind === "sign-in" ? plan.authority : plannedAuthority();
+    return (
+      authority !== null && signInMayBeWritten(writeCheck, authority, false)
+    );
+  };
   let openAdmitted = false;
   let signInFromMemory = false;
   /**
@@ -457,15 +645,16 @@ function createReleasedSignOnSessionAuth(
   /** The person this dial's sign-in is for, while it presents one. */
   let signInUserId: string | null = null;
   /**
-   * One dial sequence spends at most one refresh: set by the first sign-in
-   * refresh, cleared by an admission. A second refusal redials without one,
-   * and the session's no-progress bound ends the sequence.
+   * The host instance the latest open was dialed to, read with it: every
+   * answer to that open acts for it alone. Nothing observes a host reached
+   * only through the relay, so for it this is one instance for the process's
+   * life.
    */
-  let signInRefreshSpent = false;
+  let dialOwner: HostInstance = hosts.currentInstance(hostId);
   const remembered = (): string | null => {
     const lease = releasedSignOn.signIn();
     return lease !== null &&
-      plan !== "sign-in-next" &&
+      !signInPlanned() &&
       hosts.opensReleasedWay(lease.identity.userId, hostId)
       ? lease.identity.userId
       : null;
@@ -473,17 +662,26 @@ function createReleasedSignOnSessionAuth(
   const named = (refusal: FatalErrorDetails): boolean =>
     readDoorReason(refusal.doorReason) !== "absent";
   // Asked at attach start, before the open is read: only an attach whose open
-  // would carry the sign-in waits for the row to be read again.
+  // would carry the sign-in waits for the row to be read again. An attach
+  // begun under a sign-in plan counts: its recovery may still answer before
+  // the open is read, and plan the sign-in for it.
   const confirmRow = releasedSignOn.confirmRow;
-  const tracking = trackAttaches(grantProvider, door, lifetime, async () => {
-    rowConfirmed = true;
-    const wouldPresentSignIn =
-      releasedSignOn.opensReleasedWay() &&
-      !hosts.namedReason(hostId) &&
-      (plan === "sign-in-next" || remembered() !== null);
-    if (confirmRow === null || !wouldPresentSignIn) return;
-    rowConfirmed = await confirmRow().catch(() => false);
-  });
+  const tracking = trackAttaches(
+    grantProvider,
+    {
+      current: () => hosts.currentInstance(hostId),
+      credit: (owner) => fencedDoor.admitted(owner),
+    },
+    lifetime,
+    async (attach) => {
+      const wouldPresentSignIn =
+        releasedSignOn.opensReleasedWay() &&
+        !hosts.namedReason(hostId) &&
+        (plan.kind === "sign-in" || signInPlanned() || remembered() !== null);
+      if (confirmRow === null || !wouldPresentSignIn) return;
+      await confirmRow(attach).catch(() => undefined);
+    },
+  );
   // Only a refusal of this dial's open switches to the sign-in: a current host
   // can end a session it admitted the same way. With no sign-in to present,
   // the refusal takes the host-only token's own path, and so does a row that
@@ -493,29 +691,32 @@ function createReleasedSignOnSessionAuth(
   // again before it sends anything.
   const answersReleasedWay = (refusal: FatalErrorDetails): boolean =>
     isReleasedHostTokenRefusal(refusal) &&
-    (plan === "sign-in" ||
+    (plan.kind === "sign-in" ||
       (!hosts.namedReason(hostId) &&
-        rowAllows() &&
+        releasedSignOn.opensReleasedWay() &&
         !openAdmitted &&
         readSignIn() !== null));
   const recoverSignIn = async (
-    refusal: FatalErrorDetails,
+    sequence: DialSequence,
   ): Promise<RemoteSessionAuthRecoveryOutcome> => {
-    if (signInRefreshSpent) {
-      plan = "sign-in-next";
-      return "rotated";
-    }
-    signInRefreshSpent = true;
     const recovery = releasedSignOn.recovery;
+    if (recovery === null) return "rejected";
     const askedAt = dialsStarted;
-    const outcome =
-      recovery === null
-        ? "rejected"
-        : await revalidateStream(recovery, refusal);
     // A later open owns the plan, and a closed session has none.
-    if (dialsStarted !== askedAt || lifetime.closed()) return outcome;
+    const stillAsked = (): boolean =>
+      dialsStarted === askedAt && !lifetime.closed();
+    const answered = await sequence.spend(
+      () => recovery.revalidateForReconnect(),
+      stillAsked,
+    );
+    // Spent: the redial presents the sign-in it holds, and the session's
+    // no-progress bound ends a sequence the host keeps refusing. Adopted: a
+    // sibling's rotation, presented like one of this sequence's own.
+    const outcome =
+      answered === "spent" || answered === "adopted" ? "rotated" : answered;
+    if (!stillAsked()) return outcome;
     if (outcome === "rotated" || outcome === "network-error")
-      plan = "sign-in-next";
+      plan = { kind: "sign-in-next", owner: sequence.owner };
     // A refusal of the person's sign-in never reaches the door: the session
     // ends on it, or redials.
     return outcome;
@@ -523,64 +724,100 @@ function createReleasedSignOnSessionAuth(
   const recoverHostToken = (
     refusal: FatalErrorDetails,
   ): Promise<RemoteSessionAuthRecoveryOutcome> => {
-    plan = "host-token";
+    plan = HOST_TOKEN_PLAN;
     return auth === null
       ? Promise.resolve("rejected")
       : revalidateStream(auth, refusal);
+  };
+  /**
+   * The sign-in values given to frames (an `open`, a credential update) since
+   * the last sealed frame was asked about, so a sealed frame can say whether it
+   * carries the sign-in: a host-only token never equals one. Writes run one at
+   * a time and each reads its bearer just before its seal, so the frame asked
+   * about next was given its value after the last answer.
+   */
+  const signInsGiven = new Set<string>();
+  const giveSignIn = (signIn: string): string => {
+    signInsGiven.add(signIn);
+    return signIn;
   };
   const sessionAuth: RemoteSessionAuth = {
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
       dialsStarted += 1;
+      signInsGiven.clear();
+      dialOwner = hosts.currentInstance(hostId);
       openAdmitted = false;
-      const allowed = rowAllows();
-      signInFromMemory = allowed && remembered() !== null;
-      // Asked again here: another transport may have heard this host name a
+      signInFromMemory =
+        releasedSignOn.opensReleasedWay() && remembered() !== null;
+      const authority: SignInAuthority | null = signInPlanned()
+        ? plannedAuthority()
+        : signInFromMemory
+          ? { kind: "remembered", owner: dialOwner }
+          : null;
+      // Asked at the write: another transport may have heard this host name a
       // reason since the refusal that planned the sign-in.
       if (
-        allowed &&
-        (plan === "sign-in-next" || signInFromMemory) &&
-        !hosts.namedReason(hostId)
+        authority !== null &&
+        signInMayBeWritten(writeCheck, authority, false)
       ) {
         const lease = releasedSignOn.signIn();
         const signIn = readSignIn();
         if (lease !== null && signIn !== null) {
-          plan = "sign-in";
+          plan = { kind: "sign-in", authority };
           signInUserId = lease.identity.userId;
           return {
-            bearer: signIn,
+            bearer: giveSignIn(signIn),
             authz: null,
-            fingerprint: RELEASED_SIGN_IN_FINGERPRINT,
+            fingerprint: signIn,
           };
         }
       }
       signInFromMemory = false;
       signInUserId = null;
-      plan = "host-token";
+      plan = HOST_TOKEN_PLAN;
       return hostTokenOpenAuth(readHostToken);
+    },
+    // Asked once an open or a credential update is sealed: one carrying the
+    // sign-in goes only while the row, its authority and the host still allow
+    // it. A rotation within a kind is sent as sealed.
+    sealedStillWritable: (bearer) => {
+      const writable = !signInsGiven.has(bearer) || signInGoesNow();
+      signInsGiven.clear();
+      return writable;
     },
     // Once a host names a reason, no transport in this process hands it the
     // released-way sign-in again, until this process sees that host's local
     // process instance change: an admitted sign-in session's update carries
     // the host-only token then, and the fingerprint names what is sent.
-    readCredentialUpdateBearer: () =>
-      plan === "sign-in" && rowAllows() && !hosts.namedReason(hostId)
-        ? readSignIn()
-        : readHostToken(),
+    readCredentialUpdateBearer: () => {
+      if (!(plan.kind === "sign-in" && signInGoesNow())) return readHostToken();
+      const signIn = readSignIn();
+      return signIn === null ? null : giveSignIn(signIn);
+    },
+    // The credential the next frame presents, so a rotated sign-in is
+    // progress and the same one again is not, as in desktop-v1.5.4.
     currentFingerprint: () =>
-      plan === "host-token" || !rowAllows() || hosts.namedReason(hostId)
-        ? readHostToken()
-        : RELEASED_SIGN_IN_FINGERPRINT,
+      signInGoesNow() ? readSignIn() : readHostToken(),
     revalidateForReconnect: (refusal) => {
+      // No sequence for an instance this process has since seen replaced:
+      // nothing its refusal says plans, refreshes or mints for the new one,
+      // which answers its own open first.
+      const sequence = tracking.sequence(dialOwner);
+      if (sequence === null) {
+        signInFromMemory = false;
+        plan = HOST_TOKEN_PLAN;
+        return Promise.resolve("rotated");
+      }
       // Remembered as released, now updated: the next dial presents the token.
       if (signInFromMemory && named(refusal)) {
         signInFromMemory = false;
-        plan = "host-token";
+        plan = HOST_TOKEN_PLAN;
         return Promise.resolve("rotated");
       }
       if (answersReleasedWay(refusal)) {
-        if (plan === "sign-in") return recoverSignIn(refusal);
-        plan = "sign-in-next";
+        if (plan.kind === "sign-in") return recoverSignIn(sequence);
+        plan = { kind: "sign-in-next", owner: dialOwner };
         return Promise.resolve("rotated");
       }
       return recoverHostToken(refusal);
@@ -588,7 +825,7 @@ function createReleasedSignOnSessionAuth(
     door: {
       // Answered by the next dial, or reported once its recovery gives up.
       refused: (details) => {
-        if (named(details)) hosts.refusedNamingReason(hostId);
+        if (named(details)) hosts.refusedNamingReason(dialOwner, false);
         // Only a credential reason is answered by the token dial; any other
         // named reason shows its cover now.
         if (
@@ -596,15 +833,14 @@ function createReleasedSignOnSessionAuth(
           (signInFromMemory && named(details) && isCredentialRefusal(details))
         )
           return;
-        door?.refused(details);
+        fencedDoor.refused(details, dialOwner);
       },
       admitted: () => {
         openAdmitted = true;
-        signInRefreshSpent = false;
-        if (plan === "sign-in" && signInUserId !== null)
-          hosts.signInAdmitted(signInUserId, hostId);
-        else hosts.hostTokenAdmitted(hostId);
-        return tracking.admitted();
+        if (plan.kind === "sign-in" && signInUserId !== null)
+          hosts.signInAdmitted(signInUserId, dialOwner);
+        else hosts.hostTokenAdmitted(dialOwner);
+        return tracking.admitted(dialOwner);
       },
     },
   };

@@ -126,6 +126,7 @@ function hostTokens() {
 
 function messengerFor(target: HostDirectoryEntry) {
   return buildRawHostMessengerForTarget({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     target,
     resolveTarget: () => target,
     hostTokens: hostTokens(),

@@ -52,6 +52,7 @@ import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-s
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
+  type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import {
   cloudVerdictOf,
@@ -764,6 +765,25 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     bearer: BearerSourceProvider,
     cloudAuthorized: () => boolean,
   ): TransportView {
+    return buildHostTransportWith(
+      hostId,
+      bearer,
+      cloudAuthorized,
+      createHostTokenSource({
+        persistence: createMemoryHostTokenPersistence(),
+        mint: () => Promise.resolve({ kind: "no-sign-in" }),
+        signIn: null,
+        now: () => Date.now(),
+      }),
+    );
+  }
+
+  function buildHostTransportWith(
+    hostId: string,
+    bearer: BearerSourceProvider,
+    cloudAuthorized: () => boolean,
+    hostTokens: HostTokenSource,
+  ): TransportView {
     let nextRequestId = 0;
     const transport = createRemoteHostTransport({
       opensReleasedWay: () => false,
@@ -775,12 +795,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
       authnBaseUrl: "https://authn.test",
       hostPublicKey: Buffer.from(relay.publicKey).toString("hex"),
       bearer,
-      hostTokens: createHostTokenSource({
-        persistence: createMemoryHostTokenPersistence(),
-        mint: () => Promise.resolve({ kind: "no-sign-in" }),
-        signIn: null,
-        now: () => Date.now(),
-      }),
+      hostTokens,
       door: null,
       onState: () => undefined,
       cloudAuthorized,
@@ -1465,5 +1480,82 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await advanceUntil(() => relay.verdictUpdates.length === 2, 5_000);
 
     expect(relay.verdictUpdates).toEqual([false, true]);
+  });
+
+  /**
+   * The authn attach-grant endpoint with its `heldCall`th request held until
+   * `answer`. Call `n` is answered with grant `http-grant-n` and host-only
+   * token `host-token-n`.
+   */
+  function stubGrantEndpointHoldingCall(heldCall: number): {
+    readonly calls: () => number;
+    readonly answer: () => void;
+  } {
+    let calls = 0;
+    let answer = (): void => undefined;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => {
+        calls += 1;
+        const own = calls;
+        if (own === heldCall) await answered;
+        const grant = `http-grant-${own}`;
+        relay.recordMint(grant, Date.now(), GRANT_LIFETIME_SECONDS);
+        return new Response(
+          JSON.stringify({
+            grant,
+            role: "client",
+            expires_in: GRANT_LIFETIME_SECONDS,
+            session_grant: `host-token-${own}`,
+            session_grant_expires_in: GRANT_LIFETIME_SECONDS,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+    return { calls: () => calls, answer: () => answer() };
+  }
+
+  it("keeps the held host-only token when a relink claim's grant mint answers ok after its session closed", async () => {
+    const hostId = "host-claim-late-ok";
+    const provider = newProvider();
+    signIn(provider, USER_A, "token-a");
+    const claimMint = stubGrantEndpointHoldingCall(2);
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const view = buildHostTransportWith(
+      hostId,
+      liveBearer(provider),
+      () => true,
+      tokens,
+    );
+    view.start();
+    await advanceUntil(() => view.isReady(), 10_000);
+    expect(tokens.current(USER_A, hostId)?.token).toBe("host-token-1");
+
+    relay.dropLeg(1006, "net");
+    await advanceUntil(() => claimMint.calls() === 2, 10_000);
+    const adopt = vi.spyOn(tokens, "adopt");
+    const eraReads = vi.spyOn(tokens, "era");
+    view.close();
+    retireAllRemoteSessions();
+    const readsBeforeAnswer = eraReads.mock.calls.length;
+    claimMint.answer();
+    // The mint re-reads the era once authn answers: the answer has been taken.
+    await advanceUntil(
+      () => eraReads.mock.calls.length > readsBeforeAnswer,
+      5_000,
+    );
+    await step(0);
+
+    expect(adopt).not.toHaveBeenCalled();
+    expect(tokens.current(USER_A, hostId)?.token).toBe("host-token-1");
   });
 });
