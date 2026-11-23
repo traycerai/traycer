@@ -546,13 +546,20 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // The file is read first, so a sign-in saved elsewhere since counts as
   // replaced; with no refusal known it is not, and the store's own locked
   // rotate adopts a newer file without spending.
+  // After the file read the asker may have gone: it is asked last, beside the
+  // session's own end in refreshSignIn, and a recovery nobody wants rotates
+  // nothing.
   const signInRecovery = {
-    revalidateForReconnect: async (): Promise<SignInRotation> => {
+    revalidateForReconnect: async (
+      _presented: string | null,
+      stillWanted: () => boolean,
+    ): Promise<SignInRotation> => {
       const refused = lastRefused;
       if (refused === null || !mintSentWith.has(refused))
         return refreshSignIn();
       await signIn.adoptStored();
-      return refusedSignInReplaced(refused) ? "adopted" : refreshSignIn();
+      if (refusedSignInReplaced(refused)) return "adopted";
+      return stillWanted() ? refreshSignIn() : "network-error";
     },
   };
   const bearerOf = (hostId: string): OpenFrameBearerSource => ({
@@ -847,16 +854,17 @@ export function cliReleasedSignOn(
     // of a sign-in the person no longer holds is not of the one stored, so it
     // refreshes nothing; the redial presents the stored one.
     recovery: {
-      revalidateForReconnect: async (refused) => {
+      revalidateForReconnect: async (refused, stillWanted) => {
         // With the refused sign-in known, the file is read first: one saved
         // elsewhere since is the stored one. Unknown, the lease stands, and
         // the store's locked rotate adopts a newer file without spending.
         if (refused === null) return tokens.refreshSignIn();
         await tokens.adoptStoredSignIn();
         const stored = readLeaseBearer(lease);
-        return stored !== null && refused !== stored
-          ? "adopted"
-          : tokens.refreshSignIn();
+        if (stored !== null && refused !== stored) return "adopted";
+        // Asked last, after the read: a caller that has gone starts no
+        // rotation.
+        return stillWanted() ? tokens.refreshSignIn() : "network-error";
       },
     },
     hostTokenUnobtainable: (hostId) => tokens.hostTokenUnobtainable(hostId),
