@@ -3676,10 +3676,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       this.goTerminal(details);
       return;
     }
-    this.handleUnauthorizedFatalError(
-      details,
-      this.signInRefusalRecovery(this.socketOwner, recovery),
-    );
+    this.answerSignInRefusal(details, this.socketOwner, recovery);
   }
 
   /**
@@ -3735,11 +3732,48 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       return;
     }
     // Reads the refused plan as a refused sign-in before the plan moves on.
+    this.answerSignInRefusal(details, refusedBy, recovery);
+    this.releasedPlan = "host-token";
+  }
+
+  /**
+   * A refusal of the sign-in, read before the teardown clears what this
+   * connection presented. When this client's sign-in lease now holds a
+   * different sign-in than the one refused, the refusal was not of it: no
+   * recovery runs, the refresh budget and the no-progress count stay as they
+   * are, and one redial presents the held sign-in after the ordinary
+   * reconnect delay. Otherwise the sign-in recovers.
+   */
+  private answerSignInRefusal(
+    details: FatalErrorDetails,
+    refusedBy: HostInstance | null,
+    recovery: SignInRecovery,
+  ): void {
+    const refused = this.usesSessionGrant ? null : this.presentedToken;
+    const held = this.heldSignIn();
+    if (refused !== null && held !== null && held !== refused) {
+      this.teardownSocket(1000, "sign-in-adopted");
+      this.slowClientReconnectStreak = 0;
+      this.lastCloseWasSlowClient = false;
+      this.resetForReconnect(null);
+      this.scheduleReconnect();
+      return;
+    }
     this.handleUnauthorizedFatalError(
       details,
       this.signInRefusalRecovery(refusedBy, recovery),
     );
-    this.releasedPlan = "host-token";
+  }
+
+  /** The sign-in this client's lease holds now, or `null` when it holds none. */
+  private heldSignIn(): string | null {
+    try {
+      return extractBearerForOpenFrame(
+        this.config.releasedSignOn?.signIn() ?? null,
+      );
+    } catch {
+      return null;
+    }
   }
 
   /**
