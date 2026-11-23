@@ -1,4 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -11,6 +12,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import { SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED } from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxFailedChatActions,
   SandboxFailedRowActions,
@@ -18,6 +20,7 @@ import {
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
   createFakeSandboxBinding,
+  refusal,
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { createSandboxRetryWalkFake } from "@/hooks/sandboxes/__tests__/sandbox-retry-walk-fake";
@@ -199,6 +202,25 @@ function renderFailedRowWithSummary(options: {
     queryClient: options.queryClient,
     rows: [{ key: "failed-row", summary: options.summary }],
   });
+}
+
+function RefreshableFailedRowSummary(props: {
+  readonly initial: SandboxSummary;
+  readonly refreshed: SandboxSummary;
+}): ReactNode {
+  const [summary, setSummary] = useState(props.initial);
+  return (
+    <>
+      <button type="button" onClick={() => setSummary(props.refreshed)}>
+        Refresh row
+      </button>
+      <SandboxFailedRowActions
+        summary={summary}
+        configuration={PERSONAL_CONFIGURATION}
+        credits={PERSONAL_CONFIGURATION}
+      />
+    </>
+  );
 }
 
 function renderFailedChatActions(
@@ -816,75 +838,192 @@ describe("SandboxFailedRowActions Retry", () => {
     view.unmount();
   });
 
-  it("lets a second window reach the same refused Retry key while the first press is pending", async () => {
+  it("keeps a failed row's canonical Retry payload after a row-less shape 400", async () => {
     const user = userEvent.setup();
     const binding = createFakeSandboxBinding();
-    const firstAnswer = Promise.withResolvers<SandboxCreateFetchResult>();
-    const keys: Array<string | null> = [];
-    const reservedKeys = new Set<string>();
-    let newReservations = 0;
-    binding.auth.createSandbox.mockImplementation((request) => {
-      const key = request.clientRequestId;
-      if (key === null) throw new Error("Retry did not send a key");
-      keys.push(key);
-      if (!reservedKeys.has(key)) {
-        reservedKeys.add(key);
-        newReservations += 1;
-      }
-      return keys.length === 1
-        ? firstAnswer.promise
-        : Promise.resolve(refusedCreate());
+    const queryClient = createQueryClient();
+    const initialSummary = failedRowSummaryWith({
+      displayName: "origin/main hook",
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      region: "us-east",
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 720,
+      createdByTaskId: "origin-task",
     });
-
-    const firstWindow = renderFailedRow(
-      binding,
-      PERSONAL_CONFIGURATION,
-      "editor",
-      createQueryClient(),
-    );
-    const firstRetry = await within(firstWindow.container).findByRole(
-      "button",
-      {
-        name: "Retry",
-      },
-    );
-    const secondWindow = renderFailedRow(
-      binding,
-      PERSONAL_CONFIGURATION,
-      "editor",
-      createQueryClient(),
-    );
-    const secondRetry = await within(secondWindow.container).findByRole(
-      "button",
-      { name: "Retry" },
-    );
-    signInAs("account-a");
-    await user.click(firstRetry);
-    await waitFor(() => expect(keys).toHaveLength(1));
-    await user.click(secondRetry);
-    await waitFor(() => expect(keys).toHaveLength(2));
-    act(() => firstAnswer.resolve(refusedCreate()));
-    await waitFor(() => {
-      expect(firstRetry).toHaveProperty("disabled", false);
-      expect(secondRetry).toHaveProperty("disabled", false);
+    const refreshedSummary = failedRowSummaryWith({
+      displayName: "refreshed row name",
+      os: "linux",
+      cpus: 6,
+      memoryMb: 12_288,
+      diskMb: 61_440,
+      region: "us-east",
+      idleMinutes: 15,
+      destroyAfterRestingMinutes: 360,
+      createdByTaskId: "refreshed-task",
     });
-    await user.click(firstRetry);
-    await waitFor(() => expect(keys).toHaveLength(3));
-    await waitFor(() => expect(firstRetry).toHaveProperty("disabled", false));
-    await user.click(secondRetry);
-    await waitFor(() => expect(keys).toHaveLength(4));
-    await waitFor(() => expect(secondRetry).toHaveProperty("disabled", false));
+    const savedRequest = {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      region: "us-east",
+      displayName: "origin/main hook",
+      idleMinutes: 30,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: "env-acme",
+      destroyAfterRestingMinutes: 720,
+      createdByTaskId: "origin-task",
+      clientRequestId: `retry:${FAILED_SANDBOX_ID}`,
+    };
+    binding.auth.createSandbox
+      .mockResolvedValueOnce(
+        refusal(400, SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED),
+      )
+      .mockResolvedValueOnce({ kind: "network-error", detail: "offline" });
+    const billingAnswer = { kind: "ready", role: "editor" } as const;
+    const onBinding = (
+      runtimeBinding: HostRuntimeBinding<HostRpcRegistry>,
+    ): void => {
+      vi.spyOn(runtimeBinding.auth, "getTeamEnvironment").mockImplementation(
+        (teamId) => binding.auth.getTeamEnvironment(teamId),
+      );
+      vi.spyOn(runtimeBinding.auth, "createSandbox").mockImplementation(
+        (request) => binding.auth.createSandbox(request),
+      );
+    };
+    const view = render(
+      <SandboxBillingRuntime
+        answer={billingAnswer}
+        hostId="billing-host"
+        environmentId="env-acme"
+        queryClient={queryClient}
+        onBinding={onBinding}
+        onEnvironmentListRead={null}
+      >
+        <RefreshableFailedRowSummary
+          initial={initialSummary}
+          refreshed={refreshedSummary}
+        />
+      </SandboxBillingRuntime>,
+    );
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("viewer");
 
-    expect(keys).toEqual([
-      `retry:${FAILED_SANDBOX_ID}`,
-      `retry:${FAILED_SANDBOX_ID}`,
-      `retry:${FAILED_SANDBOX_ID}`,
-      `retry:${FAILED_SANDBOX_ID}`,
+    await user.click(retry);
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(retry).toHaveProperty("disabled", false));
+    expect(
+      queryClient
+        .getMutationCache()
+        .getAll()
+        .map(({ state }) => state.error),
+    ).toContainEqual(expect.objectContaining({ nextRequest: savedRequest }));
+    await user.click(screen.getByRole("button", { name: "Refresh row" }));
+    expect(
+      await screen.findByRole("button", { name: "Destroy refreshed row name" }),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+
+    await user.click(retry);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(2));
+    expect(binding.auth.createSandbox.mock.calls).toMatchObject([
+      [savedRequest],
+      [savedRequest],
     ]);
-    expect(binding.auth.createSandbox).toHaveBeenCalledTimes(4);
-    expect(newReservations).toBe(1);
-    firstWindow.unmount();
-    secondWindow.unmount();
+    expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2);
+    view.unmount();
+  });
+
+  it("reports a joined destroying row, then reuses the pressed key and walks after it is destroyed", async () => {
+    const user = userEvent.setup();
+    const binding = createFakeSandboxBinding();
+    const transitioningRow = sandboxSummaryFixture({
+      id: "holder-under-destroy",
+      hostId: "host-holder-under-destroy",
+      state: "destroying",
+      displayName: "origin/main hook",
+    });
+    const destroyedRow = { ...transitioningRow, state: "destroyed" as const };
+    const awakeRow = sandboxSummaryFixture({
+      id: "awake-after-destroy",
+      hostId: "host-awake-after-destroy",
+      state: "awake",
+      displayName: "origin/main hook",
+    });
+    binding.auth.createSandbox
+      .mockResolvedValueOnce({
+        kind: "ok",
+        joined: true,
+        accepted: {
+          sandboxId: transitioningRow.id,
+          hostId: transitioningRow.hostId,
+          sandbox: transitioningRow,
+        },
+      })
+      .mockResolvedValueOnce({
+        kind: "ok",
+        joined: true,
+        accepted: {
+          sandboxId: destroyedRow.id,
+          hostId: destroyedRow.hostId,
+          sandbox: destroyedRow,
+        },
+      })
+      .mockResolvedValueOnce({
+        kind: "ok",
+        accepted: {
+          sandboxId: awakeRow.id,
+          hostId: awakeRow.hostId,
+          sandbox: awakeRow,
+        },
+      });
+    const view = renderFailedRowWithSummary({
+      binding,
+      configuration: PERSONAL_CONFIGURATION,
+      environmentRole: "editor",
+      queryClient: createQueryClient(),
+      summary: failedRowSummaryWith({ displayName: "origin/main hook" }),
+    });
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("viewer");
+
+    await user.click(retry);
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+    expect(mocks.toastError).toHaveBeenCalledWith(
+      "This sandbox is changing state. Try again in a moment.",
+    );
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1);
+    expect(binding.auth.createSandbox.mock.calls[0]?.[0].clientRequestId).toBe(
+      `retry:${FAILED_SANDBOX_ID}`,
+    );
+    await waitFor(() => expect(retry).toHaveProperty("disabled", false));
+
+    await user.click(retry);
+    await waitFor(() =>
+      expect(mocks.toastSuccess).toHaveBeenCalledWith(
+        "Created origin/main hook",
+      ),
+    );
+    expect(binding.auth.createSandbox).toHaveBeenCalledTimes(3);
+    expect(
+      binding.auth.createSandbox.mock.calls.map(
+        ([request]) => request.clientRequestId,
+      ),
+    ).toEqual([
+      `retry:${FAILED_SANDBOX_ID}`,
+      `retry:${FAILED_SANDBOX_ID}`,
+      "retry:holder-under-destroy",
+    ]);
+    view.unmount();
   });
 
   it("stops at a joined destroyed credit-gate row before the next Retry", async () => {

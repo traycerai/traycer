@@ -38,7 +38,10 @@ import type {
   SandboxCreateFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
-import { SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT } from "@traycer/protocol/host/sandbox-control";
+import {
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+} from "@traycer/protocol/host/sandbox-control";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { createSandboxRetryWalkFake } from "@/hooks/sandboxes/__tests__/sandbox-retry-walk-fake";
@@ -448,6 +451,26 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       });
     }
 
+    function joinedRow(
+      sandboxId: string,
+      state: "awake" | "destroying" | "destroyed",
+    ): SandboxCreateFetchResult {
+      return {
+        kind: "ok",
+        joined: true,
+        accepted: {
+          sandboxId,
+          hostId: `host-${sandboxId}`,
+          sandbox: sandboxSummaryFixture({
+            id: sandboxId,
+            environmentId: "env-new",
+            state,
+            displayName: "Team bots",
+          }),
+        },
+      };
+    }
+
     it("shows the named refusal when HTTP 200 joins a destroyed credit-gate row", async () => {
       const user = userEvent.setup();
       auth().createSandbox.mockResolvedValue({
@@ -511,6 +534,169 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(auth().createSandbox.mock.calls[0]?.[0].displayName).toBe(
         "Team bots",
       );
+    });
+
+    it("retries a row-less shape refusal with refreshed defaults under the same team key", async () => {
+      const user = userEvent.setup();
+      auth()
+        .createSandbox.mockResolvedValueOnce(
+          refusal(400, SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED),
+        )
+        .mockResolvedValueOnce({
+          kind: "ok",
+          accepted: {
+            sandboxId: "sbx_team_shape_retry",
+            hostId: "host-team-shape-retry",
+            sandbox: sandboxSummaryFixture({
+              id: "sbx_team_shape_retry",
+              environmentId: "env-new",
+              displayName: "Team bots",
+            }),
+          },
+        });
+      const view = render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+
+      await user.click(enableButton());
+      expect(
+        (await within(cloudOption()).findByRole("alert")).textContent,
+      ).toBe("That size is outside what's offered.");
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      expect(auth().createSandbox.mock.calls[0]?.[0]).toMatchObject({
+        clientRequestId: "team-setup:env-new",
+        cpus: 4,
+        memoryMb: 8192,
+        diskMb: 40960,
+        destroyAfterRestingMinutes: 1_440,
+      });
+
+      const defaults = mocks.sandboxDefaults;
+      if (defaults.kind !== "ready")
+        throw new Error("expected team sandbox defaults");
+      const revision = defaults.value.revision;
+      if (revision === null)
+        throw new Error("expected a versioned defaults catalogue");
+      const defaultShape = defaults.value.defaults;
+      if (defaultShape === null)
+        throw new Error("expected a team sandbox default shape");
+      mocks.sandboxDefaults = {
+        kind: "ready",
+        value: {
+          ...defaults.value,
+          revision: revision + 1,
+          defaults: {
+            ...defaultShape,
+            cpus: 6,
+            memoryMb: 12_288,
+            diskMb: 61_440,
+            idleMinutes: 30,
+            restingMinutes: 720,
+          },
+        },
+      };
+      view.rerender(surfaceFor(SETUP_BOT_ID));
+
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(sandboxToastSpies.success).toHaveBeenCalledWith(
+          "Created Team bots",
+        ),
+      );
+      expect(auth().createSandbox).toHaveBeenCalledTimes(2);
+      expect(auth().createSandbox.mock.calls[1]?.[0]).toMatchObject({
+        clientRequestId: "team-setup:env-new",
+        cpus: 6,
+        memoryMb: 12_288,
+        diskMb: 61_440,
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 720,
+      });
+    });
+
+    it("stops at a joined destroying hop and restarts the next press from the team's key", async () => {
+      const user = userEvent.setup();
+      const firstHop = Promise.withResolvers<SandboxCreateFetchResult>();
+      const transitionHop = Promise.withResolvers<SandboxCreateFetchResult>();
+      const restartedPress = Promise.withResolvers<SandboxCreateFetchResult>();
+      auth()
+        .createSandbox.mockImplementationOnce(() => firstHop.promise)
+        .mockImplementationOnce(() => transitionHop.promise)
+        .mockImplementationOnce(() => restartedPress.promise)
+        .mockResolvedValueOnce(joinedRow("team-holder-2", "destroyed"))
+        .mockResolvedValueOnce({
+          kind: "ok",
+          accepted: {
+            sandboxId: "team-awake-row",
+            hostId: "host-team-awake-row",
+            sandbox: sandboxSummaryFixture({
+              id: "team-awake-row",
+              environmentId: "env-new",
+              displayName: "Team bots",
+            }),
+          },
+        });
+      render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1),
+      );
+      expect(enableButton()).toHaveProperty("disabled", true);
+      act(() => firstHop.resolve(joinedRow("team-holder-1", "destroyed")));
+      await waitFor(() =>
+        expect(auth().createSandbox).toHaveBeenCalledTimes(2),
+      );
+      act(() =>
+        transitionHop.resolve(joinedRow("team-holder-2", "destroying")),
+      );
+
+      expect(
+        (await within(cloudOption()).findByRole("alert")).textContent,
+      ).toBe("This sandbox is changing state. Try again in a moment.");
+      expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+      expect(auth().createSandbox).toHaveBeenCalledTimes(2);
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      expect(
+        auth().createSandbox.mock.calls.map(
+          ([request]) => request.clientRequestId,
+        ),
+      ).toEqual(["team-setup:env-new", "retry:team-holder-1"]);
+
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(auth().createSandbox).toHaveBeenCalledTimes(3),
+      );
+      const restartedKey =
+        auth().createSandbox.mock.calls[2]?.[0].clientRequestId;
+      act(() =>
+        restartedPress.resolve(joinedRow("team-holder-1", "destroyed")),
+      );
+      expect(restartedKey).toBe("team-setup:env-new");
+      await waitFor(() =>
+        expect(sandboxToastSpies.success).toHaveBeenCalledWith(
+          "Created Team bots",
+        ),
+      );
+      expect(
+        auth().createSandbox.mock.calls.map(
+          ([request]) => request.clientRequestId,
+        ),
+      ).toEqual([
+        "team-setup:env-new",
+        "retry:team-holder-1",
+        "team-setup:env-new",
+        "retry:team-holder-1",
+        "retry:team-holder-2",
+      ]);
     });
 
     it("creates the team's kept sandbox in the team's environment, in the configuration's default shape and region, holding the button while it is created", async () => {

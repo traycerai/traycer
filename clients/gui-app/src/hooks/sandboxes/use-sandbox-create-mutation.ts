@@ -4,13 +4,17 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxControlFailure,
+  SandboxCreateFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+  SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   type SandboxCreateAccepted,
   type SandboxCreateRequest,
 } from "@traycer/protocol/host/sandbox-control";
@@ -75,6 +79,25 @@ export function sandboxCreatePressRequest(
   }
   if (previous.error !== null) return previous.variables?.request ?? initial;
   return initial;
+}
+
+function nextCreateRequest(
+  refusal: SandboxControlFailure,
+  request: SandboxCreateRequest,
+  attempted: SandboxCreateRequest,
+): SandboxCreateRequest | null {
+  const retryCreate = sandboxRetryAfterRefusal(refusal, attempted);
+  if (retryCreate !== null) return retryCreate;
+  if (refusal.kind !== "refused") return request;
+  if (refusal.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT)
+    return attempted;
+  if (refusal.code !== SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) return request;
+  // An unreserved team setup can use the current defaults under its base key.
+  return refusal.status === 400 &&
+    attempted === request &&
+    request.clientRequestId?.startsWith("team-setup:") === true
+    ? null
+    : attempted;
 }
 
 /** One press can pass previous destroyed attempts and reserve at most one row. */
@@ -165,6 +188,14 @@ export function useSandboxCreate(
       if (result.kind === "ok") {
         const { accepted } = result;
         const sandbox = accepted.sandbox;
+        if (result.joined === true && sandbox.state === "destroying") {
+          const code = SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT;
+          throw new SandboxCreateError(
+            sandboxFailureCodeMessage(code),
+            code,
+            request,
+          );
+        }
         const joinedFailed =
           result.joined === true && sandbox.state === "failed";
         if (!joinedFailed && sandbox.state !== "destroyed") return accepted;
@@ -182,7 +213,6 @@ export function useSandboxCreate(
         );
       }
       const code = result.kind === "refused" ? result.code : null;
-      const retryCreate = sandboxRetryAfterRefusal(result, attempted);
       // A refusal for the team's credits tells only a buyer how much to add.
       throw new SandboxCreateError(
         sandboxFailureMessageFor(
@@ -191,11 +221,7 @@ export function useSandboxCreate(
           { buysTeamCredits, teamName },
         ),
         code,
-        retryCreate ??
-          (code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT ||
-          code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED
-            ? attempted
-            : request),
+        nextCreateRequest(result, request, attempted),
       );
     },
     onSuccess: (_accepted, { request }, context) => {
