@@ -87,6 +87,8 @@ const harness = vi.hoisted(() => ({
   table: new Map() as HostTokenTable,
   /** How many of the first requests are held; every later one is answered ok. */
   hold: 0,
+  /** Requests sent with these sign-ins are refused at once, whatever else is held. */
+  refuseSignIns: null as ReadonlySet<string> | null,
   /** When set, instead of `hold`: exactly the requests sent with these sign-ins are held. */
   holdOnly: null as ReadonlySet<string> | null,
   /** Set while the test itself refreshes the sign-in. */
@@ -101,6 +103,10 @@ const harness = vi.hoisted(() => ({
   onGate: null as (() => void) | null,
   /** While set, an adopting read of the credentials file waits here before it reads. */
   readGate: null as Promise<void> | null,
+  /** Adopting reads that pass before the read gate takes effect. */
+  readSkip: 0,
+  /** The gate holds one read, then is gone. */
+  readOnce: false,
   /** The next rotation the code under test starts waits here after it commits, before it resumes. */
   resumeGate: null as Promise<void> | null,
   /** The next read of the token file waits here. */
@@ -284,7 +290,9 @@ vi.mock(
             harness.holdOnly !== null
               ? harness.holdOnly.has(signIn)
               : seq < harness.hold;
-          if (!held)
+          if (harness.refuseSignIns?.has(signIn) === true)
+            request.answer({ kind: "sign-in-rejected" });
+          else if (!held)
             request.answer({
               kind: "ok",
               token: {
@@ -383,6 +391,9 @@ beforeEach(async () => {
   harness.table = new Map();
   harness.hold = 0;
   harness.holdOnly = null;
+  harness.refuseSignIns = null;
+  harness.readSkip = 0;
+  harness.readOnce = false;
   harness.testRotating = false;
   hostCount += 1;
   userId = `user-${hostCount}`;
@@ -476,6 +487,15 @@ function holdReads(): () => void {
   };
 }
 
+/** Lets `skip` adopting reads pass, then holds the next one until the returned release. */
+function holdOneReadAfter(skip: number): () => void {
+  const held = makeGate();
+  harness.readSkip = skip;
+  harness.readOnce = true;
+  harness.readGate = held.gate;
+  return held.release;
+}
+
 /** Holds the next rotation after it commits, until the returned release. */
 function holdNextRotationResume(): () => void {
   const held = makeGate();
@@ -508,8 +528,30 @@ async function rotateThenResume(
 }
 
 async function adoptAfterGate(adopt: () => Promise<void>): Promise<void> {
-  await atGate(harness.readGate);
+  if (harness.readSkip > 0) {
+    harness.readSkip -= 1;
+  } else {
+    const gate = harness.readGate;
+    if (harness.readOnce) {
+      harness.readGate = null;
+      harness.readOnce = false;
+    }
+    await atGate(gate);
+  }
   await adopt();
+}
+
+/** Settles once a request sent with `signIn` is held for the test's answer. */
+function untilHeldOn(signIn: string): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const check = (): void => {
+      if (heldOn(signIn, "oldest") === undefined) return;
+      harness.onRequest = null;
+      resolve();
+    };
+    harness.onRequest = check;
+    check();
+  });
 }
 
 /** Settles once authn has been sent `count` requests. */
@@ -1622,5 +1664,203 @@ describe("model J: nothing starts for an ended owner", () => {
     loadHold.release();
     await Promise.all(open.pending);
     expect(harness.requests).toHaveLength(0);
+  });
+});
+
+describe("model H: P to Q re-owning through the lease's recovery", () => {
+  it("P's revalidator acts on nothing, and the recovery-call count stays within the bound", async () => {
+    const open = await prepare("one process", [SIGN_IN_A]);
+    harness.refuseSignIns = new Set([SIBLING_SIGN_IN]);
+    // The recovery of A's refusal finds no refresh to take: authn is not asked
+    // again for it, so P is left holding its refusal of A.
+    credentialsFile.refreshed.splice(0);
+    await step(open, "P's mint is sent with A", async () => {
+      startAsk(open, hostId);
+      await untilRequests(1);
+    });
+    await step(open, "A is refused: counting, held for P", async () => {
+      answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
+    });
+    await step(open, "a sibling saves B and the lease adopts it", async () => {
+      await open.otherProcess.signIn(
+        credentialsOf(SIBLING_SIGN_IN),
+        false,
+        null,
+      );
+      await open.tokens.adoptStoredSignIn();
+    });
+    // The lease's recovery is built while P is current.
+    const recoveryOfP = open.tokens.streamRecovery(hostId);
+    await step(open, "P is replaced by Q", async () => {
+      processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+    });
+    // Q's mint of B is refused, through P's revalidator.
+    let outcome = "";
+    await step(
+      open,
+      "P's revalidator recovers for the host: Q's refusal of B",
+      async () => {
+        outcome = await recoveryOfP.revalidateForReconnect();
+      },
+    );
+    expect(outcome).toBe("network-error");
+    await finish(open);
+  });
+});
+
+describe("model O5: two recoveries each rotating, a third host having bought on the newest sign-in", () => {
+  it("X's counting refusal of C is not final, so X gets one more recovery", async () => {
+    const C = "sign-in-recovery-1";
+    const open = await prepare("two host ids", [SIGN_IN_A, OURS, C]);
+    await step(open, "X's mint is sent with A", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(SIGN_IN_A);
+    });
+    await step(
+      open,
+      "A is refused: X rotates A to B and retries on it",
+      async () => {
+        answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
+        await untilHeldOn(OURS);
+      },
+    );
+    await step(open, "meanwhile Y rotates B to C", () => rotateByTest(open));
+    await step(open, "a third host buys a token on C", async () => {
+      startAsk(open, otherHostId);
+      await untilHeldOn(C);
+      answerRequest(heldOn(C, "oldest"), "a token");
+    });
+    await step(
+      open,
+      "X's retry on B gets a stale refusal and re-asks on C",
+      async () => {
+        answerRequest(heldOn(OURS, "oldest"), "a 401");
+        await untilHeldOn(C);
+      },
+    );
+    await step(
+      open,
+      "X's retry on C is refused: counting, not final",
+      async () => {
+        answerRequest(heldOn(C, "oldest"), "a 401");
+      },
+    );
+    await finish(open);
+  });
+});
+
+describe("model (e): two recoveries sharing one refused flight", () => {
+  it("one is answered rotated and the other adopted, and both retries are refused on the rotated sign-in: final, no further rotation", async () => {
+    const open = await prepare("one process", [SIGN_IN_A, OURS]);
+    await step(
+      open,
+      "two mints of the host share one request sent with A",
+      async () => {
+        startAsk(open, hostId);
+        await untilHeldOn(SIGN_IN_A);
+        startAsk(open, hostId);
+      },
+    );
+    await step(open, "A is refused for both", async () => {
+      answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
+    });
+    for (let pass = 0; pass < 3; pass += 1) {
+      const retry = heldOn(OURS, "oldest");
+      if (retry === undefined) break;
+      await step(
+        open,
+        `a retry on the rotated sign-in is refused (${pass + 1})`,
+        async () => {
+          answerRequest(retry, "a 401");
+        },
+      );
+    }
+    expect(nonTestRotations()).toBe(1);
+    await finish(open);
+  });
+});
+
+describe("model: two overlapping refreshes in one process, the second superseded", () => {
+  it("the first's sign-in is kept, the retries' refusal of it is final, and nothing rotates again", async () => {
+    const open = await prepare("one process", [OURS]);
+    await step(open, "two refreshes overlap", async () => {
+      harness.testRotating = true;
+      try {
+        const first = open.tokens.refreshSignIn();
+        const second = open.tokens.refreshSignIn();
+        open.pending.push(first, second);
+        await Promise.all([first, second]);
+      } finally {
+        harness.testRotating = false;
+      }
+    });
+    await step(open, "a mint is sent with the installed sign-in", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(OURS);
+    });
+    await step(open, "it is refused: counting, final", async () => {
+      answerRequest(heldOn(OURS, "oldest"), "a 401");
+    });
+    expect(nonTestRotations()).toBe(0);
+    await finish(open);
+  });
+});
+
+describe("model gap 2: a recovery for a known refusal of A, held at its adopting read", () => {
+  it("answers adopted and rotates nothing when the lease has moved to B and B's refusal is recorded meanwhile", async () => {
+    const open = await prepare("one process", [SIGN_IN_A, OURS]);
+    await step(open, "a mint is sent with A", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(SIGN_IN_A);
+    });
+    const release = holdOneReadAfter(1);
+    await step(
+      open,
+      "A is refused: counting; its recovery waits at its adopting read",
+      async () => {
+        answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
+      },
+    );
+    await step(open, "our rotation moves the lease to B", () =>
+      rotateByTest(open),
+    );
+    await step(
+      open,
+      "another mint of the host is sent with B and refused: final",
+      async () => {
+        startAsk(open, hostId);
+        await untilHeldOn(OURS);
+        answerRequest(heldOn(OURS, "oldest"), "a 401");
+      },
+    );
+    await step(open, "the recovery's read is released", async () => {
+      release();
+    });
+    expect(nonTestRotations()).toBe(0);
+    await finish(open);
+  });
+
+  it("rotates nothing when the host process is replaced during the wait", async () => {
+    const open = await prepare("one process", [SIGN_IN_A]);
+    await step(open, "a mint is sent with A", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(SIGN_IN_A);
+    });
+    const release = holdOneReadAfter(1);
+    await step(
+      open,
+      "A is refused: counting; its recovery waits at its adopting read",
+      async () => {
+        answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
+      },
+    );
+    await step(open, "the host process is replaced", async () => {
+      processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+    });
+    await step(open, "the recovery's read is released", async () => {
+      release();
+    });
+    expect(nonTestRotations()).toBe(0);
+    await finish(open);
   });
 });
