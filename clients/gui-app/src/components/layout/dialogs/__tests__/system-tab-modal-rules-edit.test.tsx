@@ -104,6 +104,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
       setScopedHostId: () => undefined,
     },
     usePersonalHostScope: useHostScope,
+    usePickHostScope: useHostScope,
+    useHostScopeForHostId: useHostScope,
   };
 });
 vi.mock(
