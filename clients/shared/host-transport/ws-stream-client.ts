@@ -2738,6 +2738,9 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       dialPriorityForMethod(this.config.method),
     );
     this.activeSocket = socket;
+    // The instance this dial is for, observed as the socket is committed to
+    // it: an instance observed later never answered this connection.
+    this.socketOwner = this.config.hosts.currentInstance(selected.hostId);
     if (this.usesSessionGrant) this.openFrameToken = token;
     this.openAcknowledged = false;
     this.openFrameHostId = selected.hostId;
@@ -2813,13 +2816,18 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
 
     const hostId = this.openFrameHostId;
     if (hostId === null) return;
-    // The owner of this socket's answers is the instance current as its open
-    // frame is written. The sign-in goes only where it still may, asked again
-    // here, synchronously before the write, because the dial can wait for a
-    // slot: the plan's owner, the row, a reason another transport heard, and
-    // the invitation.
-    const owner = this.config.hosts.currentInstance(hostId);
-    this.socketOwner = owner;
+    // A dial whose instance the host has since left writes no open frame: its
+    // socket is lost like one an earlier instance answers, and the next dial
+    // asks the instance now observed. The sign-in goes only where it still
+    // may, asked again here, synchronously before the write, because the dial
+    // can wait for a slot: the plan's owner, the row, a reason another
+    // transport heard, and the invitation.
+    const owner = this.socketOwner;
+    if (owner === null || !this.config.hosts.isCurrent(owner)) {
+      this.teardownSocket(1000, "earlier-host-instance");
+      this.onTransportDrop();
+      return;
+    }
     if (this.releasedPlan !== "host-token" && this.signInWithdrawn(true))
       this.releasedPlan = "host-token";
     // A queued dial must still belong to its signed-in user at OPEN. Keep a
