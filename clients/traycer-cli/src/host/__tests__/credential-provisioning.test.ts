@@ -455,6 +455,7 @@ function probeSignal(): AbortSignal {
 function fatalReason(reason: string, code: string): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code,
       reason,
@@ -619,7 +620,7 @@ describe("provisionInstalledHostCredential", () => {
             void revalidateRefused(refusal).catch(() => undefined);
             session.emitStatus(
               "closed",
-              { kind: "fatalError", details: refusal },
+              { kind: "fatalError", signInVerdict: null, details: refusal },
               undefined,
             );
           })();

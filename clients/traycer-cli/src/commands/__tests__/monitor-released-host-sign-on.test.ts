@@ -386,28 +386,32 @@ vi.mock("../../internal/cli-host-tokens", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/cli-host-tokens")>();
   return {
     ...actual,
-    createCliHostTokens: (
-      options: Parameters<typeof actual.createCliHostTokens>[0],
+    acquireCliSignIn: async (
+      ...args: Parameters<typeof actual.acquireCliSignIn>
     ) => {
-      const tokens = actual.createCliHostTokens(options);
+      const handle = await actual.acquireCliSignIn(...args);
+      const tokens = handle.tokens;
       return {
-        ...tokens,
-        streamRecovery: (hostId: string) => {
-          const recovery = tokens.streamRecovery(hostId);
-          return {
-            ...recovery,
-            revalidateRefused: async (
-              refusal: Parameters<typeof recovery.revalidateRefused>[0],
-              stillWanted: Parameters<typeof recovery.revalidateRefused>[1],
-            ) => {
-              const outcome = await recovery.revalidateRefused(
-                refusal,
-                stillWanted,
-              );
-              monitorHarness.state.recovered = true;
-              return outcome;
-            },
-          };
+        ...handle,
+        tokens: {
+          ...tokens,
+          streamRecovery: (hostId: string) => {
+            const recovery = tokens.streamRecovery(hostId);
+            return {
+              ...recovery,
+              revalidateRefused: async (
+                refusal: Parameters<typeof recovery.revalidateRefused>[0],
+                stillWanted: Parameters<typeof recovery.revalidateRefused>[1],
+              ) => {
+                const outcome = await recovery.revalidateRefused(
+                  refusal,
+                  stillWanted,
+                );
+                monitorHarness.state.recovered = true;
+                return outcome;
+              },
+            };
+          },
         },
       };
     },
@@ -1894,7 +1898,13 @@ describe("traycer monitor local released-host sign-in", () => {
       await vi.advanceTimersByTimeAsync(6_000);
 
       expect(fatalLinesPrinted()).toEqual([]);
-      const redial = await socketAt(2);
+      // The withdrawn verdict reopens a new stream, whose dial sequence on
+      // this machine's door opens with the host-only token probe; the sign-in
+      // goes only after that sequence's own refusal, bare as the released host's.
+      const reopened = await socketAt(2);
+      expect((await readOpen(reopened)).token).toBe(NO_HOST_TOKEN_PROBE);
+      reopened.fireFrame(bareRefusal());
+      const redial = await socketAt(3);
       expect((await readOpen(redial)).token).toBe("sibling-sign-in");
       expect(ended).toBeNull();
       expect(monitorHarness.exits).toEqual([]);

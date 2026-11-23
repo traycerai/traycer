@@ -3190,6 +3190,7 @@ describe("WsStreamClient", () => {
     expect(inertStatuses[0].status).toBe("closed");
     expect(inertStatuses[0].reason).toEqual({
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "CLIENT_CLOSED",
         reason: "stream client was already closed (test-teardown)",
@@ -4008,7 +4009,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       expect(sockets).toHaveLength(1);
       expect(transitions.at(-1)).toEqual({
         status: "closed",
-        reason: { kind: "fatalError", details: lifecycleRefusal(code) },
+        reason: { kind: "fatalError", signInVerdict: null, details: lifecycleRefusal(code) },
         retryCause: null,
       });
       session.close();

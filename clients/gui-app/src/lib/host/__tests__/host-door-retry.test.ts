@@ -21,6 +21,7 @@ const OTHER_HOST_ID = "host-other";
 
 const fatalClose = {
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code: "UNAUTHORIZED",
     reason: "The host refused the credential.",

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
+import type { BearerLease } from "../../../../shared/auth/bearer-source";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import type { HostTokenMintOutcome } from "../../../../shared/auth/host-token-source";
 import {
@@ -18,7 +18,7 @@ import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
-import { createCliHostTokens, type CliHostTokens } from "../cli-host-tokens";
+import { acquireCliSignIn, type CliHostTokens } from "../cli-host-tokens";
 import type { SignInRotationResult } from "../../store/credentials-store";
 import { completeCredentialsReserve } from "./credentials-reserve-test-support";
 
@@ -118,8 +118,6 @@ const harness = vi.hoisted(() => ({
   readOnce: false,
   /** The next rotation the code under test starts waits here after it commits, before it resumes. */
   resumeGate: null as Promise<void> | null,
-  /** The next read of the token file waits here. */
-  loadGate: null as Promise<void> | null,
   /** The next write of the token file waits here before it lands. */
   writeGate: null as Promise<void> | null,
   /** Called as every outcome leaves the tracker, with what `signInRejected()` said then. */
@@ -179,12 +177,30 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
   };
 });
 
+// The revalidator the registry builds, with the instrumentation each case reads: every
+// rotation and adopting read the code under test starts is counted, held and resumed here.
+vi.mock("../../store/credentials-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials-store")>();
+  return {
+    ...actual,
+    createStoreBackedRevalidator: (
+      args: Parameters<typeof actual.createStoreBackedRevalidator>[0],
+    ) => {
+      const real = actual.createStoreBackedRevalidator(args);
+      return {
+        ...real,
+        rotateSignIn: () => counted(rotateThenResume(() => real.rotateSignIn())),
+        adoptStoredSignIn: () =>
+          counted(adoptAfterGate(() => real.adoptStoredSignIn())),
+      };
+    },
+  };
+});
+
 vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
   createHostTokenFilePersistence: () => ({
     load: async () => {
-      const gate = harness.loadGate;
-      harness.loadGate = null;
-      if (gate !== null) await gate;
       return harness.table;
     },
     update: async (change: (table: HostTokenTable) => HostTokenTable) => {
@@ -392,7 +408,6 @@ beforeEach(async () => {
   harness.readGate = null;
   harness.resumeGate = null;
   harness.writeGate = null;
-  harness.loadGate = null;
   harness.onLeave = null;
   harness.obtainCalls = 0;
   harness.boundExceeded = false;
@@ -431,8 +446,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await quiet();
-  for (const { tokens, store, otherProcess } of opened.splice(0)) {
-    tokens.dispose();
+  for (const { dispose, store, otherProcess } of opened.splice(0)) {
+    dispose();
     store.dispose();
     otherProcess.dispose();
   }
@@ -638,9 +653,9 @@ class JudgeModel {
   /** Rotations the model lets a counting, non-final refusal earn. */
   credits = 0;
   private folded = 0;
-  private readonly lease: MutableBearerLease;
+  private readonly lease: BearerLease;
 
-  constructor(lease: MutableBearerLease) {
+  constructor(lease: BearerLease) {
     this.lease = lease;
   }
 
@@ -737,7 +752,7 @@ async function checkModel(open: OpenTokens, step: string): Promise<void> {
   // while a read hold is armed, so a step run under one compares everything but it.
   if (harness.readGate === null)
     expect(
-      await open.tokens.signInRejectedNow(null),
+      (await open.tokens.signInRejectionNow(null)) !== null,
       `${step}: signInRejected()`,
     ).toBe(open.model.rejected());
   expect(
@@ -781,8 +796,10 @@ function startAsk(open: OpenTokens, host: string): void {
 interface OpenTokens {
   readonly store: CredentialsMutationStore;
   readonly otherProcess: CredentialsMutationStore;
-  readonly lease: MutableBearerLease;
+  readonly lease: BearerLease;
   readonly tokens: CliHostTokens;
+  /** Ends this command's handle on the person's tokens. */
+  readonly dispose: () => void;
   readonly reports: string[];
   readonly model: JudgeModel;
   /** Where `signInRejected()` differed from the model as an outcome left the tracker. */
@@ -796,13 +813,6 @@ interface OpenTokens {
 const opened: OpenTokens[] = [];
 
 async function openTokens(): Promise<OpenTokens> {
-  const open = await openTokensLoading();
-  await open.tokens.whenLoaded();
-  return open;
-}
-
-/** As `openTokens`, without waiting for the stored tokens to be read. */
-async function openTokensLoading(): Promise<OpenTokens> {
   // A full reserve is never refilled under the lock: no store's background
   // fill takes it, or writes into the directory, while the case runs.
   await completeCredentialsReserve(credentialsFile.path);
@@ -818,23 +828,15 @@ async function openTokensLoading(): Promise<OpenTokens> {
     "sign-in-recovery-5",
     "sign-in-recovery-6",
   );
-  const lease = new MutableBearerLease(SIGN_IN_A, userId);
-  const revalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-    signal: null,
-  });
-  const tokens = createCliHostTokens({
-    lease,
-    refresh: () => counted(rotateThenResume(() => revalidator.rotateSignIn())),
-    adoptStored: () =>
-      counted(adoptAfterGate(() => revalidator.adoptStoredSignIn())),
-    signal: null,
-  });
-  harness.signInRejected = () => tokens.signInRejectedNow(null);
+  const { lease, tokens, dispose } = await acquireCliSignIn(
+    { token: SIGN_IN_A, authnBaseUrl: "https://authn.test", userId },
+    null,
+  );
+  harness.signInRejected = async () =>
+    (await tokens.signInRejectionNow(null)) !== null;
   const reports: string[] = [];
-  tokens.onRefusalEndingCommand((reportedHostId) => {
-    reports.push(reportedHostId);
+  tokens.onRefusalEndingCommand((evidence) => {
+    reports.push(evidence.hostId);
   });
   const model = new JudgeModel(lease);
   const mismatches: string[] = [];
@@ -850,6 +852,7 @@ async function openTokensLoading(): Promise<OpenTokens> {
     otherProcess,
     lease,
     tokens,
+    dispose,
     reports,
     model,
     mismatches,
@@ -934,7 +937,7 @@ describe.each(scenarios)(
         harness.storedSignIn() === OURS &&
         left.some((event) => event.refusalOf?.signIn === OURS);
       expect({
-        rejected: await tokens.signInRejectedNow(null),
+        rejected: (await tokens.signInRejectionNow(null)) !== null,
         permitted: judgedByTheRule,
       }).not.toEqual({ rejected: true, permitted: false });
       // (3) No rotation starts for a refusal the rule excludes: each rotation
@@ -1699,23 +1702,6 @@ describe("model: the refusals of a refresh with no authn behind them", () => {
       },
     );
     await finish(open);
-  });
-});
-
-describe("model J: nothing starts for an ended owner", () => {
-  it("a mint whose token session ends during the read of the stored tokens sends no request, though its asker's signal is live", async () => {
-    const loadHold = makeGate();
-    harness.loadGate = loadHold.gate;
-    const open = await openTokensLoading();
-    processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
-    harness.holdOnly = new Set();
-    const asker = new AbortController();
-    open.pending.push(open.tokens.mintFresh(hostId, asker.signal));
-    await quiet();
-    open.tokens.dispose();
-    loadHold.release();
-    await Promise.all(open.pending);
-    expect(harness.requests).toHaveLength(0);
   });
 });
 

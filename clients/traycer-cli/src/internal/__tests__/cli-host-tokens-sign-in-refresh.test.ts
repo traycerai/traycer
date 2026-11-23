@@ -2,7 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
+import {
+  MutableBearerLease,
+  type BearerLease,
+} from "../../../../shared/auth/bearer-source";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import type {
   HostTokenMintOutcome,
@@ -17,11 +20,15 @@ import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
-import { createCliHostTokens, type CliHostTokens } from "../cli-host-tokens";
+import {
+  acquireCliSignIn,
+  type CliHostTokens,
+  type CliSignInHandle,
+} from "../cli-host-tokens";
 import type { SignInRotationResult } from "../../store/credentials-store";
 import { nextCasePerson } from "./case-person-test-support";
 
-// The real token path (`createCliHostTokens`: its single-flight mints, its
+// The real token path (`acquireCliSignIn`: its single-flight mints, its
 // recovery and its sign-in judge) against a fake authn, whose first mint is held
 // and answered by the test, and a fake credentials refresh that counts its
 // rotations and rotates the lease as the credentials store does.
@@ -54,6 +61,48 @@ const credentialsFile = vi.hoisted(() => ({
 }));
 
 const createdSources = vi.hoisted(() => [] as HostTokenSource[]);
+
+/** What a case injects into the store and revalidator the registry builds for its person. */
+const injected = vi.hoisted(() => ({
+  /** Wraps the store the registry builds for the next acquire. */
+  wrapStore: null as
+    | ((store: CredentialsMutationStore) => CredentialsMutationStore)
+    | null,
+  /** Replaces the sign-in refresh the registry's revalidator runs; null runs the real one. */
+  rotate: null as
+    | ((lease: BearerLease) => Promise<SignInRotationResult>)
+    | null,
+  /** Called as the revalidator's adopting read is asked, before it reads. */
+  onAdopt: null as (() => void) | null,
+}));
+
+vi.mock("../../store/credentials-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials-store")>();
+  return {
+    ...actual,
+    createCliCredentialsStore: () => {
+      const real = actual.createCliCredentialsStore();
+      return injected.wrapStore === null ? real : injected.wrapStore(real);
+    },
+    createStoreBackedRevalidator: (
+      args: Parameters<typeof actual.createStoreBackedRevalidator>[0],
+    ) => {
+      const real = actual.createStoreBackedRevalidator(args);
+      return {
+        ...real,
+        rotateSignIn: () =>
+          injected.rotate === null
+            ? real.rotateSignIn()
+            : injected.rotate(args.lease),
+        adoptStoredSignIn: () => {
+          injected.onAdopt?.();
+          return real.adoptStoredSignIn();
+        },
+      };
+    },
+  };
+});
 
 vi.mock("../../../../shared/auth/host-token-source", async (importOriginal) => {
   const actual =
@@ -147,8 +196,12 @@ vi.mock(
 
 let hostCount = 0;
 let hostId = "";
+let caseDir = "";
 
-beforeEach(() => {
+beforeEach(async () => {
+  caseDir = await mkdtemp(join(tmpdir(), "traycer-sign-in-case-"));
+  credentialsFile.path = join(caseDir, "credentials");
+  credentialsFile.refreshed.splice(0);
   harness.mints.splice(0);
   harness.hold = 1;
   createdSources.splice(0);
@@ -160,22 +213,58 @@ beforeEach(() => {
   processReleasedHosts.forgetAll();
 });
 
-afterEach(() => {
+/** The handles a case took on its person; each is ended with the case. */
+const handles: CliSignInHandle[] = [];
+
+/** The person signed in as sign-in A, taking one more handle on the one instance of its tokens. */
+async function acquire(signal: AbortSignal | null): Promise<CliSignInHandle> {
+  const handle = await acquireCliSignIn(
+    { token: SIGN_IN_A, authnBaseUrl: "https://authn.test", userId: USER_ID },
+    signal,
+  );
+  handles.push(handle);
+  return handle;
+}
+
+/** As `acquire`, signed in as `token`. */
+async function acquireAs(token: string): Promise<CliSignInHandle> {
+  const handle = await acquireCliSignIn(
+    { token, authnBaseUrl: "https://authn.test", userId: USER_ID },
+    null,
+  );
+  handles.push(handle);
+  return handle;
+}
+
+/** The one lease of the person's sign-in; a sibling's rotation is a rotation of it. */
+function rotateLease(lease: BearerLease, token: string): void {
+  if (!(lease instanceof MutableBearerLease))
+    throw new Error("the person's lease is not rotatable");
+  lease.rotate(token);
+}
+
+afterEach(async () => {
+  for (const handle of handles.splice(0)) handle.dispose();
+  injected.wrapStore = null;
+  injected.rotate = null;
+  injected.onAdopt = null;
+  credentialsFile.path = "";
+  await rm(caseDir, { recursive: true, force: true });
   processReleasedHosts.forgetAll();
 });
 
 /** The credentials refresh: each call is one rotation, and rotates the lease to the next sign-in. */
-function countingRefresh(lease: MutableBearerLease): {
-  readonly refresh: () => Promise<SignInRotationResult>;
+function countingRefresh(): {
+  readonly refresh: (lease: BearerLease) => Promise<SignInRotationResult>;
   readonly rotations: () => number;
   readonly rotatedTo: (rotation: number) => string;
 } {
   let rotations = 0;
   const rotatedTo = (rotation: number): string => `sign-in-rotated-${rotation}`;
   return {
-    refresh: async () => {
+    refresh: async (lease) => {
       rotations += 1;
-      lease.rotate(rotatedTo(rotations));
+      rotateLease(lease, rotatedTo(rotations));
       return {
         outcome: "rotated",
         installed: rotatedTo(rotations),
@@ -190,15 +279,9 @@ function countingRefresh(lease: MutableBearerLease): {
 
 describe("a mint refusal's recovery refreshes only the sign-in it was refused for", () => {
   it("ends holding the sign-in a foreground recovery saved, with exactly one rotation, when the background mint's refusal of the earlier sign-in arrives late", async () => {
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const credentials = countingRefresh(lease);
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: credentials.refresh,
-      adoptStored: async () => undefined,
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const credentials = countingRefresh();
+    injected.rotate = credentials.refresh;
+    const { lease, tokens } = await acquire(null);
     // A background mint is sent on sign-in A.
     const background = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
@@ -219,19 +302,13 @@ describe("a mint refusal's recovery refreshes only the sign-in it was refused fo
   });
 
   it("retries on the sign-in now stored, spending no rotation and judging nothing, when a sibling rotated it while the mint was held", async () => {
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const credentials = countingRefresh(lease);
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: credentials.refresh,
-      adoptStored: async () => undefined,
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const credentials = countingRefresh();
+    injected.rotate = credentials.refresh;
+    const { lease, tokens } = await acquire(null);
     const minting = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
     // Another session or the desktop rotated the stored sign-in meanwhile.
-    lease.rotate(SIBLING_SIGN_IN);
+    rotateLease(lease, SIBLING_SIGN_IN);
 
     harness.mints[0]?.answer({ kind: "sign-in-rejected" });
     const bearer = await minting;
@@ -242,28 +319,22 @@ describe("a mint refusal's recovery refreshes only the sign-in it was refused fo
       SIBLING_SIGN_IN,
     ]);
     expect(bearer).not.toBeNull();
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
   });
 });
 
 describe("a mint refusal's recovery belongs to the session that started it", () => {
   it("starts no rotation and no second mint when the refusal arrives after the session ended, though the session's signal is live", async () => {
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const credentials = countingRefresh(lease);
+    const credentials = countingRefresh();
+    injected.rotate = credentials.refresh;
     // A command whose signal outlives the call, as a give's budget does.
     const commandSignal = new AbortController();
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: credentials.refresh,
-      adoptStored: async () => undefined,
-      signal: commandSignal.signal,
-    });
-    await tokens.whenLoaded();
+    const { tokens, dispose } = await acquire(commandSignal.signal);
     // The call asks without waiting; its mint is sent and held.
     await tokens.hostBearerFor(hostId, false);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
     // The session ends. The mint's own signal is the command's, so it stays in flight.
-    tokens.dispose();
+    dispose();
     // The mint still running, joined, is the point at which its recovery has finished.
     const finished = tokens.hostBearerFor(hostId, true);
 
@@ -279,18 +350,12 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
   it("records no rejection, reports nothing and retries on the stored sign-in when a late 401 for the earlier sign-in follows an accepted refresh", async () => {
     // The retry is held too, so what the late 401 recorded is read while it is pending.
     harness.hold = 2;
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const credentials = countingRefresh(lease);
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: credentials.refresh,
-      adoptStored: async () => undefined,
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const credentials = countingRefresh();
+    injected.rotate = credentials.refresh;
+    const { lease, tokens } = await acquire(null);
     const reports: string[] = [];
-    tokens.onRefusalEndingCommand((reportedHostId) => {
-      reports.push(reportedHostId);
+    tokens.onRefusalEndingCommand((evidence) => {
+      reports.push(evidence.hostId);
     });
     // A refresh is accepted: the next 401 would normally judge the sign-in.
     await expect(tokens.refreshSignIn()).resolves.toBe("rotated");
@@ -299,7 +364,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     const minting = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
     expect(harness.mints[0]?.signIn).toBe(sentOn);
-    lease.rotate(SIBLING_SIGN_IN);
+    rotateLease(lease, SIBLING_SIGN_IN);
 
     // The late 401 for the sign-in no longer stored arrives.
     harness.mints[0]?.answer({ kind: "sign-in-rejected" });
@@ -307,7 +372,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
 
     // It judged nothing: no rejection is recorded against the stored sign-in,
     // nothing is reported, and nothing was refreshed beyond the accepted refresh.
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
     expect(credentials.rotations()).toBe(1);
     // The one retry went out on the stored sign-in.
@@ -320,24 +385,18 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     });
     const bearer = await minting;
     expect(bearer).not.toBeNull();
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
   });
 
   it("reports nothing final and asks once more on the stored sign-in when the retry after a rotation is refused for a sign-in a sibling has since replaced", async () => {
     harness.hold = 2;
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const credentials = countingRefresh(lease);
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: credentials.refresh,
-      adoptStored: async () => undefined,
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const credentials = countingRefresh();
+    injected.rotate = credentials.refresh;
+    const { lease, tokens } = await acquire(null);
     const reports: string[] = [];
-    tokens.onRefusalEndingCommand((reportedHostId) => {
-      reports.push(reportedHostId);
+    tokens.onRefusalEndingCommand((evidence) => {
+      reports.push(evidence.hostId);
     });
     const minting = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
@@ -347,14 +406,14 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     await vi.waitFor(() => expect(harness.mints).toHaveLength(2));
     expect(harness.mints[1]?.signIn).toBe(credentials.rotatedTo(1));
     // While it is pending a sibling replaces the lease with C.
-    lease.rotate(SIBLING_SIGN_IN);
+    rotateLease(lease, SIBLING_SIGN_IN);
 
     // The retry's 401 for B arrives.
     harness.mints[1]?.answer({ kind: "sign-in-rejected" });
     await minting;
 
     expect(reports).toEqual([]);
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     // Once more, on C, with no further refresh.
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([
       SIGN_IN_A,
@@ -367,8 +426,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
   it("judges nothing and refreshes the stored sign-in once when its own refusal follows a stale refusal of the sign-in our rotation produced", async () => {
     // The mints on A, on B (the retry) and on C are held; the one after C's refresh is answered.
     harness.hold = 3;
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const credentials = countingRefresh(lease);
+    const credentials = countingRefresh();
     // The refresh of C is held where it starts, so what C's refusal recorded is read while it is pending.
     const refreshesStarted: number[] = [];
     const releaseRefreshOfC: { release: () => void } = {
@@ -377,20 +435,15 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     const refreshOfCHeld = new Promise<void>((resolve) => {
       releaseRefreshOfC.release = resolve;
     });
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: async () => {
-        refreshesStarted.push(refreshesStarted.length + 1);
-        if (refreshesStarted.length === 2) await refreshOfCHeld;
-        return credentials.refresh();
-      },
-      adoptStored: async () => undefined,
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    injected.rotate = async (lease) => {
+      refreshesStarted.push(refreshesStarted.length + 1);
+      if (refreshesStarted.length === 2) await refreshOfCHeld;
+      return credentials.refresh(lease);
+    };
+    const { lease, tokens } = await acquire(null);
     const reports: string[] = [];
-    tokens.onRefusalEndingCommand((reportedHostId) => {
-      reports.push(reportedHostId);
+    tokens.onRefusalEndingCommand((evidence) => {
+      reports.push(evidence.hostId);
     });
     const minting = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
@@ -400,26 +453,26 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     await vi.waitFor(() => expect(harness.mints).toHaveLength(2));
     expect(harness.mints[1]?.signIn).toBe(credentials.rotatedTo(1));
     // While it is pending a sibling replaces B with C.
-    lease.rotate(SIBLING_SIGN_IN);
+    rotateLease(lease, SIBLING_SIGN_IN);
 
     // B's stale 401 arrives: the one retry goes out on C, and nothing is judged.
     harness.mints[1]?.answer({ kind: "sign-in-rejected" });
     await vi.waitFor(() => expect(harness.mints).toHaveLength(3));
     expect(harness.mints[2]?.signIn).toBe(SIBLING_SIGN_IN);
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(refreshesStarted).toHaveLength(1);
 
     // C's own 401 arrives: the first refusal of C, so C is refreshed, once. While
     // that refresh is pending the refusal has judged nothing.
     harness.mints[2]?.answer({ kind: "sign-in-rejected" });
     await vi.waitFor(() => expect(refreshesStarted).toHaveLength(2));
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
     releaseRefreshOfC.release();
     const bearer = await minting;
 
     expect(bearer).not.toBeNull();
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
     expect(refreshesStarted).toHaveLength(2);
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([
@@ -433,7 +486,6 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
   it("judges nothing and refreshes once when a sibling installs another sign-in before our rotation's continuation runs and that one is refused", async () => {
     // The mint on A and the retry after our rotation are held; the one after C's refresh is answered.
     harness.hold = 2;
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
     const refreshesStarted: number[] = [];
     const releaseRefreshOfC: { release: () => void } = {
       release: () => undefined,
@@ -441,15 +493,13 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     const refreshOfCHeld = new Promise<void>((resolve) => {
       releaseRefreshOfC.release = resolve;
     });
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: async () => {
+    injected.rotate = async (lease) => {
         refreshesStarted.push(refreshesStarted.length + 1);
         if (refreshesStarted.length === 1) {
           // Our rotation installs B; a sibling's write installs C before the
           // continuation of the rotation runs.
-          lease.rotate(ROTATED_SIGN_IN);
-          lease.rotate(SIBLING_SIGN_IN);
+          rotateLease(lease, ROTATED_SIGN_IN);
+          rotateLease(lease, SIBLING_SIGN_IN);
           return {
             outcome: "rotated",
             installed: ROTATED_SIGN_IN,
@@ -458,21 +508,18 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
           };
         }
         await refreshOfCHeld;
-        lease.rotate(REFRESHED_SIGN_IN);
+        rotateLease(lease, REFRESHED_SIGN_IN);
         return {
           outcome: "rotated",
           installed: REFRESHED_SIGN_IN,
           refused: null,
           accepted: REFRESHED_SIGN_IN,
         };
-      },
-      adoptStored: async () => undefined,
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    };
+    const { tokens } = await acquire(null);
     const reports: string[] = [];
-    tokens.onRefusalEndingCommand((reportedHostId) => {
-      reports.push(reportedHostId);
+    tokens.onRefusalEndingCommand((evidence) => {
+      reports.push(evidence.hostId);
     });
     const minting = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
@@ -487,13 +534,13 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     // nothing is judged and nothing is reported.
     harness.mints[1]?.answer({ kind: "sign-in-rejected" });
     await vi.waitFor(() => expect(refreshesStarted).toHaveLength(2));
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
     releaseRefreshOfC.release();
     const bearer = await minting;
 
     expect(bearer).not.toBeNull();
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
     expect(refreshesStarted).toHaveLength(2);
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([
@@ -533,22 +580,10 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     const otherProcess = createCliCredentialsStore();
     await store.signIn(credentialsOf(SIGN_IN_A), false, null);
     credentialsFile.refreshed.push(ROTATED_SIGN_IN);
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const revalidator = createStoreBackedRevalidator({
-      store,
-      lease,
-      signal: null,
-    });
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: () => revalidator.rotateSignIn(),
-      adoptStored: () => revalidator.adoptStoredSignIn(),
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const { lease, tokens, dispose } = await acquire(null);
     const reports: string[] = [];
-    tokens.onRefusalEndingCommand((reportedHostId) => {
-      reports.push(reportedHostId);
+    tokens.onRefusalEndingCommand((evidence) => {
+      reports.push(evidence.hostId);
     });
     const minting = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
@@ -567,7 +602,7 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     await vi.waitFor(() => expect(harness.mints).toHaveLength(3));
     expect(harness.mints[2]?.signIn).toBe(SIBLING_SIGN_IN);
     expect(lease.getBearerToken()).toBe(SIBLING_SIGN_IN);
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
 
     harness.mints[2]?.answer({
@@ -575,14 +610,14 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       token: { token: "host-token-c", expiresAtMs: Date.now() + 3_600_000 },
     });
     expect(await minting).not.toBeNull();
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([
       SIGN_IN_A,
       ROTATED_SIGN_IN,
       SIBLING_SIGN_IN,
     ]);
-    tokens.dispose();
+    dispose();
     store.dispose();
     otherProcess.dispose();
   });
@@ -647,32 +682,20 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     const store = createCliCredentialsStore();
     const otherProcess = createCliCredentialsStore();
     await store.signIn(credentialsOf(signInA), false, null);
-    const lease = new MutableBearerLease(signInA, USER_ID);
-    const revalidator = createStoreBackedRevalidator({
-      store,
-      lease,
-      signal: null,
-    });
     // How the refused mint stands in the source when the lease is about to be synced with the file.
     const recordedWhenSyncing: Array<string | null> = [];
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: () => revalidator.rotateSignIn(),
-      adoptStored: async () => {
-        recordedWhenSyncing.push(
-          createdSources[0]?.lastFailureOf(
-            USER_ID,
-            processReleasedHosts.currentInstance(hostId),
-          ) ?? null,
-        );
-        await revalidator.adoptStoredSignIn();
-      },
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    injected.onAdopt = () => {
+      recordedWhenSyncing.push(
+        createdSources[0]?.lastFailureOf(
+          USER_ID,
+          processReleasedHosts.currentInstance(hostId),
+        ) ?? null,
+      );
+    };
+    const { lease, tokens, dispose } = await acquireAs(signInA);
     const reports: string[] = [];
-    tokens.onRefusalEndingCommand((reportedHostId) => {
-      reports.push(reportedHostId);
+    tokens.onRefusalEndingCommand((evidence) => {
+      reports.push(evidence.hostId);
     });
     const minting = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
@@ -692,9 +715,9 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       signInA,
       signInB,
     ]);
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
-    tokens.dispose();
+    dispose();
     store.dispose();
     otherProcess.dispose();
   });
@@ -706,22 +729,10 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     const otherProcess = createCliCredentialsStore();
     await store.signIn(credentialsOf(SIGN_IN_A), false, null);
     credentialsFile.refreshed.push(ROTATED_SIGN_IN);
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const revalidator = createStoreBackedRevalidator({
-      store,
-      lease,
-      signal: null,
-    });
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: () => revalidator.rotateSignIn(),
-      adoptStored: () => revalidator.adoptStoredSignIn(),
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const { lease, tokens, dispose } = await acquire(null);
     const reports: string[] = [];
-    tokens.onRefusalEndingCommand((reportedHostId) => {
-      reports.push(reportedHostId);
+    tokens.onRefusalEndingCommand((evidence) => {
+      reports.push(evidence.hostId);
     });
     // The host refused the held token as expired: the stream's recovery, bounded by its own sequence, mints a fresh one.
     const refusal: FatalErrorDetails = {
@@ -756,9 +767,9 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       SIBLING_SIGN_IN,
     ]);
     expect(credentialsFile.refreshed).toEqual([]);
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(reports).toEqual([]);
-    tokens.dispose();
+    dispose();
     store.dispose();
     otherProcess.dispose();
   });
@@ -767,7 +778,6 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     const store = createCliCredentialsStore();
     const otherProcess = createCliCredentialsStore();
     await store.signIn(credentialsOf(SIGN_IN_A), false, null);
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
     // The disk read the refusal waits for is held until the test releases it.
     const readEntered: { resolve: () => void } = { resolve: () => undefined };
     const readWasEntered = new Promise<void>((resolve) => {
@@ -778,8 +788,8 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       releaseRead.resolve = resolve;
     });
     let readIsHeld = false;
-    const heldRead: CredentialsMutationStore = {
-      ...store,
+    injected.wrapStore = (registryStore) => ({
+      ...registryStore,
       // Only the first read is held: later ones, a later mint's among them, go through.
       read: async () => {
         if (!readIsHeld) {
@@ -787,21 +797,10 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
           readEntered.resolve();
           await readHeld;
         }
-        return store.read();
+        return registryStore.read();
       },
-    };
-    const revalidator = createStoreBackedRevalidator({
-      store: heldRead,
-      lease,
-      signal: null,
     });
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: () => revalidator.rotateSignIn(),
-      adoptStored: () => revalidator.adoptStoredSignIn(),
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const { tokens, dispose } = await acquire(null);
     // The mint carries the command's own signal, which outlives this token session.
     const command = new AbortController();
     const minting = tokens.mintFresh(hostId, command.signal);
@@ -810,7 +809,7 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     await readWasEntered;
 
     // The session ends while the read is held; a newer sign-in is on disk when it is released.
-    tokens.dispose();
+    dispose();
     await otherProcess.signIn(credentialsOf(SIBLING_SIGN_IN), false, null);
     releaseRead.resolve();
     await minting;
@@ -825,7 +824,6 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     const store = createCliCredentialsStore();
     await store.signIn(credentialsOf(SIGN_IN_A), false, null);
     credentialsFile.refreshed.push(ROTATED_SIGN_IN);
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
     const readEntered: { resolve: () => void } = { resolve: () => undefined };
     const readWasEntered = new Promise<void>((resolve) => {
       readEntered.resolve = resolve;
@@ -835,8 +833,8 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
       releaseRead.resolve = resolve;
     });
     let readIsHeld = false;
-    const heldRead: CredentialsMutationStore = {
-      ...store,
+    injected.wrapStore = (registryStore) => ({
+      ...registryStore,
       // Only the first read is held: later ones, a later mint's among them, go through.
       read: async () => {
         if (!readIsHeld) {
@@ -844,24 +842,13 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
           readEntered.resolve();
           await readHeld;
         }
-        return store.read();
+        return registryStore.read();
       },
-    };
-    const revalidator = createStoreBackedRevalidator({
-      store: heldRead,
-      lease,
-      signal: null,
     });
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: () => revalidator.rotateSignIn(),
-      adoptStored: () => revalidator.adoptStoredSignIn(),
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const { lease, tokens, dispose } = await acquire(null);
     const reports: string[] = [];
-    tokens.onRefusalEndingCommand((reportedHostId) => {
-      reports.push(reportedHostId);
+    tokens.onRefusalEndingCommand((evidence) => {
+      reports.push(evidence.hostId);
     });
     // Mint X on the stored sign-in is refused, and its disk read is held.
     const refused = tokens.mintFresh(hostId, null);
@@ -882,11 +869,11 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     if (answered.kind === "ok")
       expect(answered.bearer.getBearerToken()).toBe("host-token-2");
     expect(reports).toEqual([]);
-    expect(await tokens.signInRejectedNow(null)).toBe(false);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(false);
     expect(credentialsFile.refreshed).toEqual([ROTATED_SIGN_IN]);
     expect(lease.getBearerToken()).toBe(SIGN_IN_A);
     expect(harness.mints).toHaveLength(2);
-    tokens.dispose();
+    dispose();
     store.dispose();
   });
 });
@@ -907,15 +894,9 @@ describe("only a mint sent with the sign-in our rotation installed changes the j
   async function rotatedWithXHeld(): Promise<RotatedRig> {
     harness.hold = 2;
     const otherHostId = `${hostId.slice(0, -1)}f`;
-    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-    const credentials = countingRefresh(lease);
-    const tokens = createCliHostTokens({
-      lease,
-      refresh: credentials.refresh,
-      adoptStored: async () => undefined,
-      signal: null,
-    });
-    await tokens.whenLoaded();
+    const credentials = countingRefresh();
+    injected.rotate = credentials.refresh;
+    const { lease, tokens } = await acquire(null);
     const x = tokens.hostBearerFor(hostId, true);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
     expect(harness.mints[0]?.signIn).toBe(SIGN_IN_A);
@@ -950,7 +931,7 @@ describe("only a mint sent with the sign-in our rotation installed changes the j
       harness.mints[1]?.answer({ kind: "sign-in-rejected" });
       await y;
 
-      expect(await tokens.signInRejectedNow(null)).toBe(true);
+      expect((await tokens.signInRejectionNow(null)) !== null).toBe(true);
       expect(rotations()).toBe(1);
       expect(harness.mints).toHaveLength(2);
     },
@@ -961,12 +942,12 @@ describe("only a mint sent with the sign-in our rotation installed changes the j
 
     harness.mints[1]?.answer({ kind: "sign-in-rejected" });
     await y;
-    expect(await tokens.signInRejectedNow(null)).toBe(true);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(true);
 
     harness.mints[0]?.answer(XS_TOKEN);
     await x;
 
-    expect(await tokens.signInRejectedNow(null)).toBe(true);
+    expect((await tokens.signInRejectionNow(null)) !== null).toBe(true);
     expect(rotations()).toBe(1);
   });
 });

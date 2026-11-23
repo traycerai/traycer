@@ -162,7 +162,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     expect(onUnsupported).not.toHaveBeenCalled();
     expect(onConnectionStatus).toHaveBeenLastCalledWith({
       status: "closed",
-      reason,
+      reason: { ...reason, signInVerdict: null },
       retryCause: null,
       continuity: null,
       startSent: true,
@@ -263,7 +263,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     expect(onUnsupported).not.toHaveBeenCalled();
     expect(onConnectionStatus).toHaveBeenLastCalledWith({
       status: "closed",
-      reason,
+      reason: { ...reason, signInVerdict: null },
       retryCause: null,
       continuity: null,
       startSent: true,

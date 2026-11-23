@@ -5,18 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { AuthTokenRefreshResult } from "../../../../shared/auth/auth-validation";
-import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import type { HostTokenMintOutcome } from "../../../../shared/auth/host-token-source";
 import type { Environment } from "../../runner/environment";
+import { createCliCredentialsStore } from "../../store/credentials-store";
 import {
-  createCliCredentialsStore,
-  createStoreBackedRevalidator,
-} from "../../store/credentials-store";
-import {
-  createCliHostTokens,
+  acquireCliSignIn,
   type CliHostBearer,
   type CliHostTokens,
+  type CliSignInHandle,
 } from "../cli-host-tokens";
 import { nextCasePerson } from "./case-person-test-support";
 
@@ -159,26 +156,24 @@ function tokenOf(answer: CliHostBearer): string | null {
   return answer.kind === "ok" ? answer.bearer.getBearerToken() : null;
 }
 
-/** One token session over the shared credentials file, signed in as the held request's sign-in until it reads the file again. */
-function sessionOverFile(): {
+/**
+ * One token session of the person over the shared credentials file, signed in
+ * as the held request's sign-in until the file is read again. A second session
+ * of the person is a handle on the same lease, store and tokens.
+ */
+async function sessionOverFile(): Promise<{
   readonly tokens: CliHostTokens;
   readonly readFile: () => Promise<void>;
-} {
-  const store = createCliCredentialsStore();
-  const lease = new MutableBearerLease(SIGN_IN, userId);
-  const revalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-    signal: null,
-  });
+  readonly dispose: () => void;
+}> {
+  const handle: CliSignInHandle = await acquireCliSignIn(
+    { token: SIGN_IN, authnBaseUrl: "https://authn.test", userId },
+    null,
+  );
   return {
-    tokens: createCliHostTokens({
-      lease,
-      refresh: () => revalidator.rotateSignIn(),
-      adoptStored: () => revalidator.adoptStoredSignIn(),
-      signal: null,
-    }),
-    readFile: () => revalidator.adoptStoredSignIn(),
+    tokens: handle.tokens,
+    readFile: () => handle.revalidator.adoptStoredSignIn(),
+    dispose: () => handle.dispose(),
   };
 }
 
@@ -191,8 +186,8 @@ describe("a refused mint whose stored sign-in moved on while a sibling session b
     const other = createCliCredentialsStore();
     await other.signIn(credentialsOf(SIGN_IN), false, null);
     processReleasedHosts.observeInstance(hostId, "boot-1");
-    const x = sessionOverFile();
-    const y = sessionOverFile();
+    const x = await sessionOverFile();
+    const y = await sessionOverFile();
     try {
       const sent = new Promise<void>((resolve) => {
         harness.onSend = (index) => {
@@ -212,8 +207,8 @@ describe("a refused mint whose stored sign-in moved on while a sibling session b
       release({ kind: "sign-in-rejected" });
       return { answeredToX: await askingX, boughtByY };
     } finally {
-      x.tokens.dispose();
-      y.tokens.dispose();
+      x.dispose();
+      y.dispose();
     }
   }
 

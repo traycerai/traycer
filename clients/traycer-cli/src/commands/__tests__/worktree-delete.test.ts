@@ -754,6 +754,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "UNAUTHORIZED",
         reason: "bearer rejected",
@@ -777,6 +778,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "protocol version skew",
@@ -802,6 +804,7 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     // BEFORE the subscribe frame, so the host was never asked to delete.
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "host does not offer worktree.deleteBatchByPath",
@@ -833,6 +836,7 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INTERNAL",
         reason: "host blew up",
@@ -865,6 +869,7 @@ async function startLegacyFallback(): Promise<{
   await waitForSessions(1);
   commandSession().statusHandler?.("closed", {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "INCOMPATIBLE",
       reason: "host does not offer worktree.deleteBatchByPath",

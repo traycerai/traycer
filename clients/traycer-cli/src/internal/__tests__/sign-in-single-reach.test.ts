@@ -31,6 +31,20 @@ function linesMatching(file: string, pattern: RegExp): readonly string[] {
     );
 }
 
+/** The 1-based lines of the two-space-indented `const <name> = ...` function in `file`, through its closing `  };`. */
+function linesOfFunction(file: string, name: string): ReadonlySet<number> {
+  const lines = readFileSync(join(SRC, file), "utf8").split("\n");
+  const start = lines.findIndex((text) =>
+    text.startsWith(`  const ${name} = `),
+  );
+  const length = lines.slice(start).findIndex((text) => text === "  };");
+  if (start < 0 || length < 0)
+    throw new Error(`${name} is not a two-space-indented function in ${file}`);
+  return new Set(
+    Array.from({ length: length + 1 }, (_unused, offset) => start + offset + 1),
+  );
+}
+
 describe("the verdict has one reach (P6)", () => {
   // The synchronous read of the verdict, `tokens.signInRejected()`, is the
   // judge's own. Every exit that labels a sign-in rejected reads the one async
@@ -48,29 +62,37 @@ describe("the verdict has one reach (P6)", () => {
   it.each(["internal/host-rpc.ts", "host/credential-provisioning.ts"])(
     "has %s label a rejected sign-in through the async read",
     (file) => {
-      expect(linesMatching(file, /\bsignInRejectedNow\b/)).not.toEqual([]);
+      expect(
+        linesMatching(file, /\b(signInRejectionNow|refusalEndingCommandNow)\b/),
+      ).not.toEqual([]);
     },
   );
 });
 
 describe("the store-backed rotation has one reach (P7)", () => {
-  // `refreshSignIn` is the writer of the rotation facts, and the token options'
-  // `refresh` is what it calls. The store module defines the rotation, and the
-  // login flow's own revalidator (sign-in-environments.ts) is a different
-  // lease, as is the one in cli-environment-cloud.ts.
+  // `refreshSignIn` is the one writer of the rotation facts: it calls the
+  // rotation. The store module defines the rotation, and the one in
+  // cli-environment-cloud.ts is a different lease.
   const ROTATION_CALL = /\.(rotateSignIn|revalidateCurrentContext)\(/;
   const OWN_LEASE = new Set([
     "store/credentials-store.ts",
-    "internal/sign-in-environments.ts",
     "internal/cli-environment-cloud.ts",
   ]);
+  const TOKENS_FILE = "internal/cli-host-tokens.ts";
 
-  it("calls the rotation only as the token options' refresh", () => {
-    const calls = PRODUCTION_FILES.filter((file) => !OWN_LEASE.has(file))
-      .flatMap((file) => linesMatching(file, ROTATION_CALL))
-      .filter(
-        (line) => !/refresh: \(\) => revalidator\.rotateSignIn\(\)/.test(line),
-      );
+  it("calls the rotation only from refreshSignIn", () => {
+    const writer = linesOfFunction(TOKENS_FILE, "refreshSignIn");
+    const calls = PRODUCTION_FILES.filter(
+      (file) => !OWN_LEASE.has(file),
+    ).flatMap((file) =>
+      linesMatching(file, ROTATION_CALL).filter(
+        (line) =>
+          !(
+            file === TOKENS_FILE &&
+            writer.has(Number(line.split(":")[1]))
+          ),
+      ),
+    );
 
     expect(calls).toEqual([]);
   });

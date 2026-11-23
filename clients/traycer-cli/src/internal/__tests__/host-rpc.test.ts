@@ -847,6 +847,20 @@ describe("callHostRpc", () => {
   });
 
   it("fails with the call's own wire error, not a rejected credential, when a sibling saves a sign-in after the refusal of the stored one was reported", async () => {
+    // A host token already run out is held: the call is sent with it at once
+    // while the mint for a new one runs beside it.
+    await createHostTokenFilePersistence({
+      environment: config.environment,
+      lockWaitMs: 1_000,
+      lockPollIntervalMs: 10,
+    }).update((table) => {
+      const users = new Map(table);
+      users.set(
+        person.userId,
+        new Map([["d1", { token: "ran-out", expiresAtMs: Date.now() - 1_000 }]]),
+      );
+      return users;
+    });
     fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
     rotateMock.mockResolvedValue({
       outcome: "refresh-rejected-credential",

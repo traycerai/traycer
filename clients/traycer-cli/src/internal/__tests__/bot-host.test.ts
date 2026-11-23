@@ -134,6 +134,7 @@ describe("openLocalStreamClient host authority", () => {
     const pending = readBotSnapshot(client, "bot-1");
     state.status?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "UNAUTHORIZED",
         reason: "legacy host refusal",

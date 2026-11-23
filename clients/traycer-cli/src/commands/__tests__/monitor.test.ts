@@ -260,6 +260,7 @@ function makeCommandContext(): CommandContext {
 function unauthorizedFatal() {
   return {
     kind: "fatalError" as const,
+    signInVerdict: null,
     details: {
       code: "UNAUTHORIZED" as const,
       reason: "invalid or expired token",
@@ -281,6 +282,7 @@ function refuseOpen(
   index: number,
   fatal: {
     readonly kind: "fatalError";
+    readonly signInVerdict: null;
     readonly details: FatalErrorDetails;
   },
 ): void {
@@ -297,6 +299,7 @@ function refuseOpen(
 function incompatibleFatal() {
   return {
     kind: "fatalError" as const,
+    signInVerdict: null,
     details: {
       code: "INCOMPATIBLE" as const,
       reason: "version mismatch",
@@ -560,6 +563,7 @@ describe("runMonitor recovery", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "UNAUTHORIZED",
           reason: "agent session not admitted",
@@ -687,6 +691,7 @@ describe("runMonitor recovery", () => {
       await waitForSessions(1);
       refuseOpen(0, {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code,
           reason: "legacy host refusal",

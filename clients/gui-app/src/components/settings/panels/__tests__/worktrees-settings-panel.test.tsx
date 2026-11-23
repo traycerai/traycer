@@ -2914,7 +2914,7 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       streamMock.commandCallbacks?.onConnectionStatus({
         status: "closed",
-        reason: { kind: "fatalError", details: STREAM_FATAL },
+        reason: { kind: "fatalError", signInVerdict: null, details: STREAM_FATAL },
         retryCause: null,
         continuity: null,
         startSent: true,
@@ -2935,7 +2935,7 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       streamMock.commandCallbacks?.onConnectionStatus({
         status: "closed",
-        reason: { kind: "fatalError", details: STREAM_FATAL },
+        reason: { kind: "fatalError", signInVerdict: null, details: STREAM_FATAL },
         retryCause: null,
         continuity: null,
         startSent: false,

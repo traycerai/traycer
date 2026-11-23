@@ -99,6 +99,7 @@ function closedWith(retryable: boolean): {
 } {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "BOT_STREAM_CLOSED",
       reason: "The stream closed.",

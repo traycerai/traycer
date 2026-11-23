@@ -9,11 +9,8 @@ import {
 import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
-import {
-  MutableBearerLease,
-  type BearerLease,
-} from "../../../../shared/auth/bearer-source";
-import { createCliHostTokens } from "../cli-host-tokens";
+import type { BearerLease } from "../../../../shared/auth/bearer-source";
+import { acquireCliSignIn, type CliSignInHandle } from "../cli-host-tokens";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import { nextCasePerson } from "./case-person-test-support";
@@ -183,6 +180,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const handle of handles.splice(0)) handle.dispose();
   vi.clearAllMocks();
 });
 
@@ -248,26 +246,27 @@ describe("callHostRpc host-token mint recovery", () => {
   );
 });
 
+/** The handles a case took on its person's tokens; each is ended with the case. */
+const handles: CliSignInHandle[] = [];
+
+async function signedInHandle(): Promise<CliSignInHandle> {
+  const handle = await acquireCliSignIn(
+    { token: "signin", authnBaseUrl: "https://authn.test", userId },
+    null,
+  );
+  handles.push(handle);
+  return handle;
+}
+
 describe("createCliHostTokens refusals that end a command", () => {
   it("ends the command on a not-admitted mint begun in the same millisecond as the admission before it, once that connection has left", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     try {
       nameReason("host-same-millisecond");
-      const tokens = createCliHostTokens({
-        lease: new MutableBearerLease("signin", userId),
-        refresh: async () => ({
-          outcome: "network-error",
-          installed: null,
-          refused: null,
-          accepted: null,
-        }),
-        adoptStored: async () => undefined,
-        signal: null,
-      });
-      await tokens.whenLoaded();
+      const { tokens } = await signedInHandle();
       const ending: string[] = [];
-      tokens.onRefusalEndingCommand((hostId, failure) => {
-        ending.push(`${hostId}:${failure.kind}`);
+      tokens.onRefusalEndingCommand((evidence) => {
+        ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
       });
       // An open is admitted and its connection leaves; a mint then starts in
       // the same millisecond and authn has no row for it.
@@ -288,20 +287,9 @@ describe("createCliHostTokens refusals that end a command", () => {
     const hostId = "host-replaced-before-mint";
     processReleasedHosts.observeInstance(hostId, "process-a");
     const ending: string[] = [];
-    const tokens = createCliHostTokens({
-      lease: new MutableBearerLease("signin", userId),
-      refresh: async () => ({
-        outcome: "network-error",
-        installed: null,
-        refused: null,
-        accepted: null,
-      }),
-      adoptStored: async () => undefined,
-      signal: null,
-    });
-    await tokens.whenLoaded();
-    tokens.onRefusalEndingCommand((id, failure) => {
-      ending.push(`${id}:${failure.kind}`);
+    const { tokens } = await signedInHandle();
+    tokens.onRefusalEndingCommand((evidence) => {
+      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
     });
 
     // The host is replaced after the wrapper read the process it asks for and

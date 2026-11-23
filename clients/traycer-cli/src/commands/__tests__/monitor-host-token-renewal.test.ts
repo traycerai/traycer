@@ -198,6 +198,7 @@ const pidMock = vi.mocked(readHostPidMetadata);
 function unauthorizedFatal(doorReason: "token_expired" | "not_admitted") {
   return {
     kind: "fatalError" as const,
+    signInVerdict: null,
     details: {
       code: "UNAUTHORIZED" as const,
       reason: "expired",
@@ -220,6 +221,7 @@ function refuseOpen(
   options: StreamOptions,
   fatal: {
     readonly kind: "fatalError";
+    readonly signInVerdict: null;
     readonly details: FatalErrorDetails;
   },
 ): void {

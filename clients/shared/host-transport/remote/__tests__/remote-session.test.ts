@@ -6671,6 +6671,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
         );
         expect(streamAClosedReason).toEqual({
           kind: "fatalError",
+          signInVerdict: null,
           details: expect.objectContaining({
             code: "STREAM_CHUNK_REASSEMBLY_FAILED",
           }),
@@ -6784,6 +6785,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
         );
         expect(streamAClosedReason).toEqual({
           kind: "fatalError",
+          signInVerdict: null,
           details: expect.objectContaining({
             code: "STREAM_BODY_DECODE_FAILED",
           }),
@@ -7644,6 +7646,7 @@ describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-clien
         );
         expect(streamAClosedReason).toEqual({
           kind: "fatalError",
+          signInVerdict: null,
           details: expect.objectContaining({
             code: "STREAM_CHUNK_REASSEMBLY_FAILED",
           }),
@@ -8659,7 +8662,7 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         );
         expect(transitions.at(-1)).toEqual({
           status: "closed",
-          reason: { kind: "fatalError", details },
+          reason: { kind: "fatalError", signInVerdict: null, details },
           retryCause: null,
         });
         expect(relay.subscribeStreamIds).toHaveLength(1);
