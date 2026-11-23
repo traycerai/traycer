@@ -1100,6 +1100,56 @@ describe("provisionInstalledHostCredential", () => {
     });
   });
 
+  it("keeps the process whose ack is pending current when a later poll reads a PID row whose URL is rejected", async () => {
+    const hostId = "host-pid-row-rejected";
+    const rowA: HostPidMetadata = { ...localHostMetadata(), hostId };
+    const rowB: HostPidMetadata = {
+      ...rowA,
+      pid: rowA.pid + 1,
+      startedAt: "2026-11-15T01:00:00.000Z",
+      websocketUrl: "ws://not-loopback.example/rpc",
+    };
+    mocks.readHostPidMetadataMock.mockResolvedValue(rowA);
+    mocks.isValidLocalHostWebsocketUrlMock.mockImplementation(
+      (url: string): boolean => url === rowA.websocketUrl,
+    );
+    const readOfRowB = createDeferred<void>();
+    let instanceA: HostInstance | null = null;
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          instanceA = processReleasedHosts.currentInstance(hostId);
+          // A's ack is pending: the poll now reads B under the same host id,
+          // and the poll after that proves B's read was recorded.
+          let readsOfRowB = 0;
+          mocks.readHostPidMetadataMock.mockImplementation(async () => {
+            readsOfRowB += 1;
+            if (readsOfRowB === 2) readOfRowB.resolve();
+            return rowB;
+          });
+          await readOfRowB.promise;
+          options.onHostCredentialState(hostId, "active");
+        })();
+      }, 0);
+    };
+
+    try {
+      const outcome = await provisionInstalledHostCredential(
+        makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+      );
+
+      if (instanceA === null) throw new Error("the probe opened no session");
+      expect(processReleasedHosts.isCurrent(instanceA)).toBe(true);
+      expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+        kind: "active",
+        minted: false,
+      });
+    } finally {
+      mocks.isValidLocalHostWebsocketUrlMock.mockImplementation(() => true);
+    }
+  });
+
   it("cancels the recovery's fresh-token mint with the probe", async () => {
     const pendingMint = createDeferred<{
       readonly kind: "unavailable";
