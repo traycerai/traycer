@@ -17,7 +17,7 @@ import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
-import { createCliHostTokens } from "../cli-host-tokens";
+import { createCliHostTokens, type CliHostTokens } from "../cli-host-tokens";
 import type { SignInRotationResult } from "../../store/credentials-store";
 
 // The real token path (`createCliHostTokens`: its single-flight mints, its
@@ -863,6 +863,86 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     expect(harness.mints).toHaveLength(2);
     tokens.dispose();
     store.dispose();
+  });
+});
+
+describe("only a mint sent with the sign-in our rotation installed changes the judge's state for that rotation", () => {
+  /**
+   * Two host ids of one person, each with its own host process. X's mint is
+   * sent on sign-in A and held. Our rotation then installs B, and Y's mint is
+   * sent on B and held.
+   */
+  interface RotatedRig {
+    readonly tokens: CliHostTokens;
+    readonly rotations: () => number;
+    readonly x: Promise<unknown>;
+    readonly y: Promise<boolean>;
+  }
+
+  async function rotatedWithXHeld(): Promise<RotatedRig> {
+    harness.hold = 2;
+    const otherHostId = `${hostId.slice(0, -1)}f`;
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const credentials = countingRefresh(lease);
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: credentials.refresh,
+      adoptStored: async () => undefined,
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    const x = tokens.hostBearerFor(hostId, true);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+    expect(harness.mints[0]?.signIn).toBe(SIGN_IN_A);
+    await expect(tokens.refreshSignIn()).resolves.toBe("rotated");
+    const y = tokens.renewAfterSignInRefresh(otherHostId);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(2));
+    expect(harness.mints[1]?.signIn).toBe(credentials.rotatedTo(1));
+    return { tokens, rotations: credentials.rotations, x, y };
+  }
+
+  const XS_TOKEN: HostTokenMintOutcome = {
+    kind: "ok",
+    token: { token: "host-token-x", expiresAtMs: Date.now() + 3_600_000 },
+  };
+
+  it.each([
+    { name: "a token", outcome: XS_TOKEN },
+    {
+      name: "authn unreachable",
+      outcome: {
+        kind: "unavailable",
+        detail: "authn unreachable",
+      } satisfies HostTokenMintOutcome,
+    },
+  ])(
+    "judges the sign-in rejected when the other host's mint sent on it is refused, though this host's mint sent on the earlier one answered $name after the rotation",
+    async ({ outcome }) => {
+      const { tokens, rotations, x, y } = await rotatedWithXHeld();
+
+      harness.mints[0]?.answer(outcome);
+      await x;
+      harness.mints[1]?.answer({ kind: "sign-in-rejected" });
+      await y;
+
+      expect(tokens.signInRejected()).toBe(true);
+      expect(rotations()).toBe(1);
+      expect(harness.mints).toHaveLength(2);
+    },
+  );
+
+  it("keeps the sign-in judged rejected when a token for the earlier sign-in arrives after the other host's refusal of the one our rotation installed", async () => {
+    const { tokens, rotations, x, y } = await rotatedWithXHeld();
+
+    harness.mints[1]?.answer({ kind: "sign-in-rejected" });
+    await y;
+    expect(tokens.signInRejected()).toBe(true);
+
+    harness.mints[0]?.answer(XS_TOKEN);
+    await x;
+
+    expect(tokens.signInRejected()).toBe(true);
+    expect(rotations()).toBe(1);
   });
 });
 
