@@ -16,6 +16,7 @@ import {
   createMemoryHostTokenPersistence,
   hostSignInKey,
   type HostTokenMintOutcome,
+  type HostTokenPersistence,
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -879,6 +880,66 @@ describe("local unary while authn cannot mint", () => {
     });
     // No release after the call settled: the one made during the mint is the
     // only one, and the close of the minted socket is what the test waits on.
+    await vi.waitFor(() => expect(retried.closed).not.toBeNull(), WAIT);
+  });
+
+  it("closes the call's socket when an idle release lands while the stored tokens are still loading", async () => {
+    const stored = createMemoryHostTokenPersistence();
+    let finishLoad: () => void = () => undefined;
+    const loadHeld = new Promise<void>((resolve) => {
+      finishLoad = resolve;
+    });
+    const persistence: HostTokenPersistence = {
+      load: () => loadHeld.then(() => stored.load()),
+      update: (change) => stored.update(change),
+    };
+    const minted = "host-token-minted-after-the-load";
+    const source = createHostTokenSource({
+      persistence,
+      mint: () =>
+        Promise.resolve({
+          kind: "ok",
+          token: { token: minted, expiresAtMs: Date.now() + 3_600_000 },
+        }),
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    const driven = driveCall(trackHostTokenMints(source, memory), null);
+    clients.push(driven.client);
+
+    // The call waits for the stored tokens and holds no slot yet, so the
+    // release finds nothing of it to arm; its own claim must learn of it.
+    driven.client.releaseIdleLocalSessions();
+    finishLoad();
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const probe = driven.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("not_admitted"));
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    const retried = driven.sockets[1];
+    if (retried === undefined) throw new Error("minted dial missing");
+    const open = await openAndRead(retried);
+    expect(open.token).toBe(minted);
+    // The host admits persistent sessions, so only an armed release closes
+    // the socket once the call leaves it.
+    retried.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: open.optionalManifest,
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    await answerEcho(retried);
+    expect(await driven.settled).toEqual({
+      kind: "fulfilled",
+      value: { echoed: "hi" },
+    });
     await vi.waitFor(() => expect(retried.closed).not.toBeNull(), WAIT);
   });
 
@@ -2354,7 +2415,9 @@ describe("a held token's refusal", () => {
       "older-host-token",
     );
 
+    expect(tokens.current(USER_ID, hostId)?.token).toBe("newer-host-token");
     expect(tokens.heldRefused(USER_ID, hostId)).toBe(true);
+    expect(tokens.current(USER_ID, hostId)?.token).toBe("newer-host-token");
   });
 });
 
