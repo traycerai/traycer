@@ -837,30 +837,33 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         },
         false,
       ],
-    ] as const)("uses the correct request key after a %s", async (_status, answer, keepsKey) => {
-      const user = userEvent.setup();
-      auth().createSandbox.mockResolvedValue(answer);
-      render(teamSetupForBillingRole("editor"));
+    ] as const)(
+      "uses the correct request key after a %s",
+      async (_status, answer, keepsKey) => {
+        const user = userEvent.setup();
+        auth().createSandbox.mockResolvedValue(answer);
+        render(teamSetupForBillingRole("editor"));
 
-      await waitFor(() =>
-        expect(enableButton()).toHaveProperty("disabled", false),
-      );
-      await user.click(enableButton());
-      await waitFor(() =>
-        expect(auth().createSandbox).toHaveBeenCalledTimes(1),
-      );
-      await waitFor(() =>
-        expect(enableButton()).toHaveProperty("disabled", false),
-      );
-      await user.click(enableButton());
-      await waitFor(() =>
-        expect(auth().createSandbox).toHaveBeenCalledTimes(2),
-      );
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+        await user.click(enableButton());
+        await waitFor(() =>
+          expect(auth().createSandbox).toHaveBeenCalledTimes(1),
+        );
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+        await user.click(enableButton());
+        await waitFor(() =>
+          expect(auth().createSandbox).toHaveBeenCalledTimes(2),
+        );
 
-      const keys = auth().createSandbox.mock.calls.map(
-        ([request]) => request.clientRequestId,
-      );
-      expect(keys[1] === keys[0]).toBe(keepsKey);
-    });
+        const keys = auth().createSandbox.mock.calls.map(
+          ([request]) => request.clientRequestId,
+        );
+        expect(keys[1] === keys[0]).toBe(keepsKey);
+      },
+    );
   });
 });

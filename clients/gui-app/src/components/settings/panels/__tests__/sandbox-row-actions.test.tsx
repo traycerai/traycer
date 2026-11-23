@@ -118,7 +118,10 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-create-mutation")
     >()),
-    useSandboxCreate: () => ({ mutateAsync: createMutateAsync, isPending: false }),
+    useSandboxCreate: () => ({
+      mutateAsync: createMutateAsync,
+      isPending: false,
+    }),
   }),
 );
 type SettingsMutate = (variables: Record<string, never>) => void;
