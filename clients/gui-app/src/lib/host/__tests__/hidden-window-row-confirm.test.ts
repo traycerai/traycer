@@ -49,8 +49,49 @@ import {
   hostDoorStateFor,
 } from "@/stores/host/host-door-state-store";
 
-// The relay's handshake runs on WebCrypto, so these cases run on real timers
-// except the one that crosses the ceiling.
+// The relay's handshake runs on WebCrypto, so it needs real event-loop turns
+// while the fake clock stands still: `until` takes those turns and never moves
+// the clock, so the row-confirmation ceiling cannot rescue a read that does not
+// settle. The one case that crosses the ceiling advances the clock itself.
+
+// The real turn, taken before `vi.useFakeTimers` replaces `setImmediate`.
+const realSetImmediate = setImmediate;
+
+/** Runs `check` on real event-loop turns until it stops throwing; the test's own timeout is its bound. */
+async function until(check: () => void): Promise<void> {
+  for (;;) {
+    try {
+      check();
+      return;
+    } catch {
+      await new Promise<void>((resolve) => realSetImmediate(resolve));
+    }
+  }
+}
+
+/** The redial after a refusal waits out a reconnect backoff of under a second on the fake clock. */
+const BACKOFF_STEP_MS = 100;
+
+/**
+ * As `until`, for a wait that rests on that backoff: the fake clock advances
+ * one step with each turn. It stands still while a row confirmation is
+ * pending, so the confirmation's ceiling is never what answers a wait.
+ */
+async function untilAfterBackoff(
+  confirmation: { readonly asked: number; readonly answered: number },
+  check: () => void,
+): Promise<void> {
+  for (;;) {
+    try {
+      check();
+      return;
+    } catch {
+      await new Promise<void>((resolve) => realSetImmediate(resolve));
+      if (confirmation.asked === confirmation.answered)
+        await vi.advanceTimersByTimeAsync(BACKOFF_STEP_MS);
+    }
+  }
+}
 
 const relayHolder = vi.hoisted(() => ({
   factory: null as null | IStreamWebSocketFactory,
@@ -92,7 +133,6 @@ vi.mock(
 
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const SIGN_IN = "person-sign-in";
-const WAIT = { timeout: 10_000, interval: 20 };
 
 const echoV10 = defineRpcContract({
   method: "host.echo",
@@ -121,19 +161,34 @@ function releasedRefusal(): FatalErrorDetails {
   };
 }
 
-/** A released host: it refuses the host-only token and admits the sign-in. */
-function releasedHost(relay: FakeRelayHost): void {
+/** A released host: it refuses the host-only token and admits the sign-in. Each open it decides is recorded in `events`. */
+function releasedHost(relay: FakeRelayHost, events: string[]): void {
   relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
-  relay.decideOpen = (_grant, openIndex) =>
-    relay.openAuthz[openIndex] === null
+  relay.decideOpen = (_grant, openIndex) => {
+    // The probe presents an empty bearer; the sign-in's open presents the sign-in.
+    events.push(
+      relay.openBearers[openIndex] === "" ? "probe open" : "sign-in open",
+    );
+    return relay.openAuthz[openIndex] === null
       ? { kind: "ack" }
       : { kind: "fatal", details: releasedRefusal() };
+  };
 }
 
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
     "",
   );
+}
+
+/** Each of `names` happened, and in this order, among `events`. */
+function expectInOrder(
+  events: readonly string[],
+  names: readonly string[],
+): void {
+  const at = names.map((name) => events.indexOf(name));
+  expect(at).not.toContain(-1);
+  expect(at).toEqual([...at].sort((left, right) => left - right));
 }
 
 let hostCounter = 0;
@@ -243,11 +298,14 @@ describe("a window's remote sign-in with the real host directory", () => {
     ) => void;
     /** The confirmation the attach asked for: how often, and how many of those answered. */
     readonly confirmation: { asked: number; answered: number };
+    /** What happened, in order: each registry read asked and answered, and each open the relay decided. */
+    readonly events: string[];
   }> {
     hostCounter += 1;
     const hostId = `hidden-row-confirm-directory-${hostCounter}`;
     const relay = new FakeRelayHost();
-    releasedHost(relay);
+    const events: string[] = [];
+    releasedHost(relay, events);
     relayHolder.factory = relay.factory;
     const rowOwnedBy = (owner: RemoteHostDirectoryEntry["owner"]) =>
       personalRow(hostId, relay, owner);
@@ -268,7 +326,10 @@ describe("a window's remote sign-in with the real host directory", () => {
         handlers.add(handler);
         return { dispose: () => handlers.delete(handler) };
       };
-    const pending: Array<(outcome: RemoteHostFetchOutcome) => void> = [];
+    const pending: Array<{
+      readonly read: number;
+      readonly resolve: (outcome: RemoteHostFetchOutcome) => void;
+    }> = [];
     const confirmation = { asked: 0, answered: 0 };
     let reads = 0;
     const directory = new HostDirectoryService({
@@ -284,8 +345,10 @@ describe("a window's remote sign-in with the real host directory", () => {
             kind: "hosts",
             entries: [rowOwnedBy({ kind: "user", id: USER_ID })],
           });
+        const read = reads;
+        events.push(`read ${read} asked`);
         return new Promise<RemoteHostFetchOutcome>((resolve) => {
-          pending.push(resolve);
+          pending.push({ read, resolve });
         });
       },
     });
@@ -304,10 +367,12 @@ describe("a window's remote sign-in with the real host directory", () => {
       answerRead: (outcome) => {
         const answer = pending.shift();
         if (answer === undefined) throw new Error("no registry read pending");
-        answer(outcome);
+        events.push(`read ${answer.read} answered`);
+        answer.resolve(outcome);
       },
       rowOwnedBy,
       confirmation,
+      events,
       call: (confirm) => {
         callThroughMessenger({
           hostId,
@@ -342,7 +407,9 @@ describe("a window's remote sign-in with the real host directory", () => {
       readonly answered: number;
     };
   }): Promise<void> {
-    await vi.waitFor(() => expect(run.confirmation.asked).toBe(1), WAIT);
+    await untilAfterBackoff(run.confirmation, () =>
+      expect(run.confirmation.asked).toBe(1),
+    );
     expect(run.confirmation.answered).toBe(0);
     expect(run.relay.openBearers).toEqual([""]);
   }
@@ -365,14 +432,14 @@ describe("a window's remote sign-in with the real host directory", () => {
     // The window shows: the listener acts on the skipped push, and its read is
     // still in flight when the attach begins.
     __setBrowserDocumentHiddenForTests(false);
-    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    await until(() => expect(run.reads()).toBe(2));
     run.call(confirmRowWhenHidden(() => run.directory));
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
+    await until(() => expect(run.relay.openBearers).toHaveLength(1));
     await attachParkedOnConfirmation(run);
 
     expect(run.reads()).toBe(2);
     run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    await until(() => expect(run.relay.openBearers).toHaveLength(2));
     expect(run.relay.openBearers).toEqual(["", ""]);
   }, 20_000);
 
@@ -382,11 +449,13 @@ describe("a window's remote sign-in with the real host directory", () => {
     // Visible, with the push still skipped and no read: the listener has not run.
     showWithoutNotifying();
     run.call(confirmRowWhenHidden(() => run.directory));
-    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    await untilAfterBackoff(run.confirmation, () =>
+      expect(run.reads()).toBe(2),
+    );
     await attachParkedOnConfirmation(run);
 
     run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    await until(() => expect(run.relay.openBearers).toHaveLength(2));
     expect(run.relay.openBearers).toEqual(["", ""]);
   }, 20_000);
 
@@ -394,9 +463,9 @@ describe("a window's remote sign-in with the real host directory", () => {
     const run = await startWithDirectory("push");
     skipPushWhileHidden(run);
     const running = run.directory.refresh();
-    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    await until(() => expect(run.reads()).toBe(2));
     run.call(confirmRowWhenHidden(() => run.directory));
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
+    await until(() => expect(run.relay.openBearers).toHaveLength(1));
     await attachParkedOnConfirmation(run);
     // The running read began before this confirmation: it cannot answer it,
     // and no second read starts beside it.
@@ -409,23 +478,32 @@ describe("a window's remote sign-in with the real host directory", () => {
     });
     await running;
     // The one that follows starts after it settled; the sign-in still waits.
-    await vi.waitFor(() => expect(run.reads()).toBe(3), WAIT);
+    await until(() => expect(run.reads()).toBe(3));
     expect(run.confirmation.answered).toBe(0);
     expect(run.relay.openBearers).toEqual([""]);
     run.answerRead({
       kind: "hosts",
       entries: [run.rowOwnedBy({ kind: "user", id: USER_ID })],
     });
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    await until(() => expect(run.relay.openBearers).toHaveLength(2));
     expect(run.relay.openBearers).toEqual(["", SIGN_IN]);
     expect(run.reads()).toBe(3);
+    // The sign-in went out after the follow-up read settled, never before it.
+    expectInOrder(run.events, [
+      "read 2 answered",
+      "read 3 asked",
+      "read 3 answered",
+      "sign-in open",
+    ]);
   }, 20_000);
 
   it("joins a read that started after its confirmation began, and starts no extra one", async () => {
     const run = await startWithDirectory("push");
     skipPushWhileHidden(run);
     run.call(confirmRowWhenHidden(() => run.directory));
-    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    await untilAfterBackoff(run.confirmation, () =>
+      expect(run.reads()).toBe(2),
+    );
     await attachParkedOnConfirmation(run);
     // Another reader asks while the confirmation's own read runs.
     const refreshing = run.directory.refresh();
@@ -436,16 +514,19 @@ describe("a window's remote sign-in with the real host directory", () => {
       entries: [run.rowOwnedBy({ kind: "user", id: USER_ID })],
     });
     await refreshing;
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    await until(() => expect(run.relay.openBearers).toHaveLength(2));
     expect(run.relay.openBearers).toEqual(["", SIGN_IN]);
     expect(run.reads()).toBe(2);
+    expectInOrder(run.events, ["read 2 answered", "sign-in open"]);
   }, 20_000);
 
   it("returns at once, reading nothing, in a visible window with no push skipped", async () => {
     const run = await startWithDirectory("push");
     run.call(confirmRowWhenHidden(() => run.directory));
 
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    await untilAfterBackoff(run.confirmation, () =>
+      expect(run.relay.openBearers).toHaveLength(2),
+    );
     expect(run.relay.openBearers).toEqual(["", SIGN_IN]);
     expect(run.reads()).toBe(1);
   }, 20_000);
@@ -456,14 +537,14 @@ describe("a window's remote sign-in with the real host directory", () => {
     // poll's read, which is in flight when the attach begins.
     __setBrowserDocumentHiddenForTests(true);
     __setBrowserDocumentHiddenForTests(false);
-    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    await until(() => expect(run.reads()).toBe(2));
     run.call(confirmRowWhenHidden(() => run.directory));
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
+    await until(() => expect(run.relay.openBearers).toHaveLength(1));
     await attachParkedOnConfirmation(run);
 
     expect(run.reads()).toBe(2);
     run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
-    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    await until(() => expect(run.relay.openBearers).toHaveLength(2));
     expect(run.relay.openBearers).toEqual(["", ""]);
   }, 20_000);
 
@@ -476,18 +557,29 @@ describe("a window's remote sign-in with the real host directory", () => {
       const run = await startWithDirectory("push");
       skipPushWhileHidden(run);
       run.call(confirmRowWhenHidden(() => run.directory));
-      await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+      await untilAfterBackoff(run.confirmation, () =>
+        expect(run.reads()).toBe(2),
+      );
       if (pastCeiling) {
+        run.events.push("ceiling passed");
         await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
       } else {
         run.answerRead({ kind: "failed" });
       }
 
-      await vi.waitFor(
-        () => expect(run.relay.openBearers).toEqual(["", SIGN_IN]),
-        WAIT,
-      );
+      await until(() => expect(run.relay.openBearers).toEqual(["", SIGN_IN]));
       expect(hostDoorStateFor(run.hostId)).toBeNull();
+      if (pastCeiling) {
+        // Only the ceiling released the attach: the read never answered.
+        expectInOrder(run.events, [
+          "read 2 asked",
+          "ceiling passed",
+          "sign-in open",
+        ]);
+        expect(run.events).not.toContain("read 2 answered");
+      } else {
+        expectInOrder(run.events, ["read 2 answered", "sign-in open"]);
+      }
     },
     20_000,
   );

@@ -112,14 +112,6 @@ const EMPTY_AD = new Uint8Array(0);
 const STATUS_METHOD = "host.status";
 const STREAM_METHOD = "cursor.subscribe";
 
-/** Captured before fake timers: the real event loop lets Noise's async work finish. */
-const realSetTimeout = globalThis.setTimeout;
-function realDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    realSetTimeout(resolve, ms);
-  });
-}
-
 const statusContract = defineRpcContract({
   method: STATUS_METHOD,
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -517,10 +509,11 @@ class FakeHost {
     this.control(type);
   }
 
-  settle(): Promise<void> {
-    return Promise.all(this.connections.map((entry) => entry.queue)).then(() =>
-      realDelay(20),
-    );
+  /** Returns once every connection's work is done, and the Noise work it started with it. */
+  async settle(): Promise<void> {
+    await Promise.all(this.connections.map((entry) => entry.queue));
+    await settleNoise();
+    await Promise.all(this.connections.map((entry) => entry.queue));
   }
 
   async waitForCredentialUpdate(count: number): Promise<void> {
@@ -888,20 +881,28 @@ interface Fixture {
 
 const opened: Session[] = [];
 
+const UNTIL_TURN_LIMIT = 2_500;
+
+/**
+ * Each turn lets the Noise work in flight finish and fires what is due at the
+ * current fake time. The bound is a count of turns, never a duration.
+ */
 async function until(condition: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 2_500; attempt += 1) {
+  for (let turn = 0; turn < UNTIL_TURN_LIMIT; turn += 1) {
     if (condition()) {
       return;
     }
-    await realDelay(2);
+    await settleNoise();
+    await vi.advanceTimersByTimeAsync(0);
   }
   throw new Error("condition was not reached");
 }
 
-/** Moves the fake clock, then lets the real async work it started finish. */
+/** Lets the Noise work in flight finish, moves the fake clock, then lets the work the move started finish. */
 async function step(ms: number): Promise<void> {
+  await settleNoise();
   await vi.advanceTimersByTimeAsync(ms);
-  await realDelay(20);
+  await settleNoise();
 }
 
 /** Moves the fake clock in quarter-second steps until `condition` holds. */
@@ -1352,11 +1353,13 @@ describe("RemoteSession host-leg resume", () => {
       host.control("host_detached");
       await step(RESUME_MASK_MS);
       expect(fixture.statuses).toEqual([HELD]);
+      const sentWhileHeld = connection.socket.binarySends;
       fixture.stream.sendClientFrame(
         { kind: "noop", hasBinaryPayload: false },
         null,
       );
       await step(1_000);
+      expect(connection.socket.binarySends).toBe(sentWhileHeld);
       expect(host.clientStreamFrames).toEqual([]);
 
       const resumed = host.clientFrames.length;
@@ -2005,7 +2008,6 @@ describe("RemoteSession host-leg resume", () => {
         const sealed = socket.binarySends;
         host.detach();
         await step(500);
-        await realDelay(100);
         expect(socket.binarySends).toBe(sealed);
       }
 
@@ -3203,7 +3205,7 @@ describe("RemoteSession host-leg resume", () => {
     it("neither drops the connection nor rewrites its ledger for a larger credential replay whose exchange the host's detach cancelled while it was sealed", async () => {
       const { fixture, plane } = await pacedFixture(true);
       const { host } = fixture;
-      await writeIntoLostLegUntilRingNearlyFull(fixture, plane);
+      const bearers = await writeIntoLostLegUntilRingNearlyFull(fixture, plane);
       const seals = holdCredentialSeals();
       seals.arm();
       plane.queue.push(LARGE);
@@ -3220,6 +3222,21 @@ describe("RemoteSession host-leg resume", () => {
 
       expect(host.connections).toHaveLength(1);
       expect(host.opens).toBe(1);
+
+      // The next attach resumes on that same connection and Noise session,
+      // and replays the whole gap: the resend reads the short bearer.
+      plane.queue.push(SHORT, ...bearers);
+      host.attach();
+      const total = 1 + bearers.length;
+      await advanceUntil(
+        () => host.credentialUpdates.length === total || host.opens > 1,
+        30_000,
+      );
+      expect(host.connections).toHaveLength(1);
+      expect(host.opens).toBe(1);
+      expect(host.handshakes).toBe(1);
+      expect(host.credentialUpdates).toHaveLength(total);
+      expect(host.credentialUpdates[0]?.bearer).toBe(SHORT);
     });
 
     it("charges the pacer for a rewritten credential when it reaches the socket: a leg that dies while it is sealed leaves no charge", async () => {

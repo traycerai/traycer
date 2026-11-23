@@ -18,7 +18,12 @@ import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
-import { acquireCliSignIn, type CliHostTokens } from "../cli-host-tokens";
+import {
+  acquireCliSignIn,
+  type CliHostBearer,
+  type CliHostTokens,
+} from "../cli-host-tokens";
+import { hostSignInKey } from "../../../../shared/auth/host-token-source";
 import type { SignInRotationResult } from "../../store/credentials-store";
 import { completeCredentialsReserve } from "./credentials-reserve-test-support";
 
@@ -122,6 +127,10 @@ const harness = vi.hoisted(() => ({
   writeGate: null as Promise<void> | null,
   /** Called as every outcome leaves the tracker, with what `signInRejected()` said then. */
   onLeave: null as ((judged: boolean) => void) | null,
+  /** Sign-in refusals that left the tracker with no request behind them, each named by the ask. */
+  unattributed: [] as string[],
+  /** Sign-in refusals answered to a caller against the rule, each named by its request. */
+  ruleBreaks: [] as string[],
   /** Asks that reached the token tracker; past a bound the tracker answers nothing more. */
   obtainCalls: 0,
   boundExceeded: false,
@@ -214,8 +223,10 @@ vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
   }),
 }));
 
-// Every outcome that leaves `tracked.obtain`, judged against the rule at the
-// moment it leaves.
+// Every outcome that leaves the tracker `trackHostTokenMints` returns, judged
+// against the rule at the moment it leaves: what a caller is answered is what is
+// judged, not what the source under the tracker answered. The source's obtain
+// is wrapped too, only as the bound on asks.
 vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -226,8 +237,8 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
     trackHostTokenMints: (
       tokens: Parameters<typeof actual.trackHostTokenMints>[0],
       hosts: Parameters<typeof actual.trackHostTokenMints>[1],
-    ) =>
-      actual.trackHostTokenMints(
+    ) => {
+      const tracker = actual.trackHostTokenMints(
         {
           ...tokens,
           obtain: async (userId, hostId, fresh, ask) => {
@@ -240,40 +251,56 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
                 detail: "the ask bound was exceeded",
               };
             }
-            const outcome = await tokens.obtain(userId, hostId, fresh, ask);
-            const refusalOf =
-              outcome.kind === "sign-in-rejected"
-                ? (harness.requests.find(
-                    (request) => request.given === outcome,
-                  ) ?? null)
-                : null;
-            const obeysRule =
-              refusalOf === null ||
-              (refusalOf.signIn === harness.storedSignIn() &&
-                !harness.requests.some(
-                  (later) =>
-                    later.process === ask.owner &&
-                    later.seq > refusalOf.seq &&
-                    later.given?.kind === "ok",
-                ));
-            const judged = await harness.signInRejected();
-            harness.events.push({
-              kind: "left",
-              hostId,
-              refusalOf,
-              obeysRule,
-              boughtOnOurs: harness.requests.some(
-                (request) =>
-                  request.signIn === OURS && request.given?.kind === "ok",
-              ),
-              judged,
-            });
-            harness.onLeave?.(judged);
-            return outcome;
+            return tokens.obtain(userId, hostId, fresh, ask);
           },
         },
         hosts,
-      ),
+      );
+      return {
+        ...tracker,
+        obtain: async (userId, hostId, fresh, ask) => {
+          const outcome = await tracker.obtain(userId, hostId, fresh, ask);
+          const refusalOf =
+            outcome.kind === "sign-in-rejected"
+              ? (harness.requests.find((request) => request.given === outcome) ??
+                null)
+              : null;
+          // A refusal no request of authn produced cannot be judged against the rule.
+          if (outcome.kind === "sign-in-rejected" && refusalOf === null)
+            harness.unattributed.push(
+              `a sign-in-rejected answer to an ask for ${hostId} with no request behind it`,
+            );
+          const obeysRule =
+            refusalOf === null ||
+            (refusalOf.signIn === harness.storedSignIn() &&
+              !harness.requests.some(
+                (later) =>
+                  later.process === ask.owner &&
+                  later.seq > refusalOf.seq &&
+                  later.given?.kind === "ok",
+              ));
+          // A refusal reaches a caller only as the answer of an ask on the stored sign-in, with no later purchase for its process.
+          if (!obeysRule && refusalOf !== null)
+            harness.ruleBreaks.push(
+              `the refusal of request ${refusalOf.seq} (sent with ${refusalOf.signIn}) was answered to an ask for ${hostId}`,
+            );
+          const judged = await harness.signInRejected();
+          harness.events.push({
+            kind: "left",
+            hostId,
+            refusalOf,
+            obeysRule,
+            boughtOnOurs: harness.requests.some(
+              (request) =>
+                request.signIn === OURS && request.given?.kind === "ok",
+            ),
+            judged,
+          });
+          harness.onLeave?.(judged);
+          return outcome;
+        },
+      };
+    },
   };
 });
 
@@ -411,6 +438,8 @@ beforeEach(async () => {
   harness.writeGate = null;
   harness.onLeave = null;
   harness.obtainCalls = 0;
+  harness.unattributed.splice(0);
+  harness.ruleBreaks.splice(0);
   harness.boundExceeded = false;
   harness.gated = 0;
   ioInFlight = 0;
@@ -760,6 +789,14 @@ async function checkModel(open: OpenTokens, step: string): Promise<void> {
     nonTestRotations(),
     `${step}: rotations started beyond those a counting, non-final refusal earns`,
   ).toBeLessThanOrEqual(open.model.credits + open.limits.allowance);
+  expect(
+    harness.ruleBreaks,
+    `${step}: every sign-in refusal answered obeys the rule`,
+  ).toEqual([]);
+  expect(
+    harness.unattributed,
+    `${step}: every sign-in refusal answered comes from a request`,
+  ).toEqual([]);
   expect(harness.boundExceeded, `${step}: the ask bound`).toBe(false);
   expect(harness.obtainCalls, `${step}: asks`).toBeLessThanOrEqual(
     open.limits.calls,
@@ -1543,6 +1580,19 @@ describe("model O4: an excluded refusal whose asker ends while a newer counting 
         answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
       },
     );
+    // The excluded refusal of A wrote nothing: the lease holds B and the
+    // process still holds its refusal of B, so a recovery for it reads B's
+    // refusal, final, and not A's, which the lease has moved past.
+    await expect(
+      open.tokens.signInRecovery.revalidateForReconnect(
+        processReleasedHosts.currentInstance(hostId),
+        null,
+        () => true,
+      ),
+    ).resolves.toEqual({
+      kind: "sign-in-rejected",
+      signIn: hostSignInKey(OURS),
+    });
     await step(open, "a sibling saves C and the lease adopts it", async () => {
       await open.otherProcess.signIn(
         credentialsOf(SIBLING_SIGN_IN),
@@ -1791,18 +1841,25 @@ describe("model O5: two recoveries each rotating, a third host having bought on 
 describe("model (e): two recoveries sharing one refused flight", () => {
   it("one is answered rotated and the other adopted, and both retries are refused on the rotated sign-in: final, no further rotation", async () => {
     const open = await prepare("one process", [SIGN_IN_A, OURS]);
+    const callers: Promise<CliHostBearer>[] = [];
     await step(
       open,
       "two mints of the host share one request sent with A",
       async () => {
-        startAsk(open, hostId);
+        callers.push(open.tokens.mintFresh(hostId, null));
         await untilHeldOn(SIGN_IN_A);
-        startAsk(open, hostId);
+        callers.push(open.tokens.mintFresh(hostId, null));
       },
     );
     await step(open, "A is refused for both", async () => {
       answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
     });
+    // The recovery's retry on the rotated sign-in is sent: without it nothing
+    // below is tested.
+    expect(
+      heldOn(OURS, "oldest"),
+      "a retry on the rotated sign-in is sent",
+    ).toBeDefined();
     for (let pass = 0; pass < 3; pass += 1) {
       const retry = heldOn(OURS, "oldest");
       if (retry === undefined) break;
@@ -1815,6 +1872,13 @@ describe("model (e): two recoveries sharing one refused flight", () => {
       );
     }
     expect(nonTestRotations()).toBe(1);
+    // Both callers end on the refusal of the rotated sign-in.
+    const answers = await Promise.all(callers);
+    expect(
+      answers.map((answer) =>
+        answer.kind === "failed" ? answer.failure.kind : answer.kind,
+      ),
+    ).toEqual(["sign-in-rejected", "sign-in-rejected"]);
     await finish(open);
   });
 });

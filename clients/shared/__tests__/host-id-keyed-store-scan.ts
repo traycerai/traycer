@@ -353,16 +353,138 @@ export function findHostIdKeyedStores(
   return [...stores.values()];
 }
 
-export function scannedSources(clientsRoot: string): string[] {
-  const roots = SCAN_ROOTS.map((root) => join(clientsRoot, root) + sep);
+/**
+ * Every production source of every client and the protocol, with no scan root:
+ * a constructor called anywhere a person's app runs counts, wherever it sits.
+ * The excluded-path rule reads the path under `clientsRoot`, so a checkout
+ * that sits under a directory named `out` or `mock` is still read.
+ */
+export function productionSources(clientsRoot: string): string[] {
   return collectExecSyncStdioScanFiles(join(clientsRoot, ".."))
     .filter(
       (file) =>
         /\.tsx?$/.test(file) &&
-        !EXCLUDED_PATH.test(file) &&
-        roots.some((root) => file.startsWith(root)),
+        !EXCLUDED_PATH.test(sep + relative(clientsRoot, file)),
     )
     .sort();
+}
+
+function scannedSources(clientsRoot: string): string[] {
+  const roots = SCAN_ROOTS.map((root) => join(clientsRoot, root) + sep);
+  return productionSources(clientsRoot).filter((file) =>
+    roots.some((root) => file.startsWith(root)),
+  );
+}
+
+export interface DormantCaller {
+  /** The dormant constructor the call reaches, never the alias it went through. */
+  readonly name: string;
+  readonly line: number;
+}
+
+function withoutWrappers(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isTypeAssertionExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/**
+ * Each call or `new` whose callee is one of `names`, or a local binding of one:
+ * an import specifier (a renamed one too), a `const x = name` chain, or a
+ * member of a namespace import. A declaration, a comment and a binding that is
+ * never called are not callers. Bindings match by name, not by module, so a
+ * same-named constructor from another module is reported too.
+ */
+export function dormantCallers(
+  path: string,
+  sourceText: string,
+  names: Iterable<string>,
+): DormantCaller[] {
+  const dormant = new Set(names);
+  // Every binding starts from a written name, so a file that never writes one has no caller.
+  if (![...dormant].some((name) => sourceText.includes(name))) return [];
+  const sourceFile = ts.createSourceFile(
+    path,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const bindings = new Map<string, string>([...dormant].map((n) => [n, n]));
+  const namespaces = new Set<string>();
+  const resolve = (expression: ts.Expression): string | undefined => {
+    const target = withoutWrappers(expression);
+    if (ts.isIdentifier(target)) return bindings.get(target.text);
+    if (
+      ts.isPropertyAccessExpression(target) &&
+      ts.isIdentifier(target.expression) &&
+      namespaces.has(target.expression.text) &&
+      dormant.has(target.name.text)
+    ) {
+      return target.name.text;
+    }
+    return undefined;
+  };
+  const visitAll = (visit: (node: ts.Node) => void): void => {
+    const walk = (node: ts.Node): void => {
+      visit(node);
+      ts.forEachChild(node, walk);
+    };
+    walk(sourceFile);
+  };
+  visitAll((node) => {
+    if (ts.isNamespaceImport(node)) namespaces.add(node.name.text);
+  });
+  // An alias may be declared before the binding it copies: repeat until none is new.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    visitAll((node) => {
+      let local: string | undefined;
+      let original: string | undefined;
+      if (ts.isImportSpecifier(node)) {
+        local = node.name.text;
+        original = bindings.get((node.propertyName ?? node.name).text);
+      } else if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer !== undefined
+      ) {
+        local = node.name.text;
+        original = resolve(node.initializer);
+      }
+      if (
+        local !== undefined &&
+        original !== undefined &&
+        !bindings.has(local)
+      ) {
+        bindings.set(local, original);
+        grew = true;
+      }
+    });
+  }
+  const callers: DormantCaller[] = [];
+  visitAll((node) => {
+    if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return;
+    const name = resolve(node.expression);
+    if (name === undefined) return;
+    callers.push({
+      name,
+      line:
+        sourceFile.getLineAndCharacterOfPosition(
+          node.expression.getStart(sourceFile),
+        ).line + 1,
+    });
+  });
+  return callers;
 }
 
 export function scanHostIdKeyedStores(clientsRoot: string): FoundStore[] {

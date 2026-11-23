@@ -309,7 +309,14 @@ describe("the lease follows the credentials file through one serialised path", (
       signal: null,
     }).rotateSignIn();
 
-    expect(result).toMatchObject({ outcome: "network-error", installed: null });
+    // authn's refresh was consumed and its token is saved: a rotation that never reached authn would leave A on disk.
+    expect(authn.refreshes).toHaveLength(0);
+    expect(result).toMatchObject({
+      outcome: "network-error",
+      installed: null,
+      accepted: SIGN_IN_B,
+    });
+    expect((await store.read())?.token).toBe(SIGN_IN_B);
     expect(lease.getBearerToken()).toBe(SIGN_IN_A);
     store.dispose();
   });

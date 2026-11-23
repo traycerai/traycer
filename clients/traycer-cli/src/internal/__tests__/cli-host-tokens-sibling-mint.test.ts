@@ -219,7 +219,11 @@ describe("a refused mint whose stored sign-in moved on while a sibling session b
 
     expect(tokenOf(boughtByY)).toBe("host-token-bought-1");
     expect(tokenOf(answeredToX)).toBe("host-token-bought-1");
-    expect(harness.mints).toHaveLength(2);
+    // Y's purchase was sent on the sign-in the file held when Y read it, not on X's stale one.
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      SIGN_IN,
+      SIGN_IN_MOVED,
+    ]);
   });
 
   it("answers the token the sibling bought and sends authn no third request, when the file was empty at load", async () => {
@@ -227,6 +231,10 @@ describe("a refused mint whose stored sign-in moved on while a sibling session b
 
     expect(tokenOf(boughtByY)).toBe("host-token-bought-1");
     expect(tokenOf(answeredToX)).toBe("host-token-bought-1");
-    expect(harness.mints).toHaveLength(2);
+    // Y's purchase was sent on the sign-in the file held when Y read it, not on X's stale one.
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      SIGN_IN,
+      SIGN_IN_MOVED,
+    ]);
   });
 });

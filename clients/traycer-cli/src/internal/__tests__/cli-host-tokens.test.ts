@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { nameReason } from "./released-memory-test-support";
+import { inviteReason, nameReason } from "./released-memory-test-support";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
 import {
@@ -9,7 +9,10 @@ import {
 import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
-import type { BearerLease } from "../../../../shared/auth/bearer-source";
+import {
+  MutableBearerLease,
+  type BearerLease,
+} from "../../../../shared/auth/bearer-source";
 import { acquireCliSignIn, type CliSignInHandle } from "../cli-host-tokens";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
@@ -246,6 +249,17 @@ describe("callHostRpc host-token mint recovery", () => {
   );
 });
 
+/** The person's one lease takes `token`, as a sibling's save does; an empty token is a person signed out. */
+function rotateLease(lease: BearerLease, token: string): void {
+  if (!(lease instanceof MutableBearerLease))
+    throw new Error("the person's lease is not rotatable");
+  lease.rotate(token);
+}
+
+function emptyLease(lease: BearerLease): void {
+  rotateLease(lease, "");
+}
+
 /** The handles a case took on its person's tokens; each is ended with the case. */
 const handles: CliSignInHandle[] = [];
 
@@ -281,6 +295,97 @@ describe("createCliHostTokens refusals that end a command", () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it("ends nothing at the gate when the host invites the sign-in after a not-admitted was told and its invited open is still unanswered", async () => {
+    const hostId = "host-invited-after-told";
+    nameReason(hostId);
+    const { tokens } = await signedInHandle();
+    const ending: string[] = [];
+    tokens.onRefusalEndingCommand((evidence) => {
+      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+    });
+    // A named reason and no invited sign-in pending: the not-admitted is told.
+    state.mintOutcomes.push({ kind: "not-admitted" });
+    await tokens.mintFresh(hostId, null);
+    expect(ending).toEqual([`${hostId}:not-admitted`]);
+
+    // The host invites the sign-in, and an open carrying it is written and not answered.
+    inviteReason(hostId);
+    processReleasedHosts.invitedSignInWritten(
+      processReleasedHosts.currentInstance(hostId),
+    );
+
+    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toBeNull();
+  });
+
+  it("ends the command through the next not-admitted once the invited open is answered with a refusal", async () => {
+    const hostId = "host-invited-answered-refused";
+    nameReason(hostId);
+    const instance = processReleasedHosts.currentInstance(hostId);
+    const { tokens } = await signedInHandle();
+    const ending: string[] = [];
+    tokens.onRefusalEndingCommand((evidence) => {
+      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+    });
+    // An invited sign-in is on the wire: a not-admitted ends nothing yet.
+    inviteReason(hostId);
+    processReleasedHosts.invitedSignInWritten(instance);
+    state.mintOutcomes.push({ kind: "not-admitted" });
+    await tokens.mintFresh(hostId, null);
+    expect(ending).toEqual([]);
+
+    // The host answers the invited open with a refusal; the next not-admitted ends the command.
+    processReleasedHosts.invitedSignInAnswered(instance);
+    nameReason(hostId);
+    state.mintOutcomes.push({ kind: "not-admitted" });
+    await tokens.mintFresh(hostId, null);
+
+    expect(ending).toEqual([`${hostId}:not-admitted`]);
+    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toMatchObject(
+      {
+        kind: "host-refusal",
+        failure: { kind: "not-admitted" },
+      },
+    );
+  });
+
+  it("ends the command on a no-sign-in answer while no sign-in is stored", async () => {
+    const hostId = "host-no-sign-in-stored-none";
+    const { lease, tokens } = await signedInHandle();
+    const ending: string[] = [];
+    tokens.onRefusalEndingCommand((evidence) => {
+      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+    });
+    // The person is signed out: no sign-in is stored.
+    emptyLease(lease);
+
+    await tokens.mintFresh(hostId, null);
+
+    expect(ending).toEqual([`${hostId}:no-sign-in`]);
+    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toMatchObject(
+      {
+        kind: "host-refusal",
+        failure: { kind: "no-sign-in" },
+      },
+    );
+  });
+
+  it("tells no ending, and the gate answers null, for a no-sign-in answered while a sign-in is stored", async () => {
+    const hostId = "host-no-sign-in-sibling-saved";
+    const { tokens } = await signedInHandle();
+    const ending: string[] = [];
+    tokens.onRefusalEndingCommand((evidence) => {
+      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+    });
+    // The mint is answered that no sign-in came, though the lease holds one by the time it is reported:
+    // the sign-in a sibling saved is the stored one.
+    state.mintOutcomes.push({ kind: "no-sign-in" });
+
+    await tokens.mintFresh(hostId, null);
+
+    expect(ending).toEqual([]);
+    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toBeNull();
   });
 
   it("asks once more for the host process observed now when the process was replaced before the mint started, and the command goes on", async () => {

@@ -591,8 +591,6 @@ function bareRefusal(): Record<string, unknown> {
 
 const NOT_A_MEMBER_SENTENCE =
   "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.";
-const OLDER_HOST_SENTENCE =
-  "The host is out of date. Reinstall the latest host with 'traycer host update'.";
 
 /** The reasons a released host gives for refusing a credential. */
 const RELEASED_REASONS = [
@@ -614,9 +612,9 @@ function releasedRefusalWith(reason: string): Record<string, unknown> {
   };
 }
 
-/** A team host's refusal of a non-member; with no door reason it is an older host's. */
+/** A team host's refusal of a non-member, which always names its door reason. */
 function teamRefusal(
-  doorReason: "not_admitted" | "membership_removed" | null,
+  doorReason: "not_admitted" | "membership_removed",
 ): Record<string, unknown> {
   return {
     kind: "fatalError",
@@ -626,7 +624,7 @@ function teamRefusal(
       retryable: false,
       incompatibleMethods: null,
       upgradeGuidance: null,
-      ...(doorReason === null ? {} : { doorReason }),
+      doorReason,
     },
   };
 }
@@ -1411,7 +1409,7 @@ describe("traycer monitor local released-host sign-in", () => {
         };
         mints.answer(answered, new Response("rejected", { status: 401 }));
         answered += 1;
-        // The recovery waits in its read, or (nothing to wait on) has gone on to ask again.
+        // Both variants hold a read the recovery makes, so it waits there. Another mint starting first is the failure.
         await vi.waitFor(
           () =>
             expect(
@@ -1419,6 +1417,11 @@ describe("traycer monitor local released-host sign-in", () => {
             ).toBe(true),
           WAIT,
         );
+        expect(
+          monitorHarness.grantHosts,
+          "a mint started before the adopting read reached its hold",
+        ).toHaveLength(answered);
+        expect(reachedHold).toBe(true);
         await replaceHostProcess();
         releaseHold();
         await vi.advanceTimersByTimeAsync(0);
@@ -2059,24 +2062,6 @@ describe("traycer monitor local released-host sign-in", () => {
       ]);
       expect(monitorHarness.exits).toEqual([1]);
     });
-
-    // A guard: a host that named a reason in this process is never handed the sign-in, so
-    // its bare refusal of the host-only token is an older host's.
-    it("still prints the older-host line for a bare token refusal from a host that named a reason in this process", async () => {
-      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
-      nameReason(monitorHarness.state.hostId);
-      startMonitor();
-      const socket = await socketAt(0);
-      await readOpen(socket);
-
-      socket.fireFrame(releasedRefusalWith("released-host-token-refusal"));
-
-      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
-      expect(ended?.error).toMatchObject({
-        message: OLDER_HOST_SENTENCE,
-        exitCode: 1,
-      });
-    });
   });
 
   describe("a verdict the monitor's own adopting read withdraws or outlives (P2, P5)", () => {
@@ -2142,7 +2127,14 @@ describe("traycer monitor local released-host sign-in", () => {
 
     it("never charges a host the monitor has left across its adopting read, and dials the new host before any bound", async () => {
       // Host X's refresh budget fills through three laps, each on a process that is then replaced.
-      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      // Host Y, which the poll moves to later, holds a token of its own, distinct from X's.
+      const hostY = nextHostId();
+      holdUsableTokens(
+        new Map([
+          [monitorHarness.state.hostId, "held-token"],
+          [hostY, "held-token-y"],
+        ]),
+      );
       const mints = holdMints();
       startMonitor();
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -2167,7 +2159,6 @@ describe("traycer monitor local released-host sign-in", () => {
         () => expect(monitorHarness.grantHosts).toHaveLength(4),
         WAIT,
       );
-      const hostY = nextHostId();
       monitorHarness.state.recovered = false;
       monitorHarness.state.afterRecovery = async (lease) => {
         monitorHarness.state.hostId = hostY;
@@ -2180,6 +2171,17 @@ describe("traycer monitor local released-host sign-in", () => {
 
       expect(ended?.error).toBeUndefined();
       expect(monitorHarness.exits).toEqual([]);
+      // The redial comes on the stream's own cadence, which has grown by now: advance to it.
+      for (
+        let step = 0;
+        step < 400 && monitorHarness.sockets.length <= 4;
+        step += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      // The next socket is the dial of Y, presenting Y's held token; a redial of X would present X's.
+      const redial = await socketAt(4);
+      expect((await readOpen(redial)).token).toBe("held-token-y");
       expect(await outcomeOf()).toBe("running");
     });
   });
@@ -2200,22 +2202,6 @@ describe("traycer monitor local released-host sign-in", () => {
         message: "traycer monitor: host closed the stream: team admission",
       });
       expect(ended?.error).not.toHaveProperty("code");
-    });
-
-    // A guard: a refusal with no reason is an older host's, on c8b3e988 too.
-    it("keeps a reasonless TEAM_MEMBERSHIP_REQUIRED on the older-host route", async () => {
-      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
-      startMonitor();
-      const socket = await socketAt(0);
-      await readOpen(socket);
-
-      socket.fireFrame(teamRefusal(null));
-
-      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
-      expect(ended?.error).toMatchObject({
-        message: OLDER_HOST_SENTENCE,
-        exitCode: 1,
-      });
     });
   });
 

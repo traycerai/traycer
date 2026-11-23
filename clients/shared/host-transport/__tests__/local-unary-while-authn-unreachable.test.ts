@@ -2378,7 +2378,11 @@ describe("a sign-in is written only where its row and its host still allow it", 
 });
 
 describe("a held token's refusal", () => {
-  it("stays on the newer held token when a late refusal of an older token arrives, so the newer one is not presented again", async () => {
+  /** Two held tokens, both run out, the second the current one; nothing is refused yet. */
+  async function olderAndNewerHeld(): Promise<{
+    readonly tokens: TrackedHostTokens;
+    readonly hostId: string;
+  }> {
     const source = createHostTokenSource({
       persistence: createMemoryHostTokenPersistence(),
       mint: () =>
@@ -2401,14 +2405,21 @@ describe("a held token's refusal", () => {
         () => true,
       );
     }
-
     expect(tokens.current(USER_ID, hostId)?.token).toBe("newer-host-token");
+    return { tokens, hostId };
+  }
+
+  it("stays on the newer held token when a late refusal of an older token arrives, so the newer one is not presented again", async () => {
+    const { tokens, hostId } = await olderAndNewerHeld();
+
     heldTokenRefused(
       tokens,
       USER_ID,
       memory.currentInstance(hostId),
       "newer-host-token",
     );
+    // The newer token's own refusal marks it before the older one's arrives.
+    expect(tokens.heldRefused(USER_ID, hostId)).toBe(true);
     heldTokenRefused(
       tokens,
       USER_ID,
@@ -2418,6 +2429,20 @@ describe("a held token's refusal", () => {
 
     expect(tokens.current(USER_ID, hostId)?.token).toBe("newer-host-token");
     expect(tokens.heldRefused(USER_ID, hostId)).toBe(true);
+  });
+
+  it("marks nothing when only an older token's refusal arrives, so the newer token is still presented", async () => {
+    const { tokens, hostId } = await olderAndNewerHeld();
+
+    heldTokenRefused(
+      tokens,
+      USER_ID,
+      memory.currentInstance(hostId),
+      "older-host-token",
+    );
+
+    expect(tokens.current(USER_ID, hostId)?.token).toBe("newer-host-token");
+    expect(tokens.heldRefused(USER_ID, hostId)).toBe(false);
   });
 });
 

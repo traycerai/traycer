@@ -18,7 +18,11 @@ import {
   createCliCredentialsStore,
   type SignInRotationResult,
 } from "../../store/credentials-store";
-import { acquireCliSignIn, type CliSignInHandle } from "../cli-host-tokens";
+import {
+  acquireCliSignIn,
+  type CliHostBearer,
+  type CliSignInHandle,
+} from "../cli-host-tokens";
 import { nameReason } from "./released-memory-test-support";
 import { SIGN_OUT_ARMS, standSignOutArm } from "./sign-out-arms-test-support";
 import { nextCasePerson } from "./case-person-test-support";
@@ -203,6 +207,10 @@ function gate(): Gate {
   });
   return { reached, release, ...marks };
 }
+
+/** The host-only token an answer presents, or null for a failure. */
+const heldTokenOf = (answer: CliHostBearer): string | null =>
+  answer.kind === "ok" ? answer.bearer.getBearerToken() : null;
 
 const credentialsOf = (token: string): StoredCredentials => ({
   token,
@@ -604,7 +612,9 @@ describe("a refusal a later purchase outlived hands its caller the held token (P
     expect((await tokens.mintFresh(hostId, null)).kind).toBe("ok");
     rejected.open();
 
-    expect(await asking).toMatchObject({ kind: "ok" });
+    // The caller is answered with the later purchase's held token, and authn is asked no third time.
+    expect(heldTokenOf(await asking)).toBe("host-token-2");
+    expect(harness.mints).toHaveLength(2);
     dispose();
     real.dispose();
   });
@@ -621,7 +631,9 @@ describe("a refusal a later purchase outlived hands its caller the held token (P
     expect((await tokens.mintFresh(hostId, null)).kind).toBe("ok");
     held.open();
 
-    expect(await asking).toMatchObject({ kind: "ok" });
+    // The caller is answered with the later purchase's held token, and authn is asked no third time.
+    expect(heldTokenOf(await asking)).toBe("host-token-2");
+    expect(harness.mints).toHaveLength(2);
     dispose();
     real.dispose();
   });

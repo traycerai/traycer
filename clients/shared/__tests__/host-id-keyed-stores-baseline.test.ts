@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  dormantCallers,
   findHostIdKeyedStores,
+  productionSources,
   scanHostIdKeyedStores,
-  scannedSources,
 } from "./host-id-keyed-store-scan";
 
 // A process-memory store keyed by a host id as a plain string keeps a host's
@@ -26,6 +27,13 @@ import {
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENTS_ROOT = join(THIS_DIR, "..", "..");
+/** A small `clients/` tree whose files call the dormant constructor, to prove the scan finds a caller. */
+const VIOLATING_CLIENTS_ROOT = join(
+  THIS_DIR,
+  "fixtures",
+  "dormant-constructor",
+  "clients",
+);
 
 type BaselineEntry =
   | {
@@ -516,6 +524,11 @@ const BASELINE: Readonly<Record<string, BaselineEntry>> = {
     reason:
       "Sign-ins whose refresh authn refused, keyed by the sign-in's digest: a fact about a sign-in, the same for every host and process",
   },
+  "traycer-cli/src/internal/cli-host-tokens.ts::mintWaiters": {
+    class: "NOT-AN-ANSWER",
+    reason:
+      "This process's own count of asks waiting on a person's mints for one host id, and the requests running for them; no host or mint answer is stored",
+  },
   "shared/host-client/host-runtime.ts::latestRenewal": {
     class: "NOT-AN-ANSWER",
     reason:
@@ -578,28 +591,34 @@ describe("host-id-keyed stores of host and mint answers", () => {
     );
   });
 
-  it("fails a dormant store when its constructor gains a production caller", () => {
-    const constructors = new Set(
-      Object.values(BASELINE).flatMap((entry) =>
-        entry.class === "DORMANT" ? [entry.constructor] : [],
+  const dormantConstructors = new Set(
+    Object.values(BASELINE).flatMap((entry) =>
+      entry.class === "DORMANT" ? [entry.constructor] : [],
+    ),
+  );
+
+  const callersUnder = (clientsRoot: string): string[] =>
+    productionSources(clientsRoot).flatMap((file) =>
+      dormantCallers(
+        relative(clientsRoot, file),
+        readFileSync(file, "utf8"),
+        dormantConstructors,
+      ).map(
+        (caller) =>
+          `${relative(clientsRoot, file)}:${caller.line}: ${caller.name}`,
       ),
     );
-    const callers: string[] = [];
-    for (const file of scannedSources(CLIENTS_ROOT)) {
-      const text = readFileSync(file, "utf8");
-      for (const name of constructors) {
-        const call = new RegExp(`\\b${name}\\s*\\(`);
-        const implementationOnly = text.replace(
-          new RegExp(`(function\\s+)${name}(\\s*\\()`),
-          "$1definition$2",
-        );
-        if (call.test(implementationOnly)) {
-          callers.push(`${relative(CLIENTS_ROOT, file)}: ${name}`);
-        }
-      }
-    }
-    expect(constructors.size).toBeGreaterThan(0);
-    expect(callers).toEqual([]);
+
+  it("fails a dormant store when its constructor gains a production caller", () => {
+    expect(dormantConstructors.size).toBeGreaterThan(0);
+    expect(callersUnder(CLIENTS_ROOT)).toEqual([]);
+  });
+
+  it("catches a caller under gui-app providers and a caller through an alias, and no declaration, comment or uncalled alias", () => {
+    expect(callersUnder(VIOLATING_CLIENTS_ROOT)).toEqual([
+      "gui-app/src/providers/open-auth-provider.ts:4: createLocalOpenAuth",
+      "shared/host-transport/aliased-open-auth.ts:6: createLocalOpenAuth",
+    ]);
   });
 
   describe("the scan's rule", () => {
@@ -696,6 +715,72 @@ describe("host-id-keyed stores of host and mint answers", () => {
           function f(rows: string[]) { const hosts = new Set(rows); return hosts; }
         `),
       ).toEqual([]);
+    });
+
+    describe("a dormant constructor's callers", () => {
+      const callersOf = (source: string): string[] =>
+        dormantCallers("probe.ts", source, ["createLocalOpenAuth"]).map(
+          (caller) => `${caller.name}:${String(caller.line)}`,
+        );
+
+      it("reports a call beside the declaration, and a `new` of it", () => {
+        expect(
+          callersOf(`
+            export function createLocalOpenAuth(options: Options): Auth { return build(options); }
+            export const auth = createLocalOpenAuth({});
+            export const other = new createLocalOpenAuth({});
+          `),
+        ).toEqual(["createLocalOpenAuth:3", "createLocalOpenAuth:4"]);
+      });
+
+      it("passes a declaration that nothing calls", () => {
+        expect(
+          callersOf(`
+            export function createLocalOpenAuth(options: Options): Auth { return build(options); }
+          `),
+        ).toEqual([]);
+      });
+
+      it("passes the signature in a comment or a string", () => {
+        expect(
+          callersOf(`
+            // createLocalOpenAuth(options) builds one
+            /* new createLocalOpenAuth({}) */
+            export const note = "createLocalOpenAuth(options)";
+          `),
+        ).toEqual([]);
+      });
+
+      it("reports a call through a renamed import, a const chain and a namespace import", () => {
+        expect(
+          callersOf(`
+            import { createLocalOpenAuth as make } from "./create-local-open-auth";
+            import * as auth from "./create-local-open-auth";
+            const later = alias;
+            const alias = make;
+            make({});
+            later({});
+            auth.createLocalOpenAuth({});
+            (alias as Factory)({});
+          `),
+        ).toEqual([
+          "createLocalOpenAuth:6",
+          "createLocalOpenAuth:7",
+          "createLocalOpenAuth:8",
+          "createLocalOpenAuth:9",
+        ]);
+      });
+
+      it("passes an alias that is never called", () => {
+        expect(
+          callersOf(`
+            import { createLocalOpenAuth as make } from "./create-local-open-auth";
+            const alias = make;
+            export const kept = { alias, make };
+            export { make as exported };
+          `),
+        ).toEqual([]);
+      });
     });
   });
 });

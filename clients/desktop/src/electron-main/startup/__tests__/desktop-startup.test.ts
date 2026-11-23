@@ -1,4 +1,9 @@
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  hostSignInKey,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
+import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
@@ -162,20 +167,34 @@ vi.mock("../../windows/epic-window-ownership", () => ({
 vi.mock("../../windows/per-window-state", () => ({
   PerWindowState: class {},
 }));
+interface StartupAuthSnapshot {
+  readonly status: "signed-in" | "signed-out" | "signing-in" | "unverified";
+  readonly token: string | null;
+  readonly profile: {
+    readonly userId: string;
+    readonly userName: string;
+    readonly email: string;
+  } | null;
+}
+
 const capturedAuthSessions = vi.hoisted(() => {
   const sessions: Array<{
-    set(snapshot: {
-      readonly status: "signed-in" | "signed-out" | "signing-in" | "unverified";
-      readonly token: string | null;
-      readonly profile: {
-        readonly userId: string;
-        readonly userName: string;
-        readonly email: string;
-      } | null;
-    }): void;
+    set(snapshot: StartupAuthSnapshot): void;
+    setVerified(snapshot: StartupAuthSnapshot, generation: number): boolean;
+    beginSet(): number;
   }> = [];
   return { sessions };
 });
+
+// The sources `runDesktopStartup` built, and whether the next startup builds
+// its credentials store (so it runs on to the lifecycle policy store) or
+// stops at it, as every other case here wants.
+const startupWiring = vi.hoisted(() => ({
+  hostTokenSources: [] as Array<
+    import("@traycer-clients/shared/auth/host-token-source").HostTokenSource
+  >,
+  constructCredentialsStore: false,
+}));
 
 vi.mock("../../auth/desktop-auth-session", async (importOriginal) => {
   const actual =
@@ -355,10 +374,53 @@ vi.mock(
 vi.mock("../../auth/file-token-store", () => ({
   FileTokenStore: class {
     constructor() {
-      throw new Error("stop-after-released-host-listener");
+      if (!startupWiring.constructCredentialsStore) {
+        throw new Error("stop-after-released-host-listener");
+      }
     }
   },
 }));
+vi.mock("../../host/host-lifecycle-policy", () => ({
+  HostLifecyclePolicyStore: class {
+    constructor() {
+      throw new Error("stop-after-host-token-source");
+    }
+  },
+}));
+vi.mock(
+  "@traycer-clients/shared/auth/host-token-source",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/auth/host-token-source")
+      >();
+    return {
+      ...actual,
+      createHostTokenSource: (
+        deps: Parameters<typeof actual.createHostTokenSource>[0],
+      ) => {
+        const source = actual.createHostTokenSource(deps);
+        startupWiring.hostTokenSources.push(source);
+        return source;
+      },
+    };
+  },
+);
+vi.mock("@traycer-clients/shared/auth/host-token-file", async () => {
+  const { createMemoryHostTokenPersistence } =
+    await import("@traycer-clients/shared/auth/host-token-source");
+  return { createHostTokenFilePersistence: createMemoryHostTokenPersistence };
+});
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/grant-client",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/grant-client")
+      >();
+    return { ...actual, mintHostTokenViaHttp: vi.fn() };
+  },
+);
 vi.mock("../../browser-view/storage/browser-saved-logins", () => ({
   browserSavedLoginsFilePath: () => "/tmp/browser-saved-logins.json",
   initBrowserSavedLogins: () => Promise.resolve(),
@@ -802,5 +864,82 @@ describe("released host memory across a desktop sign-out", () => {
     expect((await openStartupFrame(nextSocket)).token).toBe(
       NO_HOST_TOKEN_PROBE,
     );
+  });
+});
+
+describe("the sign-in main's host token source mints with", () => {
+  const SIGN_IN = "desktop-main-verified-sign-in";
+  const HOST_ID = "desktop-main-sign-in-host";
+  const signedIn: StartupAuthSnapshot = {
+    status: "signed-in",
+    token: SIGN_IN,
+    profile: {
+      userId: RELEASED_USER_ID,
+      userName: "person",
+      email: "person@example.com",
+    },
+  };
+
+  afterEach(() => {
+    startupWiring.constructCredentialsStore = false;
+    startupWiring.hostTokenSources.splice(0);
+    capturedAuthSessions.sessions.splice(0);
+    vi.mocked(mintHostTokenViaHttp).mockReset();
+  });
+
+  async function startMain(): Promise<{
+    readonly session: (typeof capturedAuthSessions.sessions)[number];
+    readonly source: HostTokenSource;
+  }> {
+    startupWiring.constructCredentialsStore = true;
+    vi.mocked(mintHostTokenViaHttp).mockResolvedValue({
+      kind: "ok",
+      token: { token: "minted-host-token", expiresAtMs: Date.now() + 600_000 },
+    });
+    const { runDesktopStartup } = await import("../desktop-startup");
+    await expect(runDesktopStartup()).rejects.toThrow(
+      "stop-after-host-token-source",
+    );
+    const session = capturedAuthSessions.sessions[0];
+    const source = startupWiring.hostTokenSources[0];
+    if (session === undefined || source === undefined) {
+      throw new Error("startup did not build the auth session and the source");
+    }
+    return { session, source };
+  }
+
+  const ask = { signal: null, owner: null } as const;
+
+  it("is the sign-in main verified for that person, and the mint sends it", async () => {
+    const { session, source } = await startMain();
+    session.setVerified(signedIn, session.beginSet());
+
+    expect(source.signInKey(RELEASED_USER_ID)).toBe(hostSignInKey(SIGN_IN));
+    await source.obtain(RELEASED_USER_ID, HOST_ID, true, ask);
+    expect(vi.mocked(mintHostTokenViaHttp).mock.calls).toEqual([
+      ["", HOST_ID, SIGN_IN, null],
+    ]);
+  });
+
+  it("is none for a sign-in main has not verified, and no mint is sent", async () => {
+    const { session, source } = await startMain();
+    session.set(signedIn);
+
+    expect(source.signInKey(RELEASED_USER_ID)).toBeNull();
+    await expect(
+      source.obtain(RELEASED_USER_ID, HOST_ID, true, ask),
+    ).resolves.toEqual({ kind: "no-sign-in" });
+    expect(mintHostTokenViaHttp).not.toHaveBeenCalled();
+  });
+
+  it("is none for another person than the one main verified", async () => {
+    const { session, source } = await startMain();
+    session.setVerified(signedIn, session.beginSet());
+
+    expect(source.signInKey("another-user")).toBeNull();
+    await expect(
+      source.obtain("another-user", HOST_ID, true, ask),
+    ).resolves.toEqual({ kind: "no-sign-in" });
+    expect(mintHostTokenViaHttp).not.toHaveBeenCalled();
   });
 });

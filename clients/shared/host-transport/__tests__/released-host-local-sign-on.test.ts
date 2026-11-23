@@ -2122,13 +2122,18 @@ describe("released personal host, local stream", () => {
       expect((await openFrame(sockets[1])).token).toBe(SIGN_IN);
       // The consumer ends the stream in the status callback of the refusal's
       // own move to reconnecting, while the recovery's owner stays alive.
+      let closedByConsumer = false;
       session.onStatusChange((status) => {
         statuses.push(status);
-        if (status === "reconnecting") session.close();
+        if (status === "reconnecting") {
+          closedByConsumer = true;
+          session.close();
+        }
       });
 
       sockets[1].fireText(releasedRefusal());
-      await vi.waitFor(() => expect(statuses).toContain("reconnecting"), WAIT);
+      // The refusal's own move to reconnecting runs the callback just installed.
+      await vi.waitFor(() => expect(closedByConsumer).toBe(true), WAIT);
       // Past the longest redial backoff: nothing follows the end.
       await vi.advanceTimersByTimeAsync(RECONNECT_MAX_BACKOFF_MS);
 

@@ -243,8 +243,17 @@ describe("the concurrent pair of `traycer bot list`", () => {
       listBots(),
     ]);
 
-    expect(environments.status).toBe("rejected");
-    expect(bots.status).toBe("rejected");
+    // Both calls end on the stored-credential refusal, not on any other failure.
+    const refused = {
+      code: "E_AUTH_REJECTED",
+      message:
+        "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+    };
+    expect(environments).toMatchObject({
+      status: "rejected",
+      reason: refused,
+    });
+    expect(bots).toMatchObject({ status: "rejected", reason: refused });
     expect(authn.refreshes).toEqual([`rt-${STALE_SIGN_IN}`]);
   });
 });
