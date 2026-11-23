@@ -974,3 +974,36 @@ describe("a window's one announce for a token main wrote and handed it back", ()
     },
   );
 });
+
+describe("a window's record of a refused mint belongs to the sign-in the mint was sent with", () => {
+  const USER = "user-a";
+  const HOST = "host-refusal-belongs-to-sign-in";
+  const jwtExpiring = (exp: number): string =>
+    `header.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.signature`;
+
+  it("is seen by an ask on the same sign-in and by none once main's stored sign-in moved", async () => {
+    let stored = jwtExpiring(2_000_000);
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "sign-in-rejected" }),
+      signIn: (userId) => (userId === USER ? stored : null),
+      now: () => 1_000_000,
+    });
+    registerFor(main, USER);
+    processReleasedHosts.observeInstance(HOST, "process-a");
+    const window = windowOverMain(main);
+    const owner = { hostId: HOST, observed: "process-a" };
+
+    await expect(
+      window.obtain(USER, HOST, true, {
+        signal: null,
+        owner,
+        observedNow: () => "process-a",
+      }),
+    ).resolves.toEqual({ kind: "sign-in-rejected" });
+    expect(window.lastFailureOf(USER, owner)).toBe("sign-in-rejected");
+
+    stored = jwtExpiring(2_100_000);
+    expect(window.lastFailureOf(USER, owner)).toBeNull();
+  });
+});
