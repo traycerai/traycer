@@ -522,11 +522,10 @@ describe("main resolves the browser.sessions host itself", () => {
       }
     });
 
-    // Date and performance are faked without the timers: the wall clock and
-    // the monotonic one move independently (`setSystemTime` moves only the
-    // wall clock, `advanceTimersByTime` both), and no timer callback runs.
-    const BOTH_CLOCKS = { toFake: ["Date", "performance"] } as const;
-
+    // The clock cases below fake Date and performance without the timers: the
+    // wall clock and the monotonic one move independently (`setSystemTime`
+    // moves only the wall clock, `advanceTimersByTime` both), and no timer
+    // callback runs.
     function holdConfirmation(directory: {
       confirmRows(stillWaiting: () => boolean): Promise<boolean>;
     }): { readonly running: () => Promise<boolean> } {
@@ -547,7 +546,7 @@ describe("main resolves the browser.sessions host itself", () => {
     }
 
     it("starts no read once the monotonic clock is past its ceiling, though the ceiling's timer has not run, and answers false", async () => {
-      vi.useFakeTimers(BOTH_CLOCKS);
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
       try {
         const { directory, firstRead, gets } = directoryWithFirstReadHeld();
         const confirmation = holdConfirmation(directory);
@@ -566,7 +565,7 @@ describe("main resolves the browser.sessions host itself", () => {
     });
 
     it("keeps its deadline when the wall clock is set back past it: no read starts, and the answer is false", async () => {
-      vi.useFakeTimers(BOTH_CLOCKS);
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
       try {
         const { directory, firstRead, gets } = directoryWithFirstReadHeld();
         const confirmation = holdConfirmation(directory);
@@ -586,7 +585,7 @@ describe("main resolves the browser.sessions host itself", () => {
     });
 
     it("keeps waiting when the wall clock jumps forward past the ceiling inside it: the next read is started and answers true", async () => {
-      vi.useFakeTimers(BOTH_CLOCKS);
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
       try {
         const { directory, firstRead, gets } = directoryWithFirstReadHeld();
         const confirmation = holdConfirmation(directory);
