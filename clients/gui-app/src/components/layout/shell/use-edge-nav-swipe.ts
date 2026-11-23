@@ -5,38 +5,24 @@ import {
   withinTextEntry,
 } from "@/components/layout/shell/shell-gestures";
 import { isMobileApp } from "@/lib/mobile-app";
-import { readSafeAreaInsets } from "@/lib/safe-area-insets";
-
-/**
- * Width of the strip at each screen edge that answers a navigation swipe.
- *
- * The only absolute measurement here, and it is absolute because the thing it
- * describes is: a fingertip is the same size on a 4.7" phone as on a tablet, so
- * a zone expressed as a fraction of the viewport would be an unhittable sliver
- * on one and a wide dead band on the other.
- *
- * The strip is carved out of whichever surface is underneath - a chat timeline,
- * the canvas, a terminal - so every pixel of it is a pixel those surfaces lose.
- * Wide enough for a thumb reaching across the screen, narrow enough that
- * content is not routinely touched here. The epic row's swipe tray reserves a
- * strip of the same width for the same reason, and yields it to this.
- */
-const EDGE_ZONE_PX = 32;
+import { edgeSwipeDirectionAt } from "@/lib/edge-swipe-zones";
+import { claimEdgeSwipeEvent } from "@/components/layout/shell/edge-swipe-claims";
 
 export type EdgeNavDirection = "back" | "forward";
 
 /**
  * What activation leads to, answered by the owner of the gesture's effect.
  *
- * Three outcomes rather than a boolean, because "nothing will follow the
+ * Four outcomes rather than a boolean, because "nothing will follow the
  * finger" splits into two answers with OPPOSITE remedies: `instant` means this
  * step cannot be animated but is still owed its navigation - the discrete step
  * this gesture has always performed - while `decline` means the gesture must
  * be consumed with NO navigation at all. Collapsing them into one `false`
  * is how a swipe landing during a committed settle once fired a second,
- * instant navigation under layers still showing the first.
+ * instant navigation under layers still showing the first. `pass` leaves a
+ * contact with no available navigation to another recognizer.
  */
-export type EdgeNavDragResponse = "follow" | "instant" | "decline";
+export type EdgeNavDragResponse = "follow" | "instant" | "decline" | "pass";
 
 export interface EdgeNavSwipeRelease {
   /** Inward travel when the pointer left, in px. */
@@ -52,6 +38,8 @@ export interface EdgeNavSwipeRelease {
 }
 
 export interface EdgeNavSwipeHandlers {
+  /** Whether this contact has an action before the touch stream is reserved. */
+  readonly canStart: (direction: EdgeNavDirection) => boolean;
   /**
    * Called once, on the move that declares the drag a navigation swipe, and
    * answers what the rest of the pointer is spent on.
@@ -63,7 +51,8 @@ export interface EdgeNavSwipeHandlers {
    * which is the whole of what this gesture used to be. `decline` consumes
    * the gesture outright: no follow, no step, nothing - the answer for a
    * moment when a navigation is already in flight and a second one would
-   * land under it.
+   * land under it. `pass` leaves the contact to another recognizer when there
+   * is no action to take.
    */
   readonly onDragStart: (direction: EdgeNavDirection) => EdgeNavDragResponse;
   /** Inward travel so far, on every move of a followed drag. */
@@ -183,6 +172,12 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
     // back/forward arrows, which this gesture is the phone's stand-in for.
     if (!isMobileApp()) return;
     let tracking: EdgeNavSwipeTracking | null = null;
+    let contact: {
+      x: number;
+      y: number;
+      pointerId: number;
+      direction: EdgeNavDirection | null;
+    } | null = null;
 
     /**
      * Drops the tracked pointer, telling whatever is following the drag that it
@@ -212,15 +207,28 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       // the gesture as a whole. A drag already under way did not choose to end
       // here, so it ends the way the system ending it would.
       if (tracking !== null) {
+        contact = null;
         stopTracking(true);
         return;
       }
       if (!event.isPrimary) return;
-      if (handlersRef.current.edgesClaimed()) return;
-      const direction = edgeDirectionAt(event.clientX);
-      if (direction === null) return;
-      if (ownsHorizontalGesture(event.target)) return;
-      if (withinTextEntry(event.target)) return;
+      const direction = edgeSwipeDirectionAt(event.clientX);
+      const eligible =
+        direction !== null &&
+        !handlersRef.current.edgesClaimed() &&
+        handlersRef.current.canStart(direction) &&
+        !ownsHorizontalGesture(event.target) &&
+        !withinTextEntry(event.target);
+      contact =
+        event.pointerType === "touch" || event.pointerType === "pen"
+          ? {
+              x: event.clientX,
+              y: event.clientY,
+              pointerId: event.pointerId,
+              direction: eligible ? direction : null,
+            }
+          : null;
+      if (!eligible) return;
       tracking = {
         pointerId: event.pointerId,
         x: event.clientX,
@@ -291,6 +299,7 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       // decides how the rest of the pointer is spent: followed to the release,
       // spent on a discrete step here and now, or consumed with nothing owed.
       const response = handlersRef.current.onDragStart(started.direction);
+      if (response !== "pass") claimEdgeSwipeEvent(event);
       if (response !== "follow") {
         tracking = null;
         if (response === "instant") {
@@ -313,6 +322,7 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
     };
 
     const handlePointerUp = (event: PointerEvent): void => {
+      if (contact?.pointerId === event.pointerId) contact = null;
       const started = tracking;
       if (started === null) return;
       if (event.pointerId !== started.pointerId) return;
@@ -344,12 +354,23 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
     };
 
     const handlePointerCancel = (event: PointerEvent): void => {
+      if (contact?.pointerId === event.pointerId) contact = null;
       if (tracking === null) return;
       if (event.pointerId !== tracking.pointerId) return;
       stopTracking(true);
     };
 
-    const releaseReservation = reserveEdgeGesture(handlersRef);
+    const releaseReservation = reserveEdgeGesture(handlersRef, (x, y) => {
+      if (
+        contact === null ||
+        Math.abs(contact.x - x) > 1 ||
+        Math.abs(contact.y - y) > 1
+      )
+        return undefined;
+      const direction = contact.direction;
+      contact = null;
+      return direction;
+    });
 
     const options = { capture: true, passive: true };
     document.addEventListener("pointerdown", handlePointerDown, options);
@@ -423,9 +444,15 @@ interface ReservedTouch {
  * cancel is refused, and a recognizer that asks for one anyway is only
  * pretending to have reserved anything.
  */
-function reserveEdgeGesture(handlersRef: {
-  readonly current: EdgeNavSwipeHandlers;
-}): () => void {
+function reserveEdgeGesture(
+  handlersRef: {
+    readonly current: EdgeNavSwipeHandlers;
+  },
+  pointerDecision: (
+    x: number,
+    y: number,
+  ) => EdgeNavDirection | null | undefined,
+): () => void {
   let reserved: ReservedTouch | null = null;
 
   const handleTouchMove = (event: TouchEvent): void => {
@@ -481,11 +508,17 @@ function reserveEdgeGesture(handlersRef: {
     // The same entrance test the recognizer applies, so the two never disagree
     // about whose gesture this is - reserving a touch the recognizer will not
     // answer would cancel a scroll for nothing.
-    if (handlersRef.current.edgesClaimed()) return;
-    const direction = edgeDirectionAt(touch.clientX);
-    if (direction === null) return;
-    if (ownsHorizontalGesture(event.target)) return;
-    if (withinTextEntry(event.target)) return;
+    const prior = pointerDecision(touch.clientX, touch.clientY);
+    let direction = prior;
+    if (prior === undefined) {
+      if (handlersRef.current.edgesClaimed()) return;
+      direction = edgeSwipeDirectionAt(touch.clientX);
+      if (direction === null || !handlersRef.current.canStart(direction))
+        return;
+      if (ownsHorizontalGesture(event.target)) return;
+      if (withinTextEntry(event.target)) return;
+    }
+    if (direction === null || direction === undefined) return;
     reserved = {
       x: touch.clientX,
       y: touch.clientY,
@@ -524,25 +557,4 @@ function reserveEdgeGesture(handlersRef: {
       capture: true,
     });
   };
-}
-
-/**
- * Which navigation an edge answers, or `null` for the screen between them.
- *
- * The leading edge is checked first so a viewport narrow enough for the two
- * zones to overlap resolves to one of them rather than to whichever comparison
- * ran last. Back wins that tie because it is the gesture with somewhere to go:
- * forward only exists after a back.
- */
-function edgeDirectionAt(clientX: number): EdgeNavDirection | null {
-  const insets = readSafeAreaInsets();
-  const surfaceLeft = insets.left;
-  if (clientX >= surfaceLeft && clientX <= surfaceLeft + EDGE_ZONE_PX) {
-    return "back";
-  }
-  const surfaceRight = window.innerWidth - insets.right;
-  if (clientX <= surfaceRight && clientX >= surfaceRight - EDGE_ZONE_PX) {
-    return "forward";
-  }
-  return null;
 }

@@ -66,11 +66,23 @@ export function useMobileHistorySwipes(): ReactElement | null {
     resolveDestination,
   );
   useEdgeNavSwipe({
-    onDragStart: (direction) => {
+    canStart: (direction) => {
       if (useSettingsStore.getState().mobileSwipeHistory)
+        return transition.canStart(direction);
+      if (direction === "back") return true;
+      const focused = selectHostFocusedRef(useTabsStore.getState());
+      return (
+        (focused?.kind === "epic" || focused?.kind === "tracy") &&
+        useMobileSwitcherStore.getState().swipeOpenByTabId[focused.id] !==
+          undefined
+      );
+    },
+    onDragStart: (direction) => {
+      if (useSettingsStore.getState().mobileSwipeHistory) {
         return transition.beginDrag(direction);
+      }
       if (direction === "back") return "instant";
-      return swipeTarget.current === undefined ? "decline" : "instant";
+      return swipeTarget.current === undefined ? "pass" : "instant";
     },
     onDragMove: transition.updateDrag,
     onDragEnd: transition.endDrag,
