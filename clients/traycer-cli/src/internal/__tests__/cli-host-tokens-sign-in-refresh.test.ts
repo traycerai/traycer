@@ -58,28 +58,25 @@ vi.mock("../../store/paths", async (importOriginal) => {
   };
 });
 
-vi.mock(
-  "../../../../shared/auth/auth-validation",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../../../shared/auth/auth-validation")
-      >();
-    return {
-      ...actual,
-      refreshOnceAbortable: async (): Promise<{
-        readonly kind: "refreshed";
-        readonly token: string;
-        readonly refreshToken: string;
-      }> => {
-        const token = credentialsFile.refreshed.shift();
-        if (token === undefined)
-          throw new Error("authn was asked for a refresh no test expected");
-        return { kind: "refreshed", token, refreshToken: `rt-${token}` };
-      },
-    };
-  },
-);
+vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/auth-validation")
+    >();
+  return {
+    ...actual,
+    refreshOnceAbortable: async (): Promise<{
+      readonly kind: "refreshed";
+      readonly token: string;
+      readonly refreshToken: string;
+    }> => {
+      const token = credentialsFile.refreshed.shift();
+      if (token === undefined)
+        throw new Error("authn was asked for a refresh no test expected");
+      return { kind: "refreshed", token, refreshToken: `rt-${token}` };
+    },
+  };
+});
 
 vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
   createHostTokenFilePersistence: () => ({

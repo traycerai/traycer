@@ -380,7 +380,7 @@ export function createHostTokenSource(deps: {
   const signInKeyOf = (userId: string): number | null =>
     hostSignInKey(signIn?.(userId) ?? null);
 
-  const announce =(change: HostTokenChange): void => {
+  const announce = (change: HostTokenChange): void => {
     for (const listener of Array.from(listeners)) listener(change);
   };
 
@@ -475,10 +475,16 @@ export function createHostTokenSource(deps: {
     { signal, asker, replaces }: MintAsk,
   ): MintSent => {
     if (eraOf(userId) !== era)
-      return { sentWith: null, outcome: Promise.resolve({ kind: "superseded" }) };
+      return {
+        sentWith: null,
+        outcome: Promise.resolve({ kind: "superseded" }),
+      };
     const signInToken = signIn?.(userId) ?? null;
     if (signInToken === null)
-      return { sentWith: null, outcome: Promise.resolve({ kind: "no-sign-in" }) };
+      return {
+        sentWith: null,
+        outcome: Promise.resolve({ kind: "no-sign-in" }),
+      };
     const key = keyOf(userId, hostId);
     const mark = hostSignInKey(signInToken);
     // Keyed by refresh and era too: a mint begun before a refresh or a sign-out must
@@ -635,12 +641,13 @@ export function createHostTokenSource(deps: {
       const outcomes = await Promise.all(
         // A renewal is for a person and host id, not an attempt for a host
         // process: era and order are its write's only checks.
-        due.map((hostId) =>
-          mintOnce(userId, hostId, era, {
-            signal: null,
-            asker: NO_ASKER,
-            replaces: null,
-          }).outcome,
+        due.map(
+          (hostId) =>
+            mintOnce(userId, hostId, era, {
+              signal: null,
+              asker: NO_ASKER,
+              replaces: null,
+            }).outcome,
         ),
       );
       if (eraOf(userId) !== era) return { kind: "superseded" };

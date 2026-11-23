@@ -223,22 +223,24 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
       monitorHarness.state.credentialsPath !== ""
         ? actual.createCliCredentialsStore()
         : {
-      dispose: () => undefined,
-      rotate: async () => {
-        const adopted =
-          monitorHarness.state.rotations.length === 0 &&
-          monitorHarness.state.firstRotation === "superseded";
-        monitorHarness.state.rotations.push(adopted ? "superseded" : "applied");
-        return {
-          outcome: adopted ? "superseded" : "applied",
-          credentials: {
-            token: adopted
-              ? "adopted-expired-token"
-              : monitorHarness.state.refreshedSignIn,
+            dispose: () => undefined,
+            rotate: async () => {
+              const adopted =
+                monitorHarness.state.rotations.length === 0 &&
+                monitorHarness.state.firstRotation === "superseded";
+              monitorHarness.state.rotations.push(
+                adopted ? "superseded" : "applied",
+              );
+              return {
+                outcome: adopted ? "superseded" : "applied",
+                credentials: {
+                  token: adopted
+                    ? "adopted-expired-token"
+                    : monitorHarness.state.refreshedSignIn,
+                },
+              };
+            },
           },
-        };
-      },
-    },
     createStoreBackedRevalidator: (
       args: Parameters<typeof actual.createStoreBackedRevalidator>[0],
     ) => {
