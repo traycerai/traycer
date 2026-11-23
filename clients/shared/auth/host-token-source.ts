@@ -268,9 +268,9 @@ export type HostTokenRenewal =
  * A mint dependency's answer when it draws the request order itself: `order`
  * is drawn as the actual authn request is sent (a joiner of a request gets
  * that request's; `null` when none was sent). A dependency that answers a
- * bare outcome sent the request for this call: the source draws its order
- * from its own counter as it sends. A source never mixes the two counters'
- * orders.
+ * bare outcome sent the request for this call: the source draws its order as
+ * it sends. Both draw from the one process clock ({@link drawHostMintOrder}),
+ * so every order in a process is on the same scale.
  */
 export interface OrderedMintAnswer {
   readonly outcome: HostTokenMintOutcome;
@@ -386,9 +386,10 @@ export interface MintPurchase {
  * minted with (`null` when this source did not mint it); `null` for every
  * other kind. `order`: the answered request's order, on `sign-in-rejected`
  * and the host-specific failures (`not-a-member`, `not-admitted`,
- * `sandbox-frozen`) only. `purchase`: see {@link MintPurchase}. All of it travels beside the
- * outcome, never on it, so nothing that receives an outcome (a listener, a
- * log, an error, the desktop bridge) receives any of it.
+ * `sandbox-frozen`) only. `purchase`: see {@link MintPurchase}. All of it
+ * travels beside the outcome, never on it, so nothing that receives an
+ * outcome (a listener, a log, an error, the desktop bridge) receives any of
+ * it.
  */
 export interface IdentifiedMintOutcome {
   readonly outcome: HostTokenMintOutcome;
