@@ -40,6 +40,7 @@ import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
   type SignInRotation,
+  type SignInRotationResult,
 } from "../store/credentials-store";
 import type { HostAuth } from "./host-auth";
 
@@ -176,15 +177,15 @@ function sharedMint(
 
 export interface CliSignIn {
   readonly lease: BearerLease;
-  /** Refreshes the sign-in under the credentials lock and rotates `lease`. */
-  readonly refresh: () => Promise<SignInRotation>;
+  /** Refreshes the sign-in under the credentials lock and rotates `lease`, answering with the sign-in its save wrote. */
+  readonly refresh: () => Promise<SignInRotationResult>;
   /** Cancels this process's own mints, so an abandoned one cannot hold the CLI open; `null` lives as long as the command. */
   readonly signal: AbortSignal | null;
 }
 
 export interface SignInRevalidator {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
-  rotateSignIn(): Promise<SignInRotation>;
+  rotateSignIn(): Promise<SignInRotationResult>;
 }
 
 /** Why no host-only token could be had: authn's answer, after any one refresh. */
@@ -395,7 +396,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   let refreshRefused = false;
   let refreshedSinceLastMint = false;
   let refusedAfterRefresh = false;
-  // The sign-in this process's latest accepted rotation installed.
+  // The sign-in this process's latest accepted rotation installed, as its own
+  // save answered; `null` when it answered none.
   let installedByRefresh: string | null = null;
   // The session or command these tokens belong to has ended: no rotation
   // starts for it. A refresh already entered is left to finish.
@@ -409,24 +411,29 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   };
   // Whether a refused mint was sent with the sign-in this process's own
   // rotation installed, and so refused after that refresh. A refusal with no
-  // recorded sign-in is judged as today's, as `refusedSignInReplaced` reads it.
+  // recorded sign-in, or after a rotation that answered none, is judged as
+  // after our refresh: telling it apart would take a sign-in nobody recorded,
+  // and judging it so keeps the second refusal final, never another refresh.
   const refusedOurRefresh = (refused: HostTokenMintOutcome): boolean => {
     const sentWith = mintSentWith.get(refused);
-    return sentWith === undefined || sentWith === installedByRefresh;
+    return (
+      sentWith === undefined ||
+      installedByRefresh === null ||
+      sentWith === installedByRefresh
+    );
   };
   // The sign-in the latest refused mint was sent with, for the transports'
   // recovery, which is asked to refresh with no outcome in hand.
   let lastRefused: HostTokenMintOutcome | null = null;
   const refreshSignIn = async (): Promise<SignInRotation> => {
     if (sessionEnded()) return "network-error";
-    const outcome = await signIn.refresh();
+    const { outcome, installed } = await signIn.refresh();
     if (outcome === "rejected") refreshRefused = true;
     if (outcome === "rotated" || outcome === "adopted") {
       refreshRefused = false;
       refusedAfterRefresh = false;
       refreshedSinceLastMint = outcome === "rotated";
-      installedByRefresh =
-        outcome === "rotated" ? readLeaseBearer(signIn.lease) : null;
+      installedByRefresh = installed;
     }
     return outcome;
   };

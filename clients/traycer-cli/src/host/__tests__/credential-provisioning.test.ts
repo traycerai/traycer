@@ -181,12 +181,23 @@ const mocks = vi.hoisted(() => {
   // Same rationale as `createMintFlowMock` above: typed just wide enough to
   // expose `signal` from `.mock.calls`.
   const createStoreBackedRevalidatorMock = vi.fn(
-    (_args: {
+    (args: {
       readonly signal: AbortSignal | null;
-      readonly lease: { readonly rotate: (token: string) => void };
+      readonly lease: {
+        readonly rotate: (token: string) => void;
+        readonly getBearerToken: () => string;
+      };
     }) => ({
       revalidateCurrentContext: revalidateCurrentContextMock,
-      rotateSignIn: revalidateCurrentContextMock,
+      // The fake rotates no lease: a rotation it accepts installed the
+      // sign-in the lease holds, which the next mint is sent with.
+      rotateSignIn: async () => {
+        const outcome: unknown = await revalidateCurrentContextMock();
+        return {
+          outcome,
+          installed: outcome === "rotated" ? args.lease.getBearerToken() : null,
+        };
+      },
     }),
   );
 

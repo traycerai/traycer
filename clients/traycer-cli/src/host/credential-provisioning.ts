@@ -41,7 +41,7 @@ import type { CredentialsMutationStore } from "@traycer/protocol/config/credenti
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
-  type SignInRotation,
+  type SignInRotationResult,
 } from "../store/credentials-store";
 import { errorFromUnknown, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
@@ -188,7 +188,7 @@ const SILENT_OPEN_CONFIRMATIONS = 3;
 
 type ProbeRevalidator = {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
-  rotateSignIn(): Promise<SignInRotation>;
+  rotateSignIn(): Promise<SignInRotationResult>;
 };
 
 type AckObservation =

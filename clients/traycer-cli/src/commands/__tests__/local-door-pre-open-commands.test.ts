@@ -184,9 +184,19 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
   return {
     ...actual,
     createCliCredentialsStore: () => ({ dispose: () => undefined }),
-    createStoreBackedRevalidator: () => ({
+    createStoreBackedRevalidator: ({
+      lease,
+    }: {
+      readonly lease: { getBearerToken(): string };
+    }) => ({
       revalidateCurrentContext: async () => harness.state.refresh,
-      rotateSignIn: async () => harness.state.refresh,
+      // The fake rotates no lease: a rotation it accepts installed the
+      // sign-in the lease holds, which the next mint is sent with.
+      rotateSignIn: async () => ({
+        outcome: harness.state.refresh,
+        installed:
+          harness.state.refresh === "rotated" ? lease.getBearerToken() : null,
+      }),
     }),
   };
 });

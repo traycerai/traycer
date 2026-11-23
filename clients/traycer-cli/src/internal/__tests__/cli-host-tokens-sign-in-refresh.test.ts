@@ -4,6 +4,7 @@ import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import type { HostTokenMintOutcome } from "../../../../shared/auth/host-token-source";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { createCliHostTokens } from "../cli-host-tokens";
+import type { SignInRotationResult } from "../../store/credentials-store";
 
 // The real token path (`createCliHostTokens`: its single-flight mints, its
 // recovery and its sign-in judge) against a fake authn, whose first mint is held
@@ -89,7 +90,7 @@ afterEach(() => {
 
 /** The credentials refresh: each call is one rotation, and rotates the lease to the next sign-in. */
 function countingRefresh(lease: MutableBearerLease): {
-  readonly refresh: () => Promise<"rotated">;
+  readonly refresh: () => Promise<SignInRotationResult>;
   readonly rotations: () => number;
   readonly rotatedTo: (rotation: number) => string;
 } {
@@ -99,7 +100,7 @@ function countingRefresh(lease: MutableBearerLease): {
     refresh: async () => {
       rotations += 1;
       lease.rotate(rotatedTo(rotations));
-      return "rotated";
+      return { outcome: "rotated", installed: rotatedTo(rotations) };
     },
     rotations: () => rotations,
     rotatedTo,
@@ -362,11 +363,11 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
           // continuation of the rotation runs.
           lease.rotate(ROTATED_SIGN_IN);
           lease.rotate(SIBLING_SIGN_IN);
-          return "rotated";
+          return { outcome: "rotated", installed: ROTATED_SIGN_IN };
         }
         await refreshOfCHeld;
         lease.rotate(REFRESHED_SIGN_IN);
-        return "rotated";
+        return { outcome: "rotated", installed: REFRESHED_SIGN_IN };
       },
       signal: null,
     });

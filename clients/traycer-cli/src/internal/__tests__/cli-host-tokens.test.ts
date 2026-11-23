@@ -9,7 +9,10 @@ import {
 import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
-import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
+import {
+  MutableBearerLease,
+  type BearerLease,
+} from "../../../../shared/auth/bearer-source";
 import { createCliHostTokens } from "../cli-host-tokens";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
@@ -104,10 +107,20 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
   return {
     ...actual,
     createCliCredentialsStore: vi.fn(() => ({ dispose: state.dispose })),
-    createStoreBackedRevalidator: vi.fn(() => ({
-      revalidateCurrentContext: state.revalidate,
-      rotateSignIn: state.revalidate,
-    })),
+    createStoreBackedRevalidator: vi.fn(
+      ({ lease }: { readonly lease: BearerLease }) => ({
+        revalidateCurrentContext: state.revalidate,
+        // The fake rotates no lease: a rotation it accepts installed the
+        // sign-in the lease holds, which the next mint is sent with.
+        rotateSignIn: async () => {
+          const outcome: unknown = await state.revalidate();
+          return {
+            outcome,
+            installed: outcome === "rotated" ? lease.getBearerToken() : null,
+          };
+        },
+      }),
+    ),
   };
 });
 vi.mock("../logger", () => ({
@@ -228,7 +241,7 @@ describe("createCliHostTokens refusals that end a command", () => {
       nameReason("host-same-millisecond");
       const tokens = createCliHostTokens({
         lease: new MutableBearerLease("signin", "user-1"),
-        refresh: async () => "network-error",
+        refresh: async () => ({ outcome: "network-error", installed: null }),
         signal: null,
       });
       await tokens.whenLoaded();
@@ -255,7 +268,7 @@ describe("createCliHostTokens refusals that end a command", () => {
     const ending: string[] = [];
     const tokens = createCliHostTokens({
       lease: new MutableBearerLease("signin", "user-1"),
-      refresh: async () => "network-error",
+      refresh: async () => ({ outcome: "network-error", installed: null }),
       signal: null,
     });
     await tokens.whenLoaded();

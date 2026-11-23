@@ -68,6 +68,13 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
 /** A sign-in refresh's outcome, telling an adopted sibling's rotation ("adopted") from one authn answered. */
 export type SignInRotation = RevalidateOutcome | "adopted";
 
+/** A rotation's outcome, with the sign-in its own save wrote. */
+export interface SignInRotationResult {
+  readonly outcome: SignInRotation;
+  /** Taken from the store's locked result; `null` unless `outcome` is "rotated". */
+  readonly installed: string | null;
+}
+
 /**
  * The CLI's on-`UNAUTHORIZED` bearer revalidator, backed by the locked `rotate`
  * mutation (§7). Replaces the retired `createBearerRevalidator` + `cliBearerStore`
@@ -100,11 +107,11 @@ export function createStoreBackedRevalidator(args: {
 }): AuthRevalidator &
   AuthorityBoundAuthRevalidator & {
     revalidateCurrentContext(): Promise<RevalidateOutcome>;
-    /** As `revalidateCurrentContext`, but "adopted" when a sibling's rotation was taken from the store: authn was not asked. */
-    rotateSignIn(): Promise<SignInRotation>;
+    /** As `revalidateCurrentContext`, but "adopted" when a sibling's rotation was taken from the store (authn was not asked), and with the sign-in its own save wrote. */
+    rotateSignIn(): Promise<SignInRotationResult>;
   } {
   const { store, lease, signal } = args;
-  const rotateSignIn = async (): Promise<SignInRotation> => {
+  const rotateSignIn = async (): Promise<SignInRotationResult> => {
     // Boundary contract (matches the retired `createBearerRevalidator`): NEVER
     // throws — every failure, including a released lease or a store I/O fault,
     // maps to an outcome so the unary messenger and the stream monitor decide
@@ -140,7 +147,13 @@ export function createStoreBackedRevalidator(args: {
           if (result.credentials !== null) {
             lease.rotate(result.credentials.token);
           }
-          return result.outcome === "superseded" ? "adopted" : "rotated";
+          // A sibling's rotation adopted is no sign-in this save wrote.
+          return result.outcome === "superseded"
+            ? { outcome: "adopted", installed: null }
+            : {
+                outcome: "rotated",
+                installed: result.credentials?.token ?? null,
+              };
         case "refresh-network":
         case "lock-busy":
         case "spend-pending":
@@ -149,7 +162,7 @@ export function createStoreBackedRevalidator(args: {
           // past the wait budget, or a sibling's still-landing spend of this
           // base. None is a dead credential — stay in reconnect backoff and
           // retry (the sibling's landed pair adopts via `superseded`).
-          return "network-error";
+          return { outcome: "network-error", installed: null };
         case "deleted":
         case "tombstoned":
         case "user-mismatch":
@@ -164,14 +177,14 @@ export function createStoreBackedRevalidator(args: {
           // file in place (no clear) — a transient authn outage surfacing as
           // `refresh-rejected` must not force a re-login; the host re-spawn path
           // re-authenticates.
-          return "rejected";
+          return { outcome: "rejected", installed: null };
       }
     } catch {
-      return "network-error";
+      return { outcome: "network-error", installed: null };
     }
   };
   const revalidateCurrentContext = async (): Promise<RevalidateOutcome> => {
-    const outcome = await rotateSignIn();
+    const { outcome } = await rotateSignIn();
     return outcome === "adopted" ? "rotated" : outcome;
   };
   return {
