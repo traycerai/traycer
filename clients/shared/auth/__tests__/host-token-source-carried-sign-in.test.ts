@@ -482,3 +482,91 @@ describe("a refusal is recorded at the source only while it still stands for the
     expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
   });
 });
+
+describe("a host failure's answer carries the order of the request it answers", () => {
+  it.each([
+    "not-admitted",
+    "not-a-member",
+    "sandbox-frozen",
+  ] as const)("carries, on %s, the order the request was sent with", async (kind) => {
+    const { tokens, mints, ask } = rig(createMemoryHostTokenPersistence());
+    await tokens.whenLoaded();
+    const failed = identify(tokens, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+
+    mints[0].answer({ outcome: { kind }, order: 37 });
+    const read = await failed;
+
+    expect(read.outcome.kind).toBe(kind);
+    expect(read.order).toBe(37);
+  });
+});
+
+describe("one host process's purchase, however many sources the process holds", () => {
+  /** A source whose mint answers are bare outcomes: the source draws each request's order. */
+  function sourceOfTheProcess() {
+    const mints: Array<{
+      readonly answer: (outcome: HostTokenMintOutcome) => void;
+    }> = [];
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        new Promise<HostTokenMintOutcome>((resolve) => {
+          mints.push({ answer: resolve });
+        }),
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_A : null),
+      now: () => Date.now(),
+    });
+    return { tokens, mints };
+  }
+
+  it("records no failure of an earlier request, through another source, that a later request's kept purchase through this one has outlived", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "process-a");
+    const owner = hosts.currentInstance(HOST_ID);
+    const ask = { signal: null, owner, observedNow: () => owner.observed };
+    const x = sourceOfTheProcess();
+    const y = sourceOfTheProcess();
+    await Promise.all([x.tokens.whenLoaded(), y.tokens.whenLoaded()]);
+    // X's request is sent first, and held.
+    const refused = identify(x.tokens, true, ask);
+    await vi.waitFor(() => expect(x.mints).toHaveLength(1));
+    // Y's request is sent later, for the same host process, and its token is kept.
+    const later = identify(y.tokens, true, ask);
+    await vi.waitFor(() => expect(y.mints).toHaveLength(1));
+    y.mints[0].answer({
+      kind: "ok",
+      token: hostTokenIssuedAt("later", 2_000),
+    });
+    expect(purchaseOf(await later)).toMatchObject({ owner });
+
+    x.mints[0].answer({ kind: "sign-in-rejected" });
+    await refused;
+
+    expect(x.tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+  });
+
+  it("buys nothing for a request sent before a sign-out whose token answers after it, so a failure after the person signs in again is still recorded (a guard: green before the process-wide clock)", async () => {
+    const { tokens, mints, ask, owner } = rig(
+      createMemoryHostTokenPersistence(),
+    );
+    await tokens.whenLoaded();
+    const stale = identify(tokens, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    await tokens.forgetUser(USER_ID);
+
+    mints[0].answer({ kind: "ok", token: hostTokenIssuedAt("stale", 2_000) });
+    const staleRead = await stale;
+
+    expect(staleRead.outcome.kind).toBe("superseded");
+    expect(purchaseOf(staleRead)).toBeNull();
+    expect(tokens.current(USER_ID, HOST_ID)).toBeNull();
+
+    const refused = identify(tokens, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    mints[1].answer({ kind: "sign-in-rejected" });
+    await refused;
+
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
+  });
+});
