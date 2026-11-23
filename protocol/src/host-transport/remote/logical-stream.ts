@@ -325,7 +325,15 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     if (this.disposed) {
       return;
     }
-    for (const listener of [...this.backoffListeners]) listener();
+    // Each listener alone: a throw reaches neither the others nor the
+    // session's caller, where it would end the whole session.
+    for (const listener of [...this.backoffListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[remote-session] backoff listener threw", error);
+      }
+    }
   }
 
   /**
