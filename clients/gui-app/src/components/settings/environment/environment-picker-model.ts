@@ -2,12 +2,14 @@ import {
   SETUP_STEPS,
   setupView,
 } from "@/components/settings/host-scope/host-access-model";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import {
   localRowCohort,
   type LocalRowVerb,
 } from "@/components/settings/environment/local-row-cohort";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { LOCAL_ROW_NOT_MOVED } from "@/components/settings/move/cohort-rows";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   PERSONAL_PICK,
@@ -67,20 +69,32 @@ export function isEnvironmentComputer(
  * A Local row exists while any plane is still this computer's own or stopped,
  * and its wording comes from those planes (`localRowCohort`). An unfinished
  * setup with no known configuration keeps a separate setup row, so the person
- * can still open the computer and finish or retry it. A host whose
- * `environment.status` predates 1.1 reports no
- * planes at all, so one that has not reached `applying` gets the greyed
- * `needs an update` row instead; one that has is already shared and has no
- * row. A host that has not answered, or not been dialled, has no row:
- * nothing is known about it.
+ * can still open the computer and finish or retry it. A host that serves
+ * no `environment.status` runs its own settings and has nothing to move from
+ * here: its Local row reads as not moved, with no verb. A host whose
+ * `environment.status` is 1.0 reports no planes at all, so one that has not
+ * reached `applying` gets the greyed `needs an update` row instead; one that
+ * has is already shared and has no row. A host that has not answered, or not
+ * been dialled, has no row: nothing is known about it.
  */
 export function localPickerRow(
   host: EnvironmentPickerHost,
   status: EnvironmentStatusResponseV11 | null,
   version: NegotiatedMethodVersion,
 ): LocalPickerRow | null {
+  if (version === false) {
+    return {
+      kind: "local",
+      hostId: host.hostId,
+      name: host.name,
+      subtitle: LOCAL_ROW_NOT_MOVED,
+      verb: null,
+      needsUpdate: false,
+      defaultsToLocal: true,
+    };
+  }
   if (isBeforeConsentGate(version)) {
-    return isUnmovedOldHost(status, version) ? needsUpdateRow(host) : null;
+    return isUnmovedOldHost(status) ? needsUpdateRow(host) : null;
   }
   if (status === null) return null;
   const cohort = localRowCohort(status);
@@ -142,9 +156,8 @@ export function hostRunsPersonal(
 /** An old host that has not reached `applying`: it has not moved. */
 function isUnmovedOldHost(
   status: EnvironmentStatusResponseV11 | null,
-  version: NegotiatedMethodVersion,
 ): boolean {
-  if (version === false || status === null || status.setup === null) {
+  if (status === null || status.setup === null) {
     return true;
   }
   const { stage } = status.setup;
@@ -167,9 +180,8 @@ function needsUpdateRow(host: EnvironmentPickerHost): LocalPickerRow {
  * `environment.status` below 1.1: the host predates the move's consent gate.
  * `null` (no handshake yet) is not "too old": nothing is known.
  */
-function isBeforeConsentGate(version: NegotiatedMethodVersion): boolean {
+function isBeforeConsentGate(version: SchemaVersion | null): boolean {
   if (version === null) return false;
-  if (version === false) return true;
   return version.major < 1 || (version.major === 1 && version.minor < 1);
 }
 
@@ -210,7 +222,8 @@ export function environmentPickerModel(input: {
   const windowStatusKnown =
     input.windowHostId === null ||
     (input.hosts.some((host) => host.hostId === input.windowHostId) &&
-      (input.statuses.get(input.windowHostId) ?? null) !== null);
+      ((input.statuses.get(input.windowHostId) ?? null) !== null ||
+        input.versions.get(input.windowHostId) === false));
   let defaultPick = UNRESOLVED_PICK;
   if (windowStatusKnown) {
     defaultPick =

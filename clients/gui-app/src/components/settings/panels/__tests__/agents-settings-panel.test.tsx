@@ -1,6 +1,12 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  recordNegotiatedHostManifest,
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 // Both tabs have their own suites; here they are markers, so the page's title
 // and tab switching are what is under test.
@@ -20,7 +26,15 @@ import { AgentsSettingsPanel } from "@/components/settings/panels/agents-setting
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
+
+const OLD_HOST_PICK = {
+  kind: "local",
+  hostId: "host-old",
+  hostName: "Old laptop",
+} as const;
 
 describe("<AgentsSettingsPanel />", () => {
   it("is titled Agents and opens on the Selection guide", () => {
@@ -67,5 +81,31 @@ describe("<AgentsSettingsPanel />", () => {
     await userEvent.click(screen.getByTestId("agents-tab-guide"));
     expect(screen.getByTestId("guide-body")).toBeTruthy();
     expect(screen.queryByTestId("definitions-body")).toBeNull();
+  });
+
+  it("is the Selection guide alone on a Local pick of a host whose methods lack environment.status", () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSettingsEnvironmentPickStore.setState({ pick: OLD_HOST_PICK });
+
+    render(<AgentsSettingsPanel />);
+
+    expect(screen.getByTestId("guide-body")).toBeTruthy();
+    expect(screen.queryByTestId("agents-tab-definitions")).toBeNull();
+    expect(
+      screen.queryByText("Update this host to use agent definitions."),
+    ).toBeNull();
+  });
+
+  it("keeps the Definitions tab on a Local pick of a host that advertises environment.status", () => {
+    recordNegotiatedHostManifest("host-old", {
+      "environment.status": { major: 1, minor: 3 },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: OLD_HOST_PICK });
+
+    render(<AgentsSettingsPanel />);
+
+    expect(screen.getByTestId("agents-tab-definitions").textContent).toBe(
+      "Definitions",
+    );
   });
 });

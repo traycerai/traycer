@@ -1394,8 +1394,34 @@ row's tooltip explains the activation consequence, and an unavailable row's
 tooltip reveals a cut-off name. Search appears from six hosts up; below that it
 is one more thing to skip past.
 
-Environment picker names also wrap in full. An outdated computer's row reads
-“Update to view these settings.” Its disabled state and Move sheet are unchanged.
+Environment picker names also wrap in full. A computer whose host serves no
+`environment.status` (a released host from before the Environment group) gets
+the not-moved Local row, “its own settings, not in Personal yet”, with no Move
+verb, and the window opens on it. Its pages are that host's own and editable,
+as that release drew them (`HostOwnPageFrame`): only Providers, Permissions,
+Agents (the guide alone), Model routing and Variables & shells. No other page
+is reached: search and the command palette list none (the palette reads the
+window host's manifest while nothing is picked and no default is stored, so it
+lists none before Settings has opened either), picking the row moves to
+Providers, and a link, a deep link, a remembered route or a window that opens
+on the row draws Providers where the other page was named, so the page never
+mounts (`SettingsPanelForSection`), and the rail highlights Providers then
+(`useDrawnSection`). Every other Environment section, Machine setup and the
+retired ones included, is drawn as Providers too (`oldHostSectionShown`). The
+phone crumb and the palette's current-page check read the page drawn. In-app
+entries to a page the pick lacks are not offered: Providers' “Open Secrets”
+and the secret-grant card's Secrets button (`useSectionOffered`, over
+`pickOffersSection`, the one predicate the rail and `moveEnvironmentPick` use
+as well). Getting started's Secrets card resets the pick to the window's
+default before it opens Secrets, so it asks about that default
+(`useDefaultOffersSection`), not the pick in effect: in an old host's window it
+is absent whatever the pick is, and leaves the checklist and its count. The
+pick is never switched on the person's behalf. A Personal pick is never
+touched. The picker is given the section a link named, not the one drawn,
+so picking Personal after a link to Secrets opens Secrets. While the window
+host's handshake has not arrived, the rail still lists every row, as it did
+before; they drop once it lands. A host
+whose `environment.status` is 1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
 
 **Nothing in the host group is local-only any more.** Shell and Diagnostics
 carried a `requiresLocalHost` flag (dimmed rail rows, a `RequiresLocalHostNotice`

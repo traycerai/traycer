@@ -82,12 +82,26 @@ export function pickReading(
   return gone === null ? pick : gone.readsAs;
 }
 
+function defaultFor(
+  state: SettingsEnvironmentPickState,
+  hostId: string | null,
+): EnvironmentPick {
+  return state.defaultHostId === hostId ? state.defaultPick : UNRESOLVED_PICK;
+}
+
 /** The configuration the Environment group shows in this window. */
 export function useEnvironmentPick(): EnvironmentPick {
   const hostId = useEffectiveHostId();
-  return useSettingsEnvironmentPickStore((state) => {
-    const reading = pickReading(state.pick, state.gone);
-    if (reading !== null) return reading;
-    return state.defaultHostId === hostId ? state.defaultPick : UNRESOLVED_PICK;
-  });
+  return useSettingsEnvironmentPickStore(
+    (state) => pickReading(state.pick, state.gone) ?? defaultFor(state, hostId),
+  );
+}
+
+/**
+ * The configuration `setPick(null)` lands on: this window's default, whatever
+ * the person has picked since.
+ */
+export function useDefaultEnvironmentPick(): EnvironmentPick {
+  const hostId = useEffectiveHostId();
+  return useSettingsEnvironmentPickStore((state) => defaultFor(state, hostId));
 }

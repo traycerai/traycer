@@ -23,12 +23,14 @@ import {
   WINDOW_HOST_SELECTION,
 } from "@/components/settings/host-scope/use-host-scope";
 import {
+  SETTINGS_SECTIONS,
   SETTINGS_SECTION_GROUPS,
   visibleSettingsSections,
   type SettingsSection,
   type SettingsSectionGroupId,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
+import { useDrawnSection } from "@/components/settings/personal/use-old-host-local-pick";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { withSubpageLabels } from "@/lib/commands/sub-page-keywords";
 import type {
@@ -50,7 +52,7 @@ export const navigationSource: ReactCommandSource = {
       items.push(
         buildSettingsEntryItem(
           settingsChord,
-          settingsSectionItems(ctx.pathname, everySectionShown),
+          settingsSectionItems(sectionAtPath(ctx.pathname), everySectionShown),
         ),
       );
       if (import.meta.env.DEV) {
@@ -93,9 +95,11 @@ const SETTINGS_SUBPAGE: CommandSubpage = {
   useItems: (ctx: CommandContext) => {
     const windowScope = useHostScopeFor(WINDOW_HOST_SELECTION);
     const sectionShown = useEnvironmentSectionShown(windowScope);
+    // The page on screen is the one drawn for the section the path names.
+    const onScreen = useDrawnSection(sectionAtPath(ctx.pathname));
     return useMemo<ReadonlyArray<CommandItem>>(
-      () => settingsSectionItems(ctx.pathname, sectionShown),
-      [ctx.pathname, sectionShown],
+      () => settingsSectionItems(onScreen, sectionShown),
+      [onScreen, sectionShown],
     );
   },
 };
@@ -104,12 +108,19 @@ function everySectionShown(): boolean {
   return true;
 }
 
+function sectionAtPath(pathname: string): SettingsSectionId | null {
+  return (
+    SETTINGS_SECTIONS.find((section) => pathname === `/settings/${section.id}`)
+      ?.id ?? null
+  );
+}
+
 function settingsSectionItems(
-  pathname: string,
+  onScreen: SettingsSectionId | null,
   sectionShown: (section: SettingsSectionId) => boolean,
 ): ReadonlyArray<CommandItem> {
   return visibleSettingsSections().flatMap((section) =>
-    pathname !== `/settings/${section.id}` && sectionShown(section.id)
+    section.id !== onScreen && sectionShown(section.id)
       ? [buildSectionItem(section)]
       : [],
   );

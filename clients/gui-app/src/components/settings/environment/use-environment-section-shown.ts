@@ -6,10 +6,12 @@ import { useEnvironmentPickerModel } from "@/components/settings/environment/use
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   environmentSectionShown,
+  oldHostSectionShown,
   type EnvironmentPageFacts,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 
 /**
  * Whether Secrets can draw under `pick`, on the road `PersonalPageFrame`
@@ -39,7 +41,8 @@ function secretsServedOn(
 /**
  * `environmentSectionShown` under the current pick: the one filter the
  * Settings rows, Settings search and the command palette's Settings rows
- * share. `windowScope` is the window's own host scope
+ * share, with an old host's Local pick offering only the pages that host has
+ * (`oldHostSectionShown`). `windowScope` is the window's own host scope
  * (`WINDOW_HOST_SELECTION`), which the caller already holds.
  */
 export function useEnvironmentSectionShown(
@@ -64,9 +67,11 @@ export function useEnvironmentSectionShown(
     (): EnvironmentPageFacts => ({ secretsServed }),
     [secretsServed],
   );
+  const oldHost = useOldHostLocalPick();
   return useCallback(
     (section: SettingsSectionId) =>
-      environmentSectionShown(pick, section, facts),
-    [pick, facts],
+      environmentSectionShown(pick, section, facts) &&
+      (!oldHost || oldHostSectionShown(section)),
+    [pick, facts, oldHost],
   );
 }

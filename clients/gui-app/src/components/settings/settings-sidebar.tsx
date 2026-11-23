@@ -42,6 +42,7 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
 import { useEnvironmentSectionShown } from "@/components/settings/environment/use-environment-section-shown";
+import { useDrawnSection } from "@/components/settings/personal/use-old-host-local-pick";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -93,6 +94,12 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   const sections = visibleSettingsSections();
   // The pick hides the pages its source does not offer.
   const environmentSectionShown = useEnvironmentSectionShown(globalScope);
+  // The row the rail highlights: the page drawn for the section the surface
+  // holds, worked out once for every row.
+  const routedSection = useRoutedSectionId();
+  const drawnSection = useDrawnSection(
+    props.mode.kind === "modal" ? props.mode.activeSection : routedSection,
+  );
   // The Guide group leaves the rail once every Getting started step is done.
   const guideComplete = useGettingStartedGuideIsComplete();
   const groups = guideComplete
@@ -172,6 +179,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                       key={section.id}
                       section={section}
                       index={index}
+                      active={drawnSection === section.id}
                       mode={props.mode}
                       variant={props.variant}
                     />
@@ -215,13 +223,19 @@ function SettingsSidebarEnvironmentPicker(props: {
 function RoutedEnvironmentPicker(props: {
   readonly scope: HostScope;
 }): ReactNode {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const activeSection =
-    visibleSettingsSections().find((section) =>
-      isSectionPathname(pathname, section.id),
-    )?.id ?? null;
+  const activeSection = useRoutedSectionId();
   return (
     <EnvironmentPicker scope={props.scope} activeSection={activeSection} />
+  );
+}
+
+/** The offered section the route names, or `null` off every one. */
+function useRoutedSectionId(): SettingsSectionId | null {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return (
+    visibleSettingsSections().find((section) =>
+      isSectionPathname(pathname, section.id),
+    )?.id ?? null
   );
 }
 
@@ -348,12 +362,13 @@ function SettingsSidebarGroupHeader(props: {
 interface SettingsSidebarItemProps {
   section: SettingsSection;
   index: number;
+  active: boolean;
   mode: SettingsSidebarMode;
   variant: SettingsSidebarVariant;
 }
 
 function SettingsSidebarItem(props: SettingsSidebarItemProps) {
-  const { section, index, mode, variant } = props;
+  const { section, index, active, mode, variant } = props;
   const badgeModifier = useSettingsLeaderModifierForIndex(index);
   const Icon = section.icon;
   const digit = singleDigitLeaderDigitFor(index);
@@ -386,7 +401,6 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
     <span className="min-w-0 flex-1 truncate">{section.label}</span>
   );
   if (mode.kind === "modal") {
-    const active = mode.activeSection === section.id;
     return (
       <button
         type="button"
@@ -423,21 +437,21 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
       badge={badge}
       baseClass={baseClass}
       variant={variant}
+      active={active}
     />
   );
 }
 
 function SettingsSidebarRouteItem(props: {
   readonly section: SettingsSection;
+  readonly active: boolean;
   readonly label: ReactNode;
   readonly badge: ReactNode;
   readonly baseClass: string;
   readonly variant: SettingsSidebarVariant;
 }) {
-  const { section, label, badge, baseClass, variant } = props;
+  const { section, active, label, badge, baseClass, variant } = props;
   const Icon = section.icon;
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const active = isSectionPathname(pathname, section.id);
   // The rail replaces: its sections are peers on one screen, and back should
   // leave settings, not replay every section clicked. The mobile list pushes:
   // there a section is a full-screen drill-down BELOW the list, and a replace

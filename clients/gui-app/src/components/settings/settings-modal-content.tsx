@@ -47,6 +47,7 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
+import { useDrawnSection } from "@/components/settings/personal/use-old-host-local-pick";
 import "./settings-search.css";
 
 export interface SettingsModalContentProps {
@@ -146,7 +147,7 @@ const SETTINGS_PANELS = {
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
-  const { section } = props;
+  const section = useDrawnSection(props.section);
   // The one mount point for the settings-search reveal watcher, and the reason
   // it sits here rather than in either surface: both the modal and the routed
   // tab render their panel THROUGH this function, so one watcher covers both

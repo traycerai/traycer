@@ -3,7 +3,6 @@ import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulato
 import {
   getArtifactTabDropIndexFromPoint,
   getEdgeDropPositionFromPoint,
-  getEmptyShellDropId,
   getEpicCanvasDropPreview,
   getLeftPanelRailDropPositionOnAxis,
   getSidebarReparentPanelDropId,
@@ -39,17 +38,6 @@ describe("getEdgeDropPositionFromPoint", () => {
     // Relative (50, 75): nearest edge is bottom.
     expect(getEdgeDropPositionFromPoint({ x: 70, y: 105 }, rect)).toBe(
       "bottom",
-    );
-  });
-});
-
-describe("empty shell drop ids", () => {
-  it("scopes empty-shell droppables by epic and tab", () => {
-    expect(getEmptyShellDropId("epic-1", "tab-1")).toBe(
-      "empty-shell:epic-1:tab-1",
-    );
-    expect(getEmptyShellDropId("epic-1", "tab-1")).not.toBe(
-      getEmptyShellDropId("epic-1", "tab-2"),
     );
   });
 });
@@ -372,17 +360,6 @@ describe("epic canvas dnd-kit data guards", () => {
   it("accepts artifact tab drop target data", () => {
     expect(
       readEpicCanvasDropTargetData({
-        kind: "empty-shell",
-        epicId: "epic-1",
-        viewTabId: "view-1",
-      }),
-    ).toEqual({
-      kind: "empty-shell",
-      epicId: "epic-1",
-      viewTabId: "view-1",
-    });
-    expect(
-      readEpicCanvasDropTargetData({
         kind: "artifact-tab",
         viewTabId: "view-1",
         groupId: "group-1",
@@ -575,11 +552,6 @@ describe("epic canvas dnd-kit data guards", () => {
         groupId: "group-1",
         tabId: "tab-1",
         index: 0,
-      }),
-    ).toBeNull();
-    expect(
-      readEpicCanvasDropTargetData({
-        kind: "empty-shell",
       }),
     ).toBeNull();
     expect(
@@ -778,13 +750,6 @@ describe("getArtifactTabDropIndexFromPoint", () => {
         20,
       ),
     ).toBeNull();
-    expect(
-      getArtifactTabDropIndexFromPoint(
-        { kind: "empty-shell", epicId: "epic-1", viewTabId: "view-1" },
-        rect,
-        20,
-      ),
-    ).toBeNull();
   });
 });
 
@@ -834,20 +799,6 @@ describe("getEpicCanvasDropPreview", () => {
       kind: "artifact-tab-group-body",
       groupId: "group-1",
       position: "left",
-    });
-  });
-
-  it("resolves empty shell preview", () => {
-    expect(
-      getEpicCanvasDropPreview(
-        { kind: "empty-shell", epicId: "epic-1", viewTabId: "view-1" },
-        null,
-        { x: 0, y: 0 },
-        false,
-      ),
-    ).toEqual({
-      kind: "empty-shell",
-      viewTabId: "view-1",
     });
   });
 

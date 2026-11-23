@@ -1248,15 +1248,6 @@ export function epicNodeRecency(
   return recency;
 }
 
-export function useEpicHasArtifactRecords(): boolean {
-  return useEpicStore(
-    (s) =>
-      s.chats.allIds.length > 0 ||
-      s.artifacts.allIds.length > 0 ||
-      s.tuiAgents.allIds.length > 0,
-  );
-}
-
 export function useEpicTerminalAgent(
   tuiAgentId: string | null,
 ): TuiAgentProjection | null {

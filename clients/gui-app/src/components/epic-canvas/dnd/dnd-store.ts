@@ -135,9 +135,6 @@ function matchingEpicCanvasDropPreviewEqual(
   left: NonNullable<EpicCanvasDropPreview>,
   right: NonNullable<EpicCanvasDropPreview>,
 ): boolean {
-  if (left.kind === "empty-shell" && right.kind === "empty-shell") {
-    return left.viewTabId === right.viewTabId;
-  }
   return (
     matchingArtifactDropPreviewEqual(left, right) ||
     matchingLeftPanelDropPreviewEqual(left, right)
@@ -269,7 +266,7 @@ interface EpicDndState {
   readonly activeHeaderTabGhost: HeaderTabDragGhost | null;
   /** Whether the header preview depicts a detached member. */
   readonly headerTearOffPreview: boolean;
-  /** Current canvas-side drop preview (strip / body / empty-shell / rail). */
+  /** Current canvas-side drop preview (strip / body / rail). */
   readonly dropPreview: EpicCanvasDropPreview;
   /**
    * Insertion index into the header tab strip, for both header-tab reorder
@@ -598,14 +595,6 @@ export function useTabStripDropIndex(groupId: string): number | null {
     s.dropPreview.groupId === groupId
       ? s.dropPreview.index
       : null,
-  );
-}
-
-export function useEmptyShellDropActive(viewTabId: string): boolean {
-  return useEpicDndStore(
-    (s) =>
-      s.dropPreview?.kind === "empty-shell" &&
-      s.dropPreview.viewTabId === viewTabId,
   );
 }
 
