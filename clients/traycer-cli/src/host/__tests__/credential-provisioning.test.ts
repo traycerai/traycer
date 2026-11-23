@@ -256,7 +256,8 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      ((session: FakeStreamSession, lapIndex: number) => void) | null,
+      | ((session: FakeStreamSession, lapIndex: number) => void)
+      | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
