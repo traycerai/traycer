@@ -46,7 +46,7 @@ import {
   stagePrice,
   stageProviderFor,
   stageQuotedSize,
-  stageSizeIsRung,
+  stageRungForSize,
   type ConsequencesInput,
   type SandboxConfigurationDefaults,
   type StageConfiguration,
@@ -311,26 +311,23 @@ function diskGbForRung(
 ): string {
   const listedDiskGb = String(rung.diskMb / MB_PER_GIB);
   if (rung.grows === undefined) return listedDiskGb;
-  if (selectedRungGrows) return form.diskGb;
-  const rememberedDisk = diskOfForm(form.growingDiskGb, provider);
-  return "problem" in rememberedDisk ? listedDiskGb : form.growingDiskGb;
+  const chosenDiskGb = selectedRungGrows ? form.diskGb : form.growingDiskGb;
+  if (!selectedRungGrows && "problem" in diskOfForm(chosenDiskGb, provider)) {
+    return listedDiskGb;
+  }
+  // A remembered disk can name a fixed sibling of the growing option.
+  const selected = stageRungForSize(provider.shapes ?? [], {
+    cpus: rung.cpus,
+    memoryMb: rung.memoryMb,
+    diskMb: Number(chosenDiskGb) * MB_PER_GIB,
+  });
+  return selected !== null && selected.grows === undefined
+    ? listedDiskGb
+    : chosenDiskGb;
 }
 
 function rungKey(rung: SandboxShapeRung): string {
   return `${rung.cpus}:${rung.memoryMb}:${rung.diskMb}`;
-}
-
-/** The listed shape the form's size fields name, or `null`. */
-function rungOfForm(
-  form: ShapeForm,
-  shapes: readonly SandboxShapeRung[],
-): SandboxShapeRung | null {
-  const size = {
-    cpus: Number(form.cpus),
-    memoryMb: Math.round(Number(form.memoryGb) * MB_PER_GIB),
-    diskMb: Math.round(Number(form.diskGb) * MB_PER_GIB),
-  };
-  return shapes.find((rung) => stageSizeIsRung(rung, size)) ?? null;
 }
 
 function resolveRung(
@@ -341,7 +338,11 @@ function resolveRung(
   readonly value: string;
   readonly grows: boolean;
 } {
-  const rung = shapes === null ? null : rungOfForm(form, shapes);
+  const rung = stageRungForSize(shapes ?? [], {
+    cpus: Number(form.cpus),
+    memoryMb: Math.round(Number(form.memoryGb) * MB_PER_GIB),
+    diskMb: Number(form.diskGb) * MB_PER_GIB,
+  });
   return {
     rung,
     value: rung === null ? "" : rungKey(rung),

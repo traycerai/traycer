@@ -489,6 +489,46 @@ describe("<SandboxShapeSheet />", () => {
     });
   });
 
+  it("quotes and selects a fixed Size option beside the same growing start", () => {
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    const growing = AUTO_SIZING_RUNGS[0];
+    catalogueInUse = {
+      ...base,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            growing,
+            {
+              cpus: growing.cpus,
+              memoryMb: growing.memoryMb,
+              diskMb: 80 * GIB,
+              default: false,
+            },
+          ],
+        },
+      ],
+    };
+    const onUseShape = vi.fn();
+    renderSheet(onUseShape);
+
+    const size = screen.getByRole("combobox", { name: "Size" });
+    fireEvent.click(size);
+    const fixedOption = screen.getByRole("option", {
+      name: /2 vCPU · 4 GB · 80 GB/,
+    });
+    expect(fixedOption.textContent).toContain("$0.13/h");
+    fireEvent.click(fixedOption);
+    expect(size.textContent).toContain("2 vCPU · 4 GB · 80 GB · $0.13/h");
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 80 * GIB,
+    });
+  });
+
   it("keeps the growing rung's 50 GB disk when the provider default is 60 GB", () => {
     const base = autoSizingCatalogue();
     const [provider] = base.providers;

@@ -17,6 +17,8 @@ import {
   priceClause,
   configurationStageShape,
   rememberedOrConfigurationStageShape,
+  stageGrowth,
+  stageNeedsCredits,
   stagePrice,
   stageShapeDefaults,
   stageProviderForShape,
@@ -1122,7 +1124,93 @@ describe("growing Linux starting sizes", () => {
     });
   });
 
-  it("uses an exact listed offer without unit rates and leaves an unlisted disk unpriced", () => {
+  it("matches a fixed sibling at its named disk regardless of rung order", () => {
+    for (const growingFirst of [true, false]) {
+      const [provider] = catalogue.providers;
+      const growing = AUTO_SIZING_RUNGS[0];
+      const fixed = {
+        cpus: growing.cpus,
+        memoryMb: growing.memoryMb,
+        diskMb: 80 * 1024,
+        default: false,
+      };
+      const rungs = growingFirst ? [growing, fixed] : [fixed, growing];
+      const [region] = provider.regions;
+      const offered: SandboxCatalogue = {
+        ...catalogue,
+        providers: [
+          {
+            ...provider,
+            shapes: rungs,
+            regions: [
+              {
+                ...region,
+                shapePrices: [
+                  {
+                    cpus: fixed.cpus,
+                    memoryMb: fixed.memoryMb,
+                    diskMb: fixed.diskMb,
+                    priceMcPerHour: {
+                      awakeMc: 222,
+                      suspendedMc: 11,
+                      stoppedMc: 3,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(stageGrowth(offered, size(2, 4, 80))).toBeNull();
+      expect(
+        configurationStageShape(offered, {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4_096,
+          diskMb: 80 * 1024,
+          idleMinutes: 30,
+          restingMinutes: null,
+        })?.diskMb,
+      ).toBe(80 * 1024);
+      expect(stagePrice(offered, size(2, 4, 80))).toEqual({
+        awakeMcPerHour: 222,
+        suspendedMcPerHour: 11,
+        stoppedMcPerHour: 3,
+        exact: true,
+        offer: null,
+      });
+    }
+  });
+
+  it("keeps listed prices without an offer and derives the ceiling from rates", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const listed = catalogueWithRegion({
+      ...region,
+      shapePrices: [
+        {
+          cpus: 2,
+          memoryMb: 4_096,
+          diskMb: 50 * 1024,
+          priceMcPerHour: { awakeMc: 140, suspendedMc: 9, stoppedMc: 8 },
+        },
+      ],
+    });
+    const price = stagePrice(listed, size(2, 4, 50));
+
+    expect(price).toEqual({
+      awakeMcPerHour: 140,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 8,
+      exact: true,
+      offer: { startAwakeMc: 140, ceilingAwakeMc: 1_444 },
+    });
+    expect(stageNeedsCredits(137, price)).toBe(true);
+  });
+
+  it("uses a listed offer without rates and gives only a larger unlisted disk a lower bound", () => {
     const listed = autoSizingListedNoRatesCatalogue();
     const [provider] = listed.providers;
     const [region] = provider.regions;
@@ -1136,6 +1224,13 @@ describe("growing Linux starting sizes", () => {
       offer,
     });
     expect(stagePrice(listed, size(2, 4, 30))).toBeNull();
+    expect(stagePrice(listed, size(2, 4, 80))).toEqual({
+      awakeMcPerHour: 140,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 9,
+      exact: false,
+      offer: null,
+    });
     expect(
       stagePrice(
         catalogueWithRegion({ ...region, shapePrices: undefined }),
