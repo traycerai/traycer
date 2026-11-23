@@ -138,6 +138,18 @@ const OLD_HOST_PAGES: ReadonlySet<EnvironmentPageId> = new Set([
   "variables",
 ]);
 
+/**
+ * Whether `pick` is a Local row on a host that has completed its handshake
+ * without advertising `environment.status`. Read from the negotiated manifest
+ * by the picked host's id, which need not be the window's host.
+ */
+export function isOldHostLocalPick(pick: EnvironmentPick): boolean {
+  return (
+    pick.kind === "local" &&
+    readNegotiatedMethodVersion(pick.hostId, "environment.status") === false
+  );
+}
+
 /** Whether such an old host's Local row offers `section`. */
 export function oldHostSectionShown(section: SettingsSectionId): boolean {
   const pageId = pageIdForSection(section);
@@ -187,13 +199,9 @@ export function moveEnvironmentPick(input: {
   input.setPick(input.next);
   const section = input.activeSection;
   if (section === null) return;
-  const oldHost =
-    input.next.kind === "local" &&
-    readNegotiatedMethodVersion(input.next.hostId, "environment.status") ===
-      false;
   if (
     !environmentSectionShown(input.next, section) ||
-    (oldHost && !oldHostSectionShown(section))
+    (isOldHostLocalPick(input.next) && !oldHostSectionShown(section))
   ) {
     input.moveSurface("providers");
   }

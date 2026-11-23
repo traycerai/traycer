@@ -10,6 +10,7 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   recordNegotiatedHostManifest,
+  recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
@@ -284,6 +285,7 @@ describe("a Personal host on a build with a server pool", () => {
       queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
       mutations: { retry: false },
     });
+    recordNegotiatedHostMethods(LOCAL_HOST_ID, ["environment.status"]);
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: LOCAL_HOST_ID, hostName: "This Mac" },
     });

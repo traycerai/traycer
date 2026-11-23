@@ -2,6 +2,7 @@ import {
   SettingsSidebar,
   type SettingsSidebarVariant,
 } from "@/components/settings/settings-sidebar";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   SETTINGS_SECTION_GROUPS,
   SETTINGS_SECTIONS,
@@ -17,6 +18,8 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import {
@@ -70,7 +73,17 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
-  const useHostScopeFor = () => hostScopeFixture(globalScopeOverrides.current);
+  // One scope per override set, as the real hook's memoised scope is: a fresh
+  // object per render would restart the picker model's effects every render.
+  const scopes = new WeakMap<object, HostScope>();
+  const useHostScopeFor = () => {
+    const overrides = globalScopeOverrides.current;
+    const known = scopes.get(overrides);
+    if (known !== undefined) return known;
+    const scope = hostScopeFixture(overrides);
+    scopes.set(overrides, scope);
+    return scope;
+  };
   return {
     useHostScope,
     useHostScopeFor,
@@ -87,8 +100,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 // reads the environment list: all `useQuery`s, and this suite mounts no query
 // client. "No host has answered" is the honest empty answer; the picker's own
 // rows are covered by environment-picker.test.tsx.
+// One map for every render, as the real hook's memoised read: a fresh one
+// would rebuild a Local default pick, and re-set it, on every render.
+const noStatuses = vi.hoisted(() => new Map());
 vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
-  useRegisteredHostEnvironmentStatuses: () => new Map(),
+  useRegisteredHostEnvironmentStatuses: () => noStatuses,
 }));
 // The negotiated versions are the manifest registry's, which a case records
 // per host; nothing records one by default, so no host has negotiated.
@@ -1367,8 +1383,12 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
   ] as const;
 
   /** The modal's own wiring: the sidebar, and the page for the section the surface holds. */
-  function SettingsSurfaceHarness() {
-    const [section, setSection] = useState<SettingsSectionId>("providers");
+  function SettingsSurfaceHarness(props: {
+    readonly initialSection: SettingsSectionId;
+  }) {
+    const [section, setSection] = useState<SettingsSectionId>(
+      props.initialSection,
+    );
     useEffect(() => {
       surfaceApi.setSection = (next) => {
         const found = SETTINGS_SECTIONS.find(
@@ -1405,46 +1425,80 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: null,
       defaultPick: PERSONAL_PICK,
+      defaultHostId: null,
     });
+    useSelectionAuthorityStore.getState().reset();
     scopeOverrides.current = { client: null };
+    globalScopeOverrides.current = { client: null };
   });
 
+  async function renderSurface(initialSection: SettingsSectionId) {
+    const rootRoute = createRootRoute({
+      component: () => (
+        <SettingsSurfaceHarness initialSection={initialSection} />
+      ),
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>
+      </QueryClientProvider>,
+    );
+    return screen.findByRole("combobox", { name: "Search settings" });
+  }
+
+  function hitFor(id: string): HTMLElement | undefined {
+    return screen
+      .queryAllByRole("option")
+      .find((option) =>
+        option.dataset.testid?.startsWith(`settings-search-result-${id}:`),
+      );
+  }
+
   it.each(HIDDEN_PAGES)(
-    "leaves a search hit for %s on Providers, with no Move offer",
+    "lists no search hit for %s, so no hit can land on a page the host lacks",
     async (id, label) => {
       recordNegotiatedHostMethods("host-old", ["host.status"]);
       useSettingsEnvironmentPickStore.setState({
         pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
       });
-      const rootRoute = createRootRoute({ component: SettingsSurfaceHarness });
-      const router = createRouter({
-        routeTree: rootRoute.addChildren([]),
-        history: createMemoryHistory({ initialEntries: ["/"] }),
-      });
-      render(
-        <QueryClientProvider client={new QueryClient()}>
-          <KeybindingProvider router={router}>
-            <RouterProvider router={router} />
-          </KeybindingProvider>
-        </QueryClientProvider>,
-      );
-      const input = await screen.findByRole("combobox", {
-        name: "Search settings",
-      });
+      const input = await renderSurface("providers");
 
       fireEvent.change(input, { target: { value: label } });
-      const hit = screen
-        .getAllByRole("option")
-        .find((option) =>
-          option.dataset.testid?.startsWith(`settings-search-result-${id}:`),
-        );
-      if (hit === undefined)
-        throw new Error(`the search offers no ${id} page for "${label}"`);
-      fireEvent.click(hit);
 
-      await screen.findByTestId("providers-page-probe");
-      expect(screen.queryByTestId("local-move-page")).toBeNull();
-      expect(screen.queryByTestId("local-move-page-move")).toBeNull();
+      expect(hitFor(id)).toBeUndefined();
     },
   );
+
+  it("still lists a hit for a page the old host has", async () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
+    });
+    const input = await renderSurface("providers");
+
+    fireEvent.change(input, { target: { value: "Permissions" } });
+
+    expect(hitFor("permissions")).toBeDefined();
+  });
+
+  it("routes a window that opens on an old host's Local row off a page it lacks, before the page draws", async () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
+    globalScopeOverrides.current = {
+      host: hostScopeOptionFixture({ hostId: "host-old", name: "Old laptop" }),
+      client: null,
+    };
+    await renderSurface("skills");
+    // The window's host answers its handshake after the surface is up.
+    act(() => recordNegotiatedHostMethods("host-old", ["host.status"]));
+
+    await screen.findByTestId("providers-page-probe");
+    expect(screen.queryByTestId("skills-page-probe")).toBeNull();
+    expect(screen.queryByTestId("local-move-page")).toBeNull();
+  });
 });

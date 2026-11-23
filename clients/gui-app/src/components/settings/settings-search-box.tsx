@@ -18,6 +18,8 @@ import {
 } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import { oldHostSectionShown } from "@/lib/settings-environment-pages";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { openLayoutEditor } from "@/lib/layout/editor-session";
 import { activateTabIntent } from "@/lib/tab-navigation";
@@ -67,9 +69,15 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
   // renders inside the settings modal as well as in the tab.
   const navigate = useNavigate();
 
+  // A Local row on an old host offers only some Environment pages, so a hit
+  // on another is never listed.
+  const oldHost = useOldHostLocalPick();
   const results = useMemo(
-    () => searchSettings(query, availability),
-    [query, availability],
+    () =>
+      searchSettings(query, availability).filter(
+        (result) => !oldHost || oldHostSectionShown(result.entry.section),
+      ),
+    [query, availability, oldHost],
   );
   const active = isSettingsSearchActive(query);
   // Clamped rather than stored-and-corrected: `results` shrinks as the user
