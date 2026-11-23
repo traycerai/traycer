@@ -755,6 +755,56 @@ describe("desktop host-token source across windows asking for different host pro
     expect(windowA.lastFailureOf(USER_ID, ownerA)).toBe("not-admitted");
     expect(windowB.lastFailureOf(USER_ID, ownerB)).toBeNull();
   });
+  it("leaves a window holding main's unavailable, not its earlier refusal, when main's save of a minted token fails", async () => {
+    const answers: HostTokenMintOutcome[] = [
+      { kind: "not-a-member" },
+      { kind: "ok", token: HOST_TOKEN },
+    ];
+    let mintRequests = 0;
+    let saveFails = false;
+    const persistence = createMemoryHostTokenPersistence();
+    const main = createHostTokenSource({
+      persistence: {
+        load: () => persistence.load(),
+        update: (change) =>
+          saveFails
+            ? Promise.reject(new Error("the token could not be saved"))
+            : persistence.update(change),
+      },
+      mint: () => {
+        const answer = answers[mintRequests];
+        mintRequests += 1;
+        return Promise.resolve(answer);
+      },
+      signIn: (userId) =>
+        userId === USER_ID
+          ? `header.${Buffer.from(JSON.stringify({ exp: 2_000_000 })).toString("base64url")}.signature`
+          : null,
+      now: () => Date.now(),
+    });
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "100");
+    const owner = hosts.currentInstance(HOST_ID);
+    const window = createDesktopHostTokenSource(
+      bridgeInto(main),
+    );
+    const ask = (): Promise<HostTokenMintOutcome> =>
+      window.obtain(USER_ID, HOST_ID, true, {
+        signal: null,
+        owner,
+        observedNow: () => owner.observed,
+      });
+
+    await expect(ask()).resolves.toEqual({ kind: "not-a-member" });
+    expect(window.lastFailureOf(USER_ID, owner)).toBe("not-a-member");
+
+    saveFails = true;
+    await expect(ask()).rejects.toThrow("the token could not be saved");
+
+    expect(mintRequests).toBe(2);
+    expect(window.lastFailureOf(USER_ID, owner)).toBe("unavailable");
+  });
+
 });
 
 describe("desktop host-token source ordering by the second authn issued each token", () => {
@@ -977,38 +1027,4 @@ describe("a window records a refused mint only when main kept it under main's cu
       expect(tokens.lastFailureOf(USER_ID, owner)).toBe(failure);
     },
   );
-});
-
-describe("a window whose main could not save a token holds the outcome main holds", () => {
-  it("answers lastFailureOf as unavailable, not as the earlier not-a-member, after main's obtain rejects", async () => {
-    const { bridge } = bridgeFixture();
-    let asks = 0;
-    Reflect.set(bridge, "obtain", async () => {
-      asks += 1;
-      if (asks > 1) throw new Error("the token could not be saved");
-      return {
-        outcome: { kind: "not-a-member" },
-        era: 0,
-        held: false,
-        recorded: true,
-        signIn: FIXED_SIGN_IN_KEY,
-      };
-    });
-    const tokens = createDesktopHostTokenSource(bridge);
-    const hosts = createReleasedHostMemory();
-    hosts.observeInstance(HOST_ID, "100");
-    const owner = hosts.currentInstance(HOST_ID);
-    const ask = (): Promise<HostTokenMintOutcome> =>
-      tokens.obtain(USER_ID, HOST_ID, true, {
-        signal: null,
-        owner,
-        observedNow: () => owner.observed,
-      });
-
-    await expect(ask()).resolves.toEqual({ kind: "not-a-member" });
-    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("not-a-member");
-    await expect(ask()).rejects.toThrow("the token could not be saved");
-
-    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("unavailable");
-  });
 });
