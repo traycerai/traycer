@@ -147,7 +147,7 @@ export function stageProviderForShape(
  * Whether this rung is a candidate for the request. The quote validates a
  * growing rung's editable disk against the provider's bounds.
  */
-export function stageSizeIsRung(
+function stageSizeIsRung(
   rung: SandboxShapeRung,
   size: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
 ): boolean {
@@ -160,17 +160,30 @@ export function stageSizeIsRung(
   );
 }
 
-/** An explicit disk names a fixed rung before it can customize a growing one. */
+/**
+ * An explicit disk names a fixed rung before it can customize a growing one.
+ * When the wire cannot distinguish two rungs, the first listed one wins.
+ */
 export function stageRungForSize(
   shapes: readonly SandboxShapeRung[],
   size: Pick<StageSize, "cpus" | "memoryMb" | "diskMb">,
 ): SandboxShapeRung | null {
   const matching = shapes.filter((rung) => stageSizeIsRung(rung, size));
-  if (size.diskMb === null) {
-    return matching.find((rung) => rung.default) ?? matching.at(0) ?? null;
-  }
-  return (
-    matching.find((rung) => rung.grows === undefined) ?? matching.at(0) ?? null
+  const preferred =
+    size.diskMb === null
+      ? matching.find((rung) => rung.default)
+      : matching.find((rung) => rung.grows === undefined);
+  if (preferred === undefined) return matching.at(0) ?? null;
+  return matching.find((rung) => sameGeometry(rung, preferred)) ?? preferred;
+}
+
+/** Only the first rung at each wire geometry can be selected in a menu. */
+export function selectableStageRungs(
+  shapes: readonly SandboxShapeRung[],
+): readonly SandboxShapeRung[] {
+  return shapes.filter(
+    (rung, index) =>
+      shapes.findIndex((candidate) => sameGeometry(candidate, rung)) === index,
   );
 }
 
@@ -346,7 +359,7 @@ export function configurationShapeOptions(
     if (provider.shapes === null) {
       return [{ os, region, ...providerDefaultSize(provider) }];
     }
-    return provider.shapes.map((rung) => ({
+    return selectableStageRungs(provider.shapes).map((rung) => ({
       os,
       region,
       cpus: rung.cpus,
@@ -565,25 +578,24 @@ function sameGeometry(left: StageGeometry, right: StageGeometry): boolean {
   );
 }
 
-/** A smaller growing start keeps the disk of another growing start. */
+/** Compare growing starts at the same chosen disk. */
 function growingSmallestShape(
   catalogue: SandboxCatalogue,
   shape: StageSize,
-  selected: QuotedStageSize,
+  selected: StageGeometry,
   minimum: StageGeometry,
 ): { readonly isStaged: boolean; readonly awakeMcPerHour: number } | null {
   const price = stagePrice(catalogue, {
     ...shape,
-    ...minimum,
-    diskMb: selected.grows === null ? minimum.diskMb : shape.diskMb,
+    cpus: minimum.cpus,
+    memoryMb: minimum.memoryMb,
   });
   return price === null || !price.exact
     ? null
     : {
         isStaged:
-          selected.grows !== null &&
-          selected.shape.cpus === minimum.cpus &&
-          selected.shape.memoryMb === minimum.memoryMb,
+          selected.cpus === minimum.cpus &&
+          selected.memoryMb === minimum.memoryMb,
         awakeMcPerHour: price.awakeMcPerHour,
       };
 }
@@ -608,8 +620,13 @@ export function stageSmallestShape(
   const minimum = stageQuotedSize(provider, smallest);
   const selected = stageQuotedSize(provider, shape);
   if (minimum === null || selected === null) return null;
-  if (minimum.grows !== null) {
-    return growingSmallestShape(catalogue, shape, selected, minimum.shape);
+  if (selected.grows !== null) {
+    return growingSmallestShape(
+      catalogue,
+      shape,
+      selected.shape,
+      minimum.shape,
+    );
   }
   const exact = exactShapePrice(region, minimum.shape);
   if (
@@ -698,8 +715,9 @@ function growingAwakeMc(
 }
 
 /**
- * A growing start uses the exact price at its chosen disk when served.
- * Without rates, its listed disk can give a lower bound for a larger disk.
+ * A listed start uses its served offer or a single exact price. Unit rates
+ * supply both ends of a range when there is no exact price at the chosen disk.
+ * Without rates, the listed disk can give a lower bound for a larger disk.
  */
 function growingStagePrice(
   region: SandboxCatalogueRegion,
@@ -707,7 +725,7 @@ function growingStagePrice(
 ): StagePrice | null {
   const rates = region.pricing;
   const exact = exactShapePrice(region, quoted.shape);
-  if (rates === null || exact?.offer !== undefined) {
+  if (exact !== null || rates === null) {
     const listed =
       exact ??
       (quoted.shape.diskMb > quoted.listedDiskMb
@@ -726,19 +744,18 @@ function growingStagePrice(
     };
   }
   const storage = growingStorageMc(rates, quoted.shape.diskMb);
-  const start = exact?.awakeMc ?? growingAwakeMc(rates, quoted.shape);
-  const ratedCeiling = growingAwakeMc(rates, {
-    ...quoted.grows,
-    diskMb: quoted.shape.diskMb,
-  });
+  const start = growingAwakeMc(rates, quoted.shape);
   return {
     awakeMcPerHour: start,
-    suspendedMcPerHour: exact?.suspendedMc ?? storage,
-    stoppedMcPerHour: exact?.stoppedMc ?? storage,
+    suspendedMcPerHour: storage,
+    stoppedMcPerHour: storage,
     exact: quoted.exact,
     offer: {
       startAwakeMc: start,
-      ceilingAwakeMc: Math.max(start, ratedCeiling),
+      ceilingAwakeMc: growingAwakeMc(rates, {
+        ...quoted.grows,
+        diskMb: quoted.shape.diskMb,
+      }),
     },
   };
 }
@@ -761,8 +778,7 @@ export function stageBalanceMc(
 }
 
 /**
- * A zero or short balance: it cannot cover an hour at the stage's price
- * (the region's smallest shape's, from a server without per-unit rates).
+ * The balance cannot cover even the quoted price or lower bound for an hour.
  * Unknown either side is not short; the server's gate stays the authority
  * at send.
  */
@@ -774,6 +790,16 @@ export function stageNeedsCredits(
     balanceMc,
     price === null ? null : price.awakeMcPerHour,
   );
+}
+
+/** Only an exact quote can establish how much credit would cover the hour. */
+export function stageCreditShortfallMc(
+  balanceMc: number | null,
+  price: StagePrice | null,
+): number | null {
+  return balanceMc === null || price?.exact !== true
+    ? null
+    : Math.max(1, price.awakeMcPerHour - balanceMc);
 }
 
 /** The audience the block speaks to: a task that has or may gain readers. */

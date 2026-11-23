@@ -1488,7 +1488,7 @@ describe("useSandboxStaging New rows", () => {
       staging().composer.onPickNew("personal");
     });
     expect(screen.getByTestId("consequences-price").textContent).toContain(
-      "Not enough credits.",
+      "Not enough credits to start this sandbox for an hour.",
     );
     expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Use Laptop" })).toBeTruthy();
@@ -1592,7 +1592,7 @@ describe("useSandboxStaging New rows", () => {
       );
 
       expect(screen.getByTestId("consequences-price").textContent).toContain(
-        "Not enough credits.",
+        "Not enough credits to start this sandbox for an hour.",
       );
       expect(screen.queryByText(/an hour while awake/)).toBeNull();
       expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();

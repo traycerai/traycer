@@ -213,6 +213,47 @@ function mixedLadderCatalogue(
   };
 }
 
+function growingWithFixedSiblingCatalogue(input: {
+  readonly fixedDiskGb: number;
+  readonly fixedAwakeMc: number;
+  readonly growingFirst: boolean;
+}): SandboxCatalogue {
+  const base = autoSizingCatalogue();
+  const [provider] = base.providers;
+  const [region] = provider.regions;
+  const growing = AUTO_SIZING_RUNGS[0];
+  const fixedGeometry = {
+    cpus: growing.cpus,
+    memoryMb: growing.memoryMb,
+    diskMb: input.fixedDiskGb * GIB,
+  };
+  const fixed: SandboxShapeRung = { ...fixedGeometry, default: false };
+  return {
+    ...base,
+    providers: [
+      {
+        ...provider,
+        shapes: input.growingFirst ? [growing, fixed] : [fixed, growing],
+        regions: [
+          {
+            ...region,
+            shapePrices: [
+              {
+                ...fixedGeometry,
+                priceMcPerHour: {
+                  awakeMc: input.fixedAwakeMc,
+                  suspendedMc: 7,
+                  stoppedMc: 7,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 describe("<SandboxShapeSheet />", () => {
   const SERVED_MS = servedMinutes(7);
 
@@ -529,6 +570,86 @@ describe("<SandboxShapeSheet />", () => {
     });
   });
 
+  it.each([true, false])(
+    "offers one exact duplicate Size option and keeps the first-listed quote (growing first: %s)",
+    (growingFirst) => {
+      catalogueInUse = growingWithFixedSiblingCatalogue({
+        fixedDiskGb: 50,
+        fixedAwakeMc: 100,
+        growingFirst,
+      });
+      const onUseShape = vi.fn();
+      renderSheet(onUseShape);
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+      const [option] = screen.getAllByRole("option");
+      expect(screen.getAllByRole("option")).toHaveLength(1);
+      expect(option.textContent).toContain("$0.10/h");
+      if (growingFirst) expect(option.textContent).toContain("grows to");
+      else expect(option.textContent).toContain("50 GB");
+      fireEvent.click(option);
+      fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+      expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+        cpus: 2,
+        memoryMb: 4 * GIB,
+        diskMb: 50 * GIB,
+      });
+    },
+  );
+
+  it("keeps an in-progress disk edit mounted through a fixed sibling and submits the larger value", () => {
+    catalogueInUse = growingWithFixedSiblingCatalogue({
+      fixedDiskGb: 20,
+      fixedAwakeMc: 222,
+      growingFirst: true,
+    });
+    const onUseShape = vi.fn();
+    renderSheet(onUseShape);
+
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    disk.focus();
+    fireEvent.change(disk, { target: { value: "" } });
+    fireEvent.change(disk, { target: { value: "20" } });
+    expect(screen.getByRole("spinbutton", { name: "Disk (GB)" })).toBe(disk);
+    expect(document.activeElement).toBe(disk);
+    expect(disk.value).toBe("20");
+    fireEvent.change(disk, { target: { value: "200" } });
+    expect(screen.getByRole("spinbutton", { name: "Disk (GB)" })).toBe(disk);
+    expect(document.activeElement).toBe(disk);
+    expect(disk.value).toBe("200");
+
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 200 * GIB,
+    });
+  });
+
+  it("resolves a committed disk to its matching fixed sibling", () => {
+    catalogueInUse = growingWithFixedSiblingCatalogue({
+      fixedDiskGb: 20,
+      fixedAwakeMc: 222,
+      growingFirst: true,
+    });
+    const onUseShape = vi.fn();
+    renderSheet(onUseShape);
+
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    fireEvent.change(disk, { target: { value: "20" } });
+    expect(screen.getByRole("spinbutton", { name: "Disk (GB)" })).toBe(disk);
+    fireEvent.blur(disk);
+    expect(screen.queryByRole("spinbutton", { name: "Disk (GB)" })).toBeNull();
+    expect(
+      screen.getByRole("combobox", { name: "Size" }).textContent,
+    ).toContain("2 vCPU · 4 GB · 20 GB · $0.22/h");
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({ diskMb: 20 * GIB });
+  });
+
   it("keeps the growing rung's 50 GB disk when the provider default is 60 GB", () => {
     const base = autoSizingCatalogue();
     const [provider] = base.providers;
@@ -706,6 +827,38 @@ describe("<SandboxShapeSheet />", () => {
       autoSizingScalarNoRatesCatalogue(),
       "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14/h",
     );
+  });
+
+  it("asks for credits without naming an amount for a larger no-rates disk", () => {
+    catalogueInUse = autoSizingListedNoRatesCatalogue();
+    authUser = userWith(
+      userSubscription({
+        totalPlanCredits: 0.1,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    renderSheetWithInitialShape(vi.fn(), {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 80 * GIB,
+      region: "us-east",
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 10_080,
+    });
+
+    const price = screen.getByTestId("sandbox-shape-sheet-price");
+    expect(price.textContent).toContain(
+      "Not enough credits to start this sandbox for an hour.",
+    );
+    expect(price.textContent).not.toContain("more starts");
+    expect(
+      within(price).getByTestId("sandbox-shape-sheet-add-credits"),
+    ).toBeTruthy();
   });
 
   function expectDiskInput(
@@ -1191,6 +1344,7 @@ describe("<SandboxShapeSheet />", () => {
         }),
         [],
       );
+      const priceMcPerHour = { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 };
       catalogueInUse = {
         providers: [
           {
@@ -1199,12 +1353,16 @@ describe("<SandboxShapeSheet />", () => {
               {
                 id: "us-east",
                 label: "US East",
-                fromPriceMcPerHour: {
-                  awakeMc: 210,
-                  suspendedMc: 4,
-                  stoppedMc: 2,
-                },
+                fromPriceMcPerHour: priceMcPerHour,
                 pricing: null,
+                shapePrices: [
+                  {
+                    cpus: 2,
+                    memoryMb: 4 * GIB,
+                    diskMb: 20 * GIB,
+                    priceMcPerHour,
+                  },
+                ],
               },
             ],
           },

@@ -11,6 +11,7 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   consequenceClauses,
+  configurationShapeOptions,
   type ConsequenceClause,
   consequencesShownSubject,
   defaultStageShape,
@@ -20,10 +21,10 @@ import {
   stageGrowth,
   stageNeedsCredits,
   stagePrice,
+  stageQuotedSize,
   stageShapeDefaults,
   stageProviderForShape,
   stageSmallestShape,
-  stageSizeIsRung,
   type ConsequencesInput,
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
@@ -1184,7 +1185,7 @@ describe("growing Linux starting sizes", () => {
     }
   });
 
-  it("keeps listed prices without an offer and derives the ceiling from rates", () => {
+  it("keeps a listed scalar price without inventing a range from rates", () => {
     const [provider] = catalogue.providers;
     const [region] = provider.regions;
     const listed = catalogueWithRegion({
@@ -1205,9 +1206,172 @@ describe("growing Linux starting sizes", () => {
       suspendedMcPerHour: 9,
       stoppedMcPerHour: 8,
       exact: true,
-      offer: { startAwakeMc: 140, ceilingAwakeMc: 1_444 },
+      offer: null,
     });
     expect(stageNeedsCredits(137, price)).toBe(true);
+  });
+
+  it("uses one scalar exact price when the growing start is also its cap", () => {
+    const [region] = catalogue.providers[0].regions;
+    const capped = catalogueWithRegion({
+      ...region,
+      shapePrices: [
+        {
+          cpus: 16,
+          memoryMb: 64 * 1024,
+          diskMb: 50 * 1024,
+          priceMcPerHour: { awakeMc: 1_200, suspendedMc: 7, stoppedMc: 7 },
+        },
+      ],
+    });
+
+    expect(stagePrice(capped, size(16, 64, 50))).toEqual({
+      awakeMcPerHour: 1_200,
+      suspendedMcPerHour: 7,
+      stoppedMcPerHour: 7,
+      exact: true,
+      offer: null,
+    });
+  });
+
+  it("uses the from price for a fixed rung above a growing no-rates minimum", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const noRates: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            AUTO_SIZING_RUNGS[0],
+            {
+              cpus: 4,
+              memoryMb: 8 * 1024,
+              diskMb: 80 * 1024,
+              default: false,
+            },
+          ],
+          regions: [
+            {
+              ...region,
+              pricing: null,
+              shapePrices: [],
+              fromPriceMcPerHour: {
+                awakeMc: 140,
+                suspendedMc: 9,
+                stoppedMc: 9,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(stageSmallestShape(noRates, size(4, 8, 80))).toEqual({
+      isStaged: false,
+      awakeMcPerHour: 140,
+    });
+  });
+
+  it("prices the staged growing minimum instead of its smaller fixed sibling", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const overlap: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            { ...AUTO_SIZING_RUNGS[0], diskMb: 80 * 1024 },
+            {
+              cpus: 2,
+              memoryMb: 4 * 1024,
+              diskMb: 50 * 1024,
+              default: false,
+            },
+          ],
+          regions: [
+            {
+              ...region,
+              shapePrices: [
+                {
+                  cpus: 2,
+                  memoryMb: 4 * 1024,
+                  diskMb: 50 * 1024,
+                  priceMcPerHour: {
+                    awakeMc: 100,
+                    suspendedMc: 7,
+                    stoppedMc: 7,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(stageSmallestShape(overlap, size(2, 4, 30))).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 133,
+    });
+  });
+
+  it("offers one duplicate default size and resolves its price by first-listed rung", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const growing = AUTO_SIZING_RUNGS[0];
+    const fixed = {
+      cpus: growing.cpus,
+      memoryMb: growing.memoryMb,
+      diskMb: growing.diskMb,
+      default: false,
+    };
+    for (const [shapes, shouldGrow] of [
+      [[growing, fixed], true],
+      [[fixed, growing], false],
+    ] as const) {
+      const offered: SandboxCatalogue = {
+        ...catalogue,
+        providers: [
+          {
+            ...provider,
+            shapes,
+            regions: [
+              {
+                ...region,
+                shapePrices: [
+                  {
+                    cpus: fixed.cpus,
+                    memoryMb: fixed.memoryMb,
+                    diskMb: fixed.diskMb,
+                    priceMcPerHour: {
+                      awakeMc: 100,
+                      suspendedMc: 7,
+                      stoppedMc: 7,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      const options = configurationShapeOptions(offered);
+      const [option] = options;
+
+      expect(options).toHaveLength(1);
+      expect(stageGrowth(offered, option)).toEqual(
+        shouldGrow ? growing.grows : null,
+      );
+      expect(stagePrice(offered, option)).toEqual({
+        awakeMcPerHour: 100,
+        suspendedMcPerHour: 7,
+        stoppedMcPerHour: 7,
+        exact: true,
+        offer: null,
+      });
+    }
   });
 
   it("uses a listed offer without rates and gives only a larger unlisted disk a lower bound", () => {
@@ -1248,14 +1412,38 @@ describe("growing Linux starting sizes", () => {
     });
   });
 
-  it("matches growing rungs by compute and memory while fixed rungs retain disk matching", () => {
-    expect(stageSizeIsRung(AUTO_SIZING_RUNGS[1], size(4, 8, 30))).toBe(true);
+  it("quotes allocated disk for a growing rung and refuses it for a fixed-only rung", () => {
+    const [provider] = catalogue.providers;
     expect(
-      stageSizeIsRung(
-        { cpus: 4, memoryMb: 8 * 1024, diskMb: 50 * 1024, default: false },
-        size(4, 8, 30),
-      ),
-    ).toBe(false);
+      stageQuotedSize(provider, {
+        cpus: 4,
+        memoryMb: 8 * 1024,
+        diskMb: 30 * 1024,
+      }),
+    ).toEqual({
+      shape: { cpus: 4, memoryMb: 8 * 1024, diskMb: 30 * 1024 },
+      exact: true,
+      grows: { cpus: 16, memoryMb: 64 * 1024 },
+      listedDiskMb: 50 * 1024,
+    });
+
+    const fixedOnly: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            {
+              cpus: 4,
+              memoryMb: 8 * 1024,
+              diskMb: 50 * 1024,
+              default: true,
+            },
+          ],
+        },
+      ],
+    };
+    expect(stagePrice(fixedOnly, size(4, 8, 30))).toBeNull();
   });
 });
 

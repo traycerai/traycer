@@ -40,8 +40,10 @@ import {
   consequenceClauses,
   defaultShapeRung,
   rememberedOrConfigurationStageShape,
+  selectableStageRungs,
   stageBalanceMc,
   stageConfigurationCopy,
+  stageCreditShortfallMc,
   stageNeedsCredits,
   stagePrice,
   stageProviderFor,
@@ -472,6 +474,8 @@ function ShapeSheetForm(props: {
   }
   const selection = resolveRung(form, provider.shapes);
   const selectedRungGrows = selection.grows;
+  const selectableRungs =
+    provider.shapes === null ? null : selectableStageRungs(provider.shapes);
   const result = shapeOfForm(form, provider, selection.rung);
   const shape = "shape" in result ? result.shape : null;
   const price = shape === null ? null : stagePrice(props.catalogue, shape);
@@ -483,10 +487,7 @@ function ShapeSheetForm(props: {
     price,
     needsCredits,
     billingStarted: false,
-    shortfallMc:
-      balance === null || price === null
-        ? null
-        : Math.max(1, price.awakeMcPerHour - balance),
+    shortfallMc: stageCreditShortfallMc(balance, price),
     ...props.context,
   });
   const offered = offeredOses(props.catalogue);
@@ -548,7 +549,7 @@ function ShapeSheetForm(props: {
               setForm({ ...form, region: value });
             }}
           />
-          {provider.shapes === null ? (
+          {selectableRungs === null ? (
             <>
               <ShapeNumber
                 id={`${ids}-cpus`}
@@ -600,7 +601,7 @@ function ShapeSheetForm(props: {
                   id={`${ids}-size`}
                   label="Size"
                   value={selection.value}
-                  options={provider.shapes.map((rung) => ({
+                  options={selectableRungs.map((rung) => ({
                     value: rungKey(rung),
                     label: rungLabel(
                       props.catalogue,
@@ -610,7 +611,7 @@ function ShapeSheetForm(props: {
                     ),
                   }))}
                   onChange={(value) => {
-                    const rung = provider.shapes?.find(
+                    const rung = selectableRungs.find(
                       (candidate) => rungKey(candidate) === value,
                     );
                     if (rung === undefined) return;
@@ -638,7 +639,8 @@ function ShapeSheetForm(props: {
                   }}
                 />
               </div>
-              {selectedRungGrows ? (
+              {/* A partial disk value can name a fixed rung before the edit ends. */}
+              {selectedRungGrows || !sizeCommitted ? (
                 <ShapeNumber
                   id={`${ids}-disk`}
                   label="Disk (GB)"

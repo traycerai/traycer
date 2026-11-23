@@ -62,6 +62,7 @@ import {
   stageConfigurationCopy,
   stageConfigurationKey,
   stageConfigurations,
+  stageCreditShortfallMc,
   stageGrowth,
   stageNeedsCredits,
   stagePrice,
@@ -356,10 +357,7 @@ export function useSandboxStaging(input: {
         stage,
         stagedHost === undefined ? null : stagedHost.sandbox,
       ),
-      shortfallMc:
-        balance === null || price === null
-          ? null
-          : Math.max(1, price.awakeMcPerHour - balance),
+      shortfallMc: stageCreditShortfallMc(balance, price),
       // Waking a team's sandbox uses the team's credits whoever woke it last.
       wakingName: stage.target.kind === "existing" ? stage.target.name : null,
       audience: audienceFor(stagedConfiguration),
