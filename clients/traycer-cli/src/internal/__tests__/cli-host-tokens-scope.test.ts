@@ -16,10 +16,7 @@ import {
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
 import { createCliHostTokens } from "../cli-host-tokens";
-import {
-  SIGN_OUT_ARMS,
-  standSignOutArm,
-} from "./sign-out-arms-test-support";
+import { SIGN_OUT_ARMS, standSignOutArm } from "./sign-out-arms-test-support";
 
 // Model P, J, L and N through the CLI's real token path: a token session that
 // has ended starts no authn request; a terminal effect is re-checked against the
@@ -199,7 +196,12 @@ describe("a token session that has ended starts no authn request (J)", () => {
     const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
     const tokens = createCliHostTokens({
       lease,
-      refresh: async () => ({ outcome: "network-error", installed: null, refused: null }),
+      refresh: async () => ({
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
       adoptStored: async () => undefined,
       signal: null,
     });
@@ -219,7 +221,12 @@ describe("a token session that has ended starts no authn request (J)", () => {
     const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
     const tokens = createCliHostTokens({
       lease,
-      refresh: async () => ({ outcome: "network-error", installed: null, refused: null }),
+      refresh: async () => ({
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
       adoptStored: async () => undefined,
       signal: null,
     });
@@ -244,7 +251,12 @@ describe("a token session that has ended starts no authn request (J)", () => {
         rotation.markReached();
         await rotation.release;
         lease.rotate(SIGN_IN_B);
-        return { outcome: "rotated", installed: SIGN_IN_B, refused: null };
+        return {
+          outcome: "rotated",
+          installed: SIGN_IN_B,
+          refused: null,
+          accepted: SIGN_IN_B,
+        };
       },
       adoptStored: async () => undefined,
       signal: null,
@@ -457,14 +469,83 @@ describe("an adopted answer with nothing changed ends its loop (N)", () => {
     const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
     const tokens = createCliHostTokens({
       lease,
-      refresh: async () => ({ outcome: "adopted", installed: null, refused: null }),
+      refresh: async () => ({
+        outcome: "adopted",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
       adoptStored: async () => undefined,
       signal: null,
     });
 
-    await tokens.streamRecovery(hostId).revalidateRefused(REFUSED_AS_EXPIRED);
+    await tokens
+      .streamRecovery(hostId)
+      .revalidateRefused(REFUSED_AS_EXPIRED, () => true);
 
     expect(harness.mints.length).toBeLessThanOrEqual(2);
+    tokens.dispose();
+  });
+});
+
+describe("an admission resets only the host process that admitted", () => {
+  it("leaves the replacement's recovery spent when a late admission of the replaced process arrives", async () => {
+    processReleasedHosts.observeInstance(hostId, "boot-p");
+    const processP = processReleasedHosts.currentInstance(hostId);
+    const tokens = createCliHostTokens({
+      lease: new MutableBearerLease(SIGN_IN_A, USER_ID),
+      refresh: async () => ({
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
+      adoptStored: async () => undefined,
+      signal: null,
+    });
+    // P is replaced by Q; Q's recovery spends its one replacement of an expired token.
+    processReleasedHosts.observeInstance(hostId, "boot-q");
+    const recoveryOfQ = tokens.streamRecovery(hostId);
+    expect(
+      await recoveryOfQ.revalidateRefused(REFUSED_AS_EXPIRED, () => true),
+    ).toBe("rotated");
+
+    // P's admission arrives late: it is not Q's, so Q's recovery stays spent.
+    tokens.admitted(processP)();
+
+    expect(
+      await recoveryOfQ.revalidateRefused(REFUSED_AS_EXPIRED, () => true),
+    ).toBe("rejected");
+    expect(harness.mints).toHaveLength(1);
+    tokens.dispose();
+  });
+
+  it("gives the recovery of the process that admitted its allowance again", async () => {
+    processReleasedHosts.observeInstance(hostId, "boot-p");
+    const processP = processReleasedHosts.currentInstance(hostId);
+    const tokens = createCliHostTokens({
+      lease: new MutableBearerLease(SIGN_IN_A, USER_ID),
+      refresh: async () => ({
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
+      adoptStored: async () => undefined,
+      signal: null,
+    });
+    const recoveryOfP = tokens.streamRecovery(hostId);
+    expect(
+      await recoveryOfP.revalidateRefused(REFUSED_AS_EXPIRED, () => true),
+    ).toBe("rotated");
+
+    // P is still current and admits: its next refusal is recovered afresh.
+    tokens.admitted(processP)();
+
+    expect(
+      await recoveryOfP.revalidateRefused(REFUSED_AS_EXPIRED, () => true),
+    ).toBe("rotated");
+    expect(harness.mints).toHaveLength(2);
     tokens.dispose();
   });
 });
