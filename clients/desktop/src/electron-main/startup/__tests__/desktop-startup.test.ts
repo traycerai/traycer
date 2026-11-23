@@ -604,6 +604,9 @@ describe("runPreReady - scheme/crash-reporter ordering", () => {
     const { registerAppScheme } = await import("../../app/app-protocol");
     const { SandboxArtifactServer } =
       await import("../../app/sandbox-artifact-server");
+    // Other cases in this file run the real startup, which calls both too.
+    vi.mocked(initCrashReporter).mockClear();
+    vi.mocked(registerAppScheme).mockClear();
 
     runPreReady({
       sandboxArtifacts: new SandboxArtifactServer(() => false),
