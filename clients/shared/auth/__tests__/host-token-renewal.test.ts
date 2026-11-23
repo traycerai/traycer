@@ -1899,3 +1899,91 @@ describe("a sign-in is identified by itself, never by its end", () => {
     expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
   });
 });
+
+describe("a sign-in recovery's allowance across ordinary attempts", () => {
+  const HOST_ID = "computer-allowance-across-attempts";
+  const REFUSED_NOT_ADMITTED: FatalErrorDetails = {
+    code: "UNAUTHORIZED",
+    reason: "current-host-refusal",
+    doorReason: "not_admitted",
+    retryable: false,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  /**
+   * A CLI-shaped recovery over a source whose every mint authn refuses the
+   * sign-in for. Each refresh authn answers rotates the stored sign-in, or
+   * (`landsOnStore` false) rotates nothing the lease can present, as a
+   * refresh whose adopting read failed. The recovery judges no sign-in
+   * rejected, so a spent sequence answers transient.
+   */
+  async function recoveryRefusedOnEveryMint(landsOnStore: boolean) {
+    let storedSignIn = "sign-in-0";
+    let mints = 0;
+    let refreshes = 0;
+    const hosts = createReleasedHostMemory();
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mints += 1;
+        return Promise.resolve({ kind: "sign-in-rejected" });
+      },
+      signIn: (userId) => (userId === USER_ID ? storedSignIn : null),
+      now: () => Date.now(),
+    });
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      { token: "held-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      source.era(USER_ID),
+      () => true,
+    );
+    const revalidator = hostTokenRevalidator({
+      tokens: trackHostTokenMints(source, hosts),
+      signInKey: () => source.signInKey(USER_ID),
+      hosts,
+      currentUserId: () => USER_ID,
+      hostId: HOST_ID,
+      signInRecovery: {
+        revalidateForReconnect: () => {
+          refreshes += 1;
+          if (landsOnStore) storedSignIn = `sign-in-${refreshes}`;
+          return Promise.resolve("rotated");
+        },
+        signInRejectedFor: () => false,
+      },
+      onState: () => undefined,
+      now: () => Date.now(),
+    });
+    return {
+      mints: () => mints,
+      refreshes: () => refreshes,
+      refused: () =>
+        revalidator.revalidateRefused(REFUSED_NOT_ADMITTED, () => true),
+    };
+  }
+
+  it("gives the next ordinary attempt its own recovery after the spent branch answered transient for a refusal that was not rejected", async () => {
+    const rig = await recoveryRefusedOnEveryMint(true);
+
+    // The first attempt spends the allowance, and its re-ask is refused too:
+    // the spent branch answers transient, the refusal not being rejected.
+    await expect(rig.refused()).resolves.toBe("network-error");
+    expect(rig.refreshes()).toBe(1);
+
+    // No admission occurred. The monitor's next lap, or a redial, asks again.
+    await expect(rig.refused()).resolves.toBe("network-error");
+
+    expect(rig.refreshes()).toBe(2);
+  });
+
+  it("sends no retry mint when the recovery answered rotated but the sign-in the lease would present has not changed", async () => {
+    const rig = await recoveryRefusedOnEveryMint(false);
+
+    await expect(rig.refused()).resolves.toBe("network-error");
+
+    expect(rig.refreshes()).toBe(1);
+    expect(rig.mints()).toBe(1);
+  });
+});
