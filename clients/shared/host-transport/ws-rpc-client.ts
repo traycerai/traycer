@@ -473,6 +473,12 @@ export class WsRpcClient<
   private readonly releasedRefusals = new WeakSet<HostRpcError>();
   /** A released host refused the sign-in, a recovery is left, and the door has not heard of it. */
   private readonly signInRefusals = new WeakSet<HostRpcError>();
+  /**
+   * The sign-in the refused OPEN carried, for a refusal of the sign-in or the
+   * invited sign-in: the recovery refreshes only that one, never a lease read
+   * after it may have rotated. Absent when a session grant was on the wire.
+   */
+  private readonly refusedSignIns = new WeakMap<HostRpcError, string>();
   /** The host instance that gave each refusal: its OPEN's, or that of the published session it came on. */
   private readonly refusedBy = new WeakMap<HostRpcError, HostInstance>();
   /** The host instance each published session was admitted by: it is reused only while that one is current. */
@@ -633,7 +639,9 @@ export class WsRpcClient<
             recovery === null || cause.fatalDetails === null
               ? "rejected"
               : await recovery
-                  .revalidateForReconnect(null)
+                  .revalidateForReconnect(
+                    this.refusedSignIns.get(cause) ?? null,
+                  )
                   .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
           // A refusal of the person's sign-in never reaches the door; the
@@ -702,7 +710,9 @@ export class WsRpcClient<
             recovery === null || cause.fatalDetails === null
               ? "rejected"
               : await recovery
-                  .revalidateForReconnect(null)
+                  .revalidateForReconnect(
+                    this.refusedSignIns.get(cause) ?? null,
+                  )
                   .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
           // A refusal of the person's sign-in never reaches the door; the
@@ -1417,6 +1427,8 @@ export class WsRpcClient<
           markReleasedSignInRefusal(error);
         }
         if (ownerSignInRefused) this.ownerSignInRefusals.add(error);
+        if ((signInRefused || ownerSignInRefused) && sessionGrant === null)
+          this.refusedSignIns.set(error, liveBearer);
         if (heldRefused) this.heldRefusals.add(error);
         if (
           usesSessionGrant &&

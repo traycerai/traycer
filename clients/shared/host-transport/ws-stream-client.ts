@@ -258,8 +258,7 @@ export interface WsStreamClientOptions<
    * short-lived provisioning probe (CLI `host install`) is who needs it.
    */
   readonly onHostCredentialState:
-    | ((hostId: string, state: HostCredentialState) => void)
-    | null;
+    ((hostId: string, state: HostCredentialState) => void) | null;
   /**
    * Where this transport's observations reach the selection authority.
    *
@@ -3373,6 +3372,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    */
   private refreshSignInWithinBudget(
     refusedBy: HostInstance | null,
+    refused: string | null,
     recovery: SignInRecovery,
   ): Promise<RevalidateOutcome> {
     const current = this.dialSequence;
@@ -3384,7 +3384,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     if (sequence.spent) return Promise.resolve("rotated");
     if (sequence.running !== null) return sequence.running;
     const running: Promise<RevalidateOutcome> = Promise.resolve()
-      .then(() => recovery.revalidateForReconnect(null))
+      .then(() => recovery.revalidateForReconnect(refused))
       .then((outcome): RevalidateOutcome => {
         if (outcome === "adopted") return "rotated";
         if (outcome !== "network-error") sequence.spent = true;
@@ -3662,13 +3662,14 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     markReleasedSignInRefusal(details);
     this.planNext("sign-in-next");
     const refusedBy = this.socketOwner;
+    const refused = this.refusedSignIn();
     if (recovery === null) {
       this.goTerminal(details);
       return;
     }
     this.handleUnauthorizedFatalError(details, {
       revalidateForReconnect: () =>
-        this.refreshSignInWithinBudget(refusedBy, recovery),
+        this.refreshSignInWithinBudget(refusedBy, refused, recovery),
     });
   }
 
@@ -3710,6 +3711,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     expired: boolean,
   ): void {
     const refusedBy = this.socketOwner;
+    const refused = this.refusedSignIn();
     const recovery = this.config.releasedSignOn?.recovery ?? null;
     if (!expired) {
       const reason = readDoorReason(details.doorReason);
@@ -3727,9 +3729,18 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     // Reads the refused plan as a refused sign-in before the plan moves on.
     this.handleUnauthorizedFatalError(details, {
       revalidateForReconnect: () =>
-        this.refreshSignInWithinBudget(refusedBy, recovery),
+        this.refreshSignInWithinBudget(refusedBy, refused, recovery),
     });
     this.releasedPlan = "host-token";
+  }
+
+  /**
+   * The sign-in a refusal on this connection judged, read before the teardown
+   * clears it: `null` once a `credentialUpdate` wrote a different one, or when
+   * a session grant, not the sign-in, was on the wire.
+   */
+  private refusedSignIn(): string | null {
+    return this.usesSessionGrant ? null : this.presentedToken;
   }
 
   /**
