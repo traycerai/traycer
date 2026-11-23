@@ -3107,6 +3107,27 @@ describe("RemoteSession host-leg resume", () => {
       expect(host.opens).toBe(2);
     });
 
+    it("neither drops the connection nor rewrites its ledger for a larger credential replay whose exchange the host's detach cancelled while it was sealed", async () => {
+      const { fixture, plane } = await pacedFixture(true);
+      const { host } = fixture;
+      await writeIntoLostLegUntilRingNearlyFull(fixture, plane);
+      const seals = holdCredentialSeals();
+      seals.arm();
+      plane.queue.push(LARGE);
+      host.attach();
+      await until(() => seals.held() === 1);
+      // The host detaches again on the same relay socket while the replay
+      // seals: the exchange is cancelled and the connection is the same.
+      host.detach();
+      seals.release();
+      // The cancelled write's rewrite has no room in the ring: it must not end
+      // the connection that the next attach could resume.
+      await advanceUntil(() => host.connections.length > 1, 5_000);
+
+      expect(host.connections).toHaveLength(1);
+      expect(host.opens).toBe(1);
+    });
+
     it("charges the pacer for a rewritten credential when it reaches the socket: a leg that dies while it is sealed leaves no charge", async () => {
       const { fixture, plane } = await pacedFixture(true);
       const { host, session } = fixture;
