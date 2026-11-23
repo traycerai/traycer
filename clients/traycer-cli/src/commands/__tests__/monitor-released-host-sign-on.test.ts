@@ -1864,6 +1864,43 @@ describe("traycer monitor local released-host sign-in", () => {
       expect(monitorHarness.exits).toEqual([1]);
     });
 
+    it("redials on the sign-in a sibling saves before the monitor's fresh read, and prints no failure line, when authn refused the refresh of the sign-in a released host refused", async () => {
+      monitorHarness.state.refresh = "rejected";
+      startMonitorCommand();
+      const probe = await socketAt(0);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      probe.fireFrame(bareRefusal());
+      const signIn = await socketAt(1);
+      expect((await readOpen(signIn)).token).toBe(SIGN_IN);
+      // The adopting reads of the recovery that authn's refusal ends are let
+      // through; the monitor's own, the last, is held so a sibling's sign-in
+      // lands before it.
+      let reached = (): void => undefined;
+      const atMonitorsRead = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      let release = (): void => undefined;
+      monitorHarness.state.adoptHold = {
+        skip: 2,
+        reached,
+        release: new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+      };
+
+      signIn.fireFrame(releasedRefusalWith(RELEASED_REASONS[0]));
+      await atMonitorsRead;
+      monitorHarness.state.lease?.rotate("sibling-sign-in");
+      release();
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(fatalLinesPrinted()).toEqual([]);
+      const redial = await socketAt(2);
+      expect((await readOpen(redial)).token).toBe("sibling-sign-in");
+      expect(ended).toBeNull();
+      expect(monitorHarness.exits).toEqual([]);
+    });
+
     it("prints the session-expired line when authn refuses the first host-only mint after a released host refused the placeholder bare", async () => {
       monitorHarness.state.refresh = "rotated";
       const mint = holdMint();
