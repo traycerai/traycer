@@ -277,7 +277,6 @@ describe("what the source hands back for a mint carries the sign-in it stands fo
     mints[0].answer({
       outcome: { kind: "ok", token: hostTokenIssuedAt("flight", 2_000) },
       order: 7,
-      joined: false,
     });
     const [started, joined] = await Promise.all([starter, joiner]);
 

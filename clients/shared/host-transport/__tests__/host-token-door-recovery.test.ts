@@ -110,7 +110,13 @@ async function harness(
     mintCalls,
     states,
     signInCalls,
-    recover: session.auth,
+    // The session's recovery, asked as a transport that always wants the answer does.
+    recover: {
+      revalidateForReconnect: () =>
+        session.auth.revalidateForReconnect(() => true),
+      revalidateRefused: (refusal) =>
+        session.auth.revalidateRefused(refusal, () => true),
+    },
     door: session.door,
   };
 }
