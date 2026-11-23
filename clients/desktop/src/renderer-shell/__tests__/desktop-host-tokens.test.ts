@@ -896,3 +896,35 @@ describe("desktop host-token source ordering by the second authn issued each tok
     expect(tokens.current(USER_ID, HOST_ID)).toEqual(NEWER);
   });
 });
+
+describe("a window records a refused mint only when main kept it under main's current sign-in", () => {
+  it.each([
+    { name: "kept", recorded: true, failure: "sign-in-rejected" },
+    { name: "not kept", recorded: false, failure: null },
+  ])(
+    "answers lastFailureOf for the refusal main says it $name",
+    async ({ recorded, failure }) => {
+      const { bridge } = bridgeFixture();
+      Reflect.set(bridge, "obtain", async () => ({
+        outcome: { kind: "sign-in-rejected" },
+        era: 0,
+        held: false,
+        recorded,
+      }));
+      const tokens = createDesktopHostTokenSource(bridge);
+      const hosts = createReleasedHostMemory();
+      hosts.observeInstance(HOST_ID, "100");
+      const owner = hosts.currentInstance(HOST_ID);
+
+      await expect(
+        tokens.obtain(USER_ID, HOST_ID, true, {
+          signal: null,
+          owner,
+          observedNow: () => owner.observed,
+        }),
+      ).resolves.toEqual({ kind: "sign-in-rejected" });
+
+      expect(tokens.lastFailureOf(USER_ID, owner)).toBe(failure);
+    },
+  );
+});

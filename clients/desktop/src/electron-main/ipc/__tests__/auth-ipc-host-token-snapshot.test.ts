@@ -1007,3 +1007,55 @@ describe("a window's record of a refused mint belongs to the sign-in the mint wa
     expect(window.lastFailureOf(USER, owner)).toBeNull();
   });
 });
+
+describe("main's obtain reply says whether main kept the refusal it answers with", () => {
+  const USER = "user-a";
+  const HOST = "host-reply-records-refusal";
+  const jwtExpiring = (exp: number): string =>
+    `header.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.signature`;
+
+  it.each([
+    {
+      name: "the sign-in the mint was sent with is still stored",
+      moves: false,
+      recorded: true,
+    },
+    {
+      name: "the stored sign-in moved before the refusal came back",
+      moves: true,
+      recorded: false,
+    },
+  ])("replies recorded=$recorded when $name", async ({ moves, recorded }) => {
+    let stored = jwtExpiring(2_000_000);
+    const answers: Array<(outcome: HostTokenMintOutcome) => void> = [];
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        new Promise<HostTokenMintOutcome>((resolve) => {
+          answers.push(resolve);
+        }),
+      signIn: (userId) => (userId === USER ? stored : null),
+      now: () => 1_000_000,
+    });
+    registerFor(main, USER);
+    processReleasedHosts.observeInstance(HOST, "process-a");
+
+    const replying = invokeHandler(RunnerHostInvoke.hostTokensObtain)(
+      RENDERER,
+      USER,
+      HOST,
+      true,
+      main.era(USER),
+      { observed: "process-a" },
+    );
+    await vi.waitFor(() => expect(answers).toHaveLength(1));
+    if (moves) stored = jwtExpiring(2_100_000);
+    answers[0]({ kind: "sign-in-rejected" });
+    const reply = await replying;
+
+    expect(Reflect.get(Object(reply), "outcome")).toEqual({
+      kind: "sign-in-rejected",
+    });
+    expect(Reflect.get(Object(reply), "recorded")).toBe(recorded);
+  });
+});
