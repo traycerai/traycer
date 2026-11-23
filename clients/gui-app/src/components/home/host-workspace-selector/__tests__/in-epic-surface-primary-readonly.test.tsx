@@ -65,6 +65,7 @@ const mutationMocks = vi.hoisted(() => ({
   createPending: false,
   recordRecent: vi.fn(),
   removeBindingFolder: vi.fn().mockResolvedValue({}),
+  setEntryMode: vi.fn(),
 }));
 const recentMocks = vi.hoisted(() => ({
   prepareRecent: vi.fn(),
@@ -169,7 +170,7 @@ vi.mock("@/hooks/worktree/use-worktree-workspaces-refresh", () => ({
 }));
 vi.mock("@/hooks/worktree/use-worktree-set-entry-mode-mutation", () => ({
   useWorktreeSetEntryModeForClient: () => ({
-    mutate: vi.fn(),
+    mutate: mutationMocks.setEntryMode,
     isPending: false,
   }),
 }));
@@ -428,6 +429,7 @@ const BINDING: WorktreeBinding = {
   ],
 };
 let inFlightWorktreeIntent: WorktreeIntent | null = null;
+let failedWorktreePaths: readonly string[] = [];
 const THREE_FOLDER_BINDING: WorktreeBinding = {
   entries: [
     bindingEntry({ workspacePath: "/repo/alpha", isPrimary: false }),
@@ -459,6 +461,7 @@ function BoundSurfaceTree(props: {
           hasActiveTurn: false,
           ownerLabel: "Owner",
           inFlightWorktreeIntent,
+          failedWorktreePaths,
           missingWorktreePaths: [],
           bindingResolved: props.bindingResolved,
           onBindingCommitted: props.onBindingCommitted,
@@ -502,6 +505,7 @@ function renderBoundSurface(
 
 beforeEach(() => {
   inFlightWorktreeIntent = null;
+  failedWorktreePaths = [];
   recentMocks.prepareRecent.mockResolvedValue({ folders: [RECENT_FOLDER] });
   recentMocks.recordRecentAsync.mockResolvedValue({});
   mutationMocks.createWorktree.mockResolvedValue({ perEntry: [] });
@@ -520,6 +524,7 @@ afterEach(() => {
   mutationMocks.createWorktree.mockReset();
   mutationMocks.recordRecent.mockReset();
   mutationMocks.removeBindingFolder.mockReset();
+  mutationMocks.setEntryMode.mockReset();
   teardownStopMocks.stopShell.mockReset();
   teardownStopMocks.stopAgent.mockReset();
   teardownMocks.snapshot.mockReset();
@@ -551,6 +556,59 @@ it("keeps a dispatched new-worktree branch visible while the binding is unchange
   expect(
     within(alphaRow).getByTestId("folder-branch-trigger").textContent,
   ).toContain("feat-replacement");
+});
+
+async function findAlphaRow(): Promise<HTMLElement> {
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  const alphaRow = (await screen.findAllByTestId("folder-row")).find(
+    (row) => row.getAttribute("data-path") === "/repo/alpha",
+  );
+  if (alphaRow === undefined) throw new Error("alpha row not rendered");
+  return alphaRow;
+}
+
+describe("an idle chat's folder whose owed worktree failed", () => {
+  beforeEach(() => {
+    seedResolvedBindingMetadata();
+    inFlightWorktreeIntent = {
+      entries: [newWorktreeIntent("/repo/alpha", "polite-turtle")],
+    };
+  });
+
+  it("reads Worktree · failed, and stages a Local pick instead of writing the binding", async () => {
+    failedWorktreePaths = ["/repo/alpha"];
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+    expect(
+      within(alphaRow).getByTestId("folder-location-failed").textContent,
+    ).toBe("Worktree · failed");
+
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-trigger"));
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-local"));
+
+    expect(mutationMocks.setEntryMode).not.toHaveBeenCalled();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(CHAT_STAGING_KEY)
+      ]?.entries,
+    ).toMatchObject([{ kind: "local", workspacePath: "/repo/alpha" }]);
+  });
+
+  it("still writes a Local pick straight to the binding when the folder is not failed", async () => {
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+    expect(within(alphaRow).queryByTestId("folder-location-failed")).toBeNull();
+
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-trigger"));
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-local"));
+
+    expect(mutationMocks.setEntryMode).toHaveBeenCalledTimes(1);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(CHAT_STAGING_KEY)
+      ],
+    ).toBeUndefined();
+  });
 });
 
 it("merges a one-folder re-pick over a multi-folder dispatched intent", async () => {
@@ -1856,6 +1914,7 @@ describe("the chat chip is the composer's picker", () => {
               hasActiveTurn: false,
               ownerLabel: "Owner",
               inFlightWorktreeIntent: null,
+              failedWorktreePaths: [],
               missingWorktreePaths: [],
               bindingResolved: true,
               onBindingCommitted: null,
