@@ -169,8 +169,12 @@ export function HostScopeGate(props: {
  * A Local pick's page while its computer cannot be reached: the scope's own
  * "Can't reach" notice, with the page kept mounted underneath, hidden and
  * frozen, so its drafts survive the outage and are there when it is back. The
- * notice follows the scope's status as it is derived, with no grace period. A
- * host that needs an update is not this state: the page's own gate answers.
+ * notice follows the scope's status as it is derived, with no grace period.
+ *
+ * Away outranks old: a computer with no route shows this notice even when it
+ * also needs an update, since nothing can reach it to update it. Only a host
+ * that is reachable but below the minimum version is left to the page's own
+ * update notice (`deriveHostScopeStatus` reports that as `unreachable` too).
  */
 export function HostUnreachableGate(props: {
   readonly scope: HostScope;
@@ -180,7 +184,7 @@ export function HostUnreachableGate(props: {
   const host =
     scope.status === "unreachable" &&
     scope.host !== null &&
-    !hostScopeNeedsUpdate(scope.host)
+    (!scope.host.connectable || !hostScopeNeedsUpdate(scope.host))
       ? scope.host
       : null;
   return (
