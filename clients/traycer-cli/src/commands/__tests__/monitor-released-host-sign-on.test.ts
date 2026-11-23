@@ -1,4 +1,5 @@
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
+import type { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +92,8 @@ const monitorHarness = vi.hoisted(() => {
       realRevalidator: false,
       /** What the scripted credentials store answered each `rotate`, in order: the first is a sibling's pair adopted, later ones refresh. */
       rotations: [] as string[],
+      /** The stored sign-in the command holds, as its revalidator was given it. */
+      lease: null as MutableBearerLease | null,
       /** What refreshing the stored sign-in answers. */
       refresh: "network-error" as "network-error" | "rotated" | "rejected",
       /** What authn answers a host-token mint with. */
@@ -169,6 +172,8 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
 vi.mock("../../store/credentials-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../store/credentials-store")>();
+  const { MutableBearerLease: Lease } =
+    await import("@traycer-clients/shared/auth/bearer-source");
   return {
     ...actual,
     createCliCredentialsStore: () => ({
@@ -190,13 +195,15 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     }),
     createStoreBackedRevalidator: (
       args: Parameters<typeof actual.createStoreBackedRevalidator>[0],
-    ) =>
-      monitorHarness.state.realRevalidator
+    ) => {
+      if (args.lease instanceof Lease) monitorHarness.state.lease = args.lease;
+      return monitorHarness.state.realRevalidator
         ? actual.createStoreBackedRevalidator(args)
         : {
             revalidateCurrentContext: async () => monitorHarness.state.refresh,
             rotateSignIn: async () => monitorHarness.state.refresh,
-          },
+          };
+    },
   };
 });
 
@@ -411,6 +418,7 @@ beforeEach(() => {
   monitorHarness.state.grants = 0;
   monitorHarness.state.refresh = "network-error";
   monitorHarness.state.realRevalidator = false;
+  monitorHarness.state.lease = null;
   monitorHarness.state.rotations.splice(0);
   monitorHarness.state.signIn = SIGN_IN;
   monitorHarness.state.firstRotation = "superseded";
@@ -1769,6 +1777,100 @@ describe("traycer monitor local released-host sign-in", () => {
         message: NOT_A_MEMBER_SENTENCE,
         exitCode: 1,
       });
+    });
+  });
+
+  describe("a refusal of a sign-in that is no longer the stored one", () => {
+    const SIBLING_SIGN_IN = "sibling-sign-in";
+    const LATER_SIGN_IN = "later-sign-in";
+    const REFRESHED_SIGN_IN = "refreshed-token";
+
+    function storedSignIn(): MutableBearerLease {
+      const lease = monitorHarness.state.lease;
+      if (lease === null) throw new Error("the command held no sign-in");
+      return lease;
+    }
+
+    it("neither ends nor reads a sign-out when the proactive upkeep's mint is refused after a sibling stored another sign-in", async () => {
+      // The upkeep refreshes the sign-in and buys a token with the refreshed one.
+      const oldSignIn = expiredJwt(
+        Date.now() + 10 * 60 * 1000 + UPKEEP_FIRES_AT_MS,
+      );
+      const refreshed = expiredJwt(Date.now() + 8 * 60 * 60 * 1000);
+      monitorHarness.state.signIn = oldSignIn;
+      monitorHarness.state.refreshedSignIn = refreshed;
+      monitorHarness.state.firstRotation = "applied";
+      monitorHarness.state.realRevalidator = true;
+      const mints = holdMints();
+      startMonitor();
+      await socketAt(0);
+      for (
+        let step = 0;
+        step < 400 && !monitorHarness.grantSignIns.includes(refreshed);
+        step += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      const upkeepMint = monitorHarness.grantSignIns.indexOf(refreshed);
+      expect(upkeepMint).toBeGreaterThan(-1);
+
+      // A sibling stores another sign-in while the upkeep's mint is out.
+      storedSignIn().rotate(SIBLING_SIGN_IN);
+      mints.answer(upkeepMint, new Response("rejected", { status: 401 }));
+
+      // The command asks again on the stored sign-in, and nothing is judged.
+      await vi.waitFor(
+        () =>
+          expect(monitorHarness.grantSignIns.at(-1)).toBe(SIBLING_SIGN_IN),
+        WAIT,
+      );
+      expect(await outcomeOf()).toBe("running");
+      expect(monitorHarness.state.rotations).toEqual(["applied"]);
+      mints.answer(
+        monitorHarness.grantSignIns.length - 1,
+        grantedToken("fresh-on-sibling"),
+      );
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    it("goes on with the stored sign-in when the retry after a rotation is refused after a sibling stored another one", async () => {
+      monitorHarness.state.firstRotation = "applied";
+      monitorHarness.state.realRevalidator = true;
+      const mints = holdMints();
+      startMonitor();
+      await socketAt(0);
+      await vi.waitFor(
+        () => expect(monitorHarness.grantSignIns).toEqual([SIGN_IN]),
+        WAIT,
+      );
+
+      // The first refusal rotates the sign-in and the retry goes out on the rotated one.
+      mints.answer(0, new Response("rejected", { status: 401 }));
+      await vi.waitFor(
+        () =>
+          expect(monitorHarness.grantSignIns).toEqual([
+            SIGN_IN,
+            REFRESHED_SIGN_IN,
+          ]),
+        WAIT,
+      );
+      // A sibling stores another sign-in while the retry is out, and the retry is refused.
+      storedSignIn().rotate(LATER_SIGN_IN);
+      mints.answer(1, new Response("rejected", { status: 401 }));
+
+      await vi.waitFor(
+        () =>
+          expect(monitorHarness.grantSignIns).toEqual([
+            SIGN_IN,
+            REFRESHED_SIGN_IN,
+            LATER_SIGN_IN,
+          ]),
+        WAIT,
+      );
+      expect(await outcomeOf()).toBe("running");
+      expect(monitorHarness.state.rotations).toEqual(["applied"]);
+      mints.answer(2, grantedToken("fresh-on-later"));
+      expect(await outcomeOf()).toBe("running");
     });
   });
 });
