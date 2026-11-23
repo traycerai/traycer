@@ -48,6 +48,7 @@ import {
   migrateCliConfig,
   readBrowserConfig,
   readBrowserConfigSync,
+  readStoredAgentBrowserAccess,
   readCliConfig,
   readFeatureSettings,
   readFeatureSettingsSync,
@@ -73,6 +74,7 @@ import {
   setAgentWorktreeCreatePolicy,
   setLogLevels,
   setShell,
+  unsetAgentBrowserAccess,
   writeCliConfig,
 } from "../store";
 import { CLI_CONFIG_VERSION, featureSettingsSchema } from "../schema";
@@ -402,6 +404,37 @@ describe("cli config store", () => {
     );
     expect(await readBrowserConfig()).toEqual({ agentAccess: true });
     expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+  });
+
+  it("preserves the stored browser setting across an unrelated write", async () => {
+    await writeRaw(JSON.stringify({ version: 1, browser: {} }));
+
+    await setEnvOverride("FOO", "bar");
+
+    expect(
+      JSON.parse(await readFile(cliConfigPath(), "utf8")),
+    ).not.toHaveProperty("browser.agentAccess");
+
+    await setAgentBrowserAccess(true);
+    await setEnvOverride("FOO", "baz");
+
+    expect(JSON.parse(await readFile(cliConfigPath(), "utf8"))).toHaveProperty(
+      "browser.agentAccess",
+      true,
+    );
+  });
+
+  it("unsets a stored browser setting and keeps other settings", async () => {
+    await setEnvOverride("FOO", "bar");
+    await setAgentBrowserAccess(false);
+    expect(await readStoredAgentBrowserAccess()).toBe(false);
+
+    await unsetAgentBrowserAccess();
+
+    expect(await readStoredAgentBrowserAccess()).toBeUndefined();
+    expect(await readBrowserConfig()).toEqual({ agentAccess: true });
+    expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
+    expect((await readCliConfig()).envOverrides).toEqual({ FOO: "bar" });
   });
 
   it("sets agent browser access without changing shell, env, or log settings", async () => {
