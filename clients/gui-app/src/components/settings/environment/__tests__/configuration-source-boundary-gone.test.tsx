@@ -65,6 +65,7 @@ import { AuthService } from "@/lib/auth/auth-service";
 import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   useEnvironmentPick,
   useSettingsEnvironmentPickStore,
@@ -90,57 +91,33 @@ import {
 
 /**
  * The surface moves are asserted as the COMMANDS they issue, not as a call to
- * the helper that issues them: which helper runs is the thing under test, so a
- * mock of it would pass whatever it was handed. `navigateToSettingsSection` is
- * the real one here, reaching this recording modal bridge, and only
- * `rememberSettingsTabSection` is stood in for — its own target is a tab this
- * suite does not lay out, and what matters is that it, and nothing that
- * activates, is what a server fact reaches for.
+ * the helper that issues them: `navigateToSettingsSection` is the real one
+ * here, reaching this recording modal bridge.
  */
 const surface = vi.hoisted(() => ({
   openSettings: vi.fn(),
   setSection: vi.fn(),
-  remember: vi.fn(),
-  replaceOwnedRoute: vi.fn(),
   overlayActive: false,
-  /** The section the overlay holds, and the path a background tab remembers. */
+  /** The section the overlay holds. */
   overlaySection: "",
-  remembered: "",
 }));
 
 /**
- * The route, which is the third presentation and the one `remember` cannot
- * move: `SettingsSurface` prefers the route wherever Settings owns it. The
- * real surface is rendered against this state in the arm that owns the route,
- * so that arm asserts the section DRAWN rather than the call made — with the
- * effect out of frame, a call cannot be told apart from a no-op.
+ * The route: `SettingsSurface` prefers it wherever Settings owns it. The real
+ * surface is rendered against this state in the arm that owns the route, so
+ * that arm asserts the section DRAWN rather than a call made.
  */
-const router = vi.hoisted(() => ({
-  pathname: "/epics",
-  listeners: new Set<() => void>(),
+const router = vi.hoisted(() => ({ pathname: "/epics" }));
+vi.mock("@tanstack/react-router", () => ({
+  useRouter: () => ({ navigate: vi.fn() }),
+  useRouterState: ({
+    select,
+  }: {
+    select: (state: {
+      readonly location: { readonly pathname: string };
+    }) => unknown;
+  }) => select({ location: { pathname: router.pathname } }),
 }));
-vi.mock("@tanstack/react-router", async () => {
-  const { useSyncExternalStore } = await import("react");
-  return {
-    useRouter: () => ({ navigate: vi.fn() }),
-    useRouterState: ({
-      select,
-    }: {
-      select: (state: {
-        readonly location: { readonly pathname: string };
-      }) => unknown;
-    }) =>
-      useSyncExternalStore(
-        (onChange: () => void) => {
-          router.listeners.add(onChange);
-          return () => {
-            router.listeners.delete(onChange);
-          };
-        },
-        () => select({ location: { pathname: router.pathname } }),
-      ),
-  };
-});
 vi.mock("@/components/settings/settings-sidebar", () => ({
   SettingsSidebar: () => null,
 }));
@@ -158,28 +135,9 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
       surface.setSection(section);
       surface.overlaySection = section;
     },
-    // The bridge's own route move, recorded AND performed: what it does to a
-    // real router is asserted in `stores/tabs/__tests__/use-system-tab-modal`,
-    // against real Settings routes. Here it has to actually move the route, or
-    // the surface below has nothing to redraw from.
-    replaceOwnedSettingsRoute: (section: string) => {
-      surface.replaceOwnedRoute(section);
-      if (!router.pathname.startsWith("/settings")) return;
-      router.pathname = `/settings/${section}`;
-      // Notified, not just mutated: a route the surface never re-rendered for
-      // would let a case pass on a move nobody could see.
-      for (const listener of router.listeners) listener();
-    },
     active: null,
     close: () => undefined,
   }),
-}));
-vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
-  rememberSettingsTabSection: (section: string) => {
-    surface.remember(section);
-    surface.remembered = section;
-  },
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -226,13 +184,11 @@ afterEach(() => {
   resetNegotiatedManifests();
   surface.openSettings.mockClear();
   surface.setSection.mockClear();
-  surface.remember.mockClear();
-  surface.replaceOwnedRoute.mockClear();
   surface.overlayActive = false;
   surface.overlaySection = "";
-  surface.remembered = "";
   rerenders.tick = 0;
   router.pathname = "/epics";
+  useTabsStore.setState({ systemTabs: { history: null, settings: null } });
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -788,22 +744,12 @@ describe("a team the environment list no longer carries", () => {
   });
 
   // Personal has no Members page, and Members is the likeliest page to be on
-  // while a membership changes. Moving the selection there without moving the
-  // surface leaves the person on a panel that renders nothing, with the
-  // sidebar row they were standing on gone from under them.
+  // while a membership changes. The selection moves to Personal and the
+  // surface stays where the person is: the page answers for itself.
   //
   // The three arms below are the same removal on the three presentations
-  // Settings has, and each needs a different move — none of which may activate
-  // anything, because nobody pressed anything and `openSettings` would take a
-  // split partner's focus and route for a membership change in the background.
-  //
-  // With the overlay up, the person is looking at Settings and the section is
-  // swapped in place. With it down and a partner owning the route, Settings is
-  // a tab that may be sitting in a pane nobody is looking at, so the tab is
-  // only told where it is. With it down and Settings OWNING the route, being
-  // told is not enough: the surface prefers the route wherever it owns it, so
-  // the route is replaced — which activates nothing, a surface owning the
-  // route being the focused route owner already.
+  // Settings has: the overlay, a background tab whose split partner owns the
+  // route, and a Settings surface that owns the route. None of them moves.
   async function removalOnMembers(alongside: ReactNode): Promise<void> {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
@@ -839,11 +785,17 @@ describe("a team the environment list no longer carries", () => {
     surface.overlayActive = false;
     // A split partner owns the route, which is the case a remembered path is for.
     router.pathname = "/epics";
-    surface.remembered = "members";
+    useTabsStore.getState().openSystemTab({
+      kind: "settings",
+      name: "Settings",
+      lastPath: "/settings/members",
+    });
 
     await removalOnMembers(null);
 
-    expect(surface.remembered).toBe("members");
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/members",
+    );
     expect(router.pathname).toBe("/epics");
   });
 
@@ -888,7 +840,6 @@ describe("a team the environment list no longer carries", () => {
     });
     expect(surface.openSettings).not.toHaveBeenCalled();
     expect(surface.setSection).not.toHaveBeenCalled();
-    expect(surface.remember).not.toHaveBeenCalled();
   });
 
   // `refetch`'s promise resolves with the OBSERVER's state, so a request

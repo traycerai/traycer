@@ -108,7 +108,6 @@ function publishSurface(options: { readonly overlayActive: boolean }) {
   const surface = {
     openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
     setSection: vi.fn<(section: SettingsSectionId) => void>(),
-    replaceOwnedSettingsRoute: vi.fn<(section: SettingsSectionId) => void>(),
   };
   const api: SystemTabModalApi = {
     ...surface,
@@ -192,7 +191,6 @@ describe("<SecretsSettingsPanel />", () => {
       document.querySelector("[data-settings-panel-body]")?.textContent,
     ).toBe("");
     expect(surface.setSection).not.toHaveBeenCalled();
-    expect(surface.replaceOwnedSettingsRoute).not.toHaveBeenCalled();
     expect(surface.openSettings).not.toHaveBeenCalled();
     expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
       "/settings/secrets",
@@ -216,7 +214,6 @@ describe("<SecretsSettingsPanel />", () => {
       document.querySelector("[data-settings-panel-body]")?.textContent,
     ).toBe("");
     expect(surface.setSection).not.toHaveBeenCalled();
-    expect(surface.replaceOwnedSettingsRoute).not.toHaveBeenCalled();
     expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
       "/settings/secrets",
     );

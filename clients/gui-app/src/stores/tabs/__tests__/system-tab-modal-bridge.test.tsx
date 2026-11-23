@@ -18,7 +18,6 @@ function buildFakeApi(): SystemTabModalApi {
     openHistory: vi.fn<() => void>(),
     close: vi.fn<() => void>(),
     setSection: vi.fn<(section: SettingsSectionId) => void>(),
-    replaceOwnedSettingsRoute: vi.fn<(section: SettingsSectionId) => void>(),
     promoteToTab: vi.fn<() => void>(),
     isOverlayActive: vi.fn<(kind: SystemOverlayKind) => boolean>(() => false),
   };

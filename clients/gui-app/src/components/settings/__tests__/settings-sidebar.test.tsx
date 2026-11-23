@@ -230,7 +230,6 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", async (importOriginal) => {
             isOverlayActive: () => true,
             setSection: surfaceApi.setSection,
             openSettings: () => undefined,
-            replaceOwnedSettingsRoute: () => undefined,
             active: null,
             close: () => undefined,
           },

@@ -833,7 +833,6 @@ describe("Settings - Layout", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });
@@ -872,7 +871,6 @@ describe("Settings - Layout", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });
@@ -907,7 +905,6 @@ describe("Settings - Layout", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });
@@ -969,7 +966,6 @@ describe("Settings - Layout", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });
@@ -1681,7 +1677,6 @@ describe("Settings - Layout", () => {
         openHistory: vi.fn(),
         close: vi.fn(),
         setSection: vi.fn(),
-        replaceOwnedSettingsRoute: vi.fn(),
         promoteToTab: vi.fn(),
         isOverlayActive: () => true,
       });
