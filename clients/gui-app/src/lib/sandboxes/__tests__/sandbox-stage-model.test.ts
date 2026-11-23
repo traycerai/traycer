@@ -1317,6 +1317,52 @@ describe("growing Linux starting sizes", () => {
     });
   });
 
+  it("compares a staged fixed sibling with the rated growing minimum", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const offered: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            AUTO_SIZING_RUNGS[0],
+            {
+              cpus: 2,
+              memoryMb: 4 * 1024,
+              diskMb: 80 * 1024,
+              default: false,
+            },
+          ],
+          regions: [
+            {
+              ...region,
+              shapePrices: [
+                {
+                  cpus: 2,
+                  memoryMb: 4 * 1024,
+                  diskMb: 80 * 1024,
+                  priceMcPerHour: {
+                    awakeMc: 222,
+                    suspendedMc: 9,
+                    stoppedMc: 9,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const staged = size(2, 4, 80);
+
+    expect(stageSmallestShape(offered, staged)).toEqual({
+      isStaged: false,
+      awakeMcPerHour: 135,
+    });
+    expect(stageNeedsCredits(130, stagePrice(offered, staged))).toBe(true);
+  });
+
   it("offers one duplicate default size and resolves its price by first-listed rung", () => {
     const [provider] = catalogue.providers;
     const [region] = provider.regions;

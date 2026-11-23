@@ -597,6 +597,49 @@ describe("<SandboxShapeSheet />", () => {
     },
   );
 
+  it("keeps a remembered growing size selected beside its fixed sibling", () => {
+    catalogueInUse = growingWithFixedSiblingCatalogue({
+      fixedDiskGb: 50,
+      fixedAwakeMc: 100,
+      growingFirst: false,
+    });
+    const onUseShape = vi.fn();
+    renderSheetWithInitialShape(onUseShape, {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 80 * GIB,
+      region: "us-east",
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 10_080,
+    });
+
+    const size = screen.getByRole("combobox", { name: "Size" });
+    expect(size.textContent).toContain(
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.45/h",
+    );
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(disk.value).toBe("80");
+
+    fireEvent.click(size);
+    const fixedOption = screen.getByRole("option", {
+      name: /2 vCPU · 4 GB · 50 GB · \$0\.10\/h/,
+    });
+    fireEvent.click(fixedOption);
+
+    expect(screen.queryByRole("spinbutton", { name: "Disk (GB)" })).toBeNull();
+    expect(size.textContent).toContain("2 vCPU · 4 GB · 50 GB · $0.10/h");
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 50 * GIB,
+    });
+  });
+
   it("keeps an in-progress disk edit mounted through a fixed sibling and submits the larger value", () => {
     catalogueInUse = growingWithFixedSiblingCatalogue({
       fixedDiskGb: 20,

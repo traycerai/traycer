@@ -329,7 +329,20 @@ function diskGbForRung(
 }
 
 function rungKey(rung: SandboxShapeRung): string {
-  return `${rung.cpus}:${rung.memoryMb}:${rung.diskMb}`;
+  const kind = rung.grows === undefined ? "fixed" : "growing";
+  return `${rung.cpus}:${rung.memoryMb}:${rung.diskMb}:${kind}`;
+}
+
+function selectableFormRungs(
+  shapes: readonly SandboxShapeRung[] | null,
+  selected: SandboxShapeRung | null,
+): readonly SandboxShapeRung[] | null {
+  if (shapes === null) return null;
+  const rungs = selectableStageRungs(shapes);
+  // A resized growing start can still be selected when its listed disk names a fixed sibling.
+  return selected === null || rungs.includes(selected)
+    ? rungs
+    : [...rungs, selected];
 }
 
 function resolveRung(
@@ -474,8 +487,7 @@ function ShapeSheetForm(props: {
   }
   const selection = resolveRung(form, provider.shapes);
   const selectedRungGrows = selection.grows;
-  const selectableRungs =
-    provider.shapes === null ? null : selectableStageRungs(provider.shapes);
+  const selectableRungs = selectableFormRungs(provider.shapes, selection.rung);
   const result = shapeOfForm(form, provider, selection.rung);
   const shape = "shape" in result ? result.shape : null;
   const price = shape === null ? null : stagePrice(props.catalogue, shape);

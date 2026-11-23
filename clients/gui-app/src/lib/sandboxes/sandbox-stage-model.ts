@@ -629,19 +629,23 @@ export function stageSmallestShape(
     );
   }
   const exact = exactShapePrice(region, minimum.shape);
-  if (
-    exact === null &&
-    region.pricing === null &&
-    !sameGeometry(minimum.shape, source)
-  )
+  const rates = region.pricing;
+  let awakeMcPerHour: number;
+  if (exact !== null) {
+    awakeMcPerHour = exact.awakeMc;
+  } else if (rates !== null) {
+    awakeMcPerHour =
+      minimum.grows === null
+        ? ratedHourlyPrice(rates, minimum).awakeMcPerHour
+        : growingAwakeMc(rates, minimum.shape);
+  } else if (sameGeometry(minimum.shape, source)) {
+    awakeMcPerHour = region.fromPriceMcPerHour.awakeMc;
+  } else {
     return null;
+  }
   return {
     isStaged: sameGeometry(selected.shape, minimum.shape),
-    awakeMcPerHour:
-      exact?.awakeMc ??
-      (region.pricing === null
-        ? region.fromPriceMcPerHour.awakeMc
-        : ratedHourlyPrice(region.pricing, minimum).awakeMcPerHour),
+    awakeMcPerHour,
   };
 }
 
