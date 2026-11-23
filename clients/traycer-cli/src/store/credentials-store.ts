@@ -68,12 +68,13 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
 /** A sign-in refresh's outcome, telling an adopted sibling's rotation ("adopted") from one authn answered. */
 export type SignInRotation = RevalidateOutcome | "adopted";
 
-/** A rotation's outcome, with the sign-in its own save wrote. */
-export interface SignInRotationResult {
-  readonly outcome: SignInRotation;
-  /** Taken from the store's locked result; `null` unless `outcome` is "rotated". */
-  readonly installed: string | null;
-}
+/** A rotation's outcome, with the sign-in its own save wrote, taken from the store's locked result. */
+export type SignInRotationResult =
+  | { readonly outcome: "rotated"; readonly installed: string }
+  | {
+      readonly outcome: Exclude<SignInRotation, "rotated">;
+      readonly installed: null;
+    };
 
 /**
  * The CLI's on-`UNAUTHORIZED` bearer revalidator, backed by the locked `rotate`
@@ -153,16 +154,16 @@ export function createStoreBackedRevalidator(args: {
           //               store's in-memory overlay (withCommitRetry already
           //               re-drove the landing), so the host accepts it.
           // Rotate the lease to whichever token we settled on.
-          if (result.credentials !== null) {
-            lease.rotate(result.credentials.token);
-          }
+          // The protocol types `credentials` as nullable for every outcome;
+          // these three always carry one. With none the lease is untouched,
+          // which is what "network-error" says.
+          if (result.credentials === null)
+            return { outcome: "network-error", installed: null };
+          lease.rotate(result.credentials.token);
           // A sibling's rotation adopted is no sign-in this save wrote.
           return result.outcome === "superseded"
             ? { outcome: "adopted", installed: null }
-            : {
-                outcome: "rotated",
-                installed: result.credentials?.token ?? null,
-              };
+            : { outcome: "rotated", installed: result.credentials.token };
         case "refresh-network":
         case "lock-busy":
         case "spend-pending":

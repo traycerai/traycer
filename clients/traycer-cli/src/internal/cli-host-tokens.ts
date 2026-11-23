@@ -406,7 +406,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   let refreshedSinceLastMint = false;
   let refusedAfterRefresh = false;
   // The sign-in this process's latest accepted rotation installed, as its own
-  // save answered; `null` when it answered none.
+  // save answered; `null` before any, and after an adopted one (a sibling's).
   let installedByRefresh: string | null = null;
   // The session or command these tokens belong to has ended: no rotation
   // starts for it. A refresh already entered is left to finish.
@@ -420,16 +420,12 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   };
   // Whether a refused mint was sent with the sign-in this process's own
   // rotation installed, and so refused after that refresh. A refusal with no
-  // recorded sign-in, or after a rotation that answered none, is judged as
-  // after our refresh: telling it apart would take a sign-in nobody recorded,
-  // and judging it so keeps the second refusal final, never another refresh.
+  // recorded sign-in is judged as after our refresh: telling it apart would
+  // take a sign-in nobody recorded, and judging it so keeps the second refusal
+  // final, never another refresh.
   const refusedOurRefresh = (refused: HostTokenMintOutcome): boolean => {
     const sentWith = mintSentWith.get(refused);
-    return (
-      sentWith === undefined ||
-      installedByRefresh === null ||
-      sentWith === installedByRefresh
-    );
+    return sentWith === undefined || sentWith === installedByRefresh;
   };
   // The sign-in the latest refused mint was sent with, for the transports'
   // recovery, which is asked to refresh with no outcome in hand.
@@ -522,14 +518,32 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
           return outcome;
         if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
         if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
+        // Only an answer to a mint sent with the sign-in our rotation installed
+        // changes what the judge holds for that rotation; a token on an older
+        // sign-in, an unavailable or another sign-in's refusal changes nothing.
+        const sentWith = mintSentWith.get(outcome);
+        const ourRotationAnswered =
+          outcome.kind === "sign-in-rejected"
+            ? refusedOurRefresh(outcome)
+            : outcome.kind === "ok" &&
+              sentWith !== undefined &&
+              sentWith === installedByRefresh;
         if (
           outcome.kind === "sign-in-rejected" &&
           refreshedSinceLastMint &&
-          refusedOurRefresh(outcome)
+          ourRotationAnswered
         )
           refusedAfterRefresh = true;
-        if (outcome.kind === "ok") refusedAfterRefresh = false;
-        refreshedSinceLastMint = false;
+        // A refusal is un-judged only by a token bought with the sign-in
+        // stored now (or an accepted refresh), never by a late one on an
+        // older sign-in.
+        if (
+          outcome.kind === "ok" &&
+          sentWith !== undefined &&
+          sentWith === readLeaseBearer(signIn.lease)
+        )
+          refusedAfterRefresh = false;
+        if (ourRotationAnswered) refreshedSinceLastMint = false;
         if (isHostRefusal(outcome)) report(owner, outcome, startedAt);
         return outcome;
       },
