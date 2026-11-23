@@ -5100,7 +5100,13 @@ export class RemoteSession<
     connection.scheduler.resumeAfterResend(
       gap.frames,
       (muxFrame, reportSent) =>
-        this.writeResentFrame(generation, muxFrame, resentIndex++, reportSent),
+        this.writeResentFrame(
+          generation,
+          muxFrame,
+          resentIndex++,
+          reportSent,
+          exchange,
+        ),
       () => this.completeResume(connection, gap.frames.length),
     );
   }
@@ -6798,6 +6804,7 @@ export class RemoteSession<
       sealedBearer,
       reportSent,
       null,
+      null,
     );
   }
 
@@ -6813,6 +6820,7 @@ export class RemoteSession<
     muxFrame: Uint8Array,
     index: number,
     reportSent: (bytes: number) => void,
+    exchange: ResumeExchange,
   ): Promise<void> {
     const connection = this.connection;
     if (!this.isCurrent(generation) || connection === null) {
@@ -6827,6 +6835,7 @@ export class RemoteSession<
         null,
         reportSent,
         null,
+        exchange,
       );
       return;
     }
@@ -6850,6 +6859,7 @@ export class RemoteSession<
       write.bearer,
       reportSent,
       rewritten ? index : null,
+      exchange,
     );
   }
 
@@ -6926,7 +6936,8 @@ export class RemoteSession<
   /**
    * Seals and sends `muxFrame`, reporting its bytes once it reaches the
    * socket. `replacesIndex` names the ledger entry the bytes rewrite, recorded
-   * in the same step as the send.
+   * in the same step as the send. `exchange` is the resume round a gap frame
+   * is resent for, `null` for a first write.
    */
   private async sealAndSend(
     generation: number,
@@ -6935,21 +6946,26 @@ export class RemoteSession<
     sealedBearer: string | null,
     reportSent: (bytes: number) => void,
     replacesIndex: number | null,
+    exchange: ResumeExchange | null,
   ): Promise<void> {
     const leg = connection.socket;
-    // A frame whose leg went while it sealed is in the ledger, sealed or not:
-    // the next exchange resends it, so neither ending here speaks for the leg
-    // that replaced it.
+    // A frame whose leg went, or whose resume round was cancelled, while it
+    // sealed is in the ledger, sealed or not: the next exchange resends it, so
+    // neither ending here speaks for the leg or the round that replaced it.
+    // The skipped seal's Noise counter is never reused.
+    const current = (): boolean =>
+      this.isLegCurrent(connection, leg) &&
+      (exchange === null || connection.resumeExchange === exchange);
     let sealed: Uint8Array;
     try {
       sealed = await connection.channel.encrypt(muxFrame);
     } catch (cause) {
-      if (!this.isLegCurrent(connection, leg)) {
+      if (!current()) {
         return;
       }
       throw cause;
     }
-    if (!this.isLegCurrent(connection, leg)) {
+    if (!current()) {
       return;
     }
     // A sealed `open` or credential update can be neither read again nor
