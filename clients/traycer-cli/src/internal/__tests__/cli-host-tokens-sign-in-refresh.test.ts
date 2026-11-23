@@ -1,8 +1,17 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import type { HostTokenMintOutcome } from "../../../../shared/auth/host-token-source";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
+import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import type { Environment } from "../../runner/environment";
+import {
+  createCliCredentialsStore,
+  createStoreBackedRevalidator,
+} from "../../store/credentials-store";
 import { createCliHostTokens } from "../cli-host-tokens";
 import type { SignInRotationResult } from "../../store/credentials-store";
 
@@ -29,6 +38,48 @@ const harness = vi.hoisted(() => ({
   /** How many of the first mint requests are held; every later one is answered ok. */
   hold: 1,
 }));
+
+const credentialsFile = vi.hoisted(() => ({
+  /** The credentials file under test; empty until a test points the store at its own directory. */
+  path: "",
+  /** The sign-ins authn's refresh hands out, in the order asked. */
+  refreshed: [] as string[],
+}));
+
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return {
+    ...actual,
+    cliCredentialsPath: (environment: Environment): string => {
+      if (credentialsFile.path === "")
+        throw new Error("no credentials file under test");
+      return credentialsFile.path;
+    },
+  };
+});
+
+vi.mock(
+  "../../../../shared/auth/auth-validation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../../shared/auth/auth-validation")
+      >();
+    return {
+      ...actual,
+      refreshOnceAbortable: async (): Promise<{
+        readonly kind: "refreshed";
+        readonly token: string;
+        readonly refreshToken: string;
+      }> => {
+        const token = credentialsFile.refreshed.shift();
+        if (token === undefined)
+          throw new Error("authn was asked for a refresh no test expected");
+        return { kind: "refreshed", token, refreshToken: `rt-${token}` };
+      },
+    };
+  },
+);
 
 vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
   createHostTokenFilePersistence: () => ({
@@ -403,5 +454,88 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
       SIBLING_SIGN_IN,
       REFRESHED_SIGN_IN,
     ]);
+  });
+});
+
+describe("a refusal of a sign-in a sibling process has since replaced on disk", () => {
+  let workDir = "";
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(tmpdir(), "traycer-sign-in-sibling-"));
+    credentialsFile.path = join(workDir, "credentials");
+    credentialsFile.refreshed.splice(0);
+  });
+
+  afterEach(async () => {
+    credentialsFile.path = "";
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  const credentialsOf = (token: string): StoredCredentials => ({
+    token,
+    refreshToken: `rt-${token}`,
+    savedAt: "2026-01-01T00:00:00.000Z",
+    user: { id: USER_ID, email: "user@example.test", name: "User" },
+  });
+
+  it("reports nothing and asks once on the sign-in on disk when the retry after our rotation is refused after another process saved a newer one", async () => {
+    // The mints on A and the retry on B are held; the one after is answered.
+    harness.hold = 2;
+    const store = createCliCredentialsStore();
+    // A second handle on the same file: another process's save, outside this lease.
+    const otherProcess = createCliCredentialsStore();
+    await store.signIn(credentialsOf(SIGN_IN_A), false, null);
+    credentialsFile.refreshed.push(ROTATED_SIGN_IN);
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const revalidator = createStoreBackedRevalidator({
+      store,
+      lease,
+      signal: null,
+    });
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => revalidator.rotateSignIn(),
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    const reports: string[] = [];
+    tokens.onRefusalEndingCommand((reportedHostId) => {
+      reports.push(reportedHostId);
+    });
+    const minting = tokens.hostBearerFor(hostId, true);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+
+    // A is refused; the recovery rotates to B under the lock and retries on B, held.
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(2));
+    expect(harness.mints[1]?.signIn).toBe(ROTATED_SIGN_IN);
+
+    // Another process rotates B to C and saves it to the credentials file; this lease still holds B.
+    await otherProcess.signIn(credentialsOf(SIBLING_SIGN_IN), false, null);
+    expect(lease.getBearerToken()).toBe(ROTATED_SIGN_IN);
+
+    // B's 401 arrives: B is no longer the sign-in stored, so nothing is judged.
+    harness.mints[1]?.answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(3));
+    expect(harness.mints[2]?.signIn).toBe(SIBLING_SIGN_IN);
+    expect(lease.getBearerToken()).toBe(SIBLING_SIGN_IN);
+    expect(tokens.signInRejected()).toBe(false);
+    expect(reports).toEqual([]);
+
+    harness.mints[2]?.answer({
+      kind: "ok",
+      token: { token: "host-token-c", expiresAtMs: Date.now() + 3_600_000 },
+    });
+    expect(await minting).not.toBeNull();
+    expect(tokens.signInRejected()).toBe(false);
+    expect(reports).toEqual([]);
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      SIGN_IN_A,
+      ROTATED_SIGN_IN,
+      SIBLING_SIGN_IN,
+    ]);
+    tokens.dispose();
+    store.dispose();
+    otherProcess.dispose();
   });
 });
