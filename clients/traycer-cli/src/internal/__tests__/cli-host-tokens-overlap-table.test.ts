@@ -998,7 +998,9 @@ describe.each(scenarios)(
           lease.getBearerToken() !== harness.storedSignIn();
         const rotationsBefore = rotationsStarted();
         const reportsBefore = reports.length;
-        await tokens.streamRecovery(otherHostId).revalidateRefused(REVOKED);
+        await tokens
+          .streamRecovery(otherHostId)
+          .revalidateRefused(REVOKED, () => true);
         expect({
           rotations: holdsOwnRefusal
             ? "its own refusal's"
@@ -1033,7 +1035,7 @@ describe("a revoked session's recovery reads the host's own latest mint outcome"
     ]);
     const rotationsBefore = rotationsStarted();
 
-    await tokens.streamRecovery(hostId).revalidateRefused(REVOKED);
+    await tokens.streamRecovery(hostId).revalidateRefused(REVOKED, () => true);
 
     expect(rotationsStarted() - rotationsBefore).toBe(1);
   });
@@ -1074,98 +1076,59 @@ describe.each(installedCases)(
   "a token on the installed sign-in: $layout",
   (scenario) => {
     it(`${scenario.layout}: ${scenario.landing}, the token from ${scenario.tokenFrom}`, async () => {
-      const open = await openTokens();
-      const { tokens, reports } = open;
-      processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
-      if (scenario.layout === "two host ids")
-        processReleasedHosts.observeInstance(otherHostId, FIRST_PROCESS);
-      harness.hold = 2;
-      // Our rotation installs B; both mints below are sent with it.
-      harness.testRotating = true;
-      await expect(tokens.refreshSignIn()).resolves.toBe("rotated");
-      harness.testRotating = false;
-
-      const token = answerOf("a token", 0);
-      let first: Promise<unknown>;
-      let second: Promise<unknown>;
+      const open = await prepare(scenario.layout, [OURS]);
+      await step(open, "our rotation installs B", () => rotateByTest(open));
       if (scenario.layout === "one process") {
-        first = tokens.mintFresh(hostId, null);
-        await untilRequests(1);
-        harness.requests[0]?.answer(token);
-        await first;
-        second = tokens.mintFresh(hostId, null);
-        await untilRequests(2);
-        harness.requests[1]?.answer({ kind: "sign-in-rejected" });
+        // One process has one request per sign-in: the second mint is asked
+        // once the first has left.
+        await step(open, "a mint is sent with B", async () => {
+          startAsk(open, hostId);
+          await untilHeldOn(OURS);
+        });
+        await step(open, "its token on B", async () => {
+          answerRequest(heldOn(OURS, "oldest"), "a token");
+        });
+        await step(open, "a second mint is sent with B", async () => {
+          startAsk(open, hostId);
+          await untilHeldOn(OURS);
+        });
+        await step(open, "it is refused", async () => {
+          answerRequest(heldOn(OURS, "oldest"), "a 401");
+        });
       } else {
-        first = tokens.mintFresh(hostId, null);
-        await untilRequests(1);
-        if (scenario.layout === "a replaced process")
-          processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
-        second = tokens.mintFresh(
-          scenario.layout === "two host ids" ? otherHostId : hostId,
-          null,
-        );
-        await untilRequests(2);
-        await quiet();
+        await step(open, "the first mint is sent with B", async () => {
+          startAsk(open, hostId);
+          await untilRequests(1);
+        });
+        await step(open, "the second mint is sent with B", async () => {
+          if (scenario.layout === "a replaced process")
+            processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+          startAsk(open, secondHostOf(scenario.layout));
+          await untilRequests(2);
+        });
+        const first = harness.requests[0];
+        const second = harness.requests[1];
         const tokenRequest =
-          scenario.tokenFrom === "the first mint"
-            ? harness.requests[0]
-            : harness.requests[1];
+          scenario.tokenFrom === "the first mint" ? first : second;
         const refusalRequest =
-          scenario.tokenFrom === "the first mint"
-            ? harness.requests[1]
-            : harness.requests[0];
+          scenario.tokenFrom === "the first mint" ? second : first;
+        const token = (): Promise<void> =>
+          step(open, "the token on B lands", async () => {
+            answerRequest(tokenRequest, "a token");
+          });
+        const refusal = (): Promise<void> =>
+          step(open, "the refusal of B lands", async () => {
+            answerRequest(refusalRequest, "a 401");
+          });
         if (scenario.landing === "token before the refusal") {
-          tokenRequest?.answer(token);
-          await quiet();
-          refusalRequest?.answer({ kind: "sign-in-rejected" });
+          await token();
+          await refusal();
         } else {
-          // The refusal's recovery waits at its rotation while the token lands.
-          const release = holdRotations();
-          refusalRequest?.answer({ kind: "sign-in-rejected" });
-          await quiet();
-          tokenRequest?.answer(token);
-          await quiet();
-          release();
+          await refusal();
+          await token();
         }
       }
-      await Promise.all([first, second]);
-
-      expect(
-        harness.requests.slice(0, 2).map((request) => request.signIn),
-      ).toEqual([OURS, OURS]);
-      const refusalAt = harness.events.findIndex(
-        (event) => event.kind === "left" && event.refusalOf !== null,
-      );
-      const refusal = harness.events[refusalAt];
-      if (refusal?.kind !== "left") throw new Error("no refusal left");
-      if (scenario.landing === "token before the refusal") {
-        // The token bought on B is the first answer to a mint sent with B: a
-        // refusal of B after it is not the first mint after the refresh, so
-        // it is not judged final, and its recovery refreshes once.
-        expect(refusal.judged).toBe(false);
-        expect(
-          harness.events
-            .slice(refusalAt)
-            .filter(
-              (event) => event.kind === "rotation-started" && !event.byTest,
-            ),
-        ).toHaveLength(1);
-      } else {
-        // A refusal of B before any token on B is the first mint after the
-        // refresh: judged final as it leaves; a token on B landing after it
-        // un-judges it.
-        expect(refusal.judged).toBe(true);
-        const tokenLanding = harness.events
-          .slice(refusalAt + 1)
-          .find((event) => event.kind === "left" && event.refusalOf === null);
-        expect(tokenLanding?.kind === "left" ? tokenLanding.judged : null).toBe(
-          false,
-        );
-      }
-      expect(tokens.signInRejected()).toBe(false);
-      expect(reports).toEqual([]);
-      checkModel(open, "the end");
+      await finish(open);
     });
   },
 );
@@ -1588,7 +1551,9 @@ describe("model O4: an excluded refusal whose asker ends while a newer counting 
     const before = nonTestRotations();
     await step(open, "the session is revoked", async () => {
       open.limits.allowance += earns;
-      await open.tokens.streamRecovery(hostId).revalidateRefused(REVOKED);
+      await open.tokens
+        .streamRecovery(hostId)
+        .revalidateRefused(REVOKED, () => true);
     });
     expect(nonTestRotations() - before).toBe(earns);
     await finish(open);
@@ -1605,7 +1570,7 @@ describe("model: the lease's spent branch", () => {
       async () => {
         recovery = open.tokens
           .streamRecovery(otherHostId)
-          .revalidateRefused(TOKEN_EXPIRED);
+          .revalidateRefused(TOKEN_EXPIRED, () => true);
         open.pending.push(recovery);
         await untilRequests(1);
       },
@@ -1725,7 +1690,7 @@ describe("model H: P to Q re-owning through the lease's recovery", () => {
       open,
       "P's revalidator recovers for the host: Q's refusal of B",
       async () => {
-        outcome = await recoveryOfP.revalidateForReconnect();
+        outcome = await recoveryOfP.revalidateForReconnect(() => true);
       },
     );
     expect(outcome).toBe("network-error");
