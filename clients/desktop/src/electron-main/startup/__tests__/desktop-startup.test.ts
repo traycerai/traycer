@@ -10,7 +10,15 @@ import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixt
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { resetNegotiatedStreamVersions } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
@@ -507,6 +515,12 @@ class FakeRegistryWindow implements RegistryManagedWindow {
   }
 }
 
+// The desktop config keeps call history across tests (`clearMocks: false`), and
+// several cases run the real startup: each case counts only its own calls.
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 describe("createMruWindowProxy (decision 10) - real production proxy", () => {
   let createMruWindowProxy: (typeof import("../desktop-startup"))["createMruWindowProxy"];
 
@@ -604,9 +618,6 @@ describe("runPreReady - scheme/crash-reporter ordering", () => {
     const { registerAppScheme } = await import("../../app/app-protocol");
     const { SandboxArtifactServer } =
       await import("../../app/sandbox-artifact-server");
-    // Other cases in this file run the real startup, which calls both too.
-    vi.mocked(initCrashReporter).mockClear();
-    vi.mocked(registerAppScheme).mockClear();
 
     runPreReady({
       sandboxArtifacts: new SandboxArtifactServer(() => false),
