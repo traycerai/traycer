@@ -24,6 +24,10 @@ const state = vi.hoisted(() => {
   let table: HostTokenTable = new Map();
   const revalidate = vi.fn();
   const dispose = vi.fn();
+  // While set, the stand-in revalidator's adopting read reports it was reached and waits to be released.
+  const adoption: { hold: { reached: () => void; released: Promise<void> } | null } = {
+    hold: null,
+  };
   const mint = vi.fn(async () => {
     const next = mintOutcomes.shift();
     if (next !== undefined) return next;
@@ -41,6 +45,7 @@ const state = vi.hoisted(() => {
     mint,
     revalidate,
     dispose,
+    adoption,
     get table() {
       return table;
     },
@@ -115,7 +120,12 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
         readonly lease: BearerLease & { rotate(token: string): void };
       }) => ({
         revalidateCurrentContext: state.revalidate,
-        adoptStoredSignIn: async () => undefined,
+        adoptStoredSignIn: async () => {
+          const hold = state.adoption.hold;
+          if (hold === null) return;
+          hold.reached();
+          await hold.released;
+        },
         // A rotation it accepts installs a distinct sign-in, which the next mint is sent with.
         rotateSignIn: async () => {
           const tried = lease.getBearerToken();
@@ -175,6 +185,7 @@ beforeEach(() => {
   state.mint.mockClear();
   state.revalidate.mockReset();
   state.dispose.mockClear();
+  state.adoption.hold = null;
   resolveAuthMock.mockResolvedValue({
     token: "signin",
     authnBaseUrl: "https://authn.test",
@@ -272,6 +283,36 @@ async function signedInHandle(): Promise<CliSignInHandle> {
   return handle;
 }
 
+/** A person signed out, with a listener on what the command is told ends it. */
+async function signedOutHandle(hostId: string): Promise<{
+  readonly lease: BearerLease;
+  readonly tokens: CliSignInHandle["tokens"];
+  readonly ending: string[];
+}> {
+  const { lease, tokens } = await signedInHandle();
+  const ending: string[] = [];
+  tokens.onRefusalEndingCommand((evidence) => {
+    ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+  });
+  emptyLease(lease);
+  return { lease, tokens, ending };
+}
+
+/** Holds the stand-in revalidator's adopting read until released; `reached` settles once a read waits on it. */
+function holdAdoptingRead(): {
+  readonly reached: Promise<void>;
+  readonly release: () => void;
+} {
+  let release = (): void => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reached = new Promise<void>((resolve) => {
+    state.adoption.hold = { reached: resolve, released };
+  });
+  return { reached, release };
+}
+
 describe("createCliHostTokens refusals that end a command", () => {
   it("ends the command on a not-admitted mint begun in the same millisecond as the admission before it, once that connection has left", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
@@ -352,16 +393,11 @@ describe("createCliHostTokens refusals that end a command", () => {
 
   it("ends the command on a no-sign-in answer while no sign-in is stored", async () => {
     const hostId = "host-no-sign-in-stored-none";
-    const { lease, tokens } = await signedInHandle();
-    const ending: string[] = [];
-    tokens.onRefusalEndingCommand((evidence) => {
-      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
-    });
-    // The person is signed out: no sign-in is stored.
-    emptyLease(lease);
+    const { tokens, ending } = await signedOutHandle(hostId);
 
     await tokens.mintFresh(hostId, null);
 
+    expect(state.mint).not.toHaveBeenCalled();
     expect(ending).toEqual([`${hostId}:no-sign-in`]);
     await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toMatchObject(
       {
@@ -371,19 +407,32 @@ describe("createCliHostTokens refusals that end a command", () => {
     );
   });
 
-  it("tells no ending, and the gate answers null, for a no-sign-in answered while a sign-in is stored", async () => {
+  it("answers null at the gate for a told no-sign-in once a sibling has saved a sign-in", async () => {
     const hostId = "host-no-sign-in-sibling-saved";
-    const { tokens } = await signedInHandle();
-    const ending: string[] = [];
-    tokens.onRefusalEndingCommand((evidence) => {
-      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
-    });
-    // The mint is answered that no sign-in came, though the lease holds one by the time it is reported:
-    // the sign-in a sibling saved is the stored one.
-    state.mintOutcomes.push({ kind: "no-sign-in" });
-
+    const { lease, tokens, ending } = await signedOutHandle(hostId);
     await tokens.mintFresh(hostId, null);
+    expect(state.mint).not.toHaveBeenCalled();
+    expect(ending).toEqual([`${hostId}:no-sign-in`]);
 
+    // A sibling saves a sign-in: the stored one is no longer none.
+    rotateLease(lease, "signin");
+
+    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toBeNull();
+  });
+
+  it("tells no ending, and the gate answers null, for a no-sign-in whose report finds a sign-in a sibling saved while the source's adopting read was held", async () => {
+    const hostId = "host-no-sign-in-saved-during-read";
+    const { lease, tokens, ending } = await signedOutHandle(hostId);
+    // The source answers no-sign-in by itself, then reads the credentials file before it reports.
+    const { reached, release } = holdAdoptingRead();
+
+    const minting = tokens.mintFresh(hostId, null);
+    await reached;
+    rotateLease(lease, "signin");
+    release();
+    await minting;
+
+    expect(state.mint).not.toHaveBeenCalled();
     expect(ending).toEqual([]);
     await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toBeNull();
   });
