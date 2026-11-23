@@ -47,6 +47,8 @@ interface MintRequest {
   given: HostTokenMintOutcome | null;
   /** Whether the asker of this request still wants it when authn answers; the test ends it. */
   askerLive: boolean;
+  /** The test sets this to have the model judge the refusal when it resumes, not when authn answers. */
+  resumeLater: boolean;
   readonly answer: (outcome: HostTokenMintOutcome) => void;
 }
 
@@ -77,6 +79,13 @@ type Event =
       readonly request: MintRequest;
       readonly outcomeKind: HostTokenMintOutcome["kind"];
       /** The stored sign-in when authn answered. */
+      readonly storedThen: string;
+      readonly askerLive: boolean;
+    }
+  /** A refusal's tracker resumed, after the adopting read it was held at. */
+  | {
+      readonly kind: "resumed";
+      readonly request: MintRequest;
       readonly storedThen: string;
       readonly askerLive: boolean;
     };
@@ -272,6 +281,7 @@ vi.mock(
             process: processReleasedHosts.currentInstance(hostId),
             given: null,
             askerLive: true,
+            resumeLater: false,
             answer: (outcome) => {
               request.given = outcome;
               harness.events.push({
@@ -661,22 +671,37 @@ class JudgeModel {
             request.process,
             Math.max(this.mintedAt.get(request.process) ?? -1, request.seq),
           );
-        } else if (event.outcomeKind === "sign-in-rejected") {
-          // A refusal counts when it was sent with the stored sign-in, no
-          // later request for its process bought a token, and the process is
-          // current; one that does not count writes nothing.
-          const counts =
-            request.signIn === event.storedThen &&
-            (this.mintedAt.get(request.process) ?? -1) <= request.seq &&
-            current &&
-            event.askerLive;
-          if (!counts) continue;
-          this.refused.add(request.signIn);
-          this.held.set(request.process, request.signIn);
-          if (!this.isFinal(request.signIn)) this.credits += 1;
+        } else if (
+          event.outcomeKind === "sign-in-rejected" &&
+          !request.resumeLater
+        ) {
+          this.refusal(request, event.storedThen, event.askerLive);
         }
+      } else if (event?.kind === "resumed") {
+        this.refusal(event.request, event.storedThen, event.askerLive);
       }
     }
+  }
+
+  /**
+   * A refusal counts when it was sent with the stored sign-in, no later
+   * request for its process bought a token, the process is current and its
+   * asker is live; one that does not count writes nothing.
+   */
+  private refusal(
+    request: MintRequest,
+    storedThen: string,
+    askerLive: boolean,
+  ): void {
+    const counts =
+      request.signIn === storedThen &&
+      (this.mintedAt.get(request.process) ?? -1) <= request.seq &&
+      processReleasedHosts.isCurrent(request.process) &&
+      askerLive;
+    if (!counts) return;
+    this.refused.add(request.signIn);
+    this.held.set(request.process, request.signIn);
+    if (!this.isFinal(request.signIn)) this.credits += 1;
   }
 
   /**
@@ -1861,6 +1886,85 @@ describe("model gap 2: a recovery for a known refusal of A, held at its adopting
       release();
     });
     expect(nonTestRotations()).toBe(0);
+    await finish(open);
+  });
+});
+
+describe("model gap 3: the tracker's own overtaken re-ask answers from the cache", () => {
+  it("the cache hit moves no watermark: a counting refusal sent after the real purchase still counts", async () => {
+    const C = "sign-in-recovery-1";
+    const open = await prepare("one process", [SIGN_IN_A, OURS, C]);
+    await step(open, "an old mint is sent with A", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(SIGN_IN_A);
+    });
+    await step(open, "our rotation installs B", () => rotateByTest(open));
+    await step(
+      open,
+      "a mint is sent with B and bought: the real purchase",
+      async () => {
+        startAsk(open, hostId);
+        await untilHeldOn(OURS);
+        answerRequest(heldOn(OURS, "oldest"), "a token");
+      },
+    );
+    await step(open, "our rotation installs C", () => rotateByTest(open));
+    await step(open, "a mint is sent with C, after the purchase", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(C);
+    });
+    await step(
+      open,
+      "the old mint's refusal of A arrives: outlived, re-asked from the cache",
+      async () => {
+        answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
+      },
+    );
+    await step(open, "C is refused: counting, and final", async () => {
+      answerRequest(heldOn(C, "oldest"), "a 401");
+    });
+    await finish(open);
+  });
+
+  it("two successes resume out of order with a refusal between: the watermark does not roll back", async () => {
+    const open = await prepare("one process", [SIGN_IN_A, OURS]);
+    await step(open, "X is sent with A", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(SIGN_IN_A);
+    });
+    await step(open, "our rotation installs B", () => rotateByTest(open));
+    await step(open, "Z is sent with B", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(OURS);
+    });
+    const release = holdReads();
+    const zRequest = heldOn(OURS, "oldest");
+    if (zRequest === undefined) throw new Error("Z sent no request");
+    zRequest.resumeLater = true;
+    await step(
+      open,
+      "Z is refused; its tracker waits at its adopting read",
+      async () => {
+        answerRequest(zRequest, "a 401");
+      },
+    );
+    await step(open, "Y is sent with B, a new flight, and bought", async () => {
+      startAsk(open, hostId);
+      await untilHeldOn(OURS);
+      answerRequest(heldOn(OURS, "oldest"), "a token");
+    });
+    await step(open, "X's token on A resumes late", async () => {
+      answerRequest(heldOn(SIGN_IN_A, "oldest"), "a token");
+    });
+    await step(open, "Z resumes", async () => {
+      harness.events.push({
+        kind: "resumed",
+        request: zRequest,
+        storedThen: harness.storedSignIn(),
+        askerLive: zRequest.askerLive,
+      });
+      release();
+    });
     await finish(open);
   });
 });
