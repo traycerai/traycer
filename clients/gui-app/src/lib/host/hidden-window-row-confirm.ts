@@ -5,7 +5,10 @@ import {
 
 /** The one directory call a confirmation makes. */
 interface CatchingUpDirectory {
-  catchUpAfterHidden(stillWaiting: () => boolean): Promise<void>;
+  catchUpAfterHidden(
+    stillWaiting: () => boolean,
+    ended: Promise<void>,
+  ): Promise<void>;
 }
 
 /**
@@ -28,7 +31,7 @@ export function confirmRowWhenHidden(
     const current = directory();
     if (current === null) return;
     await confirmRowWithin(
-      (stillWaiting) => current.catchUpAfterHidden(stillWaiting),
+      (stillWaiting, ended) => current.catchUpAfterHidden(stillWaiting, ended),
       attach,
     );
   };

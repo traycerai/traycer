@@ -714,10 +714,14 @@ export class HostDirectoryService implements IHostDirectoryService {
    * read's promise: a retired read holds no waiter. When no read of the
    * current era is running it starts one; it never starts one beside a
    * running read. It stops starting reads once `stillWaiting` says no one
-   * waits, or the directory stops. Resolves at once in a shown window with no
+   * waits, or the directory stops, and stops waiting once `ended` resolves,
+   * taking its own waiter with it. Resolves at once in a shown window with no
    * mark outstanding. Never rejects.
    */
-  async catchUpAfterHidden(stillWaiting: () => boolean): Promise<void> {
+  async catchUpAfterHidden(
+    stillWaiting: () => boolean,
+    ended: Promise<void>,
+  ): Promise<void> {
     let ownStart = 0;
     if (!isDocumentVisible()) {
       this.order += 1;
@@ -728,7 +732,9 @@ export class HostDirectoryService implements IHostDirectoryService {
       return this.settledOwnedStart >= Math.max(this.latestMark, ownStart);
     };
     while (!satisfied() && stillWaiting() && this.started) {
+      let wake = (): void => undefined;
       const event = new Promise<void>((resolve) => {
+        wake = resolve;
         this.readEventWaiters.push(resolve);
       });
       const running = this.refreshInFlight;
@@ -737,7 +743,9 @@ export class HostDirectoryService implements IHostDirectoryService {
           () => undefined,
           () => undefined,
         );
-      await event;
+      await Promise.race([event, ended]);
+      const waiting = this.readEventWaiters.indexOf(wake);
+      if (waiting !== -1) this.readEventWaiters.splice(waiting, 1);
     }
   }
 

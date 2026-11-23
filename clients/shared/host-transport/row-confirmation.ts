@@ -17,8 +17,10 @@ export interface RowConfirmationAttach {
  *
  * The confirmation's loop lives no longer than the confirmation: it is handed
  * `stillWaiting`, which is false once the clock has reached the deadline, the
- * attach has ended, or `confirm` has settled. It checks that before starting
- * any read; a read it already started finishes and commits as any read does.
+ * attach has ended, or `confirm` has settled, and `ended`, which resolves as
+ * the confirmation ends. It checks `stillWaiting` before starting any read and
+ * stops waiting at `ended`; a read it already started finishes and commits as
+ * any read does.
  *
  * The deadline is a duration on the monotonic clock, `performance.now()`,
  * compared at each check; a change to the wall clock moves it neither way.
@@ -28,16 +30,23 @@ export interface RowConfirmationAttach {
  * last confirmed row stands.
  */
 export async function confirmRowWithin(
-  confirm: (stillWaiting: () => boolean) => Promise<unknown>,
+  confirm: (
+    stillWaiting: () => boolean,
+    ended: Promise<void>,
+  ) => Promise<unknown>,
   attach: RowConfirmationAttach,
 ): Promise<void> {
   const deadline = performance.now() + ROW_CONFIRM_CEILING_MS;
   let settled = false;
   const stillWaiting = (): boolean =>
     !settled && performance.now() < deadline && attach.current();
+  let end = (): void => undefined;
+  const ended = new Promise<void>((resolve) => {
+    end = resolve;
+  });
   const start = (): Promise<unknown> => {
     try {
-      return confirm(stillWaiting);
+      return confirm(stillWaiting, ended);
     } catch (error: unknown) {
       return Promise.reject(error);
     }
@@ -58,5 +67,6 @@ export async function confirmRowWithin(
   } finally {
     settled = true;
     clearCeiling();
+    end();
   }
 }

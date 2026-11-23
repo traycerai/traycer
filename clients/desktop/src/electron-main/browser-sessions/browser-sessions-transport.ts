@@ -104,9 +104,13 @@ export interface BrowserSessionsHostDirectory {
    * with. One already running may predate the question, so it is waited out
    * first, and a `reset` during the read is followed by another. Before each
    * read it asks `stillWaiting`; once that is false it starts none and answers
-   * `false`. Never throttled.
+   * `false`. Once `ended` resolves it waits on no read and answers `false`.
+   * Never throttled.
    */
-  confirmRows(stillWaiting: () => boolean): Promise<boolean>;
+  confirmRows(
+    stillWaiting: () => boolean,
+    ended: Promise<void>,
+  ): Promise<boolean>;
   /**
    * Drops the whole cached registry, and the cooldown that guards refetching
    * it, because the identity it was read for has changed.
@@ -265,20 +269,23 @@ export function createBrowserSessionsHostDirectory(
       cachedRemote.delete(hostId);
       forced = true;
     },
-    confirmRows: async (stillWaiting) => {
+    confirmRows: async (stillWaiting, ended) => {
       // A `reset` is a mark: a read started before one answers for the
       // identity before it, so another read follows, checked against the
       // generation as it stands once the read has settled. The loop lives no
       // longer than its confirmation: past that it starts no read, under any
-      // identity.
+      // identity, and waits on none.
+      const over = ended.then((): true => true);
+      const endsFirst = (read: Promise<void>): Promise<boolean> =>
+        Promise.race([read.then((): false => false), over]);
       for (;;) {
         const running = inFlight;
-        if (running !== null) await running;
+        if (running !== null && (await endsFirst(running))) return false;
         if (!stillWaiting()) return false;
         const before = readsAdopted;
         const startedIn = generation;
         forced = true;
-        await refreshOnce();
+        if (await endsFirst(refreshOnce())) return false;
         if (generation === startedIn) return readsAdopted > before;
       }
     },
@@ -359,7 +366,10 @@ export interface BrowserSessionsTransportDeps {
    * keeps current, so a remote attach that would carry the sign-in reads the
    * registry again first; a local door never waits on it.
    */
-  readonly confirmRow: (stillWaiting: () => boolean) => Promise<boolean>;
+  readonly confirmRow: (
+    stillWaiting: () => boolean,
+    ended: Promise<void>,
+  ) => Promise<boolean>;
   readonly appVersion: string | null;
   /** Main's host-only tokens; the sign-in goes only where `opensReleasedWay` allows. */
   readonly hostTokens: HostTokenSource;
