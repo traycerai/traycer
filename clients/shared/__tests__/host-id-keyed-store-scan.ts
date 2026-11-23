@@ -359,7 +359,7 @@ export function findHostIdKeyedStores(
  * The excluded-path rule reads the path under `clientsRoot`, so a checkout
  * that sits under a directory named `out` or `mock` is still read.
  */
-export function productionSources(clientsRoot: string): string[] {
+export function unexcludedClientSources(clientsRoot: string): string[] {
   return collectExecSyncStdioScanFiles(join(clientsRoot, ".."))
     .filter(
       (file) =>
@@ -371,7 +371,7 @@ export function productionSources(clientsRoot: string): string[] {
 
 function scannedSources(clientsRoot: string): string[] {
   const roots = SCAN_ROOTS.map((root) => join(clientsRoot, root) + sep);
-  return productionSources(clientsRoot).filter((file) =>
+  return unexcludedClientSources(clientsRoot).filter((file) =>
     roots.some((root) => file.startsWith(root)),
   );
 }

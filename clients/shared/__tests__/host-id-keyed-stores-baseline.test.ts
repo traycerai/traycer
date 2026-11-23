@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   dormantCallers,
   findHostIdKeyedStores,
-  productionSources,
+  unexcludedClientSources,
   scanHostIdKeyedStores,
 } from "./host-id-keyed-store-scan";
 
@@ -598,7 +598,7 @@ describe("host-id-keyed stores of host and mint answers", () => {
   );
 
   const callersUnder = (clientsRoot: string): string[] =>
-    productionSources(clientsRoot).flatMap((file) =>
+    unexcludedClientSources(clientsRoot).flatMap((file) =>
       dormantCallers(
         relative(clientsRoot, file),
         readFileSync(file, "utf8"),
