@@ -526,6 +526,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.reachDiagnostics": "target-host",
   "environment.review": "target-host",
   "environment.review.heldApply": "target-host",
+  "environment.review.heldKeep": "target-host",
   "environment.review.record": "target-host",
   "environment.secrets.consent": "pool-only",
   "environment.secrets.create": "pool-only",
