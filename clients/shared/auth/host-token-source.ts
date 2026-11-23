@@ -1,4 +1,6 @@
-import { readAccessTokenExpiryMs, readTokenIssuedAtSeconds } from "./jwt-exp";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+import { readTokenIssuedAtSeconds } from "./jwt-exp";
 import {
   isUsableHostToken,
   type HostToken,
@@ -67,10 +69,9 @@ export type HostTokenMintFailure = Exclude<
  * replaced process starts with no record. Process memory only.
  *
  * Each result belongs to the sign-in its mint was sent with (`signIn`: its
- * key, {@link hostSignInKey}): it is read only for that same key, and a
- * result for another sign-in replaces it whatever its place in the order.
- * Two sign-ins with no readable end share the key `null`, as their mints
- * share a flight.
+ * key, {@link hostSignInKey}): it is read only for that same key, never for
+ * an unknown one (`null`), and a result for another sign-in replaces it
+ * whatever its place in the order.
  */
 export interface HostMintRecords {
   readonly start: () => number;
@@ -78,7 +79,7 @@ export interface HostMintRecords {
     owner: HostMintOwner,
     userId: string,
     era: number,
-    signIn: number | null,
+    signIn: string | null,
     started: number,
     kind: HostTokenMintOutcome["kind"],
   ) => void;
@@ -86,17 +87,25 @@ export interface HostMintRecords {
     owner: HostMintOwner,
     userId: string,
     era: number,
-    signIn: number | null,
+    signIn: string | null,
   ) => HostTokenMintFailure | null;
 }
 
+// A sign-in is identified by itself: a SHA-256 digest of the whole token
+// (lowercase hex), computed in memory. Two sign-ins never share it, whatever
+// claims they share.
+function signInDigest(signInToken: string): string {
+  return bytesToHex(sha256(utf8ToBytes(signInToken)));
+}
+
 /**
- * A sign-in's key: its end (`exp`, epoch ms, read unverified), the value the
- * mints' flights are keyed by; `null` with no sign-in or no readable end.
- * Only this crosses to a window, never the sign-in itself.
+ * A sign-in's key ({@link signInDigest}): what a mint's flight, its refresh
+ * mark and the record of how it ended are kept under; `null` with no sign-in,
+ * which matches nothing. Never logged, written to disk or sent off the
+ * machine; only this crosses to a window, never the sign-in itself.
  */
-export function hostSignInKey(signInToken: string | null): number | null {
-  return signInToken === null ? null : readAccessTokenExpiryMs(signInToken);
+export function hostSignInKey(signInToken: string | null): string | null {
+  return signInToken === null ? null : signInDigest(signInToken);
 }
 
 // A token write: the era it began in, the writer's own check, and the token
@@ -178,7 +187,7 @@ function mayWriteFor(asker: MintAsker): () => boolean {
 // A mint as asked: the key of the sign-in it was sent with (`null`: none
 // sent, or one with no readable end), and its answer.
 interface MintSent {
-  readonly sentWith: number | null;
+  readonly sentWith: string | null;
   readonly outcome: Promise<HostTokenMintOutcome>;
 }
 
@@ -197,7 +206,7 @@ export function createHostMintRecords(): HostMintRecords {
       string,
       {
         readonly era: number;
-        readonly signIn: number | null;
+        readonly signIn: string | null;
         readonly started: number;
         readonly failure: HostTokenMintFailure | null;
       }
@@ -230,6 +239,7 @@ export function createHostMintRecords(): HostMintRecords {
       const recorded = records.get(owner)?.get(userId);
       return recorded !== undefined &&
         recorded.era === era &&
+        signIn !== null &&
         recorded.signIn === signIn
         ? recorded.failure
         : null;
@@ -318,7 +328,7 @@ export interface HostTokenSource {
    * The key ({@link hostSignInKey}) of the sign-in a mint for the person
    * would be sent with now: {@link lastFailureOf} answers only for it.
    */
-  signInKey(userId: string): number | null;
+  signInKey(userId: string): string | null;
   bindSignIn(signIn: VerifiedSignIn): void;
   /**
    * Brings this process's sign-in up to date with the store it is kept in:
@@ -378,9 +388,12 @@ export function createHostTokenSource(deps: {
   const renewFlights = new Map<string, Promise<HostTokenMintOutcome>>();
   const unknownFlights = new Map<string, Promise<HostTokenMintOutcome>>();
   const observedFlights = new Map<string, Promise<HostTokenMintOutcome>>();
-  // Each pair's minting refresh (its end, never the token), so a refresh mints once per
-  // host. Process memory only: a restart mints once more at most.
-  const mintedWith = new Map<string, number>();
+  // Each pair's minting sign-in (its key, never the token), so a refresh mints
+  // once per host; and the sign-in the pair's latest mint was sent with, so a
+  // late flight sent with an earlier one never moves it back. Process memory
+  // only: a restart mints once more at most.
+  const mintedWith = new Map<string, string>();
+  const sentLatest = new Map<string, string>();
   const records = createHostMintRecords();
   const eras = new Map<string, number>();
   const eraOf = (userId: string): number => eras.get(userId) ?? 0;
@@ -398,7 +411,7 @@ export function createHostTokenSource(deps: {
   };
   // The key of the person's sign-in as a mint would be sent with it now: a
   // mint's result is recorded and read only under it.
-  const signInKeyOf = (userId: string): number | null =>
+  const signInKeyOf = (userId: string): string | null =>
     hostSignInKey(signIn?.(userId) ?? null);
 
   const announce = (change: HostTokenChange): void => {
@@ -507,10 +520,11 @@ export function createHostTokenSource(deps: {
         outcome: Promise.resolve({ kind: "no-sign-in" }),
       };
     const key = keyOf(userId, hostId);
-    const mark = hostSignInKey(signInToken);
-    // Keyed by refresh and era too: a mint begun before a refresh or a sign-out must
-    // not stand in for a later ask.
-    const flightKey = `${key}\u0000${mark ?? "unknown"}\u0000${era}`;
+    const mark = signInDigest(signInToken);
+    // Keyed by sign-in and era too: a mint begun before a refresh or a
+    // sign-out must not stand in for a later ask.
+    const flightKey = `${key}\u0000${mark}\u0000${era}`;
+    sentLatest.set(key, mark);
     const running =
       asker.kind === "none"
         ? latestFlight.get(flightKey)
@@ -518,13 +532,12 @@ export function createHostTokenSource(deps: {
           ? (unknownFlights.get(flightKey) ?? renewFlights.get(flightKey))
           : (observedFlights.get(ownerKey(flightKey, asker.observed)) ??
             renewFlights.get(flightKey));
-    // Only a kept write moves the pair's refresh, and never back to an
-    // earlier one: a late older flight leaves the newer refresh standing.
+    // Only a kept write moves the pair's refresh, and only to the sign-in its
+    // latest mint was sent with: a late flight sent with an earlier one
+    // leaves the newer refresh standing.
     const refreshMoved = (written: TableWriteResult): void => {
-      if (written.kind !== "kept") return;
-      const before = mintedWith.get(key);
-      if (mark === null) mintedWith.delete(key);
-      else if (before === undefined || before < mark) mintedWith.set(key, mark);
+      if (written.kind !== "kept" || sentLatest.get(key) !== mark) return;
+      mintedWith.set(key, mark);
     };
     // A flight shares the request, never the write: authn's answer is shared,
     // and every asker, starter and joiner alike, writes the token itself under
@@ -604,10 +617,11 @@ export function createHostTokenSource(deps: {
       // to date, see `bindSignInSync`), and again as it is read.
       const record = (
         kind: HostTokenMintOutcome["kind"],
-        sentWith: number | null,
+        sentWith: string | null,
       ): void => {
         if (
           owner === null ||
+          sentWith === null ||
           eraOf(userId) !== era ||
           signInKeyOf(userId) !== sentWith
         )
@@ -658,10 +672,9 @@ export function createHostTokenSource(deps: {
       if (eraOf(userId) !== era) return { kind: "superseded" };
       const signInToken = signIn?.(userId) ?? null;
       if (signInToken === null) return { kind: "no-sign-in" };
-      const mark = readAccessTokenExpiryMs(signInToken);
+      const mark = signInDigest(signInToken);
       const due = Array.from(new Set(hostIds)).filter(
-        (hostId) =>
-          mark === null || mintedWith.get(keyOf(userId, hostId)) !== mark,
+        (hostId) => mintedWith.get(keyOf(userId, hostId)) !== mark,
       );
       if (due.length === 0) return { kind: "already-current" };
       const outcomes = await Promise.all(
@@ -703,6 +716,8 @@ export function createHostTokenSource(deps: {
       eras.set(userId, eraOf(userId) + 1);
       for (const key of Array.from(mintedWith.keys()))
         if (key.startsWith(`${userId}\u0000`)) mintedWith.delete(key);
+      for (const key of Array.from(sentLatest.keys()))
+        if (key.startsWith(`${userId}\u0000`)) sentLatest.delete(key);
       for (const key of Array.from(storedIn.keys()))
         if (key.startsWith(`${userId}\u0000`)) storedIn.delete(key);
       await loaded;

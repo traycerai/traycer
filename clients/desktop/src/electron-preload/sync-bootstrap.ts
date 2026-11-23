@@ -28,13 +28,13 @@ export function readSyncNumberFor(
   return syncNumberOf(ipcRenderer.sendSync(channel, argument), fallback);
 }
 
-/** A synchronous numeric read for one argument; anything but a finite number is null. */
-export function readSyncNullableNumberFor(
+/** A synchronous string read for one argument; anything but a non-empty string is null. */
+export function readSyncNullableStringFor(
   channel: string,
   argument: string,
-): number | null {
+): string | null {
   const value: unknown = ipcRenderer.sendSync(channel, argument);
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function syncNumberOf(value: unknown, fallback: number): number {

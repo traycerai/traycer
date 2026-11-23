@@ -687,9 +687,9 @@ export const RunnerHostSync = {
   // A person's host-token era, held by main alone: the renderer reads it at
   // the moment work begins, so it never holds one main did not issue.
   hostTokensEra: "runnerHost:sync:hostTokensEra",
-  // The key of the sign-in main holds for a person (its expiry, in ms), or
-  // null when main holds none or cannot read it: a window keeps a refused
-  // mint's record only under the sign-in main holds. No token crosses.
+  // A SHA-256 digest of the sign-in main holds for a person, or null when main
+  // holds none; never the token: a window keeps a refused mint's record only
+  // under the sign-in main holds.
   hostTokensSignIn: "runnerHost:sync:hostTokensSignIn",
   // `"managed"` or `"none"`: whether this app instance runs the local-host
   // lanes, pinned at boot from the lifecycle policy (restart-to-apply).

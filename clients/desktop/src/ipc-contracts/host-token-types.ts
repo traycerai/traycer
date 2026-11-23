@@ -37,10 +37,10 @@ export interface HostTokenObtainReply extends HostTokenEraReply {
    */
   readonly recorded: boolean;
   /**
-   * The key of the sign-in main holds as it replies (its expiry, in ms; `null`:
-   * none, or unreadable): a kept outcome was kept under it. No token crosses.
+   * The key of the sign-in main holds as it replies (a SHA-256 digest of it;
+   * `null`: none): a kept outcome was kept under it. Never the token.
    */
-  readonly signIn: number | null;
+  readonly signIn: string | null;
 }
 
 export interface HostTokenAdoptReply extends HostTokenEraReply {
@@ -78,10 +78,10 @@ export const NO_ISSUED_HOST_TOKEN_ERA = -1;
 export interface HostTokensBridgeSurface {
   era(userId: string): number;
   /**
-   * The key of the sign-in main holds for the person (its expiry, in ms), or
-   * null when main holds none or cannot read its expiry. No token crosses.
+   * A SHA-256 digest of the sign-in main holds for the person, or null when
+   * main holds none; never the token.
    */
-  signIn(userId: string): number | null;
+  signIn(userId: string): string | null;
   /**
    * `owner` is the host process the window asks for, as the window observes it
    * (`null`: none): main never joins asks for two different observed processes.
