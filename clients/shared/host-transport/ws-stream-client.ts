@@ -4534,7 +4534,18 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
 
   private signalBackoff(): void {
     if (this.disposed) return;
-    for (const listener of Array.from(this.backoffListeners)) listener();
+    // Guarded per listener: a throwing consumer must not skip the redial that
+    // follows, nor the other listeners.
+    for (const listener of Array.from(this.backoffListeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.error(
+          `[stream] backoff listener threw (method=${String(this.config.method)})`,
+          error,
+        );
+      }
+    }
   }
 
   /** Redials at once, with no timer, to hand over the sign-in this dial just planned. */
