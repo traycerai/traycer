@@ -27,7 +27,11 @@ import type {
   WebSocketOpenEvent,
 } from "@traycer/protocol/host-transport/websocket";
 import { CLI_CLIENT_IDENTITY } from "../../cli-version";
-import { openCliHostSession, type CliHostSession } from "../cli-host-tokens";
+import {
+  openCliHostSession,
+  replacedAsNetworkError,
+  type CliHostSession,
+} from "../cli-host-tokens";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import { UNWORDED_MINT_REFUSAL_MESSAGE } from "../host-door-words";
 import type { HostAuth } from "../host-auth";
@@ -493,6 +497,9 @@ function auth(): HostAuth {
 }
 
 async function openStream(session: CliHostSession): Promise<void> {
+  // As the production streams adapt it: asked with a `stillWanted`, a mint lost to a
+  // replaced host process answered like an unreachable authn.
+  const recovery = session.tokens.streamRecovery(HOST_ID);
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     hostId: HOST_ID,
@@ -500,7 +507,14 @@ async function openStream(session: CliHostSession): Promise<void> {
     bearer: session.tokens.streamBearer(HOST_ID),
     releasedSignOn: session.releasedSignOn,
     userId: USER_ID,
-    auth: session.tokens.streamRecovery(HOST_ID),
+    auth: {
+      revalidateForReconnect: () =>
+        recovery.revalidateForReconnect(() => true).then(replacedAsNetworkError),
+      revalidateRefused: (refusal) =>
+        recovery
+          .revalidateRefused(refusal, () => true)
+          .then(replacedAsNetworkError),
+    },
     clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,

@@ -80,7 +80,10 @@ interface Gate {
 
 /** One event the test waits for (`reached`) and one it later fires (`open`). */
 function gate(): Gate {
-  const marks = { markReached: () => undefined, open: () => undefined };
+  const marks: { markReached: () => void; open: () => void } = {
+    markReached: () => undefined,
+    open: () => undefined,
+  };
   const reached = new Promise<void>((resolve) => {
     marks.markReached = resolve;
   });
