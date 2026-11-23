@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import ts from "typescript";
+import { collectExecSyncStdioScanFiles } from "./exec-sync-stdio-checker";
 
 /**
  * The scan behind `host-id-keyed-stores-baseline.test.ts`: every process-memory
@@ -22,22 +23,9 @@ export const SCAN_ROOTS: readonly string[] = [
   "traycer-cli/src/host",
 ];
 
-const EXCLUDES: readonly string[] = [
-  "**/node_modules/**",
-  "**/__tests__/**",
-  "**/__testing__/**",
-  "**/test-support/**",
-  "**/mock/**",
-  "**/mocks/**",
-  "**/dist/**",
-  "**/dist-sea/**",
-  "**/coverage/**",
-  "**/out/**",
-  "**/*.d.ts",
-  "**/*.test.ts",
-  "**/*.test.tsx",
-  "**/*.generated.ts",
-];
+/** A path segment or suffix that no scanned source carries: fixtures, build output, generated files. */
+const EXCLUDED_PATH =
+  /[\\/](?:node_modules|__tests__|__testing__|test-support|mock|mocks|dist|dist-sea|coverage|out)[\\/]|\.d\.ts$|\.test\.tsx?$|\.generated\.ts$/;
 
 const STORE_CONSTRUCTORS = new Set(["Map", "Set", "WeakMap", "WeakSet"]);
 const STORE_TYPE_NAMES = new Set([
@@ -366,17 +354,15 @@ export function findHostIdKeyedStores(
 }
 
 export function scannedSources(clientsRoot: string): string[] {
-  const files = new Set<string>();
-  for (const root of SCAN_ROOTS) {
-    for (const file of ts.sys.readDirectory(
-      join(clientsRoot, root),
-      [".ts", ".tsx"],
-      [...EXCLUDES],
-    )) {
-      files.add(file);
-    }
-  }
-  return [...files].sort();
+  const roots = SCAN_ROOTS.map((root) => join(clientsRoot, root) + sep);
+  return collectExecSyncStdioScanFiles(join(clientsRoot, ".."))
+    .filter(
+      (file) =>
+        /\.tsx?$/.test(file) &&
+        !EXCLUDED_PATH.test(file) &&
+        roots.some((root) => file.startsWith(root)),
+    )
+    .sort();
 }
 
 export function scanHostIdKeyedStores(clientsRoot: string): FoundStore[] {
