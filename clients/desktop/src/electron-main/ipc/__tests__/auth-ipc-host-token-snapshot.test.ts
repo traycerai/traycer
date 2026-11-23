@@ -1019,6 +1019,32 @@ describe("a window's record of a refused mint belongs to the sign-in the mint wa
     expect(window.lastFailureOf(USER, owner)).toBeNull();
   });
 
+  it("shows no refusal of one sign-in once main holds another with the same end", async () => {
+    const withEnd = (claim: string): string =>
+      `header.${Buffer.from(JSON.stringify({ exp: 2_000_000, iat: claim })).toString("base64url")}.signature`;
+    let stored = withEnd("issued-a");
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "sign-in-rejected" }),
+      signIn: (userId) => (userId === USER ? stored : null),
+      now: () => 1_000_000,
+    });
+    registerFor(main, USER);
+    processReleasedHosts.observeInstance(HOST, "process-a");
+    const window = windowOverMain(main);
+    const owner = { hostId: HOST, observed: "process-a" };
+    await window.obtain(USER, HOST, true, {
+      signal: null,
+      owner,
+      observedNow: () => "process-a",
+    });
+    expect(window.lastFailureOf(USER, owner)).toBe("sign-in-rejected");
+
+    stored = withEnd("issued-b");
+
+    expect(window.lastFailureOf(USER, owner)).toBeNull();
+  });
+
   it("shows no refusal once an account switch moved main's era before the read", async () => {
     const main = createHostTokenSource({
       persistence: createMemoryHostTokenPersistence(),
