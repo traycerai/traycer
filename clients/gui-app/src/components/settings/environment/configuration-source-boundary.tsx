@@ -20,11 +20,7 @@ import {
   useEnvironmentInvitationsEntryHash,
   useEnvironmentInvitationsQuery,
 } from "@/hooks/environment/use-environment-invitations";
-import {
-  moveEnvironmentPick,
-  moveEnvironmentSurface,
-  PERSONAL_PICK,
-} from "@/lib/settings-environment-pages";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { TeamReadFailed } from "./team-read-failed";
@@ -100,9 +96,8 @@ export type CloudConfigurationTarget =
 export function ConfigurationSourceBoundary(props: {
   readonly target: CloudConfigurationTarget;
   /**
-   * The page this boundary wraps, so a removal can take the surface off a
-   * page Personal does not offer. `null` where the caller is not a page of
-   * the Environment group and nothing needs moving.
+   * The page this boundary wraps, or `null` where the caller is not a page of
+   * the Environment group.
    */
   readonly section: SettingsSectionId | null;
   readonly children: ReactNode;
@@ -151,7 +146,6 @@ export function ConfigurationSourceBoundary(props: {
     // The answer that raises the question, so the answer that settles it can
     // be held to being no older.
     listedAt: list.dataUpdatedAt,
-    section: props.section,
   });
 
   if (descriptor === undefined) {
@@ -183,8 +177,8 @@ export function ConfigurationSourceBoundary(props: {
       );
     }
     // The named removal is said as a toast, because the selection moves and
-    // this page goes with it; what is left to say is that this page cannot be
-    // read, for the frame it still owns.
+    // this page redraws under it; what is left to say is that this page cannot
+    // be read, for the frame it still owns.
     return (
       <div className="p-5">
         <p role="status" className="text-ui-sm text-muted-foreground">
@@ -275,10 +269,8 @@ function useGoneConfiguration(input: {
   readonly settled: boolean;
   /** When the membership list that no longer carries it was answered. */
   readonly listedAt: number;
-  /** The page this is happening on, which Personal may not offer. */
-  readonly section: SettingsSectionId | null;
 }): { readonly invitation: EnvironmentInvitation | null } {
-  const { target, listed, settled, listedAt, section } = input;
+  const { target, listed, settled, listedAt } = input;
   const invitations = useEnvironmentInvitationsQuery();
   const entryHash = useEnvironmentInvitationsEntryHash();
   const markPickGone = useSettingsEnvironmentPickStore(
@@ -427,27 +419,17 @@ function useGoneConfiguration(input: {
     // nothing else can say which team it was.
     if (label !== null)
       toast(noLongerInLine(label), { id: leftToastId(goneId) });
-    // Personal has no Members page, and Members is the likeliest page to be
-    // reading when a membership changes, so the move goes through the same
-    // guard the picker's own moves do: it takes the surface off a page the
-    // selection it lands on does not offer.
-    //
-    // It moves that surface as a server fact, not as a gesture. Nobody pressed
+    // Only the selection moves. The surface stays on the section it holds,
+    // whose body answers for Personal, Members included: nobody pressed
     // anything, and this page can be a Settings pane in a split the person is
-    // not looking at, so activating Settings here would take the focus and the
-    // route off the work they are actually doing.
+    // not looking at.
     //
     // The selection is a store every page and the picker's trigger read, so
     // it moves after the render that found the team gone, never during it. It
     // moves whether or not the team can be named: no page can read it. The
     // pick itself stays; it reads as Personal for the rest of the window.
-    moveEnvironmentPick({
-      next: PERSONAL_PICK,
-      activeSection: section,
-      setPick: markPickGone,
-      moveSurface: moveEnvironmentSurface.onServerFact,
-    });
-  }, [goneId, label, section, markPickGone]);
+    markPickGone(PERSONAL_PICK);
+  }, [goneId, label, markPickGone]);
 
   return { invitation };
 }

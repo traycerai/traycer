@@ -32,11 +32,9 @@ import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-ho
  *   list, Add a secret, Verify (`SecretsPage`);
  * - on a team's host, the team line, and no value is shown here.
  *
- * Settings does not offer the page on a host that does not serve
- * `environment.secrets.list` (`environmentSectionShown`). A path that reaches
- * it there anyway (a remembered tab, a deep link, a pick moved while it was
- * open) shows the title and nothing under it, as it does while that host's
- * answer is unknown.
+ * On a host that does not serve `environment.secrets.list`, Settings draws
+ * the section's not-available card in place of this panel
+ * (`SettingsPanelForSection`), whichever road reached it.
  */
 export function SecretsSettingsPanel(): ReactNode {
   const source = useConfigurationSource();

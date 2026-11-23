@@ -330,8 +330,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // The Environment group (id `personal`): the configuration the Environment
   // dropdown picks. Personal's pages read through the window's own host and
   // what they save applies wherever the person signs in; a Local row's read
-  // through that computer and hide what only a cloud configuration has
-  // (`environmentSectionShown`).
+  // through that computer. The kind of pick alone decides which of these rows
+  // are listed (`environmentSectionShown`).
   {
     id: "providers",
     label: "Providers",
@@ -415,9 +415,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "personal",
   },
   // The picked configuration's secrets, the page itself
-  // (`panels/secrets-settings-panel.tsx`). Offered where that page can draw:
-  // not on a host that does not serve `environment.secrets.list`
-  // (`environmentSectionShown`).
+  // (`panels/secrets-settings-panel.tsx`). Listed under every pick; a
+  // computer that does not serve `environment.secrets.list` says so in the
+  // page's body.
   {
     id: "secrets",
     label: "Secrets",

@@ -10,10 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {
-  recordNegotiatedHostMethods,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import type {
@@ -175,17 +172,7 @@ const applyingStalled = environmentStatusFixture({
 });
 const running = environmentStatusFixture({ principal: { kind: "personal" } });
 
-function pickerElementForSection(
-  windowHostId: string,
-  activeSection:
-    | "mcp-servers"
-    | "skills"
-    | "sandboxes"
-    | "storage"
-    | "members"
-    | "secrets"
-    | "agent-memories",
-) {
+function pickerElement(windowHostId: string) {
   const hosts = [
     hostScopeOptionFixture({ hostId: "mac", name: "MacBook Pro" }),
     hostScopeOptionFixture({ hostId: "dev", name: "dev-box" }),
@@ -199,31 +186,12 @@ function pickerElementForSection(
         host: hosts[0],
         activeHostId: windowHostId,
       })}
-      activeSection={activeSection}
     />
   );
 }
 
-function pickerElement(windowHostId: string) {
-  return pickerElementForSection(windowHostId, "mcp-servers");
-}
-
 function renderPicker(windowHostId: string) {
   return render(pickerElement(windowHostId));
-}
-
-function renderPickerForSection(
-  windowHostId: string,
-  activeSection:
-    | "mcp-servers"
-    | "skills"
-    | "sandboxes"
-    | "storage"
-    | "members"
-    | "secrets"
-    | "agent-memories",
-) {
-  return render(pickerElementForSection(windowHostId, activeSection));
 }
 
 function runningHost(name: string, isThisComputer: boolean): RunningHost {
@@ -302,7 +270,6 @@ describe("<EnvironmentPicker />", () => {
           host,
           activeHostId: host.hostId,
         })}
-        activeSection="skills"
       />,
     );
     expect(screen.getByTestId("environment-picker-trigger").textContent).toBe(
@@ -651,7 +618,6 @@ describe("<EnvironmentPicker />", () => {
     render(
       <EnvironmentPicker
         scope={hostScopeFixture({ hosts, host: hosts[0], activeHostId: "mac" })}
-        activeSection="mcp-servers"
       />,
     );
     openMenu();
@@ -733,73 +699,21 @@ describe("<EnvironmentPicker />", () => {
     expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("other");
   });
 
-  it.each(["mcp-servers", "skills", "sandboxes", "storage"] as const)(
-    "keeps the selected %s page when a Local row is picked",
-    (section) => {
-      answer("old", awaiting, V11);
-      renderPickerForSection("mac", section);
-      openMenu();
-
-      act(() => {
-        fireEvent.click(screen.getByTestId("environment-picker-local-old"));
-      });
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "local",
-        hostId: "old",
-        hostName: "Old laptop",
-      });
-      expect(surface.openSettings).not.toHaveBeenCalled();
-      expect(surface.setSection).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    "secrets",
-    "mcp-servers",
-    "skills",
-    "agent-memories",
-    "sandboxes",
-    "storage",
-  ] as const)(
-    "moves from %s to Providers when the Local row of a host whose methods lack environment.status is picked",
-    (section) => {
-      answer("old", null, false);
-      recordNegotiatedHostMethods("old", ["host.status"]);
-      renderPickerForSection("mac", section);
-      openMenu();
-
-      act(() => {
-        fireEvent.click(screen.getByTestId("environment-picker-local-old"));
-      });
-
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "local",
-        hostId: "old",
-        hostName: "Old laptop",
-      });
-      expect(surface.openSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ section: "providers" }),
-      );
-    },
-  );
-
-  it("moves from Members to Providers when a Local row is picked", () => {
+  it("keeps the Settings surface where it is when a Local row is picked", () => {
     answer("old", awaiting, V11);
-    renderPickerForSection("mac", "members");
+    renderPicker("mac");
     openMenu();
 
     act(() => {
       fireEvent.click(screen.getByTestId("environment-picker-local-old"));
     });
-
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
       kind: "local",
       hostId: "old",
       hostName: "Old laptop",
     });
-    expect(surface.openSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ section: "providers" }),
-    );
+    expect(surface.openSettings).not.toHaveBeenCalled();
+    expect(surface.setSection).not.toHaveBeenCalled();
   });
 
   // The invitations read is account-wide. The only thing that needs it before
