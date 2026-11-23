@@ -9,7 +9,6 @@ import {
   unresolvedSetupText,
   type EnvironmentPickerModel,
 } from "@/components/settings/environment/environment-picker-model";
-import { LOCAL_ROW_NOT_MOVED } from "@/components/settings/move/cohort-rows";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
   PERSONAL_PICK,
@@ -134,7 +133,7 @@ describe("localPickerRow", () => {
       kind: "local",
       hostId: "old",
       name: "Old laptop",
-      subtitle: LOCAL_ROW_NOT_MOVED,
+      subtitle: "its own settings, update to move to Personal",
       verb: null,
       needsUpdate: false,
       defaultsToLocal: true,
@@ -352,7 +351,7 @@ describe("environmentPickerModel", () => {
         kind: "local",
         hostId: "old",
         name: "Old laptop",
-        subtitle: LOCAL_ROW_NOT_MOVED,
+        subtitle: "its own settings, update to move to Personal",
         verb: null,
         needsUpdate: false,
         defaultsToLocal: true,

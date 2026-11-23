@@ -284,17 +284,15 @@ describe("<SecretGrantRequestCard />", () => {
     }
   });
 
-  it("offers no Secrets button under an old host's Local pick, and keeps the answers", () => {
+  it("offers the Secrets button under an old host's Local pick, opens Secrets and keeps the answers", () => {
     mocks.state.data = { kind: "secret-required" };
     pickOldHostLocal();
     renderCard(DETAIL, false);
-    expect(isAbsent("secret-grant-request-open-secrets")).toBe(true);
-    expect(isDisabled(ANSWER_IDS[0])).toBe(false);
 
-    cleanup();
-    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
-    renderCard(DETAIL, false);
-    expect(isAbsent("secret-grant-request-open-secrets")).toBe(false);
+    fireEvent.click(screen.getByTestId("secret-grant-request-open-secrets"));
+
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+    expect(isDisabled(ANSWER_IDS[0])).toBe(false);
   });
 
   it("hides the answers once the row is resolved", () => {

@@ -26,7 +26,13 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import {
+  PERSONAL_PICK,
+  UNRESOLVED_PICK,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
+import { useSectionServed } from "@/components/settings/personal/use-old-host-local-pick";
 import {
   type AnyRouter,
   createMemoryHistory,
@@ -44,6 +50,10 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
+import {
+  pickOldHostLocal,
+  recordOldHost,
+} from "@/components/settings/__tests__/old-host-pick-fixture";
 import { SettingsPanelForSection } from "@/components/settings/settings-modal-content";
 import { SettingsSurface } from "@/components/settings/settings-surface";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
@@ -53,8 +63,10 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -120,6 +132,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
       setScopedHostId: () => undefined,
     },
     usePersonalHostScope: useHostScope,
+    usePickHostScope: useHostScopeFor,
+    useHostScopeForHostId: useHostScopeFor,
   };
 });
 
@@ -183,6 +197,10 @@ vi.mock("@/components/settings/panels/providers-settings-panel", async () => ({
   ProvidersSettingsPanel: await probe("providers"),
   SkillsSettingsPanel: await probe("skills"),
 }));
+vi.mock(
+  "@/components/settings/environment/members-settings-panel",
+  async () => ({ MembersSettingsPanel: await probe("members") }),
+);
 vi.mock("@/components/settings/panels/secrets-settings-panel", async () => ({
   SecretsSettingsPanel: await probe("secrets"),
 }));
@@ -1303,13 +1321,6 @@ describe("<SettingsSidebar /> Environment pick", () => {
     return environmentRowElements().map((row) => row.textContent);
   }
 
-  /** The Environment group's rows by section id, in rail order. */
-  function environmentRowIds(): string[] {
-    return environmentRowElements().map((row) =>
-      (row.dataset.testid ?? "").replace("settings-sidebar-item-", ""),
-    );
-  }
-
   const LOCAL_PICK = {
     kind: "local",
     hostId: "host-old",
@@ -1371,7 +1382,6 @@ describe("<SettingsSidebar /> Environment pick", () => {
     hostId: "host-old",
     hostName: "Old laptop",
   } as const;
-  const MOVE_OFFER_PAGES = ["mcp-servers", "skills", "sandboxes", "storage"];
 
   /**
    * The rail beside a body that is the real Local move offer for the section
@@ -1425,19 +1435,12 @@ describe("<SettingsSidebar /> Environment pick", () => {
     });
   }
 
-  it("shows only Providers, Permissions, Agents, Model routing and Variables & shells under a Local pick on a host whose methods lack environment.status", async () => {
-    recordNegotiatedHostMethods("host-old", ["host.status"]);
-    useSettingsEnvironmentPickStore.setState({ pick: OLD_HOST_PICK });
+  it("lists every Environment row but Members under a Local pick on a host whose methods lack environment.status", async () => {
+    pickOldHostLocal();
 
     await renderRail();
 
-    expect(environmentRows()).toEqual([
-      "Providers",
-      "Permissions",
-      "Agents",
-      "Model routing",
-      "Variables & shells",
-    ]);
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
   });
 
   it("keeps every Local row for a host that advertises environment.status", async () => {
@@ -1451,19 +1454,6 @@ describe("<SettingsSidebar /> Environment pick", () => {
     await renderRail();
 
     expect(environmentRows()).toEqual(PERSONAL_ROWS);
-  });
-
-  it("reaches no Move offer from an old host's Local pick: no rail row for those pages, and none of the rows it has opens one", async () => {
-    recordNegotiatedHostMethods("host-old", ["host.status"]);
-    useSettingsEnvironmentPickStore.setState({ pick: OLD_HOST_PICK });
-    const router = await renderRailWithPages();
-
-    for (const id of MOVE_OFFER_PAGES) expect(present(id)).toBe(false);
-    for (const id of environmentRowIds()) {
-      await openFromRail(router, id);
-      expect(screen.queryByTestId("local-move-page")).toBeNull();
-      expect(screen.queryByTestId("local-move-page-move")).toBeNull();
-    }
   });
 
   it("opens the Move offer from the same rail on a Local pick of a host that advertises environment.status", async () => {
@@ -1489,25 +1479,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
   });
 
-  it("offers no Secrets row under a Local pick until its host serves the list, then offers it and keeps it", async () => {
-    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
-    listLocalPickHost();
-    await renderRail();
-
-    expect(present("secrets")).toBe(false);
-    expect(present("providers")).toBe(true);
-
-    act(() => {
-      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [
-        "environment.status",
-        SECRETS_LIST,
-      ]);
-    });
-
-    expect(present("secrets")).toBe(true);
-  });
-
-  it("offers no Secrets row under a Local pick whose computer the host list does not name, though the pool serves the list", async () => {
+  it("lists the Secrets row under a Local pick whose computer the host list does not name, though the pool serves the list", async () => {
     poolServes.current = true;
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
     globalScopeOverrides.current = {
@@ -1518,50 +1490,68 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     await renderRail();
 
-    expect(present("providers")).toBe(true);
-    expect(present("secrets")).toBe(false);
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
   });
 
-  it("offers no Secrets row under a Local pick whose host answered without the list", async () => {
+  it("lists the Secrets row under a Local pick whose host answered without the list", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
     listLocalPickHost();
     recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
 
     await renderRail();
 
-    expect(environmentRows()).toEqual(
-      PERSONAL_ROWS.filter((label) => label !== "Secrets"),
-    );
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
+  });
+
+  it("keeps the rail's rows the same when an old host's manifest lands under a remembered Local pick of it", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    await renderRail();
+    const before = environmentRows();
+
+    act(() => {
+      recordOldHost();
+    });
+
+    expect(before).toEqual(PERSONAL_ROWS);
+    expect(environmentRows()).toEqual(before);
   });
 
   it.each([
-    {
-      name: "unknown",
-      runs: null,
-      served: false,
-      offered: false,
+    { name: "serves the list", methods: ["environment.status", SECRETS_LIST] },
+    { name: "lacks the list", methods: ["environment.status"] },
+  ])(
+    "keeps the rail's rows the same when a current host that $name lands its manifest under a Local pick of it",
+    async ({ methods }) => {
+      useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+      listLocalPickHost();
+      await renderRail();
+      const before = environmentRows();
+
+      act(() => {
+        recordNegotiatedHostMethods(LOCAL_PICK.hostId, methods);
+      });
+
+      expect(before).toEqual(PERSONAL_ROWS);
+      expect(environmentRows()).toEqual(before);
     },
+  );
+
+  it.each([
+    { name: "unknown", runs: null, served: false },
     {
       name: "a host that runs Personal and serves the list",
       runs: true,
       served: true,
-      offered: true,
     },
     {
       name: "a host that runs Personal and does not serve the list",
       runs: true,
       served: false,
-      offered: false,
     },
-    {
-      name: "a host that does not run Personal",
-      runs: false,
-      served: false,
-      offered: true,
-    },
+    { name: "a host that does not run Personal", runs: false, served: false },
   ])(
-    "Personal's Secrets row, with the window's host being $name: offered is $offered",
-    async ({ runs, served, offered }) => {
+    "lists Personal's Secrets row, with the window's host being $name",
+    async ({ runs, served }) => {
       windowHostRunsPersonal.current = runs;
       recordNegotiatedHostMethods(
         "host-a",
@@ -1570,7 +1560,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
       await renderRail();
 
-      expect(present("secrets")).toBe(offered);
+      expect(present("secrets")).toBe(true);
     },
   );
 
@@ -1596,10 +1586,9 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("secrets")).toBe(true);
   });
 
-  it("offers a Secrets search result only where the pick's source serves the page", async () => {
+  it("lists a Secrets search result under a Local pick before its host answers and after, whatever it serves", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
     listLocalPickHost();
-    recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
     const router = buildRouter("/settings/general");
     render(
       <KeybindingProvider router={router}>
@@ -1612,20 +1601,16 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     fireEvent.change(input, { target: { value: "secrets" } });
 
-    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
-    expect(secretsHit()).toBeNull();
+    expect(secretsHit()).not.toBeNull();
 
     act(() => {
-      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [
-        "environment.status",
-        SECRETS_LIST,
-      ]);
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
     });
 
     expect(secretsHit()).not.toBeNull();
   });
 
-  it("offers the phone's settings list no Secrets row under a Local pick whose host does not serve the list", async () => {
+  it("lists the phone's settings list a Secrets row under a Local pick before its host answers and after, whatever it serves", async () => {
     setMobileApp(true);
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
     listLocalPickHost();
@@ -1637,20 +1622,17 @@ describe("<SettingsSidebar /> Environment pick", () => {
     );
     await screen.findByTestId("settings-sidebar-item-providers");
 
-    expect(present("secrets")).toBe(false);
+    expect(present("secrets")).toBe(true);
 
     act(() => {
-      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [
-        "environment.status",
-        SECRETS_LIST,
-      ]);
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
     });
 
     expect(present("secrets")).toBe(true);
   });
 });
 
-describe("<SettingsSidebar /> search under an old host's Local pick", () => {
+describe("<SettingsSidebar /> the section held under an old host's Local pick", () => {
   const HIDDEN_PAGES = [
     ["mcp-servers", "MCP servers"],
     ["skills", "Skills"],
@@ -1684,6 +1666,7 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
           mode={{ kind: "modal", activeSection: section, onSelect: setSection }}
           variant="rail"
         />
+        <div data-section={section} data-testid="held-section" />
         <SettingsPanelForSection section={section} />
       </>
     );
@@ -1741,25 +1724,25 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
   }
 
   it.each(HIDDEN_PAGES)(
-    "lists no search hit for %s, so no hit can land on a page the host lacks",
+    "lists a search hit for %s, and choosing it holds that section on the rail",
     async (id, label) => {
-      recordNegotiatedHostMethods("host-old", ["host.status"]);
-      useSettingsEnvironmentPickStore.setState({
-        pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
-      });
+      pickOldHostLocal();
       const input = await renderSurface("providers");
 
       fireEvent.change(input, { target: { value: label } });
+      const hit = hitFor(id);
+      expect(hit).toBeDefined();
+      if (hit !== undefined) fireEvent.click(hit);
+      act(() => {
+        useSettingsSearchStore.setState({ query: "" });
+      });
 
-      expect(hitFor(id)).toBeUndefined();
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
     },
   );
 
   it("still lists a hit for a page the old host has", async () => {
-    recordNegotiatedHostMethods("host-old", ["host.status"]);
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
-    });
+    pickOldHostLocal();
     const input = await renderSurface("providers");
 
     fireEvent.change(input, { target: { value: "Permissions" } });
@@ -1773,13 +1756,6 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     "secrets",
     "agent-memories",
   ] as const;
-
-  function arriveOnOldHostPick(): void {
-    recordNegotiatedHostMethods("host-old", ["host.status"]);
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
-    });
-  }
 
   /** The routed Settings tab: the real surface, whose section comes from the route or the remembered path. */
   async function renderRoutedTab(path: string, lastPath: string | null) {
@@ -1798,53 +1774,43 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
       </QueryClientProvider>,
     );
     await screen.findByRole("combobox", { name: "Search settings" });
+    return router;
   }
 
   it.each(PROBED_HIDDEN_PAGES)(
-    "never mounts %s when a link reaches it through navigateToSettingsSection, and Providers shows",
+    "holds %s on the rail when a link reaches it through navigateToSettingsSection",
     async (id) => {
-      arriveOnOldHostPick();
+      pickOldHostLocal();
       await renderSurface("providers");
 
       act(() => {
         navigateToSettingsSection(id);
       });
 
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
       expect(probeMounts[id] ?? 0).toBe(0);
-      expect(screen.queryByTestId("local-move-page")).toBeNull();
-      expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
     },
   );
 
   it.each(PROBED_HIDDEN_PAGES)(
-    "never mounts %s when a deep link opens the routed tab on it, and Providers shows",
+    "holds %s on the rail when a deep link opens the routed tab on it",
     async (id) => {
-      arriveOnOldHostPick();
+      pickOldHostLocal();
 
       await renderRoutedTab(`/settings/${id}`, null);
 
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
       expect(probeMounts[id] ?? 0).toBe(0);
-      expect(screen.queryByTestId("local-move-page")).toBeNull();
-      expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
     },
   );
 
-  it("draws Machine setup as Providers when a deep link opens the routed tab on it", async () => {
-    arriveOnOldHostPick();
-
-    await renderRoutedTab("/settings/machine-setup", null);
-
-    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
-  });
-
   it("never mounts a hidden page when the routed tab's remembered path names it", async () => {
-    arriveOnOldHostPick();
+    pickOldHostLocal();
 
     await renderRoutedTab("/epics", "/settings/skills");
 
     expect(probeMounts["skills"] ?? 0).toBe(0);
     expect(screen.queryByTestId("local-move-page")).toBeNull();
-    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
   });
 
   /** The window's host is the old computer and no default pick is stored yet: the dropdown resolves it. */
@@ -1862,30 +1828,33 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     realFrame.on = true;
   }
 
-  it("never mounts a hidden page while a routed tab's default pick resolves to the old host's row, and then draws Providers", async () => {
+  /** The default pick has resolved to the old host's Local row. */
+  async function defaultPickResolved(): Promise<void> {
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().defaultPick.kind).toBe(
+        "local",
+      );
+    });
+  }
+
+  it("holds Skills on the rail when a routed tab's default pick resolves to the old host's row", async () => {
     arriveInOldHostWindow();
 
     await renderRoutedTab("/settings/skills", null);
+    await defaultPickResolved();
 
-    expect(await screen.findByTestId("providers-page-probe")).toBeTruthy();
-    expect(useSettingsEnvironmentPickStore.getState().defaultPick.kind).toBe(
-      "local",
-    );
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-skills"]);
     expect(probeMounts["skills"] ?? 0).toBe(0);
-    expect(screen.queryByTestId("local-move-page")).toBeNull();
   });
 
-  it("never mounts a hidden page while a window opening on it resolves to the old host's row, and then draws Providers", async () => {
+  it("holds Skills on the rail when a window opening on it resolves to the old host's row", async () => {
     arriveInOldHostWindow();
 
     await renderSurface("skills");
+    await defaultPickResolved();
 
-    expect(await screen.findByTestId("providers-page-probe")).toBeTruthy();
-    expect(useSettingsEnvironmentPickStore.getState().defaultPick.kind).toBe(
-      "local",
-    );
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-skills"]);
     expect(probeMounts["skills"] ?? 0).toBe(0);
-    expect(screen.queryByTestId("local-move-page")).toBeNull();
   });
 
   function highlightedRows(): string[] {
@@ -1895,23 +1864,79 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
       .map((row) => row.dataset["testid"] ?? "");
   }
 
-  it("highlights Providers on the rail when a hidden page's section reaches the modal", async () => {
-    arriveOnOldHostPick();
+  function heldSection(): string | undefined {
+    return screen.getByTestId("held-section").dataset["section"];
+  }
 
-    await renderSurface("skills");
+  /** Presses the rail picker's row, with the dropdown opened as a pointer does. */
+  function pickFromRailPicker(rowTestId: string): void {
+    fireEvent.pointerDown(screen.getByTestId("environment-picker-trigger"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId(rowTestId));
+    });
+  }
 
-    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
-    expect(highlightedRows()).toEqual(["settings-sidebar-item-providers"]);
+  it("keeps the modal on Secrets when the old host's Local row is picked from the rail's picker", async () => {
+    recordOldHost();
+    globalScopeOverrides.current = {
+      client: null,
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-old", name: "Old laptop" }),
+      ],
+    };
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    await renderSurface("secrets");
+
+    pickFromRailPicker("environment-picker-local-host-old");
+
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "local",
+      hostId: "host-old",
+      hostName: "Old laptop",
+    });
+    expect(heldSection()).toBe("secrets");
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-secrets"]);
   });
 
-  it("highlights Providers on the rail when a deep link opens the routed tab on a hidden page", async () => {
-    arriveOnOldHostPick();
+  it("keeps the modal on Members when Personal is picked from the rail's picker", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-team" },
+    });
+    await renderSurface("members");
 
-    await renderRoutedTab("/settings/skills", null);
+    pickFromRailPicker("environment-picker-personal");
 
-    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
-    expect(highlightedRows()).toEqual(["settings-sidebar-item-providers"]);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+      PERSONAL_PICK,
+    );
+    expect(heldSection()).toBe("members");
   });
+
+  it.each(["secrets", "mcp-servers"] as const)(
+    "highlights %s, and not Providers, when the modal holds it under an old host's Local pick",
+    async (id) => {
+      pickOldHostLocal();
+
+      await renderSurface(id);
+
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
+    },
+  );
+
+  it.each(["secrets", "mcp-servers"] as const)(
+    "highlights %s, and not Providers, when a deep link opens the routed tab on it under an old host's Local pick",
+    async (id) => {
+      pickOldHostLocal();
+
+      await renderRoutedTab(`/settings/${id}`, null);
+
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
+    },
+  );
 
   it("still draws a hidden page under a Personal pick on the same host", async () => {
     recordNegotiatedHostMethods("host-old", ["host.status"]);
@@ -1922,5 +1947,269 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     await screen.findByTestId("skills-page-probe");
     expect(screen.queryByTestId("providers-page-probe")).toBeNull();
     expect(highlightedRows()).toEqual(["settings-sidebar-item-skills"]);
+  });
+
+  const OLD_HOST_OPTION = hostScopeOptionFixture({
+    hostId: "host-old",
+    name: "Old laptop",
+  });
+  const NEW_HOST_OPTION = hostScopeOptionFixture({
+    hostId: "host-new",
+    name: "New laptop",
+  });
+  const NEW_HOST_PICK = {
+    kind: "local",
+    hostId: "host-new",
+    hostName: "New laptop",
+  } as const;
+  const LOCAL_PICK_OLD = {
+    kind: "local",
+    hostId: "host-old",
+    hostName: "Old laptop",
+  } as const;
+  const SECRETS_LIST = "environment.secrets.list";
+
+  /** The window's host scope, and the scope the pick reads through, are one. */
+  function scopeOn(overrides: Record<string, unknown>): void {
+    scopeOverrides.current = { client: null, ...overrides };
+    globalScopeOverrides.current = scopeOverrides.current;
+  }
+
+  const cardText = (testId: string): string =>
+    screen.getByTestId(testId).textContent;
+  /** Concealed or absent: the page stays mounted beneath the away notice, out of view. */
+  function expectHiddenFromView(node: Element | null): void {
+    expect(node === null || isConcealed(node)).toBe(true);
+  }
+  const sectionHeading = (name: string): HTMLElement =>
+    screen.getByRole("heading", { name });
+
+  it("answers Secrets with the update card under the old host's Local pick, under Secrets' own heading and with the route kept", async () => {
+    pickOldHostLocal();
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    await renderSurface("secrets");
+
+    expect(sectionHeading("Secrets")).toBeTruthy();
+    expect(screen.getByText("Values and logins your agents use.")).toBeTruthy();
+    expect(cardText("page-not-on-computer-update")).toContain(
+      "Not on Old laptop",
+    );
+    expect(cardText("page-not-on-computer-update")).toContain(
+      "Update Old laptop to use Secrets.",
+    );
+    expect(heldSection()).toBe("secrets");
+    expect(screen.queryByTestId("providers-page-probe")).toBeNull();
+    expect(screen.queryByTestId("secrets-page-probe")).toBeNull();
+  });
+
+  it("answers MCP servers with the update card, not the move offer, under the old host's Local pick", async () => {
+    pickOldHostLocal();
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    await renderSurface("mcp-servers");
+
+    expect(cardText("page-not-on-computer-update")).toContain(
+      "Update Old laptop to use MCP servers.",
+    );
+    expect(screen.queryByTestId("local-move-page")).toBeNull();
+    expect(screen.queryByTestId("mcp-servers-page-probe")).toBeNull();
+  });
+
+  it("draws the Providers page, with no card, under the old host's Local pick", async () => {
+    pickOldHostLocal();
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    await renderSurface("providers");
+
+    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
+  });
+
+  it("keeps the move offer for MCP servers, and draws Secrets, under a current host's Local pick that serves the list", async () => {
+    recordNegotiatedHostManifest("host-new", {
+      "environment.status": { major: 1, minor: 3 },
+      [SECRETS_LIST]: { major: 1, minor: 0 },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: NEW_HOST_PICK });
+    scopeOn({ host: NEW_HOST_OPTION });
+
+    await renderSurface("mcp-servers");
+
+    expect(screen.getByTestId("local-move-page")).toBeTruthy();
+    expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
+
+    cleanup();
+    await renderSurface("secrets");
+
+    expect(screen.getByTestId("secrets-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
+  });
+
+  it("answers Secrets with the update card under a current host's Local pick whose handshake lacks the list", async () => {
+    recordNegotiatedHostManifest("host-new", {
+      "environment.status": { major: 1, minor: 3 },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: NEW_HOST_PICK });
+    scopeOn({ host: NEW_HOST_OPTION });
+
+    await renderSurface("secrets");
+
+    expect(cardText("page-not-on-computer-update")).toContain(
+      "Update New laptop to use Secrets.",
+    );
+    expect(screen.queryByTestId("secrets-page-probe")).toBeNull();
+  });
+
+  it("says a Local pick's computer is not connected to this app once the host list has loaded without it, with no action", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
+    scopeOn({ host: null, isLoading: false });
+
+    await renderSurface("secrets");
+
+    expect(cardText("page-not-on-computer-unlisted")).toContain(
+      "Not on Old laptop",
+    );
+    expect(cardText("page-not-on-computer-unlisted")).toContain(
+      "Old laptop isn't connected to this app.",
+    );
+    expect(
+      within(screen.getByTestId("page-not-on-computer-unlisted")).queryByRole(
+        "button",
+      ),
+    ).toBeNull();
+  });
+
+  it("shows Connecting for a Local pick's computer while the host list is loading", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
+    scopeOn({ host: null, isLoading: true });
+
+    await renderSurface("secrets");
+
+    expect(cardText("host-scope-connecting")).toContain(
+      "Connecting to Old laptop",
+    );
+    expect(screen.queryByTestId("page-not-on-computer-unlisted")).toBeNull();
+  });
+
+  it("turns Connecting into the update card, with the route and heading unchanged, when a remembered Local pick's handshake lands old", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    const router = await renderRoutedTab("/settings/secrets", null);
+
+    expect(cardText("host-scope-connecting")).toContain(
+      "Connecting to Old laptop",
+    );
+    expect(sectionHeading("Secrets")).toBeTruthy();
+
+    act(() => {
+      recordOldHost();
+    });
+
+    expect(cardText("page-not-on-computer-update")).toContain(
+      "Update Old laptop to use Secrets.",
+    );
+    expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
+    expect(sectionHeading("Secrets")).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/settings/secrets");
+  });
+
+  it.each(["secrets", "mcp-servers"] as const)(
+    "shows only the away notice on %s under a Local pick of an unreachable old host, never the update card",
+    async (section) => {
+      pickOldHostLocal();
+      scopeOn({ host: OLD_HOST_OPTION, status: "unreachable" });
+
+      await renderSurface(section);
+
+      expect(cardText("host-scope-unreachable")).toContain(
+        "Can't reach Old laptop from here",
+      );
+      expectHiddenFromView(screen.queryByTestId("page-not-on-computer-update"));
+    },
+  );
+
+  it("shows only the away notice, not the move offer, on MCP servers under a Local pick of an unreachable current host", async () => {
+    recordNegotiatedHostManifest("host-new", {
+      "environment.status": { major: 1, minor: 3 },
+      [SECRETS_LIST]: { major: 1, minor: 0 },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: NEW_HOST_PICK });
+    scopeOn({ host: NEW_HOST_OPTION, status: "unreachable" });
+
+    await renderSurface("mcp-servers");
+
+    expect(cardText("host-scope-unreachable")).toContain(
+      "Can't reach New laptop from here",
+    );
+    expectHiddenFromView(screen.queryByTestId("local-move-page"));
+  });
+
+  it("answers Members under Personal with the team-only card, under Members' own heading", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+
+    await renderSurface("members");
+
+    expect(sectionHeading("Members")).toBeTruthy();
+    expect(cardText("page-not-on-computer-team-only")).toContain(
+      "Only a team has members",
+    );
+    expect(screen.queryByTestId("members-page-probe")).toBeNull();
+  });
+
+  it("draws the Members page under a team pick", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-team" },
+    });
+
+    await renderSurface("members");
+
+    expect(screen.getByTestId("members-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
+  });
+
+  /** What `useSectionServed` answered at each render, for a pick and section. */
+  function servedHistory(
+    pick: EnvironmentPick,
+    section: SettingsSectionId,
+  ): { readonly answers: string[]; readonly rerender: () => void } {
+    const answers: string[] = [];
+    const view = renderHook(() => {
+      const answer = useSectionServed(pick, section);
+      answers.push(answer);
+      return answer;
+    });
+    return { answers, rerender: () => view.rerender() };
+  }
+
+  it("reads an unresolved pick, and a Local pick with no handshake, as pending", () => {
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    expect(servedHistory(UNRESOLVED_PICK, "secrets").answers).toEqual([
+      "pending",
+    ]);
+    expect(servedHistory(LOCAL_PICK_OLD, "secrets").answers).toEqual([
+      "pending",
+    ]);
+  });
+
+  it("reads Secrets as not served for an old host's Local pick, without ever reading it as served while the handshake lands", () => {
+    scopeOn({ host: OLD_HOST_OPTION });
+    const history = servedHistory(LOCAL_PICK_OLD, "secrets");
+
+    act(() => {
+      recordOldHost();
+    });
+
+    expect(history.answers.at(-1)).toBe("not-served");
+    expect(history.answers).not.toContain("served");
+  });
+
+  it("reads Personal on a host that does not run Personal as served", () => {
+    windowHostRunsPersonal.current = false;
+    scopeOn({ host: NEW_HOST_OPTION });
+
+    expect(servedHistory(PERSONAL_PICK, "secrets").answers).toEqual(["served"]);
   });
 });

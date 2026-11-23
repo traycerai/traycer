@@ -103,6 +103,9 @@ const surface = vi.hoisted(() => ({
   remember: vi.fn(),
   replaceOwnedRoute: vi.fn(),
   overlayActive: false,
+  /** The section the overlay holds, and the path a background tab remembers. */
+  overlaySection: "",
+  remembered: "",
 }));
 
 /**
@@ -151,7 +154,10 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
     isOverlayActive: (kind: string) =>
       kind === "settings" && surface.overlayActive,
     openSettings: surface.openSettings,
-    setSection: surface.setSection,
+    setSection: (section: string) => {
+      surface.setSection(section);
+      surface.overlaySection = section;
+    },
     // The bridge's own route move, recorded AND performed: what it does to a
     // real router is asserted in `stores/tabs/__tests__/use-system-tab-modal`,
     // against real Settings routes. Here it has to actually move the route, or
@@ -170,7 +176,10 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
 }));
 vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
-  rememberSettingsTabSection: surface.remember,
+  rememberSettingsTabSection: (section: string) => {
+    surface.remember(section);
+    surface.remembered = section;
+  },
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -220,6 +229,8 @@ afterEach(() => {
   surface.remember.mockClear();
   surface.replaceOwnedRoute.mockClear();
   surface.overlayActive = false;
+  surface.overlaySection = "";
+  surface.remembered = "";
   rerenders.tick = 0;
   router.pathname = "/epics";
   useSettingsEnvironmentPickStore.setState({
@@ -815,36 +826,28 @@ describe("a team the environment list no longer carries", () => {
     });
   }
 
-  it("swaps the section in place when the person is looking at Settings", async () => {
+  it("leaves the overlay on Members when the person is looking at Settings", async () => {
     surface.overlayActive = true;
+    surface.overlaySection = "members";
 
     await removalOnMembers(null);
 
-    expect(surface.setSection).toHaveBeenCalledWith("providers");
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.remember).not.toHaveBeenCalled();
+    expect(surface.overlaySection).toBe("members");
   });
 
-  it("moves a background Settings tab without activating it", async () => {
+  it("leaves a background Settings tab's remembered path on Members", async () => {
     surface.overlayActive = false;
-    // A split partner owns the route, which is the case `remember` is for.
+    // A split partner owns the route, which is the case a remembered path is for.
     router.pathname = "/epics";
+    surface.remembered = "members";
 
     await removalOnMembers(null);
 
-    // Where Settings has to end up: on a page Personal offers.
-    expect(surface.remember).toHaveBeenCalledWith("providers");
-    // What must not happen to the pane the person IS working in. This is the
-    // whole assertion: `openSettings` focuses the Settings tab and changes the
-    // active route, so a split partner would lose both to a membership change
-    // in the background.
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.setSection).not.toHaveBeenCalled();
-    // The partner's route is left exactly where it was.
+    expect(surface.remembered).toBe("members");
     expect(router.pathname).toBe("/epics");
   });
 
-  it("moves the Settings surface that owns the route, without activating anything", async () => {
+  it("leaves the Settings surface that owns the route on Members", async () => {
     surface.overlayActive = false;
     // The person is reading Settings ▸ Environment ▸ Members with no overlay
     // up: Settings owns the route, so its remembered path is ignored.
@@ -852,16 +855,11 @@ describe("a team the environment list no longer carries", () => {
 
     await removalOnMembers(<SettingsSurface lastPath="/settings/members" />);
 
-    // The real surface, resolving the real route. This is what `remember`
-    // alone cannot do, and asserting the command could not tell apart.
-    await waitFor(() =>
-      expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
-        "providers",
-      ),
+    // The real surface, resolving the real route.
+    expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+      "members",
     );
-    expect(surface.replaceOwnedRoute).toHaveBeenCalledWith("providers");
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.setSection).not.toHaveBeenCalled();
+    expect(router.pathname).toBe("/settings/members");
   });
 
   // A page the selection still offers is left where it is.

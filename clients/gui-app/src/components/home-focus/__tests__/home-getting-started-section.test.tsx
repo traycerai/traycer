@@ -19,6 +19,9 @@ import {
   provider,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
+import { resetEnvironmentSectionReads } from "@/components/settings/__tests__/environment-section-reads-fixture";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   mountTeamPage,
   personalPoolSource,
@@ -122,6 +125,24 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ signInUrl: "https://traycer.ai/sign-in" }),
 }));
 
+// The card is judged on the default pick's page, which reads the window's host
+// through one scope and whether it runs Personal: the shared fixtures answer
+// both, so these cases stay about the cards.
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).personalHostScopeModule,
+);
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).windowHostRunsPersonalModule,
+);
+
 const navigateMock = vi.hoisted(() => vi.fn());
 const setSectionMock = vi.hoisted(() => vi.fn());
 const openSettingsMock = vi.hoisted(() => vi.fn());
@@ -220,6 +241,11 @@ describe("HomeGettingStartedSection", () => {
       [],
     );
     mocks.staged = null;
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+      defaultHostId: null,
+    });
     mocks.openLink.mockClear();
     navigateMock.mockReset();
     setSectionMock.mockReset();
@@ -229,6 +255,7 @@ describe("HomeGettingStartedSection", () => {
   afterEach(() => {
     cleanup();
     resetTeamPageHarness();
+    resetEnvironmentSectionReads();
   });
 
   it("renders open with the heading, the count, and the cards as buttons while steps are incomplete", () => {

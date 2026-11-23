@@ -4810,16 +4810,20 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.refreshedHostIds).not.toContain("host-ambient");
   });
 
-  it("offers Open Secrets under Personal, and not under an old host's Local pick", () => {
+  it("offers Open Secrets under an old host's Local pick, and pressing it opens Secrets", () => {
     pickOldHostLocal();
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
-    expect(screen.queryByRole("button", { name: "Open Secrets" })).toBeNull();
 
-    cleanup();
+    fireEvent.click(screen.getByRole("button", { name: "Open Secrets" }));
+
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+  });
+
+  it("offers Open Secrets under Personal", () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
     render(
       <TooltipProvider>

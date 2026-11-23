@@ -347,12 +347,12 @@ describe("MobileAppHeader", () => {
     expect(screen.getByTestId("mobile-header-settings-crumb")).not.toBeNull();
   });
 
-  it("crumbs the page an old host's Local pick draws for a settings section it lacks", async () => {
+  it("crumbs the section a restored route names under an old host's Local pick, though the host lacks its page", async () => {
     pickOldHostLocal();
     presentSettingsTab("/settings/secrets");
     renderAt("/");
     expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
-      "SettingsProviders",
+      "SettingsSecrets",
     );
   });
 

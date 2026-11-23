@@ -185,7 +185,7 @@ describe("Personal's Secrets under a window host that is listed but offline", ()
     expect(await screen.findByText(SECRETS_NAME)).toBeTruthy();
   });
 
-  it("offers no Secrets row on a reachable host that runs Personal and does not serve the list", async () => {
+  it("lists the Secrets row on a reachable host that runs Personal and does not serve the list, and reads no list from it", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 
     const { messenger } = mountSettings({
@@ -205,7 +205,7 @@ describe("Personal's Secrets under a window host that is listed but offline", ()
     expect(messenger.calls.some((call) => call.method === SECRETS_LIST)).toBe(
       false,
     );
-    expect(secretsRow()).toBeNull();
+    expect(secretsRow()).not.toBeNull();
   });
 });
 
@@ -226,13 +226,10 @@ describe("Personal's Secrets once the window host that answered goes offline", (
     await waitFor(() => {
       expect(screen.queryByTestId("personal-source-loading")).toBeNull();
     });
-    expect(secretsRow()).toBeNull();
+    expect(secretsRow()).not.toBeNull();
 
     takeWindowHostOffline();
 
-    await waitFor(() => {
-      expect(secretsRow()).not.toBeNull();
-    });
     expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
     expect(screen.queryByTestId("personal-source-loading")).toBeNull();
     expect(await screen.findByText(SECRETS_NAME)).toBeTruthy();
@@ -261,17 +258,15 @@ describe("Personal's Secrets once the window host that went offline comes back",
     return mounted;
   }
 
-  it("drops the Secrets row and draws the host's page when it runs Personal without the list", async () => {
+  it("keeps the Secrets row and draws the host's page when it runs Personal without the list", async () => {
     await mountAnsweredThenOffline();
 
     takeWindowHostOnline({ "environment.status": 1 });
 
     await waitFor(() => {
-      expect(secretsRow()).toBeNull();
-    });
-    await waitFor(() => {
       expect(screen.queryByText(SECRETS_NAME)).toBeNull();
     });
+    expect(secretsRow()).not.toBeNull();
     expect(
       await screen.findByRole("heading", { name: "Secrets" }),
     ).toBeTruthy();
