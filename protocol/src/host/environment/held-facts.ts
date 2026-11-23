@@ -55,14 +55,19 @@ const NO_FACTS: HeldFacts = {
   value: null,
 };
 
-const heldStdioDefinitionSchema = lazySchema(() =>
-  z.object({
-    definition: z.object({
+export const heldMcpConnectionSchema = lazySchema(() =>
+  z.discriminatedUnion("transport", [
+    z.strictObject({
       transport: z.literal("stdio"),
       command: z.string().min(1),
       args: z.array(z.string()),
     }),
-  }),
+    z.strictObject({ transport: z.literal("http"), url: z.string().min(1) }),
+  ]),
+);
+
+const heldMcpDefinitionSchema = lazySchema(() =>
+  z.object({ definition: heldMcpConnectionSchema }),
 );
 
 /** Only the fields each line reads. */
@@ -85,11 +90,14 @@ export function heldFactsOf(entry: {
 }): HeldFacts {
   switch (entry.kind) {
     case "mcp_server": {
-      const parsed = heldStdioDefinitionSchema.safeParse(entry.value);
+      const parsed = heldMcpDefinitionSchema.safeParse(entry.value);
       if (!parsed.success) return NO_FACTS;
-      const { command, args } = parsed.data.definition;
-      // The definition carries no env, so no env value can reach the line.
-      return { ...NO_FACTS, command: shown([command, ...args].join(" ")) };
+      const { definition } = parsed.data;
+      const text =
+        definition.transport === "http"
+          ? definition.url
+          : [definition.command, ...definition.args].join(" ");
+      return { ...NO_FACTS, command: shown(text) };
     }
     case "shell": {
       const parsed = heldShellValueSchema.safeParse(entry.value);
