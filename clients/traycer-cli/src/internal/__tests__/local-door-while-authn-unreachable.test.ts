@@ -509,7 +509,9 @@ async function openStream(session: CliHostSession): Promise<void> {
     userId: USER_ID,
     auth: {
       revalidateForReconnect: () =>
-        recovery.revalidateForReconnect(() => true).then(replacedAsNetworkError),
+        recovery
+          .revalidateForReconnect(() => true)
+          .then(replacedAsNetworkError),
       revalidateRefused: (refusal) =>
         recovery
           .revalidateRefused(refusal, () => true)
