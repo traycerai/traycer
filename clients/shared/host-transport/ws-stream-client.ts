@@ -1260,7 +1260,6 @@ export class WsStreamClient<
     );
   }
 
-  /** Drops one held credential and disarms its timer. Safe to call twice. */
   /**
    * Re-asks for a credential once the wait a `pending-elsewhere` answer named
    * has passed.
@@ -1359,6 +1358,7 @@ export class WsStreamClient<
     this.provisionRetryTimers.clear();
   }
 
+  /** Drops one held credential and disarms its timer. Safe to call twice. */
   private discardPendingProvision(hostId: string): void {
     const pending = this.pendingProvisions.get(hostId);
     if (pending === undefined) {

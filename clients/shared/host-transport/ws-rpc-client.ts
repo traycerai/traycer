@@ -566,9 +566,6 @@ export class WsRpcClient<
     // bounds do. A refresh that did not reach authn ends the call with the
     // host's refusal, so it never spends this.
     let signInRefreshSpent = false;
-    // A refusal of a sign-in the call's lease no longer holds is answered once
-    // by retrying on the held one, with no recovery; a second goes to it.
-    let signInAdopted = false;
     let signInReplanned = false;
     let replacedRedialed = false;
     const hostBearerFor = this.hostBearerFor;
@@ -640,18 +637,17 @@ export class WsRpcClient<
           this.ownerSignInRefusals.has(cause)
         ) {
           const authority = hostOptions.authority;
-          if (signInRefreshSpent || hostBearerFor === undefined) throw cause;
+          if (hostBearerFor === undefined) throw cause;
           const invited = this.ownerSignInAuthorities.get(authority);
           const recovery = invited?.recovery ?? null;
-          // A call whose caller ended starts no rotation: it fails as it
-          // would after one.
-          throwIfAuthorityAborted(options.authority, cause.requestId, method);
           const adopted =
             recovery !== null &&
             cause.fatalDetails !== null &&
-            !signInAdopted &&
             this.holdsNewerSignIn(invited, cause);
-          if (adopted) signInAdopted = true;
+          if (!adopted && signInRefreshSpent) throw cause;
+          // A call whose caller ended starts no rotation: it fails as it
+          // would after one.
+          throwIfAuthorityAborted(options.authority, cause.requestId, method);
           const outcome =
             recovery === null || cause.fatalDetails === null
               ? "rejected"
@@ -723,18 +719,16 @@ export class WsRpcClient<
         }
         if (cause instanceof HostRpcError && this.signInRefusals.has(cause)) {
           const authority = hostOptions.authority;
-          if (signInRefreshSpent) throw cause;
           const released = this.signInAuthorities.get(authority);
           const recovery = released?.recovery ?? null;
-          // A call whose caller ended starts no rotation: it fails as it
-          // would after one.
-          throwIfAuthorityAborted(options.authority, cause.requestId, method);
           const adopted =
             recovery !== null &&
             cause.fatalDetails !== null &&
-            !signInAdopted &&
             this.holdsNewerSignIn(released, cause);
-          if (adopted) signInAdopted = true;
+          if (!adopted && signInRefreshSpent) throw cause;
+          // A call whose caller ended starts no rotation: it fails as it
+          // would after one.
+          throwIfAuthorityAborted(options.authority, cause.requestId, method);
           const outcome =
             recovery === null || cause.fatalDetails === null
               ? "rejected"
@@ -911,13 +905,6 @@ export class WsRpcClient<
   }
 
   /**
-   * `base` carrying `signIn`. Its token is read where each frame carrying it is
-   * written, a request on a published session or (after the OPEN's own check,
-   * {@link signInMayGoNow} with `atOpen`) an OPEN, in the same tick as that
-   * write: once the sign-in may no longer go, the read throws
-   * {@link SignInWithdrawnError} and nothing is written.
-   */
-  /**
    * Whether the sign-in lease of the refused authority now holds a different
    * sign-in than the one `cause` refused. A lease that holds none holds no
    * newer one.
@@ -935,6 +922,13 @@ export class WsRpcClient<
     }
   }
 
+  /**
+   * `base` carrying `signIn`. Its token is read where each frame carrying it is
+   * written, a request on a published session or (after the OPEN's own check,
+   * {@link signInMayGoNow} with `atOpen`) an OPEN, in the same tick as that
+   * write: once the sign-in may no longer go, the read throws
+   * {@link SignInWithdrawnError} and nothing is written.
+   */
   private withSignIn(
     base: HostRequestAuthority,
     signIn: OpenFrameBearerSource,
