@@ -204,7 +204,10 @@ describe("runStagedSandbox creating", () => {
     await run(false, deps);
 
     expect(auth.requests).toEqual([]);
-    expect(stageOf().failure).toEqual({ kind: "unavailable" });
+    expect(stageOf().failure).toEqual({
+      kind: "unavailable",
+      freshCreateKey: false,
+    });
   });
 
   it("repeats the create with the same key after a refusal, and a fresh run mints a new one", async () => {
@@ -382,7 +385,10 @@ describe("runStagedSandbox refusals", () => {
 
     await run(false, deps);
 
-    expect(stageOf().failure).toEqual({ kind: "unverified" });
+    expect(stageOf().failure).toEqual({
+      kind: "unverified",
+      freshCreateKey: false,
+    });
   });
 
   it("maps insufficient_credit to the credits failure with the shortfall", async () => {
@@ -404,6 +410,7 @@ describe("runStagedSandbox refusals", () => {
       kind: "credits",
       shortfallMc: 1_200_000,
       creditSource: "personal",
+      freshCreateKey: true,
     });
     expect(stageOf().phase).toBe("creating");
     expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
@@ -416,22 +423,22 @@ describe("runStagedSandbox refusals", () => {
         ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
         reason: "unverified",
       },
-      { kind: "unverified" },
+      { kind: "unverified", freshCreateKey: true },
     ],
     [
       "a shape the region does not offer",
       refusal(400, SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED),
-      { kind: "shape" },
+      { kind: "shape", freshCreateKey: true },
     ],
     [
       "an unavailable provider",
       refusal(503, SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE),
-      { kind: "unavailable" },
+      { kind: "unavailable", freshCreateKey: true },
     ],
     [
       "a request that never completed",
       { kind: "network-error" as const, detail: "offline" },
-      { kind: "unverified" },
+      { kind: "unverified", freshCreateKey: false },
     ],
   ] as const)("maps %s", (_name, failure, expected) => {
     expect(createFailure(failure, null)).toEqual(expected);
