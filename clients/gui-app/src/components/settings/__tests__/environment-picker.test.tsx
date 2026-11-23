@@ -699,23 +699,6 @@ describe("<EnvironmentPicker />", () => {
     expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("other");
   });
 
-  it("keeps the Settings surface where it is when a Local row is picked", () => {
-    answer("old", awaiting, V11);
-    renderPicker("mac");
-    openMenu();
-
-    act(() => {
-      fireEvent.click(screen.getByTestId("environment-picker-local-old"));
-    });
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-      kind: "local",
-      hostId: "old",
-      hostName: "Old laptop",
-    });
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.setSection).not.toHaveBeenCalled();
-  });
-
   // The invitations read is account-wide. The only thing that needs it before
   // the dropdown opens is the trigger with a pick no membership can name, so
   // a trigger naming a team the person is in must not ask for it: otherwise

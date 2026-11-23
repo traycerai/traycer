@@ -75,28 +75,26 @@ describe("navigationSource on a build with a server pool", () => {
       runs: false,
     },
   ] as const)(
-    "$name: offers Secrets once the pool serves the list, though the host does not",
+    "$name: lists Secrets before the pool serves the list, though the host does not, and after",
     ({ pick, runs }) => {
       windowHostRunsPersonal.current = runs;
       recordNegotiatedHostMethods("host-a", ["environment.status"]);
       useSettingsEnvironmentPickStore.setState({ pick });
-      const subpage = mountSettingsSubpage("/");
-      const offered = () =>
-        subpage.latest().some((item) => item.id === "nav:settings/secrets");
+      const offered = mountSettingsSubpage("/").offered;
 
-      expect(offered()).toBe(false);
+      expect(offered("nav:settings/secrets")).not.toContain(false);
 
       act(() => {
         recordNegotiatedHostMethods(POOL_HOST_ID, ["environment.secrets.list"]);
       });
 
-      expect(offered()).toBe(true);
+      expect(offered("nav:settings/secrets")).not.toContain(false);
     },
   );
 });
 
 describe("navigationSource on a build with a server pool, in a window Settings has not opened", () => {
-  it("lists Secrets for Personal on a host that runs it, once the pool serves the list", () => {
+  it("lists Secrets for Personal on a host that runs it, at every render", () => {
     useSelectionAuthorityStore.setState({ effectiveHostId: "host-a" });
     windowHostRunsPersonal.current = true;
     pickerDefaultPick.current = PERSONAL_PICK;
@@ -106,6 +104,6 @@ describe("navigationSource on a build with a server pool, in a window Settings h
     const history = mountSettingsSubpage("/").offered("nav:settings/secrets");
 
     expect(history.at(-1)).toBe(true);
-    expect(history.indexOf(true)).toBeGreaterThan(history.lastIndexOf(false));
+    expect(history).not.toContain(false);
   });
 });

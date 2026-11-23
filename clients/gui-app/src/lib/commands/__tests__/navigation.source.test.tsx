@@ -45,7 +45,11 @@ import { setMobileApp } from "@/lib/mobile-app";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import {
+  PERSONAL_PICK,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
+import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   recordNegotiatedHostManifest,
@@ -146,42 +150,40 @@ describe("navigationSource", () => {
     expect(mobileIds).not.toContain("nav:settings/app-diagnostics");
   });
 
-  it("lists no row for a page a Local pick on an old host lacks, and still lists the pages it has", () => {
-    recordNegotiatedHostMethods("host-old", ["host.status"]);
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
-    });
+  it("lists every page for a Local pick on an old host, the ones it lacks included", () => {
+    pickOldHostLocal();
 
     const ids = captureSettingsSubpage("/").map((i) => i.id);
 
-    for (const hidden of [
+    for (const section of [
       "mcp-servers",
       "skills",
       "secrets",
       "agent-memories",
       "sandboxes",
       "storage",
+      "providers",
+      "permissions",
+      "agents",
+      "shell",
     ]) {
-      expect(ids, hidden).not.toContain(`nav:settings/${hidden}`);
-    }
-    for (const kept of ["providers", "permissions", "agents", "shell"]) {
-      expect(ids, kept).toContain(`nav:settings/${kept}`);
+      expect(ids, section).toContain(`nav:settings/${section}`);
     }
   });
 
-  it("lists no hidden page in a window whose host is old before Settings has stored a default or a pick", () => {
+  it("lists the pages an old host lacks in a window whose host is old before Settings has stored a default or a pick", () => {
     useSettingsEnvironmentPickStore.setState({ pick: null });
     recordNegotiatedHostMethods("host-old", ["host.status"]);
     useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
 
     const ids = captureSettingsSubpage("/").map((i) => i.id);
 
-    expect(ids).not.toContain("nav:settings/secrets");
-    expect(ids).not.toContain("nav:settings/skills");
+    expect(ids).toContain("nav:settings/secrets");
+    expect(ids).toContain("nav:settings/skills");
     expect(ids).toContain("nav:settings/providers");
   });
 
-  it("lists the hidden pages again once the window's host moves to one that advertises environment.status", () => {
+  it("lists the same pages before and after the window's host moves to one that advertises environment.status", () => {
     recordNegotiatedHostMethods("host-old", ["host.status"]);
     recordNegotiatedHostManifest("host-new", {
       "environment.status": { major: 1, minor: 3 },
@@ -207,24 +209,32 @@ describe("navigationSource", () => {
       return null;
     }
     render(<Probe />);
-    expect(captured.map((i) => i.id)).not.toContain("nav:settings/secrets");
+    const before = captured.map((i) => i.id);
+    expect(before).toContain("nav:settings/secrets");
 
     act(() => {
       useSelectionAuthorityStore.setState({ effectiveHostId: "host-new" });
     });
-    expect(captured.map((i) => i.id)).toContain("nav:settings/secrets");
+    expect(captured.map((i) => i.id)).toEqual(before);
   });
 
-  it("offers the page on screen when a hidden path is drawn as another page's", () => {
-    recordNegotiatedHostMethods("host-old", ["host.status"]);
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
-    });
+  it("omits Secrets and lists Providers on the Secrets page under a Local pick on an old host", () => {
+    pickOldHostLocal();
 
     const ids = captureSettingsSubpage("/settings/secrets").map((i) => i.id);
 
-    expect(ids).not.toContain("nav:settings/providers");
+    expect(ids).not.toContain("nav:settings/secrets");
+    expect(ids).toContain("nav:settings/providers");
     expect(ids).toContain("nav:settings/permissions");
+  });
+
+  it("omits Members under Personal", () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+
+    const ids = captureSettingsSubpage("/").map((i) => i.id);
+
+    expect(ids).not.toContain("nav:settings/members");
+    expect(ids).toContain("nav:settings/secrets");
   });
 
   it("lists every page for a Local pick on a host that advertises environment.status", () => {
@@ -345,18 +355,18 @@ describe("navigationSource, the Secrets row by the pick's source", () => {
     },
     { name: "Local", pick: LOCAL_PICK, runs: false },
   ] as const)(
-    "$name: offers Secrets once the host serves the list, never before, and never withdraws it",
+    "$name: offers Secrets before the host answers, after it answers without the list, and after it serves the list, and never withdraws it",
     ({ pick, runs }) => {
       windowHostRunsPersonal.current = runs;
       const offered = mountSecretsRow(pick);
 
-      expect(offered().at(-1)).toBe(false);
+      expect(offered()).not.toContain(false);
 
       act(() => {
         recordNegotiatedHostMethods("host-a", ["environment.status"]);
       });
 
-      expect(offered().at(-1)).toBe(false);
+      expect(offered()).not.toContain(false);
 
       act(() => {
         recordNegotiatedHostMethods("host-a", [
@@ -365,13 +375,11 @@ describe("navigationSource, the Secrets row by the pick's source", () => {
         ]);
       });
 
-      const history = offered();
-      expect(history.at(-1)).toBe(true);
-      expect(history.indexOf(true)).toBeGreaterThan(history.lastIndexOf(false));
+      expect(offered()).not.toContain(false);
     },
   );
 
-  it("offers a Local computer's Secrets only while the window's host list names it", () => {
+  it("offers a Local computer's Secrets whether or not the window's host list names it", () => {
     const unlisted: EnvironmentPick = {
       kind: "local",
       hostId: "host-b",
@@ -379,7 +387,7 @@ describe("navigationSource, the Secrets row by the pick's source", () => {
     };
     recordNegotiatedHostMethods("host-b", ["environment.status", SECRETS_LIST]);
 
-    expect(mountSecretsRow(unlisted)().at(-1)).toBe(false);
+    expect(mountSecretsRow(unlisted)().at(-1)).toBe(true);
 
     cleanup();
     personalHostScopeOverrides.current = {
@@ -392,12 +400,12 @@ describe("navigationSource, the Secrets row by the pick's source", () => {
     expect(mountSecretsRow(unlisted)().at(-1)).toBe(true);
   });
 
-  it("offers Personal's Secrets only after the window host's Personal read has answered", () => {
+  it("offers Personal's Secrets before the window host's Personal read has answered", () => {
     windowHostRunsPersonal.current = null;
     recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
     const offered = mountSecretsRow({ kind: "personal" });
 
-    expect(offered().at(-1)).toBe(false);
+    expect(offered().at(-1)).toBe(true);
   });
 
   it("offers Secrets on the cloud road, whatever the window's host serves", () => {
