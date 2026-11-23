@@ -18,9 +18,16 @@ function masked(text: string): string {
         // Odd indexes are the separators the split kept.
         if (index % 2 === 1) return piece;
         const name = index >= 2 ? (parts[index - 2] ?? "") : "";
-        return classifyCredential({ name, value: piece }).credentialLike
-          ? MASK
-          : piece;
+        if (classifyCredential({ name, value: piece }).credentialLike)
+          return MASK;
+        return piece
+          .split("/")
+          .map((segment) =>
+            classifyCredential({ name: "", value: segment }).credentialLike
+              ? MASK
+              : segment,
+          )
+          .join("/");
       })
       .join("")
       // A whole word the pieces hide, a URL with a password among them.
@@ -91,13 +98,11 @@ export function heldFactsOf(entry: {
   switch (entry.kind) {
     case "mcp_server": {
       const parsed = heldMcpDefinitionSchema.safeParse(entry.value);
-      if (!parsed.success) return NO_FACTS;
-      const { definition } = parsed.data;
-      const text =
-        definition.transport === "http"
-          ? definition.url
-          : [definition.command, ...definition.args].join(" ");
-      return { ...NO_FACTS, command: shown(text) };
+      if (!parsed.success || parsed.data.definition.transport !== "stdio")
+        return NO_FACTS;
+      const { command, args } = parsed.data.definition;
+      // The strict definition admits no header or environment values.
+      return { ...NO_FACTS, command: shown([command, ...args].join(" ")) };
     }
     case "shell": {
       const parsed = heldShellValueSchema.safeParse(entry.value);

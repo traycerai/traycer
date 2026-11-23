@@ -10,6 +10,7 @@ import type {
   LocalOverrideTarget,
   RemoteAccessState,
 } from "@traycer/protocol/host/environment-schemas";
+import { heldFactsOf } from "@traycer/protocol/host/environment/held-facts";
 import {
   keepLocalTarget,
   keepLocalText,
@@ -612,6 +613,30 @@ describe("reviewText", () => {
     ).toBe(
       "env-e2e-memory (MCP server) runs npx -y @mcp/memory and is on hold until you choose",
     );
+  });
+
+  it("keeps a held HTTP MCP definition out of the needs-you line", () => {
+    const key = "docs-server";
+    const facts = heldFactsOf({
+      kind: "mcp_server",
+      key,
+      value: {
+        definition: {
+          transport: "http",
+          url: "https://docs.example.test/v1/mcp",
+        },
+        toolToggles: {},
+      },
+    });
+    expect(
+      reviewText(
+        reviewEntry({
+          kind: "mcp_server",
+          key,
+          command: facts.command,
+        }),
+      ),
+    ).toBe("docs-server (MCP server) is on hold until you choose");
   });
 
   it("words a held environment setting by the program it changes", () => {

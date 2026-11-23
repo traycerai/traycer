@@ -134,7 +134,7 @@ function toolGroups(
   }));
 }
 
-function mcpValue(key: string, value: unknown): TeamReviewValue {
+function mcpValue(value: unknown): TeamReviewValue {
   const modern = authnMcpServerItemValueSchema.strict().safeParse(value);
   if (modern.success) {
     return {
@@ -147,10 +147,15 @@ function mcpValue(key: string, value: unknown): TeamReviewValue {
   }
   const held = heldMcpValueSchema.safeParse(value);
   if (!held.success) return UNREADABLE;
+  const { definition } = held.data;
   return {
     kind: "mcp",
     reference: null,
-    command: heldFactsOf({ kind: "mcp_server", key, value }).command,
+    command: maskedHeldText(
+      definition.transport === "http"
+        ? definition.url
+        : [definition.command, ...definition.args].join(" "),
+    ),
     groups: toolGroups(held.data.toolToggles),
     offFor: (held.data.offFor ?? []).map(maskedText),
   };
@@ -231,7 +236,7 @@ function reviewValue(
         : UNREADABLE;
     }
     case "mcp_server":
-      return mcpValue(key, value);
+      return mcpValue(value);
     case "shell":
     case "variable":
     case "env_override":
