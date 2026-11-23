@@ -136,6 +136,8 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
   let authn: ScriptedAuthn;
   let states: string[];
   let revalidations: number;
+  /** The sign-in each refresh was asked for, as its caller named it. */
+  let refusedSignIns: (string | null | undefined)[];
   let refreshGate: Promise<RevalidateOutcome> | null;
   let built: RemoteHostTransport<
     VersionedRpcRegistry,
@@ -157,6 +159,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     authn = scriptedAuthn();
     states = [];
     revalidations = 0;
+    refusedSignIns = [];
     refreshGate = null;
     built = null;
   });
@@ -172,8 +175,11 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
 
   /** A sign-in refresh that rotates at once, or when `refreshGate` answers; counted. */
   const recovery: StreamAuthRevalidator = {
-    revalidateForReconnect: () => {
+    // Rest parameters take what the caller names, or nothing, and still
+    // type as a recovery that is asked for no sign-in.
+    revalidateForReconnect: (...refused: readonly (string | null)[]) => {
       revalidations += 1;
+      refusedSignIns.push(refused[0]);
       return refreshGate ?? Promise.resolve("rotated");
     },
   };
@@ -363,6 +369,23 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     await advance(0);
 
     expect(authn.calls()).toBe(1);
+  });
+
+  it("refreshes only the sign-in a refused relay mint was sent with, though the stored one has rotated since", async () => {
+    let signInNow = SIGN_IN;
+    const answerMint = authn.hold(1);
+    const { session } = openTransport({
+      ...PLAIN_TRANSPORT,
+      signIn: () => signInNow,
+    });
+    session.start();
+    await advanceUntil(() => authn.calls() === 1, 10_000);
+
+    signInNow = ROTATED_SIGN_IN;
+    answerMint("unauthorized");
+    await advanceUntil(() => revalidations === 1, 10_000);
+
+    expect(refusedSignIns).toEqual([SIGN_IN]);
   });
 
   it("keeps the held host-only token when an adopted token's write is released after its attempt was retired", async () => {
