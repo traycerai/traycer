@@ -480,7 +480,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(sandboxToastSpies.success).not.toHaveBeenCalled();
     });
 
-    it("keeps ordinary joined failed HTTP 200 on the success path without adding a refusal note", async () => {
+    it("shows the provider failure for an ordinary joined failed HTTP 200", async () => {
       const user = userEvent.setup();
       auth().createSandbox.mockResolvedValue({
         kind: "ok",
@@ -504,12 +504,10 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
       await user.click(enableButton());
 
-      await waitFor(() =>
-        expect(sandboxToastSpies.success).toHaveBeenCalledWith(
-          "Created Team bots",
-        ),
+      expect((await screen.findByRole("alert")).textContent).toBe(
+        "Couldn't complete the sandbox action.",
       );
-      expect(screen.queryByRole("alert")).toBeNull();
+      expect(sandboxToastSpies.success).not.toHaveBeenCalled();
       expect(auth().createSandbox.mock.calls[0]?.[0].displayName).toBe(
         "Team bots",
       );
@@ -668,9 +666,18 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         act(() =>
           walk.answer(transitionKey, firstResultOrdinal, { state: firstState }),
         );
-        await waitFor(() =>
-          expect(sandboxToastSpies.success).toHaveBeenCalledTimes(1),
-        );
+        if (firstState === "failed") {
+          await waitFor(() =>
+            expect(screen.getByRole("alert").textContent).toBe(
+              "Couldn't complete the sandbox action.",
+            ),
+          );
+          expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+        } else {
+          await waitFor(() =>
+            expect(sandboxToastSpies.success).toHaveBeenCalledTimes(1),
+          );
+        }
         act(() =>
           walk.answer(transitionKey, secondResultOrdinal, {
             state: "destroyed",
@@ -679,7 +686,9 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         await walk.waitForArrival(finalKey, 1);
         act(() => walk.answer(finalKey, 1, { state: "awake" }));
         await waitFor(() =>
-          expect(sandboxToastSpies.success).toHaveBeenCalledTimes(2),
+          expect(sandboxToastSpies.success).toHaveBeenCalledTimes(
+            firstState === "failed" ? 1 : 2,
+          ),
         );
         expect(walk.requests.map((request) => request.clientRequestId)).toEqual(
           [...oneWalk.slice(0, 5).flatMap((key) => [key, key]), finalKey],

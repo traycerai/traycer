@@ -19,7 +19,10 @@ import {
   vi,
 } from "vitest";
 import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
 import type {
   SandboxCatalogueFetchResult,
   SandboxListFetchResult,
@@ -122,6 +125,27 @@ function stageOf() {
   const stage = readStagedSandbox(surfaceKey);
   if (stage === null) throw new Error("nothing staged");
   return stage;
+}
+
+async function ownPendingStage(sendId: string): Promise<void> {
+  surfaceKey = pendingSendSurfaceKey(sendId);
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-1", userName: "U", email: "u@example.com" },
+      { userId: "user-1", username: "U" },
+      [],
+    );
+  onTestFinished(() => useAuthStore.getState().setSignedOut());
+  usePendingSandboxSendStore
+    .getState()
+    .add(pendingSend({ id: sendId, userId: "user-1" }));
+  onTestFinished(() => {
+    usePendingSandboxSendStore.setState({ sends: {} });
+  });
+  const ownership = holdPendingSandboxSendOwnership(sendId);
+  onTestFinished(ownership.release);
+  await ownership.ready;
 }
 
 beforeEach(() => {
@@ -228,6 +252,112 @@ describe("runStagedSandbox creating", () => {
     expect(auth.requests[0]?.clientRequestId).toBe(legacyKey);
   });
 
+  it("posts a restored saved retry payload before reading the sandbox list", async () => {
+    await ownPendingStage("restored-retry-send");
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const lastCreateKey = "retry:saved-row";
+    const lastRetryCreate: SandboxCreateRequest = {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: null,
+      region: "us-west",
+      displayName: "origin/main hook",
+      idleMinutes: 30,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: null,
+      destroyAfterRestingMinutes: 1440,
+      createdByTaskId: "origin-task",
+      clientRequestId: lastCreateKey,
+    };
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      lastCreateKey,
+      lastRetryCreate,
+      failure: { kind: "unverified" },
+    });
+    const stageKey = stageOf().clientRequestId;
+    const name = persistKey(STORE_KEYS.stagedSandboxSend);
+    const recordKey = recordMapStorageKey(name, surfaceKey);
+    const entries = persistedStageStorage();
+    const savedRecord = entries.find(([key]) => key === recordKey)?.[1];
+    if (savedRecord === undefined) throw new Error("expected persisted stage");
+    useStagedSandboxStore.setState({ bySurface: {} });
+    restoreStageStorage(entries);
+    await useStagedSandboxStore.persist.rehydrate();
+
+    expect(stageOf()).toMatchObject({ lastCreateKey, lastRetryCreate });
+    const { auth, deps } = harness(
+      { createSandbox: () => refusal(503, "provider_unavailable") },
+      true,
+    );
+
+    await runStagedSandbox(
+      surfaceKey,
+      { taskId: null, resume: true, createKey: null },
+      deps,
+    );
+
+    expect(auth.listReads).toBe(0);
+    expect(auth.requests).toEqual([lastRetryCreate]);
+    expect(stageOf()).toMatchObject({
+      clientRequestId: stageKey,
+      lastCreateKey,
+      lastRetryCreate,
+      failure: { kind: "unavailable" },
+    });
+  });
+
+  it("rebuilds a legacy saved key's request from the restored stage pick", async () => {
+    await ownPendingStage("legacy-retry-send");
+    useStagedSandboxStore
+      .getState()
+      .stage(surfaceKey, { ...PERSONAL_NEW, name: "legacy pick" });
+    const lastCreateKey = "retry:legacy-pick";
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      lastCreateKey,
+      failure: { kind: "unverified" },
+    });
+    const stageKey = stageOf().clientRequestId;
+    const name = persistKey(STORE_KEYS.stagedSandboxSend);
+    const recordKey = recordMapStorageKey(name, surfaceKey);
+    const entries = persistedStageStorage();
+    if (!entries.some(([key]) => key === recordKey))
+      throw new Error("expected persisted stage");
+    useStagedSandboxStore.setState({ bySurface: {} });
+    restoreStageStorage(entries);
+    await useStagedSandboxStore.persist.rehydrate();
+    expect(stageOf().lastRetryCreate).toBeUndefined();
+    const { auth, deps } = harness(
+      { createSandbox: () => refusal(503, "provider_unavailable") },
+      true,
+    );
+
+    await runStagedSandbox(
+      surfaceKey,
+      { taskId: null, resume: true, createKey: null },
+      deps,
+    );
+
+    expect(auth.listReads).toBe(0);
+    expect(auth.requests).toHaveLength(1);
+    expect(auth.requests[0]).toMatchObject({
+      clientRequestId: lastCreateKey,
+      os: SHAPE.os,
+      cpus: SHAPE.cpus,
+      memoryMb: SHAPE.memoryMb,
+      region: SHAPE.region,
+      displayName: "legacy pick",
+      createdByTaskId: null,
+    });
+    expect(stageOf()).toMatchObject({
+      clientRequestId: stageKey,
+      lastCreateKey,
+    });
+    expect(stageOf().lastRetryCreate).toBeUndefined();
+  });
+
   it("uses retry of the 502 row on the next staged press", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness(
@@ -257,6 +387,44 @@ describe("runStagedSandbox creating", () => {
     ]);
     expect(stageOf().clientRequestId).toBe(stage.clientRequestId);
     expect(stageOf().lastCreateKey).toBe(retryKey);
+  });
+
+  it("reads a changed create budget after a confirmed provider-unavailable refusal and keeps the key", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const budgetsAtPost: number[] = [];
+    const { auth, deps } = harness(
+      {
+        createSandbox: () => {
+          const budget = stageOf().createAttempt?.budgetMs;
+          if (budget === undefined) throw new Error("expected a create budget");
+          budgetsAtPost.push(budget);
+          return refusal(503, "provider_unavailable");
+        },
+      },
+      true,
+    );
+    vi.spyOn(auth, "getSandboxCatalogue")
+      .mockResolvedValueOnce({
+        kind: "ok",
+        catalogue: budgetCatalogue(480_000),
+      })
+      .mockResolvedValueOnce({
+        kind: "ok",
+        catalogue: budgetCatalogue(600_000),
+      });
+
+    await run(null, deps);
+    const attemptedKey = stageOf().lastCreateKey;
+    if (attemptedKey === undefined)
+      throw new Error("expected the attempted create key");
+    expect(stageOf().createAttempt).toBeNull();
+    await run(attemptedKey, deps);
+
+    expect(auth.requests.map(({ clientRequestId }) => clientRequestId)).toEqual(
+      [attemptedKey, attemptedKey],
+    );
+    expect(budgetsAtPost).toEqual([480_000, 600_000]);
+    expect(stageOf().createAttempt).toBeNull();
   });
 
   it("uses retry of a joined HTTP 200 failed row on the next staged press", async () => {

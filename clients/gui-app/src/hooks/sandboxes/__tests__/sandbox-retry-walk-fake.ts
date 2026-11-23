@@ -81,7 +81,7 @@ export function createSandboxRetryWalkFake(
         namedRefusal.calls += 1;
         return Promise.resolve(
           namedRefusal.calls === 1
-            ? namedCreditRefusal(namedRefusal.sandbox)
+            ? namedCreditRefusal(namedRefusal.sandbox.id)
             : {
                 kind: "ok",
                 joined: true,
@@ -244,12 +244,11 @@ function unnamedCreditRefusal(): Extract<
 }
 
 function namedCreditRefusal(
-  sandbox: SandboxSummary,
+  sandboxId: string,
 ): Extract<SandboxCreateFetchResult, { readonly kind: "refused" }> {
   return {
     ...unnamedCreditRefusal(),
-    sandboxId: sandbox.id,
-    sandbox,
+    sandboxId,
   };
 }
 

@@ -2,6 +2,8 @@ import type {
   StageConfiguration,
   StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import { z } from "zod";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
@@ -20,6 +22,8 @@ export interface ReturnedSandbox {
   readonly clientRequestId: string | null;
   /** A later create's key, when a retry has moved on from the original key. */
   readonly lastCreateKey?: string;
+  /** The exact request that went out under that key. */
+  readonly lastRetryCreate?: SandboxCreateRequest;
 }
 
 /**
@@ -45,6 +49,9 @@ export function storeReturnedSandbox(
     ...(returned.lastCreateKey === undefined
       ? {}
       : { lastCreateKey: returned.lastCreateKey }),
+    ...(returned.lastRetryCreate === undefined
+      ? {}
+      : { lastRetryCreate: returned.lastRetryCreate }),
     userId:
       "userId" in returned
         ? returned.userId
@@ -141,7 +148,7 @@ export function stageIsReturnedSandbox(
   return JSON.stringify(target) === JSON.stringify(returned.target);
 }
 
-/** Whether two returned sandboxes name the same destination and create key. */
+/** Whether two returned sandboxes name the same destination and last create. */
 export function sameReturnedSandbox(
   a: ReturnedSandbox | null,
   b: ReturnedSandbox | null,
@@ -150,6 +157,7 @@ export function sameReturnedSandbox(
   return (
     a.clientRequestId === b.clientRequestId &&
     a.lastCreateKey === b.lastCreateKey &&
+    JSON.stringify(a.lastRetryCreate) === JSON.stringify(b.lastRetryCreate) &&
     JSON.stringify(a.target) === JSON.stringify(b.target)
   );
 }
@@ -197,9 +205,30 @@ export function returnedSandboxToJson(
     ...(returned.lastCreateKey === undefined
       ? {}
       : { lastCreateKey: returned.lastCreateKey }),
+    ...(returned.lastRetryCreate === undefined
+      ? {}
+      : { lastRetryCreate: { ...returned.lastRetryCreate } }),
     userId: returned.userId,
   };
 }
+
+const createKeySchema = z.string().min(1).max(64);
+const lastRetryCreateSchema: z.ZodType<SandboxCreateRequest> = z.object({
+  os: z.enum(["linux", "windows"]),
+  cpus: z.number().positive().max(1024),
+  memoryMb: z.number().int().positive(),
+  diskMb: z.number().int().positive().nullable(),
+  region: z.string().min(1).max(32).nullable(),
+  displayName: z.string().min(1).max(191),
+  idleMinutes: z.number().int().positive().nullable(),
+  burst: z.literal(false),
+  createdByHostId: z.null(),
+  createdByAgentId: z.null(),
+  environmentId: z.string().min(1).nullable(),
+  destroyAfterRestingMinutes: z.number().int().nonnegative().nullable(),
+  createdByTaskId: z.string().min(1).max(64).nullable(),
+  clientRequestId: createKeySchema,
+});
 
 /**
  * Rebuilds a persisted destination field by field: storage is untrusted. One
@@ -211,12 +240,22 @@ export function parseReturnedSandbox(
   if (!isRecord(value)) return null;
   const target = parseTarget(value.target);
   if (target === null) return null;
+  const lastCreateKey = createKeySchema.safeParse(value.lastCreateKey);
+  const lastRetryCreate = lastRetryCreateSchema.safeParse(
+    value.lastRetryCreate,
+  );
   return {
     target,
     clientRequestId:
       typeof value.clientRequestId === "string" ? value.clientRequestId : null,
-    ...(typeof value.lastCreateKey === "string"
-      ? { lastCreateKey: value.lastCreateKey }
+    ...(target.kind === "new" && lastCreateKey.success
+      ? {
+          lastCreateKey: lastCreateKey.data,
+          ...(lastRetryCreate.success &&
+          lastRetryCreate.data.clientRequestId === lastCreateKey.data
+            ? { lastRetryCreate: lastRetryCreate.data }
+            : {}),
+        }
       : {}),
     userId: typeof value.userId === "string" ? value.userId : null,
   };

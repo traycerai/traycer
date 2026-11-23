@@ -336,6 +336,7 @@ function stagedPick({
   target,
   clientRequestId,
   lastCreateKey,
+  lastRetryCreate,
 }: ReturnedSandbox): StagedSandbox {
   return {
     target,
@@ -343,6 +344,10 @@ function stagedPick({
     phase: "staged",
     clientRequestId: clientRequestId ?? newStagedSandboxKey(),
     ...(lastCreateKey === undefined ? {} : { lastCreateKey }),
+    ...(lastRetryCreate !== undefined &&
+    lastRetryCreate.clientRequestId === lastCreateKey
+      ? { lastRetryCreate }
+      : {}),
     ownerId: null,
     createdSandboxId: null,
     createdHostId: null,

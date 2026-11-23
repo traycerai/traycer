@@ -385,7 +385,7 @@ describe("SandboxFailedRowActions Retry", () => {
     view.unmount();
   });
 
-  it("keeps the Created toast and the original name for a joined ordinary failed row, then derives the next Retry key", async () => {
+  it("shows the provider failure for a joined ordinary failed row, then derives the next Retry key", async () => {
     const binding = createFakeSandboxBinding();
     binding.auth.createSandbox
       .mockResolvedValueOnce({
@@ -418,10 +418,11 @@ describe("SandboxFailedRowActions Retry", () => {
       expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1),
     );
     await waitFor(() =>
-      expect(mocks.toastSuccess).toHaveBeenCalledWith(
-        "Created origin/main hook",
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Couldn't complete the sandbox action.",
       ),
     );
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
     await waitFor(() => expect(retry).toHaveProperty("disabled", false));
     await userEvent.click(retry);
     await waitFor(() =>
@@ -459,22 +460,24 @@ describe("SandboxFailedRowActions Retry", () => {
       const walk = createSandboxRetryWalkFake(initialKey, undefined);
       walk.refuseNamed402(initialKey, retryRow);
       binding.auth.createSandbox.mockImplementation(walk.create);
-      const firstWindow = renderFailedRow(
-        binding,
-        PERSONAL_CONFIGURATION,
-        "editor",
-        createQueryClient(),
-      );
+      const initialRow = failedRowSummaryWith({
+        createdByTaskId: "origin-task",
+        displayName: "origin/main hook",
+      });
+      const renderCard = () =>
+        renderFailedRowWithSummary({
+          binding,
+          configuration: PERSONAL_CONFIGURATION,
+          environmentRole: "editor",
+          queryClient: createQueryClient(),
+          summary: initialRow,
+        });
+      const firstWindow = renderCard();
       const firstRetry = await within(firstWindow.container).findByRole(
         "button",
         { name: "Retry" },
       );
-      const secondWindow = renderFailedRow(
-        binding,
-        PERSONAL_CONFIGURATION,
-        "editor",
-        createQueryClient(),
-      );
+      const secondWindow = renderCard();
       const secondRetry = await within(secondWindow.container).findByRole(
         "button",
         { name: "Retry" },
@@ -486,6 +489,32 @@ describe("SandboxFailedRowActions Retry", () => {
       await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
       await user.click(secondInOrder);
       await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(2));
+      expect(mocks.toastError).toHaveBeenNthCalledWith(
+        1,
+        "The team's credits don't cover an hour of this sandbox. Add $0.12 and try again.",
+      );
+      expect(mocks.toastError).toHaveBeenNthCalledWith(
+        2,
+        "Couldn't start origin/main hook",
+      );
+      expect(walk.requests.slice(0, 2)).toMatchObject([
+        {
+          clientRequestId: initialKey,
+          createdByTaskId: "origin-task",
+          displayName: "origin/main hook",
+          burst: false,
+          createdByHostId: null,
+          createdByAgentId: null,
+        },
+        {
+          clientRequestId: initialKey,
+          createdByTaskId: "origin-task",
+          displayName: "origin/main hook",
+          burst: false,
+          createdByHostId: null,
+          createdByAgentId: null,
+        },
+      ]);
       await waitFor(() => expect(firstRetry).toHaveProperty("disabled", false));
       await waitFor(() =>
         expect(secondRetry).toHaveProperty("disabled", false),
@@ -510,14 +539,38 @@ describe("SandboxFailedRowActions Retry", () => {
         nextKey,
         nextKey,
       ]);
-      expect(walk.requests.slice(2)).toMatchObject([
+      expect(walk.requests.slice(2)).toEqual([
         {
-          createdByTaskId: "origin-task",
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: 20480,
+          region: "us-east",
           displayName: "origin/main hook",
+          idleMinutes: null,
+          burst: false,
+          createdByHostId: null,
+          createdByAgentId: null,
+          environmentId: "env-acme",
+          destroyAfterRestingMinutes: 0,
+          createdByTaskId: "origin-task",
+          clientRequestId: nextKey,
         },
         {
-          createdByTaskId: "origin-task",
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: 20480,
+          region: "us-east",
           displayName: "origin/main hook",
+          idleMinutes: null,
+          burst: false,
+          createdByHostId: null,
+          createdByAgentId: null,
+          environmentId: "env-acme",
+          destroyAfterRestingMinutes: 0,
+          createdByTaskId: "origin-task",
+          clientRequestId: nextKey,
         },
       ]);
       expect(mocks.toastSuccess).toHaveBeenCalledWith(
@@ -734,6 +787,11 @@ describe("SandboxFailedRowActions Retry", () => {
     await user.click(retry);
     await waitFor(() =>
       expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Couldn't complete the sandbox action.",
+      ),
     );
     await waitFor(() => expect(retry).toHaveProperty("disabled", false));
     await user.click(retry);
@@ -1209,14 +1267,29 @@ describe("SandboxFailedRowActions Retry", () => {
       act(() =>
         walk.answer(transitionKey, firstResultOrdinal, { state: firstState }),
       );
-      await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledTimes(1));
+      if (firstState === "failed") {
+        await waitFor(() =>
+          expect(mocks.toastError).toHaveBeenCalledWith(
+            "Couldn't complete the sandbox action.",
+          ),
+        );
+        expect(mocks.toastSuccess).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() =>
+          expect(mocks.toastSuccess).toHaveBeenCalledTimes(1),
+        );
+      }
       act(() =>
         walk.answer(transitionKey, secondResultOrdinal, { state: "destroyed" }),
       );
       await walk.waitForArrival(finalKey, 1);
       expect(secondInOrder).toHaveProperty("disabled", true);
       act(() => walk.answer(finalKey, 1, { state: "awake" }));
-      await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(mocks.toastSuccess).toHaveBeenCalledTimes(
+          firstState === "failed" ? 1 : 2,
+        ),
+      );
       expect(walk.requests.map((request) => request.clientRequestId)).toEqual([
         ...oneWalk.slice(0, 5).flatMap((key) => [key, key]),
         finalKey,

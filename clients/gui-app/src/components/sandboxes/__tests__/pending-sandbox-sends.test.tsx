@@ -103,7 +103,10 @@ import {
   vi,
 } from "vitest";
 
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
 
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -4389,15 +4392,31 @@ describe("cancelling a send whose create was accepted but not answered", () => {
     const restoreLocks = installImmediateExclusiveLocks();
     try {
       seed({ ...SEEDED, phase: "creating", created: false });
+      const lastAttemptedKey = "retry:last-attempted";
+      const lastRetryCreate: SandboxCreateRequest = {
+        os: "linux",
+        cpus: 4,
+        memoryMb: 8192,
+        diskMb: null,
+        region: "us-west",
+        displayName: "origin/main hook",
+        idleMinutes: 30,
+        burst: false,
+        createdByHostId: null,
+        createdByAgentId: null,
+        environmentId: null,
+        destroyAfterRestingMinutes: 1440,
+        createdByTaskId: null,
+        clientRequestId: lastAttemptedKey,
+      };
       useStagedSandboxStore.getState().report(SURFACE, {
-        lastCreateKey: "retry:last-attempted",
+        lastCreateKey: lastAttemptedKey,
+        lastRetryCreate,
       });
       const originalStageKey = readStagedSandbox(SURFACE)?.clientRequestId;
-      const lastAttemptedKey = readStagedSandbox(SURFACE)?.lastCreateKey;
       if (originalStageKey === null || originalStageKey === undefined)
         throw new Error("expected the stage identity");
-      if (lastAttemptedKey === undefined)
-        throw new Error("expected the last attempted create key");
+      expect(readStagedSandbox(SURFACE)?.lastCreateKey).toBe(lastAttemptedKey);
       const creation = deferred<SandboxCreateFetchResult>();
       mocks.createSandbox.mockReturnValue(creation.promise);
       mount();
@@ -4427,6 +4446,7 @@ describe("cancelling a send whose create was accepted but not answered", () => {
         target: NEW_TARGET,
         clientRequestId: originalStageKey,
         lastCreateKey: lastAttemptedKey,
+        lastRetryCreate,
       });
       expect(readStagedSandbox(taskSurface)).toBeNull();
       // A reload before the Send. Reopened from Drafts, the draft brings the
@@ -4451,6 +4471,7 @@ describe("cancelling a send whose create was accepted but not answered", () => {
         phase: "staged",
         clientRequestId: originalStageKey,
         lastCreateKey: lastAttemptedKey,
+        lastRetryCreate,
         target: NEW_TARGET,
       });
 
@@ -4484,8 +4505,8 @@ describe("cancelling a send whose create was accepted but not answered", () => {
       expect(
         mocks.createSandbox.mock.calls
           .slice(createsBeforeSend)
-          .map(([request]) => request.clientRequestId),
-      ).toEqual([lastAttemptedKey]);
+          .map(([request]) => request),
+      ).toEqual([lastRetryCreate]);
       expect(readStagedSandbox(pendingSendSurfaceKey(handed.id))).toMatchObject(
         {
           clientRequestId: originalStageKey,
@@ -8069,6 +8090,22 @@ describe("a retry-family button chosen in a window that does not own the send", 
           displayName: "origin/main hook",
         });
         const retryKey = `retry:${row.id}`;
+        const retryRequest: SandboxCreateRequest = {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: 20480,
+          region: "us-east",
+          displayName: "origin/main hook",
+          idleMinutes: null,
+          burst: false,
+          createdByHostId: null,
+          createdByAgentId: null,
+          environmentId: "env-acme",
+          destroyAfterRestingMinutes: 0,
+          createdByTaskId: "origin-task",
+          clientRequestId: retryKey,
+        };
         const walk = createSandboxRetryWalkFake(
           "unused-initial-key",
           undefined,
@@ -8092,7 +8129,7 @@ describe("a retry-family button chosen in a window that does not own the send", 
             sandbox: row,
           })
           .mockImplementation(walk.create);
-        const stageView = mount();
+        let stageView = mount();
         await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(true));
         fireEvent.click(
           await screen.findByTestId("sandbox-setup-retry-creation"),
@@ -8103,6 +8140,19 @@ describe("a retry-family button chosen in a window that does not own the send", 
             sandboxId: row.id,
           }),
         );
+        const attemptedRequest = mocks.createSandbox.mock.calls.at(-1)?.[0];
+        if (attemptedRequest === undefined)
+          throw new Error("expected the failed create request");
+        expect(readStagedSandbox(SURFACE)).toMatchObject({
+          lastCreateKey: attemptedRequest.clientRequestId,
+        });
+        await reloadPendingSandboxStores();
+        answerSandboxRows([], Date.now() + 60_000);
+        stageView = mount();
+        await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(true));
+        expect(readStagedSandbox(SURFACE)).toMatchObject({
+          lastCreateKey: attemptedRequest.clientRequestId,
+        });
 
         const rowClient = new QueryClient({
           defaultOptions: {
@@ -8151,6 +8201,10 @@ describe("a retry-family button chosen in a window that does not own the send", 
             "final-holder",
           ),
         );
+        expect(readStagedSandbox(SURFACE)).toMatchObject({
+          lastCreateKey: retryKey,
+          lastRetryCreate: retryRequest,
+        });
         await waitFor(() => {
           const success = rowClient
             .getMutationCache()
@@ -8179,10 +8233,7 @@ describe("a retry-family button chosen in a window that does not own the send", 
         expect(walk.requests.map((request) => request.clientRequestId)).toEqual(
           [retryKey, retryKey],
         );
-        expect(walk.requests).toMatchObject([
-          { createdByTaskId: "origin-task", displayName: "origin/main hook" },
-          { createdByTaskId: "origin-task", displayName: "origin/main hook" },
-        ]);
+        expect(walk.requests).toEqual([retryRequest, retryRequest]);
         cardView.unmount();
         stageView.unmount();
       } finally {

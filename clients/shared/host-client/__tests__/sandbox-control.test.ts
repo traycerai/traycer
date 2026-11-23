@@ -1091,52 +1091,48 @@ describe("the other sandbox routes parse or fail the same way", () => {
     });
   });
 
-  it("create: preserves the row named by an insufficient-credit 402", async () => {
-    const sandbox = {
-      ...SUMMARY,
-      id: "sbx_named_402",
-      state: "destroyed",
-      failureCode: "credit-gate",
-      displayName: "origin/main hook",
-      createdByTaskId: "origin-task",
-    };
+  it("create: preserves the refused sandbox id and gate fields from an insufficient-credit 402", async () => {
+    const sandboxId = "sbx_named_402";
     stubFetch(async () =>
       jsonResponse(402, {
         code: "insufficient_credit",
-        sandboxId: sandbox.id,
-        sandbox,
+        sandboxId,
         reason: "denied",
         shortfallMc: 70,
+        creditSource: "team",
+        newRateMcPerHour: 120,
+        currentAwakeBurnMcPerHour: 0,
       }),
     );
 
-    await expect(
-      createSandboxViaHttp(BASE, BEARER, null, {
-        os: "linux",
-        cpus: 2,
-        memoryMb: 4096,
-        diskMb: null,
-        region: null,
-        displayName: "ambient name",
-        idleMinutes: null,
-        burst: false,
-        createdByHostId: null,
-        createdByAgentId: null,
-        environmentId: null,
-        destroyAfterRestingMinutes: null,
-        createdByTaskId: "ambient-task",
-        clientRequestId: "stage:ambient",
-      }),
-    ).resolves.toMatchObject({
+    const result = await createSandboxViaHttp(BASE, BEARER, null, {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: null,
+      displayName: "ambient name",
+      idleMinutes: null,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: null,
+      destroyAfterRestingMinutes: null,
+      createdByTaskId: "ambient-task",
+      clientRequestId: "stage:ambient",
+    });
+    expect(result).toMatchObject({
       kind: "refused",
       status: 402,
-      sandboxId: sandbox.id,
-      sandbox: {
-        id: sandbox.id,
-        createdByTaskId: "origin-task",
-        displayName: "origin/main hook",
-      },
+      sandboxId,
+      code: "insufficient_credit",
+      reason: "denied",
+      shortfallMc: 70,
+      creditSource: "team",
+      newRateMcPerHour: 120,
+      currentAwakeBurnMcPerHour: 0,
     });
+    expect(result).not.toHaveProperty("sandbox");
   });
 });
 

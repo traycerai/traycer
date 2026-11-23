@@ -471,16 +471,12 @@ export function returnPendingSandboxSendToSandbox(
 ): ReturnedPendingSandboxSend {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
+  const { kind: _kind, ...destination } =
+    pick.kind === "stage" ? pick : { ...pick, clientRequestId: null };
   const returned = returnPendingMessage(
     id,
     anotherSandboxStaged(sends[id].epicId, pick),
-    {
-      target: pick.target,
-      clientRequestId: pick.kind === "stage" ? pick.clientRequestId : null,
-      ...(pick.kind === "stage" && pick.lastCreateKey !== undefined
-        ? { lastCreateKey: pick.lastCreateKey }
-        : {}),
-    },
+    destination,
   );
   // The task draft holds the destination; its composer stages it when shown
   // (`useReturnedSandboxStage`). An awake sandbox is also the composer's
@@ -558,14 +554,20 @@ export function stagedSandboxDestination(
   stage: StagedSandbox,
 ): ReturnedSandbox {
   const { createdSandboxId, createdHostId, target } = stage;
+  const { lastCreateKey, lastRetryCreate } = stage;
   if (createdSandboxId === null || createdHostId === null)
     return {
       target,
       clientRequestId: target.kind === "new" ? stage.clientRequestId : null,
       ...(target.kind === "new" &&
-      stage.lastCreateKey !== undefined &&
-      stage.lastCreateKey !== stage.clientRequestId
-        ? { lastCreateKey: stage.lastCreateKey }
+      lastCreateKey !== undefined &&
+      (lastCreateKey !== stage.clientRequestId || lastRetryCreate !== undefined)
+        ? {
+            lastCreateKey,
+            ...(lastRetryCreate?.clientRequestId === lastCreateKey
+              ? { lastRetryCreate }
+              : {}),
+          }
         : {}),
     };
   return {

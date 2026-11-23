@@ -301,9 +301,9 @@ async function prepareCreate(
 }
 
 /**
- * The sandbox this stage can still use. A known failed create goes back to
- * the server with the same key. An existing sandbox on a resumed run is
- * read for what it is now, without an explicit wake.
+ * Uses the row already recorded for this attempt. Beginning a retry under
+ * a different key clears that row. A resumed wake reads the existing row
+ * without issuing a new wake.
  */
 function sandboxAlreadyMade(
   stage: StagedSandbox,
@@ -497,10 +497,9 @@ async function startCreateTarget(
   if (name !== target.name) {
     useStagedSandboxStore.getState().setTarget(surfaceKey, { ...target, name });
   }
-  const retryCreate =
-    run.retryCreate ?? (await lookupLegacyRetryCreate(createKey, deps));
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
-  const request: SandboxCreateRequest = retryCreate ?? {
+  // Older stages without a saved retry payload rebuild the POST from their pick.
+  const request: SandboxCreateRequest = run.retryCreate ?? {
     os: target.shape.os,
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
@@ -521,10 +520,6 @@ async function startCreateTarget(
     clientRequestId: createKey,
   };
   if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
-  if (run.retryCreate === undefined && retryCreate !== undefined)
-    useStagedSandboxStore
-      .getState()
-      .report(surfaceKey, { lastRetryCreate: request });
   const result = await createSandbox(request, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
   return recordStageCreateAnswer(surfaceKey, request, result, {
@@ -545,10 +540,12 @@ function recordStageCreateAnswer(
   if (result.kind !== "ok") {
     const retryCreate = sandboxRetryAfterRefusal(result, request);
     const failure = createFailure(result, context.teamName);
-    fail(
-      surfaceKey,
-      retryCreate === null ? failure : { ...failure, retryCreate },
-    );
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      failure: retryCreate === null ? failure : { ...failure, retryCreate },
+      ...(createRefusedBeforeReservation(result)
+        ? { createAttempt: null }
+        : {}),
+    });
     return null;
   }
   const { sandboxId, hostId, sandbox } = result.accepted;
@@ -586,19 +583,18 @@ function recordStageCreateAnswer(
   return { sandboxId, hostId };
 }
 
-/** A stage persisted before the retry payload was recorded can still find its row. */
-async function lookupLegacyRetryCreate(
-  key: string,
-  deps: StagedSandboxRunDeps,
-): Promise<SandboxCreateRequest | undefined> {
-  if (!key.startsWith("retry:")) return undefined;
-  const listed = await deps.queryClient
-    .fetchQuery(sandboxListQueryOptions(deps.auth, deps.userId, true))
-    .catch(() => null);
-  const row = listed?.sandboxes.find(
-    (summary) => summary.id === key.slice("retry:".length),
+/** Only a refusal before reservation releases the previous create's wait budget. */
+function createRefusedBeforeReservation(
+  failure: SandboxControlFailure,
+): boolean {
+  return (
+    failure.kind === "refused" &&
+    failure.sandboxId === undefined &&
+    ((failure.status === 400 &&
+      failure.code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) ||
+      (failure.status === 503 &&
+        failure.code === SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE))
   );
-  return row === undefined ? undefined : sandboxRetryCreate(row);
 }
 
 /**

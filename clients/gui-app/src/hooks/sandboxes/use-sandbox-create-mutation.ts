@@ -9,6 +9,7 @@ import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
+  SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   type SandboxCreateAccepted,
   type SandboxCreateRequest,
@@ -66,7 +67,6 @@ export function sandboxCreatePressRequest(
   initial: SandboxCreateRequest,
   previous: {
     readonly error: Error | null;
-    readonly data: SandboxCreateAccepted | undefined;
     readonly variables: SandboxCreateSubmit | undefined;
   },
 ): SandboxCreateRequest {
@@ -74,9 +74,7 @@ export function sandboxCreatePressRequest(
     return previous.error.nextRequest ?? initial;
   }
   if (previous.error !== null) return previous.variables?.request ?? initial;
-  return previous.data?.sandbox.state === "failed"
-    ? sandboxRetryCreate(previous.data.sandbox)
-    : initial;
+  return initial;
 }
 
 /** One press can pass previous destroyed attempts and reserve at most one row. */
@@ -167,10 +165,16 @@ export function useSandboxCreate(
       if (result.kind === "ok") {
         const { accepted } = result;
         const sandbox = accepted.sandbox;
-        if (sandbox.state !== "destroyed") return accepted;
-        const code = SANDBOX_REFUSAL_CODE_NOT_FOUND;
+        const joinedFailed =
+          result.joined === true && sandbox.state === "failed";
+        if (!joinedFailed && sandbox.state !== "destroyed") return accepted;
+        const code = joinedFailed
+          ? SANDBOX_REFUSAL_CODE_PROVIDER_FAILED
+          : SANDBOX_REFUSAL_CODE_NOT_FOUND;
         throw new SandboxCreateError(
-          result.joined === true && sandbox.failureCode === "credit-gate"
+          result.joined === true &&
+            sandbox.state === "destroyed" &&
+            sandbox.failureCode === "credit-gate"
             ? couldntStartLine(sandbox.displayName)
             : sandboxFailureCodeMessage(code),
           code,
