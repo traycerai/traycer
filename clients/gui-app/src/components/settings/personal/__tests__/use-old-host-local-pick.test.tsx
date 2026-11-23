@@ -5,11 +5,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import {
-  useDrawnSection,
-  useOldHostLocalPick,
-} from "@/components/settings/personal/use-old-host-local-pick";
-import type { SettingsSectionId } from "@/lib/settings-sections";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   UNRESOLVED_PICK,
@@ -101,39 +97,5 @@ describe("useOldHostLocalPick", () => {
 
     act(() => setWindowHost("host-new"));
     expect(result.current).toBe(false);
-  });
-});
-
-describe("useDrawnSection", () => {
-  function drawn(section: SettingsSectionId): SettingsSectionId {
-    return renderHook(() => useDrawnSection(section)).result.current;
-  }
-
-  it.each([
-    ["providers", "providers"],
-    ["permissions", "permissions"],
-    ["agents", "agents"],
-    ["fallback", "fallback"],
-    ["shell", "shell"],
-    ["general", "general"],
-    ["skills", "providers"],
-    ["secrets", "providers"],
-    ["machine-setup", "providers"],
-    ["agent-definitions", "providers"],
-    ["browser-agent-access", "providers"],
-  ] as const)(
-    "draws %s as %s under an old host's Local pick",
-    (section, expected) => {
-      recordNegotiatedHostMethods("host-old", OLD_MANIFEST);
-      setPick(LOCAL_PICK);
-      expect(drawn(section)).toBe(expected);
-    },
-  );
-
-  it("draws every section as named under a Personal pick", () => {
-    recordNegotiatedHostMethods("host-old", OLD_MANIFEST);
-    setPick({ kind: "personal" });
-    expect(drawn("machine-setup")).toBe("machine-setup");
-    expect(drawn("skills")).toBe("skills");
   });
 });

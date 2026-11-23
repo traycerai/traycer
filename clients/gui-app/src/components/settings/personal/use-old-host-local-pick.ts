@@ -14,13 +14,9 @@ import {
   isOldHostLocalPick,
   type EnvironmentPick,
   oldHostSectionShown,
-  pickOffersSection,
 } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
-import {
-  useDefaultEnvironmentPick,
-  useEnvironmentPick,
-} from "@/stores/settings/settings-environment-pick-store";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 /**
  * Whether the pick is a Local row on a host that serves no `environment.status`,
@@ -49,46 +45,6 @@ function useIsOldHostPick(pick: EnvironmentPick): boolean {
     [pick, windowHostId],
   );
   return useSyncExternalStore(subscribeNegotiatedManifests, getSnapshot);
-}
-
-/**
- * Whether the pick in effect offers `section`: the single answer an in-app
- * entry to a page asks before it is shown, so a link never lands on a page the
- * pick does not draw.
- */
-export function useSectionOffered(section: SettingsSectionId): boolean {
-  const pick = useEnvironmentPick();
-  return pickOffersSection(pick, useIsOldHostPick(pick), section);
-}
-
-/**
- * Whether the pick `setPick(null)` lands on, this window's default, offers
- * `section`: the answer for an entry whose handler resets the pick before it
- * navigates, so the pick in effect when it is shown does not decide it.
- */
-export function useDefaultOffersSection(section: SettingsSectionId): boolean {
-  const pick = useDefaultEnvironmentPick();
-  return pickOffersSection(pick, useIsOldHostPick(pick), section);
-}
-
-/**
- * The section a surface draws, and the rail highlights, for the one it holds.
- * A Local pick on an old host offers only some pages, and a link, a deep link,
- * a remembered route or a palette row can still name another: Providers is
- * drawn then, so the page the host lacks never mounts and the rail's row for
- * what is drawn is the active one.
- */
-export function useDrawnSection(section: SettingsSectionId): SettingsSectionId;
-export function useDrawnSection(
-  section: SettingsSectionId | null,
-): SettingsSectionId | null;
-export function useDrawnSection(
-  section: SettingsSectionId | null,
-): SettingsSectionId | null {
-  const oldHost = useOldHostLocalPick();
-  return section !== null && oldHost && !oldHostSectionShown(section)
-    ? "providers"
-    : section;
 }
 
 /**
