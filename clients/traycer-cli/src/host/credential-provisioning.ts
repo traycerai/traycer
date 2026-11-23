@@ -244,11 +244,14 @@ export async function provisionInstalledHostCredential(
     pollInFlight = true;
     try {
       const metadata = await readHostPidMetadata(options.environment);
-      if (metadata !== null) observeHostInstance(metadata);
+      // A row whose URL is refused names no process this command dials: it is
+      // neither observed nor accepted, so the endpoint and the observed
+      // process always come from one validated row.
       if (
         metadata !== null &&
         isValidLocalHostWebsocketUrl(metadata.websocketUrl)
       ) {
+        observeHostInstance(metadata);
         endpoint = {
           hostId: metadata.hostId,
           websocketUrl: metadata.websocketUrl,
