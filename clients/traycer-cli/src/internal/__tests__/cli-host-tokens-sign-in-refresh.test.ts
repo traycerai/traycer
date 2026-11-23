@@ -12,6 +12,7 @@ import { createCliHostTokens } from "../cli-host-tokens";
 
 const USER_ID = "user-1";
 const SIGN_IN_A = "sign-in-a";
+const SIBLING_SIGN_IN = "sign-in-sibling";
 
 const harness = vi.hoisted(() => ({
   /** Every mint request authn was sent, the first held until the test answers it. */
@@ -127,5 +128,59 @@ describe("a mint refusal's recovery refreshes only the sign-in it was refused fo
     expect(lease.getBearerToken()).toBe(credentials.rotatedTo(1));
     for (const mint of harness.mints)
       expect([SIGN_IN_A, credentials.rotatedTo(1)]).toContain(mint.signIn);
+  });
+
+  it("retries on the sign-in now stored, spending no rotation and judging nothing, when a sibling rotated it while the mint was held", async () => {
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const credentials = countingRefresh(lease);
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: credentials.refresh,
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    const minting = tokens.hostBearerFor(hostId, true);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+    // Another session or the desktop rotated the stored sign-in meanwhile.
+    lease.rotate(SIBLING_SIGN_IN);
+
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    const bearer = await minting;
+
+    expect(credentials.rotations()).toBe(0);
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      SIGN_IN_A,
+      SIBLING_SIGN_IN,
+    ]);
+    expect(bearer).not.toBeNull();
+    expect(tokens.signInRejected()).toBe(false);
+  });
+});
+
+describe("a mint refusal's recovery belongs to the session that started it", () => {
+  it("starts no rotation and no second mint when the refusal arrives after the session ended, though the session's signal is live", async () => {
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const credentials = countingRefresh(lease);
+    // A command whose signal outlives the call, as a give's budget does.
+    const commandSignal = new AbortController();
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: credentials.refresh,
+      signal: commandSignal.signal,
+    });
+    await tokens.whenLoaded();
+    // The call asks without waiting; its mint is sent and held.
+    await tokens.hostBearerFor(hostId, false);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+    // The session ends. The mint's own signal is the command's, so it stays in flight.
+    tokens.dispose();
+    // The mint still running, joined, is the point at which its recovery has finished.
+    const finished = tokens.hostBearerFor(hostId, true);
+
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    await finished;
+
+    expect(credentials.rotations()).toBe(0);
+    expect(harness.mints).toHaveLength(1);
   });
 });
