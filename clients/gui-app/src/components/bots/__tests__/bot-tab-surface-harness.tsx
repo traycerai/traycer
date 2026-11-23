@@ -65,7 +65,7 @@ const TRAYCER_MODEL: GuiAgentModelOption = {
 const CATALOGUE: SandboxCatalogue = {
   providers: [
     {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,

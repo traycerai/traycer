@@ -18,6 +18,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   HostRpcError,
+  mayHaveReachedHost,
   RetryableTransportError,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
@@ -43,7 +44,10 @@ import {
   type HostDoorState,
   type HostDoorStateKind,
 } from "../host-door-state";
-import type { HostRequestOptions } from "../host-messenger";
+import {
+  HostTransportFailureError,
+  type HostRequestOptions,
+} from "../host-messenger";
 import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
 import type {
   IWebSocketFactory,
@@ -208,6 +212,9 @@ class StubWebSocket implements WebSocketLike {
     this.onopen?.({ type: "open" });
   }
 
+  fireClose(code: number, reason: string, wasClean: boolean): void {
+    this.onclose?.({ code, reason, wasClean });
+  }
   fireMessage(
     frame: HostFatalErrorFrame | HostOpenAckFrame | HostResponseFrame,
   ): void {
@@ -416,6 +423,7 @@ function doorHarness(): DoorHarness {
     revalidateExpectedBearer: () => Promise.resolve("rejected"),
     revalidateRefusedBearer: (expected, hostId, refusal) =>
       recovery.revalidateRefusedBearer(expected, hostId, refusal),
+    admissionOf: (expected, hostId) => recovery.admissionOf(expected, hostId),
   };
   const wrapped = createAuthAwareMessenger<typeof testRegistry>(
     client,
@@ -539,6 +547,39 @@ function fatalDetails(
   };
 }
 
+function lastRequest(
+  socket: StubWebSocket,
+): Extract<ParsedFrame, { kind: "request" }> {
+  const frames = requestFrames(socket.sent);
+  const last = frames[frames.length - 1];
+  if (last === undefined) throw new Error("expected a request frame");
+  return last;
+}
+// Starts one more call on the open socket and returns it with the request it wrote.
+async function startCallOn(
+  harness: DoorHarness,
+  socket: StubWebSocket,
+  message: string,
+): Promise<{
+  readonly pending: Promise<{ readonly echoed: string }>;
+  readonly request: Extract<ParsedFrame, { kind: "request" }>;
+}> {
+  const wrote = socket.nextSend();
+  const pending = harness.call(message);
+  await wrote;
+  return { pending, request: lastRequest(socket) };
+}
+// Answers a request with a refusal and waits for the one retry the lease sends.
+async function refuseAndAwaitRetry(
+  socket: StubWebSocket,
+  request: Extract<ParsedFrame, { kind: "request" }>,
+  error: ResponseError,
+): Promise<Extract<ParsedFrame, { kind: "request" }>> {
+  const retried = socket.nextSend();
+  socket.fireMessage(refusalFrame(request, error));
+  await retried;
+  return lastRequest(socket);
+}
 describe("persistent /rpc door refusals through the host-only token", () => {
   afterEach(() => {
     resetNegotiatedManifests();
@@ -643,44 +684,241 @@ describe("persistent /rpc door refusals through the host-only token", () => {
     expect(harness.states).toEqual([]);
   });
 
-  it("takes one fresh token for not_admitted and raises not-admitted on the second refusal", async () => {
+  it.each([
+    { doorReason: "not_admitted", error: "not admitted" },
+    { doorReason: "token_expired", error: "token expired" },
+  ])(
+    "mints once more when a token minted after a $doorReason refusal, and admitted, is refused $doorReason on a later call",
+    async ({ doorReason, error }) => {
+      const harness = doorHarness();
+      await harness.ready;
+      const refusal = responseError("UNAUTHORIZED", error, doorReason, false);
+      const firstCall = harness.call("first change");
+      const socket = await harness.nextSocket();
+      const first = await firstRequest(socket);
+      const admittedRetry = await refuseAndAwaitRetry(socket, first, refusal);
+      socket.fireMessage(echoFrame(admittedRetry, "first change"));
+      await expect(firstCall).resolves.toEqual({ echoed: "first change" });
+      expect(harness.minted).toEqual(["host-token-2"]);
+      // The second ownership change makes the admitted token stale.
+      const later = await startCallOn(harness, socket, "second change");
+      const secondRetry = await refuseAndAwaitRetry(
+        socket,
+        later.request,
+        refusal,
+      );
+      socket.fireMessage(echoFrame(secondRetry, "second change"));
+      await expect(later.pending).resolves.toEqual({
+        echoed: "second change",
+      });
+      expect(harness.mintAttempts).toBe(2);
+      expect(harness.minted).toEqual(["host-token-2", "host-token-3"]);
+      expect(credentialTokens(socket.sent)).toEqual([
+        HELD_TOKEN,
+        HELD_TOKEN,
+        "host-token-2",
+        "host-token-2",
+        "host-token-3",
+      ]);
+      expect(harness.states).toEqual([]);
+    },
+  );
+  it.each([
+    { doorReason: "not_admitted", error: "not admitted" },
+    { doorReason: "token_expired", error: "token expired" },
+  ])(
+    "mints once more for $doorReason after the retry on the minted token was answered with a host error that refuses no token",
+    async ({ doorReason, error }) => {
+      const harness = doorHarness();
+      await harness.ready;
+      const refusal = responseError("UNAUTHORIZED", error, doorReason, false);
+      const firstCall = captureRejection(harness.call("first change"));
+      const socket = await harness.nextSocket();
+      const first = await firstRequest(socket);
+      const answeredRetry = await refuseAndAwaitRetry(socket, first, refusal);
+      // The host's door admitted T2 and the call itself failed: an app error.
+      socket.fireMessage(
+        refusalFrame(
+          answeredRetry,
+          responseError("RPC_ERROR", "no such thing", undefined, false),
+        ),
+      );
+      const appError = await firstCall;
+      expect(appError).toBeInstanceOf(HostRpcError);
+      if (!(appError instanceof HostRpcError)) {
+        throw new Error("expected the host's own error");
+      }
+      expect(appError.code).toBe("RPC_ERROR");
+      expect(harness.minted).toEqual(["host-token-2"]);
+      // The second ownership change makes the admitted token stale.
+      const later = await startCallOn(harness, socket, "second change");
+      const secondRetry = await refuseAndAwaitRetry(
+        socket,
+        later.request,
+        refusal,
+      );
+      socket.fireMessage(echoFrame(secondRetry, "second change"));
+      await expect(later.pending).resolves.toEqual({
+        echoed: "second change",
+      });
+      expect(harness.mintAttempts).toBe(2);
+      expect(harness.minted).toEqual(["host-token-2", "host-token-3"]);
+      expect(credentialTokens(socket.sent)).toEqual([
+        HELD_TOKEN,
+        HELD_TOKEN,
+        "host-token-2",
+        "host-token-2",
+        "host-token-3",
+      ]);
+      expect(harness.states).toEqual([]);
+    },
+  );
+  it.each([
+    {
+      doorReason: "not_admitted",
+      error: "not admitted",
+      states: [{ hostId: HOST_ID, kind: "not-admitted", detail: null }],
+    },
+    { doorReason: "token_expired", error: "token expired", states: [] },
+  ])(
+    "does not count an older host's token refusal as admission: a later $doorReason on the minted token stays final",
+    async ({ doorReason, error, states }) => {
+      const harness = doorHarness();
+      await harness.ready;
+      const refusal = responseError("UNAUTHORIZED", error, doorReason, false);
+      const firstCall = captureRejection(harness.call("first change"));
+      const socket = await harness.nextSocket();
+      const first = await firstRequest(socket);
+      const olderRetry = await refuseAndAwaitRetry(socket, first, refusal);
+      // UNAUTHORIZED with no doorReason: an older host refusing the token itself.
+      socket.fireMessage(
+        refusalFrame(
+          olderRetry,
+          responseError("UNAUTHORIZED", "token refused", undefined, false),
+        ),
+      );
+      const olderError = await firstCall;
+      expect(olderError).toBeInstanceOf(HostRpcError);
+      if (!(olderError instanceof HostRpcError)) {
+        throw new Error("expected the older host's refusal");
+      }
+      expect(olderError.code).toBe("UNAUTHORIZED");
+      // The messenger asks the lease for nothing more: no further mint.
+      expect(harness.minted).toEqual(["host-token-2"]);
+      expect(requestFrames(socket.sent)).toHaveLength(2);
+      const later = await startCallOn(harness, socket, "second change");
+      const laterOutcome = captureRejection(later.pending);
+      socket.fireMessage(refusalFrame(later.request, refusal));
+      expect(await laterOutcome).toBeInstanceOf(HostRpcError);
+      expect(harness.minted).toEqual(["host-token-2"]);
+      expect(harness.mintAttempts).toBe(1);
+      expect(requestFrames(socket.sent)).toHaveLength(3);
+      expect(harness.states).toEqual(states);
+    },
+  );
+  it("keeps the minted token's bound when its retry ends unanswered and nothing else is answered", async () => {
     const harness = doorHarness();
     await harness.ready;
-    const firstCall = harness.call("join");
+    const refusal = responseError(
+      "UNAUTHORIZED",
+      "not admitted",
+      "not_admitted",
+      false,
+    );
+    const firstCall = captureRejection(harness.call("first change"));
     const socket = await harness.nextSocket();
     const first = await firstRequest(socket);
-    const retried = socket.nextSend();
-    socket.fireMessage(
-      refusalFrame(
-        first,
-        responseError("UNAUTHORIZED", "not admitted", "not_admitted", false),
-      ),
-    );
-    await retried;
-    const admitted = requestFrames(socket.sent)[1];
-    if (admitted === undefined) throw new Error("expected the one fresh token");
-    socket.fireMessage(echoFrame(admitted, "join"));
-    await expect(firstCall).resolves.toEqual({ echoed: "join" });
+    await refuseAndAwaitRetry(socket, first, refusal);
     expect(harness.minted).toEqual(["host-token-2"]);
+    // The retry on T2 is on the wire; the socket drops before any answer.
+    socket.fireClose(1006, "peer-dropped", false);
+    const dropped = await firstCall;
+    expect(dropped).toBeInstanceOf(HostTransportFailureError);
+    expect(mayHaveReachedHost(dropped)).toBe(true);
     expect(harness.states).toEqual([]);
-
-    const secondCall = captureRejection(harness.call("again"));
-    const wrote = socket.nextSend();
-    await wrote;
-    const second = requestFrames(socket.sent)[2];
-    if (second === undefined) throw new Error("expected the second call");
+    // A later call on T2 is the first answer T2 gets, and that answer is a refusal.
+    const later = captureRejection(harness.call("second change"));
+    await vi.waitFor(() => expect(harness.socketCount()).toBe(2));
+    const redialed = harness.socketAt(1);
+    if (redialed === undefined) throw new Error("expected the redialed socket");
+    const laterRequest = await firstRequest(redialed);
+    redialed.fireMessage(refusalFrame(laterRequest, refusal));
+    const laterError = await later;
+    expect(laterError).toBeInstanceOf(HostRpcError);
+    expect(harness.minted).toEqual(["host-token-2"]);
+    expect(harness.mintAttempts).toBe(1);
+    expect(requestFrames(redialed.sent)).toHaveLength(1);
+    expect(credentialTokens(redialed.sent)).toEqual([
+      "host-token-2",
+      "host-token-2",
+    ]);
+    expect(harness.states).toEqual([
+      { hostId: HOST_ID, kind: "not-admitted", detail: null },
+    ]);
+  });
+  it("does not count an older host's reasonless TEAM_MEMBERSHIP_REQUIRED answer as admission: a later not_admitted on the minted token stays final", async () => {
+    const harness = doorHarness();
+    await harness.ready;
+    const refusal = responseError(
+      "UNAUTHORIZED",
+      "not admitted",
+      "not_admitted",
+      false,
+    );
+    const firstCall = captureRejection(harness.call("first change"));
+    const socket = await harness.nextSocket();
+    const first = await firstRequest(socket);
+    const olderRetry = await refuseAndAwaitRetry(socket, first, refusal);
+    // `responseError` takes the code as a plain string, so the raw wire code goes
+    // out as is; the client narrows it, as it is not one of its RPC error codes.
     socket.fireMessage(
       refusalFrame(
-        second,
+        olderRetry,
         responseError(
-          "UNAUTHORIZED",
-          "still not admitted",
-          "not_admitted",
+          "TEAM_MEMBERSHIP_REQUIRED",
+          "membership required",
+          undefined,
           false,
         ),
       ),
     );
-    const error = await secondCall;
+    const olderError = await firstCall;
+    expect(olderError).toBeInstanceOf(HostRpcError);
+    if (!(olderError instanceof HostRpcError)) {
+      throw new Error("expected the older host's refusal");
+    }
+    expect(olderError.code).toBe("RPC_ERROR");
+    expect(olderError.doorRefusal).toBeNull();
+    expect(harness.minted).toEqual(["host-token-2"]);
+    expect(requestFrames(socket.sent)).toHaveLength(2);
+    expect(harness.states).toEqual([]);
+    // The later not_admitted on T2: T2 was never admitted, so it is final.
+    const later = await startCallOn(harness, socket, "second change");
+    const laterOutcome = captureRejection(later.pending);
+    socket.fireMessage(refusalFrame(later.request, refusal));
+    expect(await laterOutcome).toBeInstanceOf(HostRpcError);
+    expect(harness.mintAttempts).toBe(1);
+    expect(harness.minted).toEqual(["host-token-2"]);
+    expect(requestFrames(socket.sent)).toHaveLength(3);
+    expect(harness.states).toEqual([
+      { hostId: HOST_ID, kind: "not-admitted", detail: null },
+    ]);
+  });
+  it("keeps a token minted after not_admitted final when its first use is refused, and a later call on it", async () => {
+    const harness = doorHarness();
+    await harness.ready;
+    const refusal = responseError(
+      "UNAUTHORIZED",
+      "not admitted",
+      "not_admitted",
+      false,
+    );
+    const firstCall = captureRejection(harness.call("join"));
+    const socket = await harness.nextSocket();
+    const first = await firstRequest(socket);
+    const refusedAtOnce = await refuseAndAwaitRetry(socket, first, refusal);
+    socket.fireMessage(refusalFrame(refusedAtOnce, refusal));
+    const error = await firstCall;
     expect(error).toBeInstanceOf(HostRpcError);
     if (!(error instanceof HostRpcError)) {
       throw new Error("expected the second refusal");
@@ -688,18 +926,89 @@ describe("persistent /rpc door refusals through the host-only token", () => {
     expect(error.fatalDetails).toBeNull();
     expect(error.doorRefusal?.doorReason).toBe("not_admitted");
     expect(harness.minted).toEqual(["host-token-2"]);
+    expect(harness.states).toEqual([
+      { hostId: HOST_ID, kind: "not-admitted", detail: null },
+    ]);
+    // A later call on that same token, refused, is final too: no mint, no retry.
+    const later = await startCallOn(harness, socket, "again");
+    const laterOutcome = captureRejection(later.pending);
+    socket.fireMessage(refusalFrame(later.request, refusal));
+    const laterError = await laterOutcome;
+    expect(laterError).toBeInstanceOf(HostRpcError);
+    expect(harness.minted).toEqual(["host-token-2"]);
+    expect(harness.mintAttempts).toBe(1);
+    expect(requestFrames(socket.sent)).toHaveLength(3);
     expect(credentialTokens(socket.sent)).toEqual([
       HELD_TOKEN,
       HELD_TOKEN,
       "host-token-2",
       "host-token-2",
     ]);
+    expect(harness.states.map(({ kind }) => kind)).toEqual([
+      "not-admitted",
+      "not-admitted",
+    ]);
+  });
+  it("keeps a token minted after token_expired final when its first use is refused, and a later call on it", async () => {
+    const harness = doorHarness();
+    await harness.ready;
+    const refusal = responseError(
+      "UNAUTHORIZED",
+      "token expired",
+      "token_expired",
+      false,
+    );
+    const firstCall = captureRejection(harness.call("join"));
+    const socket = await harness.nextSocket();
+    const first = await firstRequest(socket);
+    const refusedAtOnce = await refuseAndAwaitRetry(socket, first, refusal);
+    socket.fireMessage(refusalFrame(refusedAtOnce, refusal));
+    const error = await firstCall;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the second refusal");
+    }
+    expect(error.doorRefusal?.doorReason).toBe("token_expired");
+    expect(harness.minted).toEqual(["host-token-2"]);
+    const later = await startCallOn(harness, socket, "again");
+    const laterOutcome = captureRejection(later.pending);
+    socket.fireMessage(refusalFrame(later.request, refusal));
+    expect(await laterOutcome).toBeInstanceOf(HostRpcError);
+    expect(harness.minted).toEqual(["host-token-2"]);
+    expect(harness.mintAttempts).toBe(1);
     expect(requestFrames(socket.sent)).toHaveLength(3);
+    expect(harness.states).toEqual([]);
+  });
+  it("does not clear a minted token's bound when a call that started before the mint is answered", async () => {
+    const harness = doorHarness();
+    await harness.ready;
+    const refusal = responseError(
+      "UNAUTHORIZED",
+      "not admitted",
+      "not_admitted",
+      false,
+    );
+    // A started on the held token and is still waiting for its answer.
+    const slow = harness.call("slow");
+    const socket = await harness.nextSocket();
+    const slowRequest = await firstRequest(socket);
+    // B starts on the same token, is refused, and its retry carries the minted one.
+    const refused = await startCallOn(harness, socket, "refused");
+    const refusedOutcome = captureRejection(refused.pending);
+    const retry = await refuseAndAwaitRetry(socket, refused.request, refusal);
+    expect(harness.minted).toEqual(["host-token-2"]);
+    // A is answered now: it proves the held token, not the minted one.
+    socket.fireMessage(echoFrame(slowRequest, "slow"));
+    await expect(slow).resolves.toEqual({ echoed: "slow" });
+    // The minted token's first use is refused: still final, so no further mint.
+    socket.fireMessage(refusalFrame(retry, refusal));
+    expect(await refusedOutcome).toBeInstanceOf(HostRpcError);
+    expect(harness.minted).toEqual(["host-token-2"]);
+    expect(harness.mintAttempts).toBe(1);
     expect(harness.states).toEqual([
       { hostId: HOST_ID, kind: "not-admitted", detail: null },
     ]);
   });
-
   it("keeps keys_unavailable state on a retryable reply without minting", async () => {
     const harness = doorHarness();
     await harness.ready;

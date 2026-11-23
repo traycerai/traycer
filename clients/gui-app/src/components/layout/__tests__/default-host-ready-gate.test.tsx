@@ -481,7 +481,7 @@ describe("<HostReadyGate />", () => {
       sandboxes.catalogue = {
         providers: [
           {
-            provider: "tensorlake",
+            provider: "firecracker",
             os: ["linux"],
             shape: {
               cpuMin: 1,

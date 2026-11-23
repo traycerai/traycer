@@ -33,6 +33,7 @@ import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id
 import { removedProfilesForProvider } from "@/components/providers/provider-profile-model";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
+  harnessCatalogEntryNeedsRefresh,
   useGuiHarnessModelsWarmup,
   useGuiHarnessesQuery,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -604,6 +605,27 @@ function useTestModelCatalog(harnessId: GuiHarnessId | null): {
     subscribed: true,
   });
   const modelQuery = modelQueries.at(0);
+  // Mounting the panel or picking a provider is this slot's intent edge: a
+  // warm slot is re-asked once `harnessCatalogEntryNeedsRefresh` says it is due
+  // (an empty list always is); a cold one is the enabled no-data fetch's.
+  const modelQueryRef = useRef(modelQuery);
+  useEffect(() => {
+    modelQueryRef.current = modelQuery;
+  });
+  useEffect(() => {
+    const query = modelQueryRef.current;
+    if (query === undefined || query.data === undefined) return;
+    if (
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: query.dataUpdatedAt,
+        isError: query.isError,
+        isFetching: query.isFetching,
+        modelCount: query.data.models.length,
+      })
+    ) {
+      void query.refetch();
+    }
+  }, [harnessId]);
   if (modelQuery === undefined) {
     return { models: null, failed: false, retry: noCatalogToRetry };
   }

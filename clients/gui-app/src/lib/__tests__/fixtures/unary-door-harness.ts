@@ -173,6 +173,10 @@ export async function unaryDoorHarness(
       }
       return hostRecovery.revalidateRefusedBearer(expected, hostId, refusal);
     },
+    admissionOf: (expected, hostId) =>
+      hostId === POOL_DOOR_HOST_ID
+        ? () => undefined
+        : hostRecovery.admissionOf(expected, hostId),
   };
   const bearer =
     options.hostId === POOL_DOOR_HOST_ID
