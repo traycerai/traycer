@@ -4686,6 +4686,52 @@ describe("RemoteSession forceReconnect", () => {
     }
   }, 15_000);
 
+  it("tells no stream of a backoff for the immediate redial a failed wake probe earns a ready session still on a positive rung", async () => {
+    const finishNoise = beginFakeNoiseClock();
+    const relay = new FakeRelayHost();
+    relay.streamManifest = buildStreamManifest(
+      cursorStreamRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const lease = new MutableBearerLease("token", "user-1");
+    // Two failed opens leave the rung positive when the third is admitted, and
+    // the stable dwell cannot reset it before the probe fails.
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      streamRegistry: cursorStreamRegistry,
+    });
+    const stream = session.subscribe("cursor.subscribe", { cursor: null });
+    if (!signalsBackoff(stream)) throw new Error("a stream tells of backoff");
+    let backoffs = 0;
+    stream.onBackoffEntered(() => {
+      backoffs += 1;
+    });
+    try {
+      session.start();
+      await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
+      expect(relay.openBearers).toHaveLength(3);
+      const backoffsBeforeProbe = backoffs;
+      relay.answerPings = false;
+
+      session.wake("app-resumed", {
+        timeoutMs: 250,
+        immediateRedialOnFailure: true,
+      });
+
+      // The probe fails at its deadline and its redial is due at once: the
+      // fourth open inside 900 ms is only reachable with the rung skipped.
+      await advanceNoiseUntil(() => relay.openBearers.length === 4, 900, 25);
+      expect(backoffs).toBe(backoffsBeforeProbe);
+    } finally {
+      session.close();
+      await finishNoise();
+    }
+  }, 15_000);
+
   it("pulls a pending escalated backoff to NOW - faster than a wake's jittered collapse can", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
