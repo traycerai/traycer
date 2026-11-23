@@ -480,10 +480,10 @@ describe("<EpicSessionLifecycleBridge />", () => {
       });
       const asBob = await useStagedSandboxStore
         .getState()
-        .requestRetry(PENDING, "user-bob", "retry-creation", createKey);
+        .requestRetry(PENDING, "user-bob", "retry-creation", { createKey });
       const asAlice = await useStagedSandboxStore
         .getState()
-        .requestRetry(PENDING, "user-alice", "retry-creation", createKey);
+        .requestRetry(PENDING, "user-alice", "retry-creation", { createKey });
       recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-bob");
       recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-alice");
 

@@ -38,7 +38,6 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { terminalFocusOwnsInstance } from "@/lib/terminals/terminal-focus-registry";
-import { sandboxCreateKey } from "@/lib/sandboxes/sandbox-create-key";
 
 const SURFACE = "landing:window-test";
 
@@ -621,8 +620,7 @@ describe("<SandboxRowActions />", () => {
       new SandboxCreateError(
         "no",
         failure.kind === "refused" ? failure.code : null,
-        failure.kind === "refused" ? (failure.sandboxId ?? null) : null,
-        sandboxCreateKey("retry", summary.id),
+        null,
       );
 
     const first = await press();

@@ -390,7 +390,14 @@ function SandboxRefusalLine(props: {
       break;
     case "refused":
       sentence = failure.message;
-      remedies = null;
+      remedies =
+        failure.sandboxId === undefined ? null : (
+          <LineButton
+            label={RETRY_CREATION}
+            testId="sandbox-setup-retry-creation"
+            onClick={actions.onRetryCreation}
+          />
+        );
       break;
     case "no-provider":
     case "traycer-off":
@@ -635,6 +642,8 @@ function stillWaiting(failure: StagedSandboxFailure | null): boolean {
 function progressTitle(view: ProgressView, name: string): string {
   const { failure, resuming } = view;
   if (failure?.kind === "failed") {
+    if (failure.code === "credit-gate")
+      return couldntStartLine(failure.retryCreate?.displayName ?? name);
     return resuming ? couldntResumeLine(name) : couldntStartLine(name);
   }
   if (failure?.kind === "settings") {

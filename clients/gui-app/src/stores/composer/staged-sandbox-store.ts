@@ -1,4 +1,7 @@
-import type { SandboxRateLimit } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxRateLimit,
+} from "@traycer/protocol/host/sandbox-control";
 import type { SandboxSettingsSteps } from "@traycer/protocol/host/sandbox-settings";
 import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -25,6 +28,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createPendingStageStorage,
   requestPendingStageRetry,
+  type PendingStagePress,
   type PendingStageRetryRequest,
 } from "@/lib/sandboxes/pending-stage-storage";
 
@@ -74,7 +78,7 @@ export type StagedSandboxStep =
   | "delivering";
 
 /** Why the first action stopped short, said on the line or above the draft. */
-export type StagedSandboxFailure =
+type StagedSandboxFailureDetail =
   | {
       readonly kind: "credits";
       readonly shortfallMc: number | null;
@@ -87,7 +91,6 @@ export type StagedSandboxFailure =
   | {
       readonly kind: "refused";
       readonly message: string;
-      readonly sandboxId?: string;
     }
   /** Failed after the create was accepted, or the wake failed. */
   | {
@@ -119,6 +122,11 @@ export type StagedSandboxFailure =
   /** The sandbox is up; the send handed to it stopped short of its create. */
   | { readonly kind: "not-sent" };
 
+export type StagedSandboxFailure = StagedSandboxFailureDetail & {
+  readonly sandboxId?: string;
+  readonly retryCreate?: SandboxCreateRequest;
+};
+
 export interface StagedSandbox {
   /** The original create bound and this driver's post-preflight clock; absent on legacy stages. */
   readonly createAttempt?: {
@@ -140,6 +148,8 @@ export interface StagedSandbox {
   readonly clientRequestId: string | null;
   /** The POST a reload or Keep waiting repeats. Older stages only have the base key. */
   readonly lastCreateKey?: string;
+  /** The retry payload already selected for that key. */
+  readonly lastRetryCreate?: SandboxCreateRequest;
   /**
    * The draft whose send started the action, where a surface holds several
    * (the landing composer's drafts share one window pin): only its composer
@@ -178,13 +188,27 @@ export interface StagedSandbox {
 }
 
 /** A stage can replace a failed create while a failed wake keeps its sandbox. */
-function stagedFailedSandboxId(stage: StagedSandbox): string | null {
+export function stagedFailedSandboxId(stage: StagedSandbox): string | null {
   if (stage.target.kind !== "new") return null;
   const { failure } = stage;
-  if (failure?.kind === "refused") return failure.sandboxId ?? null;
+  if (failure?.sandboxId !== undefined) return failure.sandboxId;
   return failure?.kind === "failed" && failure.code !== "wake"
     ? stage.createdSandboxId
     : null;
+}
+
+export function stagedCreateRetryPayload(
+  stage: StagedSandbox,
+  key: string | null,
+): SandboxCreateRequest | undefined {
+  const failed = stage.failure?.retryCreate;
+  if (failed !== undefined && failed.clientRequestId === key) return failed;
+  const last = stage.lastRetryCreate;
+  return last?.clientRequestId === key ? last : undefined;
+}
+
+export function newStagedSandboxKey(): string {
+  return sandboxCreateKey("stage", uuidv4());
 }
 
 /** The key for the failure shown in the window where Retry was pressed. */
@@ -250,7 +274,7 @@ interface StagedSandboxStoreState {
   readonly begin: (
     surfaceKey: string,
     now: number,
-    options: { readonly resume: boolean; readonly createKey: string | null },
+    options: PendingStagePress & { readonly resume: boolean },
   ) => string | null;
   /**
    * Takes up the run still driving the stage's key after a Cancel: back to
@@ -265,6 +289,7 @@ interface StagedSandboxStoreState {
         | "phase"
         | "clientRequestId"
         | "lastCreateKey"
+        | "lastRetryCreate"
         | "ownerId"
         | "createdSandboxId"
         | "createdHostId"
@@ -287,7 +312,7 @@ interface StagedSandboxStoreState {
     surfaceKey: string,
     userId: string | null,
     action: PendingStageRetryAction,
-    createKey: string | null,
+    press: PendingStagePress,
   ) => Promise<string | null>;
   /**
    * The account changed: drops every composer's stage. A send's stage stays:
@@ -316,7 +341,7 @@ function stagedPick({
     target,
     createAttempt: null,
     phase: "staged",
-    clientRequestId: clientRequestId ?? sandboxCreateKey("stage", uuidv4()),
+    clientRequestId: clientRequestId ?? newStagedSandboxKey(),
     ...(lastCreateKey === undefined ? {} : { lastCreateKey }),
     ownerId: null,
     createdSandboxId: null,
@@ -380,7 +405,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             target,
           })),
         })),
-      begin: (surfaceKey, now, { resume, createKey }) => {
+      begin: (surfaceKey, now, { resume, createKey, retryCreate }) => {
         const stage = get().bySurface[surfaceKey];
         if (stage === undefined) return null;
         // A legacy pending stage with no key still has its durable send ID.
@@ -392,6 +417,10 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           );
         const previousKey = stage.lastCreateKey ?? clientRequestId;
         const lastCreateKey = createKey ?? previousKey;
+        const lastRetryCreate =
+          retryCreate?.clientRequestId === lastCreateKey
+            ? retryCreate
+            : stagedCreateRetryPayload(stage, lastCreateKey);
         const replacing =
           lastCreateKey !== previousKey && stage.target.kind === "new";
         const resumed = resume && !replacing && stage.startedAt !== null;
@@ -401,6 +430,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             phase: "creating",
             clientRequestId,
             lastCreateKey,
+            lastRetryCreate,
             createdSandboxId: replacing ? null : current.createdSandboxId,
             createdHostId: replacing ? null : current.createdHostId,
             createAttempt: replacing ? null : current.createAttempt,
@@ -436,8 +466,9 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             return {
               ...stage,
               phase: "staged",
-              clientRequestId: sandboxCreateKey("stage", uuidv4()),
+              clientRequestId: newStagedSandboxKey(),
               lastCreateKey: undefined,
+              lastRetryCreate: undefined,
               createdSandboxId: null,
               createdHostId: null,
               createAttempt: null,
@@ -448,7 +479,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             };
           }),
         })),
-      requestRetry: async (surfaceKey, userId, action, createKey) => {
+      requestRetry: async (surfaceKey, userId, action, press) => {
         if ((useAuthStore.getState().profile?.userId ?? null) !== userId)
           return null;
         const stage = get().bySurface[surfaceKey];
@@ -464,7 +495,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           clientRequestId: stage.clientRequestId,
           sendId: surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
           action,
-          createKey,
+          ...press,
         });
         if (id !== null) await useStagedSandboxStore.persist.rehydrate();
         return id;

@@ -12,12 +12,13 @@ import type {
 /**
  * The sandbox a draft's given-back message was going to, kept with that
  * draft: its composer stages it again when it holds no pick of its own, so
- * the draft's Send goes there even after a reload. `clientRequestId` is a
- * create the server may have accepted, named again rather than billed twice.
+ * the draft's Send goes there even after a reload.
  */
 export interface ReturnedSandbox {
   readonly target: StagedSandboxTarget;
+  /** The stage's stable identity and original create key. */
   readonly clientRequestId: string | null;
+  /** A later create's key, when a retry has moved on from the original key. */
   readonly lastCreateKey?: string;
 }
 

@@ -11,6 +11,7 @@ import {
   sandboxLifecycleVerbResponseSchema,
   sandboxListResponseSchema,
   sandboxRefusalBodySchema,
+  sandboxSummarySchema,
   userSandboxCostSchema,
   type SandboxAutomationOpenTarget,
   type SandboxAutomationResponse,
@@ -96,8 +97,9 @@ export type SandboxControlFailure =
       readonly currentAwakeBurnMcPerHour: number | null;
       /** A server-composed sentence for the person, shown verbatim. */
       readonly message: string | null;
-      /** The row left by a failed create, when the server names it. */
+      /** The row left by a failed or refused create, when the server names it. */
       readonly sandboxId?: string;
+      readonly sandbox?: SandboxSummary;
     }
   | { readonly kind: "network-error"; readonly detail: string }
   /**
@@ -664,13 +666,19 @@ export async function createSandboxViaHttp(
     const failure = failureOf(raw.status, raw.body);
     if (
       failure.kind !== "refused" ||
-      failure.code !== SANDBOX_REFUSAL_CODE_PROVIDER_FAILED
+      (failure.code !== SANDBOX_REFUSAL_CODE_PROVIDER_FAILED &&
+        !(
+          raw.status === 402 &&
+          failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT
+        ))
     )
       return failure;
     const row = createFailureRowSchema.safeParse(raw.body);
-    return row.success
-      ? { ...failure, sandboxId: row.data.sandboxId }
-      : failure;
+    if (!row.success) return failure;
+    const { sandboxId, sandbox } = row.data;
+    return sandbox?.id === sandboxId
+      ? { ...failure, sandboxId, sandbox }
+      : { ...failure, sandboxId };
   }
   const parsed = sandboxCreateAcceptedSchema.safeParse(raw.body);
   if (!parsed.success) {
@@ -688,6 +696,7 @@ export async function createSandboxViaHttp(
 
 const createFailureRowSchema = z.object({
   sandboxId: z.string().min(1).max(36),
+  sandbox: sandboxSummarySchema.optional().catch(undefined),
 });
 
 /**

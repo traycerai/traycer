@@ -32,7 +32,7 @@ import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   SandboxCreateError,
-  sandboxCreatePressKey,
+  sandboxCreatePressRequest,
   useSandboxCreate,
 } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import {
@@ -412,34 +412,33 @@ function EnableTeamCloudAction(props: {
   const enable = (): void => {
     if (blocked !== null || shape === undefined || shape === null) return;
     if (pending) return;
-    const clientRequestId = sandboxCreatePressKey(
-      sandboxCreateKey("team-setup", environmentId),
-      create.error,
-    );
     const store = useTeamCloudCreateStore.getState();
     store.start(environmentId);
     // The promise, not `mutate`'s callbacks, which are dropped when the card
     // unmounts before the answer.
     void create
       .mutateAsync({
-        request: {
-          os: shape.os,
-          cpus: shape.cpus,
-          memoryMb: shape.memoryMb,
-          diskMb: shape.diskMb,
-          region: shape.region,
-          displayName: TEAM_SANDBOX_NAME,
-          idleMinutes: shape.idleMinutes,
-          burst: false,
-          createdByHostId: null,
-          createdByAgentId: null,
-          environmentId,
-          // The shape's `null` is "never"; on a create `null` is the
-          // configuration's default and `0` is never.
-          destroyAfterRestingMinutes: shape.destroyAfterRestingMinutes ?? 0,
-          createdByTaskId: null,
-          clientRequestId,
-        },
+        request: sandboxCreatePressRequest(
+          {
+            os: shape.os,
+            cpus: shape.cpus,
+            memoryMb: shape.memoryMb,
+            diskMb: shape.diskMb,
+            region: shape.region,
+            displayName: TEAM_SANDBOX_NAME,
+            idleMinutes: shape.idleMinutes,
+            burst: false,
+            createdByHostId: null,
+            createdByAgentId: null,
+            environmentId,
+            // The shape's `null` is "never"; on a create `null` is the
+            // configuration's default and `0` is never.
+            destroyAfterRestingMinutes: shape.destroyAfterRestingMinutes ?? 0,
+            createdByTaskId: null,
+            clientRequestId: sandboxCreateKey("team-setup", environmentId),
+          },
+          create,
+        ),
         teamName: props.teamName,
       })
       .then(

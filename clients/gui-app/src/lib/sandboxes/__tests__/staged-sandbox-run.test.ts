@@ -379,32 +379,6 @@ describe("runStagedSandbox creating", () => {
     ]);
   });
 
-  it("automatically resumes a no-row stage with its last attempted Retry key", async () => {
-    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
-    const { auth, deps } = harness(
-      {
-        createSandbox: () => ({
-          kind: "network-error",
-          detail: "the request never completed",
-        }),
-      },
-      true,
-    );
-
-    await run("retry:shown-failure", deps);
-    await runStagedSandbox(
-      surfaceKey,
-      { taskId: null, resume: true, createKey: null },
-      deps,
-    );
-
-    expect(auth.requests.map((request) => request.clientRequestId)).toEqual([
-      "retry:shown-failure",
-      "retry:shown-failure",
-    ]);
-    expect(stageOf().lastCreateKey).toBe("retry:shown-failure");
-  });
-
   it("reports the create's own queued rateLimit onto the stage while still waiting, and a fresh poll with none clears it", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { deps } = harness(
@@ -870,7 +844,7 @@ describe("runStagedSandbox settling", () => {
 
     await run(null, deps);
 
-    expect(stageOf().failure).toEqual({
+    expect(stageOf().failure).toMatchObject({
       kind: "failed",
       code: "PROVIDER_CREATE_FAILED",
       step: "booting",

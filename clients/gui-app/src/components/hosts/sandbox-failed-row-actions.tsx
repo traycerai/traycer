@@ -11,7 +11,7 @@ import {
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import {
-  sandboxCreatePressKey,
+  sandboxCreatePressRequest,
   useSandboxCreate,
 } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
@@ -19,7 +19,10 @@ import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutatio
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { sandboxMutationKeys } from "@/lib/query-keys";
-import { sandboxCreateKey } from "@/lib/sandboxes/sandbox-create-key";
+import {
+  sandboxCreateKey,
+  sandboxRetryCreate,
+} from "@/lib/sandboxes/sandbox-create-key";
 import {
   sandboxRowActions,
   type SandboxPageConfiguration,
@@ -118,23 +121,7 @@ export function SandboxFailedRowActions(props: {
     if (signedInUserId() !== userId || queryClient.isMutating(createFilter) > 0)
       return;
     create.mutate({
-      request: {
-        os: summary.os,
-        cpus: summary.cpus,
-        memoryMb: summary.memoryMb,
-        diskMb: summary.diskMb,
-        region: summary.region,
-        displayName: summary.displayName,
-        idleMinutes: summary.idleMinutes,
-        burst: false,
-        createdByHostId: null,
-        createdByAgentId: null,
-        environmentId: summary.environmentId,
-        // A row's null is never; on a create, null uses the default.
-        destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
-        createdByTaskId: null,
-        clientRequestId: sandboxCreatePressKey(baseKey, create.error),
-      },
+      request: sandboxCreatePressRequest(sandboxRetryCreate(summary), create),
       teamName: configuration.kind === "team" ? configuration.teamName : null,
       sourceSandboxId: summary.id,
     });

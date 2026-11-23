@@ -1090,6 +1090,54 @@ describe("the other sandbox routes parse or fail the same way", () => {
       sandboxId: "sbx_failed_create",
     });
   });
+
+  it("create: preserves the row named by an insufficient-credit 402", async () => {
+    const sandbox = {
+      ...SUMMARY,
+      id: "sbx_named_402",
+      state: "destroyed",
+      failureCode: "credit-gate",
+      displayName: "origin/main hook",
+      createdByTaskId: "origin-task",
+    };
+    stubFetch(async () =>
+      jsonResponse(402, {
+        code: "insufficient_credit",
+        sandboxId: sandbox.id,
+        sandbox,
+        reason: "denied",
+        shortfallMc: 70,
+      }),
+    );
+
+    await expect(
+      createSandboxViaHttp(BASE, BEARER, null, {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: null,
+        displayName: "ambient name",
+        idleMinutes: null,
+        burst: false,
+        createdByHostId: null,
+        createdByAgentId: null,
+        environmentId: null,
+        destroyAfterRestingMinutes: null,
+        createdByTaskId: "ambient-task",
+        clientRequestId: "stage:ambient",
+      }),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 402,
+      sandboxId: sandbox.id,
+      sandbox: {
+        id: sandbox.id,
+        createdByTaskId: "origin-task",
+        displayName: "origin/main hook",
+      },
+    });
+  });
 });
 
 describe("getSandboxAutomationViaHttp", () => {

@@ -1,4 +1,5 @@
 import type { StateStorage } from "zustand/middleware";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import { v4 as uuidv4 } from "uuid";
 import {
   recordMapStorageKey,
@@ -9,12 +10,18 @@ import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 
 import type { PendingStageRetryAction } from "./pending-sandbox-send-transition";
 
+export interface PendingStagePress {
+  readonly createKey: string | null;
+  readonly retryCreate?: SandboxCreateRequest;
+}
+
 export interface PendingStageRetryRequest {
   readonly action?: PendingStageRetryAction;
   readonly id: string;
   readonly userId: string | null;
   readonly clientRequestId: string | null;
   readonly createKey?: string | null;
+  readonly retryCreate?: SandboxCreateRequest;
 }
 
 export interface PendingDispatchRetryRequest {
@@ -158,15 +165,16 @@ export function requestPendingDispatchRetry(input: {
 }
 
 /** A same-account UI request writes no stage progress and performs no host work. */
-export function requestPendingStageRetry(input: {
-  readonly name: string;
-  readonly surfaceKey: string;
-  readonly userId: string | null;
-  readonly clientRequestId: string | null;
-  readonly sendId: string;
-  readonly action: PendingStageRetryAction;
-  readonly createKey: string | null;
-}): string | null {
+export function requestPendingStageRetry(
+  input: PendingStagePress & {
+    readonly name: string;
+    readonly surfaceKey: string;
+    readonly userId: string | null;
+    readonly clientRequestId: string | null;
+    readonly sendId: string;
+    readonly action: PendingStageRetryAction;
+  },
+): string | null {
   const { name, surfaceKey, userId, clientRequestId, sendId } = input;
   try {
     const send: unknown = parse(
@@ -194,6 +202,9 @@ export function requestPendingStageRetry(input: {
       userId,
       clientRequestId,
       createKey: input.createKey,
+      ...(input.retryCreate === undefined
+        ? {}
+        : { retryCreate: input.retryCreate }),
     };
     const key = recordMapStorageKey(
       name,

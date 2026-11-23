@@ -40,6 +40,7 @@ import type {
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { PendingStagePress } from "@/lib/sandboxes/pending-stage-storage";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -165,6 +166,7 @@ import {
   returnPendingSandboxSendOnItsSandbox,
   pendingSandboxRecoveryDraftId,
   requestedAgentReadiness,
+  stagedSandboxDestination,
   type ReturnedPendingSandboxSend,
   type ReturnedSandboxPick,
   type RequestedAgentReadiness,
@@ -197,6 +199,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   holdHandoffOwner,
   readStagedSandbox,
+  newStagedSandboxKey,
+  stagedCreateRetryPayload,
+  stagedFailedSandboxId,
   stagedRetryKey,
   stagedSandboxRested,
   useStagedSandbox,
@@ -479,7 +484,7 @@ function executePendingStageRun(
   send: PendingSandboxSend,
   stage: StagedSandbox,
   runner: StagedSandboxRunner,
-  press: { readonly createKey: string | null } | null,
+  press: PendingStagePress | null,
 ): void {
   const surfaceKey = pendingSendSurfaceKey(send.id);
   if (send.request.kind === "terminal" && !stage.openTerminal)
@@ -489,6 +494,7 @@ function executePendingStageRun(
     resume:
       press === null && stage.phase === "creating" && stage.failure === null,
     createKey: press?.createKey ?? null,
+    retryCreate: press?.retryCreate,
   });
 }
 
@@ -660,7 +666,7 @@ function PendingSendDelivery(
 interface PendingStageObservation {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
-  readonly press: { readonly createKey: string | null } | null;
+  readonly press: PendingStagePress | null;
   readonly decision: PendingSendTransition;
   /** The row the decision observed; a withdrawal keeps a resting sandbox. */
   readonly rowState: HostSandboxState | null;
@@ -706,7 +712,9 @@ function pendingStageObservation(
   return {
     send,
     stage,
-    press: requestedRetry ? { createKey: retry.createKey ?? null } : null,
+    press: requestedRetry
+      ? { createKey: retry.createKey ?? null, retryCreate: retry.retryCreate }
+      : null,
     decision,
     rowState,
   };
@@ -1334,16 +1342,7 @@ function returnedSandboxPick(
 ): ReturnedSandboxPick {
   const { createdSandboxId, createdHostId, target } = stage;
   if (createdSandboxId === null || createdHostId === null)
-    return {
-      kind: "stage",
-      target,
-      clientRequestId: target.kind === "new" ? stage.clientRequestId : null,
-      ...(target.kind === "new" &&
-      stage.lastCreateKey !== undefined &&
-      stage.lastCreateKey !== stage.clientRequestId
-        ? { lastCreateKey: stage.lastCreateKey }
-        : {}),
-    };
+    return { kind: "stage", ...stagedSandboxDestination(stage) };
   const created: Extract<StagedSandboxTarget, { kind: "existing" }> = {
     kind: "existing",
     hostId: createdHostId,
@@ -2824,6 +2823,10 @@ function usePendingStagedSendRetry(
         action === "retry-stage" || action === "retry-creation"
           ? stagedRetryKey(shownStage)
           : (shownStage.lastCreateKey ?? shownStage.clientRequestId);
+      const press: PendingStagePress = {
+        createKey,
+        retryCreate: stagedCreateRetryPayload(shownStage, createKey),
+      };
       const publish =
         action === "send-again" || !ownsPendingSandboxSend(send.id);
       const plan = transitionPendingSend(
@@ -2840,12 +2843,12 @@ function usePendingStagedSendRetry(
       if (plan.effects.includes("request-retry"))
         void useStagedSandboxStore
           .getState()
-          .requestRetry(surfaceKey, send.userId, action, createKey);
+          .requestRetry(surfaceKey, send.userId, action, press);
       executePendingStageDecision(
         {
           send: sends[send.id],
           stage: current,
-          press: { createKey },
+          press,
           decision: plan,
           rowState: null,
         },
@@ -3347,7 +3350,13 @@ function PendingStagedSendItem(props: {
               }
               const returned = backToComposer(
                 false,
-                returnedSandboxPick(send, stage, rowState),
+                stagedFailedSandboxId(stage) === null
+                  ? returnedSandboxPick(send, stage, rowState)
+                  : {
+                      kind: "stage",
+                      target: stage.target,
+                      clientRequestId: newStagedSandboxKey(),
+                    },
               );
               if (
                 !Object.hasOwn(

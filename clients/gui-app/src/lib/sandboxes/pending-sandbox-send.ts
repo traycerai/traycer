@@ -39,6 +39,7 @@ import {
 } from "@/lib/provider-ordering";
 import {
   readStagedSandbox,
+  stagedCreateRetryPayload,
   stagedRetryKey,
   useStagedSandboxStore,
   type StagedSandbox,
@@ -231,6 +232,7 @@ export function handPendingSandboxSend(
     chosenKey !== (stage.lastCreateKey ?? stage.clientRequestId)
       ? {
           lastCreateKey: chosenKey,
+          lastRetryCreate: stagedCreateRetryPayload(stage, chosenKey),
           phase: "staged",
           createdSandboxId: null,
           createdHostId: null,
@@ -442,15 +444,10 @@ export function returnPendingSandboxSend(
 export type ReturnedSandboxPick =
   /**
    * Resting, or not created yet: recorded to stage, so the composer's Send
-   * wakes or creates it. `clientRequestId` is a create the server may have accepted,
-   * kept so that Send names it again rather than billing a second sandbox.
+   * wakes or creates it. The stage identity and any later create key travel
+   * with the draft so a resumed create can join the last attempt.
    */
-  | {
-      readonly kind: "stage";
-      readonly target: StagedSandboxTarget;
-      readonly clientRequestId: string | null;
-      readonly lastCreateKey?: string;
-    }
+  | (ReturnedSandbox & { readonly kind: "stage" })
   /**
    * Awake: recorded, and the task composer's host. `target` names the
    * sandbox; the composer showing the draft decides whether to stage it.

@@ -28,6 +28,10 @@ import {
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
+  sandboxRetryAfterRefusal,
+  sandboxRetryCreate,
+} from "@/lib/sandboxes/sandbox-create-key";
+import {
   sandboxListQueryOptions,
   sandboxListReadSentAt,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
@@ -159,6 +163,7 @@ export async function runStagedSandbox(
         clientRequestId,
         ...request,
         createKey: active.lastCreateKey ?? clientRequestId,
+        retryCreate: active.lastRetryCreate,
       },
       stage,
       sandboxAlreadyMade(active, request.resume),
@@ -189,6 +194,7 @@ async function drivePreparedRun(
       clientRequestId,
       resume: run.resume,
       createKey: run.createKey,
+      retryCreate: run.retryCreate,
       taskId: run.taskId,
       environmentId: prepared.environmentId,
     },
@@ -417,6 +423,7 @@ export interface StagedRunRequest {
   readonly resume: boolean;
   /** The press's chosen key; a re-drive keeps the stage's last attempted key. */
   readonly createKey: string | null;
+  readonly retryCreate?: SandboxCreateRequest;
 }
 
 /** Which run a step belongs to, and what its create adds. */
@@ -434,7 +441,10 @@ async function startStagedRun(
   made: StartedSandbox | null,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  if (made === null) return startTarget(run, stage.target, deps);
+  if (made === null)
+    return stage.target.kind === "existing"
+      ? startExistingTarget(run, stage.target, deps)
+      : startCreateTarget(run, stage.target, deps);
   if (
     stage.target.kind === "new" &&
     !recordPendingSandboxStageCreated(run.surfaceKey, made.sandboxId)
@@ -455,37 +465,42 @@ async function startStagedRun(
   return made;
 }
 
-async function startTarget(
+async function startExistingTarget(
   run: StagedRun,
-  target: StagedSandboxTarget,
+  target: Extract<StagedSandboxTarget, { kind: "existing" }>,
+  deps: StagedSandboxRunDeps,
+): Promise<StartedSandbox | null> {
+  const { surfaceKey, clientRequestId } = run;
+  useStagedSandboxStore.getState().report(surfaceKey, {
+    createdSandboxId: target.sandboxId,
+    createdHostId: target.hostId,
+    step: "booting",
+    stepAt: deps.now(),
+  });
+  const awake = await wakeCurrentStage(
+    surfaceKey,
+    clientRequestId,
+    target.hostId,
+    deps,
+  );
+  return awake ? { sandboxId: target.sandboxId, hostId: target.hostId } : null;
+}
+
+async function startCreateTarget(
+  run: StagedRun,
+  target: Extract<StagedSandboxTarget, { kind: "new" }>,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
   const { surfaceKey, clientRequestId, taskId, environmentId, createKey } = run;
-  if (target.kind === "existing") {
-    useStagedSandboxStore.getState().report(surfaceKey, {
-      createdSandboxId: target.sandboxId,
-      createdHostId: target.hostId,
-      step: "booting",
-      stepAt: deps.now(),
-    });
-    if (
-      !(await wakeCurrentStage(
-        surfaceKey,
-        clientRequestId,
-        target.hostId,
-        deps,
-      ))
-    ) {
-      return null;
-    }
-    return { sandboxId: target.sandboxId, hostId: target.hostId };
-  }
   // Give an older persisted blank stage one name, retained across retries.
   const name = stagedSandboxName(target.name);
   if (name !== target.name) {
     useStagedSandboxStore.getState().setTarget(surfaceKey, { ...target, name });
   }
-  const request: SandboxCreateRequest = {
+  const retryCreate =
+    run.retryCreate ?? (await lookupLegacyRetryCreate(createKey, deps));
+  if (!stillCurrent(surfaceKey, clientRequestId)) return null;
+  const request: SandboxCreateRequest = retryCreate ?? {
     os: target.shape.os,
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
@@ -506,35 +521,84 @@ async function startTarget(
     clientRequestId: createKey,
   };
   if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
+  if (run.retryCreate === undefined && retryCreate !== undefined)
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { lastRetryCreate: request });
   const result = await createSandbox(request, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
+  return recordStageCreateAnswer(surfaceKey, request, result, {
+    teamName:
+      target.configuration.kind === "team"
+        ? target.configuration.teamName
+        : null,
+    now: deps.now(),
+  });
+}
+
+function recordStageCreateAnswer(
+  surfaceKey: string,
+  request: SandboxCreateRequest,
+  result: SandboxCreateFetchResult,
+  context: { readonly teamName: string | null; readonly now: number },
+): StartedSandbox | null {
   if (result.kind !== "ok") {
+    const retryCreate = sandboxRetryAfterRefusal(result, request);
+    const failure = createFailure(result, context.teamName);
     fail(
       surfaceKey,
-      createFailure(
-        result,
-        target.configuration.kind === "team"
-          ? target.configuration.teamName
-          : null,
-      ),
+      retryCreate === null ? failure : { ...failure, retryCreate },
     );
     return null;
   }
   const { sandboxId, hostId, sandbox } = result.accepted;
+  if (
+    result.joined === true &&
+    sandbox.state === "destroyed" &&
+    sandbox.failureCode === "credit-gate"
+  ) {
+    fail(surfaceKey, {
+      kind: "failed",
+      code: "credit-gate",
+      step: "creating",
+      sandboxId,
+      retryCreate: sandboxRetryCreate(sandbox),
+    });
+    return null;
+  }
   if (!recordPendingSandboxStageCreated(surfaceKey, sandboxId)) return null;
   useStagedSandboxStore.getState().report(surfaceKey, {
     createdSandboxId: sandboxId,
     createdHostId: hostId,
     rateLimit: sandbox.rateLimit ?? null,
     step: "booting",
-    stepAt: deps.now(),
+    stepAt: context.now,
   });
   if (sandbox.state === "failed" || sandbox.state === "destroyed") {
     const verdict = settleVerdict(sandbox);
-    if (verdict?.kind === "failure") fail(surfaceKey, verdict.failure);
+    if (verdict?.kind === "failure")
+      fail(surfaceKey, {
+        ...verdict.failure,
+        retryCreate: sandboxRetryCreate(sandbox),
+      });
     return null;
   }
   return { sandboxId, hostId };
+}
+
+/** A stage persisted before the retry payload was recorded can still find its row. */
+async function lookupLegacyRetryCreate(
+  key: string,
+  deps: StagedSandboxRunDeps,
+): Promise<SandboxCreateRequest | undefined> {
+  if (!key.startsWith("retry:")) return undefined;
+  const listed = await deps.queryClient
+    .fetchQuery(sandboxListQueryOptions(deps.auth, deps.userId, true))
+    .catch(() => null);
+  const row = listed?.sandboxes.find(
+    (summary) => summary.id === key.slice("retry:".length),
+  );
+  return row === undefined ? undefined : sandboxRetryCreate(row);
 }
 
 /**
@@ -617,12 +681,15 @@ export function createFailure(
 ): StagedSandboxFailure {
   if (failure.kind === "refused") {
     if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT) {
+      const named =
+        failure.sandboxId === undefined ? {} : { sandboxId: failure.sandboxId };
       return failure.reason === "unverified"
-        ? { kind: "unverified" }
+        ? { kind: "unverified", ...named }
         : {
             kind: "credits",
             shortfallMc: failure.shortfallMc,
             creditSource: failure.creditSource ?? null,
+            ...named,
           };
     }
     if (failure.code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) {
@@ -680,11 +747,10 @@ async function settleRow(
   row: SandboxSummary | null | undefined,
 ): Promise<"waiting" | "finished"> {
   const { surfaceKey, clientRequestId, started, deps } = input;
-  if (row !== undefined) {
-    useStagedSandboxStore
-      .getState()
-      .report(surfaceKey, { rateLimit: row?.rateLimit ?? null });
-  }
+  if (row === undefined) return "waiting";
+  useStagedSandboxStore
+    .getState()
+    .report(surfaceKey, { rateLimit: row?.rateLimit ?? null });
   if (row?.state === "suspended" || row?.state === "stopped") {
     // A run wakes once, for the person's action that started it: only at
     // `creating` has it not woken anything yet, which is how Cancel retains
@@ -704,10 +770,15 @@ async function settleRow(
     );
     return awake ? "waiting" : "finished";
   }
-  const verdict = row === undefined ? null : settleVerdict(row);
+  const verdict = settleVerdict(row);
   if (verdict === null) return "waiting";
   if (verdict.kind === "failure") {
-    fail(surfaceKey, verdict.failure);
+    fail(
+      surfaceKey,
+      row !== null && verdict.failure.kind === "failed"
+        ? { ...verdict.failure, retryCreate: sandboxRetryCreate(row) }
+        : verdict.failure,
+    );
     return "finished";
   }
   report(surfaceKey, "applying", deps.now());
