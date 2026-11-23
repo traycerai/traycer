@@ -15,6 +15,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
 import { useOptionalHostClient } from "@/lib/host";
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
+import { useDefaultEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   sandboxIsStagedInThisWindow,
   useStagedSandboxInThisWindow,
@@ -23,7 +24,7 @@ import { providerSetUp } from "@/components/onboarding/set-up-personal";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useThisComputer } from "@/components/settings/move/this-computer";
-import { useDefaultOffersSection } from "@/components/settings/personal/use-old-host-local-pick";
+import { useSectionServed } from "@/components/settings/personal/use-old-host-local-pick";
 import {
   useThisComputersMove,
   type ThisComputersMove,
@@ -212,7 +213,11 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   // the one the sheet the card opens is for.
   const computer = useThisComputer();
   const thisComputersMove = useThisComputersMove(computer, true);
-  const secretsOffered = useDefaultOffersSection("secrets");
+  // The card's handler resets the pick before it opens Secrets, so the page is
+  // judged under the default it lands on; a pending answer keeps the card
+  // absent, so it never shows and then goes.
+  const secretsOffered =
+    useSectionServed(useDefaultEnvironmentPick(), "secrets") === "served";
   return {
     providerSetUp:
       providers.data !== undefined && providerSetUp(providers.data.providers),
