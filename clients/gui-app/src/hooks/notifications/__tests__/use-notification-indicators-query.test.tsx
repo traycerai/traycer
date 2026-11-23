@@ -69,6 +69,9 @@ function requireHostClient(): HostClient<HostRpcRegistry> {
 // is not a shape the app ever publishes.
 const hostDirectoryStub = {
   list: () => Promise.resolve([mockLocalHostEntry]),
+  // The local host serves the notification feed, so a read for this same host
+  // is never one answered by a feed that is live elsewhere.
+  getLocalEntry: () => mockLocalHostEntry,
   onChange: () => ({ dispose: () => undefined }),
 };
 

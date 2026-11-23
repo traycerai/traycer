@@ -5,6 +5,7 @@ import {
 } from "@/components/notifications/chat-indicator-fresh-hosts-context";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostLease } from "@/hooks/host/use-host-lease";
+import { useNotificationsServingHostId } from "@/hooks/host/use-notifications-serving-host-entry";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import {
   useNotificationFeedMode,
@@ -15,7 +16,9 @@ import { NotificationIndicatorsProvider } from "@/components/notifications/notif
 import type { ChatIndicatorHostScope } from "@/lib/notifications/chat-indicator-scopes";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
+  cloudFeedLiveElsewhere,
   EMPTY_INDICATOR_STATE_RESPONSE,
+  mergeHostPendingForkIntoCloudIndicators,
   mergeLocalPartitionIntoCloudIndicators,
   mergeIndicatorStateResponses,
   selectCloudNotificationIndicatorProjection,
@@ -173,8 +176,10 @@ function ChatIndicatorHostLayers(props: {
  * ASKED: the layer requests the host's `home: local` partition, whose flags OR
  * into the cloud snapshot the base holds and whose counts stand for this
  * host's chats only when it answers its whole origin - the reasoning
- * `mergeLocalPartitionIntoCloudIndicators` documents. In local mode the host
- * response IS the answer, so it merges whole.
+ * `mergeLocalPartitionIntoCloudIndicators` documents. A host other than the one
+ * serving this client's live cloud feed gives only `pendingFork`: its read
+ * state is a cached answer the feed's own rows are newer than. In local mode
+ * the host response IS the answer, so it merges whole.
  */
 function ChatIndicatorHostLayer(props: {
   readonly freshnessMode: "base" | "activity";
@@ -213,6 +218,7 @@ function ChatIndicatorHostLayer(props: {
       !hostDead &&
       !(props.isCloud && feedModeSettling),
   });
+  const servingHostId = useNotificationsServingHostId();
   const inherited = useContext(NotificationIndicatorsContext);
   const inheritedFresh = useContext(ChatIndicatorFreshHostsContext);
   const inheritedAttested = useContext(ChatIndicatorAttestedContext);
@@ -224,30 +230,46 @@ function ChatIndicatorHostLayer(props: {
     !host.isPending &&
     host.error === null;
   const fresh = hostFresh && (!props.isCloud || cloudFresh);
-  const merged: SurfaceNotificationIndicators = useMemo(
-    () =>
-      props.isCloud
-        ? mergeLocalPartitionIntoCloudIndicators(
-            inherited,
+  const merged: SurfaceNotificationIndicators = useMemo(() => {
+    if (!props.isCloud) {
+      return {
+        ...mergeIndicatorStateResponses(inherited, host.data),
+        // This layer read exactly one host, so its rows file under that
+        // host's origin - same rule the single-host hook applies.
+        byOriginHostId: {
+          ...inherited.byOriginHostId,
+          [props.hostId]: mergeIndicatorStateResponses(
+            inherited.byOriginHostId?.[props.hostId] ??
+              EMPTY_INDICATOR_STATE_RESPONSE,
             host.data,
-            props.hostId,
-            { epicIds: NO_EPIC_IDS, chatIds: props.chatIds },
-          )
-        : {
-            ...mergeIndicatorStateResponses(inherited, host.data),
-            // This layer read exactly one host, so its rows file under that
-            // host's origin - same rule the single-host hook applies.
-            byOriginHostId: {
-              ...inherited.byOriginHostId,
-              [props.hostId]: mergeIndicatorStateResponses(
-                inherited.byOriginHostId?.[props.hostId] ??
-                  EMPTY_INDICATOR_STATE_RESPONSE,
-                host.data,
-              ),
-            },
+          ),
+        },
+      };
+    }
+    return cloudFeedLiveElsewhere(cloudFresh, servingHostId, props.hostId)
+      ? mergeHostPendingForkIntoCloudIndicators(
+          inherited,
+          host.data,
+          props.hostId,
+        )
+      : mergeLocalPartitionIntoCloudIndicators(
+          inherited,
+          host.data,
+          props.hostId,
+          {
+            epicIds: NO_EPIC_IDS,
+            chatIds: props.chatIds,
           },
-    [props.isCloud, inherited, host.data, props.hostId, props.chatIds],
-  );
+        );
+  }, [
+    props.isCloud,
+    inherited,
+    host.data,
+    props.hostId,
+    props.chatIds,
+    cloudFresh,
+    servingHostId,
+  ]);
   const attested = hostFresh
     ? {
         ...mergeIndicatorStateResponses(inheritedAttested, host.data),

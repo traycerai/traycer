@@ -7,9 +7,12 @@ import {
   useHostNotificationIndicators,
   type IndicatorFreshnessMode,
 } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationsServingHostId } from "@/hooks/host/use-notifications-serving-host-entry";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
+  cloudFeedLiveElsewhere,
   EMPTY_INDICATOR_STATE_RESPONSE,
+  mergeHostPendingForkIntoCloudIndicators,
   mergeLocalPartitionIntoCloudIndicators,
   selectCloudNotificationIndicatorProjection,
   type SurfaceNotificationIndicators,
@@ -131,6 +134,7 @@ function useNotificationIndicatorsBase(
   // same-id tabs with them. Taking the id from the query instead of asking a
   // second hook is what makes the two unable to disagree.
   const readHostId = hostIndicators.hostId;
+  const servingHostId = useNotificationsServingHostId();
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   const cloudFresh = useCloudNotificationsStore(
     (state) => state.hasSnapshot && state.connectionState === "connected",
@@ -147,13 +151,24 @@ function useNotificationIndicatorsBase(
       byOriginHostId: projection.byOriginHostId,
     };
   }, [isMixed, args.enabled, cloudRows, args.epicIds, args.chatIds]);
-  const indicators = isMixed
-    ? mergeLocalPartitionIntoCloudIndicators(
+  const mixedIndicators = cloudFeedLiveElsewhere(
+    cloudFresh,
+    servingHostId,
+    readHostId,
+  )
+    ? mergeHostPendingForkIntoCloudIndicators(
+        cloudIndicators,
+        hostIndicators.data,
+        readHostId,
+      )
+    : mergeLocalPartitionIntoCloudIndicators(
         cloudIndicators,
         hostIndicators.data,
         readHostId,
         { epicIds: args.epicIds, chatIds: args.chatIds },
-      )
+      );
+  const indicators = isMixed
+    ? mixedIndicators
     : scopeIndicatorsToOrigin(hostIndicators.data, readHostId);
   const positiveFresh =
     args.enabled &&

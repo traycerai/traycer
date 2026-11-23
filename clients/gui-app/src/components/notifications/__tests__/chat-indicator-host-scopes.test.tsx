@@ -54,6 +54,14 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     hostId === null ? null : (clientsByHostId.value.get(hostId) ?? null),
 }));
 
+const servingHost = vi.hoisted((): { value: string | null } => ({
+  value: null,
+}));
+
+vi.mock("@/hooks/host/use-notifications-serving-host-entry", () => ({
+  useNotificationsServingHostId: () => servingHost.value,
+}));
+
 vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
   // Spread the real module: production reads the PARTITIONED_* floor constants
   // from here, and a factory that returns only the two hooks makes every one of
@@ -188,6 +196,29 @@ function Probe(props: {
   );
 }
 
+/** What a consumer below the scope reads for one chat, from the aggregate
+ * (`originHostId` null) or from a host's bucket. */
+function UnreadProbe(props: {
+  readonly testId: string;
+  readonly originHostId: string | null;
+  readonly chatId: string;
+}): ReactNode {
+  const state = useSurfaceNotificationIndicatorState(
+    { epicId: "epic-1", chatId: props.chatId },
+    props.originHostId,
+  );
+  return (
+    <span data-testid={props.testId}>
+      {[
+        state.pendingFork ? "fork" : "",
+        state.unreadDone || state.unreadFailure ? "unread" : "read",
+      ]
+        .filter((flag) => flag.length > 0)
+        .join(",")}
+    </span>
+  );
+}
+
 function EpicProbe(): ReactNode {
   const state = useSurfaceNotificationIndicatorState(
     { epicId: "epic-1" },
@@ -267,9 +298,41 @@ function cloudApprovalRow(input: {
   };
 }
 
+/** A done notification the cloud feed already holds as read. */
+function cloudReadDoneRow(input: {
+  readonly entryId: string;
+  readonly originHostId: string;
+  readonly chatId: string;
+}): HostNotificationsCloudFeedRow {
+  return {
+    entryId: input.entryId,
+    originHostId: input.originHostId,
+    coalesceKey: `agent.stopped:${input.chatId}`,
+    entry: {
+      id: input.entryId,
+      updatedAt: 1_100,
+      readAt: 1_200,
+      kind: "agent.stopped",
+      sourceRef: null,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: input.chatId,
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: input.chatId,
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Epic", chatTitle: "Chat" },
+  };
+}
+
 afterEach(() => {
   cleanup();
   feedMode.value = "local";
+  servingHost.value = null;
   clientsByHostId.value = new Map();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
   useCloudNotificationsStore.setState(
@@ -492,6 +555,78 @@ describe("ChatIndicatorHostScopes", () => {
       expect(screen.getByTestId(`probe-${HOST_B}-chat-b`).textContent).toBe(
         "approval",
       );
+    });
+  });
+});
+
+describe("ChatIndicatorHostScopes against a stale host answer", () => {
+  /**
+   * HOST_B still answers its whole origin with `chat-b` unread-done and
+   * counted, while the cloud feed - reached through HOST_A - holds that
+   * notification as read. HOST_B also owns a pending fork, which no feed row
+   * carries, so its landing is the point after which the read state is settled.
+   */
+  function renderStaleAnswer(cloud: {
+    readonly hasSnapshot: boolean;
+    readonly connectionState: "connected" | "unavailable";
+  }): Harness {
+    feedMode.value = "cloud";
+    servingHost.value = HOST_A;
+    useCloudNotificationsStore.setState({
+      rows: {
+        "entry-b": cloudReadDoneRow({
+          entryId: "entry-b",
+          originHostId: HOST_B,
+          chatId: "chat-b",
+        }),
+      },
+      ...cloud,
+    });
+    const harness = createHarness([
+      [
+        HOST_B,
+        {
+          "chat-b": lit({
+            unreadDone: true,
+            unreadCount: 1,
+            pendingFork: true,
+          }),
+        },
+      ],
+    ]);
+    render(
+      createElement(
+        QueryClientProvider,
+        { client: harness.queryClient },
+        <ChatIndicatorHostScopes
+          freshnessMode="base"
+          scopes={chatIndicatorHostScopes([
+            { hostId: HOST_B, chatId: "chat-b" },
+          ])}
+        >
+          <UnreadProbe testId="aggregate" originHostId={null} chatId="chat-b" />
+          <UnreadProbe testId="bucket" originHostId={HOST_B} chatId="chat-b" />
+        </ChatIndicatorHostScopes>,
+      ),
+    );
+    return harness;
+  }
+
+  it("keeps a chat read that the live cloud feed marked read, whatever another host's cached answer says", async () => {
+    renderStaleAnswer({ hasSnapshot: true, connectionState: "connected" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("aggregate").textContent).toBe("fork,read");
+      expect(screen.getByTestId("bucket").textContent).toBe("fork,read");
+    });
+  });
+
+  it("lights the chat from the host's answer while the cloud feed is not live", async () => {
+    renderStaleAnswer({ hasSnapshot: false, connectionState: "unavailable" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("aggregate").textContent).toBe("fork,unread");
+      expect(screen.getByTestId("bucket").textContent).toBe("fork,unread");
     });
   });
 });
