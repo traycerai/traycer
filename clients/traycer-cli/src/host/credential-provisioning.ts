@@ -287,6 +287,11 @@ export async function provisionInstalledHostCredential(
   // client - so it is confirmed via a rotation below before the probe
   // decides between "a later client will heal this" and "sign in again".
   let mintUnauthorized = false;
+  // The sign-in the mint flow last read to send, and the one authn refused:
+  // the confirm below rotates only that sign-in, never one the lease took
+  // after the refused mint was sent.
+  let mintSentWith: string | null = null;
+  let mintRefusedSignIn: string | null = null;
   // The mint-401 confirmation ROTATES a single-use refresh family, so it may
   // run at most once per probe. `mintUnauthorized` never clears (the 401 is
   // a fact about this run), so without this the confirm branch would re-fire
@@ -342,7 +347,10 @@ export async function provisionInstalledHostCredential(
       // The LIVE lease, not the token this call was handed: a revalidation
       // below can rotate the bearer mid-probe, and minting on the snapshot
       // would spend a token authn has already retired.
-      bearer: () => readLeaseBearer(lease),
+      bearer: () => {
+        mintSentWith = readLeaseBearer(lease);
+        return mintSentWith;
+      },
       diag: (message) => options.progress(message),
       signal: probeAbort.signal,
       // The install's consequence, not the connection-lease one: this probe
@@ -350,6 +358,7 @@ export async function provisionInstalledHostCredential(
       unavailableNote: "continuing - the host is not authorized yet.",
       onUnauthorized: () => {
         mintUnauthorized = true;
+        mintRefusedSignIn = mintSentWith;
       },
     });
     // The stored access token has a ~4h TTL, so an ordinary "already signed
@@ -715,10 +724,14 @@ export async function provisionInstalledHostCredential(
           // would 401 the same way - report `unauthorized`, because only a
           // fresh sign-in helps - while a successful rotation
           // means a later client CAN mint, and `mint-unavailable` stands.
+          // A lease that no longer holds the refused sign-in was already
+          // rotated: authn never refused what it holds now, so nothing is
+          // spent and `mint-unavailable` stands as after a rotation.
           if (
             mintUnauthorized &&
             !mintUnauthorizedConfirmed &&
             !credentialRejected &&
+            readLeaseBearer(lease) === mintRefusedSignIn &&
             remaining() > 0
           ) {
             // Latched BEFORE awaiting: the rotation is the side effect being
