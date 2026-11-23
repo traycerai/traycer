@@ -52,6 +52,10 @@ import {
   type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  resetRecordedSends,
+  settleHeldSend,
+} from "@/components/bots/__tests__/bot-send-settle-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import {
   neverLeft,
@@ -176,6 +180,13 @@ vi.mock(
     usePaneFocusProbe: () => () => true,
   }),
 );
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => {
+  const { withRecordedSends } =
+    await import("@/components/bots/__tests__/bot-send-settle-test-support");
+  return withRecordedSends(
+    await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
+  );
+});
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: [{ conversationId: CHANNEL_ID }] },
@@ -541,6 +552,14 @@ function storeRowFor(request: BotConversationSendRequest): Message {
   return row;
 }
 
+/** The host answers `held`, and the app has heard the answer. */
+function settleSend(
+  held: HeldSend,
+  answer: (held: HeldSend) => void,
+): Promise<void> {
+  return settleHeldSend(sends, held, () => answer(held));
+}
+
 function firstSend(): HeldSend {
   const held = sends.at(0);
   if (held === undefined) throw new Error("the host was sent nothing");
@@ -549,6 +568,7 @@ function firstSend(): HeldSend {
 
 beforeEach(() => {
   localStorage.clear();
+  resetRecordedSends();
   strictWindow = true;
   sends = [];
   cursorWrites = [];
@@ -617,10 +637,9 @@ describe("<BotChannelView /> the host's stored row replaces the pending row", ()
     await waitFor(() => expect(sends).toHaveLength(1));
     storeRowFor(firstSend().request);
 
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("the host went away"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("the host went away")),
+    );
 
     expect(rowsSaying(TEXT)).toHaveLength(1);
     expect(textOf(channelBox())).toBe("");
@@ -635,10 +654,9 @@ describe("<BotChannelView /> a send that definitely wrote nothing", () => {
     await waitFor(() => expect(sends).toHaveLength(1));
     expect(rowsSaying(TEXT)).toHaveLength(1);
 
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("the post was refused"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("the post was refused")),
+    );
 
     expect(rowsSaying(TEXT)).toHaveLength(0);
     expect(textOf(channelBox())).toBe(TEXT);
@@ -651,10 +669,9 @@ describe("<BotChannelView /> a send that definitely wrote nothing", () => {
     await waitFor(() => expect(sends).toHaveLength(1));
     expect(rowsSaying(TEXT)).toHaveLength(1);
 
-    await act(async () => {
-      firstSend().reject(neverLeft("the link was down"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(neverLeft("the link was down")),
+    );
 
     expect(rowsSaying(TEXT)).toHaveLength(0);
     expect(textOf(channelBox())).toBe(TEXT);
@@ -668,10 +685,9 @@ describe("<BotChannelView /> a send whose outcome is not known", () => {
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
 
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("resolver failed"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("resolver failed")),
+    );
 
     const rows = rowsSaying(TEXT);
     expect(rows).toHaveLength(1);
@@ -687,10 +703,9 @@ describe("<BotChannelView /> a send whose outcome is not known", () => {
     await screen.findByRole("group", { name: "Message Release Bot" });
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("resolver failed"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("resolver failed")),
+    );
 
     expect(rowsSaying(TEXT)).toHaveLength(1);
     await user.click(
@@ -707,20 +722,18 @@ describe("<BotChannelView /> a send whose outcome is not known", () => {
     await screen.findByRole("group", { name: "Message Release Bot" });
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
     expect(rowsSaying(TEXT)).toHaveLength(1);
     await user.click(
       within(rowsSaying(TEXT)[0]).getByRole("button", { name: "Retry" }),
     );
     await waitFor(() => expect(sends).toHaveLength(2));
 
-    await act(async () => {
-      sends[1].reject(notWrittenRefusal("refused on the retry"));
-      await Promise.resolve();
-    });
+    await settleSend(sends[1], (held) =>
+      held.reject(notWrittenRefusal("refused on the retry")),
+    );
 
     const rows = rowsSaying(TEXT);
     expect(rows).toHaveLength(1);
@@ -735,20 +748,18 @@ describe("<BotChannelView /> a send whose outcome is not known", () => {
     await screen.findByRole("group", { name: "Message Release Bot" });
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
     expect(rowsSaying(TEXT)).toHaveLength(1);
     await user.click(
       within(rowsSaying(TEXT)[0]).getByRole("button", { name: "Retry" }),
     );
     await waitFor(() => expect(sends).toHaveLength(2));
 
-    await act(async () => {
-      sends[1].reject(neverLeft("the link was down"));
-      await Promise.resolve();
-    });
+    await settleSend(sends[1], (held) =>
+      held.reject(neverLeft("the link was down")),
+    );
 
     const rows = rowsSaying(TEXT);
     expect(rows).toHaveLength(1);
@@ -954,10 +965,9 @@ describe("<BotChannelView /> a pending row and the account", () => {
     expect(rowsSaying(TEXT)).toHaveLength(1);
 
     signInAs("user-someone-else");
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("refused after the switch"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("refused after the switch")),
+    );
 
     expect(rowsSaying(TEXT)).toHaveLength(0);
     expect(textOf(channelBox())).toBe("");
@@ -973,10 +983,9 @@ describe("<BotChannelView /> a pending row and the account", () => {
       "the pending row was not drawn before the box left",
     ).toHaveLength(1);
     unmountChannel();
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("refused"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("refused")),
+    );
 
     signInAs("user-someone-else");
     remountChannel();
@@ -999,10 +1008,9 @@ describe("<BotChannelView /> a send that fails after its box unmounted, in the s
     ).toHaveLength(1);
     unmountChannel();
 
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("refused"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("refused")),
+    );
     remountChannel();
 
     expect(textOf(await findBox())).toBe(TEXT);
@@ -1027,10 +1035,9 @@ describe("<BotChannelView /> a send that fails after its box unmounted, in the s
     ).toHaveLength(1);
     unmountChannel();
 
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("refused"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("refused")),
+    );
     remountChannel();
 
     expect(textOf(await findBox())).toBe("A newer draft");
@@ -1051,10 +1058,9 @@ describe("<BotChannelView /> a send that fails after its box unmounted, in the s
     expect(rowsSaying(TEXT)).toHaveLength(1);
     typeInto(channelBox(), "A newer draft");
 
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("refused"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("refused")),
+    );
 
     expect(rowsSaying(TEXT)).toHaveLength(0);
     expect(textOf(channelBox())).toBe("A newer draft");
@@ -1174,10 +1180,7 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     await screen.findByTestId("bot-thread-panel");
     await waitFor(() => expect(sends).toHaveLength(1));
 
-    await act(async () => {
-      firstSend().resolve(null);
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) => held.resolve(null));
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
   });
@@ -1189,10 +1192,9 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     await screen.findByTestId("bot-thread-panel");
     await waitFor(() => expect(sends).toHaveLength(1));
 
-    await act(async () => {
-      firstSend().resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.resolve("thread-from-receipt"),
+    );
 
     const rail = useBotOpenThreadStore.getState().byBotId[BOT_ID];
     expect(rail.kind === "thread" && rail.sent?.threadId).toBe(
@@ -1209,10 +1211,9 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     await user.click(await screen.findByTestId("bot-thread-close"));
     await waitFor(() => expect(sends).toHaveLength(1));
 
-    await act(async () => {
-      firstSend().resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.resolve("thread-from-receipt"),
+    );
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
   });
@@ -1224,10 +1225,9 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     await screen.findByTestId("bot-thread-panel");
     await waitFor(() => expect(sends).toHaveLength(1));
 
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("refused"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("refused")),
+    );
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     expect(textOf(channelBox())).toBe(TEXT);
@@ -1245,10 +1245,7 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     ).toHaveLength(1);
     unmountChannel();
 
-    await act(async () => {
-      firstSend().resolve(null);
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) => held.resolve(null));
 
     expect(
       useBotOpenThreadStore.getState().byBotId[BOT_ID],
@@ -1268,10 +1265,9 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     ).toHaveLength(1);
     unmountChannel();
 
-    await act(async () => {
-      firstSend().resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.resolve("thread-from-receipt"),
+    );
 
     const rail = useBotOpenThreadStore.getState().byBotId[BOT_ID];
     expect(rail.kind === "thread" && rail.sent).toMatchObject({
@@ -1287,10 +1283,9 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     pressSend(TEXT);
     await screen.findByTestId("bot-thread-panel");
     await waitFor(() => expect(sends).toHaveLength(1));
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
 
     await user.click(
       within(rowsSaying(TEXT)[0]).getByRole("button", { name: "Retry" }),
@@ -1315,10 +1310,9 @@ describe('<BotChannelView replyMode="thread" /> the post a thread opened at Send
     pressSend(TEXT);
     await screen.findByTestId("bot-thread-panel");
     await waitFor(() => expect(sends).toHaveLength(1));
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
     await within(origin()).findByText(NOT_CONFIRMED);
   }
 
@@ -1333,10 +1327,7 @@ describe('<BotChannelView replyMode="thread" /> the post a thread opened at Send
     await waitFor(() => expect(sends).toHaveLength(2));
     expect(sends[1].request).toEqual(sends[0].request);
     expect(sends[1].request.sendNonce).toBeDefined();
-    await act(async () => {
-      sends[1].resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSend(sends[1], (held) => held.resolve("thread-from-receipt"));
 
     await waitFor(() =>
       expect(within(origin()).queryByText(NOT_CONFIRMED)).toBeNull(),
@@ -1367,10 +1358,7 @@ describe('<BotChannelView replyMode="thread" /> the post a thread opened at Send
       expect(retryIn(origin())).toHaveProperty("disabled", true);
       expect(retryIn(rowsSaying(TEXT)[0])).toHaveProperty("disabled", true);
     });
-    await act(async () => {
-      sends[1].resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSend(sends[1], (held) => held.resolve("thread-from-receipt"));
     await waitFor(() => {
       expect(within(origin()).queryByText(NOT_CONFIRMED)).toBeNull();
       expect(
@@ -1391,10 +1379,7 @@ describe('<BotChannelView replyMode="thread" /> the post a thread opened at Send
     await waitFor(() =>
       expect(retryIn(origin())).toHaveProperty("disabled", true),
     );
-    await act(async () => {
-      sends[1].resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSend(sends[1], (held) => held.resolve("thread-from-receipt"));
     await waitFor(() =>
       expect(within(origin()).queryByText(NOT_CONFIRMED)).toBeNull(),
     );
@@ -1443,10 +1428,9 @@ describe('<BotChannelView replyMode="thread" /> the post a thread opened at Send
       `${TEXT}{Enter}`,
     );
     await waitFor(() => expect(sends).toHaveLength(1));
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
 
     // The reply's own row carries the mark; the announcement above it does not.
     await within(panel).findByText(NOT_CONFIRMED);
@@ -1471,10 +1455,9 @@ describe('<BotChannelView replyMode="direct" /> a receipt that names a thread', 
     await waitFor(() => expect(sends).toHaveLength(1));
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
 
-    await act(async () => {
-      firstSend().resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.resolve("thread-from-receipt"),
+    );
 
     expect(await screen.findByTestId("bot-thread-panel")).toBeTruthy();
   });
@@ -1765,10 +1748,9 @@ describe("<BotChannelView /> a first post into a channel the host has not create
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
 
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
 
     expect(
       onlyHeldSend().map((send) => send.state),
@@ -1788,10 +1770,9 @@ describe("<BotChannelView /> a first post into a channel the host has not create
     const session = await mountChannelNotCreatedYet();
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
     expect(
       onlyHeldSend().map((send) => send.state),
       "the send did not end unconfirmed",
@@ -1834,10 +1815,7 @@ describe("<BotChannelView /> a first post into a channel the host has not create
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
 
-    await act(async () => {
-      firstSend().resolve(null);
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) => held.resolve(null));
 
     expect(
       session.resubscribes(),
@@ -1880,10 +1858,7 @@ describe("<BotChannelView /> a first post into a channel the host has not create
       `the held first post was not drawn: ${pageText()}`,
     ).not.toHaveLength(0);
 
-    await act(async () => {
-      firstSend().resolve(null);
-      await Promise.resolve();
-    });
+    await settleSend(firstSend(), (held) => held.resolve(null));
     // The host created the channel with the post: its stream now carries the stored row.
     const stored = storedRowOfSend(firstSend().request, VIEWER_USER_ID, 2_000);
     act(() => {

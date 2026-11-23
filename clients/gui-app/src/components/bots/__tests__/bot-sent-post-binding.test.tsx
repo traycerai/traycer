@@ -46,9 +46,15 @@ import {
   sendLineScripted,
   tabHostRequester,
 } from "@/components/bots/__tests__/bot-sent-post-scene";
+import {
+  recordedSendCount,
+  resetRecordedSends,
+  settleCancelledSceneSend,
+  settleSceneSend,
+} from "@/components/bots/__tests__/bot-send-settle-test-support";
 import { QueryClient } from "@tanstack/react-query";
 import type { RenderResult } from "@testing-library/react";
-import { act, fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   endBotTabSurfaceCase,
@@ -190,10 +196,16 @@ vi.mock(
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 // Only `bot.open` is scripted: the send mutation is the real one.
-vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
-  ...botMutationsMock,
-}));
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => {
+  const { withRecordedSends } =
+    await import("@/components/bots/__tests__/bot-send-settle-test-support");
+  return {
+    ...withRecordedSends(
+      await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
+    ),
+    ...botMutationsMock,
+  };
+});
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
@@ -255,6 +267,7 @@ let queryClient: QueryClient;
 let view: RenderResult;
 
 beforeEach(() => {
+  resetRecordedSends();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -340,9 +353,7 @@ async function hostHoldsTheSendOf(press: () => void): Promise<void> {
   const arrived = heldHost().nextSend();
   press();
   await arrived;
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await waitFor(() => expect(recordedSendCount()).toBe(before + 1));
   expect(loggedSends()).toHaveLength(before + 1);
 }
 
@@ -361,7 +372,7 @@ function botReadsSoFar(): number {
  * again: present and disabled, as it is for a row with no retry action.
  * Pressing it sends nothing.
  */
-async function expectRetryWithheldAndInert(): Promise<void> {
+function expectRetryWithheldAndInert(): void {
   const retry = screen.getByRole("button", { name: "Retry" });
   if (!(retry instanceof HTMLButtonElement)) throw new Error("no Retry button");
   // The native property, as the repo's other suites read it: the jest-dom matchers are not loaded.
@@ -370,10 +381,14 @@ async function expectRetryWithheldAndInert(): Promise<void> {
     `Retry is enabled under a binding that moved: ${pageDescription()}`,
   ).toBe(true);
   const sendsBefore = loggedSends().length;
+  const callsBefore = recordedSendCount();
   fireEvent.click(retry);
-  await act(async () => {
-    await Promise.resolve();
-  });
+  // A press that sends calls the mutation synchronously, before anything
+  // can reach the host.
+  expect(
+    recordedSendCount(),
+    "pressing the withheld Retry started a send",
+  ).toBe(callsBefore);
   expect(
     loggedSends(),
     "pressing the withheld Retry sent a request",
@@ -382,10 +397,9 @@ async function expectRetryWithheldAndInert(): Promise<void> {
 
 /** The held send answered with an error that does not say it wrote nothing. */
 async function theSendTurnsUncertain(): Promise<void> {
-  await act(async () => {
-    firstSend().reject(unmarkedRefusal("timed out"));
-    await Promise.resolve();
-  });
+  await settleSceneSend(firstSend(), (held) =>
+    held.reject(unmarkedRefusal("timed out")),
+  );
   expect(
     screen.queryAllByText(/not confirmed/i),
     `the send was not drawn unconfirmed: ${pageDescription()}`,
@@ -463,10 +477,9 @@ describe("a send the host refused because the bot's binding moved", () => {
       "the first send drew no pending row to refuse",
     ).toHaveLength(1);
     const readsBefore = botReadsSoFar();
-    await act(async () => {
-      firstSend().reject(authorityMovedRefusal("the bot moved"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) =>
+      held.reject(authorityMovedRefusal("the bot moved")),
+    );
     expect(
       textOf(channelBox()),
       "the refused text did not go back to the box",
@@ -536,7 +549,7 @@ describe("Retry of an unconfirmed send follows the binding it was made under", (
 
     bindNow({ kind: "team", hostId: ELSEWHERE, epoch: 1 });
 
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
     expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
     expect(rowsOf(TEXT_A)).toHaveLength(1);
     expect(loggedSends()).toHaveLength(1);
@@ -582,10 +595,9 @@ describe("a send the host refused as moved, by how many attempts it has made", (
     expect(heldIds(), "the first attempt held no pending row").toHaveLength(1);
     const resubscribes = botReadsSoFar();
 
-    await act(async () => {
-      heldHost().sends[0].reject(authorityMovedRefusal("the bot moved"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(heldHost().sends[0], (held) =>
+      held.reject(authorityMovedRefusal("the bot moved")),
+    );
 
     expect(
       textOf(channelBox()),
@@ -607,10 +619,9 @@ describe("a send the host refused as moved, by how many attempts it has made", (
     );
     const resubscribes = botReadsSoFar();
 
-    await act(async () => {
-      heldHost().sends[1].reject(authorityMovedRefusal("the bot moved"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(heldHost().sends[1], (held) =>
+      held.reject(authorityMovedRefusal("the bot moved")),
+    );
 
     expect(
       Object.values(useBotPendingSendsStore.getState().entries).map(
@@ -635,7 +646,7 @@ describe("a send the host refused as moved, by how many attempts it has made", (
     // The same observed binding: nothing to retry against.
     bindNow(HERE);
 
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
     expect(
       loggedSends(),
       "a send went out after the refusal: only the first attempt and the Retry should be logged",
@@ -661,10 +672,9 @@ async function pressRetry(step: string): Promise<void> {
 
 /** The host answers the send it holds at `index` as refused because the binding moved. */
 async function refuseAsMoved(index: number): Promise<void> {
-  await act(async () => {
-    heldHost().sends[index].reject(authorityMovedRefusal("the bot moved"));
-    await Promise.resolve();
-  });
+  await settleSceneSend(heldHost().sends[index], (held) =>
+    held.reject(authorityMovedRefusal("the bot moved")),
+  );
 }
 
 /** The channel's transcript now holds the host's stored row of `request`. */
@@ -703,7 +713,7 @@ describe("Retry of an unconfirmed send when the same host claims the bot again",
     await anUncertainSend();
 
     bindNow({ kind: "team", hostId: ELSEWHERE, epoch: 2 });
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
     expect(loggedSends()).toHaveLength(1);
 
     bindNow({ ...HERE, epoch: 3 });
@@ -719,7 +729,7 @@ describe("Retry of an unconfirmed send when the same host claims the bot again",
 
     bindNow({ ...HERE, epoch: 2 });
 
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
     expect(loggedSends()).toHaveLength(1);
   });
 });
@@ -748,17 +758,17 @@ describe("Retry of an unconfirmed send after the host refused an attempt as move
       botReadsSoFar(),
       "the bot was not read exactly once after the refusal",
     ).toBe(reads + 1);
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
 
     act(() => redrawSurface(view, queryClient));
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
 
     view.unmount();
     view = await mountSurfaceAs(USER_A, queryClient);
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
 
     bindNow({ ...HERE, epoch: 2 });
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
     expect(loggedSends(), "a request went out after the refusal").toHaveLength(
       2,
     );
@@ -791,10 +801,9 @@ describe("Retry of an unconfirmed send after the host refused an attempt as move
     await anUncertainSend();
     await pressRetry("the retry at the original binding");
 
-    await act(async () => {
-      heldHost().sends[1].reject(lostAfterDispatch("timed out"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(heldHost().sends[1], (held) =>
+      held.reject(lostAfterDispatch("timed out")),
+    );
 
     expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
     await pressRetry("after a transport failure at the original epoch");
@@ -806,10 +815,9 @@ describe("Retry of an unconfirmed send after the host refused an attempt as move
     bindNow({ ...HERE, epoch: 2 });
     await pressRetry("the same host at epoch 2");
 
-    await act(async () => {
-      heldHost().sends[1].reject(lostAfterDispatch("timed out"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(heldHost().sends[1], (held) =>
+      held.reject(lostAfterDispatch("timed out")),
+    );
 
     expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
     await pressRetry("after a transport failure at epoch 2");
@@ -836,11 +844,11 @@ describe("a refusal that arrives after the app moved on", () => {
     await pressRetry("the same host at epoch 3");
     await refuseAsMoved(1);
 
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
     bindNow({ ...HERE, epoch: 3 });
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
     bindNow({ ...HERE, epoch: 2 });
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
     expect(loggedSends()).toHaveLength(2);
 
     bindNow({ ...HERE, epoch: 4 });
@@ -867,7 +875,9 @@ describe("a refusal that arrives after the app moved on", () => {
     await pressRetry("the retry at the original binding");
 
     await changeAccount(USER_B);
-    await refuseAsMoved(1);
+    await settleCancelledSceneSend(heldHost().sends[1], (held) =>
+      held.reject(authorityMovedRefusal("the bot moved")),
+    );
 
     expect(rowsOf(TEXT_A), pageDescription()).toHaveLength(0);
     expect(screen.queryAllByText(/not confirmed/i)).toHaveLength(0);
@@ -892,7 +902,7 @@ describe("Retry of an unconfirmed send by what the tab's host takes", () => {
       setLine();
       bindNow(HERE);
 
-      await expectRetryWithheldAndInert();
+      expectRetryWithheldAndInert();
       expect(screen.queryAllByText(/not confirmed/i)).not.toHaveLength(0);
       expect(rowsOf(TEXT_A)).toHaveLength(1);
       expect(loggedSends()).toHaveLength(1);
@@ -903,7 +913,7 @@ describe("Retry of an unconfirmed send by what the tab's host takes", () => {
     await anUncertainSend();
     setSendLine(OLD_HOST);
     bindNow(HERE);
-    await expectRetryWithheldAndInert();
+    expectRetryWithheldAndInert();
 
     setSendLine(NONCE_HOST);
     bindNow(HERE);

@@ -36,6 +36,7 @@ import {
   chatSessionRegistryMock,
   firstSend,
   guiHarnessCatalogMock,
+  type HeldSend,
   heldHost,
   notificationMarkReadMock,
   resolvedThemeMock,
@@ -45,6 +46,10 @@ import {
   tabHostRequester,
 } from "@/components/bots/__tests__/bot-sent-post-scene";
 
+import {
+  resetRecordedSends,
+  settleSceneSend,
+} from "@/components/bots/__tests__/bot-send-settle-test-support";
 import { QueryClient } from "@tanstack/react-query";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ComponentProps } from "react";
@@ -179,10 +184,16 @@ vi.mock(
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 // Only `bot.open` is scripted: the send mutation is the real one.
-vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
-  ...botMutationsMock,
-}));
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => {
+  const { withRecordedSends } =
+    await import("@/components/bots/__tests__/bot-send-settle-test-support");
+  return {
+    ...withRecordedSends(
+      await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
+    ),
+    ...botMutationsMock,
+  };
+});
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
@@ -260,6 +271,7 @@ const NONCE_HOST = BOT_CONVERSATION_NONCE_VERSION;
 let queryClient: QueryClient;
 
 beforeEach(() => {
+  resetRecordedSends();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -285,9 +297,8 @@ async function sendHeld(text: string): Promise<void> {
 
 async function stepBack({ history }: PlaceRoute): Promise<void> {
   const before = historyEntryIdentity(history.location);
-  await act(async () => {
+  act(() => {
     history.back();
-    await Promise.resolve();
   });
   await waitFor(() =>
     expect(historyEntryIdentity(history.location)).not.toBe(before),
@@ -359,17 +370,17 @@ const POSITIONS: readonly Position[] = [
 const OUTCOMES = [
   {
     name: "the first attempt is refused",
-    answer: () => firstSend().reject(notWrittenRefusal("refused")),
+    answer: (held: HeldSend) => held.reject(notWrittenRefusal("refused")),
     removed: true,
   },
   {
     name: "the bot answers in the channel",
-    answer: () => firstSend().resolve(null),
+    answer: (held: HeldSend) => held.resolve(null),
     removed: true,
   },
   {
     name: "the host names the thread",
-    answer: () => firstSend().resolve("thread-from-receipt"),
+    answer: (held: HeldSend) => held.resolve("thread-from-receipt"),
     removed: false,
   },
 ] as const;
@@ -390,10 +401,7 @@ describe("a thread opened at Send, held under an overlay when the host answers",
         "the route did not name the thread before the host answered",
       ).toContain("thread");
 
-      await act(async () => {
-        answer();
-        await Promise.resolve();
-      });
+      await settleSceneSend(firstSend(), answer);
 
       const rail = heldRail();
       if (removed) {
@@ -466,15 +474,15 @@ describe("a thread settled by its own send, never by another's", () => {
   it.each([
     {
       name: "refused",
-      answer: () => heldHost().sends[2].reject(notWrittenRefusal("refused")),
+      answer: (held: HeldSend) => held.reject(notWrittenRefusal("refused")),
     },
     {
       name: "answered with a thread",
-      answer: () => heldHost().sends[2].resolve("thread-from-receipt"),
+      answer: (held: HeldSend) => held.resolve("thread-from-receipt"),
     },
     {
       name: "answered in the channel",
-      answer: () => heldHost().sends[2].resolve(null),
+      answer: (held: HeldSend) => held.resolve(null),
     },
   ])(
     "leaves the thread of a second Send alone when the first's Retry is $name after it",
@@ -484,10 +492,9 @@ describe("a thread settled by its own send, never by another's", () => {
       await sendHeld(TEXT_A);
       // The first attempt is uncertain, so the box may send again, and the
       // second Send opens its own thread over the first's.
-      await act(async () => {
-        firstSend().reject(unmarkedRefusal("timed out"));
-        await Promise.resolve();
-      });
+      await settleSceneSend(firstSend(), (held) =>
+        held.reject(unmarkedRefusal("timed out")),
+      );
       await screen.findAllByText(/not confirmed/i);
       await sendHeld(TEXT_B);
       await waitFor(() => {
@@ -498,10 +505,7 @@ describe("a thread settled by its own send, never by another's", () => {
       await waitFor(() => expect(heldHost().sends).toHaveLength(3));
       const before = JSON.stringify(heldRail());
 
-      await act(async () => {
-        answer();
-        await Promise.resolve();
-      });
+      await settleSceneSend(heldHost().sends[2], answer);
 
       expect(JSON.stringify(heldRail())).toBe(before);
     },
@@ -553,10 +557,9 @@ describe("a place restored over a thread removed in place", () => {
         route.history.location.search,
         "the route did not name the thread before the host answered",
       ).toContain("thread");
-      await act(async () => {
-        firstSend().reject(notWrittenRefusal("refused"));
-        await Promise.resolve();
-      });
+      await settleSceneSend(firstSend(), (held) =>
+        held.reject(notWrittenRefusal("refused")),
+      );
       await waitFor(() =>
         expect(route.history.location.search).not.toContain("thread"),
       );
@@ -616,10 +619,7 @@ describe("a place restored after the bot answered in the channel while the memor
         messages: [EARLIER_POST, storedRow(anchorMessageId)],
       });
     });
-    await act(async () => {
-      firstSend().resolve(null);
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) => held.resolve(null));
     await waitFor(() =>
       expect(route.history.location.search).not.toContain("thread"),
     );
@@ -659,20 +659,18 @@ describe("a Retry's answer while the thread is under the memory", () => {
     const route = await mountSurfaceOnRouteAs(USER_A, queryClient);
     await sendHeld(TEXT_A);
     await routeNames(route, "thread");
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
     await screen.findAllByText(/not confirmed/i);
     setRail(memoryRailOver(heldRail()));
     await routeNames(route, "memory");
 
     await user.click(await screen.findByRole("button", { name: "Retry" }));
     await waitFor(() => expect(heldHost().sends).toHaveLength(2));
-    await act(async () => {
-      heldHost().sends[1].resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSceneSend(heldHost().sends[1], (held) =>
+      held.resolve("thread-from-receipt"),
+    );
 
     const behind = behindOverlays(heldRail());
     expect(heldRail()?.kind).toBe("memory");

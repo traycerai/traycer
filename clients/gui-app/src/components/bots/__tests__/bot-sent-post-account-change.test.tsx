@@ -48,6 +48,11 @@ import {
   tabHostRequester,
 } from "@/components/bots/__tests__/bot-sent-post-scene";
 
+import {
+  resetRecordedSends,
+  settleCancelledSceneSend,
+  settleSceneSend,
+} from "@/components/bots/__tests__/bot-send-settle-test-support";
 import { QueryClient } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { act, screen, waitFor, within } from "@testing-library/react";
@@ -193,10 +198,16 @@ vi.mock(
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 // Only `bot.open` is scripted: the send mutation is the real one.
-vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
-  ...botMutationsMock,
-}));
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => {
+  const { withRecordedSends } =
+    await import("@/components/bots/__tests__/bot-send-settle-test-support");
+  return {
+    ...withRecordedSends(
+      await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
+    ),
+    ...botMutationsMock,
+  };
+});
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
@@ -275,6 +286,7 @@ const OLD_HOST = { major: NONCE_HOST.major, minor: NONCE_HOST.minor - 1 };
 let queryClient: QueryClient;
 
 beforeEach(() => {
+  resetRecordedSends();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -307,10 +319,9 @@ async function sendFromBox(withImage: boolean): Promise<void> {
 
 /** The host answered A's first attempt with an error that does not say it wrote nothing. */
 async function aSendTurnsUncertain(): Promise<void> {
-  await act(async () => {
-    firstSend().reject(unmarkedRefusal("timed out"));
-    await Promise.resolve();
-  });
+  await settleSceneSend(firstSend(), (held) =>
+    held.reject(unmarkedRefusal("timed out")),
+  );
   expect(
     screen.queryAllByText(/not confirmed/i),
     `A's post was not drawn as unconfirmed: ${pageDescription()}`,
@@ -535,9 +546,8 @@ describe("a route entry naming A's thread anchor, stepped onto", () => {
   /** A step back, as the person's back button makes it, onto an entry that names A's thread. */
   async function stepBack({ history }: PlaceRoute): Promise<void> {
     const before = historyEntryIdentity(history.location);
-    await act(async () => {
+    act(() => {
       history.back();
-      await Promise.resolve();
     });
     await waitFor(() =>
       expect(historyEntryIdentity(history.location)).not.toBe(before),
@@ -550,6 +560,7 @@ describe("a route entry naming A's thread anchor, stepped onto", () => {
     const mark = markProbes();
 
     await stepBack(route);
+    await waitFor(() => expect(heldRail()?.kind).toBe("thread"));
 
     expectNoneOfA(mark);
     const rail = heldRail();
@@ -580,10 +591,9 @@ describe("A's late callbacks, once B is signed in", () => {
     const mark = markProbes();
     const before = sendStoresSnapshot();
 
-    await act(async () => {
-      firstSend().resolve("thread-from-late-receipt");
-      await Promise.resolve();
-    });
+    await settleCancelledSceneSend(firstSend(), (held) =>
+      held.resolve("thread-from-late-receipt"),
+    );
 
     expect(
       sendStoresSnapshot(),
@@ -605,10 +615,9 @@ describe("A's late callbacks, once B is signed in", () => {
     await changeAccount(USER_B);
     const mark = markProbes();
 
-    await act(async () => {
-      firstSend().resolve("thread-from-old-host");
-      await Promise.resolve();
-    });
+    await settleCancelledSceneSend(firstSend(), (held) =>
+      held.resolve("thread-from-old-host"),
+    );
 
     expect(
       JSON.stringify(useBotOpenThreadStore.getState().byBotId),
@@ -640,10 +649,9 @@ describe("A's late callbacks, once B is signed in", () => {
     expect(heldRail()?.kind, "B's thread did not open").toBe("thread");
     const opened = heldRail();
 
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("refused"));
-      await Promise.resolve();
-    });
+    await settleCancelledSceneSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("refused")),
+    );
 
     expect(
       heldRail(),
@@ -662,10 +670,9 @@ describe("A's late callbacks, once B is signed in", () => {
     await changeAccount(USER_B);
     const before = sendStoresSnapshot();
 
-    await act(async () => {
-      heldHost().sends[1].resolve("thread-from-retry");
-      await Promise.resolve();
-    });
+    await settleCancelledSceneSend(heldHost().sends[1], (held) =>
+      held.resolve("thread-from-retry"),
+    );
 
     expect(
       sendStoresSnapshot(),
@@ -685,15 +692,12 @@ describe("what the account change must leave alone", () => {
 
     pressSend(TEXT_B);
     await waitFor(() => expect(heldHost().sends).toHaveLength(1));
-    await act(async () => {
-      await Promise.resolve();
-    });
 
     expect(heldHost().sends[0].sentBy).toBe(USER_B);
     expect(
       Object.keys(useBotPendingSendsStore.getState().entries),
     ).toHaveLength(1);
-    expect(screen.queryAllByText(TEXT_B)).not.toHaveLength(0);
+    expect(await screen.findAllByText(TEXT_B)).not.toHaveLength(0);
   });
 
   it("CONTROL: closing a thread opened at Send, under the account that sent it, clears it", async () => {
@@ -708,10 +712,9 @@ describe("what the account change must leave alone", () => {
   it("CONTROL: settles the thread opened at Send with the thread the host names, under the account that sent it", async () => {
     await aSendsHeldPost(false);
 
-    await act(async () => {
-      firstSend().resolve("thread-from-receipt");
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) =>
+      held.resolve("thread-from-receipt"),
+    );
 
     const rail = heldRail();
     expect(rail?.kind === "thread" && rail.sent?.threadId).toBe(

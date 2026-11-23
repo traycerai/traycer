@@ -44,6 +44,10 @@ import {
   tabHostRequester,
 } from "@/components/bots/__tests__/bot-sent-post-scene";
 
+import {
+  resetRecordedSends,
+  settleSceneSend,
+} from "@/components/bots/__tests__/bot-send-settle-test-support";
 import { QueryClient } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -163,10 +167,16 @@ vi.mock(
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 // Only `bot.open` is scripted: the send mutation is the real one.
-vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
-  ...botMutationsMock,
-}));
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => {
+  const { withRecordedSends } =
+    await import("@/components/bots/__tests__/bot-send-settle-test-support");
+  return {
+    ...withRecordedSends(
+      await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
+    ),
+    ...botMutationsMock,
+  };
+});
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
@@ -220,6 +230,7 @@ const OLD_HOST = { major: NONCE_HOST.major, minor: NONCE_HOST.minor - 1 };
 let queryClient: QueryClient;
 
 beforeEach(() => {
+  resetRecordedSends();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -359,10 +370,9 @@ describe("a send pressed under one account while another signs in", () => {
     await mountSurfaceAs(USER_A, queryClient);
     pressSend(TEXT_A);
     await waitFor(() => expect(heldHost().sends).toHaveLength(1));
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
     expect(
       screen.getByText(/not confirmed/i),
       "A's post was not drawn as unconfirmed",

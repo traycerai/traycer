@@ -44,6 +44,10 @@ import {
   tabHostRequester,
 } from "@/components/bots/__tests__/bot-sent-post-scene";
 
+import {
+  resetRecordedSends,
+  settleSceneSend,
+} from "@/components/bots/__tests__/bot-send-settle-test-support";
 import { QueryClient } from "@tanstack/react-query";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ComponentProps } from "react";
@@ -173,10 +177,16 @@ vi.mock(
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 // Only `bot.open` is scripted: the send mutation is the real one.
-vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
-  ...botMutationsMock,
-}));
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => {
+  const { withRecordedSends } =
+    await import("@/components/bots/__tests__/bot-send-settle-test-support");
+  return {
+    ...withRecordedSends(
+      await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
+    ),
+    ...botMutationsMock,
+  };
+});
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
@@ -254,6 +264,7 @@ const NONCE_HOST = BOT_CONVERSATION_NONCE_VERSION;
 let queryClient: QueryClient;
 
 beforeEach(() => {
+  resetRecordedSends();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -289,17 +300,15 @@ async function sendHeld(): Promise<void> {
 
 /** The host refused the first attempt before writing anything. */
 async function refuseFirstAttempt(): Promise<void> {
-  await act(async () => {
-    firstSend().reject(notWrittenRefusal("refused"));
-    await Promise.resolve();
-  });
+  await settleSceneSend(firstSend(), (held) =>
+    held.reject(notWrittenRefusal("refused")),
+  );
 }
 
 async function stepBack({ history }: PlaceRoute): Promise<void> {
   const before = historyEntryIdentity(history.location);
-  await act(async () => {
+  act(() => {
     history.back();
-    await Promise.resolve();
   });
   await waitFor(() =>
     expect(historyEntryIdentity(history.location)).not.toBe(before),
@@ -308,9 +317,8 @@ async function stepBack({ history }: PlaceRoute): Promise<void> {
 
 async function stepForward({ history }: PlaceRoute): Promise<void> {
   const before = historyEntryIdentity(history.location);
-  await act(async () => {
+  act(() => {
     history.forward();
-    await Promise.resolve();
   });
   await waitFor(() =>
     expect(historyEntryIdentity(history.location)).not.toBe(before),

@@ -44,6 +44,10 @@ import {
   tabHostRequester,
 } from "@/components/bots/__tests__/bot-sent-post-scene";
 
+import {
+  resetRecordedSends,
+  settleSceneSend,
+} from "@/components/bots/__tests__/bot-send-settle-test-support";
 import { QueryClient } from "@tanstack/react-query";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ComponentProps } from "react";
@@ -198,10 +202,16 @@ vi.mock(
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 // Only `bot.open` is scripted: the send mutation is the real one.
-vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
-  ...botMutationsMock,
-}));
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => {
+  const { withRecordedSends } =
+    await import("@/components/bots/__tests__/bot-send-settle-test-support");
+  return {
+    ...withRecordedSends(
+      await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
+    ),
+    ...botMutationsMock,
+  };
+});
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
@@ -281,6 +291,7 @@ const NEW_THREAD_BOX = "Reply in a new thread";
 let queryClient: QueryClient;
 
 beforeEach(() => {
+  resetRecordedSends();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -369,9 +380,8 @@ async function sendHeld(text: string): Promise<void> {
 
 async function stepBack({ history }: PlaceRoute): Promise<void> {
   const before = historyEntryIdentity(history.location);
-  await act(async () => {
+  act(() => {
     history.back();
-    await Promise.resolve();
   });
   await waitFor(() =>
     expect(historyEntryIdentity(history.location)).not.toBe(before),
@@ -434,10 +444,9 @@ describe("a restored place naming a post the bot answered in the channel", () =>
       announcementId: POST,
       threadId: null,
     });
-    await act(async () => {
-      firstSend().resolve(botThreadIdFor(BOT_ID, POST));
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) =>
+      held.resolve(botThreadIdFor(BOT_ID, POST)),
+    );
     await waitFor(() => expect(scene.panelKinds).toContain("posted"));
     listNames(POST);
     await waitFor(() => expect(panelKind()).toBe("listed"));
@@ -455,10 +464,9 @@ describe("a restored place naming a post the bot answered in the channel", () =>
     const search = route.history.location.search;
     await typeReply(box, TEXT_B);
 
-    await act(async () => {
-      firstSend().reject(notWrittenRefusal("refused"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) =>
+      held.reject(notWrittenRefusal("refused")),
+    );
 
     const again = await expectUnopened();
     await waitFor(() =>
@@ -492,10 +500,7 @@ describe("a restored place naming a post the bot answered in the channel", () =>
     fireEvent.click(screen.getByTestId("bot-thread-close"));
     await waitFor(() => expect(heldRail()).toBeNull());
     setChannel(directPost(anchor, TEXT_A));
-    await act(async () => {
-      firstSend().resolve(null);
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) => held.resolve(null));
 
     await stepBack(route);
 
@@ -550,10 +555,7 @@ describe("a restored place the list has not caught up with", () => {
       threadId: null,
     });
     const existing = botThreadIdFor(BOT_ID, "question-1");
-    await act(async () => {
-      firstSend().resolve(existing);
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) => held.resolve(existing));
     await waitFor(() => {
       const rail = heldRail();
       expect(rail?.kind === "thread" && rail.sent?.threadId).toBe(existing);
@@ -625,10 +627,9 @@ describe("a thread opened at Send whose post the host then stores", () => {
     await routeNames(route, "thread");
     const rail = heldRail();
     const anchor = rail?.kind === "thread" ? rail.anchorMessageId : "";
-    await act(async () => {
-      firstSend().reject(unmarkedRefusal("timed out"));
-      await Promise.resolve();
-    });
+    await settleSceneSend(firstSend(), (held) =>
+      held.reject(unmarkedRefusal("timed out")),
+    );
     await screen.findAllByText(/not confirmed/i);
     return { route, anchor, length: route.history.length };
   }
@@ -696,9 +697,7 @@ describe("a thread opened at Send whose post the host then stores", () => {
         }),
       ),
     );
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await screen.findAllByText("The nightly is red.");
 
     expect(heldRail()).toEqual(announcementThread);
   });
