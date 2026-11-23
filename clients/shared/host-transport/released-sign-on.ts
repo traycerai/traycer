@@ -477,8 +477,13 @@ export function opensReleasedWayOnThisMachine(
 
 /**
  * The typed answer of a released host to a host-only token: `UNAUTHORIZED`, no
- * `doorReason`, not retryable. A current host always names its reason when it
- * refuses an open, so this never matches one; the message text is never read.
+ * `doorReason`, not retryable. Callers read it only as the answer to their own
+ * open. A current host names its reason whenever it refuses an open's token.
+ * Its unary door sends this same shape for a frame that breaks the protocol
+ * (binary, not JSON, malformed, or out of order), but this client's open is
+ * never one: one JSON text open per socket, in the open-frame schema, before
+ * any other frame. So it does not match a current host's answer to an open.
+ * The message text is never read.
  */
 export function isReleasedHostTokenRefusal(
   details: FatalErrorDetails,
