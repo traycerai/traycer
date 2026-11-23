@@ -180,6 +180,13 @@ const mocks = vi.hoisted(() => {
   }));
   // Same rationale as `createMintFlowMock` above: typed just wide enough to
   // expose `signal` from `.mock.calls`.
+  const providedLease: {
+    current: {
+      readonly rotate: (token: string) => void;
+      readonly getBearerToken: () => string;
+    } | null;
+  } = { current: null };
+  const siblingSave: { signIn: string | null } = { signIn: null };
   const createStoreBackedRevalidatorMock = vi.fn(
     (args: {
       readonly signal: AbortSignal | null;
@@ -187,9 +194,14 @@ const mocks = vi.hoisted(() => {
         readonly rotate: (token: string) => void;
         readonly getBearerToken: () => string;
       };
-    }) => ({
+    }) => {
+      providedLease.current = args.lease;
+      return {
       revalidateCurrentContext: revalidateCurrentContextMock,
-      adoptStoredSignIn: async () => undefined,
+      // A sibling's sign-in, once saved, reaches the lease through the adopting read.
+      adoptStoredSignIn: async () => {
+        if (siblingSave.signIn !== null) args.lease.rotate(siblingSave.signIn);
+      },
       // The fake rotates no lease: a rotation it accepts installed the
       // sign-in the lease holds, which the next mint is sent with.
       rotateSignIn: async () => {
@@ -201,7 +213,8 @@ const mocks = vi.hoisted(() => {
           accepted: null,
         };
       },
-    }),
+      };
+    },
   );
 
   return {
@@ -211,6 +224,8 @@ const mocks = vi.hoisted(() => {
     hostTokenTable: new Map() as HostTokenTable,
     hostTokenMintMock: vi.fn(),
     hostTokenRecoveryResult: null as string | null,
+    providedLease,
+    siblingSave,
     // Fired synchronously from inside `subscribe()`, once per lap, with the
     // just-created session and its 1-based lap index. Tests use it to
     // schedule (via `setTimeout(..., 0)`) their simulated ack/status
@@ -474,6 +489,8 @@ beforeEach(() => {
     },
   });
   mocks.hostTokenRecoveryResult = null;
+  mocks.providedLease.current = null;
+  mocks.siblingSave.signIn = null;
   mocks.onSessionCreated = null;
 
   mocks.subscribeMock.mockClear();
@@ -2260,6 +2277,92 @@ describe("provisionInstalledHostCredential", () => {
     expect(mocks.revalidateCurrentContextMock).toHaveBeenCalledTimes(1);
     expectCleanTeardown();
   }, 10_000);
+
+  // P6: the exit's verdict is read after an adopting read of the credentials file.
+  it("does not report unauthorized when a sibling's sign-in landed after the host-token judge refused the one this lease held", async () => {
+    const recoverySettled = createDeferred<void>();
+
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.hostTokenMintMock.mockResolvedValueOnce({
+      kind: "sign-in-rejected",
+    });
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.onSessionCreated = (session, lapIndex): void => {
+      if (lapIndex !== 1) {
+        return;
+      }
+      const auth = capturedClientOptions().auth;
+      if (auth === null) {
+        throw new Error("probe wired no reconnect revalidator");
+      }
+      setTimeout(() => {
+        void auth.revalidateForReconnect().then(() => {
+          // The recovery has answered; another process saves a sign-in before the exit reads the file.
+          mocks.siblingSave.signIn = "sibling-sign-in";
+          session.emitStatus(
+            "closed",
+            fatalReason(
+              "host closed after the token judge refused sign-in",
+              "UNAUTHORIZED",
+            ),
+            null,
+          );
+          recoverySettled.resolve(undefined);
+        });
+      }, 0);
+    };
+
+    const [outcome] = await Promise.all([
+      provisionInstalledHostCredential(
+        makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+      ),
+      recoverySettled.promise,
+    ]);
+
+    expect(outcome).not.toEqual<HostCredentialProvisionOutcome>({
+      kind: "unauthorized",
+    });
+    expectCleanTeardown();
+  }, 10_000);
+
+  // P7: the confirmation's verdict is about the sign-in stored when it is read, not a latch.
+  it("does not report unauthorized when a sibling's sign-in landed while the confirming rotation of the refused one was refused", async () => {
+    const hostId = "host-1";
+    mocks.revalidateCurrentContextMock.mockImplementation(async () => {
+      // authn refuses the refresh of the sign-in this lease held; meanwhile another process saved a new one.
+      mocks.providedLease.current?.rotate("sibling-sign-in");
+      return "rejected" as const;
+    });
+    mocks.mintFlowMock.mockImplementationOnce(
+      async (): Promise<HostCredentialMintOutcome> => {
+        const options = capturedMintFlowOptions();
+        options.bearer();
+        if (options.onUnauthorized !== null) {
+          options.onUnauthorized();
+        }
+        return { kind: "unavailable" };
+      },
+    );
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        void options.hostCredentialMint({ hostId, reason: "missing" }).then(
+          () => undefined,
+          () => undefined,
+        );
+        options.onHostCredentialState(hostId, "missing");
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).not.toEqual<HostCredentialProvisionOutcome>({
+      kind: "unauthorized",
+    });
+    expectCleanTeardown();
+  });
 
   it("reports a refused mint when a fatal close follows it", async () => {
     const mint = createDeferred<{
