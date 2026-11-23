@@ -3121,8 +3121,9 @@ describe("RemoteSession host-leg resume", () => {
       host.detach();
       seals.release();
       // The cancelled write's rewrite has no room in the ring: it must not end
-      // the connection that the next attach could resume.
-      await advanceUntil(() => host.connections.length > 1, 5_000);
+      // the connection that the next attach could resume. The released seal
+      // settles inside this step, and the clock then passes the redial delay.
+      await step(5_000);
 
       expect(host.connections).toHaveLength(1);
       expect(host.opens).toBe(1);
