@@ -11,10 +11,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import {
-  recordNegotiatedHostMethods,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -127,9 +124,6 @@ function mountFrame(
   handlers: Parameters<typeof mountTeamPage>[1],
   page: { readonly section: SettingsSectionId; readonly element: ReactNode },
 ): TeamPageHarness {
-  if (pick.kind === "local") {
-    recordNegotiatedHostMethods(pick.hostId, ["environment.status"]);
-  }
   act(() => {
     useSettingsEnvironmentPickStore.setState({ pick });
   });

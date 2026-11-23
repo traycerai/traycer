@@ -1392,11 +1392,11 @@ the not-moved Local row, “its own settings, not in Personal yet”, with no Mo
 verb, and the window opens on it. Its pages are that host's own and editable,
 as that release drew them (`HostOwnPageFrame`): only Providers, Permissions,
 Agents (the guide alone), Model routing and Variables & shells. No other page
-is reached: search lists no hit for one, picking the row moves to Providers, a
-window that opens on it is moved the moment its default is set, and a Local
-pick's pages wait for that computer's handshake (a Personal pick never
-waits). A host whose `environment.status` is
-1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
+is reached: search and the command palette list none, picking the row moves to
+Providers, and a link, a deep link, a remembered route or a window that opens
+on the row draws Providers where the other page was named, so the page never
+mounts (`SettingsPanelForSection`). A Personal pick is never touched. A host
+whose `environment.status` is 1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
 
 **Nothing in the host group is local-only any more.** Shell and Diagnostics
 carried a `requiresLocalHost` flag (dimmed rail rows, a `RequiresLocalHostNotice`

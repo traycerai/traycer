@@ -18,7 +18,6 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
  *  - the promotion gap (test 7) holds the real `openSystemTab` store action
  *    back so the tab appears only on a later `act`.
  */
-import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   act,
   cleanup,
@@ -264,7 +263,6 @@ function resetStores(): void {
   useSettingsHostScopeStore.getState().reset();
   // host-a's own Permissions page, through its Local row: Personal waits on
   // the window host's environment status, which this harness never answers.
-  recordNegotiatedHostMethods("host-a", ["environment.status"]);
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: "host-a", hostName: "host-a" },
   });

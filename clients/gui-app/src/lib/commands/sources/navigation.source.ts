@@ -19,6 +19,8 @@ import {
   type SettingsSection,
   type SettingsSectionGroupId,
 } from "@/lib/settings-sections";
+import { oldHostSectionShown } from "@/lib/settings-environment-pages";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { withSubpageLabels } from "@/lib/commands/sub-page-keywords";
 import type {
@@ -76,16 +78,21 @@ const OPEN_EPICS_ITEM: CommandItem = {
 const SETTINGS_SUBPAGE: CommandSubpage = {
   id: "nav:settings",
   title: "Open settings",
-  useItems: (ctx: CommandContext) =>
-    useMemo<ReadonlyArray<CommandItem>>(
+  useItems: (ctx: CommandContext) => {
+    // A Local pick on an old host offers only some Environment pages, so no
+    // row is listed for another.
+    const oldHost = useOldHostLocalPick();
+    return useMemo<ReadonlyArray<CommandItem>>(
       () =>
         visibleSettingsSections().flatMap((section) =>
-          ctx.pathname !== `/settings/${section.id}`
+          ctx.pathname !== `/settings/${section.id}` &&
+          (!oldHost || oldHostSectionShown(section.id))
             ? [buildSectionItem(section)]
             : [],
         ),
-      [ctx.pathname],
-    ),
+      [ctx.pathname, oldHost],
+    );
+  },
 };
 
 function buildSettingsEntryItem(

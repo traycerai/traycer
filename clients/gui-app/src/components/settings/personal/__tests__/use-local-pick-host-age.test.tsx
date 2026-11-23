@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   recordNegotiatedHostMethods,
@@ -20,16 +20,21 @@ afterEach(() => {
 });
 
 describe("useLocalPickHostAge", () => {
-  it("waits on a Local pick's computer until its handshake, then reads its release", () => {
+  it("reads a Local pick's computer as old when it serves no environment.status", () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
     const { result } = renderHook(() => useLocalPickHostAge());
-    expect(result.current).toBe("unknown");
-
-    act(() => recordNegotiatedHostMethods("host-old", ["host.status"]));
     expect(result.current).toBe("old");
   });
 
-  it("never waits on a Personal pick, whatever the window's host has negotiated", () => {
+  it("reads a Local pick's computer as current when it serves environment.status", () => {
+    recordNegotiatedHostMethods("host-old", ["environment.status"]);
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    const { result } = renderHook(() => useLocalPickHostAge());
+    expect(result.current).toBe("current");
+  });
+
+  it("never reads a Personal pick as old, whatever the window's host has negotiated", () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
     const { result } = renderHook(() => useLocalPickHostAge());
     expect(result.current).toBe("none");

@@ -40,6 +40,8 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
 import { SettingsPanelForSection } from "@/components/settings/settings-modal-content";
+import { SettingsSurface } from "@/components/settings/settings-surface";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useEffect, useState } from "react";
 import {
   act,
@@ -129,19 +131,49 @@ vi.mock(
       props.children,
   }),
 );
-vi.mock("@/components/settings/panels/providers-settings-panel", () => ({
-  McpServersSettingsPanel: () => <div data-testid="mcp-servers-page-probe" />,
-  ProvidersSettingsPanel: () => <div data-testid="providers-page-probe" />,
-  SkillsSettingsPanel: () => <div data-testid="skills-page-probe" />,
-}));
-vi.mock("@/components/settings/panels/secrets-settings-panel", () => ({
-  SecretsSettingsPanel: () => <div data-testid="secrets-page-probe" />,
-}));
-vi.mock("@/components/settings/panels/agent-memories-settings-panel", () => ({
-  AgentMemoriesSettingsPanel: () => (
-    <div data-testid="agent-memories-page-probe" />
-  ),
-}));
+// Each probe counts its mounts: a page that was never drawn mounted zero times.
+const probeMounts = vi.hoisted((): Record<string, number> => ({}));
+vi.mock("@/components/settings/panels/providers-settings-panel", async () => {
+  const { useEffect } = await import("react");
+  const probe = (name: string) =>
+    function Probe() {
+      useEffect(() => {
+        probeMounts[name] = (probeMounts[name] ?? 0) + 1;
+      }, []);
+      return <div data-testid={`${name}-page-probe`} />;
+    };
+  return {
+    McpServersSettingsPanel: probe("mcp-servers"),
+    ProvidersSettingsPanel: probe("providers"),
+    SkillsSettingsPanel: probe("skills"),
+  };
+});
+vi.mock("@/components/settings/panels/secrets-settings-panel", async () => {
+  const { useEffect } = await import("react");
+  return {
+    SecretsSettingsPanel: function Probe() {
+      useEffect(() => {
+        probeMounts["secrets"] = (probeMounts["secrets"] ?? 0) + 1;
+      }, []);
+      return <div data-testid="secrets-page-probe" />;
+    },
+  };
+});
+vi.mock(
+  "@/components/settings/panels/agent-memories-settings-panel",
+  async () => {
+    const { useEffect } = await import("react");
+    return {
+      AgentMemoriesSettingsPanel: function Probe() {
+        useEffect(() => {
+          probeMounts["agent-memories"] =
+            (probeMounts["agent-memories"] ?? 0) + 1;
+        }, []);
+        return <div data-testid="agent-memories-page-probe" />;
+      },
+    };
+  },
+);
 // The surface the search navigates through: an overlay that swaps the section
 // in place, which the test's own surface (below) implements. Nothing else
 // publishes an API, so every other case keeps the real bridge.
@@ -1412,6 +1444,7 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
   }
 
   beforeEach(() => {
+    for (const name of Object.keys(probeMounts)) delete probeMounts[name];
     cleanup();
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
@@ -1487,18 +1520,123 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     expect(hitFor("permissions")).toBeDefined();
   });
 
-  it("routes a window that opens on an old host's Local row off a page it lacks, before the page draws", async () => {
+  const PROBED_HIDDEN_PAGES = [
+    "mcp-servers",
+    "skills",
+    "secrets",
+    "agent-memories",
+  ] as const;
+
+  function arriveOnOldHostPick(): void {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
+    });
+  }
+
+  /** The window's host is the old computer, and its default pick has already resolved to that row. */
+  function arriveOnOldHostDefault(): void {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
     useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
     globalScopeOverrides.current = {
       host: hostScopeOptionFixture({ hostId: "host-old", name: "Old laptop" }),
       client: null,
     };
-    await renderSurface("skills");
-    // The window's host answers its handshake after the surface is up.
-    act(() => recordNegotiatedHostMethods("host-old", ["host.status"]));
+    useSettingsEnvironmentPickStore.setState({
+      defaultPick: {
+        kind: "local",
+        hostId: "host-old",
+        hostName: "Old laptop",
+      },
+      defaultHostId: "host-old",
+    });
+  }
 
-    await screen.findByTestId("providers-page-probe");
-    expect(screen.queryByTestId("skills-page-probe")).toBeNull();
+  /** The routed Settings tab: the real surface, whose section comes from the route or the remembered path. */
+  async function renderRoutedTab(path: string, lastPath: string | null) {
+    const rootRoute = createRootRoute({
+      component: () => <SettingsSurface lastPath={lastPath} />,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([]),
+      history: createMemoryHistory({ initialEntries: [path] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("combobox", { name: "Search settings" });
+  }
+
+  it.each(PROBED_HIDDEN_PAGES)(
+    "never mounts %s when a link reaches it through navigateToSettingsSection, and Providers shows",
+    async (id) => {
+      arriveOnOldHostPick();
+      await renderSurface("providers");
+
+      act(() => {
+        navigateToSettingsSection(id);
+      });
+
+      expect(probeMounts[id] ?? 0).toBe(0);
+      expect(screen.queryByTestId("local-move-page")).toBeNull();
+      expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+    },
+  );
+
+  it.each(PROBED_HIDDEN_PAGES)(
+    "never mounts %s when a deep link opens the routed tab on it, and Providers shows",
+    async (id) => {
+      arriveOnOldHostPick();
+
+      await renderRoutedTab(`/settings/${id}`, null);
+
+      expect(probeMounts[id] ?? 0).toBe(0);
+      expect(screen.queryByTestId("local-move-page")).toBeNull();
+      expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+    },
+  );
+
+  it("never mounts a hidden page when the routed tab's remembered path names it", async () => {
+    arriveOnOldHostPick();
+
+    await renderRoutedTab("/epics", "/settings/skills");
+
+    expect(probeMounts["skills"] ?? 0).toBe(0);
     expect(screen.queryByTestId("local-move-page")).toBeNull();
+    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+  });
+
+  it("never mounts a hidden page when a routed tab's default pick lands on the old host's row", async () => {
+    arriveOnOldHostDefault();
+
+    await renderRoutedTab("/settings/skills", null);
+
+    expect(probeMounts["skills"] ?? 0).toBe(0);
+    expect(screen.queryByTestId("local-move-page")).toBeNull();
+    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+  });
+
+  it("never mounts a hidden page when a window opens on an old host's Local row", async () => {
+    arriveOnOldHostDefault();
+
+    await renderSurface("skills");
+
+    expect(probeMounts["skills"] ?? 0).toBe(0);
+    expect(screen.queryByTestId("local-move-page")).toBeNull();
+    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+  });
+
+  it("still draws a hidden page under a Personal pick on the same host", async () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+
+    await renderSurface("skills");
+
+    await screen.findByTestId("skills-page-probe");
+    expect(screen.queryByTestId("providers-page-probe")).toBeNull();
   });
 });

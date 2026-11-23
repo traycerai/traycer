@@ -1,10 +1,4 @@
-import {
-  useContext,
-  useEffect,
-  useEffectEvent,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import { ChevronDown } from "lucide-react";
 import {
@@ -48,14 +42,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   environmentPickValue,
-  isOldHostLocalPick,
   moveEnvironmentPick,
   moveEnvironmentSurface,
-  oldHostSectionShown,
   PERSONAL_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
-import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -72,15 +63,8 @@ import {
  * default pick current and drops a Local pick whose computer has since moved:
  * the store is what every Environment page reads (`useEnvironmentPick`), and
  * this is the one place that knows each computer's state.
- *
- * A default pick that is a Local row on a host with no `environment.status`
- * offers only some pages, so the surface is routed off one it does not offer
- * in the same effect that sets the default: the page has not drawn under it.
  */
-function useEnvironmentPickerModel(
-  scope: HostScope,
-  section: SettingsSectionId | null,
-): EnvironmentPickerModel {
+function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   const model = useEnvironmentStatusModel(scope);
   const pick = useSettingsEnvironmentPickStore((state) => state.pick);
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
@@ -90,21 +74,10 @@ function useEnvironmentPickerModel(
   const statuses = model.statuses;
   const stale = isStaleLocalPick(pick, model.picker, statuses);
   const { defaultPick } = model.picker;
-  const routeDefault = useEffectEvent((next: EnvironmentPick): void => {
-    if (
-      section !== null &&
-      useSettingsEnvironmentPickStore.getState().pick === null &&
-      isOldHostLocalPick(next) &&
-      !oldHostSectionShown(section)
-    ) {
-      moveEnvironmentSurface.onServerFact("providers");
-    }
-  });
   // Syncs host-reported state into the window's pick: the store is read by
   // pages that do not mount this hook.
   useEffect(() => {
     setDefaultPick(defaultPick, scope.activeHostId);
-    routeDefault(defaultPick);
   }, [defaultPick, setDefaultPick, scope.activeHostId]);
   useEffect(() => {
     if (stale) setPick(null);
@@ -121,10 +94,7 @@ function useEnvironmentPickerModel(
  * dropdown on screen too, both write the same answer.
  */
 export function EnvironmentPickUpkeep(): ReactNode {
-  useEnvironmentPickerModel(
-    useHostScopeFor(WINDOW_HOST_SELECTION),
-    useContext(SettingsSectionContext),
-  );
+  useEnvironmentPickerModel(useHostScopeFor(WINDOW_HOST_SELECTION));
   return null;
 }
 
@@ -139,7 +109,7 @@ export function EnvironmentPicker(props: {
   /** The section on screen, so a pick that hides it can leave it. */
   readonly activeSection: SettingsSectionId | null;
 }): ReactNode {
-  const model = useEnvironmentPickerModel(props.scope, props.activeSection);
+  const model = useEnvironmentPickerModel(props.scope);
   const running = useHostsRunningPersonal(true);
   const openAddHost = useAddHostDialogStore((state) => state.openDialog);
   const pick = useSettingsEnvironmentPickStore(

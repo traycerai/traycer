@@ -309,7 +309,7 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
     ).toBeNull();
   });
 
-  it("holds a Local pick's page, and claims nothing, before the host has handshaked", () => {
+  it("claims nothing before the host has handshaked", () => {
     const calls = renderFrame({
       section: "shell",
       methods: null,
@@ -317,8 +317,9 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    expect(screen.getByTestId("local-pick-version-loading")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Edit the page" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
+    ).toBeNull();
     expect(calls.status).toBe(0);
   });
 });

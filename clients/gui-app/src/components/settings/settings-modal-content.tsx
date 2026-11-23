@@ -47,6 +47,8 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
+import { oldHostSectionShown } from "@/lib/settings-environment-pages";
 import "./settings-search.css";
 
 export interface SettingsModalContentProps {
@@ -146,7 +148,14 @@ const SETTINGS_PANELS = {
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
-  const { section } = props;
+  // A Local pick on an old host offers only some pages, and a link, a deep
+  // link, a remembered route or a palette row can still name another. The
+  // page drawn is Providers then, so the page the host lacks never mounts.
+  const oldHost = useOldHostLocalPick();
+  const section =
+    oldHost && !oldHostSectionShown(props.section)
+      ? "providers"
+      : props.section;
   // The one mount point for the settings-search reveal watcher, and the reason
   // it sits here rather than in either surface: both the modal and the routed
   // tab render their panel THROUGH this function, so one watcher covers both

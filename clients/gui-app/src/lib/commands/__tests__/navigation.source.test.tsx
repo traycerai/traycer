@@ -16,6 +16,12 @@ import {
 import { setMobileApp } from "@/lib/mobile-app";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  recordNegotiatedHostManifest,
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 function ctx(pathname: string): CommandContext {
   return {
@@ -76,6 +82,8 @@ describe("navigationSource", () => {
 
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
     soundtrackOfferedMock.value = false;
     setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
@@ -134,6 +142,43 @@ describe("navigationSource", () => {
     expect(mobileIds).not.toContain("nav:settings/keybindings");
     expect(mobileIds).not.toContain("nav:settings/link-phone");
     expect(mobileIds).not.toContain("nav:settings/app-diagnostics");
+  });
+
+  it("lists no row for a page a Local pick on an old host lacks, and still lists the pages it has", () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
+    });
+
+    const ids = captureSettingsSubpage("/").map((i) => i.id);
+
+    for (const hidden of [
+      "mcp-servers",
+      "skills",
+      "secrets",
+      "agent-memories",
+      "sandboxes",
+      "storage",
+    ]) {
+      expect(ids, hidden).not.toContain(`nav:settings/${hidden}`);
+    }
+    for (const kept of ["providers", "permissions", "agents", "shell"]) {
+      expect(ids, kept).toContain(`nav:settings/${kept}`);
+    }
+  });
+
+  it("lists every page for a Local pick on a host that advertises environment.status", () => {
+    recordNegotiatedHostManifest("host-old", {
+      "environment.status": { major: 1, minor: 3 },
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
+    });
+
+    const ids = captureSettingsSubpage("/").map((i) => i.id);
+
+    expect(ids).toContain("nav:settings/skills");
+    expect(ids).toContain("nav:settings/secrets");
   });
 
   it("settings sub-page filters out the current section", () => {

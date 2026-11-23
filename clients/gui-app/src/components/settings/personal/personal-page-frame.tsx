@@ -14,10 +14,7 @@ import {
 import { PersonalPageNotices } from "@/components/settings/personal/personal-page-notices";
 import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
-import {
-  useLocalPickHostAge,
-  useOldHostLocalPick,
-} from "@/components/settings/personal/use-old-host-local-pick";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { HostMinimumVersionGate } from "@/components/settings/host-scope/host-scope-gate";
@@ -139,24 +136,11 @@ export function PersonalPageFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
-  const localPickHostAge = useLocalPickHostAge();
   const environmentPage = SETTINGS_SECTIONS.some(
     (section) => section.id === props.section && section.group === "personal",
   );
   if (pick.kind === "unresolved" && environmentPage) {
     return <UnresolvedEnvironmentPage />;
-  }
-  // Which pages a Local row's computer offers depends on its release, so
-  // nothing renders until its handshake has said.
-  if (localPickHostAge === "unknown" && environmentPage) {
-    return (
-      <AgentSpinningDots
-        className={undefined}
-        testId="local-pick-version-loading"
-        variant={undefined}
-        tone="muted"
-      />
-    );
   }
   if (pick.kind === "team" && environmentPage) {
     return (
