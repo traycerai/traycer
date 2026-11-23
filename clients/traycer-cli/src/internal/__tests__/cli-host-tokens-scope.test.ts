@@ -16,6 +16,7 @@ import {
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
 import { createCliHostTokens } from "../cli-host-tokens";
+import { nameReason } from "./released-memory-test-support";
 import { SIGN_OUT_ARMS, standSignOutArm } from "./sign-out-arms-test-support";
 
 // Model P, J, L and N through the CLI's real token path: a token session that
@@ -28,7 +29,7 @@ const USER_ID = "user-1";
 const SIGN_IN_A = "sign-in-a";
 const SIGN_IN_B = "sign-in-b";
 
-type MintAnswer = "hold" | "refused" | "ok";
+type MintAnswer = "hold" | "refused" | "ok" | "not-admitted";
 
 const harness = vi.hoisted(() => ({
   /** Every authn request, in the order sent. */
@@ -38,6 +39,8 @@ const harness = vi.hoisted(() => ({
     index: number,
   ) => MintAnswer,
   table: new Map() as HostTokenTable,
+  /** Called as each authn request is sent, before it is answered. */
+  onSend: null as ((index: number) => void) | null,
   /** While set, the stored host tokens are not yet read. */
   loadGate: null as Promise<void> | null,
 }));
@@ -107,8 +110,10 @@ vi.mock(
         new Promise<HostTokenMintOutcome>((resolve) => {
           const index = harness.mints.length;
           harness.mints.push({ hostId, signIn });
+          harness.onSend?.(index);
           const answer = harness.answerFor(index);
           if (answer === "refused") resolve({ kind: "sign-in-rejected" });
+          if (answer === "not-admitted") resolve({ kind: "not-admitted" });
           if (answer === "ok")
             resolve({
               kind: "ok",
@@ -169,6 +174,7 @@ beforeEach(async () => {
   harness.answerFor = () => "ok";
   harness.table = new Map();
   harness.loadGate = null;
+  harness.onSend = null;
   credentialsFile.refreshes.splice(0);
   hostCount += 1;
   // A host process's flights and memory are kept per host id.
@@ -734,5 +740,75 @@ describe("two token instances of one process share one order of purchases for a 
     first.dispose();
     second.dispose();
     real.dispose();
+  });
+});
+
+describe("a host-specific failure is reported by the order its own request was sent in (P9)", () => {
+  // A guard: with no purchase for the host process, the same refusal is reported.
+  it("reports a not-admitted when no purchase for the host process outlives it", async () => {
+    harness.answerFor = () => "not-admitted";
+    // The host has named a reason for its refusals, so a refused mint can end the command.
+    nameReason(hostId);
+    const tokens = createCliHostTokens({
+      lease: new MutableBearerLease(SIGN_IN_A, USER_ID),
+      refresh: async () => ({
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
+      adoptStored: async () => undefined,
+      signal: null,
+    });
+    const reports: string[] = [];
+    tokens.onRefusalEndingCommand((reportedHostId) => {
+      reports.push(reportedHostId);
+    });
+
+    await tokens.mintFresh(hostId, null);
+
+    expect(reports).toEqual([hostId]);
+    tokens.dispose();
+  });
+
+  it("reports a not-admitted whose request was sent after a kept purchase, though it was asked before it", async () => {
+    // Two asks wait on the stored host tokens. Y's continuation sends first, on A; a sibling's B is
+    // published; X's continuation then sends a distinct request, on B, which is refused not-admitted.
+    const loading = gate();
+    harness.loadGate = loading.release;
+    harness.answerFor = (index) => (index === 0 ? "ok" : "not-admitted");
+    nameReason(hostId);
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    harness.onSend = (index) => {
+      if (index === 0) lease.rotate(SIGN_IN_B);
+    };
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: async () => ({
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
+      adoptStored: async () => undefined,
+      signal: null,
+    });
+    const reports: string[] = [];
+    tokens.onRefusalEndingCommand((reportedHostId) => {
+      reports.push(reportedHostId);
+    });
+    const purchaser = tokens.mintFresh(hostId, null);
+    const refused = tokens.mintFresh(hostId, null);
+
+    loading.open();
+    await Promise.all([purchaser, refused]);
+
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      SIGN_IN_A,
+      SIGN_IN_B,
+    ]);
+    // The refused request was sent after the purchase: the later request, not an outlived one.
+    expect(reports).toEqual([hostId]);
+    tokens.dispose();
   });
 });
