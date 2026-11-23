@@ -610,29 +610,39 @@ function createPersonTokens(
       readonly order: number | null;
     }
   >();
-  // Asked only while `owner` is current, so the memory's reads by host id
-  // answer for it.
-  const endsCommand = (
+  // The key of the sign-in stored now: the lease's, which follows the file.
+  const storedKey = (): string | null => hostSignInKey(readLeaseBearer(lease));
+  // The one judgement of whether a mint's failure ends a command, made as it
+  // is told and again at the gate. A refusal concerns the host process it
+  // started for: once another is observed, or a purchase for it on a later
+  // request, it ends nothing and waits for nothing (an answer with no request
+  // behind it has no order to be outlived). `no-sign-in` ends only while no
+  // sign-in is stored. `not-admitted` ends nothing once an open of that
+  // process was admitted after its mint started; it ends only when no sign-in
+  // can follow (the host named a reason and no sign-in it invited is on the
+  // wire unanswered, or it declined this person's probe), and otherwise
+  // waits for the next mint. Every other failure ends.
+  const endingNow = (
     owner: HostInstance,
     failure: CliHostTokenFailure,
     startedAt: number,
     order: number | null,
-  ): boolean => {
-    if (failure.kind !== "not-admitted") return true;
-    if (admittedSince(owner, startedAt)) return false;
-    if (
-      (hosts.namedReason(owner.hostId) &&
-        !hosts.invitedSignInPending(owner.hostId)) ||
+  ): "ends" | "waits" | "none" => {
+    if (!hosts.isCurrent(owner) || (order !== null && outlived(owner, order)))
+      return "none";
+    if (failure.kind === "no-sign-in")
+      return storedKey() === null ? "ends" : "none";
+    if (failure.kind !== "not-admitted") return "ends";
+    if (admittedSince(owner, startedAt)) return "none";
+    return (hosts.namedReason(owner.hostId) &&
+      !hosts.invitedSignInPending(owner.hostId)) ||
       hosts.probeDeclined(userId, owner.hostId)
-    )
-      return true;
-    deferred.set(owner, { failure, startedAt, order });
-    return false;
+      ? "ends"
+      : "waits";
   };
-  // A mint's refusal concerns the host process it started for: once another
-  // is observed, or a purchase for it on a later request, it ends nothing and
-  // is deferred for nothing. An answer with no request behind it has no order
-  // to be outlived. The evidence goes to the handle whose ask met it.
+  // The evidence goes to the handle whose ask met it. A `no-sign-in` told
+  // while a sign-in is stored is one the gate would drop anyway, so nothing a
+  // person sees changes by not telling it.
   const report = (
     handle: TokensHandle | null,
     owner: HostInstance,
@@ -641,12 +651,10 @@ function createPersonTokens(
     order: number | null,
     signIn: string | null,
   ): void => {
-    if (
-      !hosts.isCurrent(owner) ||
-      (order !== null && outlived(owner, order)) ||
-      !endsCommand(owner, failure, startedAt, order)
-    )
-      return;
+    const judged = endingNow(owner, failure, startedAt, order);
+    if (judged === "waits" && failure.kind === "not-admitted")
+      deferred.set(owner, { failure, startedAt, order });
+    if (judged !== "ends") return;
     if (failure.kind !== "sign-in-rejected")
       ending.set(owner, { failure, startedAt, order });
     if (handle === null) return;
@@ -670,8 +678,6 @@ function createPersonTokens(
   // a refused mint, so a refusal of a sign-in replaced on disk is dropped
   // there and never recorded against the stored one.
   stored.bindSignInSync(adoptStored);
-  // The key of the sign-in stored now: the lease's, which follows the file.
-  const storedKey = (): string | null => hostSignInKey(readLeaseBearer(lease));
   // The host process an ask observes now. An ask whose exit has ended (the
   // one it leaves its count on, see `waitForMint`) observes none, so the
   // source's own check declines its write and its purchase. An ask whose
@@ -1055,7 +1061,8 @@ function createPersonTokens(
   // The one gate for a terminal effect on a host: after its adopting read,
   // the current process's counting refusal of the stored sign-in, still
   // rejected and outlived by no later purchase, or the failure last told as
-  // ending a command, judged again. Nothing is awaited after the read.
+  // ending a command, judged again by `endingNow` as it was told. Nothing is
+  // awaited after the read.
   const refusalEndingCommandNow = async (
     hostId: string,
   ): Promise<CliRefusalEnding | null> => {
@@ -1077,10 +1084,7 @@ function createPersonTokens(
     const told = ending.get(owner);
     if (
       told === undefined ||
-      (told.order !== null && outlived(owner, told.order)) ||
-      (told.failure.kind === "no-sign-in" && current !== null) ||
-      (told.failure.kind === "not-admitted" &&
-        admittedSince(owner, told.startedAt))
+      endingNow(owner, told.failure, told.startedAt, told.order) !== "ends"
     )
       return null;
     return { kind: "host-refusal", failure: told.failure };

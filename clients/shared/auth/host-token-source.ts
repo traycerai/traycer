@@ -357,9 +357,13 @@ export interface HostTokenSource {
    * Brings this process's sign-in up to date with the store it is kept in:
    * awaited before a refused mint is compared with the sign-in held and
    * recorded, so a refusal of a sign-in another process has since replaced
-   * is dropped. Unbound (`null`) where the sign-in has one writer in the
-   * process. A reader of the record never needs it: a record is written only
-   * for the sign-in held after it.
+   * is dropped. Bound where the process reads the shared file itself and
+   * judges a sign-in from its records (the command line). Unbound (`null`)
+   * where the process mints only with a sign-in it is handed: desktop main
+   * mints with the verified session its windows push, which they re-read
+   * from the shared file when it changes, so a record there names the
+   * sign-in main still holds and moves with it. A reader of the record never
+   * needs it: a record is written only for the sign-in held after it.
    */
   bindSignInSync(sync: (() => Promise<void>) | null): void;
   subscribe(listener: (change: HostTokenChange) => void): () => void;
