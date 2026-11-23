@@ -1,5 +1,6 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+import { drawHostMintOrder } from "./host-mint-order";
 import { readTokenIssuedAtSeconds } from "./jwt-exp";
 import {
   isUsableHostToken,
@@ -383,8 +384,9 @@ export interface MintPurchase {
  * hostSignInKey}). `signIn`: for `sign-in-rejected`, the sign-in the refused
  * request was sent with; for `ok`, the sign-in the token handed back was
  * minted with (`null` when this source did not mint it); `null` for every
- * other kind. `order`: the refused request's order, on `sign-in-rejected`
- * only. `purchase`: see {@link MintPurchase}. All of it travels beside the
+ * other kind. `order`: the answered request's order, on `sign-in-rejected`
+ * and the host-specific failures (`not-a-member`, `not-admitted`,
+ * `sandbox-frozen`) only. `purchase`: see {@link MintPurchase}. All of it travels beside the
  * outcome, never on it, so nothing that receives an outcome (a listener, a
  * log, an error, the desktop bridge) receives any of it.
  */
@@ -409,6 +411,21 @@ export interface IdentifyingHostTokenSource extends HostTokenSource {
 export function isIssuedHostTokenEra(era: number): boolean {
   return Number.isSafeInteger(era) && era >= 0;
 }
+
+// Per host process, then pair, the highest order of that process's own
+// purchase, shared by every source in this process: a failure that process
+// was answered for an earlier request is outlived by it. Orders come from the
+// one process clock, so every request sent after a sign-out orders above
+// every purchase made before it, and a request sent before a sign-out cannot
+// purchase after it (its write is refused as `era-moved`).
+const purchasedOrder = new WeakMap<HostMintOwner, Map<string, number>>();
+const outlivedBy = (owner: HostMintOwner, key: string): number | null =>
+  purchasedOrder.get(owner)?.get(key) ?? null;
+// The failures authn answered for this host: each carries its request's order.
+const carriesOrder = (kind: HostTokenMintOutcome["kind"]): boolean =>
+  kind === "not-a-member" ||
+  kind === "not-admitted" ||
+  kind === "sandbox-frozen";
 
 export function createHostTokenSource(deps: {
   readonly persistence: HostTokenPersistence;
@@ -452,24 +469,6 @@ export function createHostTokenSource(deps: {
   const renewFlights = new Map<string, Promise<OrderedMintAnswer>>();
   const unknownFlights = new Map<string, Promise<OrderedMintAnswer>>();
   const observedFlights = new Map<string, Promise<OrderedMintAnswer>>();
-  // This source's request order, for a mint dependency that draws none.
-  let sentOrder = 0;
-  // Per host process and pair, the highest order of that process's own
-  // purchase, with the era it was made in: a failure that process was
-  // answered for an earlier request is outlived by it. Read only in the same
-  // era, so a purchase from before a sign-out outlives nothing after it.
-  const purchasedOrder = new WeakMap<
-    HostMintOwner,
-    Map<string, { readonly era: number; readonly order: number }>
-  >();
-  const outlivedBy = (
-    owner: HostMintOwner,
-    key: string,
-    era: number,
-  ): number | null => {
-    const latest = purchasedOrder.get(owner)?.get(key);
-    return latest !== undefined && latest.era === era ? latest.order : null;
-  };
   // Each pair's minting sign-in (its key, never the token), so a refresh mints
   // once per host; and the sign-in the pair's latest mint was sent with, so a
   // late flight sent with an earlier one never moves it back. Process memory
@@ -672,7 +671,12 @@ export function createHostTokenSource(deps: {
         };
       if (outcome.kind !== "ok")
         return {
-          identified: { outcome, signIn: null, order: null, purchase: null },
+          identified: {
+            outcome,
+            signIn: null,
+            order: carriesOrder(outcome.kind) ? order : null,
+            purchase: null,
+          },
           order,
         };
       const written = await store(userId, hostId, outcome.token, {
@@ -704,14 +708,14 @@ export function createHostTokenSource(deps: {
           : null;
       if (
         purchase !== null &&
-        (outlivedBy(purchase.owner, key, era) ?? 0) < purchase.order
+        (outlivedBy(purchase.owner, key) ?? 0) < purchase.order
       ) {
         let byPair = purchasedOrder.get(purchase.owner);
         if (byPair === undefined) {
           byPair = new Map();
           purchasedOrder.set(purchase.owner, byPair);
         }
-        byPair.set(key, { era, order: purchase.order });
+        byPair.set(key, purchase.order);
       }
       return {
         identified: {
@@ -730,7 +734,7 @@ export function createHostTokenSource(deps: {
       return { sentWith: mark, outcome: running.then(answerFor) };
     const attempt = (async (): Promise<OrderedMintAnswer> => {
       // Drawn as this source sends, used only if the dependency draws none.
-      const drawn = ++sentOrder;
+      const drawn = drawHostMintOrder();
       const answer = await deps.mint(hostId, signInToken, signal);
       const flight: OrderedMintAnswer =
         "kind" in answer ? { outcome: answer, order: drawn } : answer;
@@ -807,7 +811,7 @@ export function createHostTokenSource(deps: {
       if (
         kind !== "ok" &&
         order !== null &&
-        (outlivedBy(owner, keyOf(userId, hostId), era) ?? 0) > order
+        (outlivedBy(owner, keyOf(userId, hostId)) ?? 0) > order
       )
         return;
       records.record(owner, userId, era, sentWith, started, kind);
