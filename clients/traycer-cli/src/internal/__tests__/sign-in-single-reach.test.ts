@@ -10,18 +10,19 @@ import { describe, expect, it } from "vitest";
 
 const SRC = fileURLToPath(new URL("../..", import.meta.url));
 
-function productionSources(): readonly string[] {
-  return readdirSync(SRC, { recursive: true, encoding: "utf8" })
-    .filter(
-      (path) =>
-        path.endsWith(".ts") &&
-        !path.endsWith(".d.ts") &&
-        !path.split("/").includes("__tests__") &&
-        !path.endsWith(".test.ts"),
-    )
-    .map((path) => path.replaceAll("\\", "/"))
-    .sort();
-}
+const PRODUCTION_FILES: readonly string[] = readdirSync(SRC, {
+  recursive: true,
+  encoding: "utf8",
+})
+  .filter(
+    (path) =>
+      path.endsWith(".ts") &&
+      !path.endsWith(".d.ts") &&
+      !path.split("/").includes("__tests__") &&
+      !path.endsWith(".test.ts"),
+  )
+  .map((path) => path.replaceAll("\\", "/"))
+  .sort();
 
 function linesMatching(file: string, pattern: RegExp): readonly string[] {
   return readFileSync(join(SRC, file), "utf8")
@@ -40,7 +41,7 @@ describe("the verdict has one reach (P6)", () => {
   const SYNC_VERDICT_CALL = /\.signInRejected\(\)/;
 
   it("reads the synchronous verdict nowhere outside the token judge", () => {
-    const readers = productionSources()
+    const readers = PRODUCTION_FILES
       .filter((file) => file !== "internal/cli-host-tokens.ts")
       .flatMap((file) => linesMatching(file, SYNC_VERDICT_CALL));
 
@@ -68,7 +69,7 @@ describe("the store-backed rotation has one reach (P7)", () => {
   ]);
 
   it("calls the rotation only as the token options' refresh", () => {
-    const calls = productionSources()
+    const calls = PRODUCTION_FILES
       .filter((file) => !OWN_LEASE.has(file))
       .flatMap((file) => linesMatching(file, ROTATION_CALL))
       .filter((line) => !/refresh: \(\) => revalidator\.rotateSignIn\(\)/.test(line));
