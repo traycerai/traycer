@@ -27,6 +27,7 @@ import {
   type IdentifiedMintOutcome,
   type IdentifyingHostTokenSource,
   type HostTokenPersistence,
+  type MintPurchase,
   type OrderedMintAnswer,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { isUsableHostToken } from "@traycer-clients/shared/auth/host-token-store";
@@ -678,6 +679,23 @@ function createPersonTokens(
   const observedFor =
     (hostId: string, exit: AbortSignal | null) => (): string | null =>
       exit?.aborted === true ? null : hosts.currentInstance(hostId).observed;
+  // The source kept this ask's own write of the token its request bought:
+  // that token is stored, so the purchase outlives every earlier request for
+  // the asker's process while it is current, whether or not the ask is still
+  // live (an abandoned one, a disposed handle's).
+  const markPurchase = (
+    asker: HostInstance,
+    purchase: MintPurchase | null,
+  ): void => {
+    if (
+      purchase === null ||
+      purchase.owner !== asker ||
+      !hosts.isCurrent(asker)
+    )
+      return;
+    if ((purchaseOrderByProcess.get(asker) ?? 0) < purchase.order)
+      purchaseOrderByProcess.set(asker, purchase.order);
+  };
   // The exit that ended an ask, or its handle's stop: an ask whose handle has
   // ended is answered as abandoned, though its request runs on for others.
   const endedExit = (
@@ -826,12 +844,21 @@ function createPersonTokens(
           owner: asker,
           observedNow: observedFor(hostId, signal),
         })
-        .catch((): Answered => ({
-          outcome: { kind: "unavailable", detail: "host-only token not saved" },
-          signIn: null,
-          order: null,
-          purchase: null,
-        }));
+        .then(
+          (result): Answered => {
+            markPurchase(asker, result.purchase);
+            return result;
+          },
+          (): Answered => ({
+            outcome: {
+              kind: "unavailable",
+              detail: "host-only token not saved",
+            },
+            signIn: null,
+            order: null,
+            purchase: null,
+          }),
+        );
       if (signal === null) return answered.finally(() => leave(null));
       const exit = signal;
       return new Promise<Answered>((resolve) => {
@@ -887,18 +914,20 @@ function createPersonTokens(
         continue;
       }
       if (outcome.kind === "ok") {
-        // A usable answer, and the purchase it records, are a live asker's.
+        // A usable answer, and the held refusal its purchase ends, are a live
+        // asker's; the purchase mark moved as the answer arrived (`askFor`).
         const exit = endedExit(handle, signal);
         if (exit !== null) return settled(abandonedMint(exit));
         const { purchase } = answered;
         // The source kept this asker's own write of the token the request
         // bought, for this owner; the owner is current (checked above, with
         // no await since) and the asker live.
-        if (purchase !== null && purchase.owner === owner) {
-          if ((purchaseOrderByProcess.get(owner) ?? 0) < purchase.order)
-            purchaseOrderByProcess.set(owner, purchase.order);
-          if (purchase.signIn === storedKey()) held.delete(owner);
-        }
+        if (
+          purchase !== null &&
+          purchase.owner === owner &&
+          purchase.signIn === storedKey()
+        )
+          held.delete(owner);
         return settled(outcome);
       }
       if (outcome.kind !== "sign-in-rejected") {
