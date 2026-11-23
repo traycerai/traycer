@@ -4056,8 +4056,13 @@ export const providersSetEnvOverrideResponseSchemaV10 = lazySchema(() =>
     state: providerCliStateSchemaV10,
   }),
 );
+export const providersSetEnvOverrideResponseSchemaV23 = lazySchema(() =>
+  providersSetEnvOverrideResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
 export type ProvidersSetEnvOverrideResponse = z.infer<
-  typeof providersSetEnvOverrideResponseSchema
+  typeof providersSetEnvOverrideResponseSchemaV23
 >;
 
 export const providersDeleteEnvOverrideRequestSchema = lazySchema(() =>

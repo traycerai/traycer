@@ -371,7 +371,14 @@ export const configEnvSetResponseSchema = lazySchema(() =>
     value: z.string().nullable(),
   }),
 );
-export type ConfigEnvSetResponse = z.infer<typeof configEnvSetResponseSchema>;
+export const configEnvSetResponseSchemaV12 = lazySchema(() =>
+  configEnvSetResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
+export type ConfigEnvSetResponse = z.infer<
+  typeof configEnvSetResponseSchemaV12
+>;
 
 export const configEnvDeleteRequestSchema = lazySchema(() =>
   z.object({

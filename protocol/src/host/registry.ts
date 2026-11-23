@@ -624,7 +624,9 @@ import {
   configEnvListV10,
   configEnvSetV10,
   configEnvSetV11,
+  configEnvSetV12,
   configEnvSetUpgradeV10ToV11,
+  configEnvSetUpgradeV11ToV12,
   configLogLevelsGetV10,
   configLogLevelsSetV10,
   configShellAddV10,
@@ -1784,6 +1786,7 @@ import {
   providersSetEnvOverrideRequestSchemaV10,
   providersSetEnvOverrideRequestSchemaV21,
   providersSetEnvOverrideResponseSchema,
+  providersSetEnvOverrideResponseSchemaV23,
   providersSetEnvOverrideResponseSchemaV10,
   providersSetEnvOverrideResponseSchemaV20,
   providersSetSelectionRequestSchema,
@@ -6458,11 +6461,28 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
+const providersSetEnvOverrideV23 = defineRpcContract({
+  method: "providers.setEnvOverride",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: providersSetEnvOverrideRequestSchema,
+  responseSchema: providersSetEnvOverrideResponseSchemaV23,
+});
+
+const providersSetEnvOverrideUpgradeV22ToV23 = defineUpgradePath<
   typeof providersSetEnvOverrideV22,
+  typeof providersSetEnvOverrideV23
+>({
+  from: providersSetEnvOverrideV22.schemaVersion,
+  to: providersSetEnvOverrideV23.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+const providersSetEnvOverrideDowngradeV23ToV10 = defineDowngradePath<
+  typeof providersSetEnvOverrideV23,
   typeof providersSetEnvOverrideV10
 >({
-  from: { major: 2, minor: 2 },
+  from: { major: 2, minor: 3 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) =>
     downgradeProviderRequestForV10(
@@ -7194,7 +7214,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.env.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: configEnvSetV10,
@@ -7203,6 +7223,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: configEnvSetV11,
           upgradeFromPreviousVersion: configEnvSetUpgradeV10ToV11,
+        },
+        2: {
+          contract: configEnvSetV12,
+          upgradeFromPreviousVersion: configEnvSetUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -14208,7 +14232,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersSetEnvOverrideV20,
@@ -14222,9 +14246,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersSetEnvOverrideV22,
           upgradeFromPreviousVersion: providersSetEnvOverrideUpgradeV21ToV22,
         },
+        3: {
+          contract: providersSetEnvOverrideV23,
+          upgradeFromPreviousVersion: providersSetEnvOverrideUpgradeV22ToV23,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersSetEnvOverrideDowngradeV22ToV10,
+        1: providersSetEnvOverrideDowngradeV23ToV10,
       },
     },
   },

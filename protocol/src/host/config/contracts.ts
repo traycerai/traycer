@@ -26,6 +26,7 @@ import {
   configEnvSetRequestSchema,
   configEnvSetRequestSchemaV10,
   configEnvSetResponseSchema,
+  configEnvSetResponseSchemaV12,
   configLogLevelsGetRequestSchema,
   configLogLevelsResponseSchema,
   configLogLevelsSetRequestSchema,
@@ -458,6 +459,23 @@ export const configEnvSetUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: configEnvSetV10.schemaVersion,
   to: configEnvSetV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const configEnvSetV12 = defineRpcContract({
+  method: "config.env.set",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: configEnvSetRequestSchema,
+  responseSchema: configEnvSetResponseSchemaV12,
+});
+
+export const configEnvSetUpgradeV11ToV12 = defineUpgradePath<
+  typeof configEnvSetV11,
+  typeof configEnvSetV12
+>({
+  from: configEnvSetV11.schemaVersion,
+  to: configEnvSetV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
