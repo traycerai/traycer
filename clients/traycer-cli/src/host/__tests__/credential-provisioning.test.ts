@@ -196,6 +196,8 @@ const mocks = vi.hoisted(() => {
       readonly release: Promise<void>;
     } | null;
   } = { current: null };
+  // When set, run once the gate has judged, before the lap loop gets its answer.
+  const gateJudged: { after: (() => Promise<void>) | null } = { after: null };
   const createStoreBackedRevalidatorMock = vi.fn(
     (args: {
       readonly signal: AbortSignal | null;
@@ -246,6 +248,7 @@ const mocks = vi.hoisted(() => {
     providedLease,
     siblingSave,
     adoptHold,
+    gateJudged,
     // Fired synchronously from inside `subscribe()`, once per lap, with the
     // just-created session and its 1-based lap index. Tests use it to
     // schedule (via `setTimeout(..., 0)`) their simulated ack/status
@@ -253,8 +256,7 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      | ((session: FakeStreamSession, lapIndex: number) => void)
-      | null,
+      ((session: FakeStreamSession, lapIndex: number) => void) | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -287,6 +289,34 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     ...actual,
     createCliCredentialsStore: mocks.createCliCredentialsStoreMock,
     createStoreBackedRevalidator: mocks.createStoreBackedRevalidatorMock,
+  };
+});
+
+vi.mock("../../internal/cli-host-tokens", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/cli-host-tokens")>();
+  return {
+    ...actual,
+    acquireCliSignIn: async (
+      ...args: Parameters<typeof actual.acquireCliSignIn>
+    ) => {
+      const handle = await actual.acquireCliSignIn(...args);
+      return {
+        ...handle,
+        tokens: {
+          ...handle.tokens,
+          refusalEndingCommandNow: async (hostId: string) => {
+            const ending = await handle.tokens.refusalEndingCommandNow(hostId);
+            const after = mocks.gateJudged.after;
+            if (after !== null) {
+              mocks.gateJudged.after = null;
+              await after();
+            }
+            return ending;
+          },
+        },
+      };
+    },
   };
 });
 
@@ -512,6 +542,7 @@ beforeEach(() => {
   mocks.providedLease.current = null;
   mocks.siblingSave.signIn = null;
   mocks.adoptHold.current = null;
+  mocks.gateJudged.after = null;
   mocks.onSessionCreated = null;
 
   mocks.subscribeMock.mockClear();
@@ -2596,6 +2627,81 @@ describe("provisionInstalledHostCredential", () => {
     expect(Date.now() - startedAt).toBeLessThan(deadlineMs);
     expect(sentWith).toEqual([SIGN_IN_A]);
     expect(mocks.subscribeMock).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  }, 10_000);
+
+  // A verdict may not wait: a refusal reported once the gate has judged is judged before the next lap.
+  it("ends at once on a standing refusal reported after the gate answered a withdrawn one, without opening another lap", async () => {
+    const SIGN_IN_A = "test-bearer-token";
+    const SIBLING = "sibling-sign-in";
+    const deadlineMs = 2_000;
+    const sentWith: string[] = [];
+    const readReached = createDeferred<void>();
+    const readReleased = createDeferred<void>();
+    const secondReported = createDeferred<void>();
+    let reports = 0;
+    // The first report wakes the lap and arms the held read; the second is the standing refusal.
+    const logger: typeof noopLogger = {
+      ...noopLogger,
+      warn: (message, fields) => {
+        if (message === "Host credential provisioning token mint refused") {
+          reports += 1;
+          if (reports === 1)
+            mocks.adoptHold.current = {
+              reached: () => readReached.resolve(undefined),
+              release: readReleased.promise,
+            };
+          else secondReported.resolve(undefined);
+        }
+        noopLogger.warn(message, fields);
+      },
+    };
+    mocks.hostTokenTable = new Map();
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    // The first mint, on A, is refused with its refresh; the next, on the sibling's sign-in, is a refusal that stands.
+    mocks.hostTokenMintMock.mockImplementation(
+      async (_authnBaseUrl: string, _hostId: string, signIn: string) => {
+        sentWith.push(signIn);
+        return sentWith.length === 1
+          ? { kind: "sign-in-rejected" }
+          : { kind: "not-a-member" };
+      },
+    );
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      // Only the first lap's dial asks; a later lap has nothing to say.
+      if (lapIndex !== 1) return;
+      setTimeout(() => {
+        // The dial asks for its host-only token: the mint runs for the host the socket was selected for.
+        capturedClientOptions().bearer("host-1");
+      }, 0);
+    };
+    // The gate has judged the first refusal withdrawn; before the loop gets that answer, a second mint is refused.
+    mocks.gateJudged.after = async () => {
+      capturedClientOptions().bearer("host-1");
+      await secondReported.promise;
+    };
+
+    const startedAt = Date.now();
+    const probe = provisionInstalledHostCredential(
+      makeOptions({ deadlineMs, progress: vi.fn(), logger }),
+    );
+    await readReached.promise;
+    // The sibling's save lands inside the gate's held read: the first gate answers null.
+    mocks.siblingSave.signIn = SIBLING;
+    mocks.providedLease.current?.rotate(SIBLING);
+    expect(mocks.providedLease.current?.getBearerToken()).toBe(SIBLING);
+    readReleased.resolve(undefined);
+
+    const outcome = await probe;
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "error",
+      message: NOT_A_MEMBER_MESSAGE,
+    });
+    expect(mocks.subscribeMock).toHaveBeenCalledTimes(1);
+    expect(Date.now() - startedAt).toBeLessThan(deadlineMs);
+    expect(sentWith).toEqual([SIGN_IN_A, SIBLING]);
     expectCleanTeardown();
   }, 10_000);
 
