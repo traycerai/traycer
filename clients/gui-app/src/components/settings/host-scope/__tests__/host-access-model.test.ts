@@ -11,9 +11,6 @@ import type {
   RemoteAccessState,
 } from "@traycer/protocol/host/environment-schemas";
 import {
-  keepLocalTarget,
-  keepLocalText,
-  keptUndoFailedText,
   localOverrideLabel,
   MOVED_NOTICE_TEXT,
   movedNoticeShown,
@@ -101,10 +98,6 @@ describe("the fixed copy", () => {
       "Your settings moved to Personal. Review what changed.",
     );
     expect(teamOwnedText("Acme")).toBe("These settings belong to Acme.");
-    expect(keepLocalText("dev-box")).toBe("Keep dev-box's value on dev-box");
-    expect(keptUndoFailedText("dev-box")).toBe(
-      "Kept on dev-box, but couldn't undo the change everywhere.",
-    );
   });
 });
 
@@ -426,7 +419,7 @@ describe("noticeText", () => {
     ).toBe("DATABASE_URL now applies everywhere.");
   });
 
-  it("names the host that made the change by its label", () => {
+  it("does not name the computer that made the change", () => {
     expect(
       noticeText(
         notice({
@@ -434,10 +427,10 @@ describe("noticeText", () => {
           from: { kind: "host", hostId: "host-a", hostLabel: "dev-box" },
         }),
       ),
-    ).toBe("DATABASE_URL from dev-box now applies everywhere.");
+    ).toBe("DATABASE_URL now applies everywhere.");
   });
 
-  it("says another host when the host has no label", () => {
+  it("does not name a computer when its label is missing", () => {
     expect(
       noticeText(
         notice({
@@ -445,7 +438,7 @@ describe("noticeText", () => {
           from: { kind: "host", hostId: "host-a", hostLabel: null },
         }),
       ),
-    ).toBe("DATABASE_URL from another host now applies everywhere.");
+    ).toBe("DATABASE_URL now applies everywhere.");
   });
 
   it("labels a provider's variable by the variable and a singleton by its page", () => {
@@ -456,101 +449,10 @@ describe("noticeText", () => {
           key: "claude-code:ANTHROPIC_API_KEY",
         }),
       ),
-    ).toBe("ANTHROPIC_API_KEY from dev-box now applies everywhere.");
+    ).toBe("ANTHROPIC_API_KEY now applies everywhere.");
     expect(noticeText(notice({ kind: "shell", key: "shell" }))).toBe(
-      "The shell from dev-box now applies everywhere.",
+      "The shell now applies everywhere.",
     );
-  });
-});
-
-describe("keepLocalTarget", () => {
-  const fromDevBox = {
-    kind: "host",
-    hostId: "host-a",
-    hostLabel: "dev-box",
-  } as const;
-  const cases: ReadonlyArray<
-    [
-      label: string,
-      notice: Partial<EnvironmentNotice>,
-      windowHostId: string | null,
-      target: LocalOverrideTarget | null,
-    ]
-  > = [
-    [
-      "a variable changed on the window's host",
-      { kind: "variable", key: "LOG_LEVEL", from: fromDevBox },
-      "host-a",
-      { kind: "variable", key: "LOG_LEVEL" },
-    ],
-    [
-      "a provider's variable, parsed from <providerId>:<variable>",
-      { kind: "env_override", key: "claude-code:ANTHROPIC_API_KEY" },
-      "host-a",
-      {
-        kind: "env_override",
-        providerId: "claude-code",
-        key: "ANTHROPIC_API_KEY",
-      },
-    ],
-    [
-      "a provider's variable whose name holds another colon",
-      { kind: "env_override", key: "codex:A:B" },
-      "host-a",
-      { kind: "env_override", providerId: "codex", key: "A:B" },
-    ],
-    [
-      "a provider id this desktop does not know",
-      { kind: "env_override", key: "not-a-provider:KEY" },
-      "host-a",
-      null,
-    ],
-    [
-      "an env override key with no colon",
-      { kind: "env_override", key: "ANTHROPIC_API_KEY" },
-      "host-a",
-      null,
-    ],
-    ["a shell item", { kind: "shell", key: "shell" }, "host-a", null],
-    [
-      "an MCP server item",
-      { kind: "mcp_server", key: "linear" },
-      "host-a",
-      null,
-    ],
-    [
-      "a change that came from the dashboard",
-      { kind: "variable", key: "LOG_LEVEL", from: { kind: "dashboard" } },
-      "host-a",
-      null,
-    ],
-    [
-      "a change that came from another host",
-      {
-        kind: "variable",
-        key: "LOG_LEVEL",
-        from: { kind: "host", hostId: "host-b", hostLabel: "laptop" },
-      },
-      "host-a",
-      null,
-    ],
-    [
-      "a change whose undo is no longer available",
-      { kind: "variable", key: "LOG_LEVEL", undoAvailable: false },
-      "host-a",
-      null,
-    ],
-    [
-      "a window with no host",
-      { kind: "variable", key: "LOG_LEVEL" },
-      null,
-      null,
-    ],
-  ];
-  it.each(cases)("%s", (_label, overrides, windowHostId, target) => {
-    expect(
-      keepLocalTarget(notice({ from: fromDevBox, ...overrides }), windowHostId),
-    ).toEqual(target);
   });
 });
 
@@ -562,28 +464,20 @@ describe("undoRefusalText", () => {
     changedBy: { kind: "dashboard" },
   };
   const needsGrant: UndoOutcome = { outcome: "needs_grant" };
-  const kept = { hostName: "dev-box" } as const;
 
   it("says nothing for an undo that went through, kept or not", () => {
     expect(undoRefusalText(saved, "LOG_LEVEL", null)).toBeNull();
-    expect(undoRefusalText(saved, "LOG_LEVEL", kept)).toBeNull();
   });
 
   it("says the value was changed again since", () => {
     expect(undoRefusalText(stale, "LOG_LEVEL", null)).toBe(
       "Couldn't undo: LOG_LEVEL was changed again since.",
     );
-    expect(undoRefusalText(stale, "LOG_LEVEL", kept)).toBe(
-      "Kept on dev-box, but couldn't undo the change everywhere: LOG_LEVEL was changed again since.",
-    );
   });
 
   it("says the undo needs the person's confirmation", () => {
     expect(undoRefusalText(needsGrant, "LOG_LEVEL", null)).toBe(
       "Couldn't undo: it needs your confirmation. Sign in again and retry.",
-    );
-    expect(undoRefusalText(needsGrant, "LOG_LEVEL", kept)).toBe(
-      "Kept on dev-box, but couldn't undo the change everywhere: it needs your confirmation. Sign in again and retry.",
     );
   });
 });
