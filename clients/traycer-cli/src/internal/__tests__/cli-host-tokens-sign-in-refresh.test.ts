@@ -53,25 +53,22 @@ const credentialsFile = vi.hoisted(() => ({
 
 const createdSources = vi.hoisted(() => [] as HostTokenSource[]);
 
-vi.mock(
-  "../../../../shared/auth/host-token-source",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../../../shared/auth/host-token-source")
-      >();
-    return {
-      ...actual,
-      createHostTokenSource: (
-        options: Parameters<typeof actual.createHostTokenSource>[0],
-      ): HostTokenSource => {
-        const source = actual.createHostTokenSource(options);
-        createdSources.push(source);
-        return source;
-      },
-    };
-  },
-);
+vi.mock("../../../../shared/auth/host-token-source", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/host-token-source")
+    >();
+  return {
+    ...actual,
+    createHostTokenSource: (
+      options: Parameters<typeof actual.createHostTokenSource>[0],
+    ): HostTokenSource => {
+      const source = actual.createHostTokenSource(options);
+      createdSources.push(source);
+      return source;
+    },
+  };
+});
 
 vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();
@@ -668,7 +665,10 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     expect(recordedWhenSyncing.length).toBeGreaterThan(0);
     expect(recordedWhenSyncing.every((failure) => failure === null)).toBe(true);
     expect(lease.getBearerToken()).toBe(signInB);
-    expect(harness.mints.map((mint) => mint.signIn)).toEqual([signInA, signInB]);
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      signInA,
+      signInB,
+    ]);
     expect(tokens.signInRejected()).toBe(false);
     expect(reports).toEqual([]);
     tokens.dispose();
