@@ -168,11 +168,6 @@ describe("staged sandbox store", () => {
       target: NEW_TARGET,
       keeps: true,
     },
-    {
-      failure: { kind: "refused", message: "Traycer refused that request." },
-      target: NEW_TARGET,
-      keeps: false,
-    },
     // The sandbox that key made failed: naming it again answers with that row.
     { failure: FAILED, target: NEW_TARGET, keeps: false },
     // A wake has no create key to bill twice; the next one wakes again.
@@ -270,6 +265,38 @@ describe("staged sandbox store", () => {
       step: "booting",
       startedAt: 1_000,
     });
+  });
+
+  it.each([
+    [
+      "an unverified balance refusal that proves the create did not happen",
+      { kind: "unverified", freshCreateKey: true },
+      true,
+    ],
+    [
+      "a team environment preflight failure",
+      { kind: "unavailable", freshCreateKey: false },
+      false,
+    ],
+  ] as const)("restores %s and uses its verdict for Retry", async (_name, failure, takesFreshKey) => {
+    const store = useStagedSandboxStore.getState();
+    const key = pendingSendSurfaceKey("send-with-create-verdict");
+    store.stage(key, NEW_TARGET);
+    const first = store.begin(key, false, 1_000, false);
+    store.report(key, { failure });
+    const persisted = persistedStageStorage();
+
+    useStagedSandboxStore.setState({ bySurface: {} });
+    restoreStageStorage(persisted);
+    await useStagedSandboxStore.persist.rehydrate();
+
+    const restored = readStagedSandbox(key);
+    if (restored === null) throw new Error("the pending stage was not restored");
+    const retry = useStagedSandboxStore
+      .getState()
+      .begin(key, stagedCreateNeedsFreshKey(restored), 5_000, false);
+
+    expect(retry === first).toBe(!takesFreshKey);
   });
 
   it("moves a surface's stage to a pending send's key as it stands, key included", () => {

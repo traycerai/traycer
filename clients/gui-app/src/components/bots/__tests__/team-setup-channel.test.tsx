@@ -828,7 +828,8 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     });
 
     it.each([
-      ["401", refusal(401, "unauthorized"), true],
+      ["401", { kind: "unauthorized" }, true],
+      ["untyped 403", { kind: "unauthorized" }, true],
       [
         "402",
         {

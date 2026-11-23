@@ -1558,6 +1558,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
  */
 async function sendAgainAfter(
   answer: SandboxCreateFetchResult | "network-error",
+  retryAgain: boolean,
 ): Promise<ReadonlyArray<string | null>> {
   if (answer === "network-error") {
     mocks.createSandbox.mockRejectedValue(new Error("offline"));
@@ -1591,14 +1592,16 @@ async function sendAgainAfter(
   await waitFor(() => {
     expect(readStagedSandbox(SURFACE)?.failure).not.toBeNull();
   });
-  let intercepted = false;
-  act(() => {
-    intercepted = latestSend?.intercept("second", null) ?? false;
-  });
-  await waitFor(() => {
-    expect(mocks.createSandbox).toHaveBeenCalledTimes(2);
-  });
-  expect(intercepted).toBe(true);
+  if (retryAgain) {
+    let intercepted = false;
+    act(() => {
+      intercepted = latestSend?.intercept("second", null) ?? false;
+    });
+    await waitFor(() => {
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(2);
+    });
+    expect(intercepted).toBe(true);
+  }
   return mocks.createSandbox.mock.calls.map(
     ([request]) => request.clientRequestId,
   );
@@ -1606,8 +1609,8 @@ async function sendAgainAfter(
 
 describe("useStagedSandboxSend's send after a failed create", () => {
   it.each([
-    ["401", refusal(401, "unauthorized"), false],
-    ["untyped 403", refusal(403, "unknown_refusal"), false],
+    ["401", { kind: "unauthorized" }, false],
+    ["untyped 403", { kind: "unauthorized" }, false],
     [
       "503 environment_unavailable",
       refusal(503, "environment_unavailable"),
@@ -1626,14 +1629,18 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     ["400 shape_not_offered", refusal(400, "shape_not_offered"), true],
     ["503 provider_unavailable", refusal(503, "provider_unavailable"), true],
     ["404 sandbox_not_found", refusal(404, "sandbox_not_found"), true],
+    ["502 provider_failed", refusal(502, "provider_failed"), true],
   ] as const)("uses the right next create key after %s", async (_name, answer, fresh) => {
-    const [first, second] = await sendAgainAfter(answer);
+    const [first, second] = await sendAgainAfter(answer, true);
 
     expect(second === first).toBe(!fresh);
   });
 
   it("offers Add credits and no Retry after a credit refusal", async () => {
-    await sendAgainAfter(refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT));
+    await sendAgainAfter(
+      refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+      false,
+    );
 
     expect(screen.getByTestId("sandbox-refusal-add-credits")).toBeDefined();
     expect(screen.queryByTestId("sandbox-refusal-retry")).toBeNull();

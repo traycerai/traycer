@@ -1,5 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
-import { v4 as uuidv4 } from "uuid";
+import { useState, type ReactNode } from "react";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { SandboxDestroyDialog } from "@/components/hosts/sandbox-confirm-dialogs";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
@@ -19,8 +18,10 @@ import {
   type SandboxPageConfiguration,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { sandboxVerbPendingLine } from "@/lib/sandboxes/sandbox-strings";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
+import { useSandboxFailedRowRetryStore } from "@/stores/sandboxes/sandbox-failed-row-retry-store";
 
 /** A chat's Retry waits until its sandbox's environment is identified. */
 export function SandboxFailedChatActions(props: {
@@ -65,9 +66,6 @@ export function SandboxFailedRowActions(props: {
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
   const [destroyOpen, setDestroyOpen] = useState(false);
-  // An unanswered request may already have created a sandbox. Reuse its key
-  // until the server accepts it or refuses it before creating anything.
-  const retryKey = useRef<string | null>(null);
   const actions = sandboxRowActions({
     summary,
     unreachable: false,
@@ -79,9 +77,13 @@ export function SandboxFailedRowActions(props: {
 
   const retry = (): void => {
     if (configuration === null || actions.primary !== "retry" || busy) return;
-    if (retryKey.current === null) retryKey.current = uuidv4();
-    create.mutate(
-      {
+    const userId = signedInUserId();
+    const accountAndRow = userId === null ? null : `${userId}:${summary.id}`;
+    const store = useSandboxFailedRowRetryStore.getState();
+    const requestKey = store.getOrCreate(accountAndRow);
+    // A mutation can settle after this row unmounts.
+    void create
+      .mutateAsync({
         request: {
           os: summary.os,
           cpus: summary.cpus,
@@ -97,19 +99,17 @@ export function SandboxFailedRowActions(props: {
           // A row's null is never; on a create, null uses the default.
           destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
           createdByTaskId: null,
-          clientRequestId: retryKey.current,
+          clientRequestId: requestKey,
         },
         teamName: configuration.kind === "team" ? configuration.teamName : null,
-      },
-      {
-        onSuccess: () => {
-          retryKey.current = null;
+      })
+      .then(
+        () => store.clear(accountAndRow, requestKey),
+        (error: unknown) => {
+          if (error instanceof Error && createErrorNeedsFreshKey(error))
+            store.clear(accountAndRow, requestKey);
         },
-        onError: (error) => {
-          if (createErrorNeedsFreshKey(error)) retryKey.current = null;
-        },
-      },
-    );
+      );
   };
 
   return (

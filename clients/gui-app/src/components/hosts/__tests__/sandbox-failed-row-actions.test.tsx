@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
@@ -11,6 +11,7 @@ import {
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSandboxFailedRowRetryStore } from "@/stores/sandboxes/sandbox-failed-row-retry-store";
 import { SandboxBillingRuntime } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -36,6 +37,13 @@ const TEAM_CONFIGURATION: SandboxPageConfiguration = {
 
 const PERSONAL_CONFIGURATION: SandboxPageConfiguration = { kind: "personal" };
 const environmentListRequests: number[] = [];
+const FAILED_SANDBOX_ID = "failed-team-sandbox";
+
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+}
 
 function refusedCreate(): Extract<
   SandboxCreateFetchResult,
@@ -77,63 +85,10 @@ async function retryAndExpectToast(options: {
     retryAgain,
   } = options;
   const binding = createFakeSandboxBinding();
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  mocks.binding = binding;
-  if (configuration.kind === "team") {
-    binding.auth.getTeamEnvironment.mockResolvedValue({
-      kind: "ok",
-      environmentId: configuration.environmentId ?? "env-acme",
-    });
-  }
+  const queryClient = createQueryClient();
+  signInAs("viewer");
+  const view = renderFailedRow(binding, configuration, environmentRole, queryClient);
   binding.auth.createSandbox.mockResolvedValue(refusal);
-  useAuthStore.setState({
-    status: "signed-in",
-    profile: {
-      userId: "viewer",
-      userName: "Viewer",
-      email: "viewer@example.test",
-    },
-    contextMetadata: { userId: "viewer", username: "viewer" },
-  });
-  render(
-    <SandboxBillingRuntime
-      answer={{ kind: "ready", role: environmentRole }}
-      hostId="billing-host"
-      environmentId={
-        configuration.kind === "team"
-          ? (configuration.environmentId ?? "env-acme")
-          : "env-acme"
-      }
-      queryClient={queryClient}
-      onBinding={(runtimeBinding: HostRuntimeBinding<HostRpcRegistry>) => {
-        const fakeBinding = mocks.binding;
-        if (fakeBinding === null) {
-          throw new Error("the fake AuthService answers were not prepared");
-        }
-        vi.spyOn(runtimeBinding.auth, "getTeamEnvironment").mockImplementation(
-          (teamId) => fakeBinding.auth.getTeamEnvironment(teamId),
-        );
-        vi.spyOn(runtimeBinding.auth, "createSandbox").mockImplementation(
-          (request) => fakeBinding.auth.createSandbox(request),
-        );
-      }}
-      onEnvironmentListRead={() => {
-        environmentListRequests.push(1);
-      }}
-    >
-      <SandboxFailedRowActions
-        summary={sandboxSummaryFixture({
-          id: "failed-team-sandbox",
-          state: "failed",
-          environmentId: "env-acme",
-        })}
-        configuration={configuration}
-        credits={configuration}
-      />
-    </SandboxBillingRuntime>,
-  );
   if (configuration.kind === "team") {
     await waitFor(() => {
       expect(environmentListRequests.length).toBeGreaterThan(0);
@@ -161,8 +116,69 @@ async function retryAndExpectToast(options: {
     await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
     await waitFor(() => expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2));
   }
+  view.unmount();
   return binding.auth.createSandbox.mock.calls.map(
     ([request]) => request.clientRequestId,
+  );
+}
+
+function signInAs(userId: string): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: { userId, userName: "Viewer", email: "viewer@example.test" },
+    contextMetadata: { userId, username: "viewer" },
+  });
+}
+
+function renderFailedRow(
+  binding: FakeSandboxBinding,
+  configuration: SandboxPageConfiguration,
+  environmentRole: "admin" | "editor" | "viewer",
+  queryClient: QueryClient,
+) {
+  mocks.binding = binding;
+  if (configuration.kind === "team") {
+    binding.auth.getTeamEnvironment.mockResolvedValue({
+      kind: "ok",
+      environmentId: configuration.environmentId ?? "env-acme",
+    });
+  }
+  return render(
+    <SandboxBillingRuntime
+      answer={{ kind: "ready", role: environmentRole }}
+      hostId="billing-host"
+      environmentId={
+        configuration.kind === "team"
+          ? (configuration.environmentId ?? "env-acme")
+          : "env-acme"
+      }
+      queryClient={queryClient}
+      onBinding={(runtimeBinding: HostRuntimeBinding<HostRpcRegistry>) => {
+        const fakeBinding = mocks.binding;
+        if (fakeBinding === null) {
+          throw new Error("the fake AuthService answers were not prepared");
+        }
+        vi.spyOn(runtimeBinding.auth, "getTeamEnvironment").mockImplementation(
+          (teamId) => fakeBinding.auth.getTeamEnvironment(teamId),
+        );
+        vi.spyOn(runtimeBinding.auth, "createSandbox").mockImplementation(
+          (request) => fakeBinding.auth.createSandbox(request),
+        );
+      }}
+      onEnvironmentListRead={() => {
+        environmentListRequests.push(1);
+      }}
+    >
+      <SandboxFailedRowActions
+        summary={sandboxSummaryFixture({
+          id: FAILED_SANDBOX_ID,
+          state: "failed",
+          environmentId: "env-acme",
+        })}
+        configuration={configuration}
+        credits={configuration}
+      />
+    </SandboxBillingRuntime>,
   );
 }
 
@@ -172,6 +188,7 @@ afterEach(() => {
   environmentListRequests.length = 0;
   mocks.toastError.mockReset();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  useSandboxFailedRowRetryStore.setState({ byAccountAndRow: {} });
 });
 
 const RETRY_REFUSAL_CASES: readonly RetryRefusalCase[] = [
@@ -223,7 +240,8 @@ describe("SandboxFailedRowActions Retry", () => {
   );
 
   it.each([
-    ["401", { ...refusedCreate(), status: 401, code: "unauthorized" }, true],
+    ["401", { kind: "unauthorized" }, true],
+    ["untyped 403", { kind: "unauthorized" }, true],
     ["402", refusedCreate(), false],
   ] as const)("uses the correct request key after a %s", async (_status, answer, keepsKey) => {
     const keys = await retryAndExpectToast({
@@ -235,5 +253,170 @@ describe("SandboxFailedRowActions Retry", () => {
     });
 
     expect(keys[1] === keys[0]).toBe(keepsKey);
+  });
+
+  it("reuses an unauthorized Retry key after the failed row remounts", async () => {
+    const binding = createFakeSandboxBinding();
+    binding.auth.createSandbox.mockResolvedValue({ kind: "unauthorized" });
+    const firstView = renderFailedRow(
+      binding,
+      PERSONAL_CONFIGURATION,
+      "editor",
+      createQueryClient(),
+    );
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("account-a");
+    await userEvent.click(retry);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1),
+    );
+    const firstKey = binding.auth.createSandbox.mock.calls[0]?.[0].clientRequestId;
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry" })).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
+    firstView.unmount();
+
+    renderFailedRow(
+      binding,
+      PERSONAL_CONFIGURATION,
+      "editor",
+      createQueryClient(),
+    );
+    const remountedRetry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("account-a");
+    await userEvent.click(remountedRetry);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2),
+    );
+
+    expect(binding.auth.createSandbox.mock.calls[1]?.[0].clientRequestId).toBe(
+      firstKey,
+    );
+  });
+
+  it("keeps unresolved Retry keys separate by account for the same row", async () => {
+    const binding = createFakeSandboxBinding();
+    binding.auth.createSandbox.mockResolvedValue({
+      kind: "network-error",
+      detail: "offline",
+    });
+    const view = renderFailedRow(
+      binding,
+      PERSONAL_CONFIGURATION,
+      "editor",
+      createQueryClient(),
+    );
+    let retry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("account-a");
+    await userEvent.click(retry);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1),
+    );
+    const accountAKey = binding.auth.createSandbox.mock.calls[0]?.[0].clientRequestId;
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry" })).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
+
+    retry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("account-b");
+    await userEvent.click(retry);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2),
+    );
+    const accountBKey = binding.auth.createSandbox.mock.calls[1]?.[0].clientRequestId;
+    expect(accountBKey).not.toBe(accountAKey);
+
+    retry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("account-a");
+    await userEvent.click(retry);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(3),
+    );
+    expect(binding.auth.createSandbox.mock.calls[2]?.[0].clientRequestId).toBe(
+      accountAKey,
+    );
+    view.unmount();
+  });
+
+  it("clears a successful Retry after unmount so a remounted row starts fresh", async () => {
+    const binding = createFakeSandboxBinding();
+    const createAnswer: {
+      resolve: ((result: SandboxCreateFetchResult) => void) | null;
+    } = { resolve: null };
+    binding.auth.createSandbox.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          createAnswer.resolve = resolve;
+        }),
+    );
+    const view = renderFailedRow(
+      binding,
+      PERSONAL_CONFIGURATION,
+      "editor",
+      createQueryClient(),
+    );
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("account-a");
+    await userEvent.click(retry);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1),
+    );
+    const firstKey = binding.auth.createSandbox.mock.calls[0]?.[0].clientRequestId;
+    await waitFor(() =>
+      expect(
+        useSandboxFailedRowRetryStore.getState().byAccountAndRow[
+          `account-a:${FAILED_SANDBOX_ID}`
+        ],
+      ).toBe(firstKey),
+    );
+    view.unmount();
+
+    const answer = createAnswer.resolve;
+    if (answer === null) throw new Error("the create promise was not captured");
+    act(() => {
+      answer({
+        kind: "ok",
+        accepted: {
+          sandboxId: "created-sandbox",
+          hostId: "created-host",
+          sandbox: sandboxSummaryFixture({
+            id: "created-sandbox",
+            hostId: "created-host",
+            state: "creating",
+          }),
+        },
+      });
+    });
+    await waitFor(() =>
+      expect(
+        useSandboxFailedRowRetryStore.getState().byAccountAndRow[
+          `account-a:${FAILED_SANDBOX_ID}`
+        ],
+      ).toBeUndefined(),
+    );
+
+    binding.auth.createSandbox.mockResolvedValue({ kind: "unauthorized" });
+    renderFailedRow(
+      binding,
+      PERSONAL_CONFIGURATION,
+      "editor",
+      createQueryClient(),
+    );
+    const remountedRetry = await screen.findByRole("button", { name: "Retry" });
+    signInAs("account-a");
+    await userEvent.click(remountedRetry);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2),
+    );
+
+    expect(binding.auth.createSandbox.mock.calls[1]?.[0].clientRequestId).not.toBe(
+      firstKey,
+    );
   });
 });
