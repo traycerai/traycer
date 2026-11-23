@@ -458,6 +458,11 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         if (outlived(owner, startedAt)) return outcome;
         if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
         if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
+        // The comparison comes first: a refusal of a sign-in already replaced
+        // when its answer arrived is not the stored one's. It judges, spends
+        // and reports nothing; its asker retries on the stored sign-in.
+        if (outcome.kind === "sign-in-rejected" && refusedSignInReplaced(outcome))
+          return outcome;
         if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
           refusedAfterRefresh = true;
         if (outcome.kind === "ok") refusedAfterRefresh = false;
@@ -591,7 +596,13 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       observedNow: () => hosts.currentInstance(hostId).observed,
     });
     if (second.kind !== "sign-in-rejected") return answer(hostId, second);
-    if (refreshed === "adopted" || refreshed === "replaced")
+    // The retry is judged by its own sign-in: one replaced while it was
+    // pending is no second refusal of the stored one, and is asked again.
+    if (
+      refreshed === "adopted" ||
+      refreshed === "replaced" ||
+      refusedSignInReplaced(second)
+    )
       return recoverRefusedSignIn(owner, second, startedAt, signal);
     report(owner, second, startedAt);
     return answer(hostId, second);
@@ -726,7 +737,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       });
       if (renewed.kind === "no-sign-in") report(owner, renewed, startedAt);
       if (renewed.kind !== "sign-in-rejected") return renewed.kind === "ok";
-      if (refusedAfterRefresh) {
+      if (refusedAfterRefresh && !refusedSignInReplaced(renewed)) {
         report(owner, renewed, startedAt);
         return false;
       }
