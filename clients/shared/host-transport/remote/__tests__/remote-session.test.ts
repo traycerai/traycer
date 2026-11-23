@@ -58,6 +58,7 @@ import {
 } from "@traycer/protocol/host-transport/mux";
 import { isTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import { processReleasedHosts } from "../../released-sign-on";
 import {
   clockCanMakeValidBearersLookExpired,
   type ServerClockSkewSignal,
@@ -1672,6 +1673,47 @@ describe("RemoteSession pending unary dispatch provenance", () => {
       expect(session.isClosed()).toBe(false);
     } finally {
       session.close();
+    }
+  });
+
+  it("credits the door nothing for an admission delivered after the dialed host process was replaced", async () => {
+    processReleasedHosts.forgetAll();
+    processReleasedHosts.observeInstance("host-1", "process-p");
+    const relay = new FakeRelayHost();
+    // The host is replaced after the dial was made for process P and before its admission is delivered.
+    relay.decideOpen = (_grant, openIndex) => {
+      if (openIndex === 0)
+        processReleasedHosts.observeInstance("host-1", "process-q");
+      return { kind: "ack" };
+    };
+    let live = 0;
+    const door: HostDoorObserver = {
+      refused: () => undefined,
+      admitted: () => {
+        live += 1;
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          live -= 1;
+        };
+      },
+    };
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    applySilenceFloor(relay, ["worktree.getBinding"]);
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: bindingOnlyRegistry(),
+      door,
+    });
+    session.start();
+    try {
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+      expect(live).toBe(0);
+    } finally {
+      session.close();
+      processReleasedHosts.forgetAll();
     }
   });
 
