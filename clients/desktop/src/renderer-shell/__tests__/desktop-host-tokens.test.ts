@@ -22,6 +22,9 @@ import { NO_ISSUED_HOST_TOKEN_ERA } from "../../ipc-contracts/host-token-types";
 import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
 import { createDesktopHostTokenSource } from "../desktop-host-tokens";
 
+/** A sign-in key as main reports it: the lowercase hex SHA-256 of a sign-in. */
+const FIXED_SIGN_IN_KEY = "a".repeat(64);
+
 const USER_ID = "user-a";
 const HOST_ID = "computer-a";
 const HOST_TOKEN = { token: "host-token", expiresAtMs: 10_000 };
@@ -56,13 +59,13 @@ function bridgeFixture(): {
   let listener: ((change: HostTokenBridgeChange) => void) | null = null;
   const bridge: HostTokensBridgeSurface = {
     era: () => mainEra,
-    signIn: () => 2_000_000,
+    signIn: () => FIXED_SIGN_IN_KEY,
     obtain: async () => ({
       outcome: { kind: "ok", token: HOST_TOKEN },
       era: mainEra,
       held: true,
       recorded: true,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     }),
     renew: async () => ({ renewal: { kind: "already-current" }, era: mainEra }),
     adopt: async () => ({ era: mainEra, kept: true }),
@@ -99,13 +102,13 @@ describe("desktop host-token source eras", () => {
       era: number;
       held: boolean;
       recorded: boolean;
-      signIn: number | null;
+      signIn: string | null;
     }>();
     let obtainCalls = 0;
     let mainEra = 0;
     const bridge: HostTokensBridgeSurface = {
       era: () => mainEra,
-      signIn: () => 2_000_000,
+      signIn: () => FIXED_SIGN_IN_KEY,
       obtain: () => {
         obtainCalls += 1;
         return answer.promise;
@@ -137,7 +140,7 @@ describe("desktop host-token source eras", () => {
       era: 0,
       held: true,
       recorded: true,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     });
 
     await expect(pending).resolves.toEqual({ kind: "superseded" });
@@ -151,13 +154,13 @@ describe("desktop host-token source eras", () => {
     let mainEra = 0;
     const bridge: HostTokensBridgeSurface = {
       era: () => mainEra,
-      signIn: () => 2_000_000,
+      signIn: () => FIXED_SIGN_IN_KEY,
       obtain: async () => ({
         outcome: { kind: "no-sign-in" },
         era: mainEra,
         held: false,
         recorded: false,
-        signIn: 2_000_000,
+        signIn: FIXED_SIGN_IN_KEY,
       }),
       renew: () => answer.promise,
       adopt: async () => ({ era: mainEra, kept: true }),
@@ -184,7 +187,7 @@ describe("desktop host-token source eras", () => {
       era: number;
       held: boolean;
       recorded: boolean;
-      signIn: number | null;
+      signIn: string | null;
     }>();
     const { bridge, emit, setEra } = bridgeFixture();
     setEra(1);
@@ -208,7 +211,7 @@ describe("desktop host-token source eras", () => {
       era: 1,
       held: false,
       recorded: false,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     });
 
     await expect(pending).resolves.toEqual({ kind: "superseded" });
@@ -220,7 +223,7 @@ describe("desktop host-token source eras", () => {
       era: number;
       held: boolean;
       recorded: boolean;
-      signIn: number | null;
+      signIn: string | null;
     }>();
     const { bridge, emit, setEra } = bridgeFixture();
     setEra(1);
@@ -247,7 +250,7 @@ describe("desktop host-token source eras", () => {
       era: 1,
       held: true,
       recorded: true,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     });
 
     await expect(pending).resolves.toEqual({ kind: "superseded" });
@@ -420,7 +423,7 @@ describe("desktop host-token source eras", () => {
           era: 0,
           held: true,
           recorded: true,
-          signIn: 2_000_000,
+          signIn: FIXED_SIGN_IN_KEY,
         };
       });
       const tokens = createDesktopHostTokenSource(bridge);
@@ -445,7 +448,7 @@ describe("desktop host-token source eras", () => {
         era,
         held: true,
         recorded: true,
-        signIn: 2_000_000,
+        signIn: FIXED_SIGN_IN_KEY,
       }));
       const tokens = createDesktopHostTokenSource(bridge);
 
@@ -775,7 +778,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
     era: number;
     held: boolean;
     recorded: boolean;
-    signIn: number | null;
+    signIn: string | null;
   };
 
   /** A window already holding `REFUSED`, whose next ask to main is held. */
@@ -786,7 +789,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       era: 0,
       held: true,
       recorded: true,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     }));
     const tokens = createDesktopHostTokenSource(rig.bridge);
     await tokens.obtain(USER_ID, HOST_ID, false, {
@@ -808,7 +811,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
     era: 0,
     held: true,
     recorded: true,
-    signIn: 2_000_000,
+    signIn: FIXED_SIGN_IN_KEY,
   };
 
   it("replaces the refused cached token with the one main's change event announces, issued a second earlier, then takes the reply", async () => {
@@ -869,7 +872,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       era: 0,
       held: true,
       recorded: true,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     });
     await asking;
 
@@ -884,7 +887,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       era: 0,
       held: false,
       recorded: true,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     }));
     const tokens = createDesktopHostTokenSource(bridge);
 
@@ -902,7 +905,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       era: 0,
       held: true,
       recorded: true,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     }));
     const tokens = createDesktopHostTokenSource(bridge);
     await tokens.obtain(USER_ID, HOST_ID, true, { signal: null, owner: null });
@@ -927,7 +930,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       era: 0,
       held: true,
       recorded: true,
-      signIn: 2_000_000,
+      signIn: FIXED_SIGN_IN_KEY,
     }));
     const tokens = createDesktopHostTokenSource(bridge);
     await tokens.obtain(USER_ID, HOST_ID, true, { signal: null, owner: null });
@@ -956,7 +959,7 @@ describe("a window records a refused mint only when main kept it under main's cu
         era: 0,
         held: false,
         recorded,
-        signIn: 2_000_000,
+        signIn: FIXED_SIGN_IN_KEY,
       }));
       const tokens = createDesktopHostTokenSource(bridge);
       const hosts = createReleasedHostMemory();
