@@ -136,26 +136,19 @@ export function moveAttemptFixture(
 
 export const REGISTERING_SETUP = { stage: "registering", state: "running" };
 
-/** What a host without the moving-settings fix serves from the stage's start, though an accepted move asks nobody. */
+/** The moving settings stage's wait for the person: what the host's status says of it, with or without a record. */
 export const MOVING_SETTINGS_WINDOW_SETUP = {
   stage: "moving_settings",
   state: "awaiting_consent",
 };
 
 /**
- * The setups a person's accepted move shows while authn has not bound this
- * computer: the registering stage after a Retry or a restart, and the moving
- * settings window. With `status.move` in `retry` or `running`, each is past
- * the accept.
+ * The setup a person's accepted move shows while authn has not bound this
+ * computer: the registering stage after a Retry or a restart. With
+ * `status.move` in `retry` or `running`, it is past the accept.
  */
-export const ACCEPTED_MOVE_CASES = [
-  { name: "registering", setup: REGISTERING_SETUP },
-  {
-    name: "the moving settings window",
-    setup: MOVING_SETTINGS_WINDOW_SETUP,
-  },
-].flatMap(({ name, setup }) =>
-  (["retry", "running"] as const).map((state) => [name, state, setup] as const),
+export const ACCEPTED_MOVE_CASES = (["retry", "running"] as const).map(
+  (state) => ["registering", state, REGISTERING_SETUP] as const,
 );
 
 /** A personal computer whose planes still read local, serving `setup` and `move`. */

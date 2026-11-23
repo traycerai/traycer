@@ -12,9 +12,10 @@ import {
 /*
  * The one table that holds the predicates' meaning for an accepted move: the
  * open record (`status.move` running or retry) carries the guard through
- * registering and the moving settings window, and stops short of applying,
- * which comes after the upload has ended, and of a stage this app does not
- * know: both are read from `setup` alone.
+ * registering, and stops short of applying, which comes after the upload has
+ * ended, and of a stage this app does not know: both are read from `setup`
+ * alone, as is the moving settings stage, where `awaiting_consent` is the
+ * host's own word.
  */
 
 const OPEN_RECORDS = ["running", "retry"] as const;
@@ -49,9 +50,9 @@ describe("an accepted move's reading by stage", () => {
       name: "the moving settings window",
       stage: "moving_settings",
       state: "awaiting_consent",
-      pastTheAccept: true,
+      pastTheAccept: false,
       stopped: false,
-      running: true,
+      running: false,
     },
     {
       name: "moving settings, running",
@@ -129,6 +130,22 @@ describe("an accepted move's reading by stage", () => {
         expect(moveHasStopped(status)).toBe(stopped);
         expect(moveIsRunning(status)).toBe(running);
       }
+    },
+  );
+
+  it.each(OPEN_RECORDS)(
+    "reads the moving settings window as the host's status says, whatever the %s record adds",
+    (record) => {
+      const setup = { stage: "moving_settings", state: "awaiting_consent" };
+      const withoutRecord = unboundMoveStatusFixture(setup, null);
+      const status = unboundMoveStatusFixture(
+        setup,
+        moveAttemptFixture(record),
+      );
+      expect(moveIsPastTheAccept(status)).toBe(
+        moveIsPastTheAccept(withoutRecord),
+      );
+      expect(moveIsRunning(status)).toBe(moveIsRunning(withoutRecord));
     },
   );
 

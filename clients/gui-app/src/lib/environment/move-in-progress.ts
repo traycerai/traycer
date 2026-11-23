@@ -53,12 +53,11 @@ export function moveAcceptanceOpen(
  * which is the reading that keeps a person informed rather than silent.
  *
  * A move its acceptance holds open ({@link moveAcceptanceOpen}) is past the
- * accept while first start is registering or moving, its `awaiting_consent`
- * read included: a Retry or a restart runs first start from registering, and
- * its moving stage may read `awaiting_consent` before it finds the
- * acceptance, though nobody is asked. Every other stage is read from `setup`
- * alone, whatever the record says: `applying` comes after the upload has
- * ended, and a stage this app does not know is not one the record covers.
+ * accept while first start is registering: a Retry or a restart runs first
+ * start from there. Every other stage is read from `setup` alone, whatever
+ * the record says: the moving stage's `awaiting_consent` is the host's own
+ * word, `applying` comes after the upload has ended, and a stage this app
+ * does not know is not one the record covers.
  */
 export function moveIsPastTheAccept(
   status: EnvironmentStatusResponseV13,
@@ -67,7 +66,7 @@ export function moveIsPastTheAccept(
   if (setup === null) return false;
   if (
     moveAcceptanceOpen(status) &&
-    (setup.stage === "registering" || setup.stage === "moving_settings") &&
+    setup.stage === "registering" &&
     setup.state !== "done"
   )
     return true;
