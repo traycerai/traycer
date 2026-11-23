@@ -197,24 +197,26 @@ const mocks = vi.hoisted(() => {
     }) => {
       providedLease.current = args.lease;
       return {
-      revalidateCurrentContext: revalidateCurrentContextMock,
-      // A sibling's sign-in, once saved, reaches the lease through the adopting read.
-      adoptStoredSignIn: async () => {
-        if (siblingSave.signIn !== null) args.lease.rotate(siblingSave.signIn);
-      },
-      // The fake rotates no lease: a rotation it accepts installed the
-      // sign-in the lease holds, which the next mint is sent with.
-      rotateSignIn: async () => {
-        // The sign-in the rotation tries, read before it runs, as the store reads `current`.
-        const tried = args.lease.getBearerToken();
-        const outcome: unknown = await revalidateCurrentContextMock();
-        return {
-          outcome,
-          installed: outcome === "rotated" ? args.lease.getBearerToken() : null,
-          refused: outcome === "rejected" ? tried : null,
-          accepted: null,
-        };
-      },
+        revalidateCurrentContext: revalidateCurrentContextMock,
+        // A sibling's sign-in, once saved, reaches the lease through the adopting read.
+        adoptStoredSignIn: async () => {
+          if (siblingSave.signIn !== null)
+            args.lease.rotate(siblingSave.signIn);
+        },
+        // The fake rotates no lease: a rotation it accepts installed the
+        // sign-in the lease holds, which the next mint is sent with.
+        rotateSignIn: async () => {
+          // The sign-in the rotation tries, read before it runs, as the store reads `current`.
+          const tried = args.lease.getBearerToken();
+          const outcome: unknown = await revalidateCurrentContextMock();
+          return {
+            outcome,
+            installed:
+              outcome === "rotated" ? args.lease.getBearerToken() : null,
+            refused: outcome === "rejected" ? tried : null,
+            accepted: null,
+          };
+        },
       };
     },
   );

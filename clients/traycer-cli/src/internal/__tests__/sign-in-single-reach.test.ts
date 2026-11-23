@@ -41,9 +41,9 @@ describe("the verdict has one reach (P6)", () => {
   const SYNC_VERDICT_CALL = /\.signInRejected\(\)/;
 
   it("reads the synchronous verdict nowhere outside the token judge", () => {
-    const readers = PRODUCTION_FILES
-      .filter((file) => file !== "internal/cli-host-tokens.ts")
-      .flatMap((file) => linesMatching(file, SYNC_VERDICT_CALL));
+    const readers = PRODUCTION_FILES.filter(
+      (file) => file !== "internal/cli-host-tokens.ts",
+    ).flatMap((file) => linesMatching(file, SYNC_VERDICT_CALL));
 
     expect(readers).toEqual([]);
   });
@@ -69,10 +69,11 @@ describe("the store-backed rotation has one reach (P7)", () => {
   ]);
 
   it("calls the rotation only as the token options' refresh", () => {
-    const calls = PRODUCTION_FILES
-      .filter((file) => !OWN_LEASE.has(file))
+    const calls = PRODUCTION_FILES.filter((file) => !OWN_LEASE.has(file))
       .flatMap((file) => linesMatching(file, ROTATION_CALL))
-      .filter((line) => !/refresh: \(\) => revalidator\.rotateSignIn\(\)/.test(line));
+      .filter(
+        (line) => !/refresh: \(\) => revalidator\.rotateSignIn\(\)/.test(line),
+      );
 
     expect(calls).toEqual([]);
   });

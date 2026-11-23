@@ -1329,7 +1329,13 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
     writeForeignToken = () => {
       writeForeignToken = () => null;
       return competingSource
-        .adopt(USER_ID, HOST_ID, LATER, competingSource.era(USER_ID), () => true)
+        .adopt(
+          USER_ID,
+          HOST_ID,
+          LATER,
+          competingSource.era(USER_ID),
+          () => true,
+        )
         .then(() => {
           expect(rig.source.current(USER_ID, HOST_ID)).toBeNull();
           return undefined;

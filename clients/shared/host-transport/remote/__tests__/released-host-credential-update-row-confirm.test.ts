@@ -135,9 +135,9 @@ async function untilReadAskedOrWritten(
 ): Promise<void> {
   await vi.waitFor(
     () =>
-      expect(heldReads.length + credentialBearers(relay).length).toBeGreaterThan(
-        0,
-      ),
+      expect(
+        heldReads.length + credentialBearers(relay).length,
+      ).toBeGreaterThan(0),
     WAIT,
   );
 }

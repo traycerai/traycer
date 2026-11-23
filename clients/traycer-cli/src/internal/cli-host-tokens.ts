@@ -1009,7 +1009,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     // read, nothing is sent and the held token or a transient answers.
     if (storedKey() === refusal.signIn) {
       await signIn.adoptStored();
-      if (storedKey() === refusal.signIn) return answer(hostId, unmoved(hostId));
+      if (storedKey() === refusal.signIn)
+        return answer(hostId, unmoved(hostId));
     }
     const retried = await askTracked(userId, hostId, true, signal, owner);
     if (retried.refusal === null) {

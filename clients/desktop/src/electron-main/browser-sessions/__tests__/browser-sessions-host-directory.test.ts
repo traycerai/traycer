@@ -446,10 +446,7 @@ describe("main resolves the browser.sessions host itself", () => {
     });
     let answer: boolean | null = null;
     const confirming = directory
-      .confirmRows(
-        () => true,
-        new Promise<void>(() => undefined),
-      )
+      .confirmRows(() => true, new Promise<void>(() => undefined))
       .then((confirmed) => {
         answer = confirmed;
         return confirmed;
@@ -558,9 +555,11 @@ describe("main resolves the browser.sessions host itself", () => {
         ceilingReached = resolve;
       });
       let answer: boolean | null = null;
-      void directory.confirmRows(() => true, ended).then((confirmed) => {
-        answer = confirmed;
-      });
+      void directory
+        .confirmRows(() => true, ended)
+        .then((confirmed) => {
+          answer = confirmed;
+        });
       await vi.waitFor(() => expect(gets()).toBe(1));
       expect(answer).toBeNull();
 

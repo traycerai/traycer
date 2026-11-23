@@ -484,22 +484,21 @@ describe("a refusal is recorded at the source only while it still stands for the
 });
 
 describe("a host failure's answer carries the order of the request it answers", () => {
-  it.each([
-    "not-admitted",
-    "not-a-member",
-    "sandbox-frozen",
-  ] as const)("carries, on %s, the order the request was sent with", async (kind) => {
-    const { tokens, mints, ask } = rig(createMemoryHostTokenPersistence());
-    await tokens.whenLoaded();
-    const failed = identify(tokens, true, ask);
-    await vi.waitFor(() => expect(mints).toHaveLength(1));
+  it.each(["not-admitted", "not-a-member", "sandbox-frozen"] as const)(
+    "carries, on %s, the order the request was sent with",
+    async (kind) => {
+      const { tokens, mints, ask } = rig(createMemoryHostTokenPersistence());
+      await tokens.whenLoaded();
+      const failed = identify(tokens, true, ask);
+      await vi.waitFor(() => expect(mints).toHaveLength(1));
 
-    mints[0].answer({ outcome: { kind }, order: 37 });
-    const read = await failed;
+      mints[0].answer({ outcome: { kind }, order: 37 });
+      const read = await failed;
 
-    expect(read.outcome.kind).toBe(kind);
-    expect(read.order).toBe(37);
-  });
+      expect(read.outcome.kind).toBe(kind);
+      expect(read.order).toBe(37);
+    },
+  );
 });
 
 describe("one host process's purchase, however many sources the process holds", () => {

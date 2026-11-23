@@ -135,7 +135,9 @@ const monitorHarness = vi.hoisted(() => {
       /** Set once the monitor's stream recovery has returned its answer to the monitor. */
       recovered: false,
       /** Run by the next adopting read of the scripted revalidator after `recovered`: the monitor's own, before it judges the exit. */
-      afterRecovery: null as ((lease: MutableBearerLease) => Promise<void>) | null,
+      afterRecovery: null as
+        | ((lease: MutableBearerLease) => Promise<void>)
+        | null,
       /** What refreshing the stored sign-in answers. */
       refresh: "network-error" as "network-error" | "rotated" | "rejected",
       /** What authn answers a host-token mint with. */
@@ -2068,7 +2070,9 @@ describe("traycer monitor local released-host sign-in", () => {
       second.fireFrame(teamRefusal("not_admitted"));
 
       await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
-      expect(ended?.error).toMatchObject({ message: "traycer monitor: host closed the stream: team admission" });
+      expect(ended?.error).toMatchObject({
+        message: "traycer monitor: host closed the stream: team admission",
+      });
     });
 
     it("never charges a host the monitor has left across its adopting read, and dials the new host before any bound", async () => {
