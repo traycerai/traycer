@@ -1628,6 +1628,13 @@ describe("released personal host, local stream", () => {
       };
     }
 
+    interface ReleasedStreamRig {
+      readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
+      readonly sockets: StubStreamWebSocket[];
+      readonly session: IStreamSession;
+      readonly statuses: string[];
+    }
+
     function releasedStream(
       signIn: MutableBearerLease,
       recovery: SignInRecovery,
@@ -1708,13 +1715,15 @@ describe("released personal host, local stream", () => {
       expect(calls).toBe(2);
     });
 
-    it("tells the recovery the sign-in the host refused, though a sibling replaced it before the recovery ran, and presents the sibling's next", async () => {
+    it("tells the recovery the sign-in the host refused, and presents the sibling's rotation it adopts next", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
       const asked: Array<string | null> = [];
       const { sockets } = releasedStream(signIn, {
         revalidateForReconnect: (refused) => {
           asked.push(refused);
+          // The store held a sibling's sign-in: it is taken, authn is not asked.
+          signIn.rotate("sign-in-of-a-sibling");
           return Promise.resolve("adopted");
         },
       });
@@ -1724,13 +1733,87 @@ describe("released personal host, local stream", () => {
       await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
       expect((await openFrame(sockets[1])).token).toBe(SIGN_IN);
 
-      signIn.rotate("sign-in-of-a-sibling");
       sockets[1].fireText(releasedRefusal());
-      await vi.waitFor(() => expect(asked).toHaveLength(1), WAIT);
       await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
 
       expect(asked).toEqual([SIGN_IN]);
       expect((await openFrame(sockets[2])).token).toBe("sign-in-of-a-sibling");
+    });
+
+    describe("a refusal of a sign-in the lease has already replaced", () => {
+      /** The stream presents SIGN_IN to a released host, which refuses it bare. */
+      async function refusedOnSignIn(
+        signIn: MutableBearerLease,
+        asked: Array<string | null>,
+      ): Promise<ReleasedStreamRig> {
+        const rig = releasedStream(signIn, {
+          revalidateForReconnect: (refused) => {
+            asked.push(refused);
+            return Promise.resolve("rotated");
+          },
+        });
+        await vi.waitFor(() => expect(rig.sockets).toHaveLength(1), WAIT);
+        expect((await openFrame(rig.sockets[0])).token).toBe(HOST_TOKEN);
+        rig.sockets[0].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(rig.sockets).toHaveLength(2), WAIT);
+        expect((await openFrame(rig.sockets[1])).token).toBe(SIGN_IN);
+        return rig;
+      }
+
+      it("is answered adopted without asking the recovery, and redials once on the lease's bearer", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        const asked: Array<string | null> = [];
+        const { sockets } = await refusedOnSignIn(signIn, asked);
+
+        signIn.rotate("sign-in-of-a-sibling");
+        sockets[1].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+        expect((await openFrame(sockets[2])).token).toBe(
+          "sign-in-of-a-sibling",
+        );
+        expect(asked).toEqual([]);
+        expect(sockets).toHaveLength(3);
+      });
+
+      it("spends no refresh and no no-progress count, so the lease's own sign-in refused later still gets one real refresh", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        const asked: Array<string | null> = [];
+        const { sockets, statuses } = await refusedOnSignIn(signIn, asked);
+
+        // More stale refusals in a row than the no-progress bound allows: each
+        // judged a sign-in the lease had already replaced with a newer one.
+        let presented = SIGN_IN;
+        for (let round = 1; round <= 4; round += 1) {
+          const next = `sign-in-of-a-sibling-${round}`;
+          signIn.rotate(next);
+          sockets[round].fireText(releasedRefusal());
+          await vi.waitFor(() => expect(sockets).toHaveLength(round + 2), WAIT);
+          expect((await openFrame(sockets[round + 1])).token).toBe(next);
+          presented = next;
+        }
+        expect(asked).toEqual([]);
+
+        // The sign-in the lease holds is now refused itself: the recovery is asked,
+        // for that sign-in, and its refresh is the sequence's first.
+        sockets[5].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(asked).toEqual([presented]), WAIT);
+        await vi.waitFor(() => expect(sockets).toHaveLength(7), WAIT);
+        expect(statuses).not.toContain("closed");
+      });
+
+      it("asks the recovery as it does today when the lease holds no bearer", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        const asked: Array<string | null> = [];
+        const { sockets } = await refusedOnSignIn(signIn, asked);
+
+        signIn.rotate("");
+        sockets[1].fireText(releasedRefusal());
+
+        await vi.waitFor(() => expect(asked).toEqual([SIGN_IN]), WAIT);
+      });
     });
 
     it("starts no rotation when the consumer closes the stream as the sign-in's refusal moves it to reconnecting", async () => {
