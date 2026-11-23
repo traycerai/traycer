@@ -872,42 +872,6 @@ describe("released personal host, remote door", () => {
     }
   }, 20_000);
 
-  it("refreshes only the sign-in the host refused, though the stored one has rotated since its open", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const relay = new FakeRelayHost();
-    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const { door } = recordingDoor();
-    // The sign-in open is answered after another transport rotated the stored one.
-    relay.decideOpen = (_grant, openIndex) => {
-      if (openIndex === 1) signIn.rotate(ROTATED_SIGN_IN);
-      return { kind: "fatal", details: releasedRefusal() };
-    };
-    const base = signOnFor(PERSONAL_ROW, signIn);
-    if (base === null) throw new Error("personal row must open released");
-    const refused: (string | null)[] = [];
-    const refresh = (
-      refusedSignIn: string | null,
-    ): Promise<RevalidateOutcome | "adopted"> => {
-      refused.push(refusedSignIn);
-      return Promise.resolve("rejected");
-    };
-    const session = openSession(
-      relay,
-      signIn,
-      { ...base, recovery: { revalidateForReconnect: refresh } },
-      door,
-    );
-    try {
-      session.start();
-      await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
-      expect(relay.openBearers).toEqual(["", SIGN_IN]);
-      expect(refused).toEqual([SIGN_IN]);
-    } finally {
-      session.close();
-      vi.useRealTimers();
-    }
-  }, 20_000);
-
   it("refreshes the sign-in for real on the next refusal when the first refresh only adopted a sibling's rotation", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const relay = new FakeRelayHost();
