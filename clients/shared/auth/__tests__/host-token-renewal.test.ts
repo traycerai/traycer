@@ -1607,3 +1607,76 @@ describe("a minted token that the ask which started its mint is still saving", (
     expect(announced).toEqual([HOST_ID]);
   });
 });
+
+describe("a mint's refusal belongs to the sign-in the mint was sent with", () => {
+  const HOST_ID = "computer-refusal-belongs-to-sign-in";
+  const SIGN_IN_A = signInToken(2_000_000);
+  const SIGN_IN_B = signInToken(2_100_000);
+  const TOKEN = hostTokenIssuedAt("bought-on-b", 2_000);
+  const hosts = createReleasedHostMemory();
+  const owner = hosts.currentInstance(HOST_ID);
+  const ask = { signal: null, owner, observedNow: () => owner.observed };
+
+  /** Every mint waits for the test, and says which sign-in it was sent with. */
+  function rig() {
+    let stored = SIGN_IN_A;
+    const mints: Array<{
+      readonly signIn: string;
+      readonly answer: (outcome: HostTokenMintOutcome) => void;
+    }> = [];
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: (_hostId, sentWith) =>
+        new Promise<HostTokenMintOutcome>((resolve) => {
+          mints.push({ signIn: sentWith, answer: resolve });
+        }),
+      signIn: (userId) => (userId === USER_ID ? stored : null),
+      now: () => Date.now(),
+    });
+    return {
+      tokens,
+      mints,
+      moveSignInTo: (next: string): void => {
+        stored = next;
+      },
+    };
+  }
+
+  it("is seen by an ask on the same sign-in, and by none once the stored sign-in moved", async () => {
+    const { tokens, mints, moveSignInTo } = rig();
+    await tokens.whenLoaded();
+    const refused = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await expect(refused).resolves.toEqual({ kind: "sign-in-rejected" });
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
+
+    moveSignInTo(SIGN_IN_B);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+
+    const next = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    mints[1].answer({ kind: "ok", token: TOKEN });
+    await expect(next).resolves.toEqual({ kind: "ok", token: TOKEN });
+    expect(mints.map((mint) => mint.signIn)).toEqual([SIGN_IN_A, SIGN_IN_B]);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+  });
+
+  it("is not set for the sign-in that replaced the one a late refusal arrives for, while that sign-in's retry is still pending", async () => {
+    const { tokens, mints, moveSignInTo } = rig();
+    await tokens.whenLoaded();
+    const onA = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    moveSignInTo(SIGN_IN_B);
+    const retryOnB = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await expect(onA).resolves.toEqual({ kind: "sign-in-rejected" });
+
+    expect(mints.map((mint) => mint.signIn)).toEqual([SIGN_IN_A, SIGN_IN_B]);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+    mints[1].answer({ kind: "ok", token: TOKEN });
+    await expect(retryOnB).resolves.toEqual({ kind: "ok", token: TOKEN });
+  });
+});

@@ -57,7 +57,11 @@ import {
   trackHostTokenMints,
   type TrackedHostTokens,
 } from "../../auth/host-token-lease";
-import type { HostTokenMintOutcome } from "../../auth/host-token-source";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenMintOutcome,
+} from "../../auth/host-token-source";
 import type { HostToken } from "../../auth/host-token-store";
 import {
   createReleasedHostMemory,
@@ -521,6 +525,103 @@ afterEach(() => {
   resetNegotiatedManifests();
   resetStreamMethodSupportMemo();
   vi.useRealTimers();
+});
+
+describe("a late refusal of an earlier sign-in, on the real token source", () => {
+  const HOST_ID = mockLocalHostEntry.hostId;
+  const jwtExpiring = (exp: number): string =>
+    `header.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.signature`;
+  const SIGN_IN_A = jwtExpiring(2_000_000);
+  const SIGN_IN_B = jwtExpiring(2_100_000);
+
+  /**
+   * No usable host-only token (or an expired held one); a mint on sign-in A
+   * is in flight and the stored sign-in moves to B; B's retry is pending when
+   * A's late 401 arrives; then a stream dials.
+   */
+  async function dialAfterTheLate401(held: HostToken | null): Promise<{
+    readonly sockets: StubStreamWebSocket[];
+  }> {
+    const hosts = createReleasedHostMemory();
+    const owner = hosts.currentInstance(HOST_ID);
+    let stored = SIGN_IN_A;
+    const mints: Array<(outcome: HostTokenMintOutcome) => void> = [];
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        new Promise<HostTokenMintOutcome>((resolve) => {
+          mints.push(resolve);
+        }),
+      signIn: (userId) => (userId === USER_ID ? stored : null),
+      now: () => Date.now(),
+    });
+    if (held !== null)
+      await source.adopt(
+        USER_ID,
+        HOST_ID,
+        held,
+        source.era(USER_ID),
+        () => true,
+      );
+    await source.whenLoaded();
+    const tracked = trackHostTokenMints(source, hosts);
+    const ask = { signal: null, owner, observedNow: () => owner.observed };
+    const onA = source.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1), WAIT);
+    stored = SIGN_IN_B;
+    void source.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2), WAIT);
+    mints[0]({ kind: "sign-in-rejected" });
+    await onA;
+
+    const signInLease = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { factory, sockets } = makeStubSocketFactory();
+    const { door } = recordingDoor();
+    const client = makeStreamClientAt({
+      factory,
+      endpoint: () => mockLocalHostEntry,
+      hostId: HOST_ID,
+      bearer: hostTokenBearer(
+        tracked,
+        () => signInLease,
+        HOST_ID,
+        () => undefined,
+      ),
+      userId: USER_ID,
+      releasedSignOn: releasedSignOnForLocalRow(
+        () => PERSONAL_ROW,
+        HOST_ID,
+        USER_ID,
+        () => signInLease,
+        null,
+        tracked,
+        hosts,
+      ),
+      auth: null,
+      door,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    subscribe(client);
+    return { sockets };
+  }
+
+  it("probes the door, since authn has refused nothing of the sign-in now stored", async () => {
+    const { sockets } = await dialAfterTheLate401(null);
+
+    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+    expect((await openFrame(sockets[0])).token).toBe(NO_HOST_TOKEN_PROBE);
+  });
+
+  it("still presents an expired held host-only token during the wait", async () => {
+    const held: HostToken = {
+      token: "expired-held-host-token",
+      expiresAtMs: Date.now() - 60_000,
+    };
+    const { sockets } = await dialAfterTheLate401(held);
+
+    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+    expect((await openFrame(sockets[0])).token).toBe(held.token);
+  });
 });
 
 describe("released personal host, local stream", () => {
