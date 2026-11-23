@@ -256,6 +256,18 @@ export function createStoreBackedRevalidator(args: {
           if (lease.getBearerToken() === current) await adoptStoredSignIn();
           {
             const held = lease.getBearerToken();
+            // "rotated" only while the lease holds the sign-in this save
+            // wrote.
+            if (
+              result.outcome !== "superseded" &&
+              held === result.credentials.token
+            )
+              return {
+                outcome: "rotated",
+                installed: result.credentials.token,
+                refused: null,
+                accepted,
+              };
             // Still nothing installed: the lease presents what was refused,
             // so this is no progress. Transient; what authn accepted stays.
             if (held === current)
@@ -265,23 +277,14 @@ export function createStoreBackedRevalidator(args: {
                 refused: null,
                 accepted,
               };
-            // "rotated" only while the lease holds the sign-in this save
-            // wrote. A sibling's rotation adopted, or one newer than this
-            // save, is no sign-in this save wrote.
-            return result.outcome !== "superseded" &&
-              held === result.credentials.token
-              ? {
-                  outcome: "rotated",
-                  installed: result.credentials.token,
-                  refused: null,
-                  accepted,
-                }
-              : {
-                  outcome: "adopted",
-                  installed: null,
-                  refused: null,
-                  accepted,
-                };
+            // A sibling's rotation adopted, or one newer than this save, is no
+            // sign-in this save wrote.
+            return {
+              outcome: "adopted",
+              installed: null,
+              refused: null,
+              accepted,
+            };
           }
         case "refresh-network":
         case "lock-busy":
