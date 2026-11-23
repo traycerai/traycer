@@ -19,6 +19,7 @@ import {
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
 import { createCliHostTokens, type CliHostTokens } from "../cli-host-tokens";
+import { completeCredentialsReserve } from "./credentials-reserve-test-support";
 
 // Two overlapping mints, in either completion order, over the real token path
 // (`createCliHostTokens`) and a real credentials file, against a scripted authn.
@@ -68,6 +69,8 @@ const harness = vi.hoisted(() => ({
   hold: 0,
   /** Set while the test itself refreshes the sign-in. */
   testRotating: false,
+  /** Called whenever authn is sent a request. */
+  onRequest: null as (() => void) | null,
   storedSignIn: (): string => "",
   signInRejected: (): boolean => false,
 }));
@@ -203,6 +206,7 @@ vi.mock(
             },
           };
           harness.requests.push(request);
+          harness.onRequest?.();
           if (seq >= harness.hold)
             request.answer({
               kind: "ok",
@@ -287,6 +291,9 @@ let workDir = "";
 beforeEach(async () => {
   harness.requests.splice(0);
   harness.events.splice(0);
+  harness.onRequest = null;
+  ioInFlight = 0;
+  ioIdle = null;
   harness.table = new Map();
   harness.hold = 0;
   harness.testRotating = false;
@@ -313,6 +320,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await quiet();
+  for (const { tokens, store, otherProcess } of opened.splice(0)) {
+    tokens.dispose();
+    store.dispose();
+    otherProcess.dispose();
+  }
   processReleasedHosts.forgetAll();
   credentialsFile.path = "";
   await rm(workDir, { recursive: true, force: true });
@@ -325,21 +338,45 @@ const credentialsOf = (token: string): StoredCredentials => ({
   user: { id: USER_ID, email: "user@example.test", name: "User" },
 });
 
+// The credentials file work the code under test starts on its own (a rotation,
+// an adopting read): counted from the moment it starts until it settles.
+let ioInFlight = 0;
+let ioIdle: (() => void) | null = null;
+
+function counted<T>(operation: Promise<T>): Promise<T> {
+  ioInFlight += 1;
+  return operation.finally(() => {
+    ioInFlight -= 1;
+    if (ioInFlight === 0) ioIdle?.();
+  });
+}
+
+/** Settles once authn has been sent `count` requests. */
+function untilRequests(count: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const check = (): void => {
+      if (harness.requests.length < count) return;
+      harness.onRequest = null;
+      resolve();
+    };
+    harness.onRequest = check;
+    check();
+  });
+}
+
 /**
- * Waits until nothing the test watches has changed for a run of event-loop
- * turns: what an answer set going (credentials file reads, a refresh, a retried
- * mint) has then finished or is waiting on a held request.
+ * Settles once what an answer or a start set going has finished or waits only
+ * on a request authn has not answered: no counted file work is under way, and
+ * the continuations of everything already resolved have run (a macrotask runs
+ * after every microtask).
  */
-async function settled(): Promise<void> {
-  const watched = (): string =>
-    `${harness.requests.length}/${harness.events.length}`;
-  let last = watched();
-  let steady = 0;
-  while (steady < 25) {
+async function quiet(): Promise<void> {
+  for (;;) {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const now = watched();
-    steady = now === last ? steady + 1 : 0;
-    last = now;
+    if (ioInFlight === 0) return;
+    await new Promise<void>((resolve) => {
+      ioIdle = resolve;
+    });
   }
 }
 
@@ -375,7 +412,12 @@ interface OpenTokens {
   readonly reports: string[];
 }
 
+const opened: OpenTokens[] = [];
+
 async function openTokens(): Promise<OpenTokens> {
+  // A full reserve is never refilled under the lock: no store's background
+  // fill takes it, or writes into the directory, while the case runs.
+  await completeCredentialsReserve(credentialsFile.path);
   const store = createCliCredentialsStore();
   const otherProcess = createCliCredentialsStore();
   await store.signIn(credentialsOf(SIGN_IN_A), false, null);
@@ -396,8 +438,8 @@ async function openTokens(): Promise<OpenTokens> {
   });
   const tokens = createCliHostTokens({
     lease,
-    refresh: () => revalidator.rotateSignIn(),
-    adoptStored: () => revalidator.adoptStoredSignIn(),
+    refresh: () => counted(revalidator.rotateSignIn()),
+    adoptStored: () => counted(revalidator.adoptStoredSignIn()),
     signal: null,
   });
   await tokens.whenLoaded();
@@ -406,7 +448,9 @@ async function openTokens(): Promise<OpenTokens> {
   tokens.onRefusalEndingCommand((reportedHostId) => {
     reports.push(reportedHostId);
   });
-  return { store, otherProcess, lease, tokens, reports };
+  const open = { store, otherProcess, lease, tokens, reports };
+  opened.push(open);
+  return open;
 }
 
 const rotationsStarted = (): number =>
@@ -416,8 +460,7 @@ describe.each(scenarios)(
   "two overlapping mints: $hostIds host id(s), $hostProcesses host process(es), sign-in $transition",
   (scenario) => {
     it(nameOf(scenario), async () => {
-      const { store, otherProcess, lease, tokens, reports } =
-        await openTokens();
+      const { otherProcess, lease, tokens, reports } = await openTokens();
       processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
       if (scenario.hostIds === 2)
         processReleasedHosts.observeInstance(otherHostId, FIRST_PROCESS);
@@ -426,7 +469,7 @@ describe.each(scenarios)(
 
       // The first mint starts and is held.
       const first = tokens.mintFresh(hostId, null);
-      await vi.waitFor(() => expect(harness.requests).toHaveLength(1));
+      await untilRequests(1);
 
       // What happens to the sign-in, or to the host process, between them.
       if (scenario.transition === "rotated by us") {
@@ -444,10 +487,8 @@ describe.each(scenarios)(
         scenario.hostIds === 2 ? otherHostId : hostId,
         null,
       );
-      await vi.waitFor(() =>
-        expect(harness.requests).toHaveLength(requestsExpected),
-      );
-      await settled();
+      await untilRequests(requestsExpected);
+      await quiet();
 
       // Authn answers, in the order the case names.
       const firstRequest = harness.requests[0];
@@ -456,17 +497,17 @@ describe.each(scenarios)(
         throw new Error("the mints sent no request");
       if (sharesOneRequest(scenario)) {
         firstRequest.answer(answerOf(scenario.first, 0));
-        await settled();
+        await quiet();
       } else if (scenario.order === "first mint first") {
         firstRequest.answer(answerOf(scenario.first, 0));
-        await settled();
+        await quiet();
         secondRequest.answer(answerOf(scenario.second, 1));
-        await settled();
+        await quiet();
       } else {
         secondRequest.answer(answerOf(scenario.second, 1));
-        await settled();
+        await quiet();
         firstRequest.answer(answerOf(scenario.first, 0));
-        await settled();
+        await quiet();
       }
       await Promise.all([first, second]);
 
@@ -568,21 +609,17 @@ describe.each(scenarios)(
           reports: 0,
         });
       }
-
-      tokens.dispose();
-      store.dispose();
-      otherProcess.dispose();
     });
   },
 );
 
 describe("a revoked session's recovery reads the host's own latest mint outcome", () => {
   it("one host: a refusal on A, a rotation, a token bought on B, then a revoked session: the recovery refreshes", async () => {
-    const { store, otherProcess, tokens } = await openTokens();
+    const { tokens } = await openTokens();
     processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
     harness.hold = 1;
     const minting = tokens.mintFresh(hostId, null);
-    await vi.waitFor(() => expect(harness.requests).toHaveLength(1));
+    await untilRequests(1);
     // A is refused; the recovery rotates to B and buys a token on it.
     harness.requests[0]?.answer({ kind: "sign-in-rejected" });
     await expect(minting).resolves.toMatchObject({ kind: "ok" });
@@ -595,8 +632,5 @@ describe("a revoked session's recovery reads the host's own latest mint outcome"
     await tokens.streamRecovery(hostId).revalidateRefused(REVOKED);
 
     expect(rotationsStarted() - rotationsBefore).toBe(1);
-    tokens.dispose();
-    store.dispose();
-    otherProcess.dispose();
   });
 });
