@@ -3072,6 +3072,9 @@ describe("RemoteSession host-leg resume", () => {
       });
       host.attach();
       const lostCredentialGap = await gapSnapshot;
+      expect(lostCredentialGap.kind).toBe("gap");
+      if (lostCredentialGap.kind !== "gap")
+        throw new Error("expected a recoverable resume gap");
       expect(lostCredentialGap.frames).toHaveLength(1);
       expect(lostCredentialGap.frames[0]?.byteLength).toBe(
         updateFrameBytes(LARGE),
