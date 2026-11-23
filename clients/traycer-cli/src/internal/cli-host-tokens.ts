@@ -434,9 +434,8 @@ export interface CliHostTokens {
    * met that may end the command, until the returned stop is called. It is
    * evidence, never a verdict: the command acts only on
    * {@link refusalEndingCommandNow}'s judgement. One rule for every command:
-   * `not-a-member`, `sandbox-frozen` and a `sign-in-rejected` its refresh could
-   * not answer are told at once; `no-sign-in` is told at once while no sign-in
-   * is stored, and not once one is. `not-admitted` (authn has
+   * `not-a-member`, `sandbox-frozen`, a `sign-in-rejected` its refresh could
+   * not answer, and `no-sign-in` are told at once. `not-admitted` (authn has
    * no row) is told only when no sign-in can follow: the host named a reason
    * in this process and no sign-in it invited is on the wire unanswered, or
    * it declined this person's probe. It is told nothing while an open of that
@@ -611,18 +610,15 @@ function createPersonTokens(
       readonly order: number | null;
     }
   >();
-  // The key of the sign-in stored now: the lease's, which follows the file.
-  const storedKey = (): string | null => hostSignInKey(readLeaseBearer(lease));
   // The one judgement of whether a mint's failure ends a command, made as it
   // is told and again at the gate. A refusal concerns the host process it
   // started for: once another is observed, or a purchase for it on a later
   // request, it ends nothing and waits for nothing (an answer with no request
-  // behind it has no order to be outlived). `no-sign-in` ends only while no
-  // sign-in is stored. `not-admitted` ends nothing once an open of that
-  // process was admitted after its mint started; it ends only when no sign-in
-  // can follow (the host named a reason and no sign-in it invited is on the
-  // wire unanswered, or it declined this person's probe), and otherwise
-  // waits for the next mint. Every other failure ends.
+  // behind it has no order to be outlived). `not-admitted` ends nothing once an
+  // open of that process was admitted after its mint started; it ends only
+  // when no sign-in can follow (the host named a reason and no sign-in it
+  // invited is on the wire unanswered, or it declined this person's probe),
+  // and otherwise waits for the next mint. Every other failure ends.
   const endingNow = (
     owner: HostInstance,
     failure: CliHostTokenFailure,
@@ -631,8 +627,6 @@ function createPersonTokens(
   ): "ends" | "waits" | "none" => {
     if (!hosts.isCurrent(owner) || (order !== null && outlived(owner, order)))
       return "none";
-    if (failure.kind === "no-sign-in")
-      return storedKey() === null ? "ends" : "none";
     if (failure.kind !== "not-admitted") return "ends";
     if (admittedSince(owner, startedAt)) return "none";
     return (hosts.namedReason(owner.hostId) &&
@@ -641,9 +635,7 @@ function createPersonTokens(
       ? "ends"
       : "waits";
   };
-  // The evidence goes to the handle whose ask met it. A `no-sign-in` told
-  // while a sign-in is stored is one the gate would drop anyway, so nothing a
-  // person sees changes by not telling it.
+  // The evidence goes to the handle whose ask met it.
   const report = (
     handle: TokensHandle | null,
     owner: HostInstance,
@@ -679,6 +671,8 @@ function createPersonTokens(
   // a refused mint, so a refusal of a sign-in replaced on disk is dropped
   // there and never recorded against the stored one.
   stored.bindSignInSync(adoptStored);
+  // The key of the sign-in stored now: the lease's, which follows the file.
+  const storedKey = (): string | null => hostSignInKey(readLeaseBearer(lease));
   // The host process an ask observes now. An ask whose exit has ended (the
   // one it leaves its count on, see `waitForMint`) observes none, so the
   // source's own check declines its write and its purchase. An ask whose
