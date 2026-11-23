@@ -1010,6 +1010,31 @@ describe("a window's record of a refused mint belongs to the sign-in the mint wa
     stored = jwtExpiring(2_100_000);
     expect(window.lastFailureOf(USER, owner)).toBeNull();
   });
+
+  it("shows no refusal once an account switch moved main's era before the read", async () => {
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "sign-in-rejected" }),
+      signIn: (userId) => (userId === USER ? jwtExpiring(2_000_000) : null),
+      now: () => 1_000_000,
+    });
+    registerFor(main, USER);
+    processReleasedHosts.observeInstance(HOST, "process-a");
+    const window = windowOverMain(main);
+    const owner = { hostId: HOST, observed: "process-a" };
+    await window.obtain(USER, HOST, true, {
+      signal: null,
+      owner,
+      observedNow: () => "process-a",
+    });
+    expect(window.lastFailureOf(USER, owner)).toBe("sign-in-rejected");
+
+    // Another window signs the person out: main's era moves, and this window
+    // has not been told when it reads.
+    await main.forgetUser(USER);
+
+    expect(window.lastFailureOf(USER, owner)).toBeNull();
+  });
 });
 
 describe("main's obtain reply says whether main kept the refusal it answers with", () => {
