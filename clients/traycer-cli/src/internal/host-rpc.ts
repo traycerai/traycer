@@ -12,6 +12,7 @@ import {
 } from "./cli-host-tokens";
 import {
   isReleasedSignInRefusal,
+  processReleasedHosts,
   type ReleasedSignOn,
   type ReleasedUnaryCause,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
@@ -489,7 +490,12 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
         releasedSignOn: session.releasedSignOn,
         hostBearerFor: (waitForMint) =>
           session.tokens.hostBearerFor(endpoint.hostId, waitForMint),
-        admitted: () => session.tokens.admitted(endpoint.hostId),
+        // The unary door names no process: the one current as the fence lets
+        // the admission through.
+        admitted: () =>
+          session.tokens.admitted(
+            processReleasedHosts.currentInstance(endpoint.hostId),
+          ),
       },
       retryPolicy,
       dispatch,

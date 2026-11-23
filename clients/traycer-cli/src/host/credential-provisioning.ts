@@ -417,16 +417,20 @@ export async function provisionInstalledHostCredential(
     // found expired before its dial belongs to the host that dial selected,
     // the current endpoint while it runs.
     const refusedBy = new WeakMap<FatalErrorDetails, HostInstance>();
+    // The probe still wants a recovery while it runs and its deadline can
+    // still cover a rotation; read by the recovery after its last await.
+    const probeWanted = (): boolean =>
+      !probeAbort.signal.aborted && remaining() > 0;
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () =>
         recoverHostToken(endpoint?.hostId ?? null, (recovery) =>
-          recovery.revalidateForReconnect(),
+          recovery.revalidateForReconnect(probeWanted),
         ),
       revalidateRefused: async (refusal) => {
         const owner = refusedBy.get(refusal);
         const outcome = await recoverHostToken(
           owner?.hostId ?? null,
-          (recovery) => recovery.revalidateRefused(refusal),
+          (recovery) => recovery.revalidateRefused(refusal, probeWanted),
         );
         const left =
           owner !== undefined &&
@@ -487,7 +491,7 @@ export async function provisionInstalledHostCredential(
         },
         admitted: (instance) => {
           doorRetried = false;
-          return tokens.admitted(instance.hostId);
+          return tokens.admitted(instance);
         },
       },
       // No tracker wired yet on the CLI side: this is a short-lived

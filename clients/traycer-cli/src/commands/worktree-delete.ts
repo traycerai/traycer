@@ -193,7 +193,7 @@ async function deleteWithHostToken(
       refused: () => undefined,
       admitted: (instance) => {
         admitted = true;
-        return tokens.admitted(instance.hostId);
+        return tokens.admitted(instance);
       },
     },
     clock: null,

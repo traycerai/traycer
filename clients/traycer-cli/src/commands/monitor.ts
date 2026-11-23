@@ -279,7 +279,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       refused: (details, instance) => {
         refusedBy.set(details, instance);
       },
-      admitted: (instance) => credential.admitted(instance.hostId),
+      admitted: (instance) => credential.admitted(instance),
     },
     // The refused socket's own host process.
     releasedWayTaken: (instance) => {
@@ -339,7 +339,11 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           watching,
         };
       },
-      credential.signInRejected,
+      // Judged after an adopting read: the stored sign-in is the file's.
+      async () => {
+        await credential.adoptStoredSignIn();
+        return credential.signInRejected();
+      },
       (listener) =>
         credential.onRefusalEndingCommand((hostId, failure) => {
           if (endpoint?.hostId === hostId)
@@ -380,8 +384,10 @@ interface MonitorCredential {
    * `not-admitted` ends nothing while that connection is admitted, nor when
    * its mint began before now.
    */
-  readonly admitted: (hostId: string) => DoorAdmissionRelease;
+  readonly admitted: (instance: HostInstance) => DoorAdmissionRelease;
   readonly signInRejected: () => boolean;
+  /** See `CliHostTokens.adoptStoredSignIn`. */
+  readonly adoptStoredSignIn: () => Promise<void>;
   /** See `CliHostTokens.onRefusalEndingCommand`. */
   readonly onRefusalEndingCommand: (
     listener: CliMintRefusalListener,
@@ -450,10 +456,15 @@ async function signInMonitorCredential(
     presented: "host-token",
     userId: lease.identity.userId,
     bearer: (hostId) => hostTokens.streamBearer(hostId),
+    // Wanted for as long as the command runs: the tokens' own session check
+    // covers its end.
     recover: (hostId, details) =>
-      hostTokens.streamRecovery(hostId).revalidateRefused(details),
-    admitted: (hostId) => hostTokens.admitted(hostId),
+      hostTokens
+        .streamRecovery(hostId)
+        .revalidateRefused(details, () => true),
+    admitted: (instance) => hostTokens.admitted(instance),
     signInRejected: () => hostTokens.signInRejected(),
+    adoptStoredSignIn: () => hostTokens.adoptStoredSignIn(),
     onRefusalEndingCommand: (listener) =>
       hostTokens.onRefusalEndingCommand(listener),
     releasedSignOn: cliReleasedSignOn(lease, hostTokens),
@@ -527,6 +538,7 @@ function capabilityMonitorCredential(
     recover: () => capability.streamRecovery(),
     admitted: () => () => undefined,
     signInRejected: () => false,
+    adoptStoredSignIn: () => Promise.resolve(),
     onRefusalEndingCommand: () => () => undefined,
     hostCredentialMint: null,
     releasedSignOn: null,
@@ -591,7 +603,7 @@ function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   recover: InboxRecovery,
   refusalOf: InboxRefusalOf,
-  signInRejected: () => boolean,
+  signedOutNow: () => Promise<boolean>,
   mintRefusals: InboxMintRefusals,
   presented: "host-token" | "agent-capability",
   credential: AgentCommandCredential,
@@ -865,8 +877,14 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
-      const signedOut = signInRejected();
-      if (left && !signedOut) {
+      // The exit is judged after the adopting read, against the process and
+      // host watched then: a sign-in saved elsewhere meanwhile is not signed
+      // out, and a process replaced meanwhile is not the one that refused.
+      const signedOut = await signedOutNow();
+      if (settled) return;
+      const refusalNow = refusalOf(details);
+      const leftNow = refusalNow !== null && !refusalNow.current;
+      if (leftNow && !signedOut) {
         // A replaced process's host-tied rejection ends nothing by itself, but
         // counts one step toward the same bound.
         if (outcome === "rejected" && (moved() || countedToBound())) return;
