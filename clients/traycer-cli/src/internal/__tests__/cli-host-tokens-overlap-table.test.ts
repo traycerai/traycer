@@ -256,14 +256,15 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
         },
         hosts,
       );
-      return {
+      const judgedTracker: typeof tracker = {
         ...tracker,
         obtain: async (userId, hostId, fresh, ask) => {
           const outcome = await tracker.obtain(userId, hostId, fresh, ask);
           const refusalOf =
             outcome.kind === "sign-in-rejected"
-              ? (harness.requests.find((request) => request.given === outcome) ??
-                null)
+              ? (harness.requests.find(
+                  (request) => request.given === outcome,
+                ) ?? null)
               : null;
           // A refusal no request of authn produced cannot be judged against the rule.
           if (outcome.kind === "sign-in-rejected" && refusalOf === null)
@@ -300,6 +301,7 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
           return outcome;
         },
       };
+      return judgedTracker;
     },
   };
 });

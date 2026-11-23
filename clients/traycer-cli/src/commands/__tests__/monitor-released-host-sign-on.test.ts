@@ -591,6 +591,8 @@ function bareRefusal(): Record<string, unknown> {
 
 const NOT_A_MEMBER_SENTENCE =
   "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.";
+const OLDER_HOST_SENTENCE =
+  "The host is out of date. Reinstall the latest host with 'traycer host update'.";
 
 /** The reasons a released host gives for refusing a credential. */
 const RELEASED_REASONS = [
@@ -2061,6 +2063,24 @@ describe("traycer monitor local released-host sign-in", () => {
         "[traycer monitor] fatal: The stored credential was rejected. Run `traycer login` to re-authenticate.\n",
       ]);
       expect(monitorHarness.exits).toEqual([1]);
+    });
+
+    // A guard: a host that named a reason in this process is never handed the sign-in, so
+    // its bare refusal of the host-only token is an older host's.
+    it("still prints the older-host line for a bare token refusal from a host that named a reason in this process", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      nameReason(monitorHarness.state.hostId);
+      startMonitor();
+      const socket = await socketAt(0);
+      await readOpen(socket);
+
+      socket.fireFrame(releasedRefusalWith("released-host-token-refusal"));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({
+        message: OLDER_HOST_SENTENCE,
+        exitCode: 1,
+      });
     });
   });
 
