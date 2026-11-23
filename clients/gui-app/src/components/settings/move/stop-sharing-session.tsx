@@ -4,6 +4,7 @@ import type {
   EnvironmentMovePersonalProfile,
   EnvironmentMoveStopResponseV11,
   EnvironmentMoveStopPreviewResponseV13,
+  EnvironmentMoveStopPreviewResponseV14,
 } from "@traycer/protocol/host/environment/move-contracts";
 import { PersonalLeaveAccounts } from "./personal-leave-accounts";
 import { PersonalLeaveSignIn } from "./personal-leave-sign-in";
@@ -83,13 +84,16 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
             }
           : null,
       options: {
-        enabled: props.open && props.hostId !== null && supported === true,
+        enabled: props.hostId !== null && supported === true,
       },
     },
   );
   const stop = useEnvironmentMoveStopMutation(props.client);
+  const [replacement, setReplacement] =
+    useState<EnvironmentMoveStopPreviewResponseV14 | null>(null);
+  const shown = replacement ?? preview.data;
   const personalProfiles = offersLeave
-    ? (preview.data?.personalProfiles ?? null)
+    ? (shown?.personalProfiles ?? null)
     : null;
   const metadata = usePersonalLeaveProviders(
     props.client,
@@ -101,15 +105,18 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   const [answeredBeforeChange, setAnsweredBeforeChange] =
     useState<ReadonlySet<string> | null>(null);
   const [refusalRefreshPending, setRefusalRefreshPending] = useState(false);
-  const previewStatus = stopPreviewStatus(
-    supported,
-    preview,
-    answeredBeforeChange !== null,
-    refusalRefreshPending,
-  );
+  const previewStatus =
+    replacement !== null
+      ? "ready"
+      : stopPreviewStatus(
+          supported,
+          preview,
+          answeredBeforeChange !== null,
+          refusalRefreshPending,
+        );
   const { managed, needsChoice } = useMemo(
-    () => stopRowsForMode(preview.data, personalProfiles !== null),
-    [preview.data, personalProfiles],
+    () => stopRowsForMode(shown, personalProfiles !== null),
+    [shown, personalProfiles],
   );
   const changedRows =
     answeredBeforeChange === null
@@ -128,10 +135,11 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
 
   const onStop = (choices: readonly StopChoiceEntry[]): void => {
     const answered = new Set(needsChoice.map(stopRowAddress));
+    const sheetDigest = shown?.sheetDigest ?? null;
     stop.mutate(
       {
         profileMode: personalProfiles === null ? null : "keep-personal",
-        sheetDigest: null,
+        sheetDigest,
         profileSignIns: personalLeaveSignIns(
           personalProfiles ?? [],
           accounts.states,
@@ -144,9 +152,33 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
       },
       {
         onSuccess: (data) => {
-          if (data.outcome === "sheet_changed") return;
+          if (data.outcome === "sheet_changed") {
+            const previousProfiles = new Map(
+              (personalProfiles ?? []).map((row) => [
+                personalLeaveAddress(row),
+                row,
+              ]),
+            );
+            accounts.retain(
+              new Set(
+                (data.preview.personalProfiles ?? []).flatMap((row) => {
+                  const address = personalLeaveAddress(row);
+                  const previous = previousProfiles.get(address);
+                  return previous?.signIn === row.signIn &&
+                    previous.shared === row.shared
+                    ? [address]
+                    : [];
+                }),
+              ),
+            );
+            setAnsweredBeforeChange(answered);
+            setReplacement(data.preview);
+            setSigningIn(null);
+            return;
+          }
           if (data.outcome === "choices_missing") {
             setAnsweredBeforeChange(answered);
+            setReplacement(null);
             void preview.refetch();
             return;
           }
@@ -155,10 +187,11 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
           onOpenChange(false);
         },
         onError: () => {
-          if (personalProfiles === null) return;
+          if (personalProfiles === null && sheetDigest === null) return;
           // Per-mutate callbacks precede the mutation observer's listeners:
           // raise the gate before the settled mutation can enable Stop.
           setRefusalRefreshPending(true);
+          setReplacement(null);
           void preview.refetch().finally(() => {
             setRefusalRefreshPending(false);
           });
@@ -170,6 +203,7 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   return (
     <>
       <StopSharingSheet
+        key={replacement?.sheetDigest}
         open={props.open}
         hostName={props.hostName}
         managed={managed}

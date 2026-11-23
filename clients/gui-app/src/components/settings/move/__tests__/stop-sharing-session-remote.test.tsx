@@ -248,6 +248,17 @@ function setAdvertisedMethodVersion(
   }
 }
 
+function advertiseSheetDigestStopPair(relay: FakeRelayHost): void {
+  setAdvertisedMethodVersion(relay, "environment.move.stopPreview", {
+    major: 1,
+    minor: 4,
+  });
+  setAdvertisedMethodVersion(relay, "environment.move.stop", {
+    major: 1,
+    minor: 3,
+  });
+}
+
 function makeHarness(
   answer: (request: {
     readonly method: string;
@@ -432,6 +443,13 @@ function preview(
   return profiles === undefined
     ? base
     : { ...base, personalProfiles: profiles === null ? null : [...profiles] };
+}
+
+function previewWithDigest(
+  profiles: readonly EnvironmentMovePersonalProfile[] | null | undefined,
+  sheetDigest: string,
+): EnvironmentMoveStopPreviewResponseV14 {
+  return { ...preview(profiles), sheetDigest };
 }
 
 function providerList(profiles: readonly ProviderProfile[]): ProvidersList {
@@ -714,6 +732,180 @@ async function expectFloorRefusalAfterReconnect(
 }
 
 describe("StopSharingSession over the real remote session", () => {
+  it.each([
+    {
+      label: "plain",
+      profiles: undefined,
+      profileMode: null,
+    },
+    {
+      label: "keep-personal",
+      profiles: [FOLDER("folder-one", "Work", "offered")],
+      profileMode: "keep-personal",
+    },
+  ] as const)(
+    "sends the displayed sheet digest on a $label Stop",
+    async ({ profiles, profileMode }) => {
+      const digest = "a".repeat(64);
+      const harness = makeHarness(({ method }) => {
+        if (method === "environment.move.stopPreview")
+          return successful(previewWithDigest(profiles, digest));
+        if (method === "environment.move.stop") return successful(stopped());
+        if (method === "providers.list") return successful(providerList([]));
+        return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+      });
+      advertiseSheetDigestStopPair(harness.relay);
+      await renderSession(
+        harness.client,
+        { showListAfterStop: false, showToaster: false },
+        null,
+      );
+
+      if (profileMode === null) {
+        await screen.findByTestId("stop-sharing-managed-empty");
+      } else {
+        await screen.findByTestId("personal-leave-codex-folder-one");
+      }
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+      await screen.findByTestId("stop-complete");
+
+      expect(stopRequests(harness)).toEqual([
+        {
+          choices: [],
+          profileMode,
+          profileSignIns:
+            profileMode === null
+              ? []
+              : [
+                  {
+                    providerId: "codex",
+                    profileId: "folder-one",
+                    signIn: { kind: "untouched" },
+                  },
+                ],
+          sheetDigest: digest,
+        },
+      ]);
+      expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(
+        1,
+      );
+      expect(harness.relay.errors).toEqual([]);
+    },
+  );
+
+  it("falls back from null personal profiles to plain Stop with that preview digest", async () => {
+    const digest = "b".repeat(64);
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview")
+        return successful(previewWithDigest(null, digest));
+      if (method === "environment.move.stop") return successful(stopped());
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    advertiseSheetDigestStopPair(harness.relay);
+    await renderSession(
+      harness.client,
+      { showListAfterStop: false, showToaster: false },
+      null,
+    );
+
+    await screen.findByTestId("stop-sharing-managed-empty");
+    expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(1);
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    await screen.findByTestId("stop-complete");
+
+    expect(stopRequests(harness)).toEqual([
+      {
+        choices: [],
+        profileMode: null,
+        profileSignIns: [],
+        sheetDigest: digest,
+      },
+    ]);
+    expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(1);
+    expect(harness.relay.errors).toEqual([]);
+  });
+
+  it("replaces the sheet from sheet_changed and confirms again with its returned digest", async () => {
+    const shownDigest = "c".repeat(64);
+    const changedDigest = "d".repeat(64);
+    let stopAttempts = 0;
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview")
+        return successful(
+          previewWithDigest(
+            [FOLDER("folder-one", "Work", "offered")],
+            shownDigest,
+          ),
+        );
+      if (method === "providers.list") return successful(providerList([]));
+      if (method === "environment.move.stop") {
+        stopAttempts += 1;
+        if (stopAttempts === 1)
+          return successful({
+            outcome: "sheet_changed",
+            preview: {
+              ...previewWithDigest(null, changedDigest),
+              managed: [
+                {
+                  kind: "variable",
+                  key: "PLAIN_ONLY",
+                  os: "any",
+                  label: "PLAIN_ONLY",
+                  detail: null,
+                },
+              ],
+            },
+          });
+        return successful(stopped());
+      }
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    advertiseSheetDigestStopPair(harness.relay);
+    await renderSession(
+      harness.client,
+      { showListAfterStop: false, showToaster: false },
+      null,
+    );
+
+    await screen.findByTestId("personal-leave-codex-folder-one");
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    await screen.findByTestId("stop-sharing-managed-variable-PLAIN_ONLY");
+    expect(stopRequests(harness)).toHaveLength(1);
+    expect(stopRequests(harness)[0]).toMatchObject({
+      profileMode: "keep-personal",
+      sheetDigest: shownDigest,
+    });
+    expect(screen.queryByTestId("personal-leave-codex-folder-one")).toBeNull();
+    const confirm = screen.getByTestId("stop-sharing-confirm");
+    expect(confirm.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(confirm);
+    await screen.findByTestId("stop-complete");
+
+    expect(stopRequests(harness)).toEqual([
+      {
+        choices: [],
+        profileMode: "keep-personal",
+        profileSignIns: [
+          {
+            providerId: "codex",
+            profileId: "folder-one",
+            signIn: { kind: "untouched" },
+          },
+        ],
+        sheetDigest: shownDigest,
+      },
+      {
+        choices: [],
+        profileMode: null,
+        profileSignIns: [],
+        sheetDigest: changedDigest,
+      },
+    ]);
+    expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(1);
+    expect(harness.relay.errors).toEqual([]);
+  });
+
   it.each([
     ["null personalProfiles", null],
     ["absent personalProfiles", undefined],

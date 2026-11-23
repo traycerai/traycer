@@ -165,6 +165,21 @@ export function usePersonalLeaveAccounts(
   return {
     states,
     change,
+    retain: (addresses: ReadonlySet<string>): void => {
+      for (const [address, signIn] of held.current) {
+        if (addresses.has(address)) continue;
+        held.current.delete(address);
+        void cancelHeld({
+          providerId: signIn.providerId,
+          profileId: signIn.admissionId,
+          holderId: null,
+        }).catch(() => {});
+      }
+      setStates(
+        (current) =>
+          new Map([...current].filter(([address]) => addresses.has(address))),
+      );
+    },
     committed: (): void => {
       held.current.clear();
     },
