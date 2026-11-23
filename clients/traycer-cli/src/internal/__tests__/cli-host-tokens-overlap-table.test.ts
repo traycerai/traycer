@@ -50,6 +50,10 @@ type Event =
       /** The refusal's request, `null` for an outcome that is not a refusal. */
       readonly refusalOf: MintRequest | null;
       readonly obeysRule: boolean;
+      /** Whether a request sent with our rotation's sign-in had bought a token by then. */
+      readonly boughtOnOurs: boolean;
+      /** What `signInRejected()` said as the outcome left. */
+      readonly judged: boolean;
     }
   | { readonly kind: "rotation-started"; readonly byTest: boolean };
 
@@ -62,6 +66,7 @@ const harness = vi.hoisted(() => ({
   /** Set while the test itself refreshes the sign-in. */
   testRotating: false,
   storedSignIn: (): string => "",
+  signInRejected: (): boolean => false,
 }));
 
 const credentialsFile = vi.hoisted(() => ({
@@ -149,7 +154,16 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
                     later.seq > refusalOf.seq &&
                     later.given?.kind === "ok",
                 ));
-            harness.events.push({ kind: "left", refusalOf, obeysRule });
+            harness.events.push({
+              kind: "left",
+              refusalOf,
+              obeysRule,
+              boughtOnOurs: harness.requests.some(
+                (request) =>
+                  request.signIn === OURS && request.given?.kind === "ok",
+              ),
+              judged: harness.signInRejected(),
+            });
             return outcome;
           },
         },
@@ -203,6 +217,9 @@ type Answer = "a token" | "a 401";
 type Order = "first mint first" | "second mint first";
 
 interface Scenario {
+  /** Two host ids share the one sign-in in one command, each with its own host process. */
+  readonly hostIds: 1 | 2;
+  /** Host processes of the first host id; always 1 for two host ids. */
   readonly hostProcesses: 1 | 2;
   readonly transition: Transition;
   readonly first: Answer;
@@ -217,7 +234,9 @@ interface Scenario {
  */
 function sharesOneRequest(scenario: Scenario): boolean {
   return (
-    scenario.hostProcesses === 1 && scenario.transition !== "rotated by us"
+    scenario.hostIds === 1 &&
+    scenario.hostProcesses === 1 &&
+    scenario.transition !== "rotated by us"
   );
 }
 
@@ -230,12 +249,16 @@ const TRANSITIONS: readonly Transition[] = [
 ];
 
 const scenarios: Scenario[] = [];
-for (const hostProcesses of [1, 2] as const)
+for (const layout of [
+  { hostIds: 1, hostProcesses: 1 },
+  { hostIds: 1, hostProcesses: 2 },
+  { hostIds: 2, hostProcesses: 1 },
+] as const)
   for (const transition of TRANSITIONS)
     for (const first of ANSWERS)
       for (const second of ANSWERS)
         for (const order of ORDERS) {
-          const scenario = { hostProcesses, transition, first, second, order };
+          const scenario = { ...layout, transition, first, second, order };
           // One request, answered once: the second answer and the order mean nothing.
           if (
             sharesOneRequest(scenario) &&
@@ -246,12 +269,15 @@ for (const hostProcesses of [1, 2] as const)
         }
 
 const nameOf = (scenario: Scenario): string =>
-  sharesOneRequest(scenario)
-    ? `${scenario.hostProcesses} host process, sign-in ${scenario.transition} between, one shared request answered with ${scenario.first}`
-    : `${scenario.hostProcesses} host process${scenario.hostProcesses === 1 ? "" : "es"}, sign-in ${scenario.transition} between, first mint answered with ${scenario.first}, second with ${scenario.second}, ${scenario.order}`;
+  scenario.hostIds === 2
+    ? `2 host ids, sign-in ${scenario.transition} between, first host's mint answered with ${scenario.first}, second host's with ${scenario.second}, ${scenario.order}`
+    : sharesOneRequest(scenario)
+      ? `${scenario.hostProcesses} host process, sign-in ${scenario.transition} between, one shared request answered with ${scenario.first}`
+      : `${scenario.hostProcesses} host process${scenario.hostProcesses === 1 ? "" : "es"}, sign-in ${scenario.transition} between, first mint answered with ${scenario.first}, second with ${scenario.second}, ${scenario.order}`;
 
 let hostCount = 0;
 let hostId = "";
+let otherHostId = "";
 let workDir = "";
 
 beforeEach(async () => {
@@ -261,7 +287,8 @@ beforeEach(async () => {
   harness.hold = 0;
   harness.testRotating = false;
   hostCount += 1;
-  hostId = `66666666-6666-4666-8666-${String(hostCount).padStart(12, "0")}`;
+  hostId = `66666666-6666-4666-8666-${String(hostCount * 2).padStart(12, "0")}`;
+  otherHostId = `66666666-6666-4666-8666-${String(hostCount * 2 + 1).padStart(12, "0")}`;
   processReleasedHosts.forgetAll();
   workDir = await mkdtemp(join(tmpdir(), "traycer-overlap-table-"));
   credentialsFile.path = join(workDir, "credentials");
@@ -324,7 +351,7 @@ const answerOf = (answer: Answer, seq: number): HostTokenMintOutcome =>
     : { kind: "sign-in-rejected" };
 
 describe.each(scenarios)(
-  "two overlapping mints: $hostProcesses host process(es), sign-in $transition",
+  "two overlapping mints: $hostIds host id(s), $hostProcesses host process(es), sign-in $transition",
   (scenario) => {
     it(nameOf(scenario), async () => {
       const store = createCliCredentialsStore();
@@ -350,7 +377,10 @@ describe.each(scenarios)(
         signal: null,
       });
       await tokens.whenLoaded();
+      harness.signInRejected = () => tokens.signInRejected();
       processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
+      if (scenario.hostIds === 2)
+        processReleasedHosts.observeInstance(otherHostId, FIRST_PROCESS);
       const requestsExpected = sharesOneRequest(scenario) ? 1 : 2;
       harness.hold = requestsExpected;
 
@@ -370,7 +400,10 @@ describe.each(scenarios)(
         processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
 
       // The second mint starts after it, and is held when it is a request of its own.
-      const second = tokens.mintFresh(hostId, null);
+      const second = tokens.mintFresh(
+        scenario.hostIds === 2 ? otherHostId : hostId,
+        null,
+      );
       await vi.waitFor(() =>
         expect(harness.requests).toHaveLength(requestsExpected),
       );
@@ -433,6 +466,21 @@ describe.each(scenarios)(
           : [index];
       });
       expect(rotationsWithoutRefusal).toEqual([]);
+      // (4) With two host ids sharing the sign-in: a refusal of the sign-in our
+      // own rotation installed, while it is still stored and before any token
+      // was bought on it, is judged as it leaves, whatever the other host's
+      // mint did meanwhile.
+      expect(
+        scenario.hostIds === 1
+          ? []
+          : left.filter(
+              (event) =>
+                event.refusalOf?.signIn === OURS &&
+                event.obeysRule &&
+                !event.boughtOnOurs &&
+                !event.judged,
+            ),
+      ).toEqual([]);
 
       tokens.dispose();
       store.dispose();
