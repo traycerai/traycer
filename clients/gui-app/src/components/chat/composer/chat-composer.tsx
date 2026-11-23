@@ -211,8 +211,9 @@ interface ChatComposerProps {
   readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
   /**
-   * The folder this chat's next run starts its CLI in, or `null` when it cannot
-   * be known before the send (see `runDirectoryFromWorktreeBindingAndIntent`).
+   * The folder alias routes are read in for this chat's next run, or `null` when
+   * it cannot be known before the send (see
+   * `runDirectoryFromWorktreeBindingAndIntent`).
    */
   readonly runWorkingDirectory: string | null;
   readonly fallbackToGlobalMentionRoots: boolean;

@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
     (params: object) => Promise<{
       routes: {
         profileId: string | null;
-        resolvedModel: string;
+        resolvedModel: string | null;
         validForMs: number;
       }[];
     }>
@@ -100,14 +100,14 @@ function limited(id: string, kind: "ambient" | "managed") {
 }
 function answer(
   profileId: string | null,
-  resolvedModel: string,
+  resolvedModel: string | null,
   validForMs: number,
 ) {
   return { profileId, resolvedModel, validForMs };
 }
 type Route = {
   profileId: string | null;
-  resolvedModel: string;
+  resolvedModel: string | null;
   validForMs: number;
 };
 let resolveRead: (value: { routes: Route[] }) => void;
@@ -330,5 +330,152 @@ describe("default model route evidence", () => {
     ];
     opus.rerender({ folder: "/repo", selected: OPUS });
     expect(opus.result.current.kind).toBe("visible");
+  });
+});
+
+describe("catalog route for the selected profile's alias", () => {
+  const catalogOpus = {
+    ...DEFAULT,
+    metadata: { resolvedModel: "claude-opus-5-5" },
+  };
+  const catalogFable = {
+    ...DEFAULT,
+    metadata: { resolvedModel: "claude-fable-5-2" },
+  };
+  function succeeded(client: QueryClient) {
+    return client
+      .getQueryCache()
+      .getAll()
+      .some((query) => query.state.status === "success");
+  }
+  beforeEach(() => {
+    mocks.supported = true;
+    mocks.read.mockReset();
+    mocks.providers = [
+      claudeState([limited("ambient", "ambient"), limited("work", "managed")]),
+    ];
+    useRateLimitSwitchPromptDismissalsStore.setState({
+      dismissedKeys: new Set<string>(),
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  it("hides an Opus catalog row when no folder can be asked", () => {
+    const hook = setup(null, catalogOpus);
+    expect(hook.result.current.kind).toBe("hidden");
+    expect(mocks.read).not.toHaveBeenCalled();
+  });
+  it("shows a Fable catalog row when no folder can be asked", () => {
+    const hook = setup(null, catalogFable);
+    expect(hook.result.current.kind).toBe("visible");
+  });
+  it("lets a folder answering Fable override an Opus catalog row", async () => {
+    mocks.read.mockImplementation(pending);
+    const hook = setup("/repo", catalogOpus);
+    expect(hook.result.current.kind).toBe("hidden");
+    act(() =>
+      resolveRead({ routes: [answer(null, "claude-fable-5-2", 1000)] }),
+    );
+    await waitFor(() => expect(hook.result.current.kind).toBe("visible"));
+  });
+  it("lets a folder answering Opus override a Fable catalog row", async () => {
+    mocks.read.mockImplementation(pending);
+    const hook = setup("/repo", catalogFable);
+    expect(hook.result.current.kind).toBe("visible");
+    act(() => resolveRead({ routes: [answer(null, "claude-opus-5-5", 1000)] }));
+    await waitFor(() => expect(hook.result.current.kind).toBe("hidden"));
+  });
+  it("keeps the warning once a disagreeing folder answer expires", async () => {
+    vi.useFakeTimers();
+    mocks.read
+      .mockResolvedValueOnce({
+        routes: [answer(null, "claude-fable-5-2", 1000)],
+      })
+      .mockImplementation(pending);
+    const hook = setup("/repo", catalogOpus);
+    await act(async () => {
+      await vi.waitFor(() => expect(hook.result.current.kind).toBe("visible"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.kind).toBe("visible");
+  });
+  it("keeps the alias hidden once an agreeing folder answer expires", async () => {
+    vi.useFakeTimers();
+    mocks.read
+      .mockResolvedValueOnce({
+        routes: [answer(null, "claude-opus-5-5", 1000)],
+      })
+      .mockImplementation(pending);
+    const hook = setup("/repo", catalogOpus);
+    await act(async () => {
+      await vi.waitFor(() => expect(succeeded(hook.client)).toBe(true));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.kind).toBe("hidden");
+  });
+  it("shows the warning when the handshake named no first-party model", async () => {
+    mocks.read.mockImplementation(pending);
+    const hook = setup("/repo", catalogOpus);
+    expect(hook.result.current.kind).toBe("hidden");
+    act(() => resolveRead({ routes: [answer(null, null, 1000)] }));
+    await waitFor(() => expect(hook.result.current.kind).toBe("visible"));
+  });
+  it("keeps the catalog route when the folder has no handshake", async () => {
+    mocks.read.mockResolvedValue({ routes: [answer(null, null, 0)] });
+    const hook = setup("/repo", catalogOpus);
+    await waitFor(() => expect(succeeded(hook.client)).toBe(true));
+    expect(hook.result.current.kind).toBe("hidden");
+  });
+  it("keeps the warning when a disagreeing answer has no validity left", async () => {
+    mocks.read.mockImplementation(pending);
+    const hook = setup("/repo", catalogOpus);
+    expect(hook.result.current.kind).toBe("hidden");
+    act(() => resolveRead({ routes: [answer(null, "claude-fable-5-2", 0)] }));
+    await waitFor(() => expect(hook.result.current.kind).toBe("visible"));
+  });
+  it("ignores a catalog value that names a gateway model", () => {
+    const hook = setup("/repo", {
+      ...DEFAULT,
+      metadata: {
+        resolvedModel:
+          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-5-5",
+      },
+    });
+    expect(hook.result.current.kind).toBe("visible");
+  });
+  it("does not apply the catalog route to another profile", () => {
+    mocks.providers = [
+      claudeState([
+        {
+          ...limited("ambient", "ambient"),
+          rateLimitLimitedScopes: [{ family: null, severity: "hard_limit" }],
+        },
+        limited("work", "managed"),
+      ]),
+    ];
+    const hook = setup(null, catalogOpus);
+    expect(visiblePrompt(hook.result.current).destinations[0]?.selectable).toBe(
+      false,
+    );
+  });
+  it("keeps a shared-window limit visible for an Opus catalog row", () => {
+    mocks.providers = [
+      claudeState([
+        {
+          ...limited("ambient", "ambient"),
+          rateLimitLimitedScopes: [{ family: null, severity: "hard_limit" }],
+        },
+        limited("work", "managed"),
+      ]),
+    ];
+    const hook = setup(null, catalogOpus);
+    expect(hook.result.current.kind).toBe("visible");
   });
 });

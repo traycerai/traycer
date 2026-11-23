@@ -1,10 +1,5 @@
-import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { useMemo } from "react";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
-import { readCachedDefaultWorktreeIntent } from "@/lib/worktree/cached-default-worktree-intent";
-import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import type {
   WorktreeBinding,
@@ -178,21 +173,14 @@ export function mentionRootsFromWorktreeBindingAndIntent(
 }
 
 /**
- * Where a folder's next run starts the CLI under its staged intent, or `null`
- * for a worktree the send has not created yet.
- */
-function folderIntentRunDirectory(entry: WorktreeFolderIntent): string | null {
-  if (entry.kind === "import") return entry.worktreePath;
-  return entry.kind === "local" ? entry.workspacePath : null;
-}
-
-/**
  * The directory a chat's next run starts its CLI in: the host's run directory
  * for the binding's declared primary entry (`entryRunDirectory`), after any
- * staged intent for that folder. `null` when the client cannot know it - no
- * binding entries yet (the host falls back to the task's folders), a
- * folderless chat (the host's own task folder), or a primary staged onto a
- * worktree not created yet.
+ * staged intent for that folder. A primary staged onto a worktree not created
+ * yet answers with the source checkout it is cut from, whose project settings
+ * the worktree starts with unless its base branch commits different ones.
+ * `null` when the client cannot know it - no binding entries yet (the host
+ * falls back to the task's folders), or a folderless chat (the host's own task
+ * folder).
  */
 export function runDirectoryFromWorktreeBindingAndIntent(
   binding: WorktreeBinding | null,
@@ -210,7 +198,7 @@ export function runDirectoryFromWorktreeBindingAndIntent(
   const staged = intent?.entries.find(
     (entry) => entry.workspacePath === primary.workspacePath,
   );
-  if (staged !== undefined) return folderIntentRunDirectory(staged);
+  if (staged !== undefined) return folderIntentRoot(staged);
   return primary.worktreePath !== null && primary.worktreePath.length > 0
     ? primary.worktreePath
     : primary.workspacePath;
@@ -218,53 +206,20 @@ export function runDirectoryFromWorktreeBindingAndIntent(
 
 /**
  * {@link runDirectoryFromWorktreeBindingAndIntent} for a landing draft, whose
- * new chat's binding uses the workspace's selected primary folder.
+ * new chat's binding uses the workspace's selected primary folder. An unstaged
+ * primary runs in place or in a new worktree cut from it, so its own path
+ * answers either way.
  */
 export function useLandingRunWorkingDirectory(
   draftId: string | null,
 ): string | null {
-  const { workspace, stagedIntent, activeHostId } =
-    useLandingFoldersAndIntent(draftId);
-  const queryClient = useQueryClient();
-  const summariesKey = useMemo(
-    () =>
-      hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
-        activeHostId,
-        "worktree.listByWorkspacePaths",
-        {
-          workspacePaths: [...workspace.folders],
-          scriptRefs: [],
-          forceRefresh: false,
-        },
-      ),
-    [activeHostId, workspace.folders],
-  );
-  const subscribe = useCallback(
-    (notify: () => void) => queryClient.getQueryCache().subscribe(notify),
-    [queryClient],
-  );
-  const snapshot = useCallback(
-    () => queryClient.getQueryData(summariesKey),
-    [queryClient, summariesKey],
-  );
-  // The picker can cache a new-worktree default before staging it. Re-evaluate
-  // when that cache changes, using the same fallback as the submit boundary.
-  useSyncExternalStore(subscribe, snapshot, snapshot);
-  const intent = effectiveWorktreeIntent({
-    workspace,
-    stagedIntent,
-    seedIntent: readCachedDefaultWorktreeIntent(
-      queryClient,
-      activeHostId,
-      workspace,
-    ),
-  });
+  const { workspace, stagedIntent } = useLandingFoldersAndIntent(draftId);
   const primary = resolvePrimaryPath(workspace.folders, workspace.primaryPath);
   if (primary === null) return null;
-  const entry = intent?.entries.find(
+  const staged = stagedIntent?.entries.find(
     (entry) => entry.workspacePath === primary,
   );
-  return entry === undefined ? primary : folderIntentRunDirectory(entry);
+  return staged === undefined ? primary : folderIntentRoot(staged);
 }
 
 function folderIntentRoot(entry: WorktreeFolderIntent): string {

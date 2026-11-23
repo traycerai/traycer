@@ -185,4 +185,26 @@ describe("resolveAutoOpenTarget", () => {
 
     expect(target?.id).toBe("chat-1");
   });
+
+  it("chooses nothing while the agent records are unanswered", () => {
+    const records = [
+      record({ id: "spec-1", name: "Spec", type: "spec" }),
+      record({ id: "chat-old", name: "Chat One", type: "chat" }),
+    ];
+
+    const target = resolveAutoOpenTarget(records, null, "chat-new", null);
+
+    expect(target).toBeNull();
+  });
+
+  it("restores the persisted focus while the agent records are unanswered", () => {
+    const records = [
+      record({ id: "chat-1", name: "Chat One", type: "chat" }),
+      record({ id: "spec-1", name: "Spec", type: "spec" }),
+    ];
+
+    const target = resolveAutoOpenTarget(records, null, "spec-1", null);
+
+    expect(target?.id).toBe("spec-1");
+  });
 });

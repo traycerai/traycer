@@ -289,7 +289,7 @@ describe("collectCanvasWideRetainedChatMembership (layer 1, pure)", () => {
     expect(membership.size).toBe(0);
   });
 
-  it("ignores a tab with a null (empty-shell) canvas root", () => {
+  it("ignores a tab with a null canvas root", () => {
     const membership = collectCanvasWideRetainedChatMembership({
       "tab-1": {
         root: null,

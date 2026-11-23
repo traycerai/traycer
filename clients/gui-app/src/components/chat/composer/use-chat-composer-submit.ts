@@ -62,7 +62,10 @@ import {
   resolveSubmitDeliveryPolicy,
   type ChatComposerSubmitSource,
 } from "@/lib/chats/resolve-steer-submit";
-import { splitLeadingSideChatCommand } from "@/lib/chats/side-chat-command";
+import {
+  splitLeadingSideChatCommand,
+  type SideChatCommandName,
+} from "@/lib/chats/side-chat-command";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type {
   ComposerToolbarStore,
@@ -180,6 +183,8 @@ interface UseChatComposerSubmitArgs {
 }
 
 export interface ChatComposerSideChatInput {
+  /** Which of the two names was typed; it picks the side chat's title prefix. */
+  readonly command: SideChatCommandName;
   /** The prompt with the command token stripped; may be empty (bare `/btw`). */
   readonly content: JsonContent;
   readonly settings: ChatRunSettings;
@@ -691,7 +696,13 @@ export function useChatComposerSubmit(
               );
               return;
             }
-            if (onSideChat({ content: sideChat.rest, settings })) {
+            if (
+              onSideChat({
+                command: sideChat.command,
+                content: sideChat.rest,
+                settings,
+              })
+            ) {
               clearAcceptedDraft();
             }
             return;

@@ -478,6 +478,15 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
   const hasOutline = outline.length > 0;
   const handleZoomIn = useCallback(() => zoomBy(ZOOM_STEP), [zoomBy]);
   const handleZoomOut = useCallback(() => zoomBy(1 / ZOOM_STEP), [zoomBy]);
+  const handleZoomTo = useCallback(
+    (percent: number) => {
+      const binding = bindingRef.current;
+      if (binding === null) return;
+      setScaleMode(null);
+      binding.viewer.currentScale = clampScale(percent / 100);
+    },
+    [setScaleMode],
+  );
   const toggleOutline = useCallback(
     () => setOutlineOpen((value) => !value),
     [],
@@ -508,6 +517,7 @@ function PdfDocument(props: PdfPreviewProps): ReactNode {
           canZoomOut: scalePercent === null || scalePercent > MIN_SCALE * 100,
           onZoomIn: handleZoomIn,
           onZoomOut: handleZoomOut,
+          onZoomTo: handleZoomTo,
           fitKind: "width",
           fitActive: scaleMode === "page-width",
           onFit: handleFitWidth,
