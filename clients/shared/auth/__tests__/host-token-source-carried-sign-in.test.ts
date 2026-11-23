@@ -570,3 +570,52 @@ describe("one host process's purchase, however many sources the process holds", 
     expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
   });
 });
+
+describe("an ownerless ask joins the mint still running when a newer mint for the pair settles first", () => {
+  it("starts no second mint for a renewal while an earlier mint, started for a host process not yet observed, is still running", async () => {
+    const answers: Array<(outcome: HostTokenMintOutcome) => void> = [];
+    let mintsSent = 0;
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      // The first two requests are held; any later one is answered at once.
+      mint: () => {
+        mintsSent += 1;
+        return mintsSent <= 2
+          ? new Promise<HostTokenMintOutcome>((resolve) => {
+              answers.push(resolve);
+            })
+          : Promise.resolve({ kind: "unavailable", detail: "extra mint" });
+      },
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_A : null),
+      now: () => Date.now(),
+    });
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "process-a");
+    const observedOwner = hosts.currentInstance(HOST_ID);
+    const unobservedOwner = { hostId: HOST_ID, observed: null };
+    await tokens.whenLoaded();
+    // The earlier mint is for a process not yet observed.
+    const earlier = identify(tokens, true, {
+      signal: null,
+      owner: unobservedOwner,
+      observedNow: () => null,
+    });
+    await vi.waitFor(() => expect(answers).toHaveLength(1));
+    // A newer mint for the observed process is a separate flight, and settles first without a kept write.
+    const newer = identify(tokens, true, {
+      signal: null,
+      owner: observedOwner,
+      observedNow: () => observedOwner.observed,
+    });
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    answers[1]({ kind: "unavailable", detail: "authn unreachable" });
+    await newer;
+
+    // A renewal asked for no host process joins the earlier mint, whose answer it can use.
+    const renewal = tokens.renew(USER_ID, [HOST_ID]);
+    answers[0]({ kind: "ok", token: hostTokenIssuedAt("earlier", 2_000) });
+    await Promise.all([earlier, renewal]);
+
+    expect(mintsSent).toBe(2);
+  });
+});
