@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { collectExecSyncStdioScanFiles } from "../../../../shared/__tests__/exec-sync-stdio-checker";
 
 // Round Q, P6 and P7: the sign-in's verdict and the store-backed rotation each
 // have ONE reach. The CLI's production sources are read as text, so a new site
@@ -10,18 +11,14 @@ import { describe, expect, it } from "vitest";
 
 const SRC = fileURLToPath(new URL("../..", import.meta.url));
 
-const PRODUCTION_FILES: readonly string[] = readdirSync(SRC, {
-  recursive: true,
-  encoding: "utf8",
-})
-  .filter(
-    (path) =>
-      path.endsWith(".ts") &&
-      !path.endsWith(".d.ts") &&
-      !path.split("/").includes("__tests__") &&
-      !path.endsWith(".test.ts"),
-  )
-  .map((path) => path.replaceAll("\\", "/"))
+const REPO_ROOT = fileURLToPath(new URL("../../../../..", import.meta.url));
+
+// The shared source collector, narrowed to this package's non-test TypeScript.
+const PRODUCTION_FILES: readonly string[] = collectExecSyncStdioScanFiles(
+  REPO_ROOT,
+)
+  .map((path) => relative(SRC, path).replaceAll("\\", "/"))
+  .filter((path) => !path.startsWith("..") && path.endsWith(".ts"))
   .sort();
 
 function linesMatching(file: string, pattern: RegExp): readonly string[] {
