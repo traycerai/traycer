@@ -667,7 +667,7 @@ export async function provisionInstalledHostCredential(
       wakeOnMintRefusal = null;
       switch (observation.kind) {
         case "token-refused":
-          return await settleAfterRecovery();
+          continue;
         case "state": {
           // This ack carried a state, so any silent-open streak was a race
           // with the grace timer, not a capability gap - start it over.
