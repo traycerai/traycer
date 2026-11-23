@@ -953,7 +953,10 @@ describe("callHostRpc", () => {
       readonly storedWhenReleased: string | undefined;
     }> {
       await holdRanOutHostToken();
-      fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
+      // authn refuses every mint on A: the messenger's retry of the door refusal mints again.
+      fetchMock.mockImplementation(
+        async () => new Response("", { status: 401 }),
+      );
       rotateMock.mockResolvedValue({
         outcome: "refresh-rejected-credential",
         credentials: null,

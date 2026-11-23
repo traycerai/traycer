@@ -2450,7 +2450,22 @@ describe("provisionInstalledHostCredential", () => {
     };
     mocks.hostTokenTable = new Map();
     mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
-    mocks.hostTokenMintMock.mockResolvedValue({ kind: "sign-in-rejected" });
+    // authn refuses the first mint, sent on A, and the refresh of A; the sibling's sign-in is good.
+    const sentWith: string[] = [];
+    mocks.hostTokenMintMock.mockImplementation(
+      async (_authnBaseUrl: string, _hostId: string, signIn: string) => {
+        sentWith.push(signIn);
+        return sentWith.length === 1
+          ? { kind: "sign-in-rejected" }
+          : {
+              kind: "ok",
+              token: {
+                token: "host-token-on-sibling",
+                expiresAtMs: Date.now() + 3_600_000,
+              },
+            };
+      },
+    );
     mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
     mocks.onSessionCreated = (): void => {
       setTimeout(() => {
@@ -2470,6 +2485,7 @@ describe("provisionInstalledHostCredential", () => {
       ),
     ).toHaveLength(1);
     expect(mocks.providedLease.current?.getBearerToken()).toBe(SIBLING);
+    expect(sentWith).toEqual(["test-bearer-token", SIBLING]);
     expect(outcome).not.toEqual<HostCredentialProvisionOutcome>({
       kind: "unauthorized",
     });
