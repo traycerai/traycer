@@ -404,10 +404,12 @@ interface ReplacementBounds {
    * refresh that authn answered (rotated or refused), until an admission, and
    * a caller that asks while one runs joins it and shares its outcome; each
    * unary recovery spends its own. A sibling's rotation taken from the store
-   * (`adopted`) was not authn's answer, and spends nothing.
+   * (`adopted`) was not authn's answer, and spends nothing. `stillWanted` is
+   * the asking caller's: the recovery reads it last before it rotates.
    */
   readonly refreshSignIn: (
     recovery: SignInRecovery,
+    stillWanted: () => boolean,
   ) => Promise<RevalidateOutcome | "adopted"> | null;
 }
 
@@ -503,11 +505,11 @@ function recoverySequence(owner: HostInstance): RecoverySequence {
     owner,
     expiry: untilAdmittedBound(),
     notAdmitted: untilAdmittedBound(),
-    refreshSignIn: (recovery) => {
+    refreshSignIn: (recovery, stillWanted) => {
       if (running !== null) return running;
       if (spent) return null;
       const refresh = recovery
-        .revalidateForReconnect(null)
+        .revalidateForReconnect(null, stillWanted)
         .then((outcome) => {
           // Only a refresh authn answered spends: one that never reached
           // it, or a sibling's rotation adopted from the store, does not.
@@ -575,7 +577,7 @@ function revalidatorWithBounds(
         : "rejected";
     if (outcome.kind === "sign-in-rejected") {
       if (signInRetried || deps.signInRecovery === null) return "rejected";
-      const refresh = bounds.refreshSignIn(deps.signInRecovery);
+      const refresh = bounds.refreshSignIn(deps.signInRecovery, caller);
       if (refresh === null) return "rejected";
       const recovered = await refresh;
       // An adopted rotation mints as a rotated one does, and leaves the
@@ -641,7 +643,7 @@ function revalidatorWithBounds(
       return outcome;
     }
     if (reason === "session_revoked" && deps.signInRecovery !== null)
-      await deps.signInRecovery.revalidateForReconnect(null);
+      await deps.signInRecovery.revalidateForReconnect(null, caller);
     return "rejected";
   };
 
@@ -689,8 +691,8 @@ export function hostTokenUnaryRevalidator(deps: {
         bounds: {
           expiry,
           notAdmitted,
-          refreshSignIn: (signInRecovery) =>
-            signInRecovery.revalidateForReconnect(null),
+          refreshSignIn: (signInRecovery, stillWanted) =>
+            signInRecovery.revalidateForReconnect(null, stillWanted),
         },
       };
       boundsByOwner.set(owner, own);

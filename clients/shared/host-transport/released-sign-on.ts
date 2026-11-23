@@ -23,10 +23,16 @@ import type { HostRequestAuthority } from "./host-messenger";
  * caller cannot tell. A recovery whose stored sign-in is no longer `refused`
  * refreshes nothing and answers `"adopted"`: the refusal was not of the
  * sign-in it holds.
+ *
+ * `stillWanted` is the caller's own: whether the session, call or command
+ * that asked still wants the answer. A recovery that awaits before it
+ * rotates calls it last, after every await, and starts no rotation once it
+ * answers `false`; one that awaits nothing first ignores it.
  */
 export interface SignInRecovery {
   revalidateForReconnect(
     refused: string | null,
+    stillWanted: () => boolean,
   ): Promise<RevalidateOutcome | "adopted">;
 }
 

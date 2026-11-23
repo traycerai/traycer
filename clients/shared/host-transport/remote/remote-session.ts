@@ -706,7 +706,7 @@ function createReleasedSignOnSessionAuth(
     const stillAsked = (): boolean =>
       dialsStarted === askedAt && !lifetime.closed();
     const answered = await sequence.spend(
-      () => recovery.revalidateForReconnect(null),
+      () => recovery.revalidateForReconnect(null, stillAsked),
       stillAsked,
     );
     // Spent: the redial presents the sign-in it holds, and the session's

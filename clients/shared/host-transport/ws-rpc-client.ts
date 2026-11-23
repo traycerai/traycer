@@ -644,6 +644,7 @@ export class WsRpcClient<
               : await recovery
                   .revalidateForReconnect(
                     this.refusedSignIns.get(cause) ?? null,
+                    () => !options.authority.abortSignal.aborted,
                   )
                   .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
@@ -718,6 +719,7 @@ export class WsRpcClient<
               : await recovery
                   .revalidateForReconnect(
                     this.refusedSignIns.get(cause) ?? null,
+                    () => !options.authority.abortSignal.aborted,
                   )
                   .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);

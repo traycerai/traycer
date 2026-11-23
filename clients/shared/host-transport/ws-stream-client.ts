@@ -3388,11 +3388,13 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     this.dialSequence = sequence;
     if (sequence.spent) return Promise.resolve("rotated");
     if (sequence.running !== null) return sequence.running;
+    const stillWanted = (): boolean =>
+      !this.disposed && this.dialsStarted === askedAt;
     const running: Promise<RevalidateOutcome> = Promise.resolve()
       .then(() =>
-        this.disposed || this.dialsStarted !== askedAt
-          ? ("network-error" as const)
-          : recovery.revalidateForReconnect(refused),
+        stillWanted()
+          ? recovery.revalidateForReconnect(refused, stillWanted)
+          : ("network-error" as const),
       )
       .then((outcome): RevalidateOutcome => {
         if (outcome === "adopted") return "rotated";
