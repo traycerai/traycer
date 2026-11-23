@@ -450,11 +450,16 @@ interface AttachOwners {
 interface AttachTracking {
   readonly grantProvider: AttemptGrantProvider;
   /**
-   * The live sequence for an answer from `owner`: begun at once where there is
-   * none, or where its instance was replaced. `null` for an answer from an
-   * instance that is no longer current, which spends nothing.
+   * The sequence an answer from `owner` spends: the admitted connection's own
+   * for a refusal of a connection the host admitted, else the live one; either
+   * begun at once where there is none, or where its instance was replaced.
+   * `null` for an answer from an instance that is no longer current, which
+   * spends nothing.
    */
-  readonly sequence: (owner: HostInstance) => DialSequence | null;
+  readonly sequence: (
+    owner: HostInstance,
+    ofAdmittedConnection: boolean,
+  ) => DialSequence | null;
   readonly admitted: (owner: HostInstance) => DoorAdmissionRelease;
 }
 
@@ -511,7 +516,12 @@ function trackAttaches(
         leg: attempt.leg,
       });
     },
-    sequence: (owner) => (owner === owners.current() ? liveSequence() : null),
+    sequence: (owner, ofAdmittedConnection) =>
+      owner !== owners.current()
+        ? null
+        : ofAdmittedConnection
+          ? legSequence()
+          : liveSequence(),
     admitted: (owner) => {
       // An admission ends the sequence of the instance that gave it.
       if (live !== null && live.owner === owner && owner === owners.current())
@@ -855,7 +865,7 @@ function createReleasedSignOnSessionAuth(
       // No sequence for an instance this process has since seen replaced:
       // nothing its refusal says plans, refreshes or mints for the new one,
       // which answers its own open first.
-      const sequence = tracking.sequence(dialOwner);
+      const sequence = tracking.sequence(dialOwner, openAdmitted);
       if (sequence === null) {
         signInFromMemory = false;
         plan = HOST_TOKEN_PLAN;
