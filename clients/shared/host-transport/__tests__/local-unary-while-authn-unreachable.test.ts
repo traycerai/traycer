@@ -1547,6 +1547,107 @@ describe("a sign-in is written only where its row and its host still allow it", 
       expect(adopting.asked).toEqual([SIGN_IN]);
     });
 
+    describe("every refusal of a sign-in the lease has replaced is answered adopted, however many follow", () => {
+      /** The call is on SIGN_IN with its first sign-in dial open and unanswered. */
+      async function onSignIn(recovery: SignInRecovery): Promise<{
+        readonly driven: DrivenCall;
+        readonly lease: () => MutableBearerLease;
+      }> {
+        const keeping = keepingLease();
+        const driven = driveCallThroughSignOn(
+          {
+            tokens: await heldExpiredReleasedHost(),
+            readRow: () => PERSONAL_ROW,
+            recovery,
+            hosts: null,
+            abortSignal: new AbortController().signal,
+          },
+          keeping.through,
+          (client) => client,
+        );
+        clients.push(driven.client);
+        await planReleasedSignIn(driven);
+        const signInSocket = driven.sockets[1];
+        if (signInSocket === undefined) throw new Error("sign-in dial missing");
+        expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+        return { driven, lease: keeping.lease };
+      }
+
+      /** The socket dialed at `index` presents `token`; the host refuses it as released. */
+      async function refusedOnToken(
+        driven: DrivenCall,
+        index: number,
+      ): Promise<void> {
+        await vi.waitFor(
+          () => expect(driven.sockets.length).toBeGreaterThan(index),
+          WAIT,
+        );
+        const socket = driven.sockets[index];
+        if (socket === undefined) throw new Error("dial missing");
+        socket.fireMessage(releasedRefusal());
+      }
+
+      it("asks no recovery and spends no allowance when both older sign-ins are refused, and completes on the third", async () => {
+        const adopting = adoptingRecovery();
+        // The recovery rotates nothing: the lease moves as siblings' refreshes do.
+        const { driven, lease } = await onSignIn({
+          revalidateForReconnect: (refused) => {
+            adopting.asked.push(refused ?? "null");
+            return Promise.resolve("rotated");
+          },
+        });
+
+        lease().rotate("sign-in-b");
+        await refusedOnToken(driven, 1);
+        // The retry presents what the lease holds, and a sibling moves it on
+        // while that dial is out.
+        await vi.waitFor(() => expect(driven.sockets).toHaveLength(3), WAIT);
+        expect((await openAndRead(driven.sockets[2])).token).toBe("sign-in-b");
+        lease().rotate("sign-in-c");
+        await refusedOnToken(driven, 2);
+        await vi.waitFor(() => expect(driven.sockets).toHaveLength(4), WAIT);
+        const last = driven.sockets[3];
+        if (last === undefined) throw new Error("last dial missing");
+        const open = await openAndRead(last);
+        expect(open.token).toBe("sign-in-c");
+        ackAndEcho(last, open);
+        await answerEcho(last);
+
+        expect(adopting.asked).toEqual([]);
+        expect(await driven.settled).toMatchObject({ kind: "fulfilled" });
+      });
+
+      it("retries a stale refusal on the held sign-in after the call's one refresh was spent, and throws nothing stale", async () => {
+        const asked: string[] = [];
+        const { driven, lease } = await onSignIn({
+          revalidateForReconnect: (refused) => {
+            asked.push(refused ?? "null");
+            // The refresh authn answered: the lease holds its result.
+            lease().rotate("sign-in-b");
+            return Promise.resolve("rotated");
+          },
+        });
+
+        // The first refusal is of the sign-in the lease still holds: it earns the refresh.
+        await refusedOnToken(driven, 1);
+        await vi.waitFor(() => expect(driven.sockets).toHaveLength(3), WAIT);
+        expect((await openAndRead(driven.sockets[2])).token).toBe("sign-in-b");
+        // A sibling then moves the lease on, and the refusal of the refreshed one arrives stale.
+        lease().rotate("sign-in-c");
+        await refusedOnToken(driven, 2);
+        await vi.waitFor(() => expect(driven.sockets).toHaveLength(4), WAIT);
+        const last = driven.sockets[3];
+        if (last === undefined) throw new Error("last dial missing");
+        const open = await openAndRead(last);
+        expect(open.token).toBe("sign-in-c");
+        ackAndEcho(last, open);
+        await answerEcho(last);
+
+        expect(asked).toEqual([SIGN_IN]);
+        expect(await driven.settled).toMatchObject({ kind: "fulfilled" });
+      });
+    });
+
     describe("a call aborted as the host's refusal reaches it", () => {
       async function refusedThenAborted(input: {
         readonly plan: (driven: DrivenCall) => Promise<void>;

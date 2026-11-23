@@ -1803,6 +1803,31 @@ describe("released personal host, local stream", () => {
         expect(statuses).not.toContain("closed");
       });
 
+      it("answers a stale refusal adopted and redials on the held sign-in after the dial sequence's refresh was spent, then again for a third sign-in", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        const asked: Array<string | null> = [];
+        const { sockets } = await refusedOnSignIn(signIn, asked);
+
+        // The sign-in the lease holds is refused: the sequence's one refresh is spent.
+        sockets[1].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(asked).toEqual([SIGN_IN]), WAIT);
+        await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+        expect((await openFrame(sockets[2])).token).toBe(SIGN_IN);
+
+        // Two sign-ins later the older ones are refused, both stale.
+        signIn.rotate("sign-in-b");
+        sockets[2].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(sockets).toHaveLength(4), WAIT);
+        expect((await openFrame(sockets[3])).token).toBe("sign-in-b");
+        signIn.rotate("sign-in-c");
+        sockets[3].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(sockets).toHaveLength(5), WAIT);
+        expect((await openFrame(sockets[4])).token).toBe("sign-in-c");
+
+        expect(asked).toEqual([SIGN_IN]);
+      });
+
       it("asks the recovery as it does today when the lease holds no bearer", async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
