@@ -19,8 +19,10 @@ import type { HostRequestAuthority } from "./host-messenger";
  * sibling's rotation was taken from the store, which authn did not answer for
  * this sequence, so it spends no refresh budget.
  *
- * `refused` is the sign-in the refused request presented, or `null` when the
- * caller cannot tell. A recovery whose stored sign-in is no longer `refused`
+ * `owner` is the host process the refusal was recorded on, or that asks with
+ * no refusal in hand, named by the asker as it asks and never captured.
+ * `refusal` is what the refused request presented, or `null` when the caller
+ * cannot tell. A recovery whose stored sign-in is no longer the refused one
  * refreshes nothing and answers `"adopted"`: the refusal was not of the
  * sign-in it holds.
  *
@@ -31,9 +33,27 @@ import type { HostRequestAuthority } from "./host-messenger";
  */
 export interface SignInRecovery {
   revalidateForReconnect(
-    refused: string | null,
+    owner: HostInstance,
+    refusal: SignInRefusal | null,
     stillWanted: () => boolean,
   ): Promise<RevalidateOutcome | "adopted">;
+  /**
+   * Whether `refusal` is judged a rejected sign-in now: a spent recovery
+   * answers terminally only then. Read after the asker's last await. A
+   * recovery without it is answered as one that judges every refusal
+   * rejected.
+   */
+  readonly signInRejectedFor?: (refusal: SignInRefusal | null) => boolean;
+}
+
+/**
+ * What a refused request presented: `signIn`, its sign-in key
+ * (`hostSignInKey`), and `order`, the refused mint request's order, or `null`
+ * for a refusal no mint sent. Held only in the frame that asks.
+ */
+export interface SignInRefusal {
+  readonly signIn: string;
+  readonly order: number | null;
 }
 
 /** The directory facts the decision reads; a local row has no `sandbox`. */
@@ -564,10 +584,7 @@ export interface ReleasedUnarySignOn {
  * gates that probe, as it gates the two causes that send the sign-in.
  */
 export type ReleasedUnaryCause =
-  | "refused"
-  | "no-host-token"
-  | "held-token-refused"
-  | "owner-sign-in";
+  "refused" | "no-host-token" | "held-token-refused" | "owner-sign-in";
 
 /**
  * `WsRpcClientOptions.releasedSignOnFor` for this machine's host, for a caller

@@ -39,10 +39,12 @@ import {
   type HostInstance,
   type SignInAuthority,
   type SignInRecovery,
+  type SignInRefusal,
   type ReleasedHostMemory,
   type ReleasedUnaryCause,
   type ReleasedUnarySignOn,
 } from "./released-sign-on";
+import { hostSignInKey } from "../auth/host-token-source";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
@@ -648,14 +650,18 @@ export class WsRpcClient<
           // A call whose caller ended starts no rotation: it fails as it
           // would after one.
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
+          const owner = this.refusedBy.get(cause);
           const outcome =
-            recovery === null || cause.fatalDetails === null
+            recovery === null ||
+            cause.fatalDetails === null ||
+            owner === undefined
               ? "rejected"
               : adopted
                 ? "adopted"
                 : await recovery
                     .revalidateForReconnect(
-                      this.refusedSignIns.get(cause) ?? null,
+                      owner,
+                      this.signInRefusalOf(cause),
                       () => !options.authority.abortSignal.aborted,
                     )
                     .catch(() => "network-error" as const);
@@ -729,14 +735,18 @@ export class WsRpcClient<
           // A call whose caller ended starts no rotation: it fails as it
           // would after one.
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
+          const owner = this.refusedBy.get(cause);
           const outcome =
-            recovery === null || cause.fatalDetails === null
+            recovery === null ||
+            cause.fatalDetails === null ||
+            owner === undefined
               ? "rejected"
               : adopted
                 ? "adopted"
                 : await recovery
                     .revalidateForReconnect(
-                      this.refusedSignIns.get(cause) ?? null,
+                      owner,
+                      this.signInRefusalOf(cause),
                       () => !options.authority.abortSignal.aborted,
                     )
                     .catch(() => "network-error" as const);
@@ -902,6 +912,12 @@ export class WsRpcClient<
     } catch {
       return null;
     }
+  }
+
+  /** The sign-in `cause` refused, for its recovery: a host's refusal, not a mint, so no order. */
+  private signInRefusalOf(cause: HostRpcError): SignInRefusal | null {
+    const signIn = hostSignInKey(this.refusedSignIns.get(cause) ?? null);
+    return signIn === null ? null : { signIn, order: null };
   }
 
   /**

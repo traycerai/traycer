@@ -2,6 +2,7 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { SignInRecovery } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { appLogger } from "@/lib/logger";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
@@ -17,8 +18,8 @@ import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
  * Lives beside `AuthService` (not under `lib/host/`) so the runtime provider
  * can import it without re-entering the `@/lib/host` barrel it itself feeds.
  *
- * It is also this app's `SignInRecovery`, and reads neither `refused` nor
- * `stillWanted`. Its rotation is the window's single flight, owned by the
+ * It is also this app's `SignInRecovery`, and reads none of `owner`,
+ * `refusal` and `stillWanted`. Its rotation is the window's single flight, owned by the
  * sign-in context (`revalidateExpectedContext`), and is decided by authn's
  * verdict on the CURRENT sign-in: `validateToken`, then `rotateLiveSession`
  * only on `rejected`. A host's refusal judges nothing here, so a stale one
@@ -27,7 +28,7 @@ import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
  */
 export function createStreamAuthRevalidator(
   authService: AuthService,
-): StreamAuthRevalidator {
+): StreamAuthRevalidator & SignInRecovery {
   const revalidate = async (): Promise<RevalidateOutcome> => {
     const outcome = await authService.revalidateCurrentContext();
     if (outcome === null) {
@@ -104,5 +105,8 @@ export function createStreamAuthRevalidator(
     // Only the server pool opens with the sign-in; a host-only token recovers through
     // `revalidateForReconnect` alone.
     revalidateRefused: () => revalidate(),
+    // The app's spent branches end as they did: in the app a refusal judges
+    // nothing, and its own auth layer decides the sign-in.
+    signInRejectedFor: () => true,
   };
 }

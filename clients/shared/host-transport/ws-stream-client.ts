@@ -120,6 +120,7 @@ import {
   type SignInWriteCheck,
 } from "./released-sign-on";
 import { NO_MINT_CALLER, type MintCaller } from "../auth/host-token-lease";
+import { hostSignInKey } from "../auth/host-token-source";
 
 /** The credential a socket selected for `hostId` presents, or `null` for none. A mint the read starts reports only while `caller` is live. */
 export type HostBearerSourceProvider = (
@@ -3390,10 +3391,13 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     if (sequence.running !== null) return sequence.running;
     const stillWanted = (): boolean =>
       !this.disposed && this.dialsStarted === askedAt;
+    // A host's refusal of the person's sign-in, not a mint: no mint order.
+    const signIn = hostSignInKey(refused);
+    const refusal = signIn === null ? null : { signIn, order: null };
     const running: Promise<RevalidateOutcome> = Promise.resolve()
       .then(() =>
-        stillWanted()
-          ? recovery.revalidateForReconnect(refused, stillWanted)
+        stillWanted() && refusedBy !== null
+          ? recovery.revalidateForReconnect(refusedBy, refusal, stillWanted)
           : ("network-error" as const),
       )
       .then((outcome): RevalidateOutcome => {

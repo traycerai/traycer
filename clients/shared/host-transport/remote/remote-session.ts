@@ -4,6 +4,7 @@ import {
   type RevalidateOutcome,
   type StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostTokenSessionRevalidator } from "@traycer-clients/shared/auth/host-token-lease";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
   RemoteSession as ProtocolRemoteSession,
@@ -197,7 +198,7 @@ export interface RemoteSessionOptions<
    * {@link releasedSignOn}.
    */
   readonly hostToken: () => string | null;
-  readonly auth: StreamAuthRevalidator | null;
+  readonly auth: HostTokenSessionRevalidator | null;
   readonly door: HostDoorObserver | null;
   readonly evidence: TransportEvidenceReporter;
   /**
@@ -509,11 +510,24 @@ function trackAttaches(
   };
 }
 
+// A host-token recovery is asked with the session's own liveness: one it starts
+// rotates nothing once the session has closed.
+function revalidateHostToken(
+  auth: HostTokenSessionRevalidator,
+  refusal: FatalErrorDetails | null,
+  lifetime: SessionLifetime,
+): Promise<RevalidateOutcome> {
+  const stillWanted = (): boolean => !lifetime.closed();
+  return refusal === null
+    ? auth.revalidateForReconnect(stillWanted)
+    : auth.revalidateRefused(refusal, stillWanted);
+}
+
 function createHostTokenRemoteSessionAuth(
   hostId: string,
   grantProvider: SignInBudgetedGrantProvider,
   readHostToken: () => string | null,
-  auth: StreamAuthRevalidator | null,
+  auth: HostTokenSessionRevalidator | null,
   door: HostDoorObserver | null,
   releasedSignOn: RemoteReleasedSignOn | null,
   lifetime: SessionLifetime,
@@ -548,7 +562,7 @@ function createHostTokenRemoteSessionAuth(
       revalidateForReconnect:
         auth === null || auth === undefined
           ? null
-          : (refusal) => revalidateStream(auth, refusal),
+          : (refusal) => revalidateHostToken(auth, refusal, lifetime),
       // Present with no observer too: an admission ends the dial sequence.
       door: {
         refused: (details: FatalErrorDetails) => {
@@ -588,7 +602,7 @@ function createReleasedSignOnSessionAuth(
   hostId: string,
   grantProvider: SignInBudgetedGrantProvider,
   readHostToken: () => string | null,
-  auth: StreamAuthRevalidator | null,
+  auth: HostTokenSessionRevalidator | null,
   door: HostDoorObserver | null,
   releasedSignOn: RemoteReleasedSignOn,
   lifetime: SessionLifetime,
@@ -706,7 +720,8 @@ function createReleasedSignOnSessionAuth(
     const stillAsked = (): boolean =>
       dialsStarted === askedAt && !lifetime.closed();
     const answered = await sequence.spend(
-      () => recovery.revalidateForReconnect(null, stillAsked),
+      // The relay hands over no refusal: none of its sign-ins is identified.
+      () => recovery.revalidateForReconnect(sequence.owner, null, stillAsked),
       stillAsked,
     );
     // Spent: the redial presents the sign-in it holds, and the session's
@@ -727,7 +742,7 @@ function createReleasedSignOnSessionAuth(
     plan = HOST_TOKEN_PLAN;
     return auth === null
       ? Promise.resolve("rejected")
-      : revalidateStream(auth, refusal);
+      : revalidateHostToken(auth, refusal, lifetime);
   };
   /**
    * The sign-in values given to frames (an `open`, a credential update) since
