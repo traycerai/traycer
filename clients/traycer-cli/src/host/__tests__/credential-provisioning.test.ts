@@ -1935,8 +1935,10 @@ describe("provisionInstalledHostCredential", () => {
     // churn credentials far more than it used to.
     const hostId = "host-1";
     mocks.mintFlowMock.mockImplementation(async () => {
-      // Mirrors the real flow: authn's 401 fires the hook synchronously,
-      // before the mint promise settles as `unavailable`.
+      // Mirrors the real flow: it reads the sign-in to send, and authn's 401
+      // then fires the hook synchronously, before the mint promise settles as
+      // `unavailable`.
+      capturedMintFlowOptions().bearer();
       capturedMintFlowOptions().onUnauthorized?.();
       return { kind: "unavailable" };
     });
@@ -2452,6 +2454,8 @@ describe("provisionInstalledHostCredential", () => {
     mocks.mintFlowMock.mockImplementationOnce(
       async (): Promise<HostCredentialMintOutcome> => {
         const options = capturedMintFlowOptions();
+        // The real flow reads the sign-in it sends before authn can answer 401.
+        options.bearer();
         if (options.onUnauthorized !== null) {
           options.onUnauthorized();
         }
@@ -2490,6 +2494,8 @@ describe("provisionInstalledHostCredential", () => {
     mocks.mintFlowMock.mockImplementationOnce(
       async (): Promise<HostCredentialMintOutcome> => {
         const options = capturedMintFlowOptions();
+        // The real flow reads the sign-in it sends before authn can answer 401.
+        options.bearer();
         if (options.onUnauthorized !== null) {
           options.onUnauthorized();
         }
