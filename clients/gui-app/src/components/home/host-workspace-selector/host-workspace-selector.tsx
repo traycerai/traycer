@@ -80,6 +80,7 @@ import {
   usePickAndAddWorkspaceFolders,
 } from "./use-pick-and-add-folders";
 import {
+  queueEditStagingKey,
   readStagedWorktreeIntent,
   stagedWorktreeIntentIsSuspended,
   stagedWorktreeIntentRevision,
@@ -136,6 +137,7 @@ import { effectiveMissingWorktreePaths } from "@/lib/composer/workspace-composer
 import { WorkspaceFolderSummaryControl } from "./workspace-folder-summary-control";
 import type { WorkspaceRunItem, WorkspaceRunMode } from "./workspace-run-item";
 import {
+  QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE,
   locationSelectionChanges,
   workspaceRunBranchLabel,
 } from "./workspace-run-item";
@@ -225,6 +227,17 @@ type BoundOwnerSurface = {
    * that names the folder releases it, so every pick for one is staged.
    */
   readonly failedWorktreePaths: readonly string[];
+  /**
+   * Chat-only: the queued message being edited, or `null`. While one is, the
+   * picker shows and edits THAT message's folders: every pick is staged in the
+   * edit's own slot (`queueEditStagingKey`) and none is written to the binding,
+   * so nothing picked here rides the chat's next send. `readOnly` while the
+   * chat's host cannot take the choice with the edit.
+   */
+  readonly queueEdit: {
+    readonly queueItemId: string;
+    readonly readOnly: boolean;
+  } | null;
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
   // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
   // `worktree.getBinding` for terminal-agents). Drives the per-folder "missing"
@@ -2225,15 +2238,24 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const releaseIntentForDispatch = useWorktreeIntentStagingStore(
     (s) => s.releaseIntentForDispatch,
   );
+  const queueEditItemId = surface.queueEdit?.queueItemId ?? null;
   const stagedKey = useMemo<WorktreeStagingKey>(
-    () => ({
-      surface: "owner",
-      hostId: ownerHostId,
-      epicId: surface.epicId,
-      ownerKind,
-      ownerId: surface.ownerId,
-    }),
-    [ownerHostId, surface.epicId, ownerKind, surface.ownerId],
+    () =>
+      queueEditItemId === null
+        ? {
+            surface: "owner",
+            hostId: ownerHostId,
+            epicId: surface.epicId,
+            ownerKind,
+            ownerId: surface.ownerId,
+          }
+        : queueEditStagingKey(
+            ownerHostId,
+            surface.epicId,
+            surface.ownerId,
+            queueEditItemId,
+          ),
+    [ownerHostId, surface.epicId, ownerKind, surface.ownerId, queueEditItemId],
   );
   const stagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(stagedKey)],
@@ -2909,6 +2931,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // branch into a fresh worktree defers to the next message send. A folder whose
   // owed worktree failed is the exception: every pick for it rides the next
   // send, since the host keeps the owed worktree until a send names the folder.
+  // While a queued message is edited every pick is that edit's, staged in its
+  // own slot (`stagedKey`) and saved with it, whatever the chat is doing.
   // For TERMINAL AGENTS: every edit (Local / import / new worktree) is staged
   // locally and applied together on the explicit "Update" — no edit resumes
   // the PTY on its own.
@@ -2926,6 +2950,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         setFolderIntent(intent, Date.now());
         if (
           surface.kind === "terminal-agent" ||
+          queueEditItemId !== null ||
           surface.isOwnerActive ||
           surface.failedWorktreePaths.includes(ws.workspacePath)
         ) {
@@ -2998,6 +3023,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       surface.isOwnerActive,
       surface.kind,
       surface.ownerId,
+      queueEditItemId,
       unstageWorktreeEntry,
     ],
   );
@@ -3418,8 +3444,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // Terminal agents keep the host fixed, but folder binding edits are allowed.
   // Edits never resume on their own (add/remove commit to the binding, location/
   // branch edits stage); the explicit "Update" applies the staged set and tells
-  // the owning tile to restart the PTY once against the updated binding.
-  const readOnly = false;
+  // the owning tile to restart the PTY once against the updated binding. Only a
+  // queued message's edit on a host that cannot take its folders is read-only.
+  const readOnly = surface.queueEdit?.readOnly === true;
   const hostSwitcher = (
     <WorkspaceHostSwitcher
       hosts={pickerHosts}
@@ -3475,6 +3502,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           <WorkspaceFolderSummaryControl
             items={recentAwareWorkspaceRunItems}
             readOnly={readOnly}
+            readOnlyNote={
+              readOnly ? QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE : undefined
+            }
             bindingResolved={surface.bindingResolved}
             addFolderPending={
               folderActions.isPreparing ||

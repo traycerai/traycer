@@ -605,6 +605,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
   const queue: ChatLowerQueueState = {
     editingItem: null,
     editingItemId: null,
+    editChangesWorkspace: false,
     value: { status: "idle", items: [] },
     resumeRequested: false,
     keepPausedRequested: false,

@@ -290,6 +290,7 @@ function surfacesProps(
     queue: {
       editingItem: null,
       editingItemId: null,
+      editChangesWorkspace: false,
       value: { status: "idle", items: [] },
       resumeRequested: false,
       keepPausedRequested: false,

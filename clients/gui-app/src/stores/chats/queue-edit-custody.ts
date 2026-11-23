@@ -5,6 +5,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import type {
   ChatSendRestore,
@@ -83,6 +84,12 @@ export interface QueueEditRecord {
   readonly restore: ChatSendRestore;
   /** The document the `queueEdit` frame carried - what the host would hold. */
   readonly wireContent: JsonContent;
+  /**
+   * The folders the `queueEdit` frame carried, picked while the row was being
+   * edited: only those the edit changes, `null` when it left the workspace as
+   * it was. Handed back with the text, so a refused edit loses neither.
+   */
+  readonly worktreeIntent: WorktreeIntent | null;
   readonly settings: ChatRunSettings;
   /** The billing context the settings frame carried beside `settings`. */
   readonly accountContext: AccountContext;
@@ -154,6 +161,8 @@ export type QueueEditSettlement =
        * hand-back has to stop trusting the host to hold those as well.
        */
       readonly wireContent: JsonContent;
+      /** See {@link QueueEditRecord.worktreeIntent}: goes back with the text. */
+      readonly worktreeIntent: WorktreeIntent | null;
       readonly cause: QueueEditReturnCause;
       /** The host's refusal. `null` for every cause but `refused`. */
       readonly hostReason: string | null;
@@ -342,6 +351,7 @@ function settleQueueEditRecord(
       clientActionId: next.editActionId,
       restore: next.restore,
       wireContent: next.wireContent,
+      worktreeIntent: next.worktreeIntent,
       cause: returned.cause,
       hostReason: returned.hostReason,
       hostCode: returned.hostCode,
@@ -541,7 +551,7 @@ function withImagesByHash(node: JsonContent): JsonContent {
 }
 
 /** `JSON.stringify` with object keys ordered and absent values dropped. */
-function canonicalJson(value: JsonContent): string {
+function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, inner: unknown) => {
     if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
       return inner;
@@ -578,6 +588,36 @@ export function queueEditContentMatches(
   );
 }
 
+/**
+ * The folders an edit of a queued message changes: each one picked while the
+ * row was being edited whose choice is not already the row's own. `null` when
+ * there are none, which the frame reads as "workspace unchanged".
+ *
+ * A pick that only returns a folder to the row's own choice is no change, and
+ * sending it would still give the row a choice of its own for nothing - a row
+ * with one cannot join a running turn.
+ */
+export function queueEditWorktreeIntent(
+  picked: WorktreeIntent | null,
+  held: WorktreeIntent | null,
+): WorktreeIntent | null {
+  if (picked === null) return null;
+  const entries = picked.entries.filter(
+    (entry) => !holdsFolderChoice(held, entry),
+  );
+  return entries.length === 0 ? null : { entries };
+}
+
+function holdsFolderChoice(
+  held: WorktreeIntent | null,
+  entry: WorktreeIntent["entries"][number],
+): boolean {
+  const own = held?.entries.find(
+    (candidate) => candidate.workspacePath === entry.workspacePath,
+  );
+  return own !== undefined && canonicalJson(own) === canonicalJson(entry);
+}
+
 /** What the host can be seen to hold, at the moment a record is accounted for. */
 export interface QueueEditEvidence {
   readonly queue: OpenChatQueueState;
@@ -600,7 +640,8 @@ type QueueEditVerdict = "applied" | "not_applied" | "unknown";
 /**
  * Whether the host saved the edited text, as far as it can be SEEN.
  *
- * - The edited document on the row, or on the message the row became: applied.
+ * - The edited document on the row, with the folders the edit carried, or on
+ *   the message the row became: applied.
  * - The message the row became, holding something else: not applied. The host
  *   refuses an edit to a prompt that has started, so nothing can change it now.
  *   Only when BOTH documents can be compared: one carrying an image with no
@@ -620,8 +661,13 @@ function queueEditVerdict(
   evidence: QueueEditEvidence,
 ): QueueEditVerdict {
   if (row !== null) {
+    // The folders too: an edit that changes only the workspace leaves the
+    // text as it was, so the text alone would read every such edit as saved.
     return row.kind === "prompt" &&
-      queueEditContentMatches(record.wireContent, row.message.content)
+      queueEditContentMatches(record.wireContent, row.message.content) &&
+      (record.worktreeIntent?.entries ?? []).every((entry) =>
+        holdsFolderChoice(row.worktreeIntent ?? null, entry),
+      )
       ? "applied"
       : "unknown";
   }

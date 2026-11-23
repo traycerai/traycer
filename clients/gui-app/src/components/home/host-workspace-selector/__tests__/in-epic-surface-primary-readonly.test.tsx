@@ -430,6 +430,10 @@ const BINDING: WorktreeBinding = {
 };
 let inFlightWorktreeIntent: WorktreeIntent | null = null;
 let failedWorktreePaths: readonly string[] = [];
+let queueEdit: {
+  readonly queueItemId: string;
+  readonly readOnly: boolean;
+} | null = null;
 const THREE_FOLDER_BINDING: WorktreeBinding = {
   entries: [
     bindingEntry({ workspacePath: "/repo/alpha", isPrimary: false }),
@@ -462,6 +466,7 @@ function BoundSurfaceTree(props: {
           ownerLabel: "Owner",
           inFlightWorktreeIntent,
           failedWorktreePaths,
+          queueEdit,
           missingWorktreePaths: [],
           bindingResolved: props.bindingResolved,
           onBindingCommitted: props.onBindingCommitted,
@@ -506,6 +511,7 @@ function renderBoundSurface(
 beforeEach(() => {
   inFlightWorktreeIntent = null;
   failedWorktreePaths = [];
+  queueEdit = null;
   recentMocks.prepareRecent.mockResolvedValue({ folders: [RECENT_FOLDER] });
   recentMocks.recordRecentAsync.mockResolvedValue({});
   mutationMocks.createWorktree.mockResolvedValue({ perEntry: [] });
@@ -1915,6 +1921,7 @@ describe("the chat chip is the composer's picker", () => {
               ownerLabel: "Owner",
               inFlightWorktreeIntent: null,
               failedWorktreePaths: [],
+              queueEdit: null,
               missingWorktreePaths: [],
               bindingResolved: true,
               onBindingCommitted: null,

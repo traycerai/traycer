@@ -33,6 +33,8 @@ export function WorkspaceSummaryTrigger(
   props: ButtonHTMLAttributes<HTMLButtonElement> & {
     readonly items: ReadonlyArray<WorkspaceRunItem>;
     readonly readOnly: boolean;
+    /** Why the folders are read-only, shown above the inspect-only list. */
+    readonly readOnlyNote?: string;
     readonly bindingResolved: boolean;
     readonly draftPending?: boolean;
     readonly ref?: Ref<HTMLButtonElement>;
@@ -41,6 +43,7 @@ export function WorkspaceSummaryTrigger(
   const {
     items,
     readOnly,
+    readOnlyNote,
     bindingResolved,
     draftPending,
     className,
@@ -163,6 +166,14 @@ export function WorkspaceSummaryTrigger(
             data-testid="workspace-readonly-folders-popover"
             onOpenAutoFocus={(event) => event.preventDefault()}
           >
+            {readOnlyNote === undefined ? null : (
+              <p
+                className="px-3 pt-2 text-ui-xs text-muted-foreground"
+                data-testid="workspace-readonly-note"
+              >
+                {readOnlyNote}
+              </p>
+            )}
             <WorkspaceFolderRows
               items={items}
               trailingSlot={null}

@@ -95,6 +95,9 @@ const PENDING_FORK_CHAT_OWNER_ID = "__pending_fork_chat__";
 const PENDING_CHILD_TERMINAL_AGENT_OWNER_PREFIX =
   "__pending_child_terminal_agent__:";
 const PENDING_FORK_TERMINAL_AGENT_OWNER_ID = "__pending_fork_terminal_agent__";
+// Per-row slot for the folders picked while one queued message is edited:
+// `<prefix><chatId>:<queueItemId>`. Matched by prefix in the persistence guard.
+const QUEUE_EDIT_OWNER_PREFIX = "__queue_edit__:";
 
 // The host segment sits right after the surface tag and is percent-encoded, so
 // a `:` inside a host id can never split the key (the rule
@@ -282,6 +285,29 @@ export function forkChatStagingKeysForEpic(
   return [...hostIds].map((hostId) =>
     pendingForkChatStagingKey(hostId, epicId),
   );
+}
+
+/**
+ * Scratch slot for the folders picked while a chat's queued message is being
+ * edited. Its own slot, not the chat's `owner` one: a pick made during the edit
+ * belongs to that queued message alone, so it must never ride the chat's next
+ * send, and cancelling the edit must leave whatever the chat had staged before
+ * it untouched. Saving the edit takes it; ending the edit any other way clears
+ * it. Transient like the launcher slots: an edit does not survive a reload.
+ */
+export function queueEditStagingKey(
+  hostId: string | null,
+  epicId: string,
+  chatId: string,
+  queueItemId: string,
+): WorktreeStagingKey {
+  return {
+    surface: "owner",
+    hostId,
+    epicId,
+    ownerKind: "chat",
+    ownerId: `${QUEUE_EDIT_OWNER_PREFIX}${chatId}:${queueItemId}`,
+  };
 }
 
 export function pendingForkTerminalAgentStagingKey(
@@ -1578,16 +1604,17 @@ export function stagedWorktreeIntentIsSuspended(
   );
 }
 
-// Single source of truth for "this owner id backs a one-shot scratch dialog and
-// must never persist": the two fixed launcher/fork ids (exact) plus any
-// per-parent child slot (prefix). Checked against the structured owner id, not
-// by sniffing the full serialized key.
+// Single source of truth for "this owner id backs a one-shot scratch slot and
+// must never persist": the fixed launcher/fork ids (exact) plus any per-parent
+// child slot or queued-message edit slot (prefix). Checked against the
+// structured owner id, not by sniffing the full serialized key.
 function isTransientStagingOwnerId(ownerId: string): boolean {
   return (
     ownerId === PENDING_TERMINAL_AGENT_OWNER_ID ||
     ownerId === PENDING_FORK_CHAT_OWNER_ID ||
     ownerId === PENDING_FORK_TERMINAL_AGENT_OWNER_ID ||
-    ownerId.startsWith(PENDING_CHILD_TERMINAL_AGENT_OWNER_PREFIX)
+    ownerId.startsWith(PENDING_CHILD_TERMINAL_AGENT_OWNER_PREFIX) ||
+    ownerId.startsWith(QUEUE_EDIT_OWNER_PREFIX)
   );
 }
 

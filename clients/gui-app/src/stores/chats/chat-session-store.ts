@@ -90,6 +90,7 @@ import {
   hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
   queueEditRecordsInCustody,
+  queueEditWorktreeIntent,
   answerQueueEditAwaitingConfirmation,
   withoutReturnedQueueEditsForRow,
   withQueueEditRecord,
@@ -167,6 +168,7 @@ import type {
   StreamFlushLease,
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { mergeWorktreeIntentEntry } from "@/components/home/host-workspace-selector/worktree-intent-merge";
 import {
   accountContextsEqual,
   useAccountContextStore,
@@ -194,8 +196,10 @@ import {
   partitionSweptIntent,
   partitionIntentAgainstSweptRefs,
   mergeRemovedWorktreeRefs,
+  queueEditStagingKey,
   sessionSweptRefsForHost,
   stagedWorktreeIntentIsSuspended,
+  stagedWorktreeIntentRevision,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
@@ -366,6 +370,7 @@ export type ChatStreamClientHandle = Pick<
       | "ultracodeProtocolSupported"
       // Optional, and absent reads as `null`, for the same reason.
       | "queuePauseReasonProtocolSupported"
+      | "queuedWorktreeIntentProtocolSupported"
     >
   >;
 
@@ -1437,6 +1442,13 @@ export interface ChatSessionState {
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
   readonly ultracodeProtocolSupported: boolean;
+  /**
+   * Whether THIS tab's line lets an edit of a queued message carry the folders
+   * it should run in (`chat.subscribe@1.47`). `false` until `open` and on any
+   * other status, so the picker stays read-only while a queued row is edited
+   * until the line is known to carry the choice.
+   */
+  readonly queuedWorktreeIntentProtocolSupported: boolean;
   /**
    * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
    * `pausedReason` (`@1.18`), or `null` while the session cannot say.
@@ -4025,6 +4037,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     readonly clientActionId: string;
     readonly queueItemId: string;
     readonly content: JsonContent;
+    /** Non-null only on a line that carries it; see `submitQueueEdit`. */
+    readonly worktreeIntent: WorktreeIntent | null;
   }): string | null => {
     const frame: ChatOwnerActionFrame = {
       kind: "queueEdit",
@@ -4034,7 +4048,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       clientActionId: input.clientActionId,
       queueItemId: input.queueItemId,
       content: input.content,
-      worktreeIntent: null,
+      worktreeIntent: input.worktreeIntent,
     };
     return sendAction({
       set: input.set,
@@ -4046,6 +4060,38 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       pendingUserMessage: null,
     });
+  };
+  /**
+   * The folders a queue edit carries, from the edit's own slot (never the
+   * chat's: see `queueEditStagingKey`), or `null` while a picked folder's
+   * metadata is unresolved and the edit must not go yet. Read only on a line
+   * that can carry them: below it the projection refuses the frame outright,
+   * which is why the picker is read-only there.
+   */
+  const queueEditWorkspaceFor = (
+    queueItemId: string,
+    held: WorktreeIntent | null,
+  ): {
+    readonly key: WorktreeStagingKey;
+    readonly picked: WorktreeIntent | null;
+    readonly worktreeIntent: WorktreeIntent | null;
+  } | null => {
+    const key = queueEditStagingKey(
+      options.hostId,
+      options.epicId,
+      options.chatId,
+      queueItemId,
+    );
+    if (streamClient?.queuedWorktreeIntentProtocolSupported?.() !== true) {
+      return { key, picked: null, worktreeIntent: null };
+    }
+    if (stagedWorktreeIntentIsSuspended(key)) return null;
+    const picked = readStagedWorktreeIntent(key);
+    return {
+      key,
+      picked,
+      worktreeIntent: queueEditWorktreeIntent(picked, held),
+    };
   };
   // Each queued steer's settings and owning tile: a steer the host refuses
   // unconfirmed is asked about in that tile and sent again confirmed with the
@@ -5348,6 +5394,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         restoredWorktreeIntentForSnapshot,
         handedBackForSnapshot,
       );
+      handBackQueueEditWorktreeIntents(queueEditSettlement.settlements);
       // A deferred session stop that survived the sweep (its turn stop was
       // accepted before the connection dropped) may never see another
       // turn-state frame - the turn could have settled while offline - so
@@ -6752,6 +6799,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           lineBreakNotices,
         ),
       }));
+      handBackQueueEditWorktreeIntents(fold.settlements);
     };
 
     const publishWindowedTranscript = (
@@ -7295,6 +7343,76 @@ export function createChatSessionStoreWithNotificationDependencies(
         .getState()
         .releaseIntentForDispatch(ownerStagingKey, stagedRevision);
       stagingRevisionByRestoredAction.delete(clientActionId);
+    };
+
+    /**
+     * A returned queue edit's folders, staged on the chat's slot with its text:
+     * what the slot held before, and the revision the staging left, by the
+     * edit's action id. Kept until the composer takes the text or it is
+     * displaced, which puts the slot back as it was found.
+     */
+    const queueEditStagingHandBacks = new Map<
+      string,
+      { readonly revision: number; readonly prior: WorktreeIntent | null }
+    >();
+
+    /**
+     * Stage the folders of each returned queue edit whose text now holds the
+     * composer's slot, so the draft sends with the folders it was edited
+     * with. Merged per folder over what the chat already had staged. A text
+     * that lost the slot keeps its folders out of the picker: they would ride
+     * a newer, unrelated draft. Read AFTER the update that awarded the slot.
+     */
+    const handBackQueueEditWorktreeIntents = (
+      settlements: ReadonlyArray<QueueEditSettlement>,
+    ): void => {
+      const holder = get().failedSendRestoration?.clientActionId ?? null;
+      for (const settlement of settlements) {
+        if (
+          settlement.kind !== "content_returned" ||
+          settlement.worktreeIntent === null ||
+          settlement.clientActionId !== holder
+        ) {
+          continue;
+        }
+        const prior = readStagedWorktreeIntent(ownerStagingKey);
+        const merged = settlement.worktreeIntent.entries.reduce<WorktreeIntent>(
+          (acc, entry) => mergeWorktreeIntentEntry(acc, entry),
+          prior ?? { entries: [] },
+        );
+        // A hand-back, not a pick: another send's dispatch mark stays its own.
+        useWorktreeIntentStagingStore
+          .getState()
+          .restoreIntentForDispatch(
+            ownerStagingKey,
+            merged,
+            settlement.clientActionId,
+          );
+        queueEditStagingHandBacks.set(settlement.clientActionId, {
+          revision: stagedWorktreeIntentRevision(ownerStagingKey),
+          prior,
+        });
+      }
+    };
+
+    /** Put the chat's slot back as a displaced queue edit found it, unless touched since. */
+    const releaseQueueEditStagingFor = (clientActionId: string): void => {
+      const handBack = queueEditStagingHandBacks.get(clientActionId);
+      if (handBack === undefined) return;
+      queueEditStagingHandBacks.delete(clientActionId);
+      if (stagedWorktreeIntentRevision(ownerStagingKey) !== handBack.revision) {
+        return;
+      }
+      const staging = useWorktreeIntentStagingStore.getState();
+      if (handBack.prior === null) {
+        staging.releaseIntentForDispatch(ownerStagingKey, handBack.revision);
+        return;
+      }
+      staging.restoreIntentForDispatch(
+        ownerStagingKey,
+        handBack.prior,
+        clientActionId,
+      );
     };
 
     /**
@@ -9189,6 +9307,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           frame,
           rejectedPending,
         );
+        // Folded here rather than inside the update so what it settles can be
+        // acted on after it: a returned edit's folders follow its text.
+        const queueEditAckFold = queueEditFoldForAck(
+          get().queueEditRecords,
+          frame,
+        );
         set((state) => {
           const pending = pendingActionForId(
             state.pendingActions,
@@ -9234,7 +9358,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             queueEditRecords: ackedQueueEditRecords,
           } = queueEditSurfacesForAck(
             state,
-            frame,
+            queueEditAckFold,
             cancelRestorationSettlementForAck(
               state,
               frame.clientActionId,
@@ -9357,7 +9481,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // one contest, in the order the two were decided.
             ...queueEditSurfacesForAck(
               state,
-              frame,
+              queueEditAckFold,
               rejectionSurfaces({
                 lineBreakNotices,
                 state,
@@ -9376,6 +9500,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // are that large. The obligation `chatSlicesOf` states is about every
         // write, not every growth.
         commitWholeSetSliceBudget();
+        handBackQueueEditWorktreeIntents(queueEditAckFold.settlements);
         // AFTER the updater above, which is this evidence's last reader.
         retireConsumedRetryEvidence(rejectedPending);
         settleUnacknowledgedDeliveryRestore(set, get, frame.clientActionId);
@@ -10412,6 +10537,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             ultracodeProtocolSupported:
               status === "open" &&
               streamClient?.ultracodeProtocolSupported?.() === true,
+            queuedWorktreeIntentProtocolSupported:
+              status === "open" &&
+              streamClient?.queuedWorktreeIntentProtocolSupported?.() === true,
             queuePauseReasonProtocolSupported:
               resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
@@ -10686,6 +10814,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
       ultracodeProtocolSupported: false,
+      queuedWorktreeIntentProtocolSupported: false,
       queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       sendWouldQueue: undefined,
@@ -10848,6 +10977,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
           ultracodeProtocolSupported: false,
+          queuedWorktreeIntentProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
@@ -11744,6 +11874,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           clientActionId: uuidv4(),
           queueItemId,
           content,
+          worktreeIntent: null,
         }),
       submitQueueEdit: (input) => {
         if (!canSendAction(get)) return null;
@@ -11753,6 +11884,16 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Nothing to edit: the row has already left this client's queue. The
         // caller keeps the draft in the composer, which is where it is safe.
         if (row === undefined || row.kind !== "prompt") return null;
+        const editWorkspace = queueEditWorkspaceFor(
+          input.queueItemId,
+          row.worktreeIntent ?? null,
+        );
+        if (editWorkspace === null) return null;
+        const { key: editStagingKey, picked, worktreeIntent } = editWorkspace;
+        // A row with a workspace choice of its own cannot join the running
+        // turn, so a save-and-steer that changes the workspace is a save.
+        const intent: QueueEditIntent =
+          worktreeIntent === null ? input.intent : "save";
         const editActionId = uuidv4();
         const followUpActionId = uuidv4();
         const accountContext = useAccountContextStore.getState().accountContext;
@@ -11763,15 +11904,16 @@ export function createChatSessionStoreWithNotificationDependencies(
           queueEditRecords: withQueueEditRecord(state.queueEditRecords, {
             queueItemId: input.queueItemId,
             messageId: row.messageId,
-            intent: input.intent,
+            intent,
             restore: input.restore,
             wireContent: input.content,
+            worktreeIntent,
             settings: input.settings,
             accountContext,
             // A plain save that asks for the settings and account the row
             // already has cannot leave the submission half applied.
             followUpIsNoOp:
-              input.intent === "save" &&
+              intent === "save" &&
               chatRunSettingsEqual(row.settings, input.settings) &&
               accountContextsEqual(row.accountContext, accountContext),
             requestedChanges: namedSettingsChanges({
@@ -11790,12 +11932,21 @@ export function createChatSessionStoreWithNotificationDependencies(
             dispatchedAt: Date.now(),
           }),
         }));
+        // Taken before dispatch, as `sendMessage` takes the chat's slot, and
+        // put back below if the submission does not go out whole.
+        const displacedEditStaging = stagedDispatchDisplacement(editStagingKey);
+        if (picked !== null) {
+          useWorktreeIntentStagingStore
+            .getState()
+            .consumeForDispatch(editStagingKey, editActionId);
+        }
         const editSent = sendQueueEditFrame({
           set,
           get,
           clientActionId: editActionId,
           queueItemId: input.queueItemId,
           content: input.content,
+          worktreeIntent,
         });
         // Save-and-steer (decision 14): the steer carries the settings and the
         // host picks safe-point vs interrupt-restart. A plain save restamps
@@ -11810,7 +11961,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 clientActionId: followUpActionId,
                 queueItemId: input.queueItemId,
                 settings: input.settings,
-                intent: input.intent,
+                intent,
                 steerRestartConfirmed: input.steerRestartConfirmed,
                 steerInitiatorId: input.steerInitiatorId,
                 steerEditSettings: chatRunSettingsEqual(
@@ -11823,13 +11974,22 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (editSent === null || followUpSent === null) {
           // The submission did not go out whole, so the composer is not
           // cleared and the draft there is still the copy. Dropping the record
-          // is what keeps the text from being handed back a second time.
+          // is what keeps the text from being handed back a second time. The
+          // folders stay with that draft, in the edit's slot.
           set((state) => ({
             queueEditRecords: withoutQueueEditRecord(
               state.queueEditRecords,
               editActionId,
             ),
           }));
+          if (picked !== null) {
+            useWorktreeIntentStagingStore
+              .getState()
+              .rollBackDispatch(editStagingKey, {
+                intent: picked,
+                displaced: displacedEditStaging,
+              });
+          }
           return null;
         }
         return editActionId;
@@ -12290,6 +12450,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             .releaseIntentForDispatch(ownerStagingKey, stagedRevision);
           stagingRevisionByRestoredAction.delete(clientActionId);
         }
+        releaseQueueEditStagingFor(clientActionId);
         set((state) => {
           const restoration = state.failedSendRestoration;
           if (restoration?.clientActionId !== clientActionId) return {};
@@ -12368,6 +12529,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       ackFailedSendRestoration: (clientActionId) => {
         // The composer TOOK the prompt, so its binding stays staged with it.
         stagingRevisionByRestoredAction.delete(clientActionId);
+        queueEditStagingHandBacks.delete(clientActionId);
         set((state) => {
           const restoration = state.failedSendRestoration;
           if (restoration?.clientActionId !== clientActionId) return {};
@@ -12635,6 +12797,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
           ultracodeProtocolSupported: false,
+          queuedWorktreeIntentProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
         });
       },
@@ -13317,32 +13480,35 @@ function withQueueEditSettlements(
   }, surfaces);
 }
 
+/** One `actionAck` folded into the queue-edit records. */
+function queueEditFoldForAck(
+  records: QueueEditRecords,
+  frame: ChatActionAckFrame,
+): QueueEditFold {
+  // A steer refused for want of confirmation is not a failed submission: the
+  // confirm dialog takes it over and sends it again, so the edit says nothing
+  // about it - neither "not applied" nor that it went ahead.
+  return frame.status === "rejected" &&
+    frame.code === QUEUE_STEER_RESTART_UNCONFIRMED_CODE
+    ? foldQueueEditSteerAwaitingConfirmation(records, frame.clientActionId)
+    : foldQueueEditAck(records, {
+        clientActionId: frame.clientActionId,
+        status: frame.status,
+        reason: frame.reason ?? null,
+        code: frame.code ?? null,
+      });
+}
+
 /**
- * One `actionAck` folded into the queue-edit records, with whatever that
+ * An ack's queue-edit fold ({@link queueEditFoldForAck}) with whatever it
  * settles laid over `surfaces` - the slices the ack's own arm already decided.
  */
 function queueEditSurfacesForAck(
   state: ChatSessionState,
-  frame: ChatActionAckFrame,
+  fold: QueueEditFold,
   surfaces: HandBackSurfaces,
   lineBreakNotices: WeakSet<ChatErrorNotice>,
 ): HandBackSurfaces & Pick<ChatSessionState, "queueEditRecords"> {
-  // A steer refused for want of confirmation is not a failed submission: the
-  // confirm dialog takes it over and sends it again, so the edit says nothing
-  // about it - neither "not applied" nor that it went ahead.
-  const fold =
-    frame.status === "rejected" &&
-    frame.code === QUEUE_STEER_RESTART_UNCONFIRMED_CODE
-      ? foldQueueEditSteerAwaitingConfirmation(
-          state.queueEditRecords,
-          frame.clientActionId,
-        )
-      : foldQueueEditAck(state.queueEditRecords, {
-          clientActionId: frame.clientActionId,
-          status: frame.status,
-          reason: frame.reason ?? null,
-          code: frame.code ?? null,
-        });
   return {
     queueEditRecords: fold.records,
     ...withQueueEditSettlements(

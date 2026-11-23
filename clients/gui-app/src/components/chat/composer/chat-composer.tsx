@@ -118,6 +118,7 @@ import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { ChatComposerAttachmentsStrip } from "./chat-composer-attachments-strip";
+import { QUEUE_EDIT_STEER_OFF_NOTE } from "./queue-edit-draft-pill";
 import { ChatComposerEditorSlot } from "./chat-composer-editor-slot";
 import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
@@ -292,6 +293,12 @@ interface ChatComposerProps {
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly editingQueueItemId: string | null;
   readonly onCancelQueueEdit: (() => void) | null;
+  /**
+   * Whether saving the queued message being edited changes its folders. Such a
+   * message cannot join the running turn, so its save-and-steer only saves and
+   * the editing pill says so.
+   */
+  readonly queueEditChangesWorkspace?: boolean;
   readonly hasPendingApprovals: boolean;
   readonly stopDisabled: boolean;
   readonly onStopTurn: (() => void) | null;
@@ -538,6 +545,25 @@ function useChatComposerTopBanner(input: {
   return { accountWait, topBannerKind };
 }
 
+/**
+ * The editing pill's note while a save-and-steer would only save. Said only
+ * when a Mod-Enter would otherwise steer, on the conditions
+ * `resolveSubmitDeliveryPolicy` steers on.
+ */
+function queueEditSteerOffNote(input: {
+  readonly queueEditChangesWorkspace: boolean | undefined;
+  readonly steerEnabled: boolean;
+  readonly steerProtocolSupported: boolean;
+  readonly activeTurnStatus: ChatActiveTurn["status"] | null;
+}): string | null {
+  return input.queueEditChangesWorkspace === true &&
+    input.steerEnabled &&
+    input.steerProtocolSupported &&
+    input.activeTurnStatus === "running"
+    ? QUEUE_EDIT_STEER_OFF_NOTE
+    : null;
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -563,6 +589,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     getActiveTurnForSteer,
     editingQueueItemId,
     onCancelQueueEdit,
+    queueEditChangesWorkspace,
     hasPendingApprovals,
     stopDisabled,
     onStopTurn,
@@ -1055,6 +1082,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     steerEnabled,
     steerProtocolSupported,
   });
+  const queueEditNote = queueEditSteerOffNote({
+    queueEditChangesWorkspace,
+    steerEnabled,
+    steerProtocolSupported,
+    activeTurnStatus,
+  });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const { accountWait, topBannerKind } = useChatComposerTopBanner({
     providerFallback,
@@ -1251,6 +1284,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                       content={draftContent}
                       editingQueueItemId={editingQueueItemId}
                       onCancelQueueEdit={onCancelQueueEdit}
+                      queueEditNote={queueEditNote}
                       onRemoveImage={removeImage}
                     />
                   }

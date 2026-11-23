@@ -1524,6 +1524,7 @@ function TerminalAgentPreLaunchToolbar(
             ownerLabel: props.agent.title,
             inFlightWorktreeIntent: null,
             failedWorktreePaths: NO_FAILED_WORKTREE_PATHS,
+            queueEdit: null,
             // Surfaced on the chip as a per-folder "missing on disk" indicator.
             // The host-computed signal on `worktree.getBinding` — the actual
             // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this

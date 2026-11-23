@@ -1492,6 +1492,7 @@ const PROBE_NAMES = [
   "ultracodeProtocolSupported",
   "queuePauseReasonProtocolSupported",
   "queuedSteerRestartConfirmationSupported",
+  "queuedWorktreeIntentProtocolSupported",
 ] as const satisfies readonly HandleProbe[];
 
 // A `...Supported` member the handle gains and this list lacks resolves the
@@ -1518,6 +1519,8 @@ const STORE_READS: Record<
   queuePauseReasonProtocolSupported: (s) => s.queuePauseReasonProtocolSupported,
   queuedSteerRestartConfirmationSupported: (s) =>
     s.queuedSteerRestartConfirmationSupported(),
+  queuedWorktreeIntentProtocolSupported: (s) =>
+    s.queuedWorktreeIntentProtocolSupported,
 };
 
 describe("the production chat stream client factory forwards every probe", () => {

@@ -48,6 +48,7 @@ import {
   useChatMessageActions,
 } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
+import { useQueueEditWorkspace } from "./use-queue-edit-workspace";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -2396,6 +2397,8 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported:
         s.autoPermissionModeProtocolSupported,
       ultracodeProtocolSupported: s.ultracodeProtocolSupported,
+      queuedWorktreeIntentProtocolSupported:
+        s.queuedWorktreeIntentProtocolSupported,
       draftBlobBridgeSupported: s.draftBlobBridgeSupported,
       interviewDeliveryRetryProtocolSupported:
         s.interviewDeliveryRetryProtocolSupported,
@@ -2768,6 +2771,16 @@ function useChatTileSessionViewModel(
         item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
   const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
+  const queueEditWorkspace = useQueueEditWorkspace({
+    hostId: viewModelHostId,
+    epicId: currentEpicId,
+    chatId: node.id,
+    editingQueueItemId: activeEditingQueueItemId,
+    rowWorktreeIntent: editingQueueItem?.worktreeIntent ?? null,
+    seeded: seededChatWorktreeIntent,
+    carriesWorktreeIntent: state.queuedWorktreeIntentProtocolSupported,
+    missingWorktreePaths: state.missingWorktreePaths,
+  });
   const chatSettingsSeed = state.chat?.settings ?? null;
   const importedSourceProvider =
     importedProvenance(state.events)?.sourceProvider ?? null;
@@ -4175,9 +4188,21 @@ function useChatTileSessionViewModel(
           // active before there is an owned turn for the "stop" wording.
           hasActiveTurn: composerActiveTurnStatus !== null,
           ownerLabel: node.name,
-          inFlightWorktreeIntent: inFlightChatWorktreeIntent,
-          failedWorktreePaths: failedChatWorktreePaths,
-          missingWorktreePaths: effectiveMissingPaths,
+          // While a queued message is edited the picker shows that message's
+          // folders: its own choice over the chat's owed request.
+          inFlightWorktreeIntent:
+            queueEditWorkspace === null
+              ? inFlightChatWorktreeIntent
+              : queueEditWorkspace.inFlightWorktreeIntent,
+          failedWorktreePaths:
+            queueEditWorkspace === null
+              ? failedChatWorktreePaths
+              : queueEditWorkspace.failedWorktreePaths,
+          queueEdit: queueEditWorkspace?.surface ?? null,
+          missingWorktreePaths:
+            queueEditWorkspace === null
+              ? effectiveMissingPaths
+              : queueEditWorkspace.missingWorktreePaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
           onForkOnHost: forkChatOnHost,
@@ -4194,6 +4219,7 @@ function useChatTileSessionViewModel(
     state.worktreeBinding,
     inFlightChatWorktreeIntent,
     failedChatWorktreePaths,
+    queueEditWorkspace,
     effectiveMissingPaths,
     state.snapshotLoaded,
     activeTurnStatus,
@@ -4470,6 +4496,7 @@ function useChatTileSessionViewModel(
     () => ({
       editingItem: editingQueueItem,
       editingItemId: activeEditingQueueItemId,
+      editChangesWorkspace: queueEditWorkspace?.changesWorkspace === true,
       value: projectedQueue,
       resumeRequested: pendingQueueIntent.resumeRequested,
       keepPausedRequested: pendingQueueIntent.keepPausedRequested,
@@ -4488,6 +4515,7 @@ function useChatTileSessionViewModel(
     [
       editingQueueItem,
       activeEditingQueueItemId,
+      queueEditWorkspace,
       projectedQueue,
       pendingQueueIntent,
       chatActions.pauseQueue,
