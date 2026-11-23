@@ -273,6 +273,8 @@ export function createDesktopHostTokenSource(
     signInKey: (userId) => bridge.signIn(userId),
     // Main mints with its own verified sign-in.
     bindSignIn: () => undefined,
+    // Main judges a refusal against its own sign-in.
+    bindSignInSync: () => undefined,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {

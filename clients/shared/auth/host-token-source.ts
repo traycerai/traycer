@@ -320,6 +320,15 @@ export interface HostTokenSource {
    */
   signInKey(userId: string): number | null;
   bindSignIn(signIn: VerifiedSignIn): void;
+  /**
+   * Brings this process's sign-in up to date with the store it is kept in:
+   * awaited before a refused mint is compared with the sign-in held and
+   * recorded, so a refusal of a sign-in another process has since replaced
+   * is dropped. Unbound (`null`) where the sign-in has one writer in the
+   * process. A reader of the record never needs it: a record is written only
+   * for the sign-in held after it.
+   */
+  bindSignInSync(sync: (() => Promise<void>) | null): void;
   subscribe(listener: (change: HostTokenChange) => void): () => void;
 }
 
@@ -334,6 +343,18 @@ export function createHostTokenSource(deps: {
   readonly now: () => number;
 }): HostTokenSource {
   let signIn = deps.signIn;
+  let syncSignIn: (() => Promise<void>) | null = null;
+  // A sync that fails leaves the sign-in as this process holds it: the
+  // compare after it reads that.
+  const signInUpToDate = async (): Promise<void> => {
+    const sync = syncSignIn;
+    if (sync === null) return;
+    try {
+      await sync();
+    } catch {
+      return;
+    }
+  };
   let table: HostTokenTable = new Map();
   let isLoaded = false;
   // A table that could not be read is as loaded as an empty one: nothing more
@@ -579,7 +600,8 @@ export function createHostTokenSource(deps: {
       const token = held(userId, hostId);
       // An answer from an era the person has left, or for a sign-in the
       // person no longer holds, says nothing of the one they hold now:
-      // compared as it is written, and again as it is read.
+      // compared as it is written (a refusal after the sign-in is brought up
+      // to date, see `bindSignInSync`), and again as it is read.
       const record = (
         kind: HostTokenMintOutcome["kind"],
         sentWith: number | null,
@@ -616,9 +638,13 @@ export function createHostTokenSource(deps: {
       } catch (cause) {
         // A token that could not be saved leaves none to present, like an
         // unreachable authn: an earlier refusal no longer stands.
+        if (owner !== null) await signInUpToDate();
         record("unavailable", sentWith);
         throw cause;
       }
+      // Up to date first, then compared, then recorded. A token answers
+      // without waiting: recording it only ends a refusal.
+      if (owner !== null && outcome.kind !== "ok") await signInUpToDate();
       record(outcome.kind, sentWith);
       return outcome;
     },
@@ -694,6 +720,10 @@ export function createHostTokenSource(deps: {
     era: eraOf,
 
     signInKey: signInKeyOf,
+
+    bindSignInSync: (next) => {
+      syncSignIn = next;
+    },
 
     bindSignIn: (next) => {
       signIn = next;
