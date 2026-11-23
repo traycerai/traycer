@@ -50,6 +50,7 @@ import {
   type ReleasedSignOnRow,
   type ReleasedUnaryCause,
   type ReleasedUnarySignOn,
+  type SignInRecovery,
 } from "../released-sign-on";
 import type { HostRequestAuthority, IHostMessenger } from "../host-messenger";
 import {
@@ -466,7 +467,7 @@ type SignOnFor = (
 function driveCallOnRow(input: {
   readonly tokens: TrackedHostTokens;
   readonly readRow: () => ReleasedSignOnRow | null;
-  readonly recovery: StreamAuthRevalidator | null;
+  readonly recovery: SignInRecovery | null;
   readonly hosts: ReleasedHostMemory | null;
   readonly abortSignal: AbortSignal;
 }): DrivenCall {
@@ -482,7 +483,7 @@ function driveCallThroughSignOn(
   input: {
     readonly tokens: TrackedHostTokens;
     readonly readRow: () => ReleasedSignOnRow | null;
-    readonly recovery: StreamAuthRevalidator | null;
+    readonly recovery: SignInRecovery | null;
     readonly hosts: ReleasedHostMemory | null;
     readonly abortSignal: AbortSignal;
   },
@@ -1388,6 +1389,98 @@ describe("a sign-in is written only where its row and its host still allow it", 
       WAIT,
     );
   }
+
+  describe("a refusal's recovery is told the sign-in the call presented", () => {
+    /** Answers `adopted`, as the CLI's recovery does for a refusal of a sign-in it no longer stores. */
+    function adoptingRecovery(): {
+      readonly recovery: SignInRecovery;
+      readonly asked: string[];
+    } {
+      const asked: string[] = [];
+      return {
+        asked,
+        recovery: {
+          revalidateForReconnect: (refused) => {
+            asked.push(refused ?? "null");
+            return Promise.resolve("adopted");
+          },
+        },
+      };
+    }
+
+    /** Keeps the call's own sign-in lease, so the test can rotate it as a sibling's refresh does. */
+    function keepingLease(): {
+      readonly through: (answerFromRow: SignOnFor) => SignOnFor;
+      readonly lease: () => MutableBearerLease;
+    } {
+      const kept: { current: MutableBearerLease | null } = { current: null };
+      return {
+        through: (answerFromRow) => (authority, cause) => {
+          if (authority.bearer instanceof MutableBearerLease)
+            kept.current = authority.bearer;
+          return answerFromRow(authority, cause);
+        },
+        lease: () => {
+          if (kept.current === null) throw new Error("no sign-in lease seen");
+          return kept.current;
+        },
+      };
+    }
+
+    it("tells it the sign-in the host's released refusal was for, though a sibling replaced the lease's before the refusal was handled", async () => {
+      const adopting = adoptingRecovery();
+      const keeping = keepingLease();
+      const driven = driveCallThroughSignOn(
+        {
+          tokens: await heldExpiredReleasedHost(),
+          readRow: () => PERSONAL_ROW,
+          recovery: adopting.recovery,
+          hosts: null,
+          abortSignal: new AbortController().signal,
+        },
+        keeping.through,
+        (client) => client,
+      );
+      clients.push(driven.client);
+      await planReleasedSignIn(driven);
+      const signInSocket = driven.sockets[1];
+      if (signInSocket === undefined) throw new Error("sign-in dial missing");
+      expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+
+      keeping.lease().rotate("sign-in-of-a-sibling");
+      signInSocket.fireMessage(releasedRefusal());
+      await vi.waitFor(() => expect(adopting.asked).toHaveLength(1), WAIT);
+
+      expect(adopting.asked).toEqual([SIGN_IN]);
+    });
+
+    it("tells it the sign-in the host's owner-sign-in refusal was for, though a sibling replaced the lease's before the refusal was handled", async () => {
+      const adopting = adoptingRecovery();
+      const keeping = keepingLease();
+      const driven = driveCallThroughSignOn(
+        {
+          tokens: blackHoledTokens().tokens,
+          readRow: () => PERSONAL_ROW,
+          recovery: adopting.recovery,
+          hosts: null,
+          abortSignal: new AbortController().signal,
+        },
+        keeping.through,
+        (client) => client,
+      );
+      clients.push(driven.client);
+      await planOwnerSignIn(driven);
+      const signInSocket = driven.sockets[1];
+      if (signInSocket === undefined) throw new Error("sign-in dial missing");
+      expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+
+      keeping.lease().rotate("sign-in-of-a-sibling");
+      signInSocket.fireMessage(namedRefusal("token_expired"));
+      await vi.waitFor(() => expect(adopting.asked).toHaveLength(1), WAIT);
+
+      expect(adopting.asked).toEqual([SIGN_IN]);
+    });
+  });
 
   it("writes no sign-in on any socket when the row moves to a team between the released plan and the OPEN", async () => {
     let row: ReleasedSignOnRow = PERSONAL_ROW;

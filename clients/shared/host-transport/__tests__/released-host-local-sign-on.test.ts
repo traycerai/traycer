@@ -1604,6 +1604,31 @@ describe("released personal host, local stream", () => {
       expect(calls).toBe(2);
     });
 
+    it("tells the recovery the sign-in the host refused, though a sibling replaced it before the recovery ran, and presents the sibling's next", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const asked: Array<string | null> = [];
+      const { sockets } = releasedStream(signIn, {
+        revalidateForReconnect: (refused) => {
+          asked.push(refused);
+          return Promise.resolve("adopted");
+        },
+      });
+      await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+      expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
+      sockets[0].fireText(releasedRefusal());
+      await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+      expect((await openFrame(sockets[1])).token).toBe(SIGN_IN);
+
+      signIn.rotate("sign-in-of-a-sibling");
+      sockets[1].fireText(releasedRefusal());
+      await vi.waitFor(() => expect(asked).toHaveLength(1), WAIT);
+      await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+
+      expect(asked).toEqual([SIGN_IN]);
+      expect((await openFrame(sockets[2])).token).toBe("sign-in-of-a-sibling");
+    });
+
     it("lets a new sequence spend one again once the host admitted a connection", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
