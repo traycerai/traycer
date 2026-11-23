@@ -561,4 +561,41 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(await rig.rowIds()).toEqual(["row-after-tick"]);
     expect(rig.reads.mostAtOnce()).toBe(1);
   });
+
+  // The wall clock can move back while a window is hidden. Vitest's fake timers
+  // fake `performance.now()` too, and `setSystemTime` moves only the wall
+  // clock, so a tick that came due on the monotonic clock is erased from the
+  // wall clock alone.
+  it("(poll tick, wall clock set back) still waits for the show's read when the wall clock was set back after a poll interval had passed hidden", async () => {
+    const rig = await startedWindow(false, false);
+    const hiddenAt = Date.now();
+    __setBrowserDocumentHiddenForTests(true);
+    // A read starts while hidden, after the hide, and settles with the personal row.
+    await vi.advanceTimersByTimeAsync(10_000);
+    void rig.directory.refresh();
+    expect(rig.reads.issued()).toBe(2);
+    rig.reads.answer(1, "personal-row");
+    await drain();
+    // The window stays hidden past a poll interval; then the wall clock is set
+    // back, before the show.
+    await vi.advanceTimersByTimeAsync(51_000);
+    vi.setSystemTime(hiddenAt - 3_600_000);
+    // The computer moved to a team meanwhile. The show reads once, as the poll
+    // does on a show, and that read is the one that carries the team row.
+    __setBrowserDocumentHiddenForTests(false);
+    expect(rig.reads.issued()).toBe(3);
+
+    const confirmation = rig.confirm();
+    await drain();
+
+    expect(confirmation.resolved()).toBe(false);
+    expect(rig.reads.issued()).toBe(3);
+
+    rig.reads.answer(2, "team-row");
+    await drain();
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["team-row"]);
+    expect(rig.reads.mostAtOnce()).toBe(1);
+  });
 });
