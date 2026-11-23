@@ -586,8 +586,12 @@ export class WsRpcClient<
             "no-host-token",
           );
     for (;;) {
-      const releasedBeforeClaim = this.localReleases !== releasesSeen;
-      releasesSeen = this.localReleases;
+      // A probe dials its own socket and claims no slot, so a release it sees
+      // is left for the next iteration's claim.
+      const probing = this.probeAuthorities.has(hostOptions.authority);
+      const releasedBeforeClaim =
+        !probing && this.localReleases !== releasesSeen;
+      if (!probing) releasesSeen = this.localReleases;
       try {
         return await this.requestWithResponseTimeoutInternal(
           method,
