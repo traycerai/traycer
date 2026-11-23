@@ -2857,6 +2857,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "environment.review.heldKeep": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "environment.review.record": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
