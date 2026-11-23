@@ -1,9 +1,17 @@
 import { QueryClient } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import { SandboxFailedRowActions } from "@/components/hosts/sandbox-failed-row-actions";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
@@ -136,6 +144,30 @@ function renderFailedRow(
   environmentRole: "admin" | "editor" | "viewer",
   queryClient: QueryClient,
 ) {
+  return renderFailedRows(
+    {
+      binding,
+      configuration,
+      environmentRole,
+      queryClient,
+      rows: [{ key: "failed-row", summary: failedRowSummary() }],
+    },
+  );
+}
+
+function renderFailedRows({
+  binding,
+  configuration,
+  environmentRole,
+  queryClient,
+  rows,
+}: {
+  binding: FakeSandboxBinding;
+  configuration: SandboxPageConfiguration;
+  environmentRole: "admin" | "editor" | "viewer";
+  queryClient: QueryClient;
+  rows: readonly { key: string; summary: SandboxSummary }[];
+}) {
   mocks.binding = binding;
   if (configuration.kind === "team") {
     binding.auth.getTeamEnvironment.mockResolvedValue({
@@ -169,17 +201,24 @@ function renderFailedRow(
         environmentListRequests.push(1);
       }}
     >
-      <SandboxFailedRowActions
-        summary={sandboxSummaryFixture({
-          id: FAILED_SANDBOX_ID,
-          state: "failed",
-          environmentId: "env-acme",
-        })}
-        configuration={configuration}
-        credits={configuration}
-      />
+      {rows.map(({ key, summary }) => (
+        <SandboxFailedRowActions
+          key={key}
+          summary={summary}
+          configuration={configuration}
+          credits={configuration}
+        />
+      ))}
     </SandboxBillingRuntime>,
   );
+}
+
+function failedRowSummary(): SandboxSummary {
+  return sandboxSummaryFixture({
+    id: FAILED_SANDBOX_ID,
+    state: "failed",
+    environmentId: "env-acme",
+  });
 }
 
 afterEach(() => {
@@ -241,7 +280,6 @@ describe("SandboxFailedRowActions Retry", () => {
 
   it.each([
     ["401", { kind: "unauthorized" }, true],
-    ["untyped 403", { kind: "unauthorized" }, true],
     ["402", refusedCreate(), false],
   ] as const)("uses the correct request key after a %s", async (_status, answer, keepsKey) => {
     const keys = await retryAndExpectToast({
@@ -253,6 +291,59 @@ describe("SandboxFailedRowActions Retry", () => {
     });
 
     expect(keys[1] === keys[0]).toBe(keepsKey);
+  });
+
+  it.each([
+    ["402", refusedCreate(), false],
+    ["unauthorized", { kind: "unauthorized" }, true],
+  ] as const)("serializes simultaneous Retry controls after a %s answer", async (_name, firstAnswer, keepsKey) => {
+    const answer = Promise.withResolvers<SandboxCreateFetchResult>();
+    const binding = createFakeSandboxBinding();
+    binding.auth.createSandbox.mockImplementationOnce(() => answer.promise);
+    binding.auth.createSandbox.mockResolvedValue({ kind: "unauthorized" });
+    const summary = failedRowSummary();
+    renderFailedRows({
+      binding,
+      configuration: PERSONAL_CONFIGURATION,
+      environmentRole: "editor",
+      queryClient: createQueryClient(),
+      rows: [
+        { key: "first-control", summary },
+        { key: "second-control", summary },
+      ],
+    });
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sandbox-row-retry")).toHaveLength(2),
+    );
+    const [firstButton, secondButton] = screen.getAllByTestId(
+      "sandbox-row-retry",
+    );
+    act(() => signInAs("account-a"));
+
+    act(() => {
+      fireEvent.click(firstButton);
+      fireEvent.click(secondButton);
+    });
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1),
+    );
+    const firstKey = binding.auth.createSandbox.mock.calls[0]?.[0].clientRequestId;
+    expect(firstButton).toHaveProperty("disabled", true);
+    expect(secondButton).toHaveProperty("disabled", true);
+    expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1);
+
+    act(() => answer.resolve(firstAnswer));
+    await waitFor(() => {
+      expect(firstButton).toHaveProperty("disabled", false);
+      expect(secondButton).toHaveProperty("disabled", false);
+    });
+    await userEvent.click(secondButton);
+    await waitFor(() =>
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2),
+    );
+
+    const secondKey = binding.auth.createSandbox.mock.calls[1]?.[0].clientRequestId;
+    expect(secondKey === firstKey).toBe(keepsKey);
   });
 
   it("reuses an unauthorized Retry key after the failed row remounts", async () => {
@@ -373,7 +464,7 @@ describe("SandboxFailedRowActions Retry", () => {
         useSandboxFailedRowRetryStore.getState().byAccountAndRow[
           `account-a:${FAILED_SANDBOX_ID}`
         ],
-      ).toBe(firstKey),
+      ).toEqual({ key: firstKey, inFlight: true }),
     );
     view.unmount();
 

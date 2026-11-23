@@ -20,8 +20,38 @@ import {
 import { sandboxVerbPendingLine } from "@/lib/sandboxes/sandbox-strings";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { useSandboxFailedRowRetryStore } from "@/stores/sandboxes/sandbox-failed-row-retry-store";
+
+function failedRowRetryScope(
+  userId: string | null,
+  sandboxId: string,
+): string | null {
+  return userId === null ? null : `${userId}:${sandboxId}`;
+}
+
+/**
+ * Sends a claimed Retry and always releases the claim. The key is cleared
+ * after an accepted create or an answer proving nothing was created.
+ */
+async function sendClaimedRetry(
+  send: () => Promise<unknown>,
+  accountAndRow: string,
+  requestKey: string,
+): Promise<void> {
+  let clearKey = false;
+  try {
+    await send();
+    clearKey = true;
+  } catch (error: unknown) {
+    clearKey = error instanceof Error && createErrorNeedsFreshKey(error);
+  } finally {
+    useSandboxFailedRowRetryStore
+      .getState()
+      .settle(accountAndRow, requestKey, clearKey);
+  }
+}
 
 /** A chat's Retry waits until its sandbox's environment is identified. */
 export function SandboxFailedChatActions(props: {
@@ -73,43 +103,50 @@ export function SandboxFailedRowActions(props: {
     settingsFailed: false,
   });
   const pendingVerb = operation?.kind === "pending" ? operation.verb : null;
-  const busy = pendingVerb !== null || create.isPending;
+  const accountAndRow = useAuthStore((state) =>
+    failedRowRetryScope(state.contextMetadata?.userId ?? null, summary.id),
+  );
+  const retryInFlight = useSandboxFailedRowRetryStore(
+    (state) =>
+      accountAndRow !== null &&
+      state.byAccountAndRow[accountAndRow]?.inFlight === true,
+  );
+  const busy = pendingVerb !== null || create.isPending || retryInFlight;
 
-  const retry = (): void => {
+  const retry = async (): Promise<void> => {
     if (configuration === null || actions.primary !== "retry" || busy) return;
-    const userId = signedInUserId();
-    const accountAndRow = userId === null ? null : `${userId}:${summary.id}`;
-    const store = useSandboxFailedRowRetryStore.getState();
-    const requestKey = store.getOrCreate(accountAndRow);
-    // A mutation can settle after this row unmounts.
-    void create
-      .mutateAsync({
-        request: {
-          os: summary.os,
-          cpus: summary.cpus,
-          memoryMb: summary.memoryMb,
-          diskMb: summary.diskMb,
-          region: summary.region,
-          displayName: summary.displayName,
-          idleMinutes: summary.idleMinutes,
-          burst: false,
-          createdByHostId: null,
-          createdByAgentId: null,
-          environmentId: summary.environmentId,
-          // A row's null is never; on a create, null uses the default.
-          destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
-          createdByTaskId: null,
-          clientRequestId: requestKey,
-        },
-        teamName: configuration.kind === "team" ? configuration.teamName : null,
-      })
-      .then(
-        () => store.clear(accountAndRow, requestKey),
-        (error: unknown) => {
-          if (error instanceof Error && createErrorNeedsFreshKey(error))
-            store.clear(accountAndRow, requestKey);
-        },
-      );
+    if (failedRowRetryScope(signedInUserId(), summary.id) !== accountAndRow)
+      return;
+    const requestKey = useSandboxFailedRowRetryStore
+      .getState()
+      .claim(accountAndRow);
+    if (requestKey === null) return;
+    await sendClaimedRetry(
+      () =>
+        create.mutateAsync({
+          request: {
+            os: summary.os,
+            cpus: summary.cpus,
+            memoryMb: summary.memoryMb,
+            diskMb: summary.diskMb,
+            region: summary.region,
+            displayName: summary.displayName,
+            idleMinutes: summary.idleMinutes,
+            burst: false,
+            createdByHostId: null,
+            createdByAgentId: null,
+            environmentId: summary.environmentId,
+            // A row's null is never; on a create, null uses the default.
+            destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
+            createdByTaskId: null,
+            clientRequestId: requestKey,
+          },
+          teamName:
+            configuration.kind === "team" ? configuration.teamName : null,
+        }),
+      accountAndRow,
+      requestKey,
+    );
   };
 
   return (
@@ -121,7 +158,7 @@ export function SandboxFailedRowActions(props: {
           size="sm"
           data-testid="sandbox-row-retry"
           disabled={busy || configuration === null}
-          onClick={retry}
+          onClick={() => void retry()}
         >
           {busy ? (
             <AgentSpinningDots

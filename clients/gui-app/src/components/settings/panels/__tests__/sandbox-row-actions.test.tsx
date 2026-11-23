@@ -629,7 +629,7 @@ describe("<SandboxRowActions />", () => {
         useSandboxFailedRowRetryStore.getState().byAccountAndRow[
           `u1:${summary.id}`
         ],
-      ).toBe(first.key),
+      ).toEqual({ key: first.key, inFlight: false }),
     );
     const second = await press();
     expect(second.key).toBe(first.key);

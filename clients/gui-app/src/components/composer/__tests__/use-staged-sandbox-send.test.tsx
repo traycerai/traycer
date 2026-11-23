@@ -1610,7 +1610,6 @@ async function sendAgainAfter(
 describe("useStagedSandboxSend's send after a failed create", () => {
   it.each([
     ["401", { kind: "unauthorized" }, false],
-    ["untyped 403", { kind: "unauthorized" }, false],
     [
       "503 environment_unavailable",
       refusal(503, "environment_unavailable"),
