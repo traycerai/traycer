@@ -274,4 +274,69 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     ]);
     expect(credentials.rotations()).toBe(1);
   });
+
+  it("judges nothing and refreshes the stored sign-in once when its own refusal follows a stale refusal of the sign-in our rotation produced", async () => {
+    // The mints on A, on B (the retry) and on C are held; the one after C's refresh is answered.
+    harness.hold = 3;
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const credentials = countingRefresh(lease);
+    // The refresh of C is held where it starts, so what C's refusal recorded is read while it is pending.
+    const refreshesStarted: number[] = [];
+    const releaseRefreshOfC: { release: () => void } = {
+      release: () => undefined,
+    };
+    const refreshOfCHeld = new Promise<void>((resolve) => {
+      releaseRefreshOfC.release = resolve;
+    });
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: async () => {
+        refreshesStarted.push(refreshesStarted.length + 1);
+        if (refreshesStarted.length === 2) await refreshOfCHeld;
+        return credentials.refresh();
+      },
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    const reports: string[] = [];
+    tokens.onRefusalEndingCommand((reportedHostId) => {
+      reports.push(reportedHostId);
+    });
+    const minting = tokens.hostBearerFor(hostId, true);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+
+    // A is refused; our rotation produces B and the retry goes out on it, held.
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(2));
+    expect(harness.mints[1]?.signIn).toBe(credentials.rotatedTo(1));
+    // While it is pending a sibling replaces B with C.
+    lease.rotate(SIBLING_SIGN_IN);
+
+    // B's stale 401 arrives: the one retry goes out on C, and nothing is judged.
+    harness.mints[1]?.answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(3));
+    expect(harness.mints[2]?.signIn).toBe(SIBLING_SIGN_IN);
+    expect(tokens.signInRejected()).toBe(false);
+    expect(refreshesStarted).toHaveLength(1);
+
+    // C's own 401 arrives: the first refusal of C, so C is refreshed, once. While
+    // that refresh is pending the refusal has judged nothing.
+    harness.mints[2]?.answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(refreshesStarted).toHaveLength(2));
+    expect(tokens.signInRejected()).toBe(false);
+    expect(reports).toEqual([]);
+    releaseRefreshOfC.release();
+    const bearer = await minting;
+
+    expect(bearer).not.toBeNull();
+    expect(tokens.signInRejected()).toBe(false);
+    expect(reports).toEqual([]);
+    expect(refreshesStarted).toHaveLength(2);
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      SIGN_IN_A,
+      credentials.rotatedTo(1),
+      SIBLING_SIGN_IN,
+      credentials.rotatedTo(2),
+    ]);
+  });
 });
