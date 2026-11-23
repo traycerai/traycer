@@ -184,17 +184,26 @@ function mayWriteFor(asker: MintAsker): () => boolean {
   return () => asker.observedNow() === asker.observed;
 }
 
-// A mint as asked: the key of the sign-in it was sent with (`null`: none
-// sent, or one with no readable end), and its answer.
-interface MintSent {
-  readonly sentWith: string | null;
-  readonly outcome: Promise<HostTokenMintOutcome>;
+// An ask's answer, and the order of the request behind it (`null`: none was
+// sent), which the source compares with the pair's kept writes.
+interface MintAnswer {
+  readonly identified: IdentifiedMintOutcome;
+  readonly order: number | null;
 }
 
-// What a mint is asked with, beyond the pair and era.
+// A mint as asked: the key of the sign-in it was sent with (`null`: none
+// sent), and its answer.
+interface MintSent {
+  readonly sentWith: string | null;
+  readonly outcome: Promise<MintAnswer>;
+}
+
+// What a mint is asked with, beyond the pair and era: `owner` is whom a
+// purchase is evidence for (`null`: a renewal or an ask with no owner).
 interface MintAsk {
   readonly signal: AbortSignal | null;
   readonly asker: MintAsker;
+  readonly owner: HostMintOwner | null;
   readonly replaces: string | null;
 }
 
@@ -254,11 +263,24 @@ export type HostTokenRenewal =
   | { readonly kind: "no-sign-in" }
   | { readonly kind: "superseded" };
 
+/**
+ * A mint dependency's answer when it draws the request order itself: `order`
+ * is drawn as the actual authn request is sent (a joiner of a request gets
+ * that request's; `null` when none was sent). A dependency that answers a
+ * bare outcome sent the request for this call: the source draws its order
+ * from its own counter as it sends. A source never mixes the two counters'
+ * orders.
+ */
+export interface OrderedMintAnswer {
+  readonly outcome: HostTokenMintOutcome;
+  readonly order: number | null;
+}
+
 export type HostTokenMint = (
   hostId: string,
   signInToken: string,
   signal: AbortSignal | null,
-) => Promise<HostTokenMintOutcome>;
+) => Promise<HostTokenMintOutcome | OrderedMintAnswer>;
 
 export type VerifiedSignIn = (userId: string) => string | null;
 
@@ -342,6 +364,48 @@ export interface HostTokenSource {
   subscribe(listener: (change: HostTokenChange) => void): () => void;
 }
 
+/**
+ * The source KEPT this asker's own write (`written`) of the token that
+ * request `order` bought on `signIn`, for `owner`, whose process check still
+ * held at the answer. The first write of a token's bytes is the one written,
+ * so one request's askers publish it once, starter or joiner, with the
+ * request's order. A cache hit, a token read from the file, an unkept write
+ * and a retired process's answer are none.
+ */
+export interface MintPurchase {
+  readonly owner: HostMintOwner;
+  readonly signIn: string;
+  readonly order: number;
+}
+
+/**
+ * A mint's outcome and what it stands for, by sign-in key ({@link
+ * hostSignInKey}). `signIn`: for `sign-in-rejected`, the sign-in the refused
+ * request was sent with; for `ok`, the sign-in the token handed back was
+ * minted with (`null` when this source did not mint it); `null` for every
+ * other kind. `order`: the refused request's order, on `sign-in-rejected`
+ * only. `purchase`: see {@link MintPurchase}. All of it travels beside the
+ * outcome, never on it, so nothing that receives an outcome (a listener, a
+ * log, an error, the desktop bridge) receives any of it.
+ */
+export interface IdentifiedMintOutcome {
+  readonly outcome: HostTokenMintOutcome;
+  readonly signIn: string | null;
+  readonly order: number | null;
+  readonly purchase: MintPurchase | null;
+}
+
+/** The shared source, with the one read that carries a mint's sign-in. */
+export interface IdentifyingHostTokenSource extends HostTokenSource {
+  /** {@link HostTokenSource.obtain}, with the sign-in its outcome stands for. */
+  obtainIdentified(
+    userId: string,
+    hostId: string,
+    fresh: boolean,
+    ask: HostTokenAsk,
+  ): Promise<IdentifiedMintOutcome>;
+}
+
 export function isIssuedHostTokenEra(era: number): boolean {
   return Number.isSafeInteger(era) && era >= 0;
 }
@@ -351,7 +415,7 @@ export function createHostTokenSource(deps: {
   readonly mint: HostTokenMint;
   readonly signIn: VerifiedSignIn | null;
   readonly now: () => number;
-}): HostTokenSource {
+}): IdentifyingHostTokenSource {
   let signIn = deps.signIn;
   let syncSignIn: (() => Promise<void>) | null = null;
   // A sync that fails leaves the sign-in as this process holds it: the
@@ -384,16 +448,38 @@ export function createHostTokenSource(deps: {
   // mint an owner not yet observed started, which only such owners join; and
   // each observed process's own, under `ownerKey`. An observed owner never
   // joins a mint started for an owner not yet observed, nor the reverse.
-  const latestFlight = new Map<string, Promise<HostTokenMintOutcome>>();
-  const renewFlights = new Map<string, Promise<HostTokenMintOutcome>>();
-  const unknownFlights = new Map<string, Promise<HostTokenMintOutcome>>();
-  const observedFlights = new Map<string, Promise<HostTokenMintOutcome>>();
+  const latestFlight = new Map<string, Promise<OrderedMintAnswer>>();
+  const renewFlights = new Map<string, Promise<OrderedMintAnswer>>();
+  const unknownFlights = new Map<string, Promise<OrderedMintAnswer>>();
+  const observedFlights = new Map<string, Promise<OrderedMintAnswer>>();
+  // This source's request order, for a mint dependency that draws none.
+  let sentOrder = 0;
+  // Per pair, the latest order of a request whose token a kept write stored:
+  // a failure answered for an earlier-started request is outlived by it.
+  const keptOrder = new Map<string, number>();
   // Each pair's minting sign-in (its key, never the token), so a refresh mints
   // once per host; and the sign-in the pair's latest mint was sent with, so a
   // late flight sent with an earlier one never moves it back. Process memory
   // only: a restart mints once more at most.
   const mintedWith = new Map<string, string>();
   const sentLatest = new Map<string, string>();
+  // Per pair, the token this source last wrote from a mint and the sign-in
+  // that mint was sent with: who a token handed back stands for. A token it
+  // did not mint (read at start, adopted) stands for no known sign-in.
+  const mintedToken = new Map<
+    string,
+    { readonly token: string; readonly signIn: string }
+  >();
+  const mintedBy = (
+    userId: string,
+    hostId: string,
+    token: HostToken,
+  ): string | null => {
+    const entry = mintedToken.get(keyOf(userId, hostId));
+    return entry !== undefined && entry.token === token.token
+      ? entry.signIn
+      : null;
+  };
   const records = createHostMintRecords();
   const eras = new Map<string, number>();
   const eraOf = (userId: string): number => eras.get(userId) ?? 0;
@@ -506,18 +592,34 @@ export function createHostTokenSource(deps: {
     userId: string,
     hostId: string,
     era: number,
-    { signal, asker, replaces }: MintAsk,
+    { signal, asker, owner, replaces }: MintAsk,
   ): MintSent => {
     if (eraOf(userId) !== era)
       return {
         sentWith: null,
-        outcome: Promise.resolve({ kind: "superseded" }),
+        outcome: Promise.resolve({
+          identified: {
+            outcome: { kind: "superseded" },
+            signIn: null,
+            order: null,
+            purchase: null,
+          },
+          order: null,
+        }),
       };
     const signInToken = signIn?.(userId) ?? null;
     if (signInToken === null)
       return {
         sentWith: null,
-        outcome: Promise.resolve({ kind: "no-sign-in" }),
+        outcome: Promise.resolve({
+          identified: {
+            outcome: { kind: "no-sign-in" },
+            signIn: null,
+            order: null,
+            purchase: null,
+          },
+          order: null,
+        }),
       };
     const key = keyOf(userId, hostId);
     const mark = signInDigest(signInToken);
@@ -543,23 +645,77 @@ export function createHostTokenSource(deps: {
     // and every asker, starter and joiner alike, writes the token itself under
     // its own rule (its era, its own check, its own `replaces`) and is answered
     // from its own write. A second write of the same token changes nothing.
+    // A refusal stands for the sign-in it was sent with; a token handed back
+    // for the sign-in it was minted with. A purchase is read from this
+    // asker's own write: kept and written, while its process check holds.
     const answerFor = async (
-      outcome: HostTokenMintOutcome,
-    ): Promise<HostTokenMintOutcome> => {
-      if (outcome.kind !== "ok") return outcome;
+      flight: OrderedMintAnswer,
+    ): Promise<MintAnswer> => {
+      const { outcome, order } = flight;
+      if (outcome.kind === "sign-in-rejected")
+        return {
+          identified: { outcome, signIn: mark, order, purchase: null },
+          order,
+        };
+      if (outcome.kind !== "ok")
+        return {
+          identified: { outcome, signIn: null, order: null, purchase: null },
+          order,
+        };
       const written = await store(userId, hostId, outcome.token, {
         era,
         mayWrite: mayWriteFor(asker),
         replaces,
       });
+      if (written.kind === "kept") {
+        mintedToken.set(key, { token: outcome.token.token, signIn: mark });
+        if (order !== null && (keptOrder.get(key) ?? 0) < order)
+          keptOrder.set(key, order);
+      }
       refreshMoved(written);
-      return answerAfter(userId, hostId, era, written, outcome.token);
+      const answer = answerAfter(userId, hostId, era, written, outcome.token);
+      if (answer.kind !== "ok")
+        return {
+          identified: {
+            outcome: answer,
+            signIn: null,
+            order: null,
+            purchase: null,
+          },
+          order,
+        };
+      const purchase: MintPurchase | null =
+        owner !== null &&
+        order !== null &&
+        written.kind === "kept" &&
+        written.written &&
+        mayWriteFor(asker)()
+          ? { owner, signIn: mark, order }
+          : null;
+      return {
+        identified: {
+          outcome: answer,
+          signIn:
+            written.kind === "not-wanted"
+              ? mark
+              : mintedBy(userId, hostId, answer.token),
+          order: null,
+          purchase,
+        },
+        order,
+      };
     };
     if (running !== undefined)
       return { sentWith: mark, outcome: running.then(answerFor) };
-    const attempt = (async (): Promise<HostTokenMintOutcome> => {
-      const outcome = await deps.mint(hostId, signInToken, signal);
-      return eraOf(userId) !== era ? { kind: "superseded" } : outcome;
+    const attempt = (async (): Promise<OrderedMintAnswer> => {
+      // Drawn as this source sends, used only if the dependency draws none.
+      const drawn = ++sentOrder;
+      const answer = await deps.mint(hostId, signInToken, signal);
+      const flight: OrderedMintAnswer =
+        "kind" in answer ? { outcome: answer, order: drawn } : answer;
+      return eraOf(userId) !== era
+        ? { ...flight, outcome: { kind: "superseded" } }
+        : flight;
     })();
     const starterAnswer = attempt.then(answerFor);
     // The flight stays joinable until its starter's own write has settled, so
@@ -587,6 +743,107 @@ export function createHostTokenSource(deps: {
     return { sentWith: mark, outcome: starterAnswer };
   };
 
+  const obtainIdentified = async (
+    userId: string,
+    hostId: string,
+    fresh: boolean,
+    ask: HostTokenAsk,
+  ): Promise<IdentifiedMintOutcome> => {
+    const { signal, owner } = ask;
+    const era = eraOf(userId);
+    // The process the ask is for, as observed when it was asked.
+    const asker = askerOf(ask);
+    // Its place in the order, before the load wait: two asks in one load
+    // window never tie.
+    const started = records.start();
+    await loaded;
+    if (eraOf(userId) !== era)
+      return {
+        outcome: { kind: "superseded" },
+        signIn: null,
+        order: null,
+        purchase: null,
+      };
+    const token = held(userId, hostId);
+    // An answer from an era the person has left, or for a sign-in the
+    // person no longer holds, says nothing of the one they hold now:
+    // compared as it is written (a refusal after the sign-in is brought up
+    // to date, see `bindSignInSync`), and again as it is read. A failure
+    // answered for a request is recorded only while no kept write stored a
+    // token a later-ordered request bought for the pair.
+    const record = (
+      kind: HostTokenMintOutcome["kind"],
+      sentWith: string | null,
+      order: number | null,
+    ): void => {
+      if (
+        owner === null ||
+        sentWith === null ||
+        eraOf(userId) !== era ||
+        signInKeyOf(userId) !== sentWith
+      )
+        return;
+      if (
+        kind !== "ok" &&
+        order !== null &&
+        (keptOrder.get(keyOf(userId, hostId)) ?? 0) > order
+      )
+        return;
+      records.record(owner, userId, era, sentWith, started, kind);
+    };
+    if (!fresh && isUsableHostToken(token, deps.now())) {
+      record("ok", signInKeyOf(userId), null);
+      return {
+        outcome: { kind: "ok", token },
+        signIn: mintedBy(userId, hostId, token),
+        order: null,
+        purchase: null,
+      };
+    }
+    // No mint starts for a process no longer the one observed, as none
+    // starts in an era the person has left: the same comparison as the
+    // write's. It answers as a retired attempt does, with what is held.
+    if (asker.kind === "known" && asker.observedNow() !== asker.observed)
+      return token === null
+        ? {
+            outcome: { kind: "process-replaced" },
+            signIn: null,
+            order: null,
+            purchase: null,
+          }
+        : {
+            outcome: { kind: "ok", token },
+            signIn: mintedBy(userId, hostId, token),
+            order: null,
+            purchase: null,
+          };
+    // The token this ask was sent to replace, refused or unusable: a mint
+    // for it replaces it whatever its issue second.
+    const { sentWith, outcome: minting } = mintOnce(userId, hostId, era, {
+      signal,
+      asker,
+      owner,
+      replaces: token?.token ?? null,
+    });
+    let answered: MintAnswer;
+    try {
+      answered = await minting;
+    } catch (cause) {
+      // A token that could not be saved leaves none to present, like an
+      // unreachable authn: an earlier refusal no longer stands.
+      if (owner !== null) await signInUpToDate();
+      record("unavailable", sentWith, null);
+      throw cause;
+    }
+    const { identified, order } = answered;
+    // Up to date first, then compared, then recorded. A token answers
+    // without waiting: recording it only ends a refusal.
+    if (owner !== null && identified.outcome.kind !== "ok")
+      await signInUpToDate();
+    record(identified.outcome.kind, sentWith, order);
+    return identified;
+  };
+
   return {
     current: held,
     loaded: () => isLoaded,
@@ -600,68 +857,12 @@ export function createHostTokenSource(deps: {
       return tokens;
     },
 
-    obtain: async (userId, hostId, fresh, ask) => {
-      const { signal, owner } = ask;
-      const era = eraOf(userId);
-      // The process the ask is for, as observed when it was asked.
-      const asker = askerOf(ask);
-      // Its place in the order, before the load wait: two asks in one load
-      // window never tie.
-      const started = records.start();
-      await loaded;
-      if (eraOf(userId) !== era) return { kind: "superseded" };
-      const token = held(userId, hostId);
-      // An answer from an era the person has left, or for a sign-in the
-      // person no longer holds, says nothing of the one they hold now:
-      // compared as it is written (a refusal after the sign-in is brought up
-      // to date, see `bindSignInSync`), and again as it is read.
-      const record = (
-        kind: HostTokenMintOutcome["kind"],
-        sentWith: string | null,
-      ): void => {
-        if (
-          owner === null ||
-          sentWith === null ||
-          eraOf(userId) !== era ||
-          signInKeyOf(userId) !== sentWith
-        )
-          return;
-        records.record(owner, userId, era, sentWith, started, kind);
-      };
-      if (!fresh && isUsableHostToken(token, deps.now())) {
-        record("ok", signInKeyOf(userId));
-        return { kind: "ok", token };
-      }
-      // No mint starts for a process no longer the one observed, as none
-      // starts in an era the person has left: the same comparison as the
-      // write's. It answers as a retired attempt does, with what is held.
-      if (asker.kind === "known" && asker.observedNow() !== asker.observed)
-        return token === null
-          ? { kind: "process-replaced" }
-          : { kind: "ok", token };
-      // The token this ask was sent to replace, refused or unusable: a mint
-      // for it replaces it whatever its issue second.
-      const { sentWith, outcome: minting } = mintOnce(userId, hostId, era, {
-        signal,
-        asker,
-        replaces: token?.token ?? null,
-      });
-      let outcome: HostTokenMintOutcome;
-      try {
-        outcome = await minting;
-      } catch (cause) {
-        // A token that could not be saved leaves none to present, like an
-        // unreachable authn: an earlier refusal no longer stands.
-        if (owner !== null) await signInUpToDate();
-        record("unavailable", sentWith);
-        throw cause;
-      }
-      // Up to date first, then compared, then recorded. A token answers
-      // without waiting: recording it only ends a refusal.
-      if (owner !== null && outcome.kind !== "ok") await signInUpToDate();
-      record(outcome.kind, sentWith);
-      return outcome;
-    },
+    obtain: (userId, hostId, fresh, ask) =>
+      obtainIdentified(userId, hostId, fresh, ask).then(
+        (identified) => identified.outcome,
+      ),
+
+    obtainIdentified,
 
     lastFailureOf: (userId, owner) =>
       records.lastFailureOf(owner, userId, eraOf(userId), signInKeyOf(userId)),
@@ -685,6 +886,7 @@ export function createHostTokenSource(deps: {
             mintOnce(userId, hostId, era, {
               signal: null,
               asker: NO_ASKER,
+              owner: null,
               replaces: null,
             }).outcome,
         ),
@@ -696,7 +898,8 @@ export function createHostTokenSource(deps: {
         // meets `process-replaced`: that answer comes only from an owned
         // obtain, before any mint starts.
         delayed: due.filter(
-          (_, index) => outcomes[index]?.kind === "unavailable",
+          (_, index) =>
+            outcomes[index]?.identified.outcome.kind === "unavailable",
         ),
       };
     },
@@ -709,6 +912,8 @@ export function createHostTokenSource(deps: {
         mayWrite: stillWanted,
         replaces: null,
       });
+      // Minted elsewhere: it stands for no sign-in this source knows.
+      if (written.kind === "kept") mintedToken.delete(keyOf(userId, hostId));
       return written.kind === "kept" && eraOf(userId) === era;
     },
 
@@ -718,6 +923,10 @@ export function createHostTokenSource(deps: {
         if (key.startsWith(`${userId}\u0000`)) mintedWith.delete(key);
       for (const key of Array.from(sentLatest.keys()))
         if (key.startsWith(`${userId}\u0000`)) sentLatest.delete(key);
+      for (const key of Array.from(mintedToken.keys()))
+        if (key.startsWith(`${userId}\u0000`)) mintedToken.delete(key);
+      for (const key of Array.from(keptOrder.keys()))
+        if (key.startsWith(`${userId}\u0000`)) keptOrder.delete(key);
       for (const key of Array.from(storedIn.keys()))
         if (key.startsWith(`${userId}\u0000`)) storedIn.delete(key);
       await loaded;
