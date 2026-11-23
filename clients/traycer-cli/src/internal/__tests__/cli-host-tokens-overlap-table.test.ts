@@ -19,6 +19,7 @@ import {
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
 import { createCliHostTokens, type CliHostTokens } from "../cli-host-tokens";
+import type { SignInRotationResult } from "../../store/credentials-store";
 import { completeCredentialsReserve } from "./credentials-reserve-test-support";
 
 // Two overlapping mints, in either completion order, over the real token path
@@ -30,7 +31,8 @@ import { completeCredentialsReserve } from "./credentials-reserve-test-support";
 // refreshes and reports nothing, and what goes upward is the answer of an ask on
 // the stored sign-in.
 
-const USER_ID = "user-1";
+// A distinct user per case: process-wide judge state is keyed by user.
+let userId = "user-1";
 const SIGN_IN_A = "sign-in-a";
 const SIBLING_SIGN_IN = "sign-in-sibling";
 const OURS = "sign-in-ours";
@@ -43,6 +45,8 @@ interface MintRequest {
   /** The host process observed when authn was sent the request. */
   readonly process: HostInstance;
   given: HostTokenMintOutcome | null;
+  /** Whether the asker of this request still wants it when authn answers; the test ends it. */
+  askerLive: boolean;
   readonly answer: (outcome: HostTokenMintOutcome) => void;
 }
 
@@ -59,7 +63,23 @@ type Event =
       /** What `signInRejected()` said as the outcome left. */
       readonly judged: boolean;
     }
-  | { readonly kind: "rotation-started"; readonly byTest: boolean };
+  | { readonly kind: "rotation-started"; readonly byTest: boolean }
+  /** A rotation's answer, as `refreshSignIn` resumes with it. */
+  | {
+      readonly kind: "rotation-done";
+      readonly installed: string | null;
+      /** The sign-in authn or the store refused to rotate. */
+      readonly refused: string | null;
+    }
+  /** Authn answered a request; the model reads what stood when it folds this. */
+  | {
+      readonly kind: "answered";
+      readonly request: MintRequest;
+      readonly outcomeKind: HostTokenMintOutcome["kind"];
+      /** The stored sign-in when authn answered. */
+      readonly storedThen: string;
+      readonly askerLive: boolean;
+    };
 
 const harness = vi.hoisted(() => ({
   requests: [] as MintRequest[],
@@ -67,10 +87,31 @@ const harness = vi.hoisted(() => ({
   table: new Map() as HostTokenTable,
   /** How many of the first requests are held; every later one is answered ok. */
   hold: 0,
+  /** When set, instead of `hold`: exactly the requests sent with these sign-ins are held. */
+  holdOnly: null as ReadonlySet<string> | null,
   /** Set while the test itself refreshes the sign-in. */
   testRotating: false,
   /** Called whenever authn is sent a request. */
   onRequest: null as (() => void) | null,
+  /** While set, a rotation the code under test starts waits here before authn answers it. */
+  rotationGate: null as Promise<void> | null,
+  /** Rotations waiting at the gate; they are the test's to release, not work in flight. */
+  gated: 0,
+  /** Called when a rotation reaches the gate. */
+  onGate: null as (() => void) | null,
+  /** While set, an adopting read of the credentials file waits here before it reads. */
+  readGate: null as Promise<void> | null,
+  /** The next rotation the code under test starts waits here after it commits, before it resumes. */
+  resumeGate: null as Promise<void> | null,
+  /** The next read of the token file waits here. */
+  loadGate: null as Promise<void> | null,
+  /** The next write of the token file waits here before it lands. */
+  writeGate: null as Promise<void> | null,
+  /** Called as every outcome leaves the tracker, with what `signInRejected()` said then. */
+  onLeave: null as ((judged: boolean) => void) | null,
+  /** Asks that reached the token tracker; past a bound the tracker answers nothing more. */
+  obtainCalls: 0,
+  boundExceeded: false,
   storedSignIn: (): string => "",
   signInRejected: (): boolean => false,
 }));
@@ -109,6 +150,12 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
         kind: "rotation-started",
         byTest: harness.testRotating,
       });
+      if (harness.rotationGate !== null && !harness.testRotating) {
+        harness.gated += 1;
+        harness.onGate?.();
+        await harness.rotationGate;
+        harness.gated -= 1;
+      }
       const token = credentialsFile.refreshed.shift();
       if (token === undefined)
         throw new Error("authn was asked for a refresh no test expected");
@@ -119,8 +166,16 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
 
 vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
   createHostTokenFilePersistence: () => ({
-    load: async () => harness.table,
+    load: async () => {
+      const gate = harness.loadGate;
+      harness.loadGate = null;
+      if (gate !== null) await gate;
+      return harness.table;
+    },
     update: async (change: (table: HostTokenTable) => HostTokenTable) => {
+      const gate = harness.writeGate;
+      harness.writeGate = null;
+      if (gate !== null) await gate;
       harness.table = change(harness.table);
       return harness.table;
     },
@@ -144,6 +199,15 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
         {
           ...tokens,
           obtain: async (userId, hostId, fresh, ask) => {
+            harness.obtainCalls += 1;
+            // A loop that never ends is a failed bound, not a hung test.
+            if (harness.obtainCalls > 40) {
+              harness.boundExceeded = true;
+              return {
+                kind: "unavailable",
+                detail: "the ask bound was exceeded",
+              };
+            }
             const outcome = await tokens.obtain(userId, hostId, fresh, ask);
             const refusalOf =
               outcome.kind === "sign-in-rejected"
@@ -171,6 +235,7 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
               ),
               judged: harness.signInRejected(),
             });
+            harness.onLeave?.(harness.signInRejected());
             return outcome;
           },
         },
@@ -200,14 +265,26 @@ vi.mock(
             signIn,
             process: processReleasedHosts.currentInstance(hostId),
             given: null,
+            askerLive: true,
             answer: (outcome) => {
               request.given = outcome;
+              harness.events.push({
+                kind: "answered",
+                request,
+                outcomeKind: outcome.kind,
+                storedThen: harness.storedSignIn(),
+                askerLive: request.askerLive,
+              });
               resolve(outcome);
             },
           };
           harness.requests.push(request);
           harness.onRequest?.();
-          if (seq >= harness.hold)
+          const held =
+            harness.holdOnly !== null
+              ? harness.holdOnly.has(signIn)
+              : seq < harness.hold;
+          if (!held)
             request.answer({
               kind: "ok",
               token: {
@@ -292,12 +369,23 @@ beforeEach(async () => {
   harness.requests.splice(0);
   harness.events.splice(0);
   harness.onRequest = null;
+  harness.rotationGate = null;
+  harness.readGate = null;
+  harness.resumeGate = null;
+  harness.writeGate = null;
+  harness.loadGate = null;
+  harness.onLeave = null;
+  harness.obtainCalls = 0;
+  harness.boundExceeded = false;
+  harness.gated = 0;
   ioInFlight = 0;
   ioIdle = null;
   harness.table = new Map();
   harness.hold = 0;
+  harness.holdOnly = null;
   harness.testRotating = false;
   hostCount += 1;
+  userId = `user-${hostCount}`;
   hostId = `66666666-6666-4666-8666-${String(hostCount * 2).padStart(12, "0")}`;
   otherHostId = `66666666-6666-4666-8666-${String(hostCount * 2 + 1).padStart(12, "0")}`;
   processReleasedHosts.forgetAll();
@@ -335,7 +423,7 @@ const credentialsOf = (token: string): StoredCredentials => ({
   token,
   refreshToken: `rt-${token}`,
   savedAt: "2026-01-01T00:00:00.000Z",
-  user: { id: USER_ID, email: "user@example.test", name: "User" },
+  user: { id: userId, email: "user@example.test", name: "User" },
 });
 
 // The credentials file work the code under test starts on its own (a rotation,
@@ -347,8 +435,81 @@ function counted<T>(operation: Promise<T>): Promise<T> {
   ioInFlight += 1;
   return operation.finally(() => {
     ioInFlight -= 1;
-    if (ioInFlight === 0) ioIdle?.();
+    if (ioInFlight === harness.gated) ioIdle?.();
   });
+}
+
+harness.onGate = (): void => {
+  if (ioInFlight === harness.gated) ioIdle?.();
+};
+
+interface Gate {
+  readonly gate: Promise<void>;
+  readonly release: () => void;
+}
+
+function makeGate(): Gate {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { gate, release };
+}
+
+/** Holds every rotation the code under test starts until the returned release. */
+function holdRotations(): () => void {
+  const held = makeGate();
+  harness.rotationGate = held.gate;
+  return () => {
+    harness.rotationGate = null;
+    held.release();
+  };
+}
+
+/** Holds every adopting read of the credentials file until the returned release. */
+function holdReads(): () => void {
+  const held = makeGate();
+  harness.readGate = held.gate;
+  return () => {
+    harness.readGate = null;
+    held.release();
+  };
+}
+
+/** Holds the next rotation after it commits, until the returned release. */
+function holdNextRotationResume(): () => void {
+  const held = makeGate();
+  harness.resumeGate = held.gate;
+  return held.release;
+}
+
+/** Waits at a gate the test releases: held work is not work in flight. */
+async function atGate(gate: Promise<void> | null): Promise<void> {
+  if (gate === null) return;
+  harness.gated += 1;
+  harness.onGate?.();
+  await gate;
+  harness.gated -= 1;
+}
+
+async function rotateThenResume(
+  rotate: () => Promise<SignInRotationResult>,
+): Promise<SignInRotationResult> {
+  const resume = harness.resumeGate;
+  harness.resumeGate = null;
+  const result = await rotate();
+  await atGate(resume);
+  harness.events.push({
+    kind: "rotation-done",
+    installed: result.outcome === "rotated" ? result.installed : null,
+    refused: result.outcome === "rejected" ? result.refused : null,
+  });
+  return result;
+}
+
+async function adoptAfterGate(adopt: () => Promise<void>): Promise<void> {
+  await atGate(harness.readGate);
+  await adopt();
 }
 
 /** Settles once authn has been sent `count` requests. */
@@ -373,7 +534,7 @@ function untilRequests(count: number): Promise<void> {
 async function quiet(): Promise<void> {
   for (;;) {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    if (ioInFlight === 0) return;
+    if (ioInFlight === harness.gated) return;
     await new Promise<void>((resolve) => {
       ioIdle = resolve;
     });
@@ -388,6 +549,14 @@ const REVOKED: FatalErrorDetails = {
   doorReason: "session_revoked",
 };
 
+const TOKEN_EXPIRED: FatalErrorDetails = {
+  code: "UNAUTHORIZED",
+  reason: "refused at the host door",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+  doorReason: "token_expired",
+};
+
 const answerOf = (answer: Answer, seq: number): HostTokenMintOutcome =>
   answer === "a token"
     ? {
@@ -400,6 +569,140 @@ const answerOf = (answer: Answer, seq: number): HostTokenMintOutcome =>
     : { kind: "sign-in-rejected" };
 
 /**
+ * The round P model, from its page and not from the code under test: the sets
+ * of sign-ins refused, rotated in and bought with only grow, and
+ * `signInRejected()` is derived from them. Facts are folded in the order they
+ * happened, each judged by what stands when the case's step has finished.
+ */
+class JudgeModel {
+  readonly refused = new Set<string>();
+  readonly rotatedIn = new Set<string>();
+  readonly bought = new Set<string>();
+  readonly refreshRefused = new Set<string>();
+  private readonly mintedAt = new Map<HostInstance, number>();
+  /** Each host process's latest counting refusal, until a counting token on the stored sign-in clears it. */
+  private readonly held = new Map<HostInstance, string>();
+  /** Rotations the model lets a counting, non-final refusal earn. */
+  credits = 0;
+  private folded = 0;
+  private readonly lease: MutableBearerLease;
+
+  constructor(lease: MutableBearerLease) {
+    this.lease = lease;
+  }
+
+  private isFinal(signIn: string): boolean {
+    return (
+      this.refused.has(signIn) &&
+      this.rotatedIn.has(signIn) &&
+      !this.bought.has(signIn)
+    );
+  }
+
+  fold(): void {
+    for (; this.folded < harness.events.length; this.folded += 1) {
+      const event = harness.events[this.folded];
+      if (event?.kind === "rotation-done") {
+        if (event.installed !== null) this.rotatedIn.add(event.installed);
+        if (event.refused !== null) this.refreshRefused.add(event.refused);
+      } else if (event?.kind === "answered") {
+        const { request } = event;
+        const current = processReleasedHosts.isCurrent(request.process);
+        if (event.outcomeKind === "ok") {
+          // authn's raw token answer prevents a final whoever is left to take
+          // it; only a live asker of a current process writes the rest.
+          this.bought.add(request.signIn);
+          if (!current || !event.askerLive) continue;
+          if (request.signIn === event.storedThen)
+            this.held.delete(request.process);
+          this.mintedAt.set(
+            request.process,
+            Math.max(this.mintedAt.get(request.process) ?? -1, request.seq),
+          );
+        } else if (event.outcomeKind === "sign-in-rejected") {
+          // A refusal counts when it was sent with the stored sign-in, no
+          // later request for its process bought a token, and the process is
+          // current; one that does not count writes nothing.
+          const counts =
+            request.signIn === event.storedThen &&
+            (this.mintedAt.get(request.process) ?? -1) <= request.seq &&
+            current &&
+            event.askerLive;
+          if (!counts) continue;
+          this.refused.add(request.signIn);
+          this.held.set(request.process, request.signIn);
+          if (!this.isFinal(request.signIn)) this.credits += 1;
+        }
+      }
+    }
+  }
+
+  /**
+   * What a session revocation's recovery for `process` earns with no refusal
+   * of its own in hand: a rotation when it holds none or one of the stored
+   * sign-in, none when it holds one of another sign-in (adopted).
+   */
+  revocationEarns(process: HostInstance): number {
+    this.fold();
+    const held = this.held.get(process);
+    return held === undefined || held === this.lease.getBearerToken() ? 1 : 0;
+  }
+
+  rejected(): boolean {
+    this.fold();
+    const signIn = this.lease.getBearerToken();
+    return this.refreshRefused.has(signIn) || this.isFinal(signIn);
+  }
+}
+
+const nonTestRotations = (): number =>
+  harness.events.filter(
+    (event) => event.kind === "rotation-started" && !event.byTest,
+  ).length;
+
+/** The model's claims after a step, each named by the step. */
+function checkModel(open: OpenTokens, step: string): void {
+  expect(open.mismatches, `${step}: signInRejected() as outcomes left`).toEqual(
+    [],
+  );
+  const expected = open.model.rejected();
+  expect(open.tokens.signInRejected(), `${step}: signInRejected()`).toBe(
+    expected,
+  );
+  expect(
+    nonTestRotations(),
+    `${step}: rotations started beyond those a counting, non-final refusal earns`,
+  ).toBeLessThanOrEqual(open.model.credits + open.limits.allowance);
+  expect(harness.boundExceeded, `${step}: the ask bound`).toBe(false);
+  expect(harness.obtainCalls, `${step}: asks`).toBeLessThanOrEqual(
+    open.limits.calls,
+  );
+}
+
+/** One step of a case: the action, then the model's claims once everything it set going has settled. */
+async function step(
+  open: OpenTokens,
+  name: string,
+  action: () => Promise<unknown>,
+): Promise<void> {
+  await action();
+  await quiet();
+  checkModel(open, name);
+}
+
+const answerRequest = (
+  request: MintRequest | undefined,
+  answer: Answer,
+): void => {
+  if (request === undefined) throw new Error("the mint sent no request");
+  request.answer(answerOf(answer, request.seq));
+};
+
+function startAsk(open: OpenTokens, host: string): void {
+  open.pending.push(open.tokens.mintFresh(host, null));
+}
+
+/**
  * One command's tokens over a real credentials file holding sign-in A, with a
  * second handle on the same file (another process's save). Authn's refresh
  * hands out our rotation's sign-in first, then a run of recovery ones.
@@ -410,11 +713,25 @@ interface OpenTokens {
   readonly lease: MutableBearerLease;
   readonly tokens: CliHostTokens;
   readonly reports: string[];
+  readonly model: JudgeModel;
+  /** Where `signInRejected()` differed from the model as an outcome left the tracker. */
+  readonly mismatches: string[];
+  /** Every ask the case started; awaited when it ends. */
+  readonly pending: Promise<unknown>[];
+  /** What the model allows beyond the rotations counting refusals earn. */
+  readonly limits: { allowance: number; calls: number };
 }
 
 const opened: OpenTokens[] = [];
 
 async function openTokens(): Promise<OpenTokens> {
+  const open = await openTokensLoading();
+  await open.tokens.whenLoaded();
+  return open;
+}
+
+/** As `openTokens`, without waiting for the stored tokens to be read. */
+async function openTokensLoading(): Promise<OpenTokens> {
   // A full reserve is never refilled under the lock: no store's background
   // fill takes it, or writes into the directory, while the case runs.
   await completeCredentialsReserve(credentialsFile.path);
@@ -430,7 +747,7 @@ async function openTokens(): Promise<OpenTokens> {
     "sign-in-recovery-5",
     "sign-in-recovery-6",
   );
-  const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+  const lease = new MutableBearerLease(SIGN_IN_A, userId);
   const revalidator = createStoreBackedRevalidator({
     store,
     lease,
@@ -438,17 +755,36 @@ async function openTokens(): Promise<OpenTokens> {
   });
   const tokens = createCliHostTokens({
     lease,
-    refresh: () => counted(revalidator.rotateSignIn()),
-    adoptStored: () => counted(revalidator.adoptStoredSignIn()),
+    refresh: () => counted(rotateThenResume(() => revalidator.rotateSignIn())),
+    adoptStored: () =>
+      counted(adoptAfterGate(() => revalidator.adoptStoredSignIn())),
     signal: null,
   });
-  await tokens.whenLoaded();
   harness.signInRejected = () => tokens.signInRejected();
   const reports: string[] = [];
   tokens.onRefusalEndingCommand((reportedHostId) => {
     reports.push(reportedHostId);
   });
-  const open = { store, otherProcess, lease, tokens, reports };
+  const model = new JudgeModel(lease);
+  const mismatches: string[] = [];
+  harness.onLeave = (judged) => {
+    const expected = model.rejected();
+    if (judged !== expected)
+      mismatches.push(
+        `as an outcome left: signInRejected() was ${judged}, the model says ${expected}`,
+      );
+  };
+  const open: OpenTokens = {
+    store,
+    otherProcess,
+    lease,
+    tokens,
+    reports,
+    model,
+    mismatches,
+    pending: [],
+    limits: { allowance: 0, calls: 8 },
+  };
   opened.push(open);
   return open;
 }
@@ -566,6 +902,7 @@ describe.each(scenarios)(
       const clearedByOlderToken: Event[] = [];
       for (const event of harness.events) {
         if (event.kind === "rotation-started") standing = false;
+        else if (event.kind !== "left") continue;
         else if (event.refusalOf !== null) {
           if (
             event.refusalOf.signIn === OURS &&
@@ -632,5 +969,658 @@ describe("a revoked session's recovery reads the host's own latest mint outcome"
     await tokens.streamRecovery(hostId).revalidateRefused(REVOKED);
 
     expect(rotationsStarted() - rotationsBefore).toBe(1);
+  });
+});
+
+type Layout = "one process" | "a replaced process" | "two host ids";
+type Landing = "token before the refusal" | "refusal before the token";
+type TokenFrom = "the first mint" | "the second mint";
+
+interface InstalledCase {
+  readonly layout: Layout;
+  readonly landing: Landing;
+  readonly tokenFrom: TokenFrom;
+}
+
+// After our rotation A to B, two mints are sent with B: one answered with a
+// token, one refused. With one process the second is asked once the first has
+// left, as a mint for one process shares its request while it is out. With a
+// replaced process or two host ids both are out at once and answered in either
+// order; a refusal answered first cannot be followed by a token that is
+// answered before its recovery rotates, one process having one request.
+const installedCases: InstalledCase[] = [
+  {
+    layout: "one process",
+    landing: "token before the refusal",
+    tokenFrom: "the first mint",
+  },
+];
+for (const layout of ["a replaced process", "two host ids"] as const)
+  for (const landing of [
+    "token before the refusal",
+    "refusal before the token",
+  ] as const)
+    for (const tokenFrom of ["the first mint", "the second mint"] as const)
+      installedCases.push({ layout, landing, tokenFrom });
+
+describe.each(installedCases)(
+  "a token on the installed sign-in: $layout",
+  (scenario) => {
+    it(`${scenario.layout}: ${scenario.landing}, the token from ${scenario.tokenFrom}`, async () => {
+      const open = await openTokens();
+      const { tokens, reports } = open;
+      processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
+      if (scenario.layout === "two host ids")
+        processReleasedHosts.observeInstance(otherHostId, FIRST_PROCESS);
+      harness.hold = 2;
+      // Our rotation installs B; both mints below are sent with it.
+      harness.testRotating = true;
+      await expect(tokens.refreshSignIn()).resolves.toBe("rotated");
+      harness.testRotating = false;
+
+      const token = answerOf("a token", 0);
+      let first: Promise<unknown>;
+      let second: Promise<unknown>;
+      if (scenario.layout === "one process") {
+        first = tokens.mintFresh(hostId, null);
+        await untilRequests(1);
+        harness.requests[0]?.answer(token);
+        await first;
+        second = tokens.mintFresh(hostId, null);
+        await untilRequests(2);
+        harness.requests[1]?.answer({ kind: "sign-in-rejected" });
+      } else {
+        first = tokens.mintFresh(hostId, null);
+        await untilRequests(1);
+        if (scenario.layout === "a replaced process")
+          processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+        second = tokens.mintFresh(
+          scenario.layout === "two host ids" ? otherHostId : hostId,
+          null,
+        );
+        await untilRequests(2);
+        await quiet();
+        const tokenRequest =
+          scenario.tokenFrom === "the first mint"
+            ? harness.requests[0]
+            : harness.requests[1];
+        const refusalRequest =
+          scenario.tokenFrom === "the first mint"
+            ? harness.requests[1]
+            : harness.requests[0];
+        if (scenario.landing === "token before the refusal") {
+          tokenRequest?.answer(token);
+          await quiet();
+          refusalRequest?.answer({ kind: "sign-in-rejected" });
+        } else {
+          // The refusal's recovery waits at its rotation while the token lands.
+          const release = holdRotations();
+          refusalRequest?.answer({ kind: "sign-in-rejected" });
+          await quiet();
+          tokenRequest?.answer(token);
+          await quiet();
+          release();
+        }
+      }
+      await Promise.all([first, second]);
+
+      expect(
+        harness.requests.slice(0, 2).map((request) => request.signIn),
+      ).toEqual([OURS, OURS]);
+      const refusalAt = harness.events.findIndex(
+        (event) => event.kind === "left" && event.refusalOf !== null,
+      );
+      const refusal = harness.events[refusalAt];
+      if (refusal?.kind !== "left") throw new Error("no refusal left");
+      if (scenario.landing === "token before the refusal") {
+        // The token bought on B is the first answer to a mint sent with B: a
+        // refusal of B after it is not the first mint after the refresh, so
+        // it is not judged final, and its recovery refreshes once.
+        expect(refusal.judged).toBe(false);
+        expect(
+          harness.events
+            .slice(refusalAt)
+            .filter(
+              (event) => event.kind === "rotation-started" && !event.byTest,
+            ),
+        ).toHaveLength(1);
+      } else {
+        // A refusal of B before any token on B is the first mint after the
+        // refresh: judged final as it leaves; a token on B landing after it
+        // un-judges it.
+        expect(refusal.judged).toBe(true);
+        const tokenLanding = harness.events
+          .slice(refusalAt + 1)
+          .find((event) => event.kind === "left" && event.refusalOf === null);
+        expect(tokenLanding?.kind === "left" ? tokenLanding.judged : null).toBe(
+          false,
+        );
+      }
+      expect(tokens.signInRejected()).toBe(false);
+      expect(reports).toEqual([]);
+      checkModel(open, "the end");
+    });
+  },
+);
+
+// ---- the round P model: each case asserts it after every step ----
+
+const LAYOUTS: readonly Layout[] = [
+  "one process",
+  "a replaced process",
+  "two host ids",
+];
+
+/** Opens a case in which exactly the requests sent with `held` sign-ins wait for the test's answer. */
+async function prepare(
+  layout: Layout,
+  held: readonly string[],
+): Promise<OpenTokens> {
+  const open = await openTokens();
+  processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
+  if (layout === "two host ids")
+    processReleasedHosts.observeInstance(otherHostId, FIRST_PROCESS);
+  harness.holdOnly = new Set(held);
+  return open;
+}
+
+const secondHostOf = (layout: Layout): string =>
+  layout === "two host ids" ? otherHostId : hostId;
+
+async function rotateByTest(open: OpenTokens): Promise<void> {
+  harness.testRotating = true;
+  try {
+    await expect(open.tokens.refreshSignIn()).resolves.toBe("rotated");
+  } finally {
+    harness.testRotating = false;
+  }
+}
+
+/** The oldest or newest request sent with `signIn` that authn has not answered. */
+function heldOn(
+  signIn: string,
+  which: "oldest" | "newest",
+): MintRequest | undefined {
+  const held = harness.requests.filter(
+    (request) => request.given === null && request.signIn === signIn,
+  );
+  return which === "oldest" ? held[0] : held.at(-1);
+}
+
+/** Ends the case: whatever authn still holds is answered with a token, and every ask has finished. */
+async function finish(open: OpenTokens): Promise<void> {
+  harness.holdOnly = new Set();
+  for (const request of harness.requests)
+    if (request.given === null) answerRequest(request, "a token");
+  await Promise.all(open.pending);
+}
+
+describe.each(LAYOUTS)(
+  "model O2: a judged refusal, a lock-free adoption of a sibling's sign-in, then its first refusal: %s",
+  (layout) => {
+    it("judges B final, un-judges on adopting C, and earns one recovery for C's first refusal", async () => {
+      const open = await prepare(layout, [OURS, SIBLING_SIGN_IN]);
+      // The first refusal of B rotates today though it is final: that fault
+      // is the final cases' subject, so it is allowed here and what follows
+      // is judged on its own.
+      open.limits.allowance = 1;
+      await step(open, "our rotation installs B", () => rotateByTest(open));
+      await step(open, "a mint is sent with B", async () => {
+        startAsk(open, hostId);
+        await untilRequests(1);
+      });
+      await step(
+        open,
+        "B is refused: the first mint after our rotation",
+        async () => {
+          answerRequest(heldOn(OURS, "oldest"), "a 401");
+        },
+      );
+      await step(
+        open,
+        "a sibling saves C and the lease adopts it",
+        async () => {
+          await open.otherProcess.signIn(
+            credentialsOf(SIBLING_SIGN_IN),
+            false,
+            null,
+          );
+          await open.tokens.adoptStoredSignIn();
+        },
+      );
+      await step(open, "a mint is sent with C", async () => {
+        if (layout === "a replaced process")
+          processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+        startAsk(open, secondHostOf(layout));
+        await vi.waitFor(() =>
+          expect(heldOn(SIBLING_SIGN_IN, "oldest")).toBeDefined(),
+        );
+      });
+      await step(
+        open,
+        "C is refused: its first refusal, which is not final",
+        async () => {
+          answerRequest(heldOn(SIBLING_SIGN_IN, "oldest"), "a 401");
+        },
+      );
+      await finish(open);
+    });
+  },
+);
+
+describe.each(LAYOUTS)(
+  "model final: a direct caller's counting first refusal: %s",
+  (layout) => {
+    it("of the sign-in our rotation installed, with nobody having bought on it: final, no rotation", async () => {
+      const open = await prepare(layout, [OURS]);
+      if (layout === "a replaced process")
+        processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+      await step(open, "our rotation installs B", () => rotateByTest(open));
+      await step(open, "a mint is sent with B", async () => {
+        startAsk(open, secondHostOf(layout));
+        await untilRequests(1);
+      });
+      await step(open, "B is refused", async () => {
+        answerRequest(heldOn(OURS, "oldest"), "a 401");
+      });
+      expect(nonTestRotations()).toBe(0);
+      await finish(open);
+    });
+
+    it("of a sibling's sign-in: not final, one rotation", async () => {
+      const open = await prepare(layout, [SIBLING_SIGN_IN]);
+      if (layout === "a replaced process")
+        processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+      await step(
+        open,
+        "a sibling saves C and the lease adopts it",
+        async () => {
+          await open.otherProcess.signIn(
+            credentialsOf(SIBLING_SIGN_IN),
+            false,
+            null,
+          );
+          await open.tokens.adoptStoredSignIn();
+        },
+      );
+      await step(open, "a mint is sent with C", async () => {
+        startAsk(open, secondHostOf(layout));
+        await untilRequests(1);
+      });
+      await step(open, "C is refused", async () => {
+        answerRequest(heldOn(SIBLING_SIGN_IN, "oldest"), "a 401");
+      });
+      expect(nonTestRotations()).toBe(1);
+      await finish(open);
+    });
+  },
+);
+
+describe.each(["a replaced process", "two host ids"] as const)(
+  "model O3: the owner replaced while its mint is out: %s",
+  (layout) => {
+    const sendBoth = async (open: OpenTokens): Promise<void> => {
+      await step(open, "our rotation installs B", () => rotateByTest(open));
+      await step(open, "the mints are sent with B", async () => {
+        startAsk(open, hostId);
+        await untilRequests(1);
+        if (layout === "two host ids") {
+          startAsk(open, otherHostId);
+          await untilRequests(2);
+        }
+      });
+    };
+    const otherHostRefused = async (open: OpenTokens): Promise<void> => {
+      if (layout === "two host ids")
+        await step(open, "the other host's mint is refused on B", async () => {
+          answerRequest(heldOn(OURS, "newest"), "a 401");
+        });
+    };
+
+    it("its refusal arrives after the replacement: it counts for nobody", async () => {
+      const open = await prepare(layout, [OURS]);
+      await sendBoth(open);
+      await step(open, "the host process is replaced", async () => {
+        processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+      });
+      await step(
+        open,
+        "the replaced process's mint is refused on B",
+        async () => {
+          answerRequest(heldOn(OURS, "oldest"), "a 401");
+        },
+      );
+      await otherHostRefused(open);
+      await finish(open);
+    });
+
+    it("the replacement lands while the adopting read for its refusal is held", async () => {
+      const open = await prepare(layout, [OURS]);
+      await sendBoth(open);
+      await step(
+        open,
+        "the refusal is read while the process is replaced",
+        async () => {
+          const release = holdReads();
+          answerRequest(heldOn(OURS, "oldest"), "a 401");
+          await quiet();
+          processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+          release();
+        },
+      );
+      await otherHostRefused(open);
+      await finish(open);
+    });
+  },
+);
+
+describe.each(["one process", "two host ids"] as const)(
+  "model gap 1, the publication window: %s",
+  (layout) => {
+    it.each([
+      "the refusal resumes first",
+      "the rotation resumes first",
+    ] as const)(
+      "our rotation is committed and adopted lock-free, B is refused before its result lands: %s",
+      async (order) => {
+        const open = await prepare(layout, [OURS]);
+        // A first refusal of B rotates today though it is final: that is the
+        // final cases' subject, not this window's.
+        open.limits.allowance = 1;
+        let release: () => void = () => undefined;
+        await step(
+          open,
+          "our rotation commits and waits to resume",
+          async () => {
+            release = holdNextRotationResume();
+            harness.testRotating = true;
+            open.pending.push(open.tokens.refreshSignIn());
+            await quiet();
+            harness.testRotating = false;
+          },
+        );
+        await step(open, "a lock-free adoption publishes B", () =>
+          open.tokens.adoptStoredSignIn(),
+        );
+        await step(open, "a mint is sent with B", async () => {
+          startAsk(open, secondHostOf(layout));
+          await untilRequests(1);
+        });
+        const refuse = (): Promise<void> =>
+          step(open, "B is refused", async () => {
+            answerRequest(heldOn(OURS, "oldest"), "a 401");
+          });
+        const resume = (): Promise<void> =>
+          step(open, "our rotation's result lands", async () => {
+            release();
+          });
+        if (order === "the refusal resumes first") {
+          await refuse();
+          await resume();
+        } else {
+          await resume();
+          await refuse();
+        }
+        await finish(open);
+      },
+    );
+  },
+);
+
+describe.each([
+  "token before the refusal",
+  "refusal before the token",
+] as const)(
+  "model gap 4: a retired process's unkept raw token on B and the replacement's refusal of B: %s",
+  (landing) => {
+    it("the raw token is bought whoever remains, and writes nothing strict", async () => {
+      const open = await prepare("a replaced process", [OURS]);
+      // A first refusal of B rotates today though it is final: that is the
+      // final cases' subject; here the judgement is read as it stands.
+      open.limits.allowance = 1;
+      await step(open, "our rotation installs B", () => rotateByTest(open));
+      await step(open, "the first process's mint is sent with B", async () => {
+        startAsk(open, hostId);
+        await untilRequests(1);
+      });
+      await step(
+        open,
+        "the host process is replaced and its mint is sent with B",
+        async () => {
+          processReleasedHosts.observeInstance(hostId, SECOND_PROCESS);
+          startAsk(open, hostId);
+          await untilRequests(2);
+        },
+      );
+      const token = (): Promise<void> =>
+        step(open, "the retired process's token on B lands", async () => {
+          answerRequest(harness.requests[0], "a token");
+        });
+      const refusal = (): Promise<void> =>
+        step(open, "the replacement's mint is refused on B", async () => {
+          answerRequest(harness.requests[1], "a 401");
+        });
+      if (landing === "token before the refusal") {
+        await token();
+        await refusal();
+      } else {
+        await refusal();
+        await token();
+      }
+      await finish(open);
+    });
+  },
+);
+
+describe("model: authn's raw token answer is published before the token file is written", () => {
+  it("two mints on B, X's token-file write held: Y's refusal of B, judged during the hold, is not final", async () => {
+    const open = await prepare("two host ids", [OURS]);
+    await step(open, "our rotation installs B", () => rotateByTest(open));
+    await step(open, "both hosts' mints are sent with B", async () => {
+      startAsk(open, hostId);
+      await untilRequests(1);
+      startAsk(open, otherHostId);
+      await untilRequests(2);
+    });
+    const writeHold = makeGate();
+    await step(
+      open,
+      "X's token on B is answered and its write is held",
+      async () => {
+        harness.writeGate = writeHold.gate;
+        answerRequest(harness.requests[0], "a token");
+      },
+    );
+    await step(open, "Y's refusal of B arrives during the hold", async () => {
+      answerRequest(harness.requests[1], "a 401");
+    });
+    harness.writeGate = null;
+    writeHold.release();
+    await finish(open);
+  });
+});
+
+describe("model: an ended asker's raw token answer", () => {
+  it("is bought without any strict write: the other host's refusal of B is not final", async () => {
+    const open = await prepare("two host ids", [OURS]);
+    await step(open, "our rotation installs B", () => rotateByTest(open));
+    const asker = new AbortController();
+    await step(open, "both hosts' mints are sent with B", async () => {
+      open.pending.push(open.tokens.mintFresh(hostId, asker.signal));
+      await untilRequests(1);
+      startAsk(open, otherHostId);
+      await untilRequests(2);
+    });
+    await step(
+      open,
+      "X's asker ends and authn answers its mint with a token",
+      async () => {
+        asker.abort();
+        const request = harness.requests[0];
+        if (request !== undefined) request.askerLive = false;
+        answerRequest(request, "a token");
+      },
+    );
+    await step(open, "Y's refusal of B arrives", async () => {
+      answerRequest(harness.requests[1], "a 401");
+    });
+    await finish(open);
+  });
+});
+
+describe("model O4: an excluded refusal whose asker ends while a newer counting refusal is held", () => {
+  it("writes nothing: the held refusal still decides the session revocation's recovery", async () => {
+    const open = await prepare("one process", [SIGN_IN_A, OURS]);
+    // The first refusal of B rotates today though it is final: that is the
+    // final cases' subject, not this case's.
+    open.limits.allowance = 1;
+    const asker = new AbortController();
+    await step(
+      open,
+      "a mint is sent with A and its asker may end",
+      async () => {
+        open.pending.push(open.tokens.mintFresh(hostId, asker.signal));
+        await untilRequests(1);
+      },
+    );
+    await step(open, "our rotation installs B", () => rotateByTest(open));
+    await step(open, "a mint is sent with B", async () => {
+      startAsk(open, hostId);
+      await untilRequests(2);
+    });
+    await step(
+      open,
+      "B is refused: counting, held for the process",
+      async () => {
+        answerRequest(heldOn(OURS, "oldest"), "a 401");
+      },
+    );
+    await step(open, "the first mint's asker ends", async () => {
+      asker.abort();
+    });
+    await step(
+      open,
+      "the first mint's refusal of A arrives: excluded, asker gone",
+      async () => {
+        answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
+      },
+    );
+    await step(open, "a sibling saves C and the lease adopts it", async () => {
+      await open.otherProcess.signIn(
+        credentialsOf(SIBLING_SIGN_IN),
+        false,
+        null,
+      );
+      await open.tokens.adoptStoredSignIn();
+    });
+    // The process holds a refusal of B and the lease holds C: its recovery
+    // is adopted, and rotates nothing.
+    const earns = open.model.revocationEarns(
+      processReleasedHosts.currentInstance(hostId),
+    );
+    const before = nonTestRotations();
+    await step(open, "the session is revoked", async () => {
+      open.limits.allowance += earns;
+      await open.tokens.streamRecovery(hostId).revalidateRefused(REVOKED);
+    });
+    expect(nonTestRotations() - before).toBe(earns);
+    await finish(open);
+  });
+});
+
+describe("model: the lease's spent branch", () => {
+  it("answers transient and reports nothing when another host bought on B and the retry's refusal of B counts", async () => {
+    const open = await prepare("two host ids", [SIGN_IN_A, OURS]);
+    let recovery: Promise<string> = Promise.resolve("");
+    await step(
+      open,
+      "Y's door refusal starts its recovery: a mint on A",
+      async () => {
+        recovery = open.tokens
+          .streamRecovery(otherHostId)
+          .revalidateRefused(TOKEN_EXPIRED);
+        open.pending.push(recovery);
+        await untilRequests(1);
+      },
+    );
+    await step(
+      open,
+      "A is refused: the recovery rotates to B and retries on it",
+      async () => {
+        answerRequest(heldOn(SIGN_IN_A, "oldest"), "a 401");
+        await untilRequests(2);
+      },
+    );
+    await step(open, "another host buys a token on B", async () => {
+      startAsk(open, hostId);
+      await untilRequests(3);
+      answerRequest(heldOn(OURS, "newest"), "a token");
+    });
+    await step(
+      open,
+      "the retry's refusal of B arrives: it counts, and B is not final",
+      async () => {
+        answerRequest(heldOn(OURS, "oldest"), "a 401");
+      },
+    );
+    await expect(recovery).resolves.toBe("network-error");
+    expect(open.reports).toEqual([]);
+    await finish(open);
+  });
+});
+
+describe("model: the refusals of a refresh with no authn behind them", () => {
+  it("a deleted credentials file: the refresh is refused for the sign-in it was asked to rotate", async () => {
+    const open = await prepare("one process", []);
+    await step(
+      open,
+      "the credentials file is deleted and a refresh is asked",
+      async () => {
+        await rm(credentialsFile.path);
+        await open.tokens.refreshSignIn();
+      },
+    );
+    await finish(open);
+  });
+
+  it("another user's sign-in in the credentials file: the refresh is refused for the sign-in it was asked to rotate", async () => {
+    const open = await prepare("one process", []);
+    await step(
+      open,
+      "another user signs in on the file and a refresh is asked",
+      async () => {
+        await open.otherProcess.signIn(
+          {
+            ...credentialsOf(SIBLING_SIGN_IN),
+            user: {
+              id: "someone-else",
+              email: "else@example.test",
+              name: "Else",
+            },
+          },
+          false,
+          null,
+        );
+        await open.tokens.refreshSignIn();
+      },
+    );
+    await finish(open);
+  });
+});
+
+describe("model J: nothing starts for an ended owner", () => {
+  it("a mint whose token session ends during the read of the stored tokens sends no request, though its asker's signal is live", async () => {
+    const loadHold = makeGate();
+    harness.loadGate = loadHold.gate;
+    const open = await openTokensLoading();
+    processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
+    harness.holdOnly = new Set();
+    const asker = new AbortController();
+    open.pending.push(open.tokens.mintFresh(hostId, asker.signal));
+    await quiet();
+    open.tokens.dispose();
+    loadHold.release();
+    await Promise.all(open.pending);
+    expect(harness.requests).toHaveLength(0);
   });
 });
