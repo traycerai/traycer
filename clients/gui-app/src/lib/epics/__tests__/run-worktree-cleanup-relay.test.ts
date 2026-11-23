@@ -139,7 +139,7 @@ function onSubscribe(relay: FakeRelayHost): Promise<number> {
     const push = relay.subscribeStreamIds.push.bind(relay.subscribeStreamIds);
     vi.spyOn(relay.subscribeStreamIds, "push").mockImplementation((...ids) => {
       const length = push(...ids);
-      const streamId = ids[0];
+      const streamId = ids.at(0);
       if (streamId !== undefined) resolve(streamId);
       return length;
     });
