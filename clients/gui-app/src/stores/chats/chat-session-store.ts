@@ -4034,6 +4034,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       clientActionId: input.clientActionId,
       queueItemId: input.queueItemId,
       content: input.content,
+      worktreeIntent: null,
     };
     return sendAction({
       set: input.set,
