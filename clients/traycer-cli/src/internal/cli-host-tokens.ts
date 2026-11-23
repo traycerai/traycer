@@ -14,7 +14,8 @@ import {
   heldWhileAuthnUnreachable,
   hostTokenRevalidator,
   trackHostTokenMints,
-  type HostTokenSessionRevalidator,
+  type CliHostTokenSessionRevalidator,
+  type HostTokenRecoveryOutcome,
   type TrackedHostTokens,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import {
@@ -37,6 +38,7 @@ import {
   type HostInstance,
   type ReleasedSignOn,
   type SignInRecovery,
+  type SignInRecoveryOutcome,
   type SignInRefusal,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
@@ -298,6 +300,16 @@ export type JudgedSignInRecovery = SignInRecovery & {
   readonly signInRejectedFor: (refusal: SignInRefusal | null) => boolean;
 };
 
+/**
+ * A recovery whose mint was lost to a host process replacement, answered as
+ * every caller but the monitor's lap count answers it: like an unreachable
+ * authn.
+ */
+export const replacedAsNetworkError = (
+  outcome: HostTokenRecoveryOutcome,
+): RevalidateOutcome =>
+  outcome === "process-replaced" ? "network-error" : outcome;
+
 export type CliHostBearer =
   | { readonly kind: "ok"; readonly bearer: OpenFrameBearerSource }
   | { readonly kind: "failed"; readonly failure: CliHostTokenFailure };
@@ -330,7 +342,7 @@ export interface CliHostTokens {
   /** Unary recovery for calls to `hostId`, read from the host's refusal. */
   unaryRecovery(hostId: string): RefusalAwareAuthRevalidator;
   /** Recovery of a stream's refused token; {@link admitted} resets its bounds. */
-  streamRecovery(hostId: string): HostTokenSessionRevalidator;
+  streamRecovery(hostId: string): CliHostTokenSessionRevalidator;
   /**
    * `instance` admitted an open: a second refusal is final only between two
    * of its admissions, and a `not-admitted` ends nothing while that
@@ -818,16 +830,18 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       ? "rejected"
       : "adopted";
   };
+  // A replaced owner is the one reason it answers "process-replaced": every
+  // other declined recovery is "network-error".
   const recoverSignIn = async (
     owner: HostInstance,
     refusal: SignInRefusal | null,
     stillWanted: () => boolean,
-  ): Promise<SignInRotation> => {
+  ): Promise<SignInRecoveryOutcome> => {
     // None in hand and none held: the stored sign-in is rotated as it always
     // was, and the store's locked rotate adopts a newer file without
     // spending. Nothing is awaited before the action.
     if (refusal === null && !held.has(owner)) {
-      if (!hosts.isCurrent(owner)) return "network-error";
+      if (!hosts.isCurrent(owner)) return "process-replaced";
       if (!stillWanted() || sessionEnded()) return "network-error";
       return rotateStored();
     }
@@ -836,7 +850,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     if (known !== null && known.signIn !== storedKey()) return "adopted";
     if (known !== null && known.order !== null && outlived(owner, known.order))
       return "network-error";
-    if (!hosts.isCurrent(owner)) return "network-error";
+    if (!hosts.isCurrent(owner)) return "process-replaced";
     if (!stillWanted() || sessionEnded()) return "network-error";
     if (known !== null && finalFor(facts, known.signIn)) return "rejected";
     return rotateStored();
@@ -878,8 +892,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // refusal final. A restarted host starts with a recovery of its own, never
   // one an earlier instance spent; the process a recovery acts for is the
   // owner it is handed.
-  const recoveries = new WeakMap<HostInstance, HostTokenSessionRevalidator>();
-  const recoveryOf = (instance: HostInstance): HostTokenSessionRevalidator => {
+  const recoveries = new WeakMap<HostInstance, CliHostTokenSessionRevalidator>();
+  const recoveryOf = (instance: HostInstance): CliHostTokenSessionRevalidator => {
     let recovery = recoveries.get(instance);
     if (recovery === undefined) {
       recovery = hostTokenRevalidator({
@@ -896,7 +910,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     }
     return recovery;
   };
-  const streamRecovery = (hostId: string): HostTokenSessionRevalidator =>
+  const streamRecovery = (hostId: string): CliHostTokenSessionRevalidator =>
     recoveryOf(hosts.currentInstance(hostId));
 
   // One lease object per host, read afresh on every frame.
@@ -955,7 +969,9 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       refusal,
       () => signal?.aborted !== true,
     );
-    if (recovered === "network-error")
+    // Its one mapping: a recovery its owner's replacement declined is as
+    // transient here as an unreachable refresh.
+    if (recovered === "network-error" || recovered === "process-replaced")
       return answer(hostId, {
         kind: "unavailable",
         detail: "sign-in refresh unavailable",
@@ -1034,14 +1050,18 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         // already known to have run out.
         revalidateExpectedBearer: async (expected) =>
           expected.identity.userId === userId
-            ? recovery.revalidateForReconnect(sessionWanted)
+            ? replacedAsNetworkError(
+                await recovery.revalidateForReconnect(sessionWanted),
+              )
             : "superseded",
         revalidateRefusedBearer: async (expected, _hostId, refusal) => {
           if (expected.identity.userId !== userId) return "superseded";
           // A refusal of this one call rather than at the door recovers
           // nothing: the call carried a token checked unexpired just before.
           if (refusal === null) return "rejected";
-          return recovery.revalidateRefused(refusal, sessionWanted);
+          return replacedAsNetworkError(
+            await recovery.revalidateRefused(refusal, sessionWanted),
+          );
         },
       };
     },

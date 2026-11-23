@@ -4,6 +4,7 @@ import {
   cliReleasedSignOn,
   createCliHostTokens,
   observeHostInstance,
+  replacedAsNetworkError,
   type CliHostTokenFailure,
 } from "../internal/cli-host-tokens";
 import {
@@ -24,7 +25,10 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "../../../shared/auth/bearer-revalidator";
-import type { HostTokenSessionRevalidator } from "../../../shared/auth/host-token-lease";
+import type {
+  CliHostTokenSessionRevalidator,
+  HostTokenRecoveryOutcome,
+} from "../../../shared/auth/host-token-lease";
 import type { HostCredentialMintOutcome } from "../../../shared/host-transport/host-credential-mint-flow";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
 import type {
@@ -444,8 +448,8 @@ export async function provisionInstalledHostCredential(
     const recoverHostToken = (
       hostId: string | null,
       recover: (
-        recovery: HostTokenSessionRevalidator,
-      ) => Promise<RevalidateOutcome>,
+        recovery: CliHostTokenSessionRevalidator,
+      ) => Promise<HostTokenRecoveryOutcome>,
     ): Promise<RevalidateOutcome> => {
       // Reaching this callback at all means the host answered and refused
       // the token we presented - it was up and talking, whatever happens to
@@ -460,7 +464,11 @@ export async function provisionInstalledHostCredential(
       if (remaining() <= 0 || hostId === null) {
         return Promise.resolve<RevalidateOutcome>("rejected");
       }
-      const settled = recover(tokens.streamRecovery(hostId));
+      // A mint lost to a host process replacement is a transient answer
+      // here: the probe redials and asks the process current then.
+      const settled = recover(tokens.streamRecovery(hostId)).then(
+        replacedAsNetworkError,
+      );
       inFlightRevalidation = settled;
       return settled;
     };

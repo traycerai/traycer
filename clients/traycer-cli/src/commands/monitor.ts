@@ -43,6 +43,7 @@ import {
 } from "../../../shared/auth/bearer-source";
 import type { HostCredentialMintFlow } from "../../../shared/host-transport/host-credential-mint-flow";
 import type { RevalidateOutcome } from "../../../shared/auth/bearer-revalidator";
+import type { HostTokenRecoveryOutcome } from "../../../shared/auth/host-token-lease";
 import {
   createProactiveRefreshScheduler,
   DEFAULT_REFRESH_LEAD_MS,
@@ -378,7 +379,7 @@ interface MonitorCredential {
   readonly recover: (
     hostId: string,
     details: FatalErrorDetails,
-  ) => Promise<RevalidateOutcome>;
+  ) => Promise<HostTokenRecoveryOutcome>;
   /**
    * The host admitted an open: its recovery's bounds start again, and a
    * `not-admitted` ends nothing while that connection is admitted, nor when
@@ -549,7 +550,9 @@ function capabilityMonitorCredential(
 
 type InboxTarget = { readonly agentId: string; readonly epicId: string };
 
-type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
+type InboxRecovery = (
+  details: FatalErrorDetails,
+) => Promise<HostTokenRecoveryOutcome>;
 
 /**
  * The host that refused, whether it is still the monitor's (the same host
@@ -864,6 +867,15 @@ function runInboxSubscription(
           epicId: target.epicId,
         });
         subscribe();
+        return;
+      }
+      // A lap whose mint was lost to a host process replacement: one step of
+      // this host id's count, as at a rotation, across successive processes,
+      // and the replacement is asked after the ordinary delay. An outage
+      // answers "network-error" below and counts nothing.
+      if (outcome === "process-replaced") {
+        if (moved() || countedToBound()) return;
+        subscribeAfterDelay();
         return;
       }
       if (outcome === "network-error") {
