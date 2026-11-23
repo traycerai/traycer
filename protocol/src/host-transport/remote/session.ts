@@ -931,6 +931,14 @@ interface ResumeExchange {
   answered: boolean;
 }
 
+/** A loss whose redial is due now, for the generation it was lost on. */
+interface ImmediateRedial {
+  readonly generation: number;
+  readonly reason: string;
+  /** The loss's scheduler pulled its wait to now. */
+  spent: boolean;
+}
+
 interface ActiveConnection {
   readonly generation: number;
   /** The grant this relay attach presented; `null` on a direct pool leg. */
@@ -1382,6 +1390,12 @@ export class RemoteSession<
    * phase timer) cannot strand the session on its old rung either way.
    */
   private pendingForceGeneration: number | null = null;
+  /**
+   * A redial due now that the loss being handled will arm, set only while
+   * {@link loseLegRedialingNow} runs: the scheduler pulls the wait it armed to
+   * zero before it says whether the streams wait.
+   */
+  private immediateRedial: ImmediateRedial | null = null;
   /**
    * How the last leg that CARRIED the session ended; sent as `prev`. Written
    * only through {@link recordReplacedLeg}, which is where the rule lives.
@@ -2396,12 +2410,12 @@ export class RemoteSession<
       // until an unrelated `host_attached`. Dropping it and redialling now is
       // what the caller asked for; the redial parks again if the host is
       // still away.
-      this.handleLegLost(
+      this.loseLegRedialingNow(
         connection.generation,
         `forced-reconnect:${reason}`,
         "not-host-evidence",
+        reason,
       );
-      this.pullRedialToNow(reason);
       return;
     }
     if (this.backoffTimer !== null) {
@@ -2909,17 +2923,21 @@ export class RemoteSession<
             this.connection.legEnd = { code: info.code, reason: info.reason };
           }
           const provenance = this.legEndProvenance(socket());
-          this.handleLegLost(
-            generation,
+          const cause =
             provenance === "host-transport-plane"
               ? describeSocketClose(this.phase, info)
-              : `${describeSocketClose(this.phase, info)} after its attach grant expired`,
-            provenance,
-          );
+              : `${describeSocketClose(this.phase, info)} after its attach grant expired`;
           if (immediateRedialEarned) {
             // A user is watching this recovery happen; sleeping out the
             // backoff rung the funnel armed would be pure added outage.
-            this.pullRedialToNow("wake-probe-failed");
+            this.loseLegRedialingNow(
+              generation,
+              cause,
+              provenance,
+              "wake-probe-failed",
+            );
+          } else {
+            this.handleLegLost(generation, cause, provenance);
           }
         });
       },
@@ -5390,6 +5408,30 @@ export class RemoteSession<
     this.handleConnectionLost(generation, cause, provenance);
   }
 
+  /**
+   * {@link handleLegLost} for a loss whose redial is due now: the scheduler it
+   * reaches pulls the rung it armed to zero before classifying the wait. A
+   * loss that armed nothing still pulls whatever wait stands, as before.
+   */
+  private loseLegRedialingNow(
+    generation: number,
+    cause: string,
+    provenance: ConnectionLossProvenance,
+    reason: string,
+  ): void {
+    const intent: ImmediateRedial = { generation, reason, spent: false };
+    const previous = this.immediateRedial;
+    this.immediateRedial = intent;
+    try {
+      this.handleLegLost(generation, cause, provenance);
+    } finally {
+      this.immediateRedial = previous;
+    }
+    if (!intent.spent) {
+      this.pullRedialToNow(reason);
+    }
+  }
+
   private canRelink(connection: ActiveConnection): boolean {
     return (
       this.phase === "ready" &&
@@ -6396,7 +6438,8 @@ export class RemoteSession<
    * THE reconnect scheduler for a failed attempt: arms the ordinary rung
    * (attempt accounting, jitter, and the failure log all see the ordinary
    * delay, which is returned for that log) and then spends a force recorded
-   * against exactly `generation` by pulling that newly armed wait to zero.
+   * against exactly `generation`, or a loss's own immediate redial, by pulling
+   * that newly armed wait to zero.
    * Every retryable failure lander must come through here - the loss funnel,
    * the grant-provision failure, the thrown connect path, and both
    * UNAUTHORIZED revalidation arms - so whether a recorded demand is honored
@@ -6406,13 +6449,22 @@ export class RemoteSession<
     generation: number,
     redial: "backoff" | "recovery",
   ): number {
-    const forced = this.pendingForceGeneration === generation;
     const retryInMs = this.scheduleReconnect();
     this.consumePendingForce(generation);
-    // Classifies the wait for the streams; it changes no delay. A recovery's
-    // own timed redial (a credential that moved on) and a redial pulled to
-    // now are not a wait.
-    if (redial === "backoff" && retryInMs > 0 && !forced)
+    const immediate = this.immediateRedial;
+    if (immediate !== null && immediate.generation === generation) {
+      immediate.spent = true;
+      this.pullRedialToNow(immediate.reason);
+    }
+    // Classifies the wait for the streams, as armed once every pull above has
+    // applied; it changes no delay. A recovery's own timed redial (a
+    // credential that moved on) and a redial pulled to now are not a wait.
+    if (
+      redial === "backoff" &&
+      retryInMs > 0 &&
+      this.backoffTimer !== null &&
+      this.backoffDelayMs > 0
+    )
       this.notifyBackoffEntered();
     return retryInMs;
   }
