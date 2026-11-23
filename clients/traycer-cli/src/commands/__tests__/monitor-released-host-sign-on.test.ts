@@ -2471,7 +2471,22 @@ describe("traycer monitor local released-host sign-in", () => {
       const SIGN_IN_B = "revoked-later-sign-in";
       holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
       monitorHarness.state.refreshed.push(SIGN_IN_B, REFRESH_REJECTED);
+      // The file is written, and its reserve filled in the background, under real timers. The refill
+      // after each rotation is scheduled with `setImmediate`, which stays real here: a fake one would
+      // advance it only as the test advances the clock, and each rotation would wait on it.
+      vi.useRealTimers();
       await seedCredentials(SIGN_IN);
+      await completeCredentialsReserve(monitorHarness.state.credentialsPath);
+      vi.useFakeTimers({
+        toFake: [
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "Date",
+          "performance",
+        ],
+      });
       let requests = 0;
       monitorHarness.state.grantResponse = () => {
         requests += 1;
@@ -2499,6 +2514,8 @@ describe("traycer monitor local released-host sign-in", () => {
           step += 1
         ) {
           await vi.advanceTimersByTimeAsync(250);
+          // The store's file work is real: let the event loop turn between steps.
+          await new Promise<void>((resolve) => setImmediate(resolve));
         }
         if (ended !== null) break;
         const redial = await socketAt(lap + 2);
