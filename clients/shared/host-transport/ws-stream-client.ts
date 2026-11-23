@@ -3384,7 +3384,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     if (sequence.spent) return Promise.resolve("rotated");
     if (sequence.running !== null) return sequence.running;
     const running: Promise<RevalidateOutcome> = Promise.resolve()
-      .then(() => recovery.revalidateForReconnect())
+      .then(() => recovery.revalidateForReconnect(null))
       .then((outcome): RevalidateOutcome => {
         if (outcome === "adopted") return "rotated";
         if (outcome !== "network-error") sequence.spent = true;

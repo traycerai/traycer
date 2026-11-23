@@ -774,8 +774,17 @@ export function cliReleasedSignOn(
     // No row is held, so none refuses it, as `opensReleasedWayOnThisMachine`
     // reads a missing row.
     mayPresentSignIn: () => true,
-    // The transport's own: it reads "adopted" as no refresh spent.
-    recovery: { revalidateForReconnect: () => tokens.refreshSignIn() },
+    // The transport's own: it reads "adopted" as no refresh spent. A refusal
+    // of a sign-in the person no longer holds is not of the one stored, so it
+    // refreshes nothing; the redial presents the stored one.
+    recovery: {
+      revalidateForReconnect: (refused) => {
+        const stored = readLeaseBearer(lease);
+        return refused !== null && stored !== null && refused !== stored
+          ? Promise.resolve("adopted")
+          : tokens.refreshSignIn();
+      },
+    },
     hostTokenUnobtainable: (hostId) => tokens.hostTokenUnobtainable(hostId),
     ownerSignInEligible: (hostId) => tokens.ownerSignInEligible(hostId),
     heldTokenRefused: (instance, presented) =>

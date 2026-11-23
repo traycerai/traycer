@@ -507,7 +507,7 @@ function recoverySequence(owner: HostInstance): RecoverySequence {
       if (running !== null) return running;
       if (spent) return null;
       const refresh = recovery
-        .revalidateForReconnect()
+        .revalidateForReconnect(null)
         .then((outcome) => {
           // Only a refresh authn answered spends: one that never reached
           // it, or a sibling's rotation adopted from the store, does not.
@@ -641,7 +641,7 @@ function revalidatorWithBounds(
       return outcome;
     }
     if (reason === "session_revoked" && deps.signInRecovery !== null)
-      await deps.signInRecovery.revalidateForReconnect();
+      await deps.signInRecovery.revalidateForReconnect(null);
     return "rejected";
   };
 
@@ -690,7 +690,7 @@ export function hostTokenUnaryRevalidator(deps: {
           expiry,
           notAdmitted,
           refreshSignIn: (signInRecovery) =>
-            signInRecovery.revalidateForReconnect(),
+            signInRecovery.revalidateForReconnect(null),
         },
       };
       boundsByOwner.set(owner, own);

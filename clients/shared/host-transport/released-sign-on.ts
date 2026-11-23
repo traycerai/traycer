@@ -18,9 +18,16 @@ import type { HostRequestAuthority } from "./host-messenger";
  * The person's sign-in recovery as a transport sees it. `"adopted"` means a
  * sibling's rotation was taken from the store, which authn did not answer for
  * this sequence, so it spends no refresh budget.
+ *
+ * `refused` is the sign-in the refused request presented, or `null` when the
+ * caller cannot tell. A recovery whose stored sign-in is no longer `refused`
+ * refreshes nothing and answers `"adopted"`: the refusal was not of the
+ * sign-in it holds.
  */
 export interface SignInRecovery {
-  revalidateForReconnect(): Promise<RevalidateOutcome | "adopted">;
+  revalidateForReconnect(
+    refused: string | null,
+  ): Promise<RevalidateOutcome | "adopted">;
 }
 
 /** The directory facts the decision reads; a local row has no `sandbox`. */

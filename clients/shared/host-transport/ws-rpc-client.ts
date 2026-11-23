@@ -633,7 +633,7 @@ export class WsRpcClient<
             recovery === null || cause.fatalDetails === null
               ? "rejected"
               : await recovery
-                  .revalidateForReconnect()
+                  .revalidateForReconnect(null)
                   .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
           // A refusal of the person's sign-in never reaches the door; the
@@ -702,7 +702,7 @@ export class WsRpcClient<
             recovery === null || cause.fatalDetails === null
               ? "rejected"
               : await recovery
-                  .revalidateForReconnect()
+                  .revalidateForReconnect(null)
                   .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
           // A refusal of the person's sign-in never reaches the door; the
