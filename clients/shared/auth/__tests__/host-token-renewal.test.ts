@@ -1951,7 +1951,7 @@ describe("a sign-in recovery's allowance across ordinary attempts", () => {
           if (landsOnStore) storedSignIn = `sign-in-${refreshes}`;
           return Promise.resolve("rotated");
         },
-        signInRejectedFor: () => false,
+        signInRejectedFor: () => Promise.resolve(false),
       },
       onState: () => undefined,
       now: () => Date.now(),
