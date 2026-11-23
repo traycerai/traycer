@@ -1394,3 +1394,51 @@ describe("released personal host, remote door", () => {
     }
   }, 20_000);
 });
+
+describe("an attach decides once whether its open carries the sign-in", () => {
+  it("opens with the host-only token, and reads no row, when another transport has the sign-in admitted only while this attach's grant is in flight", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const hosts = createReleasedHostMemory();
+    const { door, refusals } = recordingDoor();
+    relay.decideOpen = () => ({ kind: "ack" });
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    let rowReads = 0;
+    const heldGrants: Array<(grant: AttachGrantProvision) => void> = [];
+    const session = openSessionWithGrants(
+      relay,
+      {
+        ...personal,
+        hosts,
+        confirmRow: () => {
+          rowReads += 1;
+          return Promise.resolve();
+        },
+      },
+      door,
+      () =>
+        new Promise<AttachGrantProvision>((resolve) => {
+          heldGrants.push(resolve);
+        }),
+    );
+    try {
+      session.start();
+      // At grant time no transport has the sign-in admitted: the attach is a
+      // host-only attach, and no row is read for it.
+      await vi.waitFor(() => expect(heldGrants).toHaveLength(1), WAIT);
+      // Another transport of this process has the host admit the sign-in
+      // during the grant round trip, before this attach's open is read.
+      hosts.signInAdmitted(USER_ID, hosts.currentInstance("host-1"));
+      heldGrants[0](OK_GRANT);
+
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual([""]);
+      expect(isHostTokenAuthz(relay.openAuthz[0])).toBe(true);
+      expect(rowReads).toBe(0);
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+});
