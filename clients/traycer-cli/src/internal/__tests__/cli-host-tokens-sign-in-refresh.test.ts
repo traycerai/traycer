@@ -13,6 +13,8 @@ import { createCliHostTokens } from "../cli-host-tokens";
 const USER_ID = "user-1";
 const SIGN_IN_A = "sign-in-a";
 const SIBLING_SIGN_IN = "sign-in-sibling";
+const ROTATED_SIGN_IN = "sign-in-rotated";
+const REFRESHED_SIGN_IN = "sign-in-refreshed";
 
 const harness = vi.hoisted(() => ({
   /** Every mint request authn was sent, the first held until the test answers it. */
@@ -337,6 +339,68 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
       credentials.rotatedTo(1),
       SIBLING_SIGN_IN,
       credentials.rotatedTo(2),
+    ]);
+  });
+
+  it("judges nothing and refreshes once when a sibling installs another sign-in before our rotation's continuation runs and that one is refused", async () => {
+    // The mint on A and the retry after our rotation are held; the one after C's refresh is answered.
+    harness.hold = 2;
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const refreshesStarted: number[] = [];
+    const releaseRefreshOfC: { release: () => void } = {
+      release: () => undefined,
+    };
+    const refreshOfCHeld = new Promise<void>((resolve) => {
+      releaseRefreshOfC.release = resolve;
+    });
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: async () => {
+        refreshesStarted.push(refreshesStarted.length + 1);
+        if (refreshesStarted.length === 1) {
+          // Our rotation installs B; a sibling's write installs C before the
+          // continuation of the rotation runs.
+          lease.rotate(ROTATED_SIGN_IN);
+          lease.rotate(SIBLING_SIGN_IN);
+          return "rotated";
+        }
+        await refreshOfCHeld;
+        lease.rotate(REFRESHED_SIGN_IN);
+        return "rotated";
+      },
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    const reports: string[] = [];
+    tokens.onRefusalEndingCommand((reportedHostId) => {
+      reports.push(reportedHostId);
+    });
+    const minting = tokens.hostBearerFor(hostId, true);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+
+    // A is refused: our rotation installs B, a sibling then installs C, and the retry goes out on C.
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(2));
+    expect(harness.mints[1]?.signIn).toBe(SIBLING_SIGN_IN);
+
+    // C's 401 arrives. C is not the sign-in our rotation installed, so this is
+    // its first refusal: C is refreshed once, and while that refresh is pending
+    // nothing is judged and nothing is reported.
+    harness.mints[1]?.answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(refreshesStarted).toHaveLength(2));
+    expect(tokens.signInRejected()).toBe(false);
+    expect(reports).toEqual([]);
+    releaseRefreshOfC.release();
+    const bearer = await minting;
+
+    expect(bearer).not.toBeNull();
+    expect(tokens.signInRejected()).toBe(false);
+    expect(reports).toEqual([]);
+    expect(refreshesStarted).toHaveLength(2);
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      SIGN_IN_A,
+      SIBLING_SIGN_IN,
+      REFRESHED_SIGN_IN,
     ]);
   });
 });
