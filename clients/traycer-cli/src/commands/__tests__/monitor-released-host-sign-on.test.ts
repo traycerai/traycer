@@ -120,6 +120,8 @@ const monitorHarness = vi.hoisted(() => {
       credentialsPath: "",
       /** The sign-ins authn's refresh hands out to the real store, in the order asked; `REFRESH_REJECTED` is its refusal. */
       refreshed: [] as string[],
+      /** When set, the real store's rotations and reads in flight are kept here until they settle. */
+      storeWork: null as Set<Promise<unknown>> | null,
       /** When set, a real rotation is held after its locked result, until the test releases it. */
       rotationHold: null as {
         readonly reached: () => void;
@@ -304,7 +306,23 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
           },
           read: async () => monitorHarness.state.scriptedFile,
         };
-      const real = actual.createCliCredentialsStore();
+      const actualStore = actual.createCliCredentialsStore();
+      const work = monitorHarness.state.storeWork;
+      const inFlight = <T>(promise: Promise<T>): Promise<T> => {
+        if (work === null) return promise;
+        work.add(promise);
+        const settled = (): void => {
+          work.delete(promise);
+        };
+        promise.then(settled, settled);
+        return promise;
+      };
+      const real = {
+        ...actualStore,
+        rotate: (args: Parameters<typeof actualStore.rotate>[0]) =>
+          inFlight(actualStore.rotate(args)),
+        read: () => inFlight(actualStore.read()),
+      };
       const hold = monitorHarness.state.rotationHold;
       return hold === null
         ? real
@@ -633,6 +651,7 @@ beforeEach(() => {
   monitorHarness.state.upkeep = null;
   monitorHarness.state.credentialsPath = "";
   monitorHarness.state.refreshed.splice(0);
+  monitorHarness.state.storeWork = null;
   monitorHarness.state.rotations.splice(0);
   monitorHarness.state.signIn = SIGN_IN;
   monitorHarness.state.firstRotation = "superseded";
@@ -2537,6 +2556,8 @@ describe("traycer monitor local released-host sign-in", () => {
           "performance",
         ],
       });
+      const storeWork = new Set<Promise<unknown>>();
+      monitorHarness.state.storeWork = storeWork;
       let requests = 0;
       monitorHarness.state.grantResponse = () => {
         requests += 1;
@@ -2564,8 +2585,10 @@ describe("traycer monitor local released-host sign-in", () => {
           step += 1
         ) {
           await vi.advanceTimersByTimeAsync(250);
-          // The store's file work is real: let the event loop turn between steps.
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          // The store's file work is real: wait for the rotation or read in flight to settle, which
+          // is the event the redial follows. `waitFor` advances the fake clock while it waits, so a
+          // lock poll the work sleeps on still runs.
+          await vi.waitFor(() => expect(storeWork.size).toBe(0), WAIT);
         }
         if (ended !== null) break;
         const redial = await socketAt(lap + 2);
