@@ -1743,6 +1743,68 @@ describe("released personal host, local stream", () => {
       expect((await openFrame(sockets[2])).token).toBe("sign-in-of-a-sibling");
     });
 
+    describe("a refused sign-in whose recovery adopts a sign-in each time", () => {
+      /** Every dial is refused the released way as it appears; the token each open carried is returned, in order. */
+      async function refuseEveryDial(
+        sockets: StubStreamWebSocket[],
+        refusals: number,
+      ): Promise<string[]> {
+        const tokens: string[] = [];
+        const opened = new Set<StubStreamWebSocket>();
+        for (let round = 0; round < 400 && tokens.length < refusals; round += 1) {
+          await vi.advanceTimersByTimeAsync(50);
+          for (const socket of sockets) {
+            if (opened.has(socket)) continue;
+            socket.fireOpen();
+            if (socket.textSent.length === 0) continue;
+            opened.add(socket);
+            tokens.push(String(readFrame(socket.textSent[0]).token));
+            socket.fireText(releasedRefusal());
+          }
+        }
+        return tokens;
+      }
+
+      it("keeps redialling while each recovery adopts a different sibling's sign-in, asks authn for no refresh, and stays open", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        let adoptions = 0;
+        const { sockets, statuses } = releasedStream(signIn, {
+          revalidateForReconnect: () => {
+            adoptions += 1;
+            // A sibling process saved its own, newer sign-in; the store's value is taken.
+            signIn.rotate(`sibling-${adoptions}`);
+            return Promise.resolve("adopted");
+          },
+        });
+
+        const tokens = await refuseEveryDial(sockets, 6);
+
+        expect(tokens.slice(0, 6)).toEqual([
+          HOST_TOKEN,
+          SIGN_IN,
+          "sibling-1",
+          "sibling-2",
+          "sibling-3",
+          "sibling-4",
+        ]);
+        expect(statuses).not.toContain("closed");
+      });
+
+      it("still ends at the bound when the adoption leaves the sign-in where it was", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        const { sockets, statuses } = releasedStream(signIn, {
+          revalidateForReconnect: () => Promise.resolve("adopted"),
+        });
+
+        const tokens = await refuseEveryDial(sockets, 4);
+
+        expect(tokens).toEqual([HOST_TOKEN, SIGN_IN, SIGN_IN, SIGN_IN]);
+        await vi.waitFor(() => expect(statuses).toContain("closed"), WAIT);
+      });
+    });
+
     describe("a spent refusal is judged by the recovery before the stream answers it", () => {
       /** A released stream whose door's reports are recorded. */
       function judgedStream(
