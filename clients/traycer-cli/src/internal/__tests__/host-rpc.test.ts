@@ -128,6 +128,13 @@ const {
   },
 }));
 const presentedHostTokens = vi.hoisted(() => [] as string[]);
+/** The listener seam of each host session a call opened, so a case can see when a refusal ended the command. */
+interface OpenedHostSession {
+  readonly tokens: {
+    readonly onRefusalEndingCommand: (listener: () => void) => () => void;
+  };
+}
+const openedHostSessions = vi.hoisted(() => [] as OpenedHostSession[]);
 
 vi.mock("../agent-session-capability", async (importOriginal) => {
   const actual =
@@ -147,11 +154,13 @@ vi.mock("../cli-host-tokens", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cli-host-tokens")>();
   return {
     ...actual,
-    requireCliHostSession: (
+    requireCliHostSession: async (
       ...args: Parameters<typeof actual.requireCliHostSession>
     ) => {
       requireCliHostSessionMock(...args);
-      return actual.requireCliHostSession(...args);
+      const session = await actual.requireCliHostSession(...args);
+      openedHostSessions.push(session);
+      return session;
     },
   };
 });
@@ -357,6 +366,7 @@ beforeEach(async () => {
   landed = null;
   person = nextCasePerson();
   presentedHostTokens.length = 0;
+  openedHostSessions.length = 0;
   agentEnvironment.capability = undefined;
   agentEnvironment.agentId = undefined;
   agentEnvironment.names.length = 0;
@@ -834,6 +844,51 @@ describe("callHostRpc", () => {
     expect(rotateMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("fails with the call's own wire error, not a rejected credential, when a sibling saves a sign-in after the refusal of the stored one was reported", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
+    rotateMock.mockResolvedValue({
+      outcome: "refresh-rejected-credential",
+      credentials: null,
+      rejection: null,
+      diskPressure: null,
+    });
+    // The call is on the wire while the mint is refused and its refresh is
+    // refused; once that is reported a sibling saves its own sign-in, and only
+    // then does the call fail, with an error unrelated to any credential.
+    requestMock.mockImplementation(async () => {
+      const session = openedHostSessions[0];
+      if (session === undefined) throw new Error("no host session was opened");
+      await new Promise<void>((resolve) => {
+        session.tokens.onRefusalEndingCommand(resolve);
+      });
+      landed = {
+        token: "sibling-sign-in",
+        refreshToken: "sibling-sign-in-refresh",
+        savedAt: "2026-01-01T00:00:01.000Z",
+        user: { id: person.userId, email: "a@b.c", name: "A" },
+      };
+      throw new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket frame timed out after 15000ms",
+        requestId: "r1",
+        method: METHOD,
+        fatalDetails: null,
+      });
+    });
+
+    await expect(
+      toAgentCliError(
+        callHostRpcAtEndpoint(
+          METHOD,
+          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+    });
   });
 
   it("reports a rejected stored credential when an expired host token's mint and sign-in refresh are refused", async () => {
