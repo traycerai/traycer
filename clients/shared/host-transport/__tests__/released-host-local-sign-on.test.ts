@@ -1743,6 +1743,191 @@ describe("released personal host, local stream", () => {
       expect((await openFrame(sockets[2])).token).toBe("sign-in-of-a-sibling");
     });
 
+    describe("a spent refusal is judged by the recovery before the stream answers it", () => {
+      /** A released stream whose door's reports are recorded. */
+      function judgedStream(
+        signIn: MutableBearerLease,
+        recovery: SignInRecovery,
+      ): {
+        readonly sockets: StubStreamWebSocket[];
+        readonly statuses: string[];
+        readonly refusals: FatalErrorDetails[];
+      } {
+        const { factory, sockets } = makeStubSocketFactory();
+        const { door, refusals } = recordingDoor();
+        const client = makeStreamClient(
+          factory,
+          new MutableBearerLease(HOST_TOKEN, USER_ID),
+          releasedSignOnForLocalRow(
+            () => PERSONAL_ROW,
+            mockLocalHostEntry.hostId,
+            USER_ID,
+            () => signIn,
+            recovery,
+            NO_MINTS,
+            createReleasedHostMemory(),
+          ),
+          door,
+        );
+        return { sockets, refusals, ...subscribe(client) };
+      }
+
+      /** The host refuses every open the released way, answered as each dial appears, until the session ends. */
+      async function refuseEveryDialUntilClosed(
+        sockets: StubStreamWebSocket[],
+        statuses: string[],
+      ): Promise<void> {
+        const opened = new Set<StubStreamWebSocket>();
+        const refused = new Set<StubStreamWebSocket>();
+        await vi.waitFor(() => {
+          for (const socket of sockets) {
+            if (!opened.has(socket)) {
+              opened.add(socket);
+              socket.fireOpen();
+            } else if (!refused.has(socket) && socket.textSent.length > 0) {
+              refused.add(socket);
+              socket.fireText(releasedRefusal());
+            }
+          }
+          expect(statuses).toContain("closed");
+        }, WAIT);
+      }
+
+      it("awaits the judgement, which installs a newer sign-in, and redials presenting it with no second refresh, after a refresh that rotated nothing the stream could present", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        let refreshes = 0;
+        let judgements = 0;
+        let release = (): void => undefined;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const { sockets, statuses } = releasedStream(signIn, {
+          // The rotation landed in the store, and the lease has not installed it.
+          revalidateForReconnect: () => {
+            refreshes += 1;
+            return Promise.resolve("rotated");
+          },
+          signInRejectedFor: async () => {
+            judgements += 1;
+            await gate;
+            signIn.rotate("B");
+            return false;
+          },
+        });
+        await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+        expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
+        sockets[0].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+        expect((await openFrame(sockets[1])).token).toBe(SIGN_IN);
+        sockets[1].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+        expect((await openFrame(sockets[2])).token).toBe(SIGN_IN);
+
+        sockets[2].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(judgements).toBe(1), WAIT);
+        // Nothing redials while the judgement is still adopting.
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(sockets).toHaveLength(3);
+
+        release();
+        await vi.waitFor(() => expect(sockets).toHaveLength(4), WAIT);
+        expect((await openFrame(sockets[3])).token).toBe("B");
+        expect(refreshes).toBe(1);
+        expect(statuses).not.toContain("closed");
+      });
+
+      it("ends at the bound, after three refreshes and two judgements, when the host refuses every sign-in and each judgement says the refusal is not rejected", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        let refreshes = 0;
+        let judgements = 0;
+        const { sockets, statuses, refusals } = judgedStream(signIn, {
+          revalidateForReconnect: () => {
+            refreshes += 1;
+            signIn.rotate(`sign-in-${refreshes}`);
+            return Promise.resolve("rotated");
+          },
+          signInRejectedFor: async () => {
+            judgements += 1;
+            return false;
+          },
+        });
+
+        await refuseEveryDialUntilClosed(sockets, statuses);
+
+        expect(sockets.map((socket) => tokensOf(socket)[0])).toEqual([
+          HOST_TOKEN,
+          SIGN_IN,
+          "sign-in-1",
+          "sign-in-1",
+          "sign-in-2",
+          "sign-in-2",
+        ]);
+        expect(refreshes).toBe(3);
+        expect(judgements).toBe(2);
+        const opensAtClose = sockets.length;
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(sockets).toHaveLength(opensAtClose);
+        expect(refusals).toEqual([]);
+      });
+
+      it("ends at the spent refusal when the judgement says the sign-in is rejected", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        let refreshes = 0;
+        let judgements = 0;
+        const { sockets, statuses } = judgedStream(signIn, {
+          revalidateForReconnect: () => {
+            refreshes += 1;
+            signIn.rotate(`sign-in-${refreshes}`);
+            return Promise.resolve("rotated");
+          },
+          signInRejectedFor: async () => {
+            judgements += 1;
+            return true;
+          },
+        });
+
+        await refuseEveryDialUntilClosed(sockets, statuses);
+
+        expect(sockets.map((socket) => tokensOf(socket)[0])).toEqual([
+          HOST_TOKEN,
+          SIGN_IN,
+          "sign-in-1",
+        ]);
+        expect(refreshes).toBe(1);
+        expect(judgements).toBe(1);
+      });
+
+      it("ends at once when authn refuses the second refresh, with no further dial", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        let refreshes = 0;
+        const { sockets, statuses } = judgedStream(signIn, {
+          revalidateForReconnect: () => {
+            refreshes += 1;
+            if (refreshes > 1) return Promise.resolve("rejected");
+            signIn.rotate(`sign-in-${refreshes}`);
+            return Promise.resolve("rotated");
+          },
+          signInRejectedFor: async () => false,
+        });
+
+        await refuseEveryDialUntilClosed(sockets, statuses);
+
+        expect(sockets.map((socket) => tokensOf(socket)[0])).toEqual([
+          HOST_TOKEN,
+          SIGN_IN,
+          "sign-in-1",
+          "sign-in-1",
+        ]);
+        expect(refreshes).toBe(2);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(sockets).toHaveLength(4);
+      });
+    });
+
     describe("a refusal of a sign-in the lease has already replaced", () => {
       /** The stream presents SIGN_IN to a released host, which refuses it bare. */
       async function refusedOnSignIn(
