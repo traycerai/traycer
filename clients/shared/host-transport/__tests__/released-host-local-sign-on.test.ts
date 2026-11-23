@@ -1826,8 +1826,8 @@ describe("released personal host, local stream", () => {
 
         sockets[2].fireText(releasedRefusal());
         await vi.waitFor(() => expect(judgements).toBe(1), WAIT);
-        // Nothing redials while the judgement is still adopting.
-        await vi.advanceTimersByTimeAsync(10_000);
+        // Nothing redials while the judgement is still adopting; held under the stream's 10 s recovery budget.
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(sockets).toHaveLength(3);
 
         release();
