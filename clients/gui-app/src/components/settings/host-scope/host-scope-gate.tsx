@@ -165,6 +165,38 @@ export function HostScopeGate(props: {
   );
 }
 
+/**
+ * A Local pick's page while its computer cannot be reached: the scope's own
+ * "Can't reach" notice, with the page kept mounted underneath, hidden and
+ * frozen, so its drafts survive the outage and are there when it is back. The
+ * notice follows the scope's status as it is derived, with no grace period.
+ *
+ * Away outranks old: a computer with no route shows this notice even when it
+ * also needs an update, since nothing can reach it to update it. Only a host
+ * that is reachable but below the minimum version is left to the page's own
+ * update notice (`deriveHostScopeStatus` reports that as `unreachable` too).
+ */
+export function HostUnreachableGate(props: {
+  readonly scope: HostScope;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { scope } = props;
+  const host =
+    scope.status === "unreachable" &&
+    scope.host !== null &&
+    (!scope.host.connectable || !hostScopeNeedsUpdate(scope.host))
+      ? scope.host
+      : null;
+  return (
+    <>
+      {host === null ? null : <UnreachableNotice scope={scope} host={host} />}
+      <HostScopeBody hostId={scope.hostId} usable={host === null}>
+        {props.children}
+      </HostScopeBody>
+    </>
+  );
+}
+
 /** Local-row pages retain their drafts while their host needs an update. */
 export function HostMinimumVersionGate(props: {
   readonly host: HostScopeOption | null;
@@ -279,8 +311,7 @@ const FrozenWhileConcealed = memo(
   (_prev, next) => !next.usable,
 );
 
-/** The notice a scope's page shows while its host cannot be reached. */
-export function UnreachableNotice(props: {
+function UnreachableNotice(props: {
   readonly scope: HostScope;
   readonly host: HostScopeOption;
 }): ReactNode {

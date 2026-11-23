@@ -6,14 +6,9 @@ import { STORAGE } from "@/components/settings/environment/storage-page.definiti
 import {
   HostScopeConnecting,
   HostScopeNotice,
-  UnreachableNotice,
+  HostUnreachableGate,
 } from "@/components/settings/host-scope/host-scope-gate";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import {
-  usePersonalHostScope,
-  type HostScope,
-} from "@/components/settings/host-scope/use-host-scope";
-import { isLocalMovePageSection } from "@/components/settings/environment/local-move-sections";
+import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { HostUpdateNowAction } from "@/components/settings/panels/host-update-now-action";
 import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definitions";
@@ -54,9 +49,10 @@ const PAGE_COPY: ReadonlyMap<SettingsSectionId, PageCopy> = new Map<
 ]);
 
 /** What a section's body shows in place of the page, keyed by its answer. */
-type PageNotOnComputerAnswer =
-  | Exclude<SectionAnswer, { readonly kind: "served" | "unresolved" }>
-  | { readonly kind: "away"; readonly host: HostScopeOption };
+type PageNotOnComputerAnswer = Exclude<
+  SectionAnswer,
+  { readonly kind: "served" | "unresolved" }
+>;
 
 /**
  * `section`'s body under the Environment pick: `children`, the page, or in
@@ -85,44 +81,22 @@ function HostPageOrNotOnComputer(props: {
   readonly pick: EnvironmentPick;
   readonly children: ReactNode;
 }): ReactNode {
-  const { pick } = props;
+  const answer = useSectionAnswer(props.pick, props.section);
   const scope = usePersonalHostScope();
-  const answer = notOnComputerAnswer(
-    props.section,
-    useSectionAnswer(pick, props.section),
-    pick.kind === "local",
-    scope,
-  );
-  return answer === null ? (
-    props.children
+  const body =
+    answer.kind === "served" || answer.kind === "unresolved" ? (
+      props.children
+    ) : (
+      <PageNotOnComputer section={props.section} answer={answer} />
+    );
+  // A Local pick of a computer that cannot be reached shows the "Can't reach"
+  // notice on every page, whatever the page or its answer: nothing on it can
+  // be read or updated until it is back, and the page stays mounted beneath.
+  return props.pick.kind === "local" ? (
+    <HostUnreachableGate scope={scope}>{body}</HostUnreachableGate>
   ) : (
-    <PageNotOnComputer section={props.section} answer={answer} scope={scope} />
+    body
   );
-}
-
-/**
- * What replaces the page, or `null` for the page itself. A Local pick of a
- * computer that cannot be reached shows the scope's notice wherever the page
- * would otherwise not draw, or offer a move it cannot run: that outranks the
- * computer lacking the page, since nothing on it can be updated until it is
- * back. A page that draws keeps its own gate, which holds its drafts.
- */
-function notOnComputerAnswer(
-  section: SettingsSectionId,
-  answer: SectionAnswer,
-  local: boolean,
-  scope: HostScope,
-): PageNotOnComputerAnswer | null {
-  const drawn = answer.kind === "served" || answer.kind === "unresolved";
-  if (
-    local &&
-    scope.status === "unreachable" &&
-    scope.host !== null &&
-    (!drawn || isLocalMovePageSection(section))
-  ) {
-    return { kind: "away", host: scope.host };
-  }
-  return drawn ? null : answer;
 }
 
 /**
@@ -134,7 +108,6 @@ function notOnComputerAnswer(
 function PageNotOnComputer(props: {
   readonly section: SettingsSectionId;
   readonly answer: PageNotOnComputerAnswer;
-  readonly scope: HostScope;
 }): ReactNode {
   const entry = SETTINGS_SECTIONS.find((item) => item.id === props.section);
   const copy = PAGE_COPY.get(props.section);
@@ -146,7 +119,6 @@ function PageNotOnComputer(props: {
           answer={props.answer}
           label={label}
           icon={entry?.icon ?? null}
-          scope={props.scope}
         />
       </div>
     </SettingsPanelShell>
@@ -157,16 +129,11 @@ function PageNotOnComputerCard(props: {
   readonly answer: PageNotOnComputerAnswer;
   readonly label: string;
   readonly icon: LucideIcon | null;
-  readonly scope: HostScope;
 }): ReactNode {
   const { answer } = props;
   switch (answer.kind) {
     case "pending":
       return <HostScopeConnecting hostName={answer.hostName} />;
-    case "away":
-      // The scope's own notice: nothing on the computer can be read or
-      // updated until it is back.
-      return <UnreachableNotice scope={props.scope} host={answer.host} />;
     case "update":
       return (
         <HostScopeNotice

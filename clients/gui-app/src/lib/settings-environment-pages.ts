@@ -195,22 +195,6 @@ export function environmentSectionShown(
   return pageId === null || !PAGES_HIDDEN_BY_PICK[pick.kind].has(pageId);
 }
 
-/**
- * Whether `pick` offers `section`: the Environment group's rule
- * (`environmentSectionShown`), and for an old host's Local pick (`oldHost`,
- * read from the manifest by the caller) only the pages that host has.
- */
-export function pickOffersSection(
-  pick: EnvironmentPick,
-  oldHost: boolean,
-  section: SettingsSectionId,
-): boolean {
-  return (
-    environmentSectionShown(pick, section) &&
-    (!oldHost || oldHostSectionShown(section))
-  );
-}
-
 /** The pick an address names; a Local row is never addressed by one. */
 export function pickForConfiguration(
   configurationId: ConfigurationId,
