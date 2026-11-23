@@ -136,6 +136,7 @@ import {
 } from "@/lib/worktree/worktree-commit-capture";
 import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
 import {
+  queueEditOpenForChat,
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
   type WorktreeStagingKey,
@@ -2830,6 +2831,11 @@ function useChatTileSessionViewModel(
     () => handle.store.getState().draftBlobBridgeSupported,
     [handle.store],
   );
+  // Any pane's edit, not this tile's alone: the composer draft is the chat's.
+  const isQueueEditOpen = useCallback(
+    () => queueEditOpenForChat(viewModelHostId, currentEpicId, node.id),
+    [currentEpicId, node.id, viewModelHostId],
+  );
   const getQueuedSteerRestartConfirmationSupported =
     handle.store.getState().queuedSteerRestartConfirmationSupported;
   // Declared HERE rather than beside its other readers further down: the
@@ -2843,7 +2849,7 @@ function useChatTileSessionViewModel(
     scope: handoffScope,
     profileUserId: profile?.userId ?? null,
     getDraftBlobBridgeSupported,
-    queueEditOpen: uiState.editingQueueItemId !== null,
+    isQueueEditOpen,
   });
   useChatSetupFailureRestoreDriver({
     handle,

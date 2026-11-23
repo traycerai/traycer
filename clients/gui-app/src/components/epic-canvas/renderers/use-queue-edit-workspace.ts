@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useLayoutEffect, useMemo } from "react";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
   failedWorktreePathsForDisplay,
@@ -91,7 +91,10 @@ export function useQueueEditWorkspace(input: {
   const picked = useWorktreeIntentStagingStore((state) =>
     stagingKeyId === null ? undefined : state.intentByKey[stagingKeyId],
   );
-  useEffect(() => {
+  // A layout effect: whether an edit is open is read by every pane's handoff
+  // driver from its own passive effect, including one that runs in this same
+  // commit, so the edit must be open (or closed) before any of them.
+  useLayoutEffect(() => {
     if (queueItemId === null || sessionId === null) return undefined;
     const key = queueEditStagingKey(hostId, epicId, chatId, {
       queueItemId,

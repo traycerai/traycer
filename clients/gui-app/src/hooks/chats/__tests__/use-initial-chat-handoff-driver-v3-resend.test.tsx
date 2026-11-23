@@ -1,4 +1,4 @@
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -25,6 +25,14 @@ import {
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  useQueueEditWorkspace,
+  type QueueEditSession,
+} from "@/components/epic-canvas/renderers/use-queue-edit-workspace";
+import {
+  queueEditOpenForChat,
+  useWorktreeIntentStagingStore,
+} from "@/stores/worktree/worktree-intent-staging-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
 
@@ -245,7 +253,7 @@ function registerWaitingChatHandoff(content: JsonContent): void {
 
 function mountDriver(
   handle: ChatSessionStoreHandle,
-  queueEditOpen: boolean,
+  isQueueEditOpen: () => boolean,
 ): void {
   // Constructed ONCE per mount, outside the render callback, and that placement
   // is load-bearing rather than tidiness. `useSeededSendContent` lists this
@@ -272,7 +280,7 @@ function mountDriver(
       // Read from the store at the moment of the resend, never a boolean
       // captured at mount.
       getDraftBlobBridgeSupported,
-      queueEditOpen,
+      isQueueEditOpen,
     }),
   );
 }
@@ -299,6 +307,7 @@ beforeEach(() => {
   installFreshIndexedDb();
   useInitialChatHandoffStore.getState().resetForTests();
   useComposerDraftStore.setState({ drafts: {} });
+  useWorktreeIntentStagingStore.getState().resetForTests();
   handles = [];
   resetDraftBlobTransportForTests();
   // `currentDraftBlobOwnerId()` reads `contextMetadata.userId` - NOT
@@ -325,7 +334,7 @@ describe("initial-chat-handoff driver: legacy v3 (fully-inlined) resend", () => 
     handles.push(handle);
     markSnapshotLoadedAndActable(handle, false);
 
-    mountDriver(handle, false);
+    mountDriver(handle, () => false);
 
     // The driver's effect fires synchronously on mount (waitingChat +
     // snapshotLoaded + canAct) and the fast path needs no await: a fully-inlined
@@ -382,7 +391,7 @@ describe("initial-chat-handoff driver: hash-first resend", () => {
     handles.push(handle);
     markSnapshotLoadedAndActable(handle, true);
 
-    mountDriver(handle, false);
+    mountDriver(handle, () => false);
 
     const attrs = findImageAttrs(await dispatchedResendContent(handle));
     expect(attrs).not.toBeNull();
@@ -409,7 +418,7 @@ describe("initial-chat-handoff driver: hash-first resend", () => {
     handles.push(handle);
     markSnapshotLoadedAndActable(handle, false);
 
-    mountDriver(handle, false);
+    mountDriver(handle, () => false);
 
     const attrs = findImageAttrs(await dispatchedResendContent(handle));
     expect(attrs).not.toBeNull();
@@ -432,7 +441,7 @@ describe("initial-chat-handoff driver: hash-first resend", () => {
     handles.push(handle);
     markSnapshotLoadedAndActable(handle, true);
 
-    mountDriver(handle, false);
+    mountDriver(handle, () => false);
 
     const attrs = findImageAttrs(await dispatchedResendContent(handle));
     expect(attrs).not.toBeNull();
@@ -466,7 +475,7 @@ describe("initial-chat-handoff driver: a returned draft meets a queue edit", () 
     handles.push(handle);
     seedReturnedDraft(handle);
 
-    mountDriver(handle, false);
+    mountDriver(handle, () => false);
 
     expect(
       JSON.stringify(useComposerDraftStore.getState().drafts[CHAT_ID]?.content),
@@ -482,7 +491,7 @@ describe("initial-chat-handoff driver: a returned draft meets a queue edit", () 
     handles.push(handle);
     seedReturnedDraft(handle);
 
-    mountDriver(handle, true);
+    mountDriver(handle, () => true);
 
     const state = handle.store.getState();
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]).toBeUndefined();
@@ -491,5 +500,136 @@ describe("initial-chat-handoff driver: a returned draft meets a queue edit", () 
     expect(state.errorNotices.map((notice) => notice.code)).toEqual([
       SEND_NOT_RECORDED_NOTICE_CODE,
     ]);
+  });
+
+  const RETURNED_STATE = {
+    clientActionId: "returned-1",
+    messageId: null,
+    content: RETURNED,
+    browserAnnotations: [],
+    reason: "Your edit to a queued message was not saved.",
+    displacedReason: "Your edit to a queued message was not saved.",
+    reasonIsRemovedProfile: false,
+    stated: false,
+    worktreeIntent: null,
+  } as const;
+
+  const EDIT: QueueEditSession = {
+    queueItemId: "queue-item-1",
+    sessionId: "session-1",
+  };
+
+  /**
+   * Two panes of one chat in one tree: the first edits a queued message with
+   * the real hook, the second only runs the handoff driver, asking the same
+   * question chat-tile's wiring asks. The edit hook comes AFTER the driver, so
+   * its effect is the later one in the commit.
+   */
+  function renderPanes(
+    initial: { readonly edit: QueueEditSession | null },
+    handle: ChatSessionStoreHandle,
+  ) {
+    const getDraftBlobBridgeSupported = (): boolean => false;
+    const isQueueEditOpen = (): boolean =>
+      queueEditOpenForChat(HOST_ID, EPIC_ID, CHAT_ID);
+    return renderHook(
+      (props: { readonly edit: QueueEditSession | null }) => {
+        useInitialChatHandoffDriver({
+          handle,
+          nodeId: CHAT_ID,
+          scope: SCOPE,
+          profileUserId: USER_ID,
+          getDraftBlobBridgeSupported,
+          isQueueEditOpen,
+        });
+        useQueueEditWorkspace({
+          hostId: HOST_ID,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          edit: props.edit,
+          rowWorktreeIntent: null,
+          seeded: null,
+          carriesWorktreeIntent: true,
+          missingWorktreePaths: [],
+        });
+      },
+      { initialProps: initial },
+    );
+  }
+
+  function expectStatedNotAdopted(handle: ChatSessionStoreHandle): void {
+    const state = handle.store.getState();
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]).toBeUndefined();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(state.lastCopyPrompts["returned-1"]?.content).toEqual(RETURNED);
+  }
+
+  it("is stated, not adopted, when another pane of the chat holds the edit", () => {
+    const handle = buildHandle(false);
+    handles.push(handle);
+    markSnapshotLoadedAndActable(handle, false);
+    renderPanes({ edit: EDIT }, handle);
+
+    act(() => {
+      handle.store.setState({ failedSendRestoration: RETURNED_STATE });
+    });
+
+    expectStatedNotAdopted(handle);
+  });
+
+  it("is stated, not adopted, when the edit begins in the same commit as the return", () => {
+    const handle = buildHandle(false);
+    handles.push(handle);
+    markSnapshotLoadedAndActable(handle, false);
+    const view = renderPanes({ edit: null }, handle);
+
+    act(() => {
+      view.rerender({ edit: EDIT });
+      handle.store.setState({ failedSendRestoration: RETURNED_STATE });
+    });
+
+    expectStatedNotAdopted(handle);
+  });
+
+  it("is put in the chat's composer by neither of two drivers once one has stated it", () => {
+    const handle = buildHandle(false);
+    handles.push(handle);
+    markSnapshotLoadedAndActable(handle, false);
+    const getDraftBlobBridgeSupported = (): boolean => false;
+    // The first driver stands in for the editing pane's view (an edit is open
+    // there); the second sees none. That isolates the stale snapshot: the
+    // second one's effect runs after the first has consumed the restoration it
+    // was built from.
+    renderHook(() => {
+      useInitialChatHandoffDriver({
+        handle,
+        nodeId: CHAT_ID,
+        scope: SCOPE,
+        profileUserId: USER_ID,
+        getDraftBlobBridgeSupported,
+        isQueueEditOpen: () => true,
+      });
+      useInitialChatHandoffDriver({
+        handle,
+        nodeId: CHAT_ID,
+        scope: SCOPE,
+        profileUserId: USER_ID,
+        getDraftBlobBridgeSupported,
+        isQueueEditOpen: () => false,
+      });
+    });
+
+    act(() => {
+      handle.store.setState({ failedSendRestoration: RETURNED_STATE });
+    });
+
+    expectStatedNotAdopted(handle);
+    expect(
+      handle.store
+        .getState()
+        .errorNotices.filter(
+          (notice) => notice.code === SEND_NOT_RECORDED_NOTICE_CODE,
+        ),
+    ).toHaveLength(1);
   });
 });

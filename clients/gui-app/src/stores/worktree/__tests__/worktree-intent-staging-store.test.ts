@@ -9,6 +9,7 @@ import {
   pendingChildTerminalAgentStagingKey,
   pendingForkChatStagingKey,
   pendingTerminalAgentStagingKey,
+  queueEditOpenForChat,
   queueEditStagingKey,
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -770,5 +771,53 @@ describe("a queued message's edit slot", () => {
         worktreeStagingKeyString(EDIT_KEY)
       ],
     ).toEqual(["/repo/a"]);
+  });
+});
+
+describe("queueEditOpenForChat", () => {
+  const edit = { queueItemId: "queue-item-1", sessionId: "session-1" };
+  const KEY = queueEditStagingKey(HOST_A, "epic-1", "chat", edit);
+
+  afterEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("is true while any session of the chat is open, and false once it is closed", () => {
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(false);
+
+    openQueueEditStaging(KEY);
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(true);
+
+    closeQueueEditStaging(KEY);
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(false);
+  });
+
+  it("stays true until the last of two sessions of the chat closes", () => {
+    const other = queueEditStagingKey(HOST_A, "epic-1", "chat", {
+      queueItemId: "queue-item-1",
+      sessionId: "session-2",
+    });
+    openQueueEditStaging(KEY);
+    openQueueEditStaging(other);
+
+    closeQueueEditStaging(KEY);
+
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(true);
+  });
+
+  it("is false for another chat whose id extends this one's after a colon", () => {
+    openQueueEditStaging(
+      queueEditStagingKey(HOST_A, "epic-1", "chat:other", edit),
+    );
+
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(false);
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat:other")).toBe(true);
+  });
+
+  it("is false for the same chat id on another host or in another epic", () => {
+    openQueueEditStaging(KEY);
+
+    expect(queueEditOpenForChat(HOST_B, "epic-1", "chat")).toBe(false);
+    expect(queueEditOpenForChat(HOST_A, "epic-2", "chat")).toBe(false);
   });
 });

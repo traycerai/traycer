@@ -43,7 +43,10 @@ import {
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
-import { chatCapHasActiveWork } from "@/stores/chats/session-registry";
+import {
+  ChatSessionRegistry,
+  chatCapHasActiveWork,
+} from "@/stores/chats/session-registry";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
@@ -2521,5 +2524,32 @@ describe("a folders-only queue edit that a reconnect leaves unconfirmed", () => 
     harness.handle.store.getState().markNoticeDelivered(notice);
 
     expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
+  });
+
+  it("holds the epic's park until the notice is delivered", () => {
+    harness = openWithQueuedRowOnLine(true);
+    const handle = harness.handle;
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: 60 * 60 * 1_000,
+      maxWarmSessions: 8,
+    });
+    registry.acquire(
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "queue-edit-park",
+      },
+      () => handle,
+    );
+    submitFoldersOnlyEdit(harness);
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+    const notice = workspaceNotice(harness);
+    if (notice === undefined) throw new Error("expected the notice");
+    expect(registry.unsettledWorkForEpic(EPIC_ID).unsettled).toBe(true);
+
+    handle.store.getState().markNoticeDelivered(notice);
+
+    expect(registry.unsettledWorkForEpic(EPIC_ID).unsettled).toBe(false);
   });
 });

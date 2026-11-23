@@ -311,20 +311,50 @@ export function queueEditStagingKey(
     hostId,
     epicId,
     ownerKind: "chat",
-    ownerId: `${QUEUE_EDIT_OWNER_PREFIX}${chatId}:${edit.queueItemId}:${edit.sessionId}`,
+    ownerId: `${queueEditOwnerPrefix(chatId)}${edit.queueItemId}:${edit.sessionId}`,
   };
+}
+
+// The chat's segment is encoded, so it ends at the first ":" after it and one
+// chat's prefix never matches another chat's slots.
+function queueEditOwnerPrefix(chatId: string): string {
+  return `${QUEUE_EDIT_OWNER_PREFIX}${encodeURIComponent(chatId)}:`;
 }
 
 // The queue-edit slots whose edit session is open, by serialized key. An entry
 // lives exactly as long as its edit, so nothing is kept once the edit ends.
-const liveQueueEditSlotIds = new Set<string>();
+const liveQueueEditSlots = new Map<string, WorktreeStagingKey>();
 
 /**
  * Open one edit session's slot for picks. React's development re-run of an
  * effect closes a session and opens it again; a real edit is opened once.
  */
 export function openQueueEditStaging(key: WorktreeStagingKey): void {
-  liveQueueEditSlotIds.add(worktreeStagingKeyString(key));
+  liveQueueEditSlots.set(worktreeStagingKeyString(key), key);
+}
+
+/**
+ * Whether a queued message of this chat is being edited, in any pane. The
+ * composer draft is the chat's, not a pane's, so a draft handed back must not
+ * land in it while any pane's edit holds it.
+ */
+export function queueEditOpenForChat(
+  hostId: string | null,
+  epicId: string,
+  chatId: string,
+): boolean {
+  const prefix = queueEditOwnerPrefix(chatId);
+  for (const key of liveQueueEditSlots.values()) {
+    if (
+      key.surface === "owner" &&
+      key.hostId === hostId &&
+      key.epicId === epicId &&
+      key.ownerId.startsWith(prefix)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -335,7 +365,7 @@ export function openQueueEditStaging(key: WorktreeStagingKey): void {
  */
 export function closeQueueEditStaging(key: WorktreeStagingKey): void {
   const id = worktreeStagingKeyString(key);
-  liveQueueEditSlotIds.delete(id);
+  liveQueueEditSlots.delete(id);
   useWorktreeIntentStagingStore.setState((state) => ({
     intentByKey: withoutKey(state.intentByKey, id),
     suspendedWorkspacePathsByKey: withoutKey(
@@ -368,7 +398,7 @@ function refusesQueueEditWrite(key: WorktreeStagingKey): boolean {
   return (
     key.surface === "owner" &&
     key.ownerId.startsWith(QUEUE_EDIT_OWNER_PREFIX) &&
-    !liveQueueEditSlotIds.has(worktreeStagingKeyString(key))
+    !liveQueueEditSlots.has(worktreeStagingKeyString(key))
   );
 }
 
@@ -1516,7 +1546,7 @@ export const useWorktreeIntentStagingStore =
               : state;
           }),
         resetForTests: () => {
-          liveQueueEditSlotIds.clear();
+          liveQueueEditSlots.clear();
           set({
             intentByKey: {},
             suspendedWorkspacePathsByKey: {},

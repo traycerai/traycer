@@ -8,7 +8,10 @@ import {
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
 import { agentActivityTurnForHost } from "@/stores/agent-activity-store";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import {
   chatActivityIndicator,
   composerTurnStatus,
@@ -494,7 +497,25 @@ function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
   ) {
     return true;
   }
-  return false;
+  // The same promise for the notice that a queued message's folder change
+  // could not be confirmed: a park disposes the chat, and the notice with it.
+  return holdsUntoldWorkspaceNotice(state);
+}
+
+/**
+ * A queued message's folder change that could not be confirmed, not yet told.
+ * Its record retired when the notice was written and nothing was handed back,
+ * so the notice is the only telling there is - and it is shown when a pane
+ * focuses, which a closed tile never does. Bounded like every hold here: the
+ * session's idle deferral is capped by `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`.
+ */
+function holdsUntoldWorkspaceNotice(state: ChatSessionState): boolean {
+  return state.errorNotices.some(
+    (notice) =>
+      notice.code === QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE &&
+      notice.clientActionId !== null &&
+      !state.deliveredNoticeActionIds.has(notice.clientActionId),
+  );
 }
 
 /**
@@ -546,19 +567,8 @@ function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
     return true;
   }
   // 6. A queued message's folder change that could not be confirmed, not yet
-  //    told. Its record retired when the notice was written and nothing was
-  //    handed back, so the notice is the only telling there is - and it is
-  //    shown when a pane focuses, which a closed tile never does.
-  if (
-    state.errorNotices.some(
-      (notice) =>
-        notice.code === QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE &&
-        notice.clientActionId !== null &&
-        !state.deliveredNoticeActionIds.has(notice.clientActionId),
-    )
-  ) {
-    return true;
-  }
+  //    told - see `holdsUntoldWorkspaceNotice`.
+  if (holdsUntoldWorkspaceNotice(state)) return true;
   // 4. The prompt has become an UNDELIVERED last-copy notice. A restoration
   //    displaced by the user's newer draft ends up here, and so does a
   //    recovery abandoned into an occupied slot - and once the slot is
