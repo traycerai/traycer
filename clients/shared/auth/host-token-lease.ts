@@ -556,8 +556,9 @@ export function hostTokenSessionAuth(
 }
 
 /**
- * A local stream's: its door hears which host each answer came from, and only
- * `deps.hostId`'s admission resets the recovery's bounds for that host. Its
+ * A local stream's: its door hears which host process each answer came from,
+ * and only the admission of the process a sequence recovers resets it: a late
+ * admission of a replaced process leaves its replacement's bounds. Its
  * recovery is built per stream session, the caller of every mint it starts;
  * every session of the client shares one set of bounds.
  */
@@ -576,7 +577,7 @@ export function hostTokenStreamAuth(
         door?.refused(details, instance);
       },
       admitted: (instance) => {
-        if (instance.hostId === deps.hostId) recovery.admitted();
+        recovery.admittedBy(instance);
         return door?.admitted(instance) ?? NOTHING_TO_RELEASE;
       },
     },
@@ -636,6 +637,8 @@ function boundedRecovery(
 ): {
   readonly forCaller: (caller: MintCaller) => HostTokenRevalidator;
   readonly admitted: () => void;
+  /** `instance`'s admission: it ends only the sequence recovering `instance`. */
+  readonly admittedBy: (instance: HostInstance) => void;
 } {
   // `null` until the next recovery starts one for the process it recovers.
   let sequence: RecoverySequence | null = null;
@@ -648,6 +651,9 @@ function boundedRecovery(
       revalidatorWithBounds(deps, mints, sequenceOf, caller),
     admitted: () => {
       sequence = null;
+    },
+    admittedBy: (instance) => {
+      if (sequence?.owner === instance) sequence = null;
     },
   };
 }
