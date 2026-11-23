@@ -132,6 +132,10 @@ const monitorHarness = vi.hoisted(() => {
         readonly reached: () => void;
         readonly release: Promise<void>;
       } | null,
+      /** Set once the monitor's stream recovery has returned its answer to the monitor. */
+      recovered: false,
+      /** Run by the next adopting read of the scripted revalidator after `recovered`: the monitor's own, before it judges the exit. */
+      afterRecovery: null as ((lease: MutableBearerLease) => Promise<void>) | null,
       /** What refreshing the stored sign-in answers. */
       refresh: "network-error" as "network-error" | "rotated" | "rejected",
       /** What authn answers a host-token mint with. */
@@ -321,6 +325,16 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
         : {
             revalidateCurrentContext: async () => monitorHarness.state.refresh,
             adoptStoredSignIn: async () => {
+              const after = monitorHarness.state.afterRecovery;
+              if (
+                after !== null &&
+                monitorHarness.state.recovered &&
+                args.lease instanceof Lease
+              ) {
+                monitorHarness.state.afterRecovery = null;
+                await after(args.lease);
+                return;
+              }
               const hold = monitorHarness.state.adoptHold;
               if (hold === null) return;
               if (hold.skip > 0) {
@@ -357,6 +371,41 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
               };
             },
           };
+    },
+  };
+});
+
+// The stream recovery the monitor asks, observed: `recovered` says it has returned its answer, so a test
+// can act in the monitor's own adopting read that comes after it.
+vi.mock("../../internal/cli-host-tokens", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/cli-host-tokens")>();
+  return {
+    ...actual,
+    createCliHostTokens: (
+      options: Parameters<typeof actual.createCliHostTokens>[0],
+    ) => {
+      const tokens = actual.createCliHostTokens(options);
+      return {
+        ...tokens,
+        streamRecovery: (hostId: string) => {
+          const recovery = tokens.streamRecovery(hostId);
+          return {
+            ...recovery,
+            revalidateRefused: async (
+              refusal: Parameters<typeof recovery.revalidateRefused>[0],
+              stillWanted: Parameters<typeof recovery.revalidateRefused>[1],
+            ) => {
+              const outcome = await recovery.revalidateRefused(
+                refusal,
+                stillWanted,
+              );
+              monitorHarness.state.recovered = true;
+              return outcome;
+            },
+          };
+        },
+      };
     },
   };
 });
@@ -587,6 +636,8 @@ beforeEach(() => {
   USER_ID = `monitor-test-user-${userCount}`;
   monitorHarness.state.scriptedFile = null;
   monitorHarness.state.adoptHold = null;
+  monitorHarness.state.recovered = false;
+  monitorHarness.state.afterRecovery = null;
   monitorHarness.state.grantResponse = () =>
     Promise.resolve(new Response("authn unavailable", { status: 503 }));
   processReleasedHosts.forgetAll();
@@ -1959,6 +2010,109 @@ describe("traycer monitor local released-host sign-in", () => {
     });
   });
 
+  describe("a verdict the monitor's own adopting read withdraws or outlives (P2, P5)", () => {
+    const SIBLING = "sibling-sign-in";
+
+    /** Host X's held token is refused as expired and its mint is held; returns the held mints. */
+    async function refuseHeldTokenOnX(): Promise<{
+      readonly answer: (index: number, response: Response) => void;
+    }> {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      const mints = holdMints();
+      startMonitor();
+      const socket = await socketAt(0);
+      await readOpen(socket);
+      socket.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(1),
+        WAIT,
+      );
+      return mints;
+    }
+
+    it("does not exit, and redials on the live sign-in, when the adopting read after a rejected verdict withdraws it", async () => {
+      monitorHarness.state.refresh = "rejected";
+      const mints = await refuseHeldTokenOnX();
+      // A sibling's sign-in lands in the monitor's own read, after the recovery answered "rejected".
+      monitorHarness.state.recovered = false;
+      monitorHarness.state.afterRecovery = async (lease) => {
+        lease.rotate(SIBLING);
+      };
+
+      mints.answer(0, new Response("rejected", { status: 401 }));
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(ended?.error).toBeUndefined();
+      expect(monitorHarness.exits).toEqual([]);
+      await socketAt(1);
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    // A guard: a refusal tied to the host, not to the sign-in, ends with the host's door line when the sign-in is not rejected.
+    it("still ends with the host's door line on a final the host itself gave, though the sign-in is not rejected", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      const mints = holdMints();
+      startMonitor();
+      const first = await socketAt(0);
+      await readOpen(first);
+      first.fireFrame(teamRefusal("not_admitted"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(1),
+        WAIT,
+      );
+      mints.answer(0, grantedToken("fresh-1"));
+      const second = await socketAt(1);
+      await readOpen(second);
+      second.fireFrame(teamRefusal("not_admitted"));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({ message: "traycer monitor: host closed the stream: team admission" });
+    });
+
+    it("never charges a host the monitor has left across its adopting read, and dials the new host before any bound", async () => {
+      // Host X's refresh budget fills through three laps, each on a process that is then replaced.
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      const mints = holdMints();
+      startMonitor();
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const socket = await socketAt(attempt);
+        await readOpen(socket);
+        socket.fireFrame(fatal("token_expired", "host token expired"));
+        await vi.waitFor(
+          () => expect(monitorHarness.grantHosts).toHaveLength(attempt + 1),
+          WAIT,
+        );
+        await replaceHostProcess();
+        mints.answer(attempt, grantedToken(`fresh-${attempt + 1}`));
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      // Lap 4: X's person-level refusal; in the monitor's own read the poll moves to host Y and a sibling's sign-in lands.
+      monitorHarness.state.refresh = "rejected";
+      const socket = await socketAt(3);
+      await readOpen(socket);
+      socket.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(4),
+        WAIT,
+      );
+      const hostY = nextHostId();
+      monitorHarness.state.recovered = false;
+      monitorHarness.state.afterRecovery = async (lease) => {
+        monitorHarness.state.hostId = hostY;
+        await letPollRead();
+        lease.rotate(SIBLING);
+      };
+
+      mints.answer(3, new Response("rejected", { status: 401 }));
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(ended?.error).toBeUndefined();
+      expect(monitorHarness.exits).toEqual([]);
+      expect(await outcomeOf()).toBe("running");
+    });
+  });
+
   describe("a team host that refuses a non-member", () => {
     // A guard: the monitor's line for this refusal is the one c8b3e988 printed.
     it("ends at once with the c8b3e988 line when the refusal names membership_removed", async () => {
@@ -2306,6 +2460,59 @@ describe("traycer monitor local released-host sign-in", () => {
           ?.get(monitorHarness.state.hostId)?.token,
       ).toBe("host-token-c");
       expect(monitorHarness.state.refreshed).toEqual([]);
+    });
+
+    it("refreshes a sign-in that revoked after a lap bought on it, on a later lap, and ends, with authn's requests bounded", async () => {
+      // One host. Lap 1: the held token is refused as expired, the mint on A is refused, A is
+      // refreshed to B and the retry buys a token on B. B is then revoked at authn, and the host
+      // refuses that token as not_admitted before any admission. Every later mint on B is refused.
+      const SIGN_IN_B = "revoked-later-sign-in";
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      monitorHarness.state.refreshed.push(SIGN_IN_B, REFRESH_REJECTED);
+      await seedCredentials(SIGN_IN);
+      let requests = 0;
+      monitorHarness.state.grantResponse = () => {
+        requests += 1;
+        return Promise.resolve(
+          requests === 2
+            ? grantedToken("bought-on-b")
+            : new Response("rejected", { status: 401 }),
+        );
+      };
+      startMonitor();
+      const first = await socketAt(0);
+      expect((await readOpen(first)).token).toBe("held-token");
+      first.fireFrame(fatal("token_expired", "host token expired"));
+      const second = await socketAt(1);
+      expect((await readOpen(second)).token).toBe("bought-on-b");
+      second.fireFrame(teamRefusal("not_admitted"));
+
+      // Later laps, each on the ordinary redial: the same token, the same refusal.
+      for (let lap = 0; lap < 6 && ended === null; lap += 1) {
+        for (
+          let step = 0;
+          step < 400 &&
+          ended === null &&
+          monitorHarness.sockets.length <= lap + 2;
+          step += 1
+        ) {
+          await vi.advanceTimersByTimeAsync(250);
+        }
+        if (ended !== null) break;
+        const redial = await socketAt(lap + 2);
+        await readOpen(redial);
+        redial.fireFrame(teamRefusal("not_admitted"));
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      // The refresh of B happened (the queue is spent) and authn refused it.
+      expect(monitorHarness.state.refreshed).toEqual([]);
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({
+        message: expect.stringContaining("re-authenticate"),
+      });
+      // The requests are not a loop.
+      expect(requests).toBeLessThanOrEqual(8);
     });
 
     it("goes on with the sign-in on disk when another process saves one before the monitor reads a rotation authn refused", async () => {
