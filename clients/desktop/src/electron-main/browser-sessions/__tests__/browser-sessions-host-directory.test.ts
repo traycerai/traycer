@@ -554,6 +554,85 @@ describe("main resolves the browser.sessions host itself", () => {
       }
     });
 
+    // Date and performance are faked without the timers: the wall clock and
+    // the monotonic one move independently (`setSystemTime` moves only the
+    // wall clock, `advanceTimersByTime` both), and no timer callback runs.
+    const BOTH_CLOCKS = { toFake: ["Date", "performance"] } as const;
+
+    function holdConfirmation(directory: {
+      confirmRows(stillWaiting: () => boolean): Promise<boolean>;
+    }): { readonly running: () => Promise<boolean> } {
+      let running: Promise<boolean> | null = null;
+      void confirmRowWithin(
+        (stillWaiting) => {
+          running = directory.confirmRows(stillWaiting);
+          return running;
+        },
+        { current: () => true },
+      );
+      return {
+        running: () => {
+          if (running === null) throw new Error("no confirmation started");
+          return running;
+        },
+      };
+    }
+
+    it("keeps its deadline when the wall clock is set back past it: no read starts, and the answer is false", async () => {
+      vi.useFakeTimers(BOTH_CLOCKS);
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation = holdConfirmation(directory);
+        expect(gets()).toBe(1);
+
+        directory.reset();
+        vi.advanceTimersByTime(ROW_CONFIRM_CEILING_MS + 1);
+        vi.setSystemTime(Date.now() - 600_000);
+        firstRead.resolve(remoteResponse("host-1"));
+        const answer = await confirmation.running();
+
+        expect(gets()).toBe(1);
+        expect(answer).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps waiting when the wall clock jumps forward past the ceiling inside it: the next read is started and answers true", async () => {
+      vi.useFakeTimers(BOTH_CLOCKS);
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation = holdConfirmation(directory);
+        expect(gets()).toBe(1);
+
+        directory.reset();
+        vi.setSystemTime(Date.now() + ROW_CONFIRM_CEILING_MS + 1);
+        firstRead.resolve(remoteResponse("host-1"));
+        const answer = await confirmation.running();
+
+        expect(gets()).toBe(2);
+        expect(answer).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("resolves, never rejecting, for a confirmation that throws as it starts, and starts no read", async () => {
+      const { directory, gets } = directoryWithFirstReadHeld();
+
+      await expect(
+        confirmRowWithin(
+          () => {
+            throw new Error("the confirmation could not start");
+          },
+          { current: () => true },
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(gets()).toBe(0);
+      expect(directory.peek("host-1")).toBeNull();
+    });
+
     it("starts no read when its attach ended before the ceiling and the account resets before its read settled", async () => {
       const { directory, firstRead, gets } = directoryWithFirstReadHeld();
       let attached = true;
