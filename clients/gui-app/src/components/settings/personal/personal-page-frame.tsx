@@ -55,7 +55,7 @@ interface WindowHostEnvironment {
   readonly hostId: string | null;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostName: string;
-  readonly localOverrides: readonly LocalOverride[];
+  readonly localOverrides: readonly LocalOverride[] | null;
   readonly notices: readonly EnvironmentNotice[];
   readonly review: readonly ReviewHeldEntry[];
 }
@@ -90,7 +90,7 @@ function useWindowHostEnvironmentState(
     hostId: scope.hostId,
     client: scope.client,
     hostName: scope.hostLabel,
-    localOverrides: overrides.data?.overrides ?? NO_OVERRIDES,
+    localOverrides: overrides.data?.overrides ?? null,
     notices: personal
       ? ofKinds(notices.data?.notices ?? NO_NOTICES, kinds)
       : NO_NOTICES,

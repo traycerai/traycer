@@ -14,7 +14,7 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import {
   readNotices,
-  readReviewHolds,
+  readEnvironmentReview,
   type ReviewHeldEntry,
 } from "@traycer-clients/shared/environment/environment-review";
 import {
@@ -197,21 +197,29 @@ function isReviewV11(
   return "shownAt" in review && "evidence" in review;
 }
 
+/** The durable Move result and current holds, read on the person's session. */
+export function useEnvironmentOperationReviewRead(
+  hostId: string | null,
+  enabled: boolean,
+) {
+  const { environmentId } = usePersonalEnvironment(enabled);
+  return useEnvironmentCloudOwnRead({
+    method: "environment.review",
+    // The sheet's host is in the key: its revision report re-reads this one.
+    params: { environmentId: environmentId ?? "", hostId },
+    read: (cloud) => readEnvironmentReview(cloud, environmentId ?? ""),
+    enabled: enabled && environmentId !== null,
+    staleTime: 0,
+  });
+}
+
 /** With that host unreachable the three facts read null; its `entries` are never read. */
 export function useEnvironmentReviewRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
 ): EnvironmentRead<EnvironmentReviewSheet> {
-  const personal = usePersonalEnvironment(enabled);
-  const environmentId = personal.environmentId;
-  const holds = useEnvironmentCloudOwnRead({
-    method: "environment.review",
-    // The sheet's host is in the key: its revision report re-reads this one.
-    params: { environmentId: environmentId ?? "", hostId },
-    read: (cloud) => readReviewHolds(cloud, environmentId ?? ""),
-    enabled: enabled && environmentId !== null,
-  });
+  const holds = useEnvironmentOperationReviewRead(hostId, enabled);
   const supported = useHostMethodSupport(hostId, "environment.review");
   const record = useHostQuery<HostRpcRegistry, "environment.review">({
     cacheKeyIdentity: undefined,
@@ -232,7 +240,7 @@ export function useEnvironmentReviewRead(
           shownAt: recorded?.shownAt ?? null,
           acknowledgedAt: recorded?.acknowledgedAt ?? null,
           evidence: recorded?.evidence ?? { version: null, at: null },
-          entries: holds.data,
+          entries: holds.data.entries,
           recorded: recorded !== null,
         };
   return { supported: true, data, isError: holds.isError };

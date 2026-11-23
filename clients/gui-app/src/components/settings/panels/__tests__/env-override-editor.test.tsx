@@ -6,6 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnvOverrideEditor } from "../env-override-editor";
 
@@ -17,6 +18,7 @@ type EnvCommit = (
   value: string | null,
 ) => void | Promise<void>;
 type EnvDelete = (key: string) => void | Promise<void>;
+type OnlyOnSave = (key: string, value: string) => Promise<void>;
 
 afterEach(() => {
   cleanup();
@@ -29,6 +31,11 @@ interface EditorInput {
   }[];
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
+  readonly onlyOn?: {
+    readonly label: string;
+    readonly keptKeys: ReadonlySet<string>;
+    readonly save: OnlyOnSave;
+  };
 }
 
 function editorElement(input: EditorInput) {
@@ -42,6 +49,7 @@ function editorElement(input: EditorInput) {
       emptyLabel="No environment variables."
       onCommit={input.onCommit}
       onDelete={input.onDelete}
+      onlyOn={input.onlyOn}
     />
   );
 }
@@ -51,6 +59,158 @@ function renderEditor(input: EditorInput) {
 }
 
 describe("EnvOverrideEditor", () => {
+  it("saves an edited value only on this computer when activated by mouse", async () => {
+    const user = userEvent.setup();
+    const onlyOnSave = vi.fn<OnlyOnSave>(() => Promise.resolve());
+    const onCommit = vi.fn<EnvCommit>();
+    renderEditor({
+      overrides: [{ key: "LOG_LEVEL", value: "info" }],
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+      onlyOn: {
+        label: "Only on dev-box",
+        keptKeys: new Set(),
+        save: onlyOnSave,
+      },
+    });
+
+    const field = screen.getByLabelText("Value for LOG_LEVEL");
+    field.focus();
+    fireEvent.change(field, { target: { value: "debug" } });
+    await user.click(screen.getByRole("button", { name: "Only on dev-box" }));
+
+    expect(onlyOnSave).toHaveBeenCalledWith("LOG_LEVEL", "debug");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("groups Only on with the draft field for Tab and Enter", async () => {
+    const user = userEvent.setup();
+    const onlyOnSave = vi.fn<OnlyOnSave>(() => Promise.resolve());
+    const onCommit = vi.fn<EnvCommit>();
+    renderEditor({
+      overrides: [{ key: "LOG_LEVEL", value: "info" }],
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+      onlyOn: {
+        label: "Only on dev-box",
+        keptKeys: new Set(),
+        save: onlyOnSave,
+      },
+    });
+
+    const field = screen.getByLabelText("Value for LOG_LEVEL");
+    field.focus();
+    fireEvent.change(field, { target: { value: "debug" } });
+    await user.tab();
+    const onlyOn = screen.getByRole("button", { name: "Only on dev-box" });
+    expect(document.activeElement).toBe(onlyOn);
+    expect(onCommit).not.toHaveBeenCalled();
+
+    await user.keyboard("{Enter}");
+
+    expect(onlyOnSave).toHaveBeenCalledWith("LOG_LEVEL", "debug");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("saves everywhere when Tab moves past Only on", async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn<EnvCommit>();
+    renderEditor({
+      overrides: [{ key: "LOG_LEVEL", value: "info" }],
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+      onlyOn: {
+        label: "Only on dev-box",
+        keptKeys: new Set(),
+        save: vi.fn<OnlyOnSave>(() => Promise.resolve()),
+      },
+    });
+
+    const field = screen.getByLabelText("Value for LOG_LEVEL");
+    field.focus();
+    fireEvent.change(field, { target: { value: "debug" } });
+    await user.tab();
+    expect(onCommit).not.toHaveBeenCalled();
+    await user.tab();
+
+    expect(onCommit).toHaveBeenCalledWith("LOG_LEVEL", "LOG_LEVEL", "debug");
+  });
+
+  it("keeps Only on available for a new valid key and saves the draft locally", async () => {
+    const user = userEvent.setup();
+    const onlyOnSave = vi.fn<OnlyOnSave>(() => Promise.resolve());
+    const onCommit = vi.fn<EnvCommit>();
+    renderEditor({
+      overrides: [],
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+      onlyOn: {
+        label: "Only on dev-box",
+        keptKeys: new Set(),
+        save: onlyOnSave,
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Add a variable" }));
+    await user.type(screen.getByLabelText("New variable name"), "NODE_ENV");
+    await user.type(screen.getByLabelText("New variable value"), "staging");
+    await user.click(screen.getByRole("button", { name: "Only on dev-box" }));
+
+    expect(onlyOnSave).toHaveBeenCalledWith("NODE_ENV", "staging");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("does not offer Only on for a value already kept on this computer", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    renderEditor({
+      overrides: [{ key: "LOG_LEVEL", value: "info" }],
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+      onlyOn: {
+        label: "Only on dev-box",
+        keptKeys: new Set(["LOG_LEVEL"]),
+        save: vi.fn<OnlyOnSave>(() => Promise.resolve()),
+      },
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Only on dev-box" }),
+    ).toBeNull();
+    fireEvent.change(screen.getByLabelText("Value for LOG_LEVEL"), {
+      target: { value: "debug" },
+    });
+    fireEvent.blur(screen.getByLabelText("Value for LOG_LEVEL"));
+
+    expect(onCommit).toHaveBeenCalledWith("LOG_LEVEL", "LOG_LEVEL", "debug");
+  });
+
+  it("does not send a shared save when Only on unmounts while focused", async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn<EnvCommit>();
+    const onlyOnSave = vi.fn<OnlyOnSave>(() => Promise.resolve());
+    const view = renderEditor({
+      overrides: [{ key: "LOG_LEVEL", value: "info" }],
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+      onlyOn: {
+        label: "Only on dev-box",
+        keptKeys: new Set(),
+        save: onlyOnSave,
+      },
+    });
+
+    const field = screen.getByLabelText("Value for LOG_LEVEL");
+    field.focus();
+    fireEvent.change(field, { target: { value: "debug" } });
+    const onlyOn = screen.getByRole("button", { name: "Only on dev-box" });
+    await user.tab();
+    expect(document.activeElement).toBe(onlyOn);
+    view.unmount();
+
+    expect(onlyOnSave).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
   it("stages a new environment variable until the apply button is pressed, then keeps it as a disabled pending draft until the overrides list it", async () => {
     let finishRead: () => void = () => {
       throw new Error("read has not started");

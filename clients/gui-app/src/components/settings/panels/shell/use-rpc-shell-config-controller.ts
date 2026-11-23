@@ -210,11 +210,11 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
-      proposes: everyAnswerProposes,
+      proposes: (answer) => answer.savedLocally !== true,
     },
     mutationKey: configMutationKeys.envSet(),
     errorMessage: "Couldn't save the variable",
-    invalidateMethods: ["config.env.list"],
+    invalidateMethods: ["config.env.list", "environment.localOverrides"],
   });
   const envDeleteMutation = useHostScopedMutationForClient(client, {
     method: "config.env.delete",
@@ -272,7 +272,7 @@ export function useRpcShellConfigController(props: {
         await sendFollowedSave(
           await prepare({ method: "config.env.set", request: set }),
           () => pressedClient.request("config.env.set", set),
-          everyAnswerProposes,
+          (answer) => answer.savedLocally !== true,
         );
         if (rename.oldKey.length === 0) return;
         const remove = { key: rename.oldKey };
@@ -393,9 +393,6 @@ export function useRpcShellConfigController(props: {
       ),
     setEnv: (entry, callbacks) =>
       envSetMutation.mutate(entry, afterEnvRead(callbacks)),
-    setEnvAsync: async (entry) => {
-      await envSetMutation.mutateAsync(entry);
-    },
     deleteEnv: (key, callbacks) =>
       envDeleteMutation.mutate({ key }, afterEnvRead(callbacks)),
     renameEnv: (rename, callbacks) =>

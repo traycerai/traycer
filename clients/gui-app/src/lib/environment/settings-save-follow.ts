@@ -4,7 +4,7 @@ import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/
 export type PendingSettingsSave =
   | {
       readonly kind: "send";
-      readonly answered: () => void;
+      readonly answered: (proposed: boolean) => void;
       readonly failed: () => void;
     }
   /** Ends as an aborted request, which no notice reports. */
@@ -31,8 +31,7 @@ export async function sendFollowedSave<T>(
     pending.failed();
     throw cause;
   }
-  if (proposes(answer)) pending.answered();
-  else pending.failed();
+  pending.answered(proposes(answer));
   return answer;
 }
 

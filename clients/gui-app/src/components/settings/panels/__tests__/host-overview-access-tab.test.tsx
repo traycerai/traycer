@@ -48,7 +48,6 @@ import {
   ACCESS_HOST_NAME,
   ACCESS_METHODS,
   buildAccessHost,
-  noticeFixture,
   type AccessHost,
   type AccessHostState,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
@@ -151,8 +150,18 @@ const PERSONAL_ENVIRONMENT: EnvironmentDescriptorV11 = {
   providerHandle: null,
 };
 
-function serveNoticesFromAuthn(host: AccessHost): { notices: number } {
-  const log = { notices: 0 };
+interface ReviewHostFixture {
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly migratedAt: number;
+  readonly uploadedSettings?: boolean;
+}
+
+function serveNoticesFromAuthn(
+  host: AccessHost,
+  reviewHosts: readonly ReviewHostFixture[],
+): { notices: number; reviews: number } {
+  const log = { notices: 0, reviews: 0 };
   hostMock.binding = {
     directory: null,
     auth: createFakeEnvironmentCloudAuth({
@@ -165,6 +174,15 @@ function serveNoticesFromAuthn(host: AccessHost): { notices: number } {
         environments: () => [PERSONAL_ENVIRONMENT],
         onRequest: (request) => {
           const path = new URL(request.url).pathname;
+          if (
+            request.method === "GET" &&
+            request.url.includes("/review?include=operation")
+          ) {
+            log.reviews += 1;
+            return jsonEnvironmentAnswer({
+              review: { hosts: reviewHosts, needsYou: [] },
+            });
+          }
           if (request.method !== "GET" || !path.endsWith("/notices")) {
             return null;
           }
@@ -197,7 +215,7 @@ function serveNoticesFromAuthn(host: AccessHost): { notices: number } {
       }),
     }),
   };
-  // The read of Personal's id and its notices waits for a verified viewer.
+  // The read of Personal's id and move review waits for a verified viewer.
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: "user-me", username: "user-me" },
@@ -857,15 +875,27 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
 describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
   const SETUP_DONE = { stage: "done", state: "done" } as const;
 
-  it("shows once setup is done and a change came from this host's move", async () => {
-    const host = hostWith(
-      { setup: SETUP_DONE },
-      { notices: [noticeFixture({ source: "migration" })] },
-    );
-    serveNoticesFromAuthn(host);
+  it("shows for this host's uploaded settings, even with a same-named host", async () => {
+    const host = hostWith({ setup: SETUP_DONE }, { notices: [] });
+    const log = serveNoticesFromAuthn(host, [
+      {
+        hostId: ACCESS_HOST_ID,
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 1,
+        uploadedSettings: true,
+      },
+      {
+        hostId: "same-name-host",
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 2,
+        uploadedSettings: true,
+      },
+    ]);
     renderTab(host, READY);
 
     const notice = await screen.findByTestId("moved-to-personal-notice");
+    await settle();
+    expect(log.reviews).toBeGreaterThan(0);
     expect(
       within(notice).getByText(
         "Your settings moved to Personal. Review what changed.",
@@ -879,52 +909,79 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
   it("is not shown while setup is still running", async () => {
     const host = hostWith(
       { setup: { stage: "moving_settings", state: "running" } },
-      { notices: [noticeFixture({ source: "migration" })] },
+      { notices: [] },
     );
-    const log = serveNoticesFromAuthn(host);
+    const log = serveNoticesFromAuthn(host, [
+      {
+        hostId: ACCESS_HOST_ID,
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 1,
+        uploadedSettings: true,
+      },
+    ]);
     renderTab(host, READY);
 
     await screen.findByTestId("host-setup-section");
     await settle();
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
-    expect(log.notices).toBe(0);
+    expect(log.reviews).toBe(0);
   });
 
-  it("is not shown when no change came from the move", async () => {
-    const host = hostWith(
-      { setup: SETUP_DONE },
-      { notices: [noticeFixture({ source: "offline" })] },
-    );
-    const log = serveNoticesFromAuthn(host);
+  it("is not shown when this host uploaded no settings", async () => {
+    const host = hostWith({ setup: SETUP_DONE }, { notices: [] });
+    const log = serveNoticesFromAuthn(host, [
+      {
+        hostId: ACCESS_HOST_ID,
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 1,
+      },
+      {
+        hostId: "same-name-host",
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 2,
+        uploadedSettings: true,
+      },
+    ]);
     renderTab(host, READY);
 
     await waitFor(() => {
-      expect(log.notices).toBeGreaterThan(0);
+      expect(log.reviews).toBeGreaterThan(0);
     });
     await settle();
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
   });
 
-  it("is not shown on a team's host, whose notices are not read", async () => {
+  it("is not shown on a team's host, whose move review is not read", async () => {
     const host = hostWith(
       { setup: SETUP_DONE, principal: { kind: "team", teamName: "Acme" } },
-      { notices: [noticeFixture({ source: "migration" })] },
+      { notices: [] },
     );
-    const log = serveNoticesFromAuthn(host);
+    const log = serveNoticesFromAuthn(host, [
+      {
+        hostId: ACCESS_HOST_ID,
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 1,
+        uploadedSettings: true,
+      },
+    ]);
     renderTab(host, READY);
 
     await screen.findByTestId("team-owned-line");
     await settle();
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
-    expect(log.notices).toBe(0);
+    expect(log.reviews).toBe(0);
   });
 
   it("Dismiss hides it and records the dismissal for that host only", async () => {
-    const host = hostWith(
-      { setup: SETUP_DONE },
-      { notices: [noticeFixture({ source: "migration" })] },
-    );
-    serveNoticesFromAuthn(host);
+    const host = hostWith({ setup: SETUP_DONE }, { notices: [] });
+    serveNoticesFromAuthn(host, [
+      {
+        hostId: ACCESS_HOST_ID,
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 1,
+        uploadedSettings: true,
+      },
+    ]);
     renderTab(host, READY);
     await screen.findByTestId("moved-to-personal-notice");
 
@@ -943,26 +1000,34 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
 
   it("stays hidden once dismissed on this desktop", async () => {
     useHostAccessPromptsStore.getState().dismissMovedNotice(ACCESS_HOST_ID);
-    const host = hostWith(
-      { setup: SETUP_DONE },
-      { notices: [noticeFixture({ source: "migration" })] },
-    );
-    const log = serveNoticesFromAuthn(host);
+    const host = hostWith({ setup: SETUP_DONE }, { notices: [] });
+    const log = serveNoticesFromAuthn(host, [
+      {
+        hostId: ACCESS_HOST_ID,
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 1,
+        uploadedSettings: true,
+      },
+    ]);
     renderTab(host, READY);
 
     await waitFor(() => {
-      expect(log.notices).toBeGreaterThan(0);
+      expect(log.reviews).toBeGreaterThan(0);
     });
     await settle();
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
   });
 
   it("sends Review to the Secrets page", async () => {
-    const host = hostWith(
-      { setup: SETUP_DONE },
-      { notices: [noticeFixture({ source: "migration" })] },
-    );
-    serveNoticesFromAuthn(host);
+    const host = hostWith({ setup: SETUP_DONE }, { notices: [] });
+    serveNoticesFromAuthn(host, [
+      {
+        hostId: ACCESS_HOST_ID,
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 1,
+        uploadedSettings: true,
+      },
+    ]);
     renderTab(host, READY);
     const notice = await screen.findByTestId("moved-to-personal-notice");
 

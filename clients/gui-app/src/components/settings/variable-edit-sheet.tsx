@@ -61,6 +61,10 @@ export function VariableEditSheet(props: {
   readonly saveDisabled: boolean;
   readonly removeLabel: string;
   readonly onSave: (() => void) | null;
+  readonly onlyOn?: {
+    readonly label: string;
+    readonly onSave: () => void;
+  } | null;
   readonly onRemove: (() => void) | null;
   readonly onDismiss: () => void;
   readonly children: ReactNode;
@@ -105,7 +109,7 @@ export function VariableEditSheet(props: {
         >
           {props.children}
         </div>
-        <div className="flex items-center gap-2 p-4 pb-safe-bottom-gutter">
+        <div className="flex flex-wrap items-center gap-2 p-4 pb-safe-bottom-gutter">
           {props.onRemove === null ? null : (
             <Button
               type="button"
@@ -133,6 +137,16 @@ export function VariableEditSheet(props: {
               onClick={props.onSave}
             >
               Save
+            </Button>
+          )}
+          {props.onlyOn === undefined || props.onlyOn === null ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={props.busy || props.saveDisabled}
+              onClick={props.onlyOn.onSave}
+            >
+              {props.onlyOn.label}
             </Button>
           )}
         </div>

@@ -4,15 +4,8 @@
  */
 import { useContext, useState, type ReactNode } from "react";
 import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type {
-  EnvironmentNotice,
-  LocalOverrideTarget,
-} from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentNotice } from "@traycer/protocol/host/environment-schemas";
 import {
-  keepLocalTarget,
-  keepLocalText,
-  keptUndoFailedText,
   noticeText,
   reviewText,
   undoRefusalText,
@@ -22,12 +15,6 @@ import { itemLabel } from "@/components/settings/personal/personal-page-status";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentUndoMutation } from "@/hooks/environment/use-environment-undo-mutation";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { ignoreError } from "@/lib/browser-view/ignore-error";
-import type { HostRpcRegistry } from "@/lib/host";
-import { environmentMutationKeys } from "@/lib/query-keys";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
@@ -35,35 +22,22 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationName } from "@/components/settings/environment/mcp-servers-model";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/**
- * In a Personal page's header: its convergence notices ("LOG_LEVEL
- * from dev-box now applies everywhere.", with Undo and, on that host, "Keep
- * dev-box's value on dev-box") and its "needs you" rows: a held value's opens
- * the retrospective sheet, every other one Secrets.
- * Nothing when the page has neither.
- */
+/** Convergence notices and held changes for the settings on this page. */
 export function PersonalPageNotices(): ReactNode {
   const value = useContext(PersonalPageContext);
   const source = useConfigurationSource();
   const team = source.kind === "pool" && source.configuration === "team";
   if (value === null || (value.client === null && !team)) return null;
   if (value.notices.length === 0 && value.review.length === 0) return null;
-  const { client } = value;
   return (
     <ul
       className="flex max-w-[72ch] flex-col gap-1.5"
       data-testid="personal-page-notices"
     >
-      {client === null
+      {value.client === null
         ? null
         : value.notices.map((notice) => (
-            <NoticeRow
-              key={notice.noticeId}
-              client={client}
-              hostId={value.hostId}
-              hostName={value.hostName}
-              notice={notice}
-            />
+            <NoticeRow key={notice.noticeId} notice={notice} />
           ))}
       {value.review.map((entry) => (
         <ReviewRow
@@ -80,17 +54,11 @@ export function PersonalPageNotices(): ReactNode {
 const ROW_CLASS =
   "flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-md border border-border/60 bg-foreground/3 px-3 py-1.5 text-ui-sm";
 
-function NoticeRow(props: {
-  readonly client: HostClient<HostRpcRegistry>;
-  readonly hostId: string | null;
-  readonly hostName: string;
-  readonly notice: EnvironmentNotice;
-}): ReactNode {
+function NoticeRow(props: { readonly notice: EnvironmentNotice }): ReactNode {
   const { notice } = props;
   const label = itemLabel(notice);
   const [refusal, setRefusal] = useState<string | null>(null);
   const undo = useEnvironmentUndoMutation();
-  const keepTarget = keepLocalTarget(notice, props.hostId);
   return (
     <li className={ROW_CLASS} data-testid="personal-notice">
       <span className="min-w-0 text-foreground">
@@ -106,29 +74,6 @@ function NoticeRow(props: {
       </span>
       {notice.undoAvailable ? (
         <div className="flex shrink-0 flex-wrap gap-2">
-          {keepTarget === null ? null : (
-            <KeepLocalButton
-              client={props.client}
-              hostName={props.hostName}
-              target={keepTarget}
-              disabled={undo.isPending}
-              onKept={async () => {
-                try {
-                  const outcome = await undo.mutateAsync({
-                    noticeId: notice.noticeId,
-                  });
-                  setRefusal(
-                    undoRefusalText(outcome, label, {
-                      hostName: props.hostName,
-                    }),
-                  );
-                } catch {
-                  setRefusal(keptUndoFailedText(props.hostName));
-                }
-              }}
-              onRefused={setRefusal}
-            />
-          )}
           <Button
             type="button"
             size="sm"
@@ -139,7 +84,7 @@ function NoticeRow(props: {
                 { noticeId: notice.noticeId },
                 {
                   onSuccess: (outcome) =>
-                    setRefusal(undoRefusalText(outcome, label, null)),
+                    setRefusal(undoRefusalText(outcome, label)),
                 },
               )
             }
@@ -160,104 +105,7 @@ function NoticeRow(props: {
   );
 }
 
-/**
- * "Keep dev-box's value on dev-box": keeps the value this host has now as its
- * own, then undoes the change everywhere. Shown only on the host the change
- * came from, once its current value is read; the value is read the way the
- * page that shows it reads it, so the two agree.
- */
-function KeepLocalButton(props: {
-  readonly client: HostClient<HostRpcRegistry>;
-  readonly hostName: string;
-  readonly target: LocalOverrideTarget;
-  readonly disabled: boolean;
-  readonly onKept: () => Promise<void>;
-  readonly onRefused: (text: string) => void;
-}): ReactNode {
-  const current = useCurrentValue(props.client, props.target);
-  const keep = useHostScopedMutationForClient(props.client, {
-    method: "config.env.localOverride.set",
-    mutationKey: environmentMutationKeys.localOverrideSet(),
-    errorMessage: "Couldn't keep the value on this host.",
-    scope: { id: "config.env.localOverride" },
-    invalidateMethods: ["environment.localOverrides"],
-  });
-  if (current === null) return null;
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant="outline"
-      disabled={props.disabled || keep.isPending}
-      onClick={() => {
-        void keep
-          .mutateAsync({
-            target: props.target,
-            value: current,
-          })
-          .then(async (answer) => {
-            if (answer.outcome === "needs_grant") {
-              props.onRefused(
-                "Couldn't keep the value without your confirmation.",
-              );
-              return;
-            }
-            await props.onKept();
-          })
-          // A refused write was toasted by the mutation; nothing was undone.
-          .catch(ignoreError);
-      }}
-    >
-      {keepLocalText(props.hostName)}
-      {keep.isPending ? (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-          tone="muted"
-        />
-      ) : null}
-    </Button>
-  );
-}
-
-/** This host's current value for `target`, or `null` until read (or unset). */
-function useCurrentValue(
-  client: HostClient<HostRpcRegistry>,
-  target: LocalOverrideTarget,
-): string | null {
-  const variables = useHostQuery<HostRpcRegistry, "config.env.list">({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "config.env.list",
-    params: {},
-    options: { enabled: target.kind === "variable" },
-  });
-  // Subscribed: the row must read the value itself, not rely on the
-  // Providers page's own read being mounted beside it.
-  const providers = useProvidersListForClient(client, {
-    enabled: target.kind === "env_override",
-    subscribed: target.kind === "env_override",
-  });
-  if (target.kind === "variable") {
-    return (
-      variables.data?.entries.find((entry) => entry.key === target.key)
-        ?.value ?? null
-    );
-  }
-  return (
-    providers.data?.providers
-      .find((provider) => provider.providerId === target.providerId)
-      ?.envOverrides.find((override) => override.key === target.key)?.value ??
-    null
-  );
-}
-
-/**
- * A "needs you" row: a hold. Its `Review` opens the retrospective sheet for
- * the host this page reads, where its Approve and Discard are; with no host
- * to read, Secrets.
- */
+/** Review opens the sheet for this host, or Secrets when there is no host. */
 function ReviewRow(props: {
   readonly entry: ReviewHeldEntry;
   readonly hostId: string | null;

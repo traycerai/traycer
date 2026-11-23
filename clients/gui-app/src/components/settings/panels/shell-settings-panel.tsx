@@ -1,5 +1,4 @@
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useMutation } from "@tanstack/react-query";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Info, RotateCcw } from "lucide-react";
@@ -15,13 +14,9 @@ import type {
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
-import {
-  usePersonalPageHost,
-  usePersonalRowNotes,
-} from "@/components/settings/personal/personal-page-context";
+import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { environmentMutationKeys } from "@/lib/query-keys";
+import { usePersonalEnvOverrideActions } from "@/components/settings/personal/use-personal-env-override-actions";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -48,6 +43,7 @@ import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effe
 import {
   EnvOverrideEditor,
   type EnvStaleRefusal,
+  type OnlyOnComputer,
 } from "@/components/settings/panels/env-override-editor";
 import { staleWriteOf } from "@/lib/environment/stale-write";
 import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-chips";
@@ -355,7 +351,8 @@ function ShellSettingsPanelBody(props: {
   const overrides = controller.overrides;
 
   const shellPending = controller.shellPending;
-  const envPending = controller.envPending;
+  const { onlyOn, canShare, share } = usePersonalEnvOverrideActions(null);
+  const envPending = controller.envPending || share.isPending;
   const [shellSaveTarget, setShellSaveTarget] =
     useState<ShellSaveTarget | null>(null);
   const [shellSavedTarget, setShellSavedTarget] =
@@ -535,32 +532,16 @@ function ShellSettingsPanelBody(props: {
       });
     });
   };
-  // Use everywhere: this host's own value becomes Personal's, then the host
-  // stops keeping one of its own. Cleared only after the save landed, so a
-  // failed save leaves the host's value where it was.
-  const pageHost = usePersonalPageHost();
-  const clearOwnValue = useHostScopedMutationForClient(pageHost.client, {
-    method: "config.env.localOverride.clear",
-    mutationKey: environmentMutationKeys.localOverrideClear(),
-    errorMessage: "Couldn't stop this computer keeping its own value.",
-    scope: { id: "config.env.localOverride" },
-    invalidateMethods: ["environment.localOverrides", "config.env.list"],
-  });
-  const useEverywhere = useMutation({
-    mutationFn: async (entry: {
-      readonly key: string;
-      readonly value: string;
-    }) => {
-      await controller.setEnvAsync(entry);
-      await clearOwnValue.mutateAsync({
-        target: { kind: "variable", key: entry.key },
-      });
-    },
-  });
-  const onUseEverywhere = (key: string, value: string): void => {
-    if (envPending || useEverywhere.isPending) return;
+  const onUseEverywhere = (key: string): void => {
+    if (envPending || !canShare) return;
     beginEnvSave();
-    useEverywhere.mutate({ key, value }, envSaveCallbacks(key));
+    share.mutate(key, {
+      onSuccess: (result) => {
+        if (result === "shared") finishEnvSave();
+        else cancelEnvSave();
+      },
+      onError: cancelEnvSave,
+    });
   };
 
   return (
@@ -597,7 +578,8 @@ function ShellSettingsPanelBody(props: {
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
         onUseEverywhere={onUseEverywhere}
-        useEverywherePending={useEverywhere.isPending}
+        canShare={canShare}
+        onlyOn={onlyOn}
       />
     </div>
   );
@@ -989,8 +971,9 @@ function HostEnvironmentGroup(props: {
     value: string | null,
   ) => Promise<void>;
   readonly onDelete: (key: string) => Promise<void>;
-  readonly onUseEverywhere: (key: string, value: string) => void;
-  readonly useEverywherePending: boolean;
+  readonly onUseEverywhere: (key: string) => void;
+  readonly canShare: boolean;
+  readonly onlyOn: OnlyOnComputer | null;
 }) {
   const viewerId = useCloudChatViewerId();
   const configurationKey = useConfigurationKey();
@@ -1002,7 +985,7 @@ function HostEnvironmentGroup(props: {
       <PersonalRowNoteText
         name={key}
         note={note}
-        disabled={props.pending || props.useEverywherePending}
+        disabled={props.pending || !props.canShare}
         onUseEverywhere={props.onUseEverywhere}
       />,
     );
@@ -1044,6 +1027,7 @@ function HostEnvironmentGroup(props: {
           <EnvOverrideEditor
             key={JSON.stringify([viewerId, configurationKey])}
             rowNotes={rowNotes}
+            onlyOn={props.onlyOn}
             overrides={props.overrides}
             disabled={props.pending}
             namePlaceholder="OPENAI_API_KEY"

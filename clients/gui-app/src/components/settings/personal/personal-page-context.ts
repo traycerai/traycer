@@ -22,7 +22,7 @@ export interface PersonalPageContextValue {
   readonly state: PersonalHostState;
   readonly hostName: string;
   /** This host's machine facts: values that apply on it only. */
-  readonly localOverrides: readonly LocalOverride[];
+  readonly localOverrides: readonly LocalOverride[] | null;
   /** The window's host and the client that reaches it. */
   readonly hostId: string | null;
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -99,7 +99,7 @@ export function usePersonalRowNotes(
   const hostName =
     value.hostName.length === 0 ? "this computer" : value.hostName;
   const notes = new Map<string, PersonalRowNote>();
-  for (const override of value.localOverrides) {
+  for (const override of value.localOverrides ?? NO_OVERRIDES) {
     const own = override.target;
     if (
       own.kind === target.kind &&

@@ -25,7 +25,14 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 // standing up a real `<HostRuntimeProvider>` - see `providers-settings-panel.test.tsx`
 // and `provider-mcp-tab.test.tsx` for the same partial-object pattern.
 const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
+  (): {
+    current: {
+      readonly hostClient: unknown;
+      readonly auth?: {
+        readonly environmentCloud: () => EnvironmentCloud;
+      };
+    } | null;
+  } => ({
     current: null,
   }),
 );
@@ -70,12 +77,21 @@ import type {
   IRunnerHost,
   TraycerShellConfigSetInput,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { LocalOverride } from "@traycer/protocol/host/environment-schemas";
+import type {
+  ConfigEnvLocalOverrideSetRequest,
+  LocalOverride,
+} from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import {
   MockRunnerHost,
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
+  recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -92,6 +108,7 @@ import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-r
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { queryKeys } from "@/lib/query-keys";
 import {
   ALL_CONFIG_RPC_METHODS,
@@ -109,6 +126,7 @@ afterEach(() => {
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   sandboxCredentialRefusal.current = null;
+  useAuthStore.setState({ status: "signed-out" });
 });
 
 // A non-login program: its family default is no flags, so switching to it must
@@ -129,6 +147,23 @@ async function openEnvAdd(): Promise<void> {
 }
 
 const SAVED_FLASH_MS = 1600;
+const P6_METHODS = [
+  ...CONFIG_SHELL_METHODS,
+  "config.env.localOverride.set",
+  "config.env.localOverride.saveToPersonal",
+  "config.env.localOverride.clear",
+];
+
+function p6Manifest(): ConnectionManifest {
+  return Object.fromEntries(
+    P6_METHODS.map((method) => {
+      const variableMinor = method === "config.env.set" ? 2 : 0;
+      const minor =
+        method === "config.env.localOverride.clear" ? 1 : variableMinor;
+      return [method, { major: 1, minor }];
+    }),
+  );
+}
 
 /**
  * The panel over the config RPC path - the production path for every
@@ -155,9 +190,12 @@ function renderShellPanelOverRpc(options: {
    * distinct from a recorded-but-empty manifest.
    */
   readonly methods?: readonly string[] | null;
+  /** A full per-method manifest for same-major gates such as clear@1.1. */
+  readonly manifest?: ConnectionManifest;
   readonly hostKind?: HostScopeOption["kind"];
 }): ConfigHostFixture & {
   readonly queryClient: QueryClient;
+  readonly applyRequests: EnvironmentTransportRequest[];
   readonly rerenderPanel: () => void;
   readonly unmountPanel: () => void;
 } {
@@ -171,7 +209,9 @@ function renderShellPanelOverRpc(options: {
     cli,
     overrideHandlers: options.overrideHandlers,
   });
-  if (options.methods !== null) {
+  if (options.manifest !== undefined) {
+    recordNegotiatedHostManifest(hostId, options.manifest);
+  } else if (options.methods !== null) {
     recordNegotiatedHostMethods(
       hostId,
       options.methods ?? [
@@ -204,7 +244,35 @@ function renderShellPanelOverRpc(options: {
     status: "ready",
     client: fixture.client,
   };
-  hostBindingMock.current = { hostClient: fixture.client };
+  const applyRequests: EnvironmentTransportRequest[] = [];
+  if (options.localOverrides !== undefined) {
+    useAuthStore.setState({ status: "signed-in" });
+    const cloud: EnvironmentCloud = {
+      authnBaseUrl: "https://example.invalid",
+      bearer: {
+        kind: "cloud",
+        getBearerToken: () => "shell-settings-test-bearer",
+      },
+      transport: (request) => {
+        const path = new URL(request.url).pathname;
+        if (request.method === "POST" && path.includes("/review/held/")) {
+          applyRequests.push(request);
+          return Promise.resolve({
+            status: 200,
+            text: JSON.stringify({ outcome: "applied" }),
+          });
+        }
+        return Promise.resolve({ status: 404, text: "{}" });
+      },
+      onOriginSignIn: () => true,
+    };
+    hostBindingMock.current = {
+      hostClient: fixture.client,
+      auth: { environmentCloud: () => cloud },
+    };
+  } else {
+    hostBindingMock.current = { hostClient: fixture.client };
+  }
 
   const runnerHost: IRunnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
@@ -247,6 +315,7 @@ function renderShellPanelOverRpc(options: {
   return {
     ...fixture,
     queryClient,
+    applyRequests,
     rerenderPanel: () => rendered.rerender(panel()),
     unmountPanel: () => rendered.unmount(),
   };
@@ -1416,6 +1485,13 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
 
 describe("<ShellSettingsPanel /> host environment names that look like credentials", () => {
   const PASSWORD_URL = "https://user:pw@example.com/x";
+  const SHARE_RECEIPT = {
+    environmentId: "env-personal",
+    heldId: "held-shell-value",
+    revision: 9,
+    expectedLiveRevision: 3,
+    reviewRequired: false,
+  } as const;
 
   function envCli(): MockTraycerCli {
     const cli = new MockTraycerCli();
@@ -1521,6 +1597,53 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
+  it("saves an edited variable only on this host without changing Personal", async () => {
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+    const { set } = envHandlers(cli);
+    const localSet = vi.fn((request: ConfigEnvLocalOverrideSetRequest) =>
+      Promise.resolve({
+        outcome: "saved" as const,
+        overrides: [
+          {
+            target: request.target,
+            os: "any" as const,
+            value: request.value,
+            setAt: 2,
+          },
+        ],
+      }),
+    );
+    renderShellPanelOverRpc({
+      cli,
+      hostId: "dev-box",
+      methods: [
+        ...CONFIG_SHELL_METHODS,
+        "config.env.localOverride.set",
+        "config.env.localOverride.clear",
+        "config.env.localOverride.saveToPersonal",
+      ],
+      localOverrides: [],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.set": localSet,
+      },
+    });
+
+    fireEvent.change(await screen.findByLabelText("Value for LOG_LEVEL"), {
+      target: { value: "debug" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Only on dev-box" }));
+
+    await waitFor(() => {
+      expect(localSet).toHaveBeenCalledWith({
+        target: { kind: "variable", key: "LOG_LEVEL" },
+        value: "debug",
+      });
+    });
+    expect(set).not.toHaveBeenCalled();
+  });
+
   it("offers Use everywhere for a password URL shown as dots and saves that URL", async () => {
     const cli = envCli();
     cli.envOverrides = [{ key: "REPO_URL", value: "https://example.com/path" }];
@@ -1531,12 +1654,17 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
         overrides: [],
       }),
     );
-    renderShellPanelOverRpc({
+    const saveToPersonal = vi.fn((_request: ConfigEnvLocalOverrideSetRequest) =>
+      Promise.resolve(SHARE_RECEIPT),
+    );
+    const panel = renderShellPanelOverRpc({
       cli,
+      manifest: p6Manifest(),
       localOverrides: [localVariableOverride("REPO_URL", PASSWORD_URL)],
       overrideHandlers: {
         "config.env.set": set,
         "config.env.localOverride.clear": clear,
+        "config.env.localOverride.saveToPersonal": saveToPersonal,
       },
     });
 
@@ -1547,17 +1675,25 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
 
     fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
 
-    await waitFor(() => {
-      expect(set).toHaveBeenCalledOnce();
-      expect(clear).toHaveBeenCalledOnce();
-    });
-    expect(set).toHaveBeenCalledWith({
-      key: "REPO_URL",
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledOnce());
+    expect(saveToPersonal).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "REPO_URL" },
       value: PASSWORD_URL,
     });
+    await waitFor(() => expect(panel.applyRequests).toHaveLength(1));
+    expect(panel.applyRequests[0]?.body).toEqual({
+      revision: SHARE_RECEIPT.revision,
+      expectedLiveRevision: SHARE_RECEIPT.expectedLiveRevision,
+    });
+    expect(panel.applyRequests[0]?.url).toBe(
+      "https://example.invalid/api/v3/environments/env-personal/review/held/held-shell-value/apply",
+    );
+    await waitFor(() => expect(clear).toHaveBeenCalledOnce());
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "REPO_URL" },
+      expectedValue: PASSWORD_URL,
     });
+    expect(set).not.toHaveBeenCalled();
   });
 
   it("still moves an ordinary local variable everywhere", async () => {
@@ -1570,12 +1706,17 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
         overrides: [],
       }),
     );
-    renderShellPanelOverRpc({
+    const saveToPersonal = vi.fn((_request: ConfigEnvLocalOverrideSetRequest) =>
+      Promise.resolve(SHARE_RECEIPT),
+    );
+    const panel = renderShellPanelOverRpc({
       cli,
+      manifest: p6Manifest(),
       localOverrides: [localVariableOverride("LOG_LEVEL", "error")],
       overrideHandlers: {
         "config.env.set": set,
         "config.env.localOverride.clear": clear,
+        "config.env.localOverride.saveToPersonal": saveToPersonal,
       },
     });
 
@@ -1583,56 +1724,63 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
       await screen.findByRole("button", { name: "Use everywhere" }),
     );
 
-    await waitFor(() => {
-      expect(set).toHaveBeenCalledOnce();
-      expect(clear).toHaveBeenCalledOnce();
-    });
-    expect(set).toHaveBeenCalledWith({
-      key: "LOG_LEVEL",
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledOnce());
+    expect(saveToPersonal).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
       value: "error",
     });
+    await waitFor(() => expect(panel.applyRequests).toHaveLength(1));
+    expect(panel.applyRequests[0]?.body).toEqual({
+      revision: SHARE_RECEIPT.revision,
+      expectedLiveRevision: SHARE_RECEIPT.expectedLiveRevision,
+    });
+    await waitFor(() => expect(clear).toHaveBeenCalledOnce());
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "LOG_LEVEL" },
+      expectedValue: "error",
     });
+    expect(set).not.toHaveBeenCalled();
   });
 
   it("clears a host's own variable after its save resolves, even if the panel unmounts", async () => {
-    let releaseSave: (() => void) | undefined;
     const cli = envCli();
     cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
-    const set = vi.fn(
-      async (request: { key: string; value: string | null }) => {
-        await new Promise<void>((resolve) => {
-          releaseSave = resolve;
-        });
-        return { key: request.key, value: request.value };
-      },
+    let releaseSave: (() => void) | undefined;
+    const saveToPersonal = vi.fn(
+      (_request: ConfigEnvLocalOverrideSetRequest) =>
+        new Promise<typeof SHARE_RECEIPT>((resolve) => {
+          releaseSave = () => resolve(SHARE_RECEIPT);
+        }),
     );
     const clear = vi.fn(() =>
       Promise.resolve({ outcome: "saved" as const, overrides: [] }),
     );
     const panel = renderShellPanelOverRpc({
       cli,
+      manifest: p6Manifest(),
       localOverrides: [localVariableOverride("LOG_LEVEL", "error")],
       overrideHandlers: {
-        "config.env.set": set,
         "config.env.localOverride.clear": clear,
+        "config.env.localOverride.saveToPersonal": saveToPersonal,
       },
     });
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Use everywhere" }),
     );
-    await waitFor(() => expect(set).toHaveBeenCalledOnce());
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledOnce());
+    expect(panel.applyRequests).toHaveLength(0);
     expect(clear).not.toHaveBeenCalled();
 
     panel.unmountPanel();
     if (releaseSave === undefined) throw new Error("save did not start");
     act(() => releaseSave?.());
 
+    await waitFor(() => expect(panel.applyRequests).toHaveLength(1));
     await waitFor(() => expect(clear).toHaveBeenCalledOnce());
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "LOG_LEVEL" },
+      expectedValue: "error",
     });
   });
 
@@ -1643,23 +1791,26 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     });
     const cli = envCli();
     cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
-    const set = vi.fn(() => failedSave);
+    const saveToPersonal = vi.fn(
+      (_request: ConfigEnvLocalOverrideSetRequest) => failedSave,
+    );
     const clear = vi.fn(() =>
       Promise.resolve({ outcome: "saved" as const, overrides: [] }),
     );
-    renderShellPanelOverRpc({
+    const panel = renderShellPanelOverRpc({
       cli,
+      manifest: p6Manifest(),
       localOverrides: [localVariableOverride("LOG_LEVEL", "error")],
       overrideHandlers: {
-        "config.env.set": set,
         "config.env.localOverride.clear": clear,
+        "config.env.localOverride.saveToPersonal": saveToPersonal,
       },
     });
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Use everywhere" }),
     );
-    await waitFor(() => expect(set).toHaveBeenCalledOnce());
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledOnce());
     if (rejectSave === undefined) throw new Error("save did not start");
     await act(async () => {
       rejectSave?.(new Error("save failed"));
@@ -1667,6 +1818,7 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     });
 
     expect(clear).not.toHaveBeenCalled();
+    expect(panel.applyRequests).toHaveLength(0);
   });
 });
 

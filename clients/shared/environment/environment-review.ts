@@ -84,6 +84,8 @@ export type ReviewHeldEntry = EnvironmentReviewEntryV12 & {
   readonly op: "put" | "delete";
   readonly heldRevision: number;
   readonly liveRevision: number | null;
+  /** Host-proposal holds carry a generation. Historical Move holds do not. */
+  readonly sharingGeneration?: number;
 };
 
 const NO_HELD_FACTS = {
@@ -93,11 +95,11 @@ const NO_HELD_FACTS = {
   value: null,
 } as const;
 
-export async function readReviewHolds(
+export async function readEnvironmentReview(
   cloud: EnvironmentCloud,
   environmentId: string,
-): Promise<readonly ReviewHeldEntry[]> {
-  return readProjectedReviewHolds(cloud, environmentId, ({ entry }) => entry);
+) {
+  return readProjectedReview(cloud, environmentId, ({ entry }) => entry);
 }
 
 /** Values exist only while a caller makes its validated, masked projection. */
@@ -116,6 +118,18 @@ export async function readProjectedReviewHolds<Projection>(
   environmentId: string,
   project: (input: ReviewHeldProjectionInput) => Projection,
 ): Promise<readonly Projection[]> {
+  const { entries } = await readProjectedReview(cloud, environmentId, project);
+  return entries;
+}
+
+async function readProjectedReview<Projection>(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  project: (input: ReviewHeldProjectionInput) => Projection,
+): Promise<{
+  readonly entries: readonly Projection[];
+  readonly uploadedHostIds: readonly string[];
+}> {
   const query = new URLSearchParams({ include: REVIEW_INCLUDE_OPERATION });
   const { review } = parseReview(
     await sendReview(
@@ -149,12 +163,20 @@ export async function readProjectedReviewHolds<Projection>(
       op: entry.op,
       heldRevision: entry.revision,
       liveRevision: entry.live?.revision ?? null,
+      ...(entry.sharingGeneration === null
+        ? {}
+        : { sharingGeneration: entry.sharingGeneration }),
     };
     holds.push(
       project({ entry: held, proposed: entry.value, current: entry.live }),
     );
   }
-  return holds;
+  return {
+    entries: holds,
+    uploadedHostIds: (review?.hosts ?? [])
+      .filter((host) => host.uploadedSettings === true)
+      .map((host) => host.hostId),
+  };
 }
 
 export interface ReviewChoiceOutcome {

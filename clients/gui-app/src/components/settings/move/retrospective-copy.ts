@@ -25,9 +25,14 @@ export const APPROVE = "Approve";
 
 export type HeldApplyChoice = "discard" | "approve";
 
-export interface HeldChoiceAction {
-  readonly choice: HeldApplyChoice;
+export type PersonalHeldChoice = HeldApplyChoice | "keep";
+
+export interface HeldChoiceAction<
+  Choice extends PersonalHeldChoice = HeldApplyChoice,
+> {
+  readonly choice: Choice;
   readonly label: string;
+  readonly variant?: "default";
 }
 
 export const HELD_COMMAND_CHOICES: readonly HeldChoiceAction[] = [

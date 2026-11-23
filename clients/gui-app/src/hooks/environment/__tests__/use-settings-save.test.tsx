@@ -24,7 +24,10 @@ import type {
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import type { EnvironmentProposalsResponse } from "@traycer/protocol/host/environment/settings-proposals";
-import type { SetupScript } from "@traycer/protocol/host/environment-schemas";
+import type {
+  LocalOverride,
+  SetupScript,
+} from "@traycer/protocol/host/environment-schemas";
 import type { ConfigShellGetResponseV11 } from "@traycer/protocol/host/config/index";
 import { hostRpcRegistry } from "@traycer/protocol/host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
@@ -77,6 +80,7 @@ import {
   type EnvironmentClientFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import { settingsSaveMemoryKey } from "@/lib/persist";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
   useSettingsSaveMemoryStore,
@@ -305,6 +309,9 @@ interface MutableAuthnState {
   itemsGate: Deferred<EnvironmentTransportAnswer> | null;
   ownSettings: boolean;
   failSave: boolean;
+  configEnvSetSavedLocally: boolean;
+  configEnvSetLostReply: boolean;
+  providerSetEnvOverrideSavedLocally: boolean;
   localHostId: string | null;
   readonly shellConfig: ConfigShellGetResponseV11;
   proposals: EnvironmentProposalsResponse;
@@ -413,6 +420,8 @@ function makeSaveHarness(overrides: {
   readonly proposals?: EnvironmentProposalsResponse;
   readonly reviewAnswer?: EnvironmentTransportAnswer;
   readonly shellConfig?: ConfigShellGetResponseV11;
+  readonly configEnvSetMinor?: number;
+  readonly providersSetEnvOverrideMinor?: number;
 }): SaveHarness {
   const listeners = new Set<() => void>();
   const state: MutableAuthnState = {
@@ -426,6 +435,9 @@ function makeSaveHarness(overrides: {
     itemsGate: overrides.itemsGate ?? null,
     ownSettings: overrides.ownSettings ?? false,
     failSave: false,
+    configEnvSetSavedLocally: false,
+    configEnvSetLostReply: false,
+    providerSetEnvOverrideSavedLocally: false,
     localHostId: overrides.localHostId ?? null,
     shellConfig: overrides.shellConfig ?? {
       path: "/bin/zsh",
@@ -551,7 +563,12 @@ function makeSaveHarness(overrides: {
         captureSave("providers.setEnvOverride", request);
         if (state.failSave) throw new Error("Test host write failed");
         hostEvents.push("answer:providers.setEnvOverride");
-        return { state: providerMutationState(request.providerId) };
+        return {
+          state: providerMutationState(request.providerId),
+          ...(state.providerSetEnvOverrideSavedLocally
+            ? { savedLocally: true }
+            : {}),
+        };
       },
       "providers.deleteEnvOverride": (request) => {
         captureSave("providers.deleteEnvOverride", request);
@@ -572,7 +589,19 @@ function makeSaveHarness(overrides: {
       "config.env.set": (request) => {
         captureSave("config.env.set", request);
         hostEvents.push("answer:config.env.set");
-        return { key: request.key, value: request.value };
+        if (state.configEnvSetLostReply) {
+          throw new HostRequestAbortedError({
+            message: "The host reply was lost after dispatch.",
+            requestId: "lost-config-env-set-reply",
+            method: "config.env.set",
+            mayHaveDispatched: true,
+          });
+        }
+        return {
+          key: request.key,
+          value: request.value,
+          ...(state.configEnvSetSavedLocally ? { savedLocally: true } : {}),
+        };
       },
       "config.env.delete": (request) => {
         captureSave("config.env.delete", request);
@@ -614,7 +643,10 @@ function makeSaveHarness(overrides: {
   recordNegotiatedHostManifest(HOST_ID, {
     "environment.status": { major: 1, minor: 1 },
     "environment.host.read": { major: 1, minor: 1 },
-    "providers.setEnvOverride": { major: 2, minor: 2 },
+    "providers.setEnvOverride": {
+      major: 2,
+      minor: overrides.providersSetEnvOverrideMinor ?? 2,
+    },
     "providers.deleteEnvOverride": { major: 2, minor: 1 },
     "environment.proposals": { major: 1, minor: 0 },
     "environment.setup.get": { major: 1, minor: 0 },
@@ -622,7 +654,10 @@ function makeSaveHarness(overrides: {
     "config.shell.get": { major: 1, minor: 1 },
     "config.shell.listDetected": { major: 1, minor: 0 },
     "config.env.list": { major: 1, minor: 0 },
-    "config.env.set": { major: 1, minor: 1 },
+    "config.env.set": {
+      major: 1,
+      minor: overrides.configEnvSetMinor ?? 1,
+    },
     "config.env.delete": { major: 1, minor: 0 },
     "config.shell.set": { major: 1, minor: 2 },
     "config.shell.add": { major: 1, minor: 2 },
@@ -1049,6 +1084,29 @@ function records(): readonly SettingsSaveMemoryRecord[] {
   return Object.values(useSettingsSaveMemoryStore.getState().records);
 }
 
+function cacheLocalOverrides(
+  harness: SaveHarness,
+  overrides: readonly LocalOverride[],
+): void {
+  harness.queryClient.setQueryData(
+    hostQueryKeys.method<HostRpcRegistry, "environment.localOverrides">(
+      HOST_ID,
+      "environment.localOverrides",
+      {},
+    ),
+    { overrides: [...overrides] },
+  );
+}
+
+function localVariableOverride(value: string): LocalOverride {
+  return {
+    target: { kind: "variable", key: ROW_ORDER_KEY },
+    os: "any",
+    value,
+    setAt: 1,
+  };
+}
+
 function storedRows(accountId: string): readonly string[] {
   const prefix = `${settingsSaveMemoryKey(accountId)}:records:`;
   const rows: string[] = [];
@@ -1109,6 +1167,110 @@ describe("settings-save callers", () => {
     expect(remembered?.valueDigest).toBe(
       await settingValueDigest({ value: "new-value" }),
     );
+  });
+
+  it.each([
+    { label: "the host answers", lostReply: false },
+    { label: "the reply is lost after dispatch", lostReply: true },
+  ])(
+    "does not register a matching shared hold for a known computer-owned variable when $label",
+    async ({ lostReply }) => {
+      const value = "new-local-value";
+      const harness = makeSaveHarness({
+        rowsByKind: {
+          variable: [
+            itemRow(
+              { kind: "variable", key: ROW_ORDER_KEY },
+              "macos",
+              { value: "previous-value" },
+              3,
+            ),
+          ],
+        },
+        localHostId: HOST_ID,
+        proposals: variableProposalForEdit(
+          "00000000-0000-4000-8000-000000000081",
+          "put",
+        ),
+        reviewAnswer: variableReviewAnswerForEdit({
+          heldId: "held-prior-shared-value",
+          operation: "put",
+          heldValue: value,
+          liveRevision: 3,
+          liveValue: "previous-value",
+        }),
+        configEnvSetMinor: 2,
+      });
+      harness.state.configEnvSetLostReply = lostReply;
+      harness.state.reviewPostAnswer = {
+        status: 200,
+        text: JSON.stringify({ outcome: "applied" }),
+      };
+      const { result } = renderHook(
+        () =>
+          useRpcShellConfigController({ enabled: true, pickProgramFile: null }),
+        { wrapper: harness.wrapper },
+      );
+      await waitForPreparedReads(harness, "variable");
+      await waitFor(() =>
+        expect(harness.hostRequests).toContain("config.env.list"),
+      );
+      cacheLocalOverrides(harness, [
+        localVariableOverride("previous-local-value"),
+      ]);
+
+      const save = invokeShellSave((callbacks) =>
+        result.current.setEnv({ key: ROW_ORDER_KEY, value }, callbacks),
+      );
+      if (lostReply) {
+        await expect(save).rejects.toBeInstanceOf(HostRequestAbortedError);
+      } else {
+        await save;
+      }
+
+      expect(harness.recordsAtSend).toEqual([null]);
+      expect(reviewApplyRequests(harness)).toEqual([]);
+    },
+  );
+
+  it("forgets a shared-save ticket when a capable provider host says it kept the value locally", async () => {
+    const harness = makeSaveHarness({
+      localHostId: HOST_ID,
+      proposals: proposalForEdit("00000000-0000-4000-8000-000000000082"),
+      reviewAnswer: reviewAnswerForEdit(
+        "held-prior-provider-value",
+        "new-value",
+        3,
+        "old-value",
+      ),
+      providersSetEnvOverrideMinor: 3,
+    });
+    harness.state.providerSetEnvOverrideSavedLocally = true;
+    harness.state.reviewPostAnswer = {
+      status: 200,
+      text: JSON.stringify({ outcome: "applied" }),
+    };
+    const { result } = renderHook(() => useEnvOverrideEditor(), {
+      wrapper: harness.wrapper,
+    });
+    await waitForPreparedReads(harness, "env_override");
+    cacheLocalOverrides(harness, []);
+    const proposalReadsBeforeSave = harness.hostEvents.filter(
+      (event) => event === "read:environment.proposals",
+    ).length;
+
+    await act(async () => {
+      await result.current.mutateAsync(setTarget("new-value"));
+    });
+
+    expect(harness.recordsAtSend[0]).not.toBeNull();
+    await waitFor(() => expect(records()).toEqual([]));
+    expect(
+      harness.hostEvents.filter(
+        (event) => event === "read:environment.proposals",
+      ),
+    ).toHaveLength(proposalReadsBeforeSave);
+    expect(reviewApplyRequests(harness)).toEqual([]);
   });
 
   it("keeps the revision read when the editor opened", async () => {
@@ -2817,12 +2979,12 @@ describe("settings-save callers", () => {
     });
 
     harness.state.proposals = { proposals: [] };
-    await act(async () => {
-      await result.current.setEnvAsync({
-        key: ROW_ORDER_KEY,
-        value: "third-write",
-      });
-    });
+    await invokeShellSave((callbacks) =>
+      result.current.setEnv(
+        { key: ROW_ORDER_KEY, value: "third-write" },
+        callbacks,
+      ),
+    );
     await waitFor(() => expect(harness.saveRequests).toHaveLength(3));
     expect(harness.recordsAtSend[2]?.expectedLiveRevision).toBe(
       finalExpectedRevision,

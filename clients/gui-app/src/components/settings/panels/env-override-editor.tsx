@@ -200,6 +200,12 @@ function envRowsWithPending(
   return rows;
 }
 
+export interface OnlyOnComputer {
+  readonly label: string;
+  readonly keptKeys: ReadonlySet<string>;
+  readonly save: (key: string, value: string) => Promise<void>;
+}
+
 export function EnvOverrideEditor(props: {
   readonly overrides: readonly EnvOverrideValue[];
   readonly disabled: boolean;
@@ -221,6 +227,7 @@ export function EnvOverrideEditor(props: {
   /** Resolves after the removal and its post-write overrides read complete. */
   readonly onDelete: (key: string) => void | Promise<void>;
   readonly renderDetails?: (key: string) => ReactNode;
+  readonly onlyOn?: OnlyOnComputer | null;
 }) {
   const { namePlaceholder, emptyLabel } = props;
   const phone = useIsSmallViewport();
@@ -272,6 +279,19 @@ export function EnvOverrideEditor(props: {
         original: props.overrides.find((entry) => entry.key === oldKey) ?? null,
       },
       () => props.onCommit(oldKey, key, value),
+    );
+  };
+  const onlyOn = props.onlyOn ?? null;
+  const onKeep = (oldKey: string, key: string, value: string): void => {
+    if (onlyOn === null) return;
+    void submit(
+      {
+        oldKey,
+        key,
+        action: "put",
+        original: props.overrides.find((entry) => entry.key === oldKey) ?? null,
+      },
+      () => onlyOn.save(key, value),
     );
   };
   const onDelete = (key: string): void => {
@@ -346,6 +366,12 @@ export function EnvOverrideEditor(props: {
                 staleRefusal={props.staleRefusal}
                 savedRow={savedRow}
                 onCommit={onCommit}
+                onlyOnLabel={
+                  onlyOn === null || onlyOn.keptKeys.has(entry.key)
+                    ? null
+                    : onlyOn.label
+                }
+                onKeep={onKeep}
                 onDelete={onDelete}
               />
             );
@@ -362,6 +388,8 @@ export function EnvOverrideEditor(props: {
           onAdd={(key, value) => {
             onCommit("", key, value);
           }}
+          onlyOnLabel={onlyOn?.label ?? null}
+          onKeep={(key, value) => onKeep("", key, value)}
           onCancel={() => {
             setAdding(false);
             if (phone) clearSheetError();
@@ -416,6 +444,8 @@ function EnvOverrideRow(props: {
     value: string | null,
   ) => void;
   readonly onDelete: (key: string) => void;
+  readonly onlyOnLabel: string | null;
+  readonly onKeep: (oldKey: string, key: string, value: string) => void;
 }) {
   const { entry, otherKeys, disabled, onCommit, onDelete } = props;
   const [open, setOpen] = useState(false);
@@ -426,7 +456,7 @@ function EnvOverrideRow(props: {
   const saved =
     props.savedRow !== seenSavedRow && props.savedRow?.key === entry.key;
   if (props.savedRow !== seenSavedRow) setSeenSavedRow(props.savedRow);
-  const [following, setFollowing] = useState(false);
+  const [following, setFollowing] = useState(true);
   const [seenRefusal, setSeenRefusal] = useState(
     () => props.staleRefusal?.seq ?? 0,
   );
@@ -446,7 +476,11 @@ function EnvOverrideRow(props: {
   } else if (following && !draftShowsEntry(draft, entry)) {
     setDraft(draftOf(entry));
   }
+  const keepingDraft = useRef(false);
+  const onlyOnFocused = useRef(false);
   const editDraft = (update: (current: Draft) => Draft): void => {
+    keepingDraft.current = false;
+    onlyOnFocused.current = false;
     setFollowing(false);
     setDraft(update);
   };
@@ -495,7 +529,9 @@ function EnvOverrideRow(props: {
   }, [props.phone]);
   useEffect(() => {
     return () => {
-      if (phoneRef.current) return;
+      // Removing a focused Only on button gives no blur destination to save for.
+      if (phoneRef.current || keepingDraft.current || onlyOnFocused.current)
+        return;
       const current = draftRef.current;
       const currentEntry = entryRef.current;
       const nextKey = current.key.trim();
@@ -508,9 +544,36 @@ function EnvOverrideRow(props: {
     };
   }, []);
 
+  const onlyOnLabel =
+    draft.mode === "set" && draft.key.trim() === entry.key
+      ? props.onlyOnLabel
+      : null;
+  const keep = (): void => {
+    keepingDraft.current = true;
+    props.onKeep(entry.key, entry.key, draft.value);
+  };
+  const onlyOn =
+    onlyOnLabel === null ? null : { label: onlyOnLabel, onSave: keep };
   const editor = (
     <>
-      <div className={props.phone ? "flex flex-col gap-4" : GRID}>
+      <EnvRowControls
+        phone={props.phone}
+        onlyOn={onlyOn}
+        disabled={disabled}
+        autoSave={() => {
+          if (!keepingDraft.current) commit();
+        }}
+        onOnlyOnFocus={(focused) => {
+          onlyOnFocused.current = focused;
+        }}
+        remove={
+          <RemoveVariableButton
+            name={entry.key}
+            disabled={disabled}
+            onDelete={onDelete}
+          />
+        }
+      >
         <EnvDraftFields
           draft={draft}
           disabled={disabled}
@@ -520,16 +583,11 @@ function EnvOverrideRow(props: {
           onName={(key) => editDraft((current) => ({ ...current, key }))}
           onValue={(value) => editDraft((current) => ({ ...current, value }))}
           onMode={(mode) => editDraft((current) => ({ ...current, mode }))}
-          onCommit={commit}
+          onCommit={() => {
+            if (onlyOn === null && !keepingDraft.current) commit();
+          }}
         />
-        {props.phone ? null : (
-          <RemoveVariableButton
-            name={entry.key}
-            disabled={disabled}
-            onDelete={onDelete}
-          />
-        )}
-      </div>
+      </EnvRowControls>
       <EnvRowNote note={props.note} />
       <EnvRowFooter draft={draft} disabled={disabled} onTrim={trimValue} />
       <EnvRowDetails details={props.details} />
@@ -539,6 +597,7 @@ function EnvOverrideRow(props: {
     return <li className="flex flex-col gap-1 px-3 py-2">{editor}</li>;
   const dismiss = (): void => {
     if (disabled) return;
+    keepingDraft.current = false;
     setOpen(false);
     setFollowing(false);
     setDraft(draftOf(entry));
@@ -573,6 +632,7 @@ function EnvOverrideRow(props: {
           if (draftShowsEntry(draft, entry)) dismiss();
           else commit();
         }}
+        onlyOn={onlyOn}
         onRemove={() => onDelete(entry.key)}
         onDismiss={dismiss}
       >
@@ -580,6 +640,66 @@ function EnvOverrideRow(props: {
         {props.feedback}
       </VariableEditSheet>
     </li>
+  );
+}
+
+function EnvRowControls(props: {
+  readonly phone: boolean;
+  readonly onlyOn: {
+    readonly label: string;
+    readonly onSave: () => void;
+  } | null;
+  readonly disabled: boolean;
+  readonly autoSave: () => void;
+  readonly onOnlyOnFocus: (focused: boolean) => void;
+  readonly remove: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (props.phone) {
+    return <div className="flex flex-col gap-4">{props.children}</div>;
+  }
+  const { onlyOn } = props;
+  if (onlyOn === null) {
+    return (
+      <div className={GRID}>
+        {props.children}
+        {props.remove}
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <div
+        className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
+        onBlur={(event) => {
+          const next = event.relatedTarget;
+          if (
+            !props.disabled &&
+            !(next instanceof Node && event.currentTarget.contains(next))
+          ) {
+            props.autoSave();
+          }
+        }}
+      >
+        <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)] items-center gap-2">
+          {props.children}
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={props.disabled}
+          onFocus={() => props.onOnlyOnFocus(true)}
+          onBlur={() => props.onOnlyOnFocus(false)}
+          // Some browsers blur the field without focusing a clicked button.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onlyOn.onSave}
+        >
+          {onlyOn.label}
+        </Button>
+      </div>
+      {props.remove}
+    </div>
   );
 }
 
@@ -739,6 +859,8 @@ function EnvOverrideAddRow(props: {
   readonly disabled: boolean;
   readonly namePlaceholder: string;
   readonly onAdd: (key: string, value: string | null) => void;
+  readonly onlyOnLabel: string | null;
+  readonly onKeep: (key: string, value: string) => void;
   readonly onCancel: () => void;
 }) {
   const { existingKeys, disabled, namePlaceholder, onAdd, onCancel } = props;
@@ -749,7 +871,7 @@ function EnvOverrideAddRow(props: {
     error: null,
   }));
 
-  const add = (): void => {
+  const add = (onlyOn: boolean): void => {
     const nextKey = draft.key.trim();
     const nextValue = draft.mode === "unset" ? null : draft.value;
     const error = draftError(nextKey, existingKeys);
@@ -757,12 +879,22 @@ function EnvOverrideAddRow(props: {
       setDraft((current) => ({ ...current, error }));
       return;
     }
+    if (onlyOn) {
+      if (nextValue !== null) props.onKeep(nextKey, nextValue);
+      return;
+    }
     onAdd(nextKey, nextValue);
   };
 
+  const onlyOnLabel = draft.mode === "set" ? props.onlyOnLabel : null;
+  const saveDisabled = draft.key.trim().length === 0;
+  const desktopGrid =
+    onlyOnLabel === null
+      ? GRID
+      : "grid grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_auto] items-center gap-2";
   const editor = (
     <>
-      <div className={props.phone ? "flex flex-col gap-4" : GRID}>
+      <div className={props.phone ? "flex flex-col gap-4" : desktopGrid}>
         <label
           className={
             props.phone ? "flex w-full flex-col gap-2 text-ui-sm" : "contents"
@@ -797,17 +929,30 @@ function EnvOverrideAddRow(props: {
           onBlur={() => undefined}
         />
         {props.phone ? null : (
-          <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
+          <div
+            className={cn(ROW_ACTIONS_PLACEMENT, "flex flex-wrap items-center")}
+          >
             <Button
               type="button"
               size="icon-sm"
               variant="ghost"
-              disabled={disabled || draft.key.trim().length === 0}
+              disabled={disabled || saveDisabled}
               aria-label="Apply variable"
-              onClick={add}
+              onClick={() => add(false)}
             >
               <Check className="size-4 text-[var(--term-ansi-green)]" />
             </Button>
+            {onlyOnLabel === null ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled || saveDisabled}
+                onClick={() => add(true)}
+              >
+                {onlyOnLabel}
+              </Button>
+            )}
             <Button
               type="button"
               size="icon-sm"
@@ -841,10 +986,15 @@ function EnvOverrideAddRow(props: {
       open
       title="Add a variable"
       busy={disabled}
-      saveDisabled={draft.key.trim().length === 0}
+      saveDisabled={saveDisabled}
       removeLabel="Remove"
       onRemove={null}
-      onSave={add}
+      onlyOn={
+        onlyOnLabel === null
+          ? null
+          : { label: onlyOnLabel, onSave: () => add(true) }
+      }
+      onSave={() => add(false)}
       onDismiss={onCancel}
     >
       {editor}

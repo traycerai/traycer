@@ -10,7 +10,6 @@ import type {
   RemoteAccessState,
 } from "@traycer/protocol/host/environment-schemas";
 import { heldCommandLine } from "@/components/settings/move/held-from-review";
-import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import { itemLabel } from "@/components/settings/personal/personal-page-status";
 import { providerDisplayName } from "@/lib/provider-ordering";
 
@@ -155,20 +154,19 @@ function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
-/**
- * Whether the one-time "Your settings moved to Personal" notice shows: setup
- * is done and a change came from this host's move.
- */
 export function movedNoticeShown(
   status: EnvironmentStatusResponse,
-  notices: readonly EnvironmentNotice[],
+  hostId: string,
+  uploadedHostIds: readonly string[],
   dismissed: boolean,
 ): boolean {
-  if (dismissed || status.setup === null) return false;
-  if (status.setup.state !== "done" && status.setup.stage !== "done") {
-    return false;
-  }
-  return notices.some((notice) => notice.source === "migration");
+  return (
+    !dismissed &&
+    status.principal?.kind === "personal" &&
+    status.setup !== null &&
+    (status.setup.state === "done" || status.setup.stage === "done") &&
+    uploadedHostIds.includes(hostId)
+  );
 }
 
 export const MOVED_NOTICE_TEXT =
@@ -218,74 +216,23 @@ export function sameOverrideTarget(
 
 // ── Notices ──────────────────────────────────────────────────────────────────
 
-/** A change no computer made came from a person's session, so it names no place. */
 export function noticeText(notice: EnvironmentNotice): string {
-  const { from } = notice;
-  if (from.kind === "dashboard") {
-    return `${itemLabel(notice)} now applies everywhere.`;
-  }
-  return `${itemLabel(notice)} from ${from.hostLabel ?? "another host"} now applies everywhere.`;
+  return `${itemLabel(notice)} now applies everywhere.`;
 }
 
-/**
- * The value the "Keep" action writes on this host, as a local override, or
- * `null` where it is not offered. Offered only for a variable or a provider's
- * variable, only while undo still is, and only on the host the change came
- * from (the window's host).
- */
-export function keepLocalTarget(
-  notice: EnvironmentNotice,
-  windowHostId: string | null,
-): LocalOverrideTarget | null {
-  if (!notice.undoAvailable || windowHostId === null) return null;
-  if (notice.from.kind !== "host" || notice.from.hostId !== windowHostId) {
-    return null;
-  }
-  if (notice.kind === "variable") return { kind: "variable", key: notice.key };
-  if (notice.kind !== "env_override") return null;
-  // An env override's item key is `<providerId>:<variable>`.
-  const separator = notice.key.indexOf(":");
-  if (separator === -1) return null;
-  const providerId = providerIdSchema.safeParse(notice.key.slice(0, separator));
-  if (!providerId.success) return null;
-  return {
-    kind: "env_override",
-    providerId: providerId.data,
-    key: notice.key.slice(separator + 1),
-  };
-}
-
-/** "Keep dev-box's value on dev-box". */
-export function keepLocalText(hostName: string): string {
-  return `Keep ${hostName}'s value on ${hostName}`;
-}
-
-/**
- * What an Undo that did not go through says, or `null` for one that did.
- * `kept` is the Keep action's Undo: the value stays on this host either way.
- */
+/** What an Undo that did not go through says. */
 export function undoRefusalText(
   outcome: UndoOutcome,
   label: string,
-  kept: { readonly hostName: string } | null,
 ): string | null {
-  const prefix =
-    kept === null
-      ? "Couldn't undo"
-      : `Kept on ${kept.hostName}, but couldn't undo the change everywhere`;
   switch (outcome.outcome) {
     case "saved":
       return null;
     case "stale":
-      return `${prefix}: ${label} was changed again since.`;
+      return `Couldn't undo: ${label} was changed again since.`;
     case "needs_grant":
-      return `${prefix}: it needs your confirmation. Sign in again and retry.`;
+      return "Couldn't undo: it needs your confirmation. Sign in again and retry.";
   }
-}
-
-/** The Keep action's Undo failed outright; the value stays on this host. */
-export function keptUndoFailedText(hostName: string): string {
-  return `Kept on ${hostName}, but couldn't undo the change everywhere.`;
 }
 
 // ── Needs you ────────────────────────────────────────────────────────────────

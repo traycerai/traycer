@@ -85,7 +85,6 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   recordNegotiatedHostManifest,
-  recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
@@ -96,11 +95,13 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 import type {
   ConfigEnvLocalOverrideClearRequest,
   ConfigEnvLocalOverrideResponse,
+  ConfigEnvLocalOverrideSetRequest,
   EnvironmentReviewEntry,
   EnvironmentSecretV12,
   EnvironmentStatusResponseV13,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentTransportRequest } from "@traycer-clients/shared/environment/environment-cloud";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
@@ -141,6 +142,10 @@ const READY_STATUS: EnvironmentStatusResponseV13 = environmentStatusFixture({
 const MANIFEST_MINORS: ReadonlyMap<string, number> = new Map([
   ["environment.status", 1],
   ["environment.secrets.list", 2],
+  ["config.env.set", 2],
+  ["config.env.localOverride.clear", 1],
+  ["config.env.localOverride.saveToPersonal", 0],
+  ["config.env.localOverride.set", 0],
 ]);
 /** `sk-` and a long run: a known token shape, whatever the variable is called. */
 const API_KEY_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
@@ -176,6 +181,16 @@ interface Rendered {
       request: ConfigEnvLocalOverrideClearRequest,
     ) => Promise<ConfigEnvLocalOverrideResponse>
   >;
+  readonly saveToPersonal: Mock<
+    (request: ConfigEnvLocalOverrideSetRequest) => Promise<{
+      readonly environmentId: string;
+      readonly heldId: string;
+      readonly revision: number;
+      readonly expectedLiveRevision: number | null;
+      readonly reviewRequired: boolean;
+    }>
+  >;
+  readonly applyRequests: EnvironmentTransportRequest[];
 }
 
 type RenderShellPageOptions = {
@@ -211,6 +226,15 @@ function renderShellPage(
     ): Promise<ConfigEnvLocalOverrideResponse> =>
       Promise.resolve({ outcome: "saved", overrides: [] }),
   );
+  const saveToPersonal = vi.fn((_request: ConfigEnvLocalOverrideSetRequest) =>
+    Promise.resolve({
+      environmentId: "env-personal",
+      heldId: "held-local-value",
+      revision: 9,
+      expectedLiveRevision: 3,
+      reviewRequired: false,
+    }),
+  );
   let statusCalls = 0;
   const fixture = buildConfigHostFixture({
     hostId: HOST_ID,
@@ -219,6 +243,10 @@ function renderShellPage(
     overrideHandlers: {
       "config.env.set": set,
       "config.env.localOverride.clear": clear,
+      "config.env.localOverride.saveToPersonal": saveToPersonal,
+      "config.env.localOverride.set": (
+        _request: ConfigEnvLocalOverrideSetRequest,
+      ) => ({ outcome: "saved", overrides: [] }),
       "environment.status": () => {
         statusCalls += 1;
         return options.status;
@@ -262,25 +290,23 @@ function renderShellPage(
     },
   });
   const methods = [...CONFIG_SHELL_METHODS, ...options.environmentMethods];
+  const manifest = Object.fromEntries(
+    methods.map((method) => [
+      method,
+      { major: 1, minor: MANIFEST_MINORS.get(method) ?? 0 },
+    ]),
+  );
   // These cases are about a host's own pages, which a Local row reads,
   // unless a case picks Personal itself. The Personal pick keeps the host's
   // pages only once it knows the host's environment.status version, so a
   // Personal case records versions.
   if (useSettingsEnvironmentPickStore.getState().pick === null) {
-    recordNegotiatedHostMethods(HOST_ID, methods);
+    recordNegotiatedHostManifest(HOST_ID, manifest);
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
     });
   } else {
-    recordNegotiatedHostManifest(
-      HOST_ID,
-      Object.fromEntries(
-        methods.map((method) => [
-          method,
-          { major: 1, minor: MANIFEST_MINORS.get(method) ?? 0 },
-        ]),
-      ),
-    );
+    recordNegotiatedHostManifest(HOST_ID, manifest);
   }
   scopeOverrides.current = {
     host: hostScopeOptionFixture({
@@ -303,6 +329,7 @@ function renderShellPage(
     hostCount: 1,
     providerHandle: null,
   };
+  const applyRequests: EnvironmentTransportRequest[] = [];
   const auth = createFakeEnvironmentCloudAuth({
     listEnvironments: () =>
       Promise.resolve({
@@ -313,6 +340,10 @@ function renderShellPage(
       environments: () => [personalEnvironment],
       onRequest: (request) => {
         const pathname = new URL(request.url).pathname;
+        if (request.method === "POST" && pathname.includes("/review/held/")) {
+          applyRequests.push(request);
+          return jsonEnvironmentAnswer({});
+        }
         if (request.method === "GET" && pathname.endsWith("/secrets")) {
           return jsonEnvironmentAnswer(
             authnSecretsList({ secrets: [...options.secrets], removed: [] }),
@@ -375,6 +406,8 @@ function renderShellPage(
     runnerHost,
     set,
     clear,
+    saveToPersonal,
+    applyRequests,
     statusCalls: () => statusCalls,
   };
 }
@@ -387,6 +420,8 @@ const READY_HOST = {
     "environment.review",
     "environment.list",
     "environment.secrets.list",
+    "config.env.localOverride.set",
+    "config.env.localOverride.saveToPersonal",
     "config.env.localOverride.clear",
   ],
   existingVariables: [],
@@ -701,7 +736,7 @@ describe("a variable held for the person on a Personal page", () => {
     const banner = await screen.findByTestId("personal-review-row");
     expect(
       within(banner).getByText(
-        "SHELL_INIT (variable) changes how programs start and is on hold until you choose",
+        "SHELL_INIT (variable) is on hold until you choose",
       ),
     ).toBeTruthy();
     expect(screen.getByLabelText("Value for SHELL_INIT")).toBeTruthy();
@@ -740,37 +775,57 @@ describe("a variable this computer keeps its own value for", () => {
   });
 
   it("saves the host's value for everyone, and stops the host keeping its own only after the save landed", async () => {
-    const { set, clear } = renderShellPage(OWN_VALUE_HOST, undefined);
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    const { clear, saveToPersonal, applyRequests } = renderShellPage(
+      OWN_VALUE_HOST,
+      undefined,
+    );
     let finishSave: () => void = () => {};
-    set.mockImplementationOnce(async (request) => {
+    saveToPersonal.mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => {
         finishSave = resolve;
       });
-      return { key: request.key, value: request.value };
+      return {
+        environmentId: "env-personal",
+        heldId: "held-local-value",
+        revision: 9,
+        expectedLiveRevision: 3,
+        reviewRequired: false,
+      };
     });
     await pageIsReady();
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Use everywhere" }),
-    );
+    const shareButton = await screen.findByRole<HTMLButtonElement>("button", {
+      name: "Use everywhere",
+    });
+    expect(shareButton.disabled).toBe(false);
+    fireEvent.click(shareButton);
 
-    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
-    expect(set).toHaveBeenCalledWith({
-      key: "LOG_LEVEL",
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledTimes(1));
+    expect(saveToPersonal).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
       value: "error",
     });
+    expect(applyRequests).toHaveLength(0);
     expect(clear).not.toHaveBeenCalled();
 
     finishSave();
 
     await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
+    expect(applyRequests).toHaveLength(1);
+    expect(applyRequests[0]?.body).toEqual({
+      revision: 9,
+      expectedLiveRevision: 3,
+    });
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "LOG_LEVEL" },
+      expectedValue: "error",
     });
   });
 
   it("shows dots and Use everywhere for a value that looks like a key, and the click saves that value", async () => {
-    const { set, clear } = renderShellPage(
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    const { clear, saveToPersonal, applyRequests } = renderShellPage(
       {
         ...OWN_VALUE_HOST,
         localOverrides: [variableOverride("LOG_LEVEL", API_KEY_VALUE)],
@@ -783,16 +838,26 @@ describe("a variable this computer keeps its own value for", () => {
     expect(note.textContent).toBe("host-a uses: •••••••• · Use everywhere");
     expect(document.body.textContent).not.toContain(API_KEY_VALUE);
 
-    fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+    const shareButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Use everywhere",
+    });
+    expect(shareButton.disabled).toBe(false);
+    fireEvent.click(shareButton);
 
-    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
-    expect(set).toHaveBeenCalledWith({
-      key: "LOG_LEVEL",
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledTimes(1));
+    expect(saveToPersonal).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
       value: API_KEY_VALUE,
+    });
+    await waitFor(() => expect(applyRequests).toHaveLength(1));
+    expect(applyRequests[0]?.body).toEqual({
+      revision: 9,
+      expectedLiveRevision: 3,
     });
     await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "LOG_LEVEL" },
+      expectedValue: API_KEY_VALUE,
     });
   });
 });

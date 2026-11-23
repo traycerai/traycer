@@ -37,7 +37,7 @@ import { Switch } from "@/components/ui/switch";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   useEnvironmentLocalOverridesRead,
-  useEnvironmentNoticesRead,
+  useEnvironmentOperationReviewRead,
   useEnvironmentStatusRead,
 } from "@/hooks/environment/use-environment-reads";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
@@ -168,11 +168,7 @@ function AccessSections(props: {
   const localHostId = useReactiveLocalHostId();
   return (
     <>
-      <MovedNotice
-        client={props.client}
-        hostId={props.hostId}
-        status={props.status}
-      />
+      <MovedNotice hostId={props.hostId} status={props.status} />
       <SetupSection
         client={props.client}
         hostId={props.hostId}
@@ -195,7 +191,6 @@ function AccessSections(props: {
 // ── "Your settings moved to Personal" ───────────────────────────────────────
 
 function MovedNotice(props: {
-  readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
   readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
@@ -203,7 +198,8 @@ function MovedNotice(props: {
     props.status.setup !== null &&
     (props.status.setup.state === "done" ||
       props.status.setup.stage === "done");
-  const notices = useEnvironmentNoticesRead(
+  const review = useEnvironmentOperationReviewRead(
+    props.hostId,
     setupDone && props.status.principal?.kind === "personal",
   );
   const dismissed = useHostAccessPromptsStore((state) =>
@@ -216,7 +212,12 @@ function MovedNotice(props: {
   );
   if (
     props.hostId === null ||
-    !movedNoticeShown(props.status, notices.data?.notices ?? [], dismissed)
+    !movedNoticeShown(
+      props.status,
+      props.hostId,
+      review.data?.uploadedHostIds ?? [],
+      dismissed,
+    )
   ) {
     return null;
   }

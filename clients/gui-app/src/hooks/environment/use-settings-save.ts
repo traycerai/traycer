@@ -17,7 +17,10 @@ import {
   readSettingsItemRows,
   readSettingsSaveHost,
 } from "@traycer-clients/shared/environment/settings-save-target";
-import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentLocalOverridesResponse,
+  EnvironmentOs,
+} from "@traycer/protocol/host/environment-schemas";
 import { settingValueSchema } from "@traycer/protocol/host/environment/settings-proposals";
 import {
   canonicalSettingValue,
@@ -29,12 +32,13 @@ import {
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
+import { readHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
 import type { PendingSettingsSave } from "@/lib/environment/settings-save-follow";
 import type { SettingsSaveOrigin } from "@/lib/environment/settings-save-origin";
-import { environmentQueryKeys } from "@/lib/query-keys";
+import { environmentQueryKeys, hostQueryKeys } from "@/lib/query-keys";
 import { useSettingsSaveCoordinator } from "@/providers/settings-save-coordinator-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -273,6 +277,7 @@ async function followSave(
       hostId,
       sharingGeneration: host.sharingGeneration,
       expectedLiveRevision: liveRowAt(editRows, edit.os)?.revision ?? null,
+      ...(canSaveLocally(save, hostId) ? { waitForHostOutcome: true } : {}),
     },
     () => {
       void keepOwnWrite(scope, operation, edit).catch(() => undefined);
@@ -285,8 +290,8 @@ async function followSave(
   const { ticket } = beginning;
   return {
     kind: "send",
-    answered: () => {
-      void coordinator.settle(ticket, true);
+    answered: (proposed) => {
+      void coordinator.settle(ticket, proposed ? true : "no_proposal");
     },
     failed: () => {
       void coordinator.settle(ticket, false);
@@ -363,6 +368,52 @@ function useSaveScope(
   return scope;
 }
 
+function canSaveLocally(
+  save: SettingsSave,
+  hostId: string,
+): save is Extract<
+  SettingsSave,
+  { method: "config.env.set" | "providers.setEnvOverride" }
+> {
+  if (
+    save.method !== "config.env.set" &&
+    save.method !== "providers.setEnvOverride"
+  ) {
+    return false;
+  }
+  if (save.request.value === null) return false;
+  const version = readHostMethodSchemaVersion(hostId, save.method);
+  if (save.method === "config.env.set") {
+    return version?.major === 1 && version.minor >= 2;
+  }
+  return version?.major === 2 && version.minor >= 3;
+}
+
+/** A known kept put on a capable host needs no Personal ticket. */
+function knownKeptValue(
+  save: SettingsSave,
+  hostId: string,
+  queryClient: QueryClient,
+): boolean {
+  if (!canSaveLocally(save, hostId)) return false;
+  const values = queryClient.getQueryData<EnvironmentLocalOverridesResponse>(
+    hostQueryKeys.method<HostRpcRegistry, "environment.localOverrides">(
+      hostId,
+      "environment.localOverrides",
+      {},
+    ),
+  );
+  return (
+    values?.overrides.some(({ target }) => {
+      if (target.key !== save.request.key) return false;
+      return save.method === "config.env.set"
+        ? target.kind === "variable"
+        : target.kind === "env_override" &&
+            target.providerId === save.request.providerId;
+    }) ?? false
+  );
+}
+
 /**
  * A host in no environment, one authn does not list, or a failed read remembers
  * nothing: the save still goes, and its hold waits for one click.
@@ -393,6 +444,8 @@ export function useSettingsSave(
         return { kind: "abandoned", method: save.method };
       }
       if (sentOn !== scope.hostId) return NOTHING_TO_FOLLOW;
+      if (knownKeptValue(save, sentOn, scope.queryClient))
+        return NOTHING_TO_FOLLOW;
       const accountId = scope.coordinator.account();
       if (accountId === null) return NOTHING_TO_FOLLOW;
       const operation: SaveOperation = {

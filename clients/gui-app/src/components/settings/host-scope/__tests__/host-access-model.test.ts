@@ -271,69 +271,68 @@ describe("setupView", () => {
 });
 
 describe("movedNoticeShown", () => {
-  const migration = notice({ source: "migration" });
-  const offline = notice({ source: "offline" });
+  const hostId = "host-a";
   interface MovedCase {
     readonly label: string;
     readonly setupRecord: Setup;
-    readonly notices: readonly EnvironmentNotice[];
+    readonly uploadedHostIds: readonly string[];
     readonly dismissed: boolean;
     readonly shown: boolean;
   }
   const cases: readonly MovedCase[] = [
     {
-      label: "setup done by state with a migration notice",
+      label: "this host uploaded settings during its move",
       setupRecord: setup("applying", "done"),
-      notices: [migration],
+      uploadedHostIds: [hostId],
       dismissed: false,
       shown: true,
     },
     {
-      label: "setup done by stage with a migration notice",
+      label: "another host uploaded settings",
       setupRecord: setup("done", "running"),
-      notices: [offline, migration],
+      uploadedHostIds: ["host-b"],
       dismissed: false,
-      shown: true,
+      shown: false,
     },
     {
       label: "dismissed on this desktop",
       setupRecord: setup("applying", "done"),
-      notices: [migration],
+      uploadedHostIds: [hostId],
       dismissed: true,
       shown: false,
     },
     {
       label: "no setup record",
       setupRecord: null,
-      notices: [migration],
+      uploadedHostIds: [hostId],
       dismissed: false,
       shown: false,
     },
     {
       label: "setup still running",
       setupRecord: setup("moving_settings", "running"),
-      notices: [migration],
+      uploadedHostIds: [hostId],
       dismissed: false,
       shown: false,
     },
     {
       label: "setup stopped",
       setupRecord: setup("moving_settings", "failed"),
-      notices: [migration],
+      uploadedHostIds: [hostId],
       dismissed: false,
       shown: false,
     },
     {
-      label: "no migration notice",
+      label: "this host did not upload any settings",
       setupRecord: setup("applying", "done"),
-      notices: [offline],
+      uploadedHostIds: [],
       dismissed: false,
       shown: false,
     },
     {
-      label: "no notices at all",
+      label: "an older authn review has no upload marker",
       setupRecord: setup("applying", "done"),
-      notices: [],
+      uploadedHostIds: [],
       dismissed: false,
       shown: false,
     },
@@ -342,7 +341,8 @@ describe("movedNoticeShown", () => {
     expect(
       movedNoticeShown(
         environmentStatusFixture({ setup: movedCase.setupRecord }),
-        movedCase.notices,
+        hostId,
+        movedCase.uploadedHostIds,
         movedCase.dismissed,
       ),
     ).toBe(movedCase.shown);
@@ -466,17 +466,17 @@ describe("undoRefusalText", () => {
   const needsGrant: UndoOutcome = { outcome: "needs_grant" };
 
   it("says nothing for an undo that went through, kept or not", () => {
-    expect(undoRefusalText(saved, "LOG_LEVEL", null)).toBeNull();
+    expect(undoRefusalText(saved, "LOG_LEVEL")).toBeNull();
   });
 
   it("says the value was changed again since", () => {
-    expect(undoRefusalText(stale, "LOG_LEVEL", null)).toBe(
+    expect(undoRefusalText(stale, "LOG_LEVEL")).toBe(
       "Couldn't undo: LOG_LEVEL was changed again since.",
     );
   });
 
   it("says the undo needs the person's confirmation", () => {
-    expect(undoRefusalText(needsGrant, "LOG_LEVEL", null)).toBe(
+    expect(undoRefusalText(needsGrant, "LOG_LEVEL")).toBe(
       "Couldn't undo: it needs your confirmation. Sign in again and retry.",
     );
   });
@@ -484,14 +484,14 @@ describe("undoRefusalText", () => {
 
 describe("reviewText", () => {
   const cases: ReadonlyArray<[reason: string, text: string]> = [
-    [
-      "executable_entry",
-      "DATABASE_URL (variable) changes how programs start and is on hold until you choose",
-    ],
+    ["executable_entry", "DATABASE_URL (variable) is on hold until you choose"],
   ];
-  it.each(cases)("reason %s", (reason, text) => {
-    expect(reviewText(reviewEntry({ reason }))).toBe(text);
-  });
+  it.each(cases)(
+    "words a plain held variable for reason %s",
+    (reason, text) => {
+      expect(reviewText(reviewEntry({ reason }))).toBe(text);
+    },
+  );
 
   it("names a held MCP server's command and says it waits for a choice", () => {
     expect(

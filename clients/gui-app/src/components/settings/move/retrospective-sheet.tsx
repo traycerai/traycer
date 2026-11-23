@@ -21,7 +21,7 @@ import {
   NO_MOVE_SHEET_ACCEPTANCE,
   retrospectiveEvidenceLine,
   retrospectiveTitle,
-  type HeldApplyChoice,
+  type PersonalHeldChoice,
   type HeldChoiceAction,
   type ReviewEvidence,
 } from "@/components/settings/move/retrospective-copy";
@@ -94,7 +94,10 @@ export function RetrospectiveSheet(props: {
   readonly onOpenChange: (open: boolean) => void;
   readonly onShown: () => void;
   readonly onAcknowledged: () => void;
-  readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
+  readonly heldActions?: (
+    heldId: string,
+  ) => readonly HeldChoiceAction<PersonalHeldChoice>[];
+  readonly onHeldApply: (heldId: string, choice: PersonalHeldChoice) => void;
   /**
    * `Move to Personal` under what is still on this computer; `null` hides it
    * on a computer that runs a team's settings, which has nothing of the
@@ -179,7 +182,9 @@ export function RetrospectiveSheet(props: {
               >
                 <HeldList
                   rows={props.held}
-                  actions={HELD_COMMAND_CHOICES}
+                  actionsForRow={
+                    props.heldActions ?? (() => HELD_COMMAND_CHOICES)
+                  }
                   pendingId={props.heldPendingId}
                   approveRefused={props.heldApproveRefused}
                   onHeldApply={props.onHeldApply}
@@ -312,12 +317,14 @@ function SharedInUseLink(props: {
   );
 }
 
-export function HeldList(props: {
+export function HeldList<Choice extends PersonalHeldChoice>(props: {
   readonly rows: readonly HeldRow[];
-  readonly actions: readonly HeldChoiceAction[];
+  readonly actionsForRow: (
+    heldId: string,
+  ) => readonly HeldChoiceAction<Choice>[];
   readonly pendingId: string | null;
   readonly approveRefused: ReadonlySet<string>;
-  readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
+  readonly onHeldApply: (heldId: string, choice: Choice) => void;
   readonly renderDetails: ((heldId: string) => ReactNode) | null;
 }): ReactNode {
   return (
@@ -345,12 +352,15 @@ export function HeldList(props: {
               ? null
               : props.renderDetails(row.heldId)}
             <div className="flex flex-wrap gap-1.5">
-              {props.actions.map((action) => (
+              {props.actionsForRow(row.heldId).map((action) => (
                 <Button
                   key={action.choice}
                   type="button"
                   size="xs"
-                  variant={action.choice === "discard" ? "muted" : "outline"}
+                  variant={
+                    action.variant ??
+                    (action.choice === "discard" ? "muted" : "outline")
+                  }
                   disabled={
                     props.pendingId !== null ||
                     (action.choice === "approve" &&

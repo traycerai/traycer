@@ -19,7 +19,10 @@ import type {
   EnvironmentTransportAnswer,
   EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentReviewHeldKeepRequest,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
@@ -109,7 +112,10 @@ function heldValue(entry: ReviewHeldEntry): unknown {
   }
 }
 
-function authnHeldEntry(entry: ReviewHeldEntry): Record<string, unknown> {
+function authnHeldEntry(
+  entry: ReviewHeldEntry,
+  sharingGeneration: number | null,
+): Record<string, unknown> {
   return {
     type: "held",
     heldId: entry.entryId,
@@ -118,7 +124,7 @@ function authnHeldEntry(entry: ReviewHeldEntry): Record<string, unknown> {
     key: entry.key,
     os: entry.os === "any" ? null : entry.os,
     hostId: entry.hostId ?? mockLocalHostEntry.hostId,
-    sharingGeneration: null,
+    sharingGeneration,
     hostName: "Old laptop",
     heldAt: entry.heldAt,
     op: entry.op,
@@ -133,6 +139,7 @@ function authnHeldEntry(entry: ReviewHeldEntry): Record<string, unknown> {
 interface SessionHarness {
   readonly rerender: (open: boolean) => void;
   readonly requests: readonly CapturedReviewRequest[];
+  readonly keepCalls: readonly EnvironmentReviewHeldKeepRequest[];
   /** The base authn's requests are sent to, as the binding's sign-in has it. */
   readonly authnBaseUrl: string;
   readonly resolveApply: (answer: EnvironmentTransportAnswer) => void;
@@ -173,8 +180,11 @@ function renderSessionWith(
     readonly applyAnswer?: EnvironmentTransportAnswer;
     readonly deferApply?: boolean;
     readonly readFailures?: number;
+    readonly heldKeepSupported?: boolean;
+    readonly proposalHeldIds?: readonly string[];
   },
 ): SessionHarness {
+  const keepCalls: EnvironmentReviewHeldKeepRequest[] = [];
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () => status,
     "environment.list": () => ({
@@ -195,6 +205,10 @@ function renderSessionWith(
     "environment.review.record": (request) => {
       recorded.push(request.event);
       return { outcome: "recorded" };
+    },
+    "environment.review.heldKeep": (request) => {
+      keepCalls.push(request);
+      return { outcome: "kept" };
     },
   };
   const harness = mountTeamPage(personalPoolSource(), handlers);
@@ -225,7 +239,17 @@ function renderSessionWith(
         return {
           status: 200,
           text: JSON.stringify({
-            review: { hosts: [], needsYou: currentEntries.map(authnHeldEntry) },
+            review: {
+              hosts: [],
+              needsYou: currentEntries.map((entry) =>
+                authnHeldEntry(
+                  entry,
+                  session.proposalHeldIds?.includes(entry.entryId) === true
+                    ? 7
+                    : null,
+                ),
+              ),
+            },
           }),
         };
       }
@@ -252,6 +276,9 @@ function renderSessionWith(
     "environment.review": { major: 1, minor: 2 },
     "environment.review.record": { major: 1, minor: 0 },
     "environment.list": { major: 1, minor: 1 },
+    ...(session.heldKeepSupported === true
+      ? { "environment.review.heldKeep": { major: 1, minor: 0 } }
+      : {}),
   });
   harness.queryClient.setDefaultOptions({
     queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
@@ -275,6 +302,7 @@ function renderSessionWith(
   return {
     rerender: (open) => view.rerender(ui(open)),
     requests,
+    keepCalls,
     authnBaseUrl: cloud.authnBaseUrl,
     resolveApply: (answer) => {
       if (applyResolver === null) throw new Error("Apply did not start");
@@ -426,7 +454,7 @@ describe("<RetrospectiveSession /> commands on hold", () => {
       "variable",
       "NODE_ENV",
       "production",
-      "NODE_ENV (variable) changes how programs start: NODE_ENV=production. Once approved, every computer and sandbox running Personal starts programs with it.",
+      "NODE_ENV (variable): NODE_ENV=production",
     ],
   ])(
     "words a held %s by what it is and what approving it does",
@@ -525,7 +553,7 @@ describe("<RetrospectiveSession /> commands on hold", () => {
           kind: "variable",
           key: "PATH_EXTRA",
         }),
-        line: `PATH_EXTRA (variable) changes how programs start: PATH_EXTRA=setting. Once approved, ${EVERYWHERE} starts programs with it.`,
+        line: "PATH_EXTRA (variable): PATH_EXTRA=setting",
       },
     ];
     renderSession(
@@ -543,6 +571,159 @@ describe("<RetrospectiveSession /> commands on hold", () => {
       expect(rowLine?.textContent).toBe(line);
     }
   });
+});
+
+describe("<RetrospectiveSession /> keeping a current host proposal", () => {
+  const SHARED = environmentStatusFixture({
+    planes: { records: "shared_unrecorded", broker: "local", room: "local" },
+  });
+  const ORIGIN_HOST_ID = mockLocalHostEntry.hostId;
+
+  it("offers Keep only for current-host variable puts and sends the displayed hold to that host", async () => {
+    const view = renderSessionWith(
+      SHARED,
+      [
+        entryOf({
+          entryId: "variable-put",
+          kind: "variable",
+          key: "LOG_LEVEL",
+          hostId: ORIGIN_HOST_ID,
+          heldRevision: 11,
+        }),
+        entryOf({
+          entryId: "provider-put",
+          kind: "env_override",
+          key: "claude:LOG_LEVEL",
+          harness: "claude",
+          hostId: ORIGIN_HOST_ID,
+          heldRevision: 12,
+        }),
+        entryOf({
+          entryId: "variable-removal",
+          kind: "variable",
+          key: "OLD_LEVEL",
+          op: "delete",
+          hostId: ORIGIN_HOST_ID,
+          heldRevision: 13,
+        }),
+        entryOf({
+          entryId: "hook-put",
+          kind: "hook",
+          key: "notify",
+          hostId: ORIGIN_HOST_ID,
+          heldRevision: 14,
+        }),
+      ],
+      [],
+      {
+        onOpenChange: vi.fn(),
+        heldKeepSupported: true,
+        proposalHeldIds: ["variable-put", "provider-put"],
+      },
+    );
+
+    const variableRow = await screen.findByTestId(
+      "retrospective-held-variable-put",
+    );
+    const providerRow = screen.getByTestId("retrospective-held-provider-put");
+    const removalRow = screen.getByTestId(
+      "retrospective-held-variable-removal",
+    );
+    const otherKindRow = screen.getByTestId("retrospective-held-hook-put");
+
+    for (const row of [variableRow, providerRow]) {
+      expect(within(row).getAllByRole("button")).toHaveLength(3);
+      expect(
+        within(row).getByRole("button", { name: "Use everywhere" }),
+      ).toBeTruthy();
+      expect(
+        within(row).getByRole("button", {
+          name: "Keep on Old laptop only",
+        }),
+      ).toBeTruthy();
+      expect(within(row).getByRole("button", { name: "Discard" })).toBeTruthy();
+    }
+    for (const row of [removalRow, otherKindRow]) {
+      expect(within(row).getAllByRole("button")).toHaveLength(2);
+      expect(within(row).getByRole("button", { name: "Approve" })).toBeTruthy();
+      expect(within(row).getByRole("button", { name: "Discard" })).toBeTruthy();
+      expect(
+        within(row).queryByRole("button", {
+          name: "Keep on Old laptop only",
+        }),
+      ).toBeNull();
+    }
+
+    fireEvent.click(
+      within(variableRow).getByRole("button", {
+        name: "Keep on Old laptop only",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(view.keepCalls).toEqual([
+        { heldId: "variable-put", revision: 11 },
+      ]);
+    });
+    expect(applyRequests(view.requests)).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      label: "the host did not advertise heldKeep",
+      hostId: ORIGIN_HOST_ID,
+      heldKeepSupported: false,
+      proposalHeldIds: ["variable-put"],
+      shareLabel: "Use everywhere",
+    },
+    {
+      label: "the held value came from another host",
+      hostId: "another-host",
+      heldKeepSupported: true,
+      proposalHeldIds: ["variable-put"],
+      shareLabel: "Use everywhere",
+    },
+    {
+      label: "the old Move hold has no sharing generation",
+      hostId: ORIGIN_HOST_ID,
+      heldKeepSupported: true,
+      proposalHeldIds: [],
+      shareLabel: "Approve",
+    },
+  ])(
+    "offers two choices when $label",
+    async ({ hostId, heldKeepSupported, proposalHeldIds, shareLabel }) => {
+      renderSessionWith(
+        SHARED,
+        [
+          entryOf({
+            entryId: "variable-put",
+            kind: "variable",
+            key: "LOG_LEVEL",
+            hostId,
+          }),
+        ],
+        [],
+        {
+          onOpenChange: vi.fn(),
+          heldKeepSupported,
+          proposalHeldIds,
+        },
+      );
+
+      const row = await screen.findByTestId("retrospective-held-variable-put");
+      expect(within(row).getAllByRole("button")).toHaveLength(2);
+      expect(
+        within(row).getByRole("button", { name: shareLabel }),
+      ).toBeTruthy();
+      expect(within(row).getByRole("button", { name: "Discard" })).toBeTruthy();
+      expect(
+        within(row).queryByRole("button", {
+          name: "Keep on Old laptop only",
+        }),
+      ).toBeNull();
+    },
+  );
 });
 
 describe("<RetrospectiveSession /> an authn refusal for a held choice", () => {

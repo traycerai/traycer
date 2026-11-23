@@ -1306,32 +1306,17 @@ and shared notes have no review workflow. Mount, window focus and this app's
 own settlement refresh review; no new poll or proposal push is promised.
 
 **Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`).
-In a Personal page's header, for the item kinds the
-page edits: each convergence notice from `environment.notices`
-("LOG_LEVEL from dev-box now applies everywhere.", or "from the dashboard")
-with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
-"needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
-runs a command / was changed without your confirmation.") with Review, which
-opens Secrets. A variable is saved as typed, whatever its name or value, on
-Variables and on a provider's Env tab, on every host a sandbox included,
-whether or not a secret declares the same name. A value
-already saved that looks like a key (`classifyCredential`) shows as dots with
-Remove, never in a field, on every Variables and Env list (Personal, a team, a
-Local row). On the host a variable or
-provider-variable notice came from, "Keep dev-box's value on dev-box" writes
-the value that host has now as its own (`config.env.localOverride.set`, the
-value read as the page reads it: `config.env.list` or `providers.list`) and
-then undoes the change everywhere; an undo that is refused leaves the kept
-value, equal to the current one, and the row says why. A Variables or
-provider-variable row this host keeps its own value for shows the shared
-value with "dev-box uses: error · Use everywhere" beneath (dots for a value
-that looks like a key), and its Set and Remove change
-the shared value only. Use everywhere saves the host's value as the shared one
-and then clears the host's own (`config.env.localOverride.clear`); the host's
-own value is otherwise changed under Access and setup ▸ This host's own
-values. A team's host shows no
-notices: its Personal pages are read-only (`inert`) under the team line,
-like a host whose version predates these settings.
+Personal pages show convergence notices for the settings they edit, with Undo
+while available. A held variable or provider variable has three answers on the
+review sheet: Use everywhere, Keep on the originating computer only, and Discard.
+The computer's Overview shows the moved notice if its Move uploaded settings,
+and keeps it until dismissed.
+
+On Variables and shells and on a provider's Variables tab, a set value can be
+saved as a computer's own with "Only on {computer}". A kept row's editor shows
+and saves that computer's own value. Its note offers Use everywhere, which
+saves to Personal before clearing the computer's own value. Values that look
+like keys are shown as dots. A team's host shows no Personal notices.
 
 **Two sections are both called "Diagnostics"**, one per group, and the group
 heading above each is what distinguishes them - the same way the rail already
@@ -6737,9 +6722,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
     settings."; an unreachable one says its values need a connection. Top to
     bottom, each only while it applies:
     1. **"Your settings moved to Personal. Review what changed."** once setup
-       is done and a notice came from the move (`source: "migration"`), with
-       Review (opens Secrets) and Dismiss. Dismissed
-       per host on this desktop (`useHostAccessPromptsStore`).
+       is done and its Move uploaded settings, from this host's result in
+       the review. Review opens Secrets. Dismissal is saved per host on this
+       desktop (`useHostAccessPromptsStore`).
     2. **Finishing setup** from `environment.status.setup {stage, state}`:
        Registering this host, Moving this host's settings to Personal,
        Applying your settings, each marked done, running or waiting, with

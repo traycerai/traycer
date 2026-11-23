@@ -94,11 +94,6 @@ export interface ShellConfigController {
     entry: { readonly key: string; readonly value: string | null },
     callbacks: ShellCommandCallbacks,
   ) => void;
-  /** Completion for multi-write operations that must survive panel unmount. */
-  readonly setEnvAsync: (entry: {
-    readonly key: string;
-    readonly value: string | null;
-  }) => Promise<void>;
   readonly deleteEnv: (key: string, callbacks: ShellCommandCallbacks) => void;
   /**
    * Rename an override as a SINGLE operation: write `newKey`, then drop

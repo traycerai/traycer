@@ -231,6 +231,7 @@ export const authnOperationReviewResponseSchema = lazySchema(() =>
             hostId: z.string(),
             hostName: z.string().max(256),
             migratedAt: epochMsSchema,
+            uploadedSettings: z.boolean().optional(),
           }),
         ),
         needsYou: z.array(

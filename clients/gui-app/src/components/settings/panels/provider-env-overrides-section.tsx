@@ -8,13 +8,10 @@ import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
-import {
-  usePersonalPageHost,
-  usePersonalRowNotes,
-} from "@/components/settings/personal/personal-page-context";
+import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { environmentMutationKeys, queryKeys } from "@/lib/query-keys";
+import { usePersonalEnvOverrideActions } from "@/components/settings/personal/use-personal-env-override-actions";
+import { queryKeys } from "@/lib/query-keys";
 import { useHostBinding } from "@/lib/host";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
@@ -59,31 +56,7 @@ export function ProviderEnvOverridesSection(props: {
     submittedValue.clear,
   );
   const deleteOverride = useProvidersDeleteEnvOverride();
-  // Use everywhere: this host's own value becomes Personal's, then the host
-  // stops keeping one; cleared only after the save landed.
-  const pageHost = usePersonalPageHost();
-  const clearOwnValue = useHostScopedMutationForClient(pageHost.client, {
-    method: "config.env.localOverride.clear",
-    mutationKey: environmentMutationKeys.localOverrideClear(),
-    errorMessage: "Couldn't stop this computer keeping its own value.",
-    scope: { id: "config.env.localOverride" },
-    invalidateMethods: ["environment.localOverrides", "providers.list"],
-  });
-  const useEverywhere = useMutation({
-    mutationFn: async (entry: {
-      readonly key: string;
-      readonly value: string;
-    }) => {
-      submittedValue.set(entry.value);
-      await setOverride.mutateAsync({
-        providerId,
-        key: entry.key,
-      });
-      await clearOwnValue.mutateAsync({
-        target: { kind: "env_override", providerId, key: entry.key },
-      });
-    },
-  });
+  const { onlyOn, canShare, share } = usePersonalEnvOverrideActions(providerId);
   const commitOverride = useMutation({
     onSettled: submittedValue.clear,
     mutationFn: async (entry: {
@@ -102,8 +75,7 @@ export function ProviderEnvOverridesSection(props: {
   const disabled =
     setOverride.isPending ||
     deleteOverride.isPending ||
-    clearOwnValue.isPending ||
-    useEverywhere.isPending ||
+    share.isPending ||
     commitOverride.isPending;
   // The overrides re-read after a write: `disabled` ends with the write, and
   // the spinner stays until the re-read lands.
@@ -120,8 +92,8 @@ export function ProviderEnvOverridesSection(props: {
       <PersonalRowNoteText
         name={key}
         note={note}
-        disabled={disabled}
-        onUseEverywhere={(key, value) => useEverywhere.mutate({ key, value })}
+        disabled={disabled || !canShare}
+        onUseEverywhere={(key) => share.mutate(key)}
       />,
     );
   }
@@ -168,6 +140,7 @@ export function ProviderEnvOverridesSection(props: {
       <EnvOverrideEditor
         key={JSON.stringify([viewerId, configurationKey, providerId])}
         rowNotes={rowNotes}
+        onlyOn={onlyOn}
         overrides={overrides}
         disabled={disabled}
         namePlaceholder={envNamePlaceholder(providerId)}

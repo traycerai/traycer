@@ -74,6 +74,7 @@ export interface SettingsSaveContext {
   readonly hostId: string;
   readonly sharingGeneration: number;
   readonly expectedLiveRevision: number | null;
+  readonly waitForHostOutcome?: true;
 }
 
 export interface SettingsSaveCoordinatorPorts {
@@ -109,7 +110,7 @@ export interface SettingsSaveCoordinator {
   /** A proposed save's host is reconciled through `environment.proposals`; no save answer carries it. */
   readonly settle: (
     ticket: SettingsSaveTicket,
-    hostAnswered: boolean,
+    hostAnswered: boolean | "no_proposal",
   ) => Promise<void>;
   /** One at a time per host; a call while one runs waits for it. */
   readonly reconcile: (hostId: string) => Promise<void>;
@@ -197,6 +198,9 @@ export function createSettingsSaveCoordinator(
   ports: SettingsSaveCoordinatorPorts,
 ): SettingsSaveCoordinator {
   const running = new Map<string, Promise<void>>();
+  // These writes can stay on the host. An older matching receipt is not
+  // evidence while that write's outcome is still unknown.
+  const awaitingHostOutcome = new Set<string>();
   const appliedListeners = new Map<string, () => void>();
   const store = () => useSettingsSaveMemoryStore.getState();
 
@@ -288,7 +292,8 @@ export function createSettingsSaveCoordinator(
     forgetExpired();
     dropUnremembered();
     const mine = Object.entries(store().records).filter(
-      ([, record]) => record.hostId === hostId,
+      ([id, record]) =>
+        record.hostId === hostId && !awaitingHostOutcome.has(id),
     );
     if (mine.length === 0) return;
 
@@ -357,7 +362,10 @@ export function createSettingsSaveCoordinator(
   const begunIn = new Map<string, number>();
 
   const awaitsHold = (hostId: string): boolean =>
-    Object.values(store().records).some((record) => record.hostId === hostId);
+    Object.entries(store().records).some(
+      ([id, record]) =>
+        record.hostId === hostId && !awaitingHostOutcome.has(id),
+    );
 
   // A later arm never pushes out a sooner one: a new save's short wait stands
   // against an older run's long one, whichever of them arms last.
@@ -435,8 +443,10 @@ export function createSettingsSaveCoordinator(
     // The memory may be another account's by now: an edit is remembered only
     // in the memory of the account it was made for.
     if (memoryAccount() !== context.accountId) return ACCOUNT_CHANGED;
-    const id = store().remember({
-      editId: crypto.randomUUID(),
+    const id = crypto.randomUUID();
+    if (context.waitForHostOutcome === true) awaitingHostOutcome.add(id);
+    store().remember({
+      editId: id,
       environmentId: context.environmentId,
       hostId: context.hostId,
       sharingGeneration: context.sharingGeneration,
@@ -458,8 +468,10 @@ export function createSettingsSaveCoordinator(
 
   const settle = async (
     ticket: SettingsSaveTicket,
-    hostAnswered: boolean,
+    hostAnswered: boolean | "no_proposal",
   ): Promise<void> => {
+    if (hostAnswered === "no_proposal") forget(ticket.id);
+    awaitingHostOutcome.delete(ticket.id);
     store().markAnswered(ticket.id);
     const armedIn = begunIn.get(ticket.id) ?? null;
     begunIn.delete(ticket.id);

@@ -95,12 +95,16 @@ import {
 import type {
   ConfigEnvLocalOverrideClearRequest,
   ConfigEnvLocalOverrideResponse,
+  ConfigEnvLocalOverrideSetRequest,
   EnvironmentReviewEntry,
   EnvironmentSecretV12,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -117,7 +121,6 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { isRecord } from "@/lib/editor/prosemirror-json";
 import { queryKeys } from "@/lib/query-keys";
 import type { EnvOverrideValue } from "../env-override-editor";
 import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
@@ -125,6 +128,7 @@ import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
 } from "@traycer/protocol/host/released-wire-rows";
+import { jsonEnvironmentAnswer } from "../../../../../__tests__/create-fake-runner-host";
 
 const mocks = vi.hoisted(() => ({
   setOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
@@ -206,28 +210,6 @@ function expectSetOverrideTargetVariables(providerId: string): void {
     keys: ["key", "providerId"],
     providerId,
   });
-}
-
-type OutgoingSetOverrideRequest = {
-  readonly providerId: string;
-  readonly key: string;
-  readonly value: string;
-};
-
-function outgoingSetOverrideMatches(
-  actual: unknown,
-  expected: OutgoingSetOverrideRequest,
-): boolean {
-  if (!isRecord(actual)) return false;
-  const actualKeys = Object.keys(actual).sort();
-  const expectedKeys = ["key", "providerId", "value"];
-  return (
-    actualKeys.length === expectedKeys.length &&
-    actualKeys.every((key, index) => key === expectedKeys[index]) &&
-    actual.providerId === expected.providerId &&
-    actual.key === expected.key &&
-    actual.value === expected.value
-  );
 }
 
 let fakeAuthn: FakeEnvironmentAuthn | null = null;
@@ -410,16 +392,47 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   interface HostFacts {
     readonly localOverrides: readonly LocalOverride[];
     readonly secrets: readonly EnvironmentSecretV12[];
+    readonly localOverrideSetSupported?: boolean;
+    readonly saveToPersonalSupported?: boolean;
+    readonly guardedClearSupported?: boolean;
   }
   const NO_FACTS: HostFacts = { localOverrides: [], secrets: [] };
+  const SAVE_RECEIPT = {
+    environmentId: "env-personal",
+    heldId: "held-provider-value",
+    revision: 9,
+    expectedLiveRevision: 3,
+    reviewRequired: false,
+  };
+  const heldApplyRequests: EnvironmentTransportRequest[] = [];
   const clearOverride = vi.fn(
     (
       _request: ConfigEnvLocalOverrideClearRequest,
     ): Promise<ConfigEnvLocalOverrideResponse> =>
       Promise.resolve({ outcome: "saved", overrides: [] }),
   );
+  const setLocalOverride = vi.fn(
+    (
+      request: ConfigEnvLocalOverrideSetRequest,
+    ): Promise<ConfigEnvLocalOverrideResponse> =>
+      Promise.resolve({
+        outcome: "saved",
+        overrides: [
+          {
+            target: request.target,
+            os: "any",
+            value: request.value,
+            setAt: 2,
+          },
+        ],
+      }),
+  );
+  const saveToPersonal = vi.fn((_request: ConfigEnvLocalOverrideSetRequest) =>
+    Promise.resolve(SAVE_RECEIPT),
+  );
 
   beforeEach(() => {
+    heldApplyRequests.length = 0;
     useSettingsEnvironmentPickStore.setState({
       defaultPick: { kind: "personal" },
     });
@@ -455,7 +468,9 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       "environment.localOverrides": () => ({
         overrides: [...facts.localOverrides],
       }),
+      "config.env.localOverride.set": setLocalOverride,
       "config.env.localOverride.clear": clearOverride,
+      "config.env.localOverride.saveToPersonal": saveToPersonal,
       "environment.list": () => environmentList,
       "environment.secrets.list": () => ({
         secrets: [...facts.secrets],
@@ -479,6 +494,20 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
     const authn = createFakeEnvironmentAuthn(handlers);
     fakeAuthn = authn;
+    const cloud: EnvironmentCloud = {
+      ...authn.cloud,
+      transport: async (request) => {
+        const path = new URL(request.url).pathname;
+        if (
+          request.method === "POST" &&
+          path.endsWith("/review/held/held-provider-value/apply")
+        ) {
+          heldApplyRequests.push(request);
+          return jsonEnvironmentAnswer({ outcome: "applied" });
+        }
+        return authn.cloud.transport(request);
+      },
+    };
     // On the Personal pick the page keeps this host's pages once it knows the
     // host's environment.status version and that the host runs Personal.
     recordNegotiatedHostManifest(HOST_ID, {
@@ -488,6 +517,20 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       "environment.list": { major: 1, minor: 0 },
       "environment.secrets.list": { major: 1, minor: 2 },
       "config.env.localOverride.clear": { major: 1, minor: 0 },
+      ...(facts.localOverrideSetSupported
+        ? { "config.env.localOverride.set": { major: 1, minor: 0 } }
+        : {}),
+      ...(facts.saveToPersonalSupported
+        ? {
+            "config.env.localOverride.saveToPersonal": {
+              major: 1,
+              minor: 0,
+            },
+          }
+        : {}),
+      ...(facts.guardedClearSupported
+        ? { "config.env.localOverride.clear": { major: 1, minor: 1 } }
+        : {}),
     });
     scopeOverrides.current = {
       host: hostScopeOptionFixture({ hostId: HOST_ID, name: "dev-box" }),
@@ -498,7 +541,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     hostBindingMock.current = {
       hostClient: client,
       auth: {
-        environmentCloud: () => authn.cloud,
+        environmentCloud: () => cloud,
         listEnvironments: () =>
           Promise.resolve({ kind: "ok" as const, list: environmentList }),
       },
@@ -721,9 +764,65 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     { key: "ANTHROPIC_BASE_URL", value: "https://shared.example.invalid" },
   ];
 
+  it("offers Only on for a provider variable when the host supports the P6 methods", async () => {
+    renderClaudeEnvTab(
+      {
+        localOverrides: [],
+        secrets: [],
+        localOverrideSetSupported: true,
+        saveToPersonalSupported: true,
+        guardedClearSupported: true,
+      },
+      SHARED_URL,
+    );
+
+    const onlyOn = await screen.findByRole("button", {
+      name: "Only on dev-box",
+    });
+    fireEvent.change(screen.getByLabelText("Value for ANTHROPIC_BASE_URL"), {
+      target: { value: OWN_URL },
+    });
+    fireEvent.click(onlyOn);
+
+    await waitFor(() =>
+      expect(setLocalOverride).toHaveBeenCalledWith({
+        target: {
+          kind: "env_override",
+          providerId: "claude-code",
+          key: "ANTHROPIC_BASE_URL",
+        },
+        value: OWN_URL,
+      }),
+    );
+    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+    expect(clearOverride).not.toHaveBeenCalled();
+  });
+
+  it("hides Only on when a host can set local values but cannot save them to Personal", async () => {
+    renderClaudeEnvTab(
+      {
+        localOverrides: [],
+        secrets: [],
+        localOverrideSetSupported: true,
+      },
+      SHARED_URL,
+    );
+
+    await screen.findByLabelText("Value for ANTHROPIC_BASE_URL");
+    expect(
+      screen.queryByRole("button", { name: "Only on dev-box" }),
+    ).toBeNull();
+  });
+
   it("reads what the host uses for a provider variable it keeps its own value for", async () => {
     renderClaudeEnvTab(
-      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      {
+        localOverrides: [ownBaseUrl(OWN_URL)],
+        secrets: [],
+        localOverrideSetSupported: true,
+        saveToPersonalSupported: true,
+        guardedClearSupported: true,
+      },
       SHARED_URL,
     );
 
@@ -733,7 +832,13 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   it("saves the host's value for everyone, then stops the host keeping its own", async () => {
     renderClaudeEnvTab(
-      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      {
+        localOverrides: [ownBaseUrl(OWN_URL)],
+        secrets: [],
+        localOverrideSetSupported: true,
+        saveToPersonalSupported: true,
+        guardedClearSupported: true,
+      },
       SHARED_URL,
     );
 
@@ -741,20 +846,20 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       await screen.findByRole("button", { name: "Use everywhere" }),
     );
 
-    await waitFor(() =>
-      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
-    );
-    expectSetOverrideTargetVariables("claude-code");
-    const outgoingSetCall = mocks.setOverrideMutate.mock.calls.at(0);
-    expect(
-      outgoingSetCall !== undefined &&
-        outgoingSetOverrideMatches(outgoingSetCall[0], {
-          providerId: "claude-code",
-          key: "ANTHROPIC_BASE_URL",
-          value: OWN_URL,
-        }),
-    ).toBe(true);
-    // The clear RPC follows the save's resolved promise.
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledTimes(1));
+    expect(saveToPersonal).toHaveBeenCalledWith({
+      target: {
+        kind: "env_override",
+        providerId: "claude-code",
+        key: "ANTHROPIC_BASE_URL",
+      },
+      value: OWN_URL,
+    });
+    await waitFor(() => expect(heldApplyRequests).toHaveLength(1));
+    expect(heldApplyRequests[0]?.body).toEqual({
+      revision: SAVE_RECEIPT.revision,
+      expectedLiveRevision: SAVE_RECEIPT.expectedLiveRevision,
+    });
     await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
     expect(clearOverride).toHaveBeenCalledWith({
       target: {
@@ -762,35 +867,36 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         providerId: "claude-code",
         key: "ANTHROPIC_BASE_URL",
       },
+      expectedValue: OWN_URL,
     });
+    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
   });
 
   it("clears a provider's own value after its save resolves, even if the section unmounts", async () => {
-    let resolveSave: (() => void) | undefined;
-    mocks.setOverrideMutate.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveSave = resolve;
-        }),
-    );
+    const receipt = Promise.withResolvers<typeof SAVE_RECEIPT>();
+    saveToPersonal.mockImplementationOnce(() => receipt.promise);
     const view = renderClaudeEnvTab(
-      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      {
+        localOverrides: [ownBaseUrl(OWN_URL)],
+        secrets: [],
+        localOverrideSetSupported: true,
+        saveToPersonalSupported: true,
+        guardedClearSupported: true,
+      },
       SHARED_URL,
     );
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Use everywhere" }),
     );
-    await waitFor(() =>
-      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
-    );
-    expectSetOverrideTargetVariables("claude-code");
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledTimes(1));
+    expect(heldApplyRequests).toHaveLength(0);
     expect(clearOverride).not.toHaveBeenCalled();
 
     view.unmount();
-    if (resolveSave === undefined) throw new Error("save did not start");
-    act(() => resolveSave?.());
+    act(() => receipt.resolve(SAVE_RECEIPT));
 
+    await waitFor(() => expect(heldApplyRequests).toHaveLength(1));
     await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
     expect(clearOverride).toHaveBeenCalledWith({
       target: {
@@ -798,33 +904,69 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         providerId: "claude-code",
         key: "ANTHROPIC_BASE_URL",
       },
+      expectedValue: OWN_URL,
     });
   });
 
   it("keeps a provider's own value when saving it for everyone fails", async () => {
     let rejectSave: ((error: Error) => void) | undefined;
-    const save = new Promise<void>((_resolve, reject) => {
+    const save = new Promise<typeof SAVE_RECEIPT>((_resolve, reject) => {
       rejectSave = reject;
     });
-    mocks.setOverrideMutate.mockImplementationOnce(() => save);
+    saveToPersonal.mockImplementationOnce(() => save);
     renderClaudeEnvTab(
-      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      {
+        localOverrides: [ownBaseUrl(OWN_URL)],
+        secrets: [],
+        localOverrideSetSupported: true,
+        saveToPersonalSupported: true,
+        guardedClearSupported: true,
+      },
       SHARED_URL,
     );
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Use everywhere" }),
     );
-    await waitFor(() =>
-      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
-    );
-    expectSetOverrideTargetVariables("claude-code");
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledTimes(1));
     if (rejectSave === undefined) throw new Error("save did not start");
     await act(async () => {
       rejectSave?.(new Error("save failed"));
       await save.catch(() => undefined);
     });
 
+    expect(clearOverride).not.toHaveBeenCalled();
+  });
+
+  it("leaves a provider's own value when the save requires review", async () => {
+    saveToPersonal.mockResolvedValueOnce({
+      ...SAVE_RECEIPT,
+      reviewRequired: true,
+    });
+    renderClaudeEnvTab(
+      {
+        localOverrides: [ownBaseUrl(OWN_URL)],
+        secrets: [],
+        localOverrideSetSupported: true,
+        saveToPersonalSupported: true,
+        guardedClearSupported: true,
+      },
+      SHARED_URL,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+
+    await waitFor(() => expect(saveToPersonal).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Use everywhere",
+        }).disabled,
+      ).toBe(false),
+    );
+    expect(heldApplyRequests).toHaveLength(0);
     expect(clearOverride).not.toHaveBeenCalled();
   });
 
@@ -852,13 +994,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("deletes the old provider variable after a renamed save resolves, even if the section unmounts", async () => {
-    let resolveSave: (() => void) | undefined;
-    mocks.setOverrideMutate.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveSave = resolve;
-        }),
-    );
+    const renameSave = Promise.withResolvers<void>();
+    mocks.setOverrideMutate.mockImplementationOnce(() => renameSave.promise);
     const view = renderProviderEnvTab("cursor", [
       { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
     ]);
@@ -880,8 +1017,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
     view.unmount();
     expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
-    if (resolveSave === undefined) throw new Error("save did not start");
-    act(() => resolveSave?.());
+    act(() => renameSave.resolve());
 
     await waitFor(() =>
       expect(mocks.deleteOverrideMutate).toHaveBeenCalledTimes(1),
@@ -1180,10 +1316,23 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
       it("keeps the spinner up and the rows disabled through Use everywhere's save and the clearing of the computer's own value", async () => {
         renderClaudeEnvTab(
-          { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+          {
+            localOverrides: [ownBaseUrl(OWN_URL)],
+            secrets: [],
+            localOverrideSetSupported: true,
+            saveToPersonalSupported: true,
+            guardedClearSupported: true,
+          },
           SHARED_URL,
         );
-        const releaseSave = holdWrite(mocks.setOverrideMutate);
+        const receipt = Promise.withResolvers<typeof SAVE_RECEIPT>();
+        saveToPersonal.mockImplementationOnce(() => receipt.promise);
+        const releaseSave = async (): Promise<void> => {
+          await act(async () => {
+            receipt.resolve(SAVE_RECEIPT);
+            await receipt.promise;
+          });
+        };
         const clearing =
           Promise.withResolvers<ConfigEnvLocalOverrideResponse>();
         clearOverride.mockImplementationOnce(() => clearing.promise);

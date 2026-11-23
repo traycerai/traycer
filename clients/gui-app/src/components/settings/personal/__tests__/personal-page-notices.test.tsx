@@ -97,7 +97,6 @@ import { useScopedHostBinding } from "@/components/settings/host-scope/use-scope
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
-import { provider } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
@@ -420,10 +419,6 @@ async function settled(log: AuthnLog): Promise<void> {
   });
 }
 
-function methodsOf(host: AccessHost): string[] {
-  return host.requests.map((request) => request.method);
-}
-
 const FROM_DEV_BOX = {
   kind: "host",
   hostId: ACCESS_HOST_ID,
@@ -431,7 +426,7 @@ const FROM_DEV_BOX = {
 } as const;
 
 describe("a Personal page's convergence notices", () => {
-  it("says which change now applies everywhere, and where it came from", async () => {
+  it("says which change now applies everywhere without naming its computer", async () => {
     const host = hostWith(
       {},
       {
@@ -449,7 +444,7 @@ describe("a Personal page's convergence notices", () => {
 
     const rows = await screen.findAllByTestId("personal-notice");
     expect(rows.map((row) => row.textContent)).toEqual([
-      expect.stringContaining("LOG_LEVEL from dev-box now applies everywhere."),
+      expect.stringContaining("LOG_LEVEL now applies everywhere."),
       expect.stringContaining("DATABASE_URL now applies everywhere."),
     ]);
     // Under the page's heading, in the shell's header with the status line.
@@ -458,7 +453,7 @@ describe("a Personal page's convergence notices", () => {
     expect(header?.closest("[data-settings-panel-shell]")).not.toBeNull();
   });
 
-  it("names another host without a label as 'another host'", async () => {
+  it("does not name another host when its label is missing", async () => {
     const host = hostWith(
       {},
       {
@@ -473,7 +468,7 @@ describe("a Personal page's convergence notices", () => {
 
     expect(
       (await screen.findByTestId("personal-notice")).textContent,
-    ).toContain("LOG_LEVEL from another host now applies everywhere.");
+    ).toContain("LOG_LEVEL now applies everywhere.");
   });
 
   it("shows only the notices of this page's kinds", async () => {
@@ -614,10 +609,8 @@ describe("Undo on a notice", () => {
   });
 });
 
-describe("Keep this host's value", () => {
-  const KEEP = "Keep dev-box's value on dev-box";
-
-  it("keeps the current value on this host FIRST and undoes the change everywhere SECOND", async () => {
+describe("a convergence notice from a computer", () => {
+  it("keeps Undo and does not offer Keep or name the computer", async () => {
     const host = hostWith(
       {},
       {
@@ -627,190 +620,11 @@ describe("Keep this host's value", () => {
     );
     renderPage(host, SHELL_PAGE);
 
-    fireEvent.click(await screen.findByRole("button", { name: KEEP }));
-
-    await waitFor(() => {
-      expect(methodsOf(host)).toEqual([
-        "config.env.localOverride.set",
-        "environment.undo",
-      ]);
-    });
-    expect(host.requests).toEqual([
-      {
-        method: "config.env.localOverride.set",
-        params: {
-          target: { kind: "variable", key: "LOG_LEVEL" },
-          value: "debug",
-        },
-      },
-      {
-        method: "environment.undo",
-        params: { kind: "variable", key: "LOG_LEVEL", os: null },
-      },
-    ]);
-    expect(screen.queryByTestId("personal-notice-refusal")).toBeNull();
-  });
-
-  it("keeps the value on this host even when the undo is refused as stale, and says so", async () => {
-    const host = hostWith(
-      {},
-      {
-        notices: [noticeFixture({ from: FROM_DEV_BOX })],
-        envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
-        undoAnswer: {
-          outcome: "stale",
-          currentRevision: 5,
-          changedBy: { kind: "dashboard" },
-        },
-      },
-    );
-    renderPage(host, SHELL_PAGE);
-
-    fireEvent.click(await screen.findByRole("button", { name: KEEP }));
-
-    expect(
-      (await screen.findByTestId("personal-notice-refusal")).textContent,
-    ).toBe(
-      "Kept on dev-box, but couldn't undo the change everywhere: LOG_LEVEL was changed again since.",
-    );
-    // The override stays: it was set, and nothing took it back.
-    expect(methodsOf(host)).toEqual([
-      "config.env.localOverride.set",
-      "environment.undo",
-    ]);
-    expect(host.paramsOf("config.env.localOverride.clear")).toEqual([]);
-  });
-
-  it("does not undo anything when the host will not keep the value without a confirmation", async () => {
-    const host = hostWith(
-      {},
-      {
-        notices: [noticeFixture({ from: FROM_DEV_BOX })],
-        envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
-        localOverrideNeedsGrant: true,
-      },
-    );
-    renderPage(host, SHELL_PAGE);
-
-    fireEvent.click(await screen.findByRole("button", { name: KEEP }));
-
-    expect(
-      (await screen.findByTestId("personal-notice-refusal")).textContent,
-    ).toBe("Couldn't keep the value without your confirmation.");
-    expect(methodsOf(host)).toEqual(["config.env.localOverride.set"]);
-  });
-
-  it("is offered only on the host the change came from", async () => {
-    const host = hostWith(
-      {},
-      {
-        notices: [
-          noticeFixture({
-            from: { kind: "host", hostId: "host-b", hostLabel: "laptop" },
-          }),
-        ],
-        envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
-      },
-    );
-    const log = renderPage(host, SHELL_PAGE);
-
     const row = await screen.findByTestId("personal-notice");
-    expect(row.textContent).toContain("LOG_LEVEL from laptop");
-    expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
-    await settled(log);
-    expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
-  });
-
-  it("is not offered for a change made in the dashboard", async () => {
-    const host = hostWith(
-      {},
-      {
-        notices: [noticeFixture({ from: { kind: "dashboard" } })],
-        envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
-      },
-    );
-    const log = renderPage(host, SHELL_PAGE);
-
-    const row = await screen.findByTestId("personal-notice");
-    await settled(log);
+    expect(row.textContent).toContain("LOG_LEVEL now applies everywhere.");
+    expect(row.textContent).not.toContain("from dev-box");
     expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
     expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
-  });
-
-  it("is not offered until the host's current value is read", async () => {
-    const host = hostWith(
-      {},
-      {
-        notices: [noticeFixture({ from: FROM_DEV_BOX })],
-        envEntries: [{ key: "OTHER", value: "x" }],
-      },
-    );
-    const log = renderPage(host, SHELL_PAGE);
-
-    const row = await screen.findByTestId("personal-notice");
-    await settled(log);
-    expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
-    expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
-  });
-
-  it("draws no row and no Keep for a change authn's list does not carry", async () => {
-    const host = hostWith(
-      {},
-      { notices: [], envEntries: [{ key: "LOG_LEVEL", value: "debug" }] },
-    );
-    const log = renderPage(host, SHELL_PAGE);
-
-    await waitFor(() => {
-      expect(log.notices).toBeGreaterThan(0);
-    });
-    await settled(log);
-    expect(screen.queryByTestId("personal-notice")).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Keep / })).toBeNull();
-  });
-
-  it("keeps a provider's variable as that provider's override", async () => {
-    const claude = {
-      ...provider("claude-code", []),
-      envOverrides: [{ key: "ANTHROPIC_BASE_URL", value: "http://proxy" }],
-    };
-    const host = hostWith(
-      {},
-      {
-        notices: [
-          noticeFixture({
-            kind: "env_override",
-            key: "claude-code:ANTHROPIC_BASE_URL",
-            from: FROM_DEV_BOX,
-          }),
-        ],
-        providers: [claude],
-      },
-    );
-    // Nothing else on the page reads the provider list: the Keep row reads
-    // the value itself.
-    renderPage(host, { ...SHELL_PAGE, section: "providers" });
-
-    expect(
-      (await screen.findByTestId("personal-notice")).textContent,
-    ).toContain("ANTHROPIC_BASE_URL from dev-box now applies everywhere.");
-    fireEvent.click(await screen.findByRole("button", { name: KEEP }));
-
-    await waitFor(() => {
-      expect(methodsOf(host)).toEqual([
-        "config.env.localOverride.set",
-        "environment.undo",
-      ]);
-    });
-    expect(host.paramsOf("config.env.localOverride.set")).toEqual([
-      {
-        target: {
-          kind: "env_override",
-          providerId: "claude-code",
-          key: "ANTHROPIC_BASE_URL",
-        },
-        value: "http://proxy",
-      },
-    ]);
   });
 });
 
@@ -851,7 +665,7 @@ describe("a Personal page's 'needs you' rows", () => {
     });
   });
 
-  it("words a held variable from a host that sends none by what it changes", async () => {
+  it("keeps a plain held variable's kind without guessing its effect", async () => {
     const host = hostWith(
       {},
       {
@@ -870,7 +684,7 @@ describe("a Personal page's 'needs you' rows", () => {
     const rows = await screen.findAllByTestId("personal-review-row");
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining(
-        "SHELL_INIT (variable) changes how programs start and is on hold until you choose",
+        "SHELL_INIT (variable) is on hold until you choose",
       ),
     ]);
   });

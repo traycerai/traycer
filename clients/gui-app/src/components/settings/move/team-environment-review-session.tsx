@@ -226,7 +226,7 @@ function TeamReviewDialog(props: {
                     detail: line.clause,
                   },
                 ]}
-                actions={
+                actionsForRow={() =>
                   ready && canEdit && readable ? HELD_COMMAND_CHOICES : []
                 }
                 pendingId={choice.isPending ? choice.variables.heldId : null}

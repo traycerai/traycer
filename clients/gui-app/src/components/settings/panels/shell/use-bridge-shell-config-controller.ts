@@ -169,9 +169,6 @@ export function useBridgeShellConfigController(props: {
       revertMutation.mutate({ path }, callbacks),
     setEnv: (entry, callbacks) =>
       envSetMutation.mutate(entry, afterEnvRead(callbacks)),
-    setEnvAsync: async (entry) => {
-      await envSetMutation.mutateAsync(entry);
-    },
     renameEnv: (rename, callbacks) =>
       envRenameMutation.mutate(rename, afterEnvRead(callbacks)),
     deleteEnv: (key, callbacks) =>

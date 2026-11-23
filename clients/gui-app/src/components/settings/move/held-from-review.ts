@@ -1,3 +1,4 @@
+import { isLaunchSensitiveName } from "@traycer/protocol/environment/launch-sensitive-name";
 import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { HeldRow } from "@/components/settings/move/retrospective-sheet";
@@ -163,12 +164,15 @@ function variableLine(
     entry.kind === "env_override" && separator >= 0
       ? entry.key.slice(separator + 1)
       : entry.key;
+  const assignment = facts.value === null ? "" : `: ${name}=${facts.value}`;
+  if (!isLaunchSensitiveName(name)) {
+    return { name, clause: `(variable)${assignment}`, acts: false, reach: "" };
+  }
   const program = facts.harness === null ? null : harnessLabel(facts.harness);
   const changes =
     program === null
       ? "changes how programs start"
       : `changes how ${program} starts`;
-  const assignment = facts.value === null ? "" : `: ${name}=${facts.value}`;
   return {
     name,
     clause: `(variable) ${changes}${assignment}`,
