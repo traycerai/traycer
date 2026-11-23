@@ -327,11 +327,13 @@ describe("the hostTokensAdopt handler", () => {
     registerFor(main, "user-a");
     const bridge: HostTokensBridgeSurface = {
       era: (userId) => main.era(userId),
+      signIn: (userId) => main.signInKey(userId),
       obtain: async () => ({
         outcome: { kind: "no-sign-in" },
         era: 0,
         held: false,
         recorded: false,
+        signIn: null,
       }),
       renew: async () => ({ renewal: { kind: "no-sign-in" }, era: 0 }),
       adopt: async (userId, hostId, token, expectedEra, owner) => {
@@ -459,6 +461,7 @@ function windowOverMain(main: HostTokenSource): HostTokenSource {
   });
   const bridge: HostTokensBridgeSurface = {
     era: (userId) => main.era(userId),
+    signIn: (userId) => main.signInKey(userId),
     obtain: async (userId, hostId, fresh, expectedEra, owner) => {
       const reply: unknown = await invokeHandler(
         RunnerHostInvoke.hostTokensObtain,
@@ -467,6 +470,7 @@ function windowOverMain(main: HostTokenSource): HostTokenSource {
         outcome: Reflect.get(Object(reply), "outcome"),
         held: Reflect.get(Object(reply), "held") === true,
         recorded: Reflect.get(Object(reply), "recorded") === true,
+        signIn: Reflect.get(Object(reply), "signIn"),
         era: Reflect.get(Object(reply), "era"),
       };
     },
@@ -716,6 +720,7 @@ describe("main's broadcast of a kept host-token write", () => {
     const windowOver = (): HostTokenSource =>
       createDesktopHostTokenSource({
         era: (userId) => main.era(userId),
+        signIn: (userId) => main.signInKey(userId),
         obtain: async (userId, hostId, fresh, expectedEra, owner) => {
           const reply: unknown = await invokeHandler(
             RunnerHostInvoke.hostTokensObtain,
@@ -724,6 +729,7 @@ describe("main's broadcast of a kept host-token write", () => {
             outcome: Reflect.get(Object(reply), "outcome"),
             held: Reflect.get(Object(reply), "held") === true,
             recorded: Reflect.get(Object(reply), "recorded") === true,
+            signIn: Reflect.get(Object(reply), "signIn"),
             era: Reflect.get(Object(reply), "era"),
           };
         },
@@ -826,6 +832,7 @@ describe("a window's one announce for a token main wrote and handed it back", ()
     });
     const tokens = createDesktopHostTokenSource({
       era: (userId) => main.era(userId),
+      signIn: (userId) => main.signInKey(userId),
       obtain: async (userId, hostId, fresh, expectedEra, owner) => {
         const reply: unknown = await invokeHandler(
           RunnerHostInvoke.hostTokensObtain,
@@ -834,6 +841,7 @@ describe("a window's one announce for a token main wrote and handed it back", ()
           outcome: Reflect.get(Object(reply), "outcome"),
           held: Reflect.get(Object(reply), "held") === true,
           recorded: Reflect.get(Object(reply), "recorded") === true,
+          signIn: Reflect.get(Object(reply), "signIn"),
           era: Reflect.get(Object(reply), "era"),
         };
       },
