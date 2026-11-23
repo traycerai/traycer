@@ -731,7 +731,14 @@ function createReleasedSignOnSessionAuth(
       dialsStarted === askedAt && !lifetime.closed();
     const answered = await sequence.spend(
       // The relay hands over no refusal: none of its sign-ins is identified.
-      () => recovery.revalidateForReconnect(sequence.owner, null, stillAsked),
+      // One declined for a replaced process is answered as an outage: it
+      // spends nothing, and the redial reads the current process.
+      () =>
+        recovery
+          .revalidateForReconnect(sequence.owner, null, stillAsked)
+          .then((outcome) =>
+            outcome === "process-replaced" ? "network-error" : outcome,
+          ),
       stillAsked,
     );
     // Spent: the redial presents the sign-in it holds, and the session's

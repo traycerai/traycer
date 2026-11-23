@@ -664,6 +664,13 @@ export class WsRpcClient<
                       this.signInRefusalOf(cause),
                       () => !options.authority.abortSignal.aborted,
                     )
+                    .then((answer) =>
+                      // A replaced refusing process: the call fails with the
+                      // refusal, as with a refresh that did not reach authn.
+                      answer === "process-replaced"
+                        ? ("network-error" as const)
+                        : answer,
+                    )
                     .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
           // A refusal of the person's sign-in never reaches the door; the
@@ -748,6 +755,13 @@ export class WsRpcClient<
                       owner,
                       this.signInRefusalOf(cause),
                       () => !options.authority.abortSignal.aborted,
+                    )
+                    .then((answer) =>
+                      // A replaced refusing process: the call fails with the
+                      // refusal, as with a refresh that did not reach authn.
+                      answer === "process-replaced"
+                        ? ("network-error" as const)
+                        : answer,
                     )
                     .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);

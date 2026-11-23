@@ -37,10 +37,58 @@ export type HostTokenSessionRevalidator = {
   ) => Promise<RevalidateOutcome>;
   readonly admitted: () => void;
 };
+
+/**
+ * A recovery's outcome before it leaves the lease: `"process-replaced"` is a
+ * mint lost to a replacement of the host process it was for, told apart from
+ * a mint that could not reach authn. Only the CLI's revalidator hands it out;
+ * every other entry answers it as `"network-error"`.
+ */
+export type HostTokenRecoveryOutcome = RevalidateOutcome | "process-replaced";
+
+/** The CLI's session revalidator: {@link HostTokenSessionRevalidator}, with a mint lost to a replacement told apart. */
+export type CliHostTokenSessionRevalidator = {
+  readonly revalidateForReconnect: (
+    stillWanted: () => boolean,
+  ) => Promise<HostTokenRecoveryOutcome>;
+  readonly revalidateRefused: (
+    refusal: FatalErrorDetails,
+    stillWanted: () => boolean,
+  ) => Promise<HostTokenRecoveryOutcome>;
+  readonly admitted: () => void;
+};
+
+/** One caller's recovery inside the lease, before a transport reads it. */
+interface RecoveringRevalidator {
+  readonly revalidateForReconnect: () => Promise<HostTokenRecoveryOutcome>;
+  readonly revalidateRefused: (
+    refusal: FatalErrorDetails,
+  ) => Promise<HostTokenRecoveryOutcome>;
+}
+
+// A transport reads a mint lost to a replacement as it reads any mint that
+// produced nothing: it redials, and the redial reads the current process.
+function transportOutcome(
+  outcome: HostTokenRecoveryOutcome,
+): RevalidateOutcome {
+  return outcome === "process-replaced" ? "network-error" : outcome;
+}
+
+function transportRevalidator(
+  recovery: RecoveringRevalidator,
+): HostTokenRevalidator {
+  return {
+    revalidateForReconnect: () =>
+      recovery.revalidateForReconnect().then(transportOutcome),
+    revalidateRefused: (refusal) =>
+      recovery.revalidateRefused(refusal).then(transportOutcome),
+  };
+}
 import type {
   HostInstance,
   ReleasedHostMemory,
   SignInRecovery,
+  SignInRecoveryOutcome,
   SignInRefusal,
 } from "../host-transport/released-sign-on";
 import type {
@@ -456,7 +504,7 @@ interface ReplacementBounds {
     owner: HostInstance,
     refusal: SignInRefusal | null,
     stillWanted: () => boolean,
-  ) => Promise<RevalidateOutcome | "adopted"> | null;
+  ) => Promise<SignInRecoveryOutcome> | null;
 }
 
 type HostTokenRevalidatorDeps = {
@@ -519,7 +567,7 @@ function identifiedMints(deps: IdentifyingRevalidatorDeps): RevalidatorMints {
 function sessionRevalidator(
   deps: HostTokenRevalidatorDeps,
   mints: RevalidatorMints,
-): HostTokenSessionRevalidator {
+): CliHostTokenSessionRevalidator {
   const recovery = boundedRecovery(deps, mints);
   return {
     revalidateForReconnect: (stillWanted) =>
@@ -540,7 +588,14 @@ export function hostTokenSessionAuth(
   readonly auth: HostTokenSessionRevalidator;
   readonly door: HostDoorObserver;
 } {
-  const auth = sessionRevalidator(deps, unidentifiedMints(deps.tokens));
+  const recovery = sessionRevalidator(deps, unidentifiedMints(deps.tokens));
+  const auth: HostTokenSessionRevalidator = {
+    revalidateForReconnect: (stillWanted) =>
+      recovery.revalidateForReconnect(stillWanted).then(transportOutcome),
+    revalidateRefused: (refusal, stillWanted) =>
+      recovery.revalidateRefused(refusal, stillWanted).then(transportOutcome),
+    admitted: recovery.admitted,
+  };
   return {
     auth,
     door: {
@@ -571,7 +626,7 @@ export function hostTokenStreamAuth(
 } {
   const recovery = boundedRecovery(deps, unidentifiedMints(deps.tokens));
   return {
-    auth: recovery.forCaller,
+    auth: (caller) => transportRevalidator(recovery.forCaller(caller)),
     door: {
       refused: (details, instance) => {
         door?.refused(details, instance);
@@ -590,7 +645,7 @@ export function hostTokenStreamAuth(
 // `deps.onState` whoever is still waiting: its owner fences them itself.
 export function hostTokenRevalidator(
   deps: IdentifyingRevalidatorDeps,
-): HostTokenSessionRevalidator {
+): CliHostTokenSessionRevalidator {
   return sessionRevalidator(deps, identifiedMints(deps));
 }
 
@@ -605,7 +660,7 @@ interface RecoverySequence extends ReplacementBounds {
 
 function recoverySequence(owner: HostInstance): RecoverySequence {
   let spent = false;
-  let running: Promise<RevalidateOutcome | "adopted"> | null = null;
+  let running: Promise<SignInRecoveryOutcome> | null = null;
   return {
     owner,
     expiry: untilAdmittedBound(),
@@ -617,8 +672,13 @@ function recoverySequence(owner: HostInstance): RecoverySequence {
         .revalidateForReconnect(asked, refusal, stillWanted)
         .then((outcome) => {
           // Only a refresh authn answered spends: one that never reached
-          // it, or a sibling's rotation adopted from the store, does not.
-          if (outcome !== "network-error" && outcome !== "adopted")
+          // it, a sibling's rotation adopted from the store, or one declined
+          // for a replaced process, does not.
+          if (
+            outcome !== "network-error" &&
+            outcome !== "adopted" &&
+            outcome !== "process-replaced"
+          )
             spent = true;
           return outcome;
         })
@@ -635,7 +695,7 @@ function boundedRecovery(
   deps: HostTokenRevalidatorDeps,
   mints: RevalidatorMints,
 ): {
-  readonly forCaller: (caller: MintCaller) => HostTokenRevalidator;
+  readonly forCaller: (caller: MintCaller) => RecoveringRevalidator;
   readonly admitted: () => void;
   /** `instance`'s admission: it ends only the sequence recovering `instance`. */
   readonly admittedBy: (instance: HostInstance) => void;
@@ -666,7 +726,7 @@ function revalidatorWithBounds(
   mints: RevalidatorMints,
   boundsOf: (owner: HostInstance) => ReplacementBounds,
   caller: MintCaller,
-): HostTokenRevalidator {
+): RecoveringRevalidator {
   const mintFresh = async (
     userId: string,
     signInRetried: boolean,
@@ -674,7 +734,7 @@ function revalidatorWithBounds(
     bounds: ReplacementBounds,
     owner: HostInstance,
     report: HostTokenStateSink,
-  ): Promise<RevalidateOutcome> => {
+  ): Promise<HostTokenRecoveryOutcome> => {
     const held = deps.tokens.current(userId, deps.hostId);
     const presented = mints.signInKey();
     const answered = await mints.obtainIdentified(userId, deps.hostId, {
@@ -683,13 +743,14 @@ function revalidatorWithBounds(
       observedNow: () => deps.hosts.currentInstance(deps.hostId).observed,
     });
     // Recorded for another process (the mint was re-owned): nothing here acts
-    // on it, and the redial reads the current process.
-    if (answered.owner !== owner) return "network-error";
+    // on it, and the redial reads the current process. Lost to the
+    // replacement, never to an outage.
+    if (answered.owner !== owner) return "process-replaced";
     const outcome = answered.outcome;
     if (outcome.kind === "ok") return "rotated";
-    // No mint started for a replaced process: the redial reads the current one.
-    if (outcome.kind === "no-sign-in" || outcome.kind === "process-replaced")
-      return "network-error";
+    // No mint for a replaced process: the redial reads the current one.
+    if (outcome.kind === "process-replaced") return "process-replaced";
+    if (outcome.kind === "no-sign-in") return "network-error";
     // The era ended: only the same person, signed in again, gets one more ask.
     if (outcome.kind === "superseded")
       return !eraRetried && deps.currentUserId() === userId
@@ -722,6 +783,8 @@ function revalidatorWithBounds(
         return mints.signInKey() !== presented
           ? mintFresh(userId, false, eraRetried, bounds, owner, report)
           : spent();
+      // A refresh declined for a replaced process answers as a mint lost to
+      // it does.
       return recovered === "rotated"
         ? mintFresh(userId, true, eraRetried, bounds, owner, report)
         : recovered;
@@ -737,11 +800,11 @@ function revalidatorWithBounds(
   const recover = async (
     userId: string,
     refusal: FatalErrorDetails | null,
-  ): Promise<RevalidateOutcome> => {
+  ): Promise<HostTokenRecoveryOutcome> => {
     const owner = deps.hosts.currentInstance(deps.hostId);
     const bounds = boundsOf(owner);
     const report = mintReport(deps.onState, deps.hosts, owner, caller);
-    const mint = (): Promise<RevalidateOutcome> =>
+    const mint = (): Promise<HostTokenRecoveryOutcome> =>
       mintFresh(userId, false, false, bounds, owner, report);
     if (refusal === null) return mint();
     const reason = readDoorReason(refusal.doorReason);
@@ -788,7 +851,7 @@ function revalidatorWithBounds(
 
   const recoverFor = async (
     refusal: FatalErrorDetails | null,
-  ): Promise<RevalidateOutcome> => {
+  ): Promise<HostTokenRecoveryOutcome> => {
     const userId = deps.currentUserId();
     return userId === null ? "rejected" : recover(userId, refusal);
   };
@@ -845,12 +908,14 @@ export function hostTokenUnaryRevalidator(deps: {
       if (userId !== expected.identity.userId) return "superseded";
       if (refusal === null) return "rejected";
       // The call whose refusal it recovers is the caller of every mint it starts.
-      return revalidatorWithBounds(
-        { ...deps, hostId },
-        unidentifiedMints(deps.tokens),
-        boundsOf,
-        () => !callSignal.aborted,
-      ).revalidateRefused(refusal);
+      return transportOutcome(
+        await revalidatorWithBounds(
+          { ...deps, hostId },
+          unidentifiedMints(deps.tokens),
+          boundsOf,
+          () => !callSignal.aborted,
+        ).revalidateRefused(refusal),
+      );
     },
     // Read as the call starts, with the host process the call is for: a token
     // minted while it ran is cleared only by a call that starts with it.

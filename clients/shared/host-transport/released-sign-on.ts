@@ -15,6 +15,17 @@ import { hostDoorStateOfRefusal } from "./host-door-state";
 import type { HostRequestAuthority } from "./host-messenger";
 
 /**
+ * A sign-in recovery's answer. `"process-replaced"`: it refreshed nothing
+ * because the host process it was asked for has been replaced. It spends no
+ * refresh budget, and every transport answers it as `"network-error"`; only
+ * the CLI's monitor counts it.
+ */
+export type SignInRecoveryOutcome =
+  | RevalidateOutcome
+  | "adopted"
+  | "process-replaced";
+
+/**
  * The person's sign-in recovery as a transport sees it. `"adopted"` means a
  * sibling's rotation was taken from the store, which authn did not answer for
  * this sequence, so it spends no refresh budget.
@@ -36,7 +47,7 @@ export interface SignInRecovery {
     owner: HostInstance,
     refusal: SignInRefusal | null,
     stillWanted: () => boolean,
-  ): Promise<RevalidateOutcome | "adopted">;
+  ): Promise<SignInRecoveryOutcome>;
   /**
    * Whether `refusal` is judged a rejected sign-in now: a spent recovery
    * answers terminally only then. Read after the asker's last await. A
@@ -584,7 +595,10 @@ export interface ReleasedUnarySignOn {
  * gates that probe, as it gates the two causes that send the sign-in.
  */
 export type ReleasedUnaryCause =
-  "refused" | "no-host-token" | "held-token-refused" | "owner-sign-in";
+  | "refused"
+  | "no-host-token"
+  | "held-token-refused"
+  | "owner-sign-in";
 
 /**
  * `WsRpcClientOptions.releasedSignOnFor` for this machine's host, for a caller

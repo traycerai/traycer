@@ -3402,6 +3402,9 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       )
       .then((outcome): RevalidateOutcome => {
         if (outcome === "adopted") return "rotated";
+        // The refusing process was replaced while the recovery ran: the redial
+        // reads the current one, and nothing is spent.
+        if (outcome === "process-replaced") return "network-error";
         if (outcome !== "network-error") sequence.spent = true;
         return outcome;
       })
