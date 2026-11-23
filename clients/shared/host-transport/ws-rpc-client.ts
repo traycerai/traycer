@@ -658,11 +658,11 @@ export class WsRpcClient<
               : adopted
                 ? "adopted"
                 : await recovery
-                  .revalidateForReconnect(
-                    this.refusedSignIns.get(cause) ?? null,
-                    () => !options.authority.abortSignal.aborted,
-                  )
-                  .catch(() => "network-error" as const);
+                    .revalidateForReconnect(
+                      this.refusedSignIns.get(cause) ?? null,
+                      () => !options.authority.abortSignal.aborted,
+                    )
+                    .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
           // A refusal of the person's sign-in never reaches the door; the
           // call fails with it.
@@ -741,11 +741,11 @@ export class WsRpcClient<
               : adopted
                 ? "adopted"
                 : await recovery
-                  .revalidateForReconnect(
-                    this.refusedSignIns.get(cause) ?? null,
-                    () => !options.authority.abortSignal.aborted,
-                  )
-                  .catch(() => "network-error" as const);
+                    .revalidateForReconnect(
+                      this.refusedSignIns.get(cause) ?? null,
+                      () => !options.authority.abortSignal.aborted,
+                    )
+                    .catch(() => "network-error" as const);
           throwIfAuthorityAborted(options.authority, cause.requestId, method);
           // A refusal of the person's sign-in never reaches the door; the
           // call fails with it.
