@@ -4661,6 +4661,35 @@ describe("released personal host, local unary", () => {
       expect(driven.refusals).toEqual([]);
     },
   );
+
+  it("hands the recovery a still-wanted check that reads the call's abort, so a recovery that awaited first sees the call ended", async () => {
+    const heldRead: { release: () => void } = { release: () => undefined };
+    const readHeld = new Promise<void>((resolve) => {
+      heldRead.release = resolve;
+    });
+    let started = 0;
+    const wanted: boolean[] = [];
+    const driven = driveUnaryRefresh(new MutableBearerLease(SIGN_IN, USER_ID), {
+      // A recovery that reads the stored sign-in before it rotates asks last, after that await.
+      revalidateForReconnect: async (
+        _refused: string | null,
+        stillWanted: () => boolean,
+      ): Promise<RevalidateOutcome> => {
+        started += 1;
+        await readHeld;
+        wanted.push(stillWanted());
+        return "network-error";
+      },
+    });
+    await refuseHostTokenThenSignIn(driven);
+    await vi.waitFor(() => expect(started).toBe(1), WAIT);
+
+    driven.abort();
+    heldRead.release();
+    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+
+    expect(wanted).toEqual([false]);
+  });
 });
 
 /** Waits for the dial at `index`, opens it, and answers its OPEN with `frame`. */
@@ -4686,7 +4715,7 @@ function openTokensOf(sockets: readonly UnarySocket[]): unknown[] {
 
 function driveUnaryRefresh(
   signIn: MutableBearerLease,
-  recovery: StreamAuthRevalidator,
+  recovery: StreamAuthRevalidator | SignInRecovery,
 ): {
   readonly client: WsRpcClient<typeof echoRegistry>;
   readonly sockets: UnarySocket[];
