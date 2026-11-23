@@ -4,6 +4,7 @@ import { usePickHostScope } from "@/components/settings/host-scope/use-host-scop
 import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
 import {
   readNegotiatedMethodVersion,
   type NegotiatedMethodVersion,
@@ -54,7 +55,11 @@ function useIsOldHostPick(pick: EnvironmentPick): boolean {
  * - `served`: the page itself.
  * - `unresolved`: no pick yet, the page's own unresolved state.
  * - `pending`: the picked computer has not answered yet; "Connecting".
- * - `update`: the computer lacks the page, and updating it gives the page.
+ * - `lists-failed`: the host lists failed before naming the computer, so
+ *   nothing is known about it; the lists' retry.
+ * - `missing`: the computer lacks the page. `updateGives` is whether an
+ *   update would give it: an old host's pages other than Secrets, which is
+ *   pool-only and no host update serves.
  * - `unlisted`: a Local pick of a computer this app's host list does not name.
  * - `team-only`: Members, under a pick that is not a team.
  *
@@ -65,10 +70,12 @@ export type SectionAnswer =
   | { readonly kind: "served" }
   | { readonly kind: "unresolved" }
   | { readonly kind: "pending"; readonly hostName: string }
+  | { readonly kind: "lists-failed" }
   | {
-      readonly kind: "update";
+      readonly kind: "missing";
       readonly hostId: string;
       readonly hostName: string;
+      readonly updateGives: boolean;
     }
   | { readonly kind: "unlisted"; readonly hostName: string }
   | { readonly kind: "team-only" };
@@ -80,6 +87,8 @@ interface SectionFacts {
   /** The host the pick reads through, or `null` where the list names none. */
   readonly host: { readonly hostId: string; readonly name: string } | null;
   readonly hostsLoading: boolean;
+  /** A host list failed, so a host it does not name is not known to be gone. */
+  readonly listsFailed: boolean;
   /** `useWindowHostRunsPersonal`, for a Personal pick. */
   readonly windowHostRuns: boolean | null;
   /** That host's own `environment.status`, from its handshake. */
@@ -95,11 +104,24 @@ interface SectionFacts {
 function servedOr(
   supported: boolean | null,
   host: { readonly hostId: string; readonly name: string },
+  updateGives: boolean,
 ): SectionAnswer {
   if (supported === null) return { kind: "pending", hostName: host.name };
   return supported
     ? { kind: "served" }
-    : { kind: "update", hostId: host.hostId, hostName: host.name };
+    : {
+        kind: "missing",
+        hostId: host.hostId,
+        hostName: host.name,
+        updateGives,
+      };
+}
+
+/** An unknown fact: Connecting, or the lists' retry where they failed. */
+function pendingOrFailed(facts: SectionFacts, hostName: string): SectionAnswer {
+  return facts.listsFailed && facts.host === null
+    ? { kind: "lists-failed" }
+    : { kind: "pending", hostName };
 }
 
 function sectionAnswer(facts: SectionFacts): SectionAnswer {
@@ -109,15 +131,17 @@ function sectionAnswer(facts: SectionFacts): SectionAnswer {
   if (pick.kind === "team") return { kind: "served" };
   if (section === "members") return { kind: "team-only" };
   if (pick.kind === "personal") {
+    // Every Personal page waits for whether the window's host runs it: that
+    // decides the page's source, so drawing one first would swap it.
+    if (facts.windowHostRuns === null) {
+      return pendingOrFailed(facts, host?.name ?? UNNAMED_HOST_LABEL);
+    }
     // Personal reads the cloud unless the window's host runs it: only then is
     // a page the host's own, and only Secrets needs a method of it.
-    if (section !== "secrets" || facts.windowHostRuns === false) {
+    if (section !== "secrets" || !facts.windowHostRuns || host === null) {
       return { kind: "served" };
     }
-    if (facts.windowHostRuns === null || host === null) {
-      return { kind: "pending", hostName: host?.name ?? "" };
-    }
-    return servedOr(facts.secretsList, host);
+    return servedOr(facts.secretsList, host, false);
   }
   return localSectionAnswer(facts, pick.hostName);
 }
@@ -129,7 +153,7 @@ function sectionAnswer(facts: SectionFacts): SectionAnswer {
  * `environment.secrets.list`. Even a page every host serves waits for the
  * handshake: its frame, and Agents' body, differ on an old host
  * (`useOldHostLocalPick`), so drawing one first would swap it when the answer
- * lands.
+ * lands. Updating an old host gives its missing pages, except Secrets.
  */
 function localSectionAnswer(
   facts: SectionFacts,
@@ -137,18 +161,18 @@ function localSectionAnswer(
 ): SectionAnswer {
   const { host, section } = facts;
   if (host === null) {
-    return facts.hostsLoading
-      ? { kind: "pending", hostName: pickedName }
+    return facts.hostsLoading || facts.listsFailed
+      ? pendingOrFailed(facts, pickedName)
       : { kind: "unlisted", hostName: pickedName };
   }
   if (facts.environmentStatus === null) {
     return { kind: "pending", hostName: host.name };
   }
   if (facts.environmentStatus === false) {
-    return servedOr(oldHostSectionShown(section), host);
+    return servedOr(oldHostSectionShown(section), host, section !== "secrets");
   }
   return section === "secrets"
-    ? servedOr(facts.secretsList, host)
+    ? servedOr(facts.secretsList, host, false)
     : { kind: "served" };
 }
 
@@ -190,6 +214,7 @@ export function useSectionAnswer(
         ? null
         : { hostId: scope.host.hostId, name: scope.host.name },
     hostsLoading: scope.isLoading,
+    listsFailed: scope.listsFailed,
     windowHostRuns,
     environmentStatus,
     secretsList: pick.kind === "local" ? ownSecretsList : supportSecretsList,

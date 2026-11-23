@@ -54,7 +54,10 @@ import {
   pickOldHostLocal,
   recordOldHost,
 } from "@/components/settings/__tests__/old-host-pick-fixture";
-import { SettingsPanelForSection } from "@/components/settings/settings-modal-content";
+import {
+  SettingsModalContent,
+  SettingsPanelForSection,
+} from "@/components/settings/settings-modal-content";
 import { SettingsSurface } from "@/components/settings/settings-surface";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useEffect, useState } from "react";
@@ -197,6 +200,14 @@ vi.mock("@/components/settings/panels/providers-settings-panel", async () => ({
   ProvidersSettingsPanel: await probe("providers"),
   SkillsSettingsPanel: await probe("skills"),
 }));
+// Browser agent access opens in place, so the Permissions page it used to be
+// redirected to is a probe that must never mount for it.
+vi.mock(
+  "@/components/settings/panels/permissions-settings-panel",
+  async () => ({
+    PermissionsSettingsPanel: await probe("permissions"),
+  }),
+);
 vi.mock(
   "@/components/settings/environment/members-settings-panel",
   async () => ({ MembersSettingsPanel: await probe("members") }),
@@ -399,6 +410,17 @@ interface RunnerHostStub {
 const runnerHostStub = vi.hoisted(() => ({
   current: null as RunnerHostStub | null,
 }));
+// Whether Host Overview would offer the picked computer an update: the card's
+// update line and its action follow it.
+const updateNow = vi.hoisted(() => ({ applies: false }));
+vi.mock("@/components/settings/panels/host-update-now-action", () => ({
+  useHostUpdateNow: () => ({
+    applies: updateNow.applies,
+    action: updateNow.applies ? (
+      <button type="button" data-testid="update-now-probe" />
+    ) : null,
+  }),
+}));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => runnerHostStub.current,
 }));
@@ -468,6 +490,7 @@ function buildVariantRouter(
 
 afterEach(() => {
   soundtrackOfferedMock.value = false;
+  updateNow.applies = false;
 });
 
 describe("<SettingsSidebar /> leader hints", () => {
@@ -1723,6 +1746,25 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
     return screen.findByRole("combobox", { name: "Search settings" });
   }
 
+  /** A modal opened on a remembered `section`, the surface the sidebar sits in. */
+  async function renderModal(section: SettingsSectionId) {
+    const rootRoute = createRootRoute({
+      component: () => <SettingsModalContent section={section} />,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("combobox", { name: "Search settings" });
+  }
+
   function hitFor(id: string): HTMLElement | undefined {
     return screen
       .queryAllByRole("option")
@@ -1992,20 +2034,18 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
   const sectionHeading = (name: string): HTMLElement =>
     screen.getByRole("heading", { name });
 
-  it("answers Secrets with the update card under the old host's Local pick, under Secrets' own heading and with the route kept", async () => {
+  it("answers Secrets with the not-available card and no update line under the old host's Local pick, under Secrets' own heading and with the route kept", async () => {
     pickOldHostLocal();
     scopeOn({ host: OLD_HOST_OPTION });
+    // No host update serves Secrets, so an update on offer adds no line.
+    updateNow.applies = true;
 
     await renderSurface("secrets");
 
     expect(sectionHeading("Secrets")).toBeTruthy();
     expect(screen.getByText("Values and logins your agents use.")).toBeTruthy();
-    expect(cardText("page-not-on-computer-update")).toContain(
-      "Not on Old laptop",
-    );
-    expect(cardText("page-not-on-computer-update")).toContain(
-      "Update Old laptop to use Secrets.",
-    );
+    expect(cardText("page-not-on-computer-missing")).toBe("Not on Old laptop");
+    expect(screen.queryByTestId("update-now-probe")).toBeNull();
     expect(heldSection()).toBe("secrets");
     expect(screen.queryByTestId("providers-page-probe")).toBeNull();
     expect(screen.queryByTestId("secrets-page-probe")).toBeNull();
@@ -2015,11 +2055,14 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
     pickOldHostLocal();
     scopeOn({ host: OLD_HOST_OPTION });
 
+    updateNow.applies = true;
+
     await renderSurface("mcp-servers");
 
     expect(cardText("page-not-on-computer-update")).toContain(
       "Update Old laptop to use MCP servers.",
     );
+    expect(screen.getByTestId("update-now-probe")).toBeTruthy();
     expect(screen.queryByTestId("local-move-page")).toBeNull();
     expect(screen.queryByTestId("mcp-servers-page-probe")).toBeNull();
   });
@@ -2054,18 +2097,18 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
     expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
   });
 
-  it("answers Secrets with the update card under a current host's Local pick whose handshake lacks the list", async () => {
+  it("answers Secrets with the not-available card and no update line under a current host's Local pick whose handshake lacks the list", async () => {
     recordNegotiatedHostManifest("host-new", {
       "environment.status": { major: 1, minor: 3 },
     });
     useSettingsEnvironmentPickStore.setState({ pick: NEW_HOST_PICK });
     scopeOn({ host: NEW_HOST_OPTION });
+    updateNow.applies = true;
 
     await renderSurface("secrets");
 
-    expect(cardText("page-not-on-computer-update")).toContain(
-      "Update New laptop to use Secrets.",
-    );
+    expect(cardText("page-not-on-computer-missing")).toBe("Not on New laptop");
+    expect(screen.queryByTestId("update-now-probe")).toBeNull();
     expect(screen.queryByTestId("secrets-page-probe")).toBeNull();
   });
 
@@ -2100,7 +2143,7 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
     expect(screen.queryByTestId("page-not-on-computer-unlisted")).toBeNull();
   });
 
-  it("turns Connecting into the update card, with the route and heading unchanged, when a remembered Local pick's handshake lands old", async () => {
+  it("turns Connecting into the not-available card, with the route and heading unchanged, when a remembered Local pick's handshake lands old", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
     scopeOn({ host: OLD_HOST_OPTION });
 
@@ -2115,9 +2158,7 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
       recordOldHost();
     });
 
-    expect(cardText("page-not-on-computer-update")).toContain(
-      "Update Old laptop to use Secrets.",
-    );
+    expect(cardText("page-not-on-computer-missing")).toBe("Not on Old laptop");
     expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
     expect(sectionHeading("Secrets")).toBeTruthy();
     expect(router.state.location.pathname).toBe("/settings/secrets");
@@ -2149,10 +2190,11 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
   });
 
   it.each(["secrets", "mcp-servers"] as const)(
-    "shows only the away notice on %s under a Local pick of an unreachable old host, never the update card",
+    "shows only the away notice on %s under a Local pick of an unreachable old host, never the not-available card",
     async (section) => {
       pickOldHostLocal();
       scopeOn({ host: OLD_HOST_OPTION, status: "unreachable" });
+      updateNow.applies = true;
 
       await renderSurface(section);
 
@@ -2160,6 +2202,9 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
         "Can't reach Old laptop from here",
       );
       expectHiddenFromView(screen.queryByTestId("page-not-on-computer-update"));
+      expectHiddenFromView(
+        screen.queryByTestId("page-not-on-computer-missing"),
+      );
     },
   );
 
@@ -2177,6 +2222,17 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
       "Can't reach New laptop from here",
     );
     expectHiddenFromView(screen.queryByTestId("local-move-page"));
+  });
+
+  it("opens a remembered Browser agent access in place under the old host's Local pick, with the not-available card", async () => {
+    pickOldHostLocal();
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    await renderModal("browser-agent-access");
+
+    expect(sectionHeading("Browser agent access")).toBeTruthy();
+    expect(cardText("page-not-on-computer")).toContain("Not on Old laptop");
+    expect(screen.queryByTestId("permissions-page-probe")).toBeNull();
   });
 
   it("answers Members under Personal with the team-only card, under Members' own heading", async () => {

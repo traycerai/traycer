@@ -17,6 +17,17 @@ interface GonePick {
 }
 
 /**
+ * Getting Started's Secrets card, decided once for a window host: whether the
+ * default pick of `hostId` had a Secrets page when its answer first came. It
+ * stays for that host across an outage and its return (brief 3 §4, R2), so
+ * the card never shows and then goes; another window host decides again.
+ */
+interface SecretsCardDecision {
+  readonly hostId: string | null;
+  readonly offered: boolean;
+}
+
+/**
  * WHICH CONFIGURATION Settings ▸ Environment is showing: Personal, a team, or
  * a Local row (a computer whose settings have not moved).
  *
@@ -39,6 +50,7 @@ interface SettingsEnvironmentPickState {
   readonly defaultPick: EnvironmentPick;
   readonly defaultHostId: string | null;
   readonly gone: GonePick | null;
+  readonly secretsCard: SecretsCardDecision | null;
   readonly setPick: (pick: EnvironmentPick | null) => void;
   readonly setDefaultPick: (
     pick: EnvironmentPick,
@@ -46,6 +58,8 @@ interface SettingsEnvironmentPickState {
   ) => void;
   /** Marks the current pick gone, to read as `readsAs` (`null`: the default). */
   readonly markPickGone: (readsAs: EnvironmentPick | null) => void;
+  /** Records the card's decision for `hostId`, unless it has one already. */
+  readonly decideSecretsCard: (hostId: string | null, offered: boolean) => void;
 }
 
 export const useSettingsEnvironmentPickStore =
@@ -54,6 +68,7 @@ export const useSettingsEnvironmentPickStore =
     defaultPick: UNRESOLVED_PICK,
     defaultHostId: null,
     gone: null,
+    secretsCard: null,
     setPick: (pick) => set({ pick, gone: null }),
     setDefaultPick: (defaultPick, defaultHostId) =>
       set((state) =>
@@ -67,6 +82,12 @@ export const useSettingsEnvironmentPickStore =
         state.pick === null || state.gone?.readsAs === readsAs
           ? state
           : { gone: { readsAs } },
+      ),
+    decideSecretsCard: (hostId, offered) =>
+      set((state) =>
+        state.secretsCard?.hostId === hostId
+          ? state
+          : { secretsCard: { hostId, offered } },
       ),
   }));
 
@@ -104,4 +125,19 @@ export function useEnvironmentPick(): EnvironmentPick {
 export function useDefaultEnvironmentPick(): EnvironmentPick {
   const hostId = useEffectiveHostId();
   return useSettingsEnvironmentPickStore((state) => defaultFor(state, hostId));
+}
+
+/**
+ * Getting Started's Secrets card for this window's host: the host, and the
+ * decision made for it, `null` before one is.
+ */
+export function useSecretsCardDecision(): {
+  readonly hostId: string | null;
+  readonly offered: boolean | null;
+} {
+  const hostId = useEffectiveHostId();
+  const offered = useSettingsEnvironmentPickStore((state) =>
+    state.secretsCard?.hostId === hostId ? state.secretsCard.offered : null,
+  );
+  return { hostId, offered };
 }

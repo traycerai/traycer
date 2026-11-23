@@ -407,7 +407,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   },
   // Whether agents may drive the in-app browser. Not offered in navigation
   // (`RETIRED_SETTINGS_SECTION_IDS`): the switch is the Browser tab of
-  // Permissions, and its route redirects there.
+  // Permissions. A remembered section or an old link opens it in place
+  // (`OPENED_IN_PLACE_SECTION_IDS`).
   {
     id: "browser-agent-access",
     label: "Browser agent access",
@@ -585,6 +586,15 @@ const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
 ]);
 
 /**
+ * Retired sections a remembered section or a link still opens as themselves,
+ * not as their heir: Browser agent access is a page an old host's Local pick
+ * lacks, and its body says so under its own heading (brief 3, row 7), which a
+ * redirect to Permissions, a page that host has, would hide.
+ */
+export const OPENED_IN_PLACE_SECTION_IDS: ReadonlySet<SettingsSectionId> =
+  new Set(["browser-agent-access"]);
+
+/**
  * The page that now holds what a section this build does not offer used to,
  * where one does: a remembered section or a link that names it opens that
  * page, as its route redirects there. Mostly retired sections (Notifications'
@@ -595,7 +605,6 @@ export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   Partial<Record<SettingsSectionId, SettingsSectionId>>
 > = {
   "agent-definitions": "agents",
-  "browser-agent-access": "permissions",
   "app-notifications": "alerts",
   notifications: "alerts",
 };

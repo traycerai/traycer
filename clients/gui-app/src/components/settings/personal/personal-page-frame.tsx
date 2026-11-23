@@ -43,7 +43,6 @@ import {
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
 import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { UnresolvedEnvironmentPage } from "@/components/settings/environment/unresolved-environment-page";
@@ -188,7 +187,8 @@ const CLOUD_ONLY_SECTIONS: ReadonlySet<SettingsSectionId> = new Set([
 /**
  * Personal from the cloud, or from the window's host when it runs Personal.
  * Nothing renders while that host's status is unknown: a guess would show
- * one source's values and then swap to the other's.
+ * one source's values and then swap to the other's. The section's body says
+ * Connecting under its heading meanwhile (`PageOrNotOnComputer`).
  */
 function PersonalSourceFrame(props: {
   readonly section: SettingsSectionId;
@@ -196,16 +196,7 @@ function PersonalSourceFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const runs = useWindowHostRunsPersonal(usePersonalHostScope());
-  if (runs === null) {
-    return (
-      <AgentSpinningDots
-        className={undefined}
-        testId="personal-source-loading"
-        variant={undefined}
-        tone="muted"
-      />
-    );
-  }
+  if (runs === null) return null;
   if (runs) {
     return (
       <HostPageFrame section={props.section}>{props.children}</HostPageFrame>

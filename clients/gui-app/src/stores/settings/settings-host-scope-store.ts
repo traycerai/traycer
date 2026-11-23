@@ -83,6 +83,12 @@ export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
           pick: { ...environment.pick, hostId: next },
         });
       }
+      if (environment.secretsCard?.hostId === previous) {
+        // The same window host under its new id: its card stays decided.
+        useSettingsEnvironmentPickStore.setState({
+          secretsCard: { ...environment.secretsCard, hostId: next },
+        });
+      }
       if (
         environment.defaultPick.kind === "local" &&
         environment.defaultPick.hostId === previous

@@ -1250,13 +1250,13 @@ refusal shows the host's words (`Connect to manage secrets.` with no session on
 this computer) or the `secretChangeRefusalLine` for a create refusal's code;
 `destination_unresolvable` reads "Couldn't reach <address>. Check the server
 address, then save again." On a team's host the page is the team line, no list.
-On a host that does not serve `environment.secrets.list`, Settings offers no
-Secrets row, search hit or palette row (none while that is still unknown,
-`useEnvironmentSectionShown`; while the window's host is out, Personal follows
-the cloud as its page does; the palette's Settings rows resolve the pick
-themselves, in a window where Settings has not opened), and the page reached
-there anyway shows its title
-and nothing under it. **Replace** (`environment.secrets.replaceValue`, compare-and-set on the
+Secrets is listed under every pick, and no host's answer adds or removes its
+row, search hit or palette row (`useEnvironmentSectionShown`). Where the pick's
+computer does not serve `environment.secrets.list`, the page's body reads "Not
+on {computer}" under its heading, with no update line: the method is
+pool-only, and no host update serves it (see the Environment picker below).
+While the window's host is out, Personal follows the cloud, as its page does.
+**Replace** (`environment.secrets.replaceValue`, compare-and-set on the
 version the list showed; a stale answer asks to look again) carries the same
 custody sentence, and the row then reads the rotation
 (`environment.secrets.rotation`, polled every 3 s only while it moves): "New
@@ -1406,20 +1406,44 @@ command palette list the same rows as for any Local pick. Every road (a rail
 row, a link, the palette, search, a deep link, a remembered route, a pick
 change) ends at the section it names, and the surface never moves: the URL,
 heading, rail highlight and phone crumb all name that section. Its body
-answers in place (`SettingsPanelForSection`): the page, “Connecting to
-{computer}…” while the picked computer has not answered, or the not-available
-card, “Not on {computer}” · “Update {computer} to use {page}.” with Update now
-where an update applies, or “{computer} isn't connected to this app.” for a
-computer the window's host list does not name. Members under a non-team pick
-reads “Only a team has members”; a person removed from the team they were
-reading stays on that section under Personal. In-app links are always
+answers in place (`SettingsPanelForSection`, `useSectionAnswer`), always
+under the section's own heading:
+
+- the page;
+- “Connecting to {computer}…” while a fact it needs is unknown: the picked
+  computer's handshake, or, for every Personal page but Members, whether the
+  window's host runs Personal, including while the host lists have not named
+  that host yet;
+- the lists' “Couldn't load your hosts” notice and its Try again, where a host
+  list failed before naming the computer, instead of a claim about it;
+- the not-available card, “Not on {computer}”. “Update {computer} to use
+  {page}.” and its action are added only where updating gives the page and an
+  update can be made: an old host's missing pages, through Host Overview's
+  Update now, or the minimum-version update for a computer below the minimum,
+  which has no client to read its versions through. Secrets never has the
+  line: no host update serves it;
+- “{computer} isn't connected to this app.” for a computer the settled host
+  list does not name;
+- for a Local pick that cannot be reached, “Can't reach {computer} from here”,
+  with the page kept, hidden, beneath. The notice offers no “Back to” and does
+  not mention a status above: an Environment page's scope follows its pick
+  (`HostScope.readOnly`), and it shows no Host picker status.
+
+Members under a non-team pick reads “Only a team has members”; a person
+removed from the team they were reading stays on that section under Personal.
+Browser agent access is retired from navigation, but a remembered section or
+an old link opens it in place, never redirected to Permissions
+(`OPENED_IN_PLACE_SECTION_IDS`): the Browser tab's switch under its own
+heading, or the not-available card on an old host. In-app links are always
 offered: Providers' “Open Secrets” and the secret-grant card's Secrets
 button open Secrets, and its body answers. Getting started's Secrets card
 resets the pick to the window's default before it opens Secrets, so it asks
-whether that default serves Secrets
-(`useSectionServed(useDefaultEnvironmentPick(), "secrets") === "served"`), not
-the pick in effect: absent while the default is unknown, absent for an old
-host's Local default, and never shown and then taken away. The pick is never
+whether that default serves Secrets, not the pick in effect. The checklist
+resolves the default itself with the dropdown's own upkeep
+(`useEnvironmentPickerModel`), so Home decides it in a window where Settings
+never opened. The card is absent while the answer is unknown. Its first answer
+for the window's host is kept (`decideSecretsCard`) across an outage and the
+host's return, so it never shows and then goes, and never appears late. The pick is never
 switched on the person's behalf. A Personal pick is never touched. A host
 whose `environment.status` is 1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
 

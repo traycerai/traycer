@@ -5,9 +5,10 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 
 /**
  * Whether the window's host runs Personal, read through `scope`, the window's
- * own host scope; `null` while it is unknown: no handshake yet, or a host that
- * serves `environment.status` and has not answered. A window with no host
- * runs nothing, and neither does one whose host cannot be reached or is
+ * own host scope; `null` while it is unknown: the host lists have not named
+ * the window's host yet, or failed to, no handshake yet, or a host that
+ * serves `environment.status` and has not answered. A window the settled
+ * lists give no host runs nothing, and neither does one whose host cannot be reached or is
  * offline now, whatever it answered before it stopped: its pages read the
  * cloud rather than ask a host that is not there. A host still connecting or
  * restarting is not offline, so it stays unknown and its row does not flicker.
@@ -18,7 +19,9 @@ export function useWindowHostRunsPersonal(scope: HostScope): boolean | null {
     scope.client,
     "environment.status",
   );
-  if (scope.hostId === null) return false;
+  if (scope.hostId === null) {
+    return scope.isLoading || scope.listsFailed ? null : false;
+  }
   if (
     scope.status === "unreachable" ||
     scope.status === "vanished" ||

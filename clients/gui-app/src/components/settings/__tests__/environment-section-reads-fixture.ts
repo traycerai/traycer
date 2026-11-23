@@ -6,6 +6,10 @@ import {
   UNRESOLVED_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
+import {
+  useDefaultEnvironmentPick,
+  useEnvironmentPick,
+} from "@/stores/settings/settings-environment-pick-store";
 
 /**
  * The reads under Settings' section filters (the rail, search and the
@@ -70,6 +74,22 @@ export const environmentStatusModelModule = {
   } => ({
     picker: { localRows: [], defaultPick: pickerDefaultPick.current },
     statuses: pickerStatuses.current,
+  }),
+};
+
+/**
+ * The picker model as the pick store holds it, writing nothing: for suites
+ * that seed the store's default themselves and are about what a surface does
+ * with it. The default's resolution has its own cases (Home's cold mount,
+ * `use-environment-picker-model.test.tsx`).
+ */
+export const seededPickerModelModule = {
+  useEnvironmentPickerModel: (): EnvironmentPickerModel & {
+    readonly pick: EnvironmentPick;
+  } => ({
+    localRows: [],
+    defaultPick: useDefaultEnvironmentPick(),
+    pick: useEnvironmentPick(),
   }),
 };
 

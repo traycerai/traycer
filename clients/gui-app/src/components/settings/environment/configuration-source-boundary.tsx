@@ -12,6 +12,7 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { seeButNotChangeLine } from "@/components/settings/members/copy";
 import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-dialog";
+import { SectionStandIn } from "@/components/settings/environment/page-not-on-computer";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -76,6 +77,30 @@ function invitedInsteadLine(invitation: EnvironmentInvitation): string {
  * from a team the app never saw the person in.
  */
 const CONFIGURATION_UNAVAILABLE = "These settings are no longer available.";
+
+/** A cloud-read page while its configuration loads, under its own heading. */
+function ConfigurationLoading(props: {
+  readonly section: SettingsSectionId | null;
+}): ReactNode {
+  const dots = (
+    <AgentSpinningDots
+      className={undefined}
+      testId={undefined}
+      variant={undefined}
+      tone="muted"
+    />
+  );
+  return props.section === null ? (
+    dots
+  ) : (
+    <SectionStandIn
+      section={props.section}
+      testId="configuration-source-loading"
+    >
+      {dots}
+    </SectionStandIn>
+  );
+}
 
 /** The configuration a cloud-read page shows: a team's, or Personal. */
 export type CloudConfigurationTarget =
@@ -150,14 +175,7 @@ export function ConfigurationSourceBoundary(props: {
 
   if (descriptor === undefined) {
     if (list.isPending) {
-      return (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-          tone="muted"
-        />
-      );
+      return <ConfigurationLoading section={props.section} />;
     }
     if (list.isError) {
       return (

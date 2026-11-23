@@ -15,7 +15,17 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
 import { useOptionalHostClient } from "@/lib/host";
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
-import { useDefaultEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useLayoutEffect } from "react";
+import {
+  useDefaultEnvironmentPick,
+  useSecretsCardDecision,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
+import { useEnvironmentPickerModel } from "@/components/settings/environment/use-environment-picker-model";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+} from "@/components/settings/host-scope/use-host-scope";
 import {
   sandboxIsStagedInThisWindow,
   useStagedSandboxInThisWindow,
@@ -213,11 +223,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   // the one the sheet the card opens is for.
   const computer = useThisComputer();
   const thisComputersMove = useThisComputersMove(computer, true);
-  // The card's handler resets the pick before it opens Secrets, so the page is
-  // judged under the default it lands on; a pending answer keeps the card
-  // absent, so it never shows and then goes.
-  const secretsOffered =
-    useSectionServed(useDefaultEnvironmentPick(), "secrets") === "served";
+  const secretsOffered = useSecretsCardOffered();
   return {
     providerSetUp:
       providers.data !== undefined && providerSetUp(providers.data.providers),
@@ -230,6 +236,29 @@ export function useGettingStartedFacts(): GettingStartedFacts {
     secretsOffered,
     thisComputersMove,
   };
+}
+
+/**
+ * Whether the Secrets card shows. Its handler resets the pick before it opens
+ * Secrets, so the page is judged under the default it lands on, resolved here
+ * by the dropdown's own upkeep: Home shows the card in a window where Settings
+ * never opened. A pending answer keeps the card absent, and the first answer
+ * for the window's host is kept (`decideSecretsCard`), so an outage and the
+ * host's return, which change the page's source, never take the card away or
+ * add it after it was left out.
+ */
+function useSecretsCardOffered(): boolean {
+  useEnvironmentPickerModel(useHostScopeFor(WINDOW_HOST_SELECTION));
+  const served = useSectionServed(useDefaultEnvironmentPick(), "secrets");
+  const answered = served === "pending" ? null : served === "served";
+  const { hostId, offered: decided } = useSecretsCardDecision();
+  const decideSecretsCard = useSettingsEnvironmentPickStore(
+    (state) => state.decideSecretsCard,
+  );
+  useLayoutEffect(() => {
+    if (answered !== null) decideSecretsCard(hostId, answered);
+  }, [answered, hostId, decideSecretsCard]);
+  return decided ?? answered ?? false;
 }
 
 /** Whether the Guide group has nothing left to show (E4). */

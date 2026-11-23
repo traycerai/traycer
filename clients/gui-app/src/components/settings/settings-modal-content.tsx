@@ -6,6 +6,7 @@ import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import {
   isSettingsSectionVisible,
+  OPENED_IN_PLACE_SECTION_IDS,
   RETIRED_SECTION_REPLACEMENTS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
@@ -35,6 +36,7 @@ import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
+import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { CreditsSettingsPanel } from "@/components/settings/panels/credits-settings-panel";
@@ -69,9 +71,11 @@ export function SettingsModalContent(
 ): ReactNode {
   const { setSection } = useSystemTabModalActions();
   const requested: SettingsSectionId = props.section ?? "general";
-  const section: SettingsSectionId = isSettingsSectionVisible(requested)
-    ? requested
-    : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
+  const section: SettingsSectionId =
+    isSettingsSectionVisible(requested) ||
+    OPENED_IN_PLACE_SECTION_IDS.has(requested)
+      ? requested
+      : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
   return (
     <SettingsDensityContext.Provider value="compact">
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -108,9 +112,9 @@ const SETTINGS_PANELS = {
   "getting-started": GettingStartedSettingsPanel,
   general: GeneralSettingsPanel,
   browser: BrowserSettingsPanel,
-  // Retired: `SettingsModalContent` opens their replacement instead
-  // (`RETIRED_SECTION_REPLACEMENTS`), as their routes redirect there.
-  "browser-agent-access": PermissionsSettingsPanel,
+  // Opened in place by a remembered section or an old link
+  // (`OPENED_IN_PLACE_SECTION_IDS`), though navigation no longer offers it.
+  "browser-agent-access": BrowserAgentAccessSettingsPanel,
   appearance: AppearanceSettingsPanel,
   layout: LayoutSettingsPanel,
   "opening-behavior": OpeningBehaviorPanel,

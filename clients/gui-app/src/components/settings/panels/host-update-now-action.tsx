@@ -36,12 +36,14 @@ import { canonicalReadIsLive } from "@/lib/host/fleet-update/canonical-status-ob
  * Host Overview's Update now for `hostId`, on a page that computer lacks until
  * it is updated: the same reads, the same gates and the same install of the
  * latest version. Restart, Force and the version list stay on Host Overview.
- * Renders nothing where Host Overview would offer no Update now.
+ * `action` is `null` where Host Overview would offer no Update now; `applies`
+ * is whether an update can be made at all: offered now, or in flight.
  */
-export function HostUpdateNowAction(props: {
-  readonly hostId: string;
-}): ReactNode {
-  const reads = useHostUpdateNowReads(props.hostId);
+export function useHostUpdateNow(hostId: string): {
+  readonly applies: boolean;
+  readonly action: ReactNode;
+} {
+  const reads = useHostUpdateNowReads(hostId);
   const { scope, status, operation } = reads;
   const { reportedOperation } = reads;
   const incarnation = useOverviewIncarnation();
@@ -81,15 +83,17 @@ export function HostUpdateNowAction(props: {
     foregroundUpdateLine,
     incarnation,
   });
-  return HostOverviewUpdateAction(
+  const inFlight = inFlightUpdateKind(operation.operationView) !== null;
+  const action = HostOverviewUpdateAction(
     {
       summary: updates.summary,
       degrade: updates.degrade,
       foregroundUpdateLine,
     },
-    inFlightUpdateKind(operation.operationView) !== null,
+    inFlight,
     false,
   );
+  return { applies: action !== null || inFlight, action };
 }
 
 type HostStatusResponse = ResponseOfMethod<HostRpcRegistry, "host.status">;

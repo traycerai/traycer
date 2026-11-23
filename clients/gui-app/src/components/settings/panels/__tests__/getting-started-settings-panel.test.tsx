@@ -244,6 +244,14 @@ vi.mock(
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
     ).windowHostRunsPersonalModule,
 );
+// Each case seeds the window's default itself.
+vi.mock(
+  "@/components/settings/environment/use-environment-picker-model",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).seededPickerModelModule,
+);
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const activateTabIntentMock = vi.hoisted(() =>
@@ -372,9 +380,8 @@ describe("GettingStartedSettingsPanel", () => {
     activateTabIntentMock.mockClear();
     setSectionMock.mockReset();
     useSettingsEnvironmentPickStore.setState({
-      pick: null,
+      ...useSettingsEnvironmentPickStore.getInitialState(),
       defaultPick: PERSONAL_PICK,
-      defaultHostId: null,
     });
   });
 
@@ -567,10 +574,10 @@ describe("GettingStartedSettingsPanel", () => {
     expect(screen.getByRole("status").textContent).toBe("0 of 3 complete");
   });
 
-  it("lands on Secrets from the card in a window whose default offers it, under a pick that does not", () => {
+  it("offers the Secrets card and lands on the default's Secrets from it, under the person's own Local pick of an old host that has none", () => {
     useSelectionAuthorityStore.setState({ effectiveHostId: "host-new" });
+    pickOldHostLocal();
     useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "team", environmentId: "env-team" },
       defaultPick: { kind: "personal" },
       defaultHostId: "host-new",
     });
@@ -663,18 +670,6 @@ describe("GettingStartedSettingsPanel", () => {
     render(<GettingStartedSettingsPanel />);
 
     expect(screen.queryByTestId(SECRET_CARD)).toBeNull();
-  });
-
-  it("shows the Secrets card under the person's own Local pick of an old host while the default is Personal, because the card opens the default", () => {
-    useSelectionAuthorityStore.setState({ effectiveHostId: "host-new" });
-    pickOldHostLocal();
-    useSettingsEnvironmentPickStore.setState({
-      defaultPick: PERSONAL_PICK,
-      defaultHostId: "host-new",
-    });
-    render(<GettingStartedSettingsPanel />);
-
-    expect(screen.getByTestId(SECRET_CARD)).toBeTruthy();
   });
 
   it("marks credits complete once the balance is above zero", () => {

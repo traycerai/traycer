@@ -16,6 +16,14 @@ vi.mock(
 const harness = vi.hoisted(() => ({
   hosts: [] as HostScopeOption[],
   activeHostId: null as string | null,
+  /** The host lists' own state: still loading, or failed before any row. */
+  listsResolved: true,
+  listsFailed: false,
+  isLoading: false,
+  retryLists: vi.fn(),
+  /** Whether Host Overview would offer Update now on the picked computer. */
+  updateApplies: true,
+  startUpdate: vi.fn(),
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
@@ -26,9 +34,41 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
       hostOptionsFixture({
         hosts: harness.hosts,
         activeHostId: harness.activeHostId,
+        listsResolved: harness.listsResolved,
+        listsFailed: harness.listsFailed,
+        isLoading: harness.isLoading,
+        retryLists: harness.retryLists,
       }),
   };
 });
+// The skew action under a below-minimum computer is the real button over this
+// update; Host Overview's own Update now is the card's, so it is answered here.
+vi.mock("@/hooks/host/use-older-host-update", () => ({
+  useOlderHostUpdate: () => ({
+    update: harness.startUpdate,
+    pending: false,
+    remotePending: false,
+    failure: null,
+  }),
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
+  useHostProvisioningProgress: () => null,
+}));
+vi.mock(
+  "@/components/settings/panels/host-update-now-action",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/panels/host-update-now-action")
+    >()),
+    useHostUpdateNow: () => ({
+      applies: harness.updateApplies,
+      action: <button type="button">Host Overview update</button>,
+    }),
+  }),
+);
 vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
   useRunnerHost: () => ({
@@ -52,8 +92,14 @@ vi.mock("@/lib/analytics", () => ({
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -64,6 +110,9 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { ReactNode } from "react";
 
@@ -117,6 +166,12 @@ afterEach(() => {
   resetNegotiatedManifests();
   harness.hosts = [];
   harness.activeHostId = null;
+  harness.listsResolved = true;
+  harness.listsFailed = false;
+  harness.isLoading = false;
+  harness.updateApplies = true;
+  harness.retryLists.mockReset();
+  harness.startUpdate.mockReset();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -151,19 +206,25 @@ describe("Secrets under a Local pick of an old computer", () => {
     expectHiddenFromView(screen.queryByTestId("page-not-on-computer-update"));
   });
 
-  it("keeps the update when the computer is connected and merely below the minimum version", () => {
+  // Secrets has no update to keep (no host update serves it), so the page an
+  // update gives is MCP servers.
+  it("keeps the update on a page an update gives when the computer is connected and merely below the minimum version", () => {
     pickOldHostLocal();
     listOldHost({
       connectable: true,
       entry: belowMinimumEntry("host-old"),
     });
 
-    renderSecrets();
+    render(pageElement("mcp-servers"));
 
     expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
     expect(
       screen.getByTestId("page-not-on-computer-update").textContent,
-    ).toContain("Update Old laptop to use Secrets.");
+    ).toContain("Update Old laptop to use MCP servers.");
+    fireEvent.click(
+      screen.getByRole("button", { name: HOST_UPDATE_SKEW_COPY.action }),
+    );
+    expect(harness.startUpdate).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -194,5 +255,203 @@ describe("A page an old computer has, under a Local pick that goes out of reach 
       "value",
       "keep this draft",
     );
+  });
+});
+
+const WINDOW_HOST = hostScopeOptionFixture({
+  hostId: "host-win",
+  name: "Window laptop",
+  isLocalMachine: true,
+  isActive: true,
+});
+
+/** The window's host is named and listed, and has answered nothing yet. */
+function pickPersonalOnUnansweredWindowHost(): void {
+  useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+  harness.hosts = [WINDOW_HOST];
+  harness.activeHostId = "host-win";
+}
+
+function railLabel(section: SettingsSectionId): string {
+  const entry = SETTINGS_SECTIONS.find((item) => item.id === section);
+  if (entry === undefined) throw new Error(`no section ${section}`);
+  return entry.label;
+}
+
+describe("An Environment page under a Personal pick whose window host has not answered", () => {
+  it.each([
+    "providers",
+    "mcp-servers",
+    "skills",
+    "agent-memories",
+    "sandboxes",
+    "storage",
+  ] as const)(
+    "shows %s under its own heading with Connecting, not the page",
+    (section) => {
+      pickPersonalOnUnansweredWindowHost();
+
+      render(pageElement(section));
+
+      expect(
+        screen.getByRole("heading", { name: railLabel(section) }),
+      ).toBeTruthy();
+      expect(screen.getByTestId("host-scope-connecting").textContent).toContain(
+        "Connecting to Window laptop",
+      );
+      expect(screen.queryByTestId("draft")).toBeNull();
+    },
+  );
+
+  it("shows Secrets as Connecting, not the cloud page, while the host row the authority names has not arrived", () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    harness.activeHostId = "host-win";
+    harness.listsResolved = false;
+    harness.isLoading = true;
+
+    renderSecrets();
+
+    expect(screen.getByTestId("host-scope-connecting")).toBeTruthy();
+    expect(screen.queryByTestId("draft")).toBeNull();
+  });
+});
+
+describe("A page under a pick while the host lists failed before supplying a row", () => {
+  beforeEach(() => {
+    harness.listsResolved = false;
+    harness.listsFailed = true;
+  });
+
+  it("answers a Local pick with the list failure and its retry, never that the computer is unlisted", () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
+    });
+
+    renderSecrets();
+
+    expect(screen.queryByTestId("page-not-on-computer-unlisted")).toBeNull();
+    expect(screen.getByTestId("host-scope-lists-failed").textContent).toContain(
+      "Couldn't load your hosts",
+    );
+    fireEvent.click(screen.getByTestId("host-scope-retry-lists"));
+    expect(harness.retryLists).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers Personal's Secrets, whose window host row is missing, with the list failure and its retry", () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    harness.activeHostId = "host-win";
+
+    renderSecrets();
+
+    expect(screen.queryByTestId("draft")).toBeNull();
+    expect(screen.getByTestId("host-scope-lists-failed")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("host-scope-retry-lists"));
+    expect(harness.retryLists).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("The away notice on a page an old computer lacks", () => {
+  it("sits under the section's own heading", () => {
+    pickOldHostLocal();
+    listOldHost({ connectable: false });
+
+    renderSecrets();
+
+    expect(screen.getByTestId("host-scope-unreachable")).toBeTruthy();
+    // The hidden page beneath keeps its own heading; one is in view.
+    const shown = screen
+      .getAllByRole("heading", { name: "Secrets", hidden: true })
+      .filter((heading) => !isConcealed(heading));
+    expect(shown).toHaveLength(1);
+  });
+
+  it("offers no way back to the active computer, and claims no status above it", () => {
+    pickOldHostLocal();
+    listOldHost({ connectable: false });
+
+    renderSecrets();
+
+    const notice = screen.getByTestId("host-scope-unreachable");
+    expect(screen.queryByTestId("host-scope-return-to-active")).toBeNull();
+    expect(notice.textContent).not.toContain(
+      "Its status above is from your account, not a live link.",
+    );
+  });
+});
+
+describe("The update line on a page a picked computer lacks", () => {
+  const updateLine = (name: string, label: string): string =>
+    `Update ${name} to use ${label}.`;
+
+  // The window's own computer, so the scope reaches it and no away notice
+  // stands in for the page.
+  function listActive(hostId: string, name: string): void {
+    harness.activeHostId = hostId;
+    harness.hosts = [
+      hostScopeOptionFixture({
+        hostId,
+        name,
+        isLocalMachine: false,
+        isActive: true,
+      }),
+    ];
+  }
+
+  it("is absent where updating cannot give the page: a current computer without the secrets list", () => {
+    recordNegotiatedHostManifest("host-new", {
+      "environment.status": { major: 1, minor: 3 },
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-new", hostName: "New laptop" },
+    });
+    listActive("host-new", "New laptop");
+    harness.updateApplies = true;
+
+    renderSecrets();
+
+    expect(screen.getByText("Not on New laptop")).toBeTruthy();
+    expect(screen.queryByText(updateLine("New laptop", "Secrets"))).toBeNull();
+    expect(
+      within(screen.getByTestId("page-not-on-computer")).queryByRole("button"),
+    ).toBeNull();
+  });
+
+  it("shows with Host Overview's action on an old computer's MCP servers when an update applies", () => {
+    pickOldHostLocal();
+    listActive("host-old", "Old laptop");
+    harness.updateApplies = true;
+
+    render(pageElement("mcp-servers"));
+
+    expect(
+      screen.getByText(updateLine("Old laptop", "MCP servers")),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Host Overview update" }),
+    ).toBeTruthy();
+  });
+
+  it("is absent on an old computer's MCP servers when no update applies", () => {
+    pickOldHostLocal();
+    listActive("host-old", "Old laptop");
+    harness.updateApplies = false;
+
+    render(pageElement("mcp-servers"));
+
+    expect(screen.getByText("Not on Old laptop")).toBeTruthy();
+    expect(
+      screen.queryByText(updateLine("Old laptop", "MCP servers")),
+    ).toBeNull();
+  });
+
+  it("is absent on an old computer's Secrets, which no update gives", () => {
+    pickOldHostLocal();
+    listActive("host-old", "Old laptop");
+    harness.updateApplies = true;
+
+    renderSecrets();
+
+    expect(screen.getByText("Not on Old laptop")).toBeTruthy();
+    expect(screen.queryByText(updateLine("Old laptop", "Secrets"))).toBeNull();
   });
 });

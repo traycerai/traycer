@@ -139,11 +139,12 @@ function TeamPermissionsUnlessMachineAsked(): ReactNode {
 }
 
 /**
- * The Browser agent access switch: the Browser tab's body on a host pick, and
- * a region below the policy on a team, whose page has no tabs. It reads the
+ * The Browser agent access switch: the Browser tab's body on a host pick, a
+ * region below the policy on a team, whose page has no tabs, and the legacy
+ * Browser agent access page's body. It reads the
  * ambient binding, so a Local row's pick re-provides it to that computer.
  */
-function PermissionsBrowserAgentAccess(): ReactNode {
+export function PermissionsBrowserAgentAccess(): ReactNode {
   return (
     <EnvironmentHostBinding>
       <BrowserAgentAccessGroup />

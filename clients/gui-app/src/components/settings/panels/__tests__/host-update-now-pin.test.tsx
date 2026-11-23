@@ -148,9 +148,10 @@ describe("Update now, on the page a computer lacks and on Host Overview", () => 
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-a", hostName: "Old laptop" },
     });
+    // A page an update gives the old computer: no host update serves Secrets.
     renderWith(
-      <PageOrNotOnComputer section="secrets">
-        <div data-testid="secrets-page" />
+      <PageOrNotOnComputer section="mcp-servers">
+        <div data-testid="mcp-servers-page" />
       </PageOrNotOnComputer>,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
@@ -160,6 +161,6 @@ describe("Update now, on the page a computer lacks and on Host Overview", () => 
 
     expect(installs[1]).toEqual(installs[0]);
     expect(installs[0]).toMatchObject({ version: "1.6.0" });
-    expect(screen.queryByTestId("secrets-page")).toBeNull();
+    expect(screen.queryByTestId("mcp-servers-page")).toBeNull();
   });
 });

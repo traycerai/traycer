@@ -66,6 +66,12 @@ export interface HostScope {
   } | null;
   /** Drop an explicit pick and follow the active host again. */
   readonly returnToActive: () => void;
+  /**
+   * The scope follows its page's pick and nothing on the page can re-point it
+   * (`WINDOW_HOST_SELECTION`, `useHostScopeForHostId`): `setHostId` and
+   * `returnToActive` do nothing, and no Host picker status shows above.
+   */
+  readonly readOnly: boolean;
   /** The app-wide active host — where new work lands and the bell reads from. */
   readonly activeHostId: string | null;
   readonly activeHost: HostScopeOption | null;
@@ -222,7 +228,7 @@ export function useHostScope(): HostScope {
  */
 export const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
-  setScopedHostId: () => undefined,
+  setScopedHostId: noScopedHostWrite,
 };
 
 function noScopedHostWrite(): void {
@@ -372,6 +378,7 @@ function useHostScopeWithOptions(
     vanishedHostId: resolved.vanishedHostId,
     vanishedSelection: null,
     returnToActive: () => setScopedHostId(null),
+    readOnly: setScopedHostId === noScopedHostWrite,
     activeHostId,
     activeHost: findHostOption(hosts, activeHostId),
     isViewingActive: isFollowing,

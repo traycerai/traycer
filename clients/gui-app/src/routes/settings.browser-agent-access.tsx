@@ -1,15 +1,11 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
 
 /**
- * Legacy redirect: Browser agent access is the Browser tab of Permissions. A
- * remembered path or a deep link lands on that page.
+ * Legacy path: a remembered path or a deep link opens Browser agent access in
+ * place, never rewritten to Permissions, so a computer without the page says
+ * so under its own heading.
  */
 export const Route = createFileRoute("/settings/browser-agent-access")({
-  beforeLoad: () => {
-    redirect({
-      throw: true,
-      to: "/settings/permissions",
-      replace: true,
-    });
-  },
+  component: BrowserAgentAccessSettingsPanel,
 });

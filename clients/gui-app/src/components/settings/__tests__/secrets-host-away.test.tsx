@@ -167,7 +167,7 @@ const secretsRow = (): Element | null =>
   screen.queryByTestId("settings-sidebar-item-secrets");
 
 describe("Personal's Secrets under a window host that is listed but offline", () => {
-  it("offers the Secrets row and draws the cloud page, not the spinner, with Personal picked", async () => {
+  it("offers the Secrets row and draws the cloud page with Personal picked", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 
     mountSettings({
@@ -179,7 +179,6 @@ describe("Personal's Secrets under a window host that is listed but offline", ()
     await screen.findByTestId("settings-sidebar-item-general");
     expect(secretsRow()).not.toBeNull();
     expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
-    expect(screen.queryByTestId("personal-source-loading")).toBeNull();
     // Only the cloud frame lists: the host frame, with no list served, draws
     // the title and description alone.
     expect(await screen.findByText(SECRETS_NAME)).toBeTruthy();
@@ -198,10 +197,8 @@ describe("Personal's Secrets under a window host that is listed but offline", ()
     });
 
     await screen.findByTestId("settings-sidebar-item-general");
-    // The page leaves its spinner once the host's answer says it runs Personal.
-    await waitFor(() => {
-      expect(screen.queryByTestId("personal-source-loading")).toBeNull();
-    });
+    // The page draws once the host's answer says it runs Personal.
+    expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
     expect(messenger.calls.some((call) => call.method === SECRETS_LIST)).toBe(
       false,
     );
@@ -210,7 +207,7 @@ describe("Personal's Secrets under a window host that is listed but offline", ()
 });
 
 describe("Personal's Secrets once the window host that answered goes offline", () => {
-  it("offers the Secrets row and draws the cloud page, not the spinner, with its answer still cached", async () => {
+  it("offers the Secrets row and draws the cloud page with its answer still cached", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 
     mountSettings({
@@ -223,16 +220,14 @@ describe("Personal's Secrets once the window host that answered goes offline", (
     });
 
     await screen.findByTestId("settings-sidebar-item-general");
-    await waitFor(() => {
-      expect(screen.queryByTestId("personal-source-loading")).toBeNull();
-    });
+    expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
     expect(secretsRow()).not.toBeNull();
 
     takeWindowHostOffline();
 
     expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
-    expect(screen.queryByTestId("personal-source-loading")).toBeNull();
     expect(await screen.findByText(SECRETS_NAME)).toBeTruthy();
+    expect(secretsRow()).not.toBeNull();
   });
 });
 
@@ -248,9 +243,7 @@ describe("Personal's Secrets once the window host that went offline comes back",
       },
     });
     await screen.findByTestId("settings-sidebar-item-general");
-    await waitFor(() => {
-      expect(screen.queryByTestId("personal-source-loading")).toBeNull();
-    });
+    expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
     takeWindowHostOffline();
     await waitFor(() => {
       expect(secretsRow()).not.toBeNull();
@@ -271,7 +264,6 @@ describe("Personal's Secrets once the window host that went offline comes back",
       await screen.findByRole("heading", { name: "Secrets" }),
     ).toBeTruthy();
     expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
-    expect(screen.queryByTestId("personal-source-loading")).toBeNull();
   });
 
   it("keeps the Secrets row when it serves the list", async () => {
@@ -281,6 +273,5 @@ describe("Personal's Secrets once the window host that went offline comes back",
 
     expect(await screen.findByText(SECRETS_NAME)).toBeTruthy();
     expect(secretsRow()).not.toBeNull();
-    expect(screen.queryByTestId("personal-source-loading")).toBeNull();
   });
 });
