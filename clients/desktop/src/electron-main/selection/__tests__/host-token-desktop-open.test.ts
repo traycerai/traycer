@@ -736,7 +736,8 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
       cloudAuthorized: () => true,
       endpoint: () => null,
       liveRow: () => directory.peek(REMOTE_HOST_ID),
-      confirmRow: (stillWaiting) => directory.confirmRows(stillWaiting),
+      confirmRow: (stillWaiting, ended) =>
+        directory.confirmRows(stillWaiting, ended),
       appVersion: "1.0.0-test",
       hostTokens,
     });

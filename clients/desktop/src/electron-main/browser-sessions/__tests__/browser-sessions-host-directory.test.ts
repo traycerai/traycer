@@ -446,7 +446,10 @@ describe("main resolves the browser.sessions host itself", () => {
     });
     let answer: boolean | null = null;
     const confirming = directory
-      .confirmRows(() => true)
+      .confirmRows(
+        () => true,
+        new Promise<void>(() => undefined),
+      )
       .then((confirmed) => {
         answer = confirmed;
         return confirmed;
@@ -501,8 +504,8 @@ describe("main resolves the browser.sessions host itself", () => {
           running: null,
         };
         const released = confirmRowWithin(
-          (stillWaiting) => {
-            confirmation.running = directory.confirmRows(stillWaiting);
+          (stillWaiting, ended) => {
+            confirmation.running = directory.confirmRows(stillWaiting, ended);
             return confirmation.running;
           },
           { current: () => true },
@@ -527,12 +530,15 @@ describe("main resolves the browser.sessions host itself", () => {
     // moves only the wall clock, `advanceTimersByTime` both), and no timer
     // callback runs.
     function holdConfirmation(directory: {
-      confirmRows(stillWaiting: () => boolean): Promise<boolean>;
+      confirmRows(
+        stillWaiting: () => boolean,
+        ended: Promise<void>,
+      ): Promise<boolean>;
     }): { readonly running: () => Promise<boolean> } {
       let running: Promise<boolean> | null = null;
       void confirmRowWithin(
-        (stillWaiting) => {
-          running = directory.confirmRows(stillWaiting);
+        (stillWaiting, ended) => {
+          running = directory.confirmRows(stillWaiting, ended);
           return running;
         },
         { current: () => true },
@@ -544,6 +550,25 @@ describe("main resolves the browser.sessions host itself", () => {
         },
       };
     }
+
+    it("answers false and returns when its confirmation ends while a refresh is held, without waiting for the refresh", async () => {
+      const { directory, gets } = directoryWithFirstReadHeld();
+      let ceilingReached = (): void => undefined;
+      const ended = new Promise<void>((resolve) => {
+        ceilingReached = resolve;
+      });
+      let answer: boolean | null = null;
+      void directory.confirmRows(() => true, ended).then((confirmed) => {
+        answer = confirmed;
+      });
+      await vi.waitFor(() => expect(gets()).toBe(1));
+      expect(answer).toBeNull();
+
+      ceilingReached();
+
+      await vi.waitFor(() => expect(answer).toBe(false));
+      expect(gets()).toBe(1);
+    });
 
     it("starts no read once the monotonic clock is past its ceiling, though the ceiling's timer has not run, and answers false", async () => {
       vi.useFakeTimers({ toFake: ["Date", "performance"] });
