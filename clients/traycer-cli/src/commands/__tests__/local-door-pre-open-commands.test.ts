@@ -197,6 +197,10 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
         outcome: harness.state.refresh,
         installed:
           harness.state.refresh === "rotated" ? lease.getBearerToken() : null,
+        refused:
+          harness.state.refresh === "rejected" ? lease.getBearerToken() : null,
+        accepted:
+          harness.state.refresh === "rotated" ? lease.getBearerToken() : null,
       }),
     }),
   };

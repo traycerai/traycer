@@ -163,6 +163,8 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
           return {
             outcome,
             installed: outcome === "rotated" ? lease.getBearerToken() : null,
+            refused: outcome === "rejected" ? lease.getBearerToken() : null,
+            accepted: outcome === "rotated" ? lease.getBearerToken() : null,
           };
         },
       }),
@@ -231,7 +233,11 @@ async function waitForMintCount(count: number) {
   await vi.waitFor(() => expect(state.mint).toHaveBeenCalledTimes(count));
 }
 
+// A person no earlier case used: the process-scope judge of a sign-in is kept per person.
+let caseUserCount = 0;
+
 beforeEach(() => {
+  caseUserCount += 1;
   vi.useFakeTimers();
   state.sessions.length = 0;
   state.streamOptions.length = 0;
@@ -246,7 +252,7 @@ beforeEach(() => {
   resolveAuthMock.mockResolvedValue({
     token: "signin",
     authnBaseUrl: "https://authn.test",
-    userId: "user-1",
+    userId: `user-${caseUserCount}`,
   });
   pidMock.mockResolvedValue({
     pid: 1,

@@ -181,6 +181,8 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
           return {
             outcome,
             installed: outcome === "rotated" ? lease.getBearerToken() : null,
+            refused: outcome === "rejected" ? lease.getBearerToken() : null,
+            accepted: outcome === "rotated" ? lease.getBearerToken() : null,
           };
         },
       }),
@@ -325,7 +327,11 @@ function expectNoAckCall(): void {
   ).toBe(false);
 }
 
+// A person no earlier case used: the process-scope judge of a sign-in is kept per person.
+let caseUserCount = 0;
+
 beforeEach(async () => {
+  caseUserCount += 1;
   testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-monitor-"));
   vi.useFakeTimers();
   sessions.length = 0;
@@ -357,7 +363,7 @@ beforeEach(async () => {
   resolveAuthMock.mockResolvedValue({
     token: "tok-1",
     authnBaseUrl: "https://authn.test",
-    userId: "u1",
+    userId: `u${caseUserCount}`,
   });
   resolveAuthMock.mockClear();
   pidMock.mockReset();
