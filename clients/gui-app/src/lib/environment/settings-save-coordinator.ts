@@ -239,7 +239,6 @@ export function createSettingsSaveCoordinator(
   };
 
   const expired = (record: SettingsSaveMemoryRecord): boolean =>
-    record.environmentId !== null &&
     ports.now() - record.writtenAt > SETTINGS_SAVE_MEMORY_TTL_MS;
 
   const forgetExpired = (): void => {
