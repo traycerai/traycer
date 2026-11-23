@@ -7,6 +7,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
+import { settingsSaveRequestId } from "@traycer/protocol/framework/settings-save-request-id";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import type {
@@ -31,7 +32,10 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
+import type {
+  SettingsSaveBeginning,
+  SettingsSaveCoordinator,
+} from "@/lib/environment/settings-save-coordinator";
 import type { PendingSettingsSave } from "@/lib/environment/settings-save-follow";
 import type { SettingsSaveOrigin } from "@/lib/environment/settings-save-origin";
 import { environmentQueryKeys } from "@/lib/query-keys";
@@ -278,6 +282,14 @@ async function followSave(
       void keepOwnWrite(scope, operation, edit).catch(() => undefined);
     },
   );
+  return followBeginning(coordinator, beginning, save);
+}
+
+function followBeginning(
+  coordinator: SettingsSaveCoordinator,
+  beginning: SettingsSaveBeginning,
+  save: SettingsSave,
+): PendingSettingsSave {
   if (beginning.kind === "account_changed") {
     return { kind: "abandoned", method: save.method };
   }
@@ -285,6 +297,7 @@ async function followSave(
   const { ticket } = beginning;
   return {
     kind: "send",
+    requestId: settingsSaveRequestId(ticket.id),
     answered: () => {
       void coordinator.settle(ticket, true);
     },
@@ -294,10 +307,21 @@ async function followSave(
   };
 }
 
+interface LocalSaveScope {
+  readonly coordinator: SettingsSaveCoordinator;
+  readonly hostId: string;
+  readonly viewerId: string;
+}
+
+interface SaveScopes {
+  readonly shared: SaveScope | null;
+  readonly local: LocalSaveScope | null;
+}
+
 function useSaveScope(
   client: HostClient<HostRpcRegistry> | null,
   kinds: readonly string[],
-): SaveScope | null {
+): SaveScopes {
   const [session] = useState(() => crypto.randomUUID());
   const [ledger] = useState(createSaveLedger);
   const coordinator = useSettingsSaveCoordinator();
@@ -360,18 +384,27 @@ function useSaveScope(
       enabled: scope !== null,
     })),
   });
-  return scope;
+  const local = useMemo<LocalSaveScope | null>(
+    () =>
+      coordinator !== null &&
+      source !== null &&
+      hostId !== null &&
+      viewerId.length > 0 &&
+      (environmentRead.kind === "own_settings" ||
+        environmentRead.kind === "pending")
+        ? { coordinator, hostId, viewerId }
+        : null,
+    [coordinator, environmentRead.kind, hostId, source, viewerId],
+  );
+  return { shared: scope, local };
 }
 
-/**
- * A host in no environment, one authn does not list, or a failed read remembers
- * nothing: the save still goes, and its hold waits for one click.
- */
+/** A save made while the host uses its own settings can be followed after it binds. */
 export function useSettingsSave(
   client: HostClient<HostRpcRegistry> | null,
   kinds: readonly string[],
 ): PrepareSettingsSave {
-  const scope = useSaveScope(client, kinds);
+  const { shared, local } = useSaveScope(client, kinds);
   return useCallback(
     async (
       save: SettingsSave,
@@ -385,6 +418,7 @@ export function useSettingsSave(
       if (!pressedOn.onOriginSignIn()) {
         return { kind: "abandoned", method: save.method };
       }
+      const scope = shared ?? local;
       if (scope === null) return NOTHING_TO_FOLLOW;
       // A save prepared once anyone else is signed in is not sent.
       const isEditorsAccount = (): boolean =>
@@ -395,13 +429,21 @@ export function useSettingsSave(
       if (sentOn !== scope.hostId) return NOTHING_TO_FOLLOW;
       const accountId = scope.coordinator.account();
       if (accountId === null) return NOTHING_TO_FOLLOW;
-      const operation: SaveOperation = {
-        cloud: pressedOn,
-        order: scope.ledger.take(),
-      };
       let pending: PendingSettingsSave;
       try {
-        pending = await followSave(scope, operation, save, accountId);
+        pending =
+          shared === null
+            ? followBeginning(
+                scope.coordinator,
+                scope.coordinator.beginLocal(accountId, scope.hostId),
+                save,
+              )
+            : await followSave(
+                shared,
+                { cloud: pressedOn, order: shared.ledger.take() },
+                save,
+                accountId,
+              );
       } catch {
         pending = NOTHING_TO_FOLLOW;
       }
@@ -416,7 +458,7 @@ export function useSettingsSave(
       if (pending.kind === "send") pending.failed();
       return { kind: "abandoned", method: save.method };
     },
-    [scope],
+    [local, shared],
   );
 }
 
@@ -427,7 +469,7 @@ export function useSettingsItemExists(
   client: HostClient<HostRpcRegistry> | null,
   kind: string,
 ): SettingsItemExists {
-  const scope = useSaveScope(client, [kind]);
+  const { shared: scope } = useSaveScope(client, [kind]);
   return useCallback(
     async (key: string): Promise<boolean> => {
       if (scope === null) return false;

@@ -545,6 +545,7 @@ export function acquireRemoteSession<
       responseTimeoutMs,
       replayMustBeKeyed,
       requiredHostMethodVersion,
+      requestId,
     ) =>
       session.sendUnary(
         method,
@@ -555,6 +556,7 @@ export function acquireRemoteSession<
         responseTimeoutMs,
         replayMustBeKeyed,
         requiredHostMethodVersion,
+        requestId,
       ),
     subscribe: (method, params) => session.subscribe(method, params),
     subscribeAtVersion: (method, schemaVersion, params) =>
@@ -1054,6 +1056,7 @@ export function tryAcquireReadyRemoteSession<
           // ...and it names no version floor: the borrowed view exists for
           // `host.getUpdateStatus`, a released-floor method.
           null,
+          undefined,
         )
         .then((result) => {
           if (entry.superseded) {

@@ -477,7 +477,7 @@ export class WsRpcClient<
     options: HostRequestOptions,
     releasedDuringLookup: boolean,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const requestId = this.requestIdProvider();
+    const requestId = options.requestId ?? this.requestIdProvider();
     const selected = options.authority.endpoint;
     throwIfAuthorityAborted(options.authority, requestId, method);
     if (selected.websocketUrl === null) {

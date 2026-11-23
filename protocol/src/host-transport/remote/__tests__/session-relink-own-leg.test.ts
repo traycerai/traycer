@@ -840,6 +840,7 @@ function callStatus(session: Session): Promise<unknown> {
     undefined,
     false,
     null,
+    undefined,
   );
 }
 

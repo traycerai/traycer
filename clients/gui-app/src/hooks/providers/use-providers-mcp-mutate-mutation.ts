@@ -25,6 +25,7 @@ import {
 import {
   everyAnswerProposes,
   sendFollowedSave,
+  requestFollowedSettingsSave,
 } from "@/lib/environment/settings-save-follow";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -195,7 +196,13 @@ export function useProvidersMcpMutate(
         };
         const response = await sendFollowedSave(
           await pressed.prepare(save, hostId, pressed.origin),
-          () => pressedClient.request("providers.nativeMutate", request),
+          (requestId) =>
+            requestFollowedSettingsSave(
+              pressedClient,
+              "providers.nativeMutate",
+              request,
+              requestId,
+            ),
           everyAnswerProposes,
         );
         return { data: mapNativeMutateToMcpMutate({ response }), snapshot };

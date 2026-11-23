@@ -662,12 +662,15 @@ export function useHostMutation<
             args.requiredHostMethodVersion?.(variables) ?? null;
           const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
           // A keyed dispatch carries both retry identity and version floor.
-          const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
+          const dispatch = (
+            requestId: string | undefined,
+          ): Promise<ResponseOfMethod<Registry, Method>> => {
             const signal = args.signalFor?.(variables) ?? undefined;
             signal?.throwIfAborted();
-            if (idempotencyKey !== null) {
+            if (idempotencyKey !== null || requestId !== undefined) {
               return client.requestWithOptions(args.method, params, {
                 idempotencyKey,
+                requestId,
                 // The method's own scheduling budget. A keyed create is a small
                 // INTERACTIVE request once its images travel by hash, so there is
                 // nothing to extend - and the policy table REFUSES a budget it
@@ -696,13 +699,15 @@ export function useHostMutation<
           const mappedDispatch =
             mapDispatchError === undefined
               ? dispatch
-              : (): Promise<ResponseOfMethod<Registry, Method>> =>
-                  dispatch().catch((cause: unknown) => {
+              : (
+                  requestId: string | undefined,
+                ): Promise<ResponseOfMethod<Registry, Method>> =>
+                  dispatch(requestId).catch((cause: unknown) => {
                     throw mapDispatchError(cause);
                   });
           const dispatched =
             pressed === null
-              ? await mappedDispatch()
+              ? await mappedDispatch(undefined)
               : await sendFollowedSave(
                   await pressed.follow.follow(params, client, pressed.origin),
                   mappedDispatch,
@@ -715,7 +720,9 @@ export function useHostMutation<
           const response =
             resolveResponse === undefined
               ? dispatched
-              : await resolveResponse(dispatched, variables, mappedDispatch);
+              : await resolveResponse(dispatched, variables, () =>
+                  mappedDispatch(undefined),
+                );
           args.onResponse?.(response, variables);
           return response;
         }),

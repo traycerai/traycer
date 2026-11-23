@@ -1,9 +1,16 @@
 // A leaf: imports no hook and nothing of `@/lib/host`, whose mutation sends through it.
-import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import {
+  HostRequestAbortedError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 
 export type PendingSettingsSave =
   | {
       readonly kind: "send";
+      readonly requestId?: string;
       readonly answered: () => void;
       readonly failed: () => void;
     }
@@ -13,7 +20,7 @@ export type PendingSettingsSave =
 /** An answer that proposes nothing settles the save as not proposed, so nothing is applied. */
 export async function sendFollowedSave<T>(
   pending: PendingSettingsSave,
-  send: () => Promise<T>,
+  send: (requestId: string | undefined) => Promise<T>,
   proposes: (answer: T) => boolean,
 ): Promise<T> {
   if (pending.kind === "abandoned") {
@@ -26,7 +33,7 @@ export async function sendFollowedSave<T>(
   }
   let answer: T;
   try {
-    answer = await send();
+    answer = await send(pending.requestId);
   } catch (cause) {
     pending.failed();
     throw cause;
@@ -34,6 +41,26 @@ export async function sendFollowedSave<T>(
   if (proposes(answer)) pending.answered();
   else pending.failed();
   return answer;
+}
+
+export function requestFollowedSettingsSave<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+>(
+  client: HostRequester<Registry>,
+  method: Method,
+  params: RequestOfMethod<Registry, Method>,
+  requestId: string | undefined,
+): Promise<ResponseOfMethod<Registry, Method>> {
+  return requestId === undefined
+    ? client.request(method, params)
+    : client.requestWithOptions(method, params, {
+        idempotencyKey: null,
+        responseTimeoutMs: null,
+        requiredHostMethodVersion: null,
+        signal: undefined,
+        requestId,
+      });
 }
 
 export function everyAnswerProposes(): boolean {
