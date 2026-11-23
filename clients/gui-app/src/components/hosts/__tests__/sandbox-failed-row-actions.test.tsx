@@ -12,7 +12,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
-import { SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED } from "@traycer/protocol/host/sandbox-control";
+import {
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+} from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxFailedChatActions,
   SandboxFailedRowActions,
@@ -939,6 +942,75 @@ describe("SandboxFailedRowActions Retry", () => {
       [savedRequest],
     ]);
     expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2);
+    view.unmount();
+  });
+
+  it("uses the current failed row key after the mounted card changes rows", async () => {
+    const user = userEvent.setup();
+    const binding = createFakeSandboxBinding();
+    const queryClient = createQueryClient();
+    const initialSummary = failedRowSummaryWith({
+      id: "failed-row-X",
+      displayName: "row X",
+    });
+    const refreshedSummary = failedRowSummaryWith({
+      id: "failed-row-Y",
+      displayName: "row Y",
+    });
+    binding.auth.createSandbox
+      .mockResolvedValueOnce({
+        ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+        sandboxId: initialSummary.id,
+      })
+      .mockResolvedValueOnce({ kind: "network-error", detail: "offline" });
+    const view = render(
+      <SandboxBillingRuntime
+        answer={{ kind: "ready", role: "editor" }}
+        hostId="billing-host"
+        environmentId="env-acme"
+        queryClient={queryClient}
+        onBinding={(runtimeBinding: HostRuntimeBinding<HostRpcRegistry>) => {
+          vi.spyOn(
+            runtimeBinding.auth,
+            "getTeamEnvironment",
+          ).mockImplementation((teamId) =>
+            binding.auth.getTeamEnvironment(teamId),
+          );
+          vi.spyOn(runtimeBinding.auth, "createSandbox").mockImplementation(
+            (request) => binding.auth.createSandbox(request),
+          );
+        }}
+        onEnvironmentListRead={null}
+      >
+        <RefreshableFailedRowSummary
+          initial={initialSummary}
+          refreshed={refreshedSummary}
+        />
+      </SandboxBillingRuntime>,
+    );
+    signInAs("viewer");
+
+    const retryX = await screen.findByRole("button", { name: "Retry" });
+    await user.click(retryX);
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(retryX).toHaveProperty("disabled", false));
+    expect(binding.auth.createSandbox.mock.calls[0]?.[0].clientRequestId).toBe(
+      "retry:failed-row-X",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Refresh row" }));
+    const retryY = await screen.findByRole("button", { name: "Retry" });
+    await user.click(retryY);
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(2));
+
+    expect(
+      binding.auth.createSandbox.mock.calls.map(
+        ([request]) => request.clientRequestId,
+      ),
+    ).toEqual(["retry:failed-row-X", "retry:failed-row-Y"]);
+    expect(binding.auth.createSandbox.mock.calls[1]?.[0].displayName).toBe(
+      "row Y",
+    );
     view.unmount();
   });
 

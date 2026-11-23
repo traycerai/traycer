@@ -62,7 +62,7 @@ import {
  * (`TeamHostOptionsCard`), and the message box is drawn with nothing to send
  * and why. Drawn in the Tracy surface's channel pane, beside its column.
  */
-export function TeamSetupChannel(props: {
+interface TeamSetupChannelProps {
   readonly setup: TeamSetup;
   readonly client: HostClient<HostRpcRegistry> | null;
   /** The surface's host, whose bots the title's picker lists. */
@@ -71,7 +71,14 @@ export function TeamSetupChannel(props: {
   readonly level2: MobileLevel2Form | null;
   /** The surface's Threads, a row of the title's picker as of its column. */
   readonly threadsView: BotThreadsViewState;
-}): ReactNode {
+}
+
+export function TeamSetupChannel(props: TeamSetupChannelProps): ReactNode {
+  // The polling latch and create outcome both belong to this environment.
+  return <TeamSetupChannelContent key={props.setup.environmentId} {...props} />;
+}
+
+function TeamSetupChannelContent(props: TeamSetupChannelProps): ReactNode {
   const { setup, hostId, level2, threadsView } = props;
   // Re-read on the shared on-screen cadence while the person can see the
   // setup and it still needs a host. The team's host creating the bot rings

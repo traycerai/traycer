@@ -3,17 +3,19 @@ import type {
   SandboxCreateRequest,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import { v5 as uuidv5 } from "uuid";
 
 /** Matches the create endpoint's 1–64 character clientRequestId contract. */
 export function sandboxCreateKey(
   intent: "retry" | "team-setup" | "stage",
   id: string,
 ): string {
+  if (id.length === 0) throw new Error("Invalid sandbox create key length");
   const key = `${intent}:${id}`;
-  if (id.length === 0 || key.length > 64) {
-    throw new Error("Invalid sandbox create key length");
-  }
-  return key;
+  if (key.length <= 64 && !id.startsWith("~")) return key;
+  // Reserve "~" for compact keys so a literal ID cannot alias one.
+  const name = `traycer:sandbox-create:${JSON.stringify(key)}`;
+  return `${intent}:~${uuidv5(name, uuidv5.URL)}`;
 }
 
 /** Derives a press's key from the failure it answers or repeats its refused send. */

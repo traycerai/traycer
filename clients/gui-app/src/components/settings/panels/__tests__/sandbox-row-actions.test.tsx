@@ -45,6 +45,9 @@ const mutation = () => ({ mutate: vi.fn(), isPending: false });
 const createMutateAsync = vi.hoisted(() =>
   vi.fn<(variables: SandboxCreateSubmit) => Promise<SandboxCreateAccepted>>(),
 );
+const swallowCreateMutationRejection = vi.hoisted(() =>
+  vi.fn<(reason: unknown) => void>(),
+);
 const destroyMutate = vi.hoisted(() => vi.fn());
 
 // The auth service is the network boundary of the Automations open and read.
@@ -119,7 +122,7 @@ vi.mock(
     >()),
     useSandboxCreate: () => ({
       mutate: (variables: Parameters<typeof createMutateAsync>[0]) => {
-        void createMutateAsync(variables);
+        void createMutateAsync(variables).catch(swallowCreateMutationRejection);
       },
       mutateAsync: createMutateAsync,
       isPending: false,
@@ -251,6 +254,7 @@ beforeEach(() => {
   });
   createMutateAsync.mockReset();
   createMutateAsync.mockImplementation(() => new Promise(() => undefined));
+  swallowCreateMutationRejection.mockReset();
   destroyMutate.mockClear();
   settings.retry.mockReset();
   settings.legacy.mockReset();
@@ -609,11 +613,11 @@ describe("<SandboxRowActions />", () => {
         readonly onError: (error: Error) => void;
       };
     }> => {
+      const callIndex = createMutateAsync.mock.calls.length;
       await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-      const call = createMutateAsync.mock.calls.at(-1);
-      const answer = answers.at(-1);
-      if (call === undefined) throw new Error("expected a create");
-      if (answer === undefined) throw new Error("expected a pending create");
+      expect(createMutateAsync.mock.calls).toHaveLength(callIndex + 1);
+      const call = createMutateAsync.mock.calls[callIndex];
+      const answer = answers[callIndex];
       return { key: call[0].request.clientRequestId, answer };
     };
     const refusal = (failure: SandboxControlFailure) =>
@@ -629,6 +633,9 @@ describe("<SandboxRowActions />", () => {
       first.answer.onError(
         refusal({ kind: "network-error", detail: "timeout" }),
       ),
+    );
+    await waitFor(() =>
+      expect(swallowCreateMutationRejection).toHaveBeenCalledTimes(1),
     );
     const second = await press();
     expect(second.key).toBe(first.key);
@@ -646,6 +653,9 @@ describe("<SandboxRowActions />", () => {
           message: null,
         }),
       ),
+    );
+    await waitFor(() =>
+      expect(swallowCreateMutationRejection).toHaveBeenCalledTimes(2),
     );
     const third = await press();
     expect(third.key).toBe(second.key);

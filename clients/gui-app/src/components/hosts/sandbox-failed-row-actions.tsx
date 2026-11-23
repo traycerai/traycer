@@ -61,13 +61,23 @@ export function SandboxFailedChatActions(props: {
   );
 }
 
-/** The failed-create row's safe actions, shared by Settings and the chat slot. */
-export function SandboxFailedRowActions(props: {
+interface SandboxFailedRowActionsProps {
   readonly summary: SandboxSummary;
   /** `null` holds Retry back. */
   readonly configuration: SandboxPageConfiguration | null;
   readonly credits: SandboxPageConfiguration | null;
-}): ReactNode {
+}
+
+/** The failed-create row's safe actions, shared by Settings and the chat slot. */
+export function SandboxFailedRowActions(
+  props: SandboxFailedRowActionsProps,
+): ReactNode {
+  return <SandboxFailedRowControls key={props.summary.id} {...props} />;
+}
+
+function SandboxFailedRowControls(
+  props: SandboxFailedRowActionsProps,
+): ReactNode {
   const { summary, configuration, credits } = props;
   // Not known whose sandbox it is: worded as for someone who cannot buy.
   const buysTeamCredits = useOffersAddCredits(credits);
