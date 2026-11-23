@@ -1,8 +1,16 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { subscribeNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { usePickHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import {
+  readNegotiatedMethodVersion,
+  type NegotiatedMethodVersion,
+} from "@/lib/host/read-negotiated-method-version";
 import {
   hostLacksEnvironmentStatus,
+  isEnvironmentGroupSection,
   isOldHostLocalPick,
   type EnvironmentPick,
   oldHostSectionShown,
@@ -81,4 +89,170 @@ export function useDrawnSection(
   return section !== null && oldHost && !oldHostSectionShown(section)
     ? "providers"
     : section;
+}
+
+/**
+ * What the body of `section` shows under a pick, the one answer every road to
+ * a page ends at (`SettingsPanelForSection`):
+ *
+ * - `served`: the page itself.
+ * - `unresolved`: no pick yet, the page's own unresolved state.
+ * - `pending`: the picked computer has not answered yet; "Connecting".
+ * - `update`: the computer lacks the page, and updating it gives the page.
+ * - `unlisted`: a Local pick of a computer this app's host list does not name.
+ * - `team-only`: Members, under a pick that is not a team.
+ *
+ * Nothing here moves the surface or hides a row: the rail lists rows by the
+ * kind of pick alone, and a late answer changes only this body.
+ */
+export type SectionAnswer =
+  | { readonly kind: "served" }
+  | { readonly kind: "unresolved" }
+  | { readonly kind: "pending"; readonly hostName: string }
+  | {
+      readonly kind: "update";
+      readonly hostId: string;
+      readonly hostName: string;
+    }
+  | { readonly kind: "unlisted"; readonly hostName: string }
+  | { readonly kind: "team-only" };
+
+/** The facts `sectionAnswer` decides from, read by `useSectionAnswer`. */
+interface SectionFacts {
+  readonly pick: EnvironmentPick;
+  readonly section: SettingsSectionId;
+  /** The host the pick reads through, or `null` where the list names none. */
+  readonly host: { readonly hostId: string; readonly name: string } | null;
+  readonly hostsLoading: boolean;
+  /** `useWindowHostRunsPersonal`, for a Personal pick. */
+  readonly windowHostRuns: boolean | null;
+  /** That host's own `environment.status`, from its handshake. */
+  readonly environmentStatus: NegotiatedMethodVersion;
+  /**
+   * Whether that host serves `environment.secrets.list`: a Local computer's
+   * own handshake, never a pool's answer; for Personal on a host that runs
+   * it, the support read, which answers for the pool in a pool build.
+   */
+  readonly secretsList: boolean | null;
+}
+
+function servedOr(
+  supported: boolean | null,
+  host: { readonly hostId: string; readonly name: string },
+): SectionAnswer {
+  if (supported === null) return { kind: "pending", hostName: host.name };
+  return supported
+    ? { kind: "served" }
+    : { kind: "update", hostId: host.hostId, hostName: host.name };
+}
+
+function sectionAnswer(facts: SectionFacts): SectionAnswer {
+  const { pick, section, host } = facts;
+  if (!isEnvironmentGroupSection(section)) return { kind: "served" };
+  if (pick.kind === "unresolved") return { kind: "unresolved" };
+  if (pick.kind === "team") return { kind: "served" };
+  if (section === "members") return { kind: "team-only" };
+  if (pick.kind === "personal") {
+    // Personal reads the cloud unless the window's host runs it: only then is
+    // a page the host's own, and only Secrets needs a method of it.
+    if (section !== "secrets" || facts.windowHostRuns === false) {
+      return { kind: "served" };
+    }
+    if (facts.windowHostRuns === null || host === null) {
+      return { kind: "pending", hostName: host?.name ?? "" };
+    }
+    return servedOr(facts.secretsList, host);
+  }
+  return localSectionAnswer(facts, pick.hostName);
+}
+
+/**
+ * A Local pick reads its own computer's handshake, never a pool's answer: a
+ * computer the list does not name is not connected, an old one has only
+ * `oldHostSectionShown`'s pages, and a current one lacks Secrets only without
+ * `environment.secrets.list`.
+ */
+function localSectionAnswer(
+  facts: SectionFacts,
+  pickedName: string,
+): SectionAnswer {
+  const { host, section } = facts;
+  if (host === null) {
+    return facts.hostsLoading
+      ? { kind: "pending", hostName: pickedName }
+      : { kind: "unlisted", hostName: pickedName };
+  }
+  if (facts.environmentStatus === null) {
+    return { kind: "pending", hostName: host.name };
+  }
+  if (facts.environmentStatus === false) {
+    return servedOr(oldHostSectionShown(section), host);
+  }
+  return section === "secrets"
+    ? servedOr(facts.secretsList, host)
+    : { kind: "served" };
+}
+
+/** `sectionAnswer` for `pick`, which need not be the pick in effect. */
+export function useSectionAnswer(
+  pick: EnvironmentPick,
+  section: SettingsSectionId,
+): SectionAnswer {
+  const scope = usePickHostScope(pick);
+  const windowHostRuns = useWindowHostRunsPersonal(scope);
+  const hostId = scope.host?.hostId ?? null;
+  const environmentStatus = useSyncExternalStore(
+    subscribeNegotiatedManifests,
+    () =>
+      hostId === null
+        ? null
+        : readNegotiatedMethodVersion(hostId, "environment.status"),
+  );
+  const ownSecretsList = useSyncExternalStore(
+    subscribeNegotiatedManifests,
+    () => {
+      if (hostId === null) return null;
+      const version = readNegotiatedMethodVersion(
+        hostId,
+        "environment.secrets.list",
+      );
+      return version === null ? null : version !== false;
+    },
+  );
+  const supportSecretsList = useHostMethodSupport(
+    hostId,
+    "environment.secrets.list",
+  );
+  return sectionAnswer({
+    pick,
+    section,
+    host:
+      scope.host === null
+        ? null
+        : { hostId: scope.host.hostId, name: scope.host.name },
+    hostsLoading: scope.isLoading,
+    windowHostRuns,
+    environmentStatus,
+    secretsList: pick.kind === "local" ? ownSecretsList : supportSecretsList,
+  });
+}
+
+/** Whether a page is served under a pick, for a surface that offers it. */
+export type SectionServed = "served" | "not-served" | "pending";
+
+/**
+ * `useSectionAnswer` in three states, for an entry that is shown only where
+ * its page is: shown on `served`, absent while `pending`, so it never shows
+ * and then goes.
+ */
+export function useSectionServed(
+  pick: EnvironmentPick,
+  section: SettingsSectionId,
+): SectionServed {
+  const answer = useSectionAnswer(pick, section);
+  if (answer.kind === "served") return "served";
+  if (answer.kind === "pending" || answer.kind === "unresolved") {
+    return "pending";
+  }
+  return "not-served";
 }

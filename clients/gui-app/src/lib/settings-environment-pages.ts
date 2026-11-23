@@ -165,6 +165,11 @@ const ENVIRONMENT_GROUP_SECTIONS: ReadonlySet<SettingsSectionId> = new Set(
   ),
 );
 
+/** Whether `section` is one of the Environment group's pages. */
+export function isEnvironmentGroupSection(section: SettingsSectionId): boolean {
+  return ENVIRONMENT_GROUP_SECTIONS.has(section);
+}
+
 const OLD_HOST_SECTIONS: ReadonlySet<SettingsSectionId> = new Set(
   [...OLD_HOST_PAGES].map(environmentPageSection),
 );
