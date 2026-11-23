@@ -477,15 +477,22 @@ export function opensReleasedWayOnThisMachine(
 
 /**
  * The typed answer of a released host to a host-only token: `UNAUTHORIZED`, no
- * `doorReason`, not retryable. Callers read it only as the answer to their own
- * open. A current host names its reason whenever it refuses an open's token.
- * Its unary and relay doors send this same shape for a frame or OPEN that
- * breaks the protocol (binary, not JSON, malformed, or out of order), and the
- * relay door does so on the host-to-host grant path too. This client's open is
- * never one of those: a single open per socket or handshake, in the open-frame
- * schema, before any other frame. So the shape does not match a current
- * host's answer to an open.
- * The message text is never read.
+ * `doorReason`, not retryable. Callers read it as the answer to their own open;
+ * once the sign-in is a stream or relay dial's plan, which follows such an
+ * answer, they read it on any frame of that dial. A current host names its
+ * reason whenever it refuses an open's token. It also sends this same shape:
+ * - on its unary and relay doors, for a frame or OPEN that breaks the protocol
+ *   (binary, not JSON, malformed, or out of order);
+ * - on its relay door, for the host-to-host grant path;
+ * - on its relay door, for an OPEN whose authorization version it does not
+ *   read, on purpose: to that client it is an older host.
+ * This client's open is none of those while two things hold:
+ * - it sends no authorization version the host does not read (it sends the
+ *   session-grant version or none);
+ * - the host's open schema accepts every field it sends, as a single open per
+ *   socket or handshake, before any other frame.
+ * While both hold, the shape does not match a current host's answer to an
+ * open. The message text is never read.
  */
 export function isReleasedHostTokenRefusal(
   details: FatalErrorDetails,
