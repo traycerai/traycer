@@ -1561,8 +1561,11 @@ describe("model O4: an excluded refusal whose asker ends while a newer counting 
 });
 
 describe("model: the lease's spent branch", () => {
-  it("answers transient and reports nothing when another host bought on B and the retry's refusal of B counts", async () => {
+  it("answers transient and reports nothing when another host bought on B and the retry's refusal of B counts; the next ordinary attempt gets its one recovery, and persisting refusals end at the bound", async () => {
+    const C = "sign-in-recovery-1";
     const open = await prepare("two host ids", [SIGN_IN_A, OURS]);
+    // The asks the whole sequence of attempts may make at the tracker.
+    open.limits.calls = 14;
     let recovery: Promise<string> = Promise.resolve("");
     await step(
       open,
@@ -1597,6 +1600,61 @@ describe("model: the lease's spent branch", () => {
     );
     await expect(recovery).resolves.toBe("network-error");
     expect(open.reports).toEqual([]);
+
+    // The next ordinary attempt on the same recovery (the monitor's lap, a
+    // redial: no admission between) starts with its one recovery. Refusals of
+    // C persist from here on.
+    const rotationsBeforeNext = nonTestRotations();
+    let next: Promise<string> = Promise.resolve("");
+    await step(
+      open,
+      "the next ordinary attempt: Y's door refusal starts a new call on the same recovery",
+      async () => {
+        harness.refuseSignIns = new Set([C]);
+        next = open.tokens
+          .streamRecovery(otherHostId)
+          .revalidateRefused(TOKEN_EXPIRED, () => true);
+        open.pending.push(next);
+        await untilHeldOn(OURS);
+      },
+    );
+    await step(
+      open,
+      "B is refused again: it counts and is not final",
+      async () => {
+        answerRequest(heldOn(OURS, "oldest"), "a 401");
+        await next;
+      },
+    );
+    expect(
+      nonTestRotations() - rotationsBeforeNext,
+      "the next attempt's one recovery: the sign-in refresh is asked",
+    ).toBe(1);
+    // C persists in being refused: the retry's refusal is the first of C
+    // after our own rotation, with nothing bought on it, and is final.
+    await expect(next).resolves.toBe("rejected");
+
+    // One more attempt: refusals persist, so nothing rotates again, and each
+    // attempt makes one request.
+    const rotationsAtBound = nonTestRotations();
+    const requestsAtBound = harness.requests.length;
+    let last: Promise<string> = Promise.resolve("");
+    await step(open, "a further ordinary attempt at the bound", async () => {
+      last = open.tokens
+        .streamRecovery(otherHostId)
+        .revalidateRefused(TOKEN_EXPIRED, () => true);
+      open.pending.push(last);
+      await last;
+    });
+    expect(
+      nonTestRotations() - rotationsAtBound,
+      "the recovery count stops at its bound",
+    ).toBe(0);
+    expect(
+      harness.requests.length - requestsAtBound,
+      "authn requests stay bounded",
+    ).toBe(1);
+    await expect(last).resolves.toBe("rejected");
     await finish(open);
   });
 });
