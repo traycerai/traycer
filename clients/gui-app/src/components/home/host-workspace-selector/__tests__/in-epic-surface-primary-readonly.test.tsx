@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import {
@@ -43,6 +51,7 @@ import {
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
   queueEditStagingKey,
@@ -433,6 +442,7 @@ let inFlightWorktreeIntent: WorktreeIntent | null = null;
 let failedWorktreePaths: readonly string[] = [];
 let queueEdit: {
   readonly queueItemId: string;
+  readonly editSessionId: string;
   readonly readOnly: boolean;
 } | null = null;
 const THREE_FOLDER_BINDING: WorktreeBinding = {
@@ -619,12 +629,10 @@ describe("an idle chat's folder whose owed worktree failed", () => {
 });
 
 describe("an idle chat while a queued message is edited", () => {
-  const EDIT_KEY = queueEditStagingKey(
-    "host-test",
-    "epic-1",
-    "owner-1",
-    "queue-item-1",
-  );
+  const EDIT_KEY = queueEditStagingKey("host-test", "epic-1", "owner-1", {
+    queueItemId: "queue-item-1",
+    sessionId: "edit-session-1",
+  });
 
   beforeEach(() => {
     seedResolvedBindingMetadata();
@@ -635,7 +643,11 @@ describe("an idle chat while a queued message is edited", () => {
   });
 
   it("stages a Local pick in the edit's own slot, not on the binding or the chat's slot", async () => {
-    queueEdit = { queueItemId: "queue-item-1", readOnly: false };
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      readOnly: false,
+    };
     renderBoundSurface("chat", true, null, BINDING);
     const alphaRow = await findAlphaRow();
 
@@ -650,8 +662,82 @@ describe("an idle chat while a queued message is edited", () => {
     expect(staged[worktreeStagingKeyString(CHAT_STAGING_KEY)]).toBeUndefined();
   });
 
+  it("remembers nothing for the folder from a pick made during the edit", async () => {
+    const remember = vi.spyOn(
+      useWorktreeIntentMemoryStore.getState(),
+      "setFolderIntent",
+    );
+    onTestFinished(() => {
+      remember.mockRestore();
+    });
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      readOnly: false,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-trigger"));
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-local"));
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(EDIT_KEY)
+      ],
+    ).toBeDefined();
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it("keeps the binding fixed: Add is disabled and Remove is disabled, each with the reason", async () => {
+    const user = userEvent.setup();
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      readOnly: false,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+
+    const add = screen.getByTestId("folder-add");
+    const remove = within(alphaRow).getByTestId("folder-remove");
+    expect(add instanceof HTMLButtonElement && add.disabled).toBe(true);
+    expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(true);
+
+    await user.hover(add.parentElement ?? add);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Finish the edit to add or remove folders",
+    );
+    await user.unhover(add.parentElement ?? add);
+    await user.hover(remove.parentElement ?? remove);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Finish the edit to add or remove folders",
+    );
+  });
+
+  it("offers no Locate on a folder that is absent from the host", async () => {
+    listByPathsMocks.workspaces = [
+      { ...resolvedSummary("/repo/alpha"), presence: "absent" },
+      resolvedSummary("/repo/beta"),
+    ];
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      readOnly: false,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+    fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+
+    expect(await screen.findByTestId("folder-row-not-available")).toBeTruthy();
+    expect(screen.queryByTestId("folder-row-locate")).toBeNull();
+  });
+
   it("shows the note and no folder controls when the edit is read-only", async () => {
-    queueEdit = { queueItemId: "queue-item-1", readOnly: true };
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      readOnly: true,
+    };
     renderBoundSurface("chat", true, null, BINDING);
 
     fireEvent.click(screen.getByRole("button", { name: /^beta/ }));

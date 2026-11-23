@@ -280,6 +280,7 @@ function submitEdit(
 ): EditFrames {
   const editActionId = harness.handle.store.getState().submitQueueEdit({
     queueItemId: QUEUE_ITEM_ID,
+    editSessionId: EDIT_SESSION_ID,
     content: EDITED,
     restore: { content: EDITED, browserAnnotations },
     settings,
@@ -1115,6 +1116,7 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
 
     const result = harness.handle.store.getState().submitQueueEdit({
       queueItemId: "no-such-row",
+      editSessionId: EDIT_SESSION_ID,
       content: EDITED,
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
@@ -2058,6 +2060,7 @@ describe("a refused queue edit retracts this host's blob acks (finding 8)", () =
     // annotation crop is added on the way out).
     const editActionId = harness.handle.store.getState().submitQueueEdit({
       queueItemId: QUEUE_ITEM_ID,
+      editSessionId: EDIT_SESSION_ID,
       content: WIRE_ONLY_IMAGE,
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
@@ -2091,7 +2094,11 @@ const OWNER_SLOT: WorktreeStagingKey = {
   ownerKind: "chat",
   ownerId: CHAT_ID,
 };
-const EDIT_SLOT = queueEditStagingKey(HOST_ID, EPIC_ID, CHAT_ID, QUEUE_ITEM_ID);
+const EDIT_SESSION_ID = "edit-session-1";
+const EDIT_SLOT = queueEditStagingKey(HOST_ID, EPIC_ID, CHAT_ID, {
+  queueItemId: QUEUE_ITEM_ID,
+  sessionId: EDIT_SESSION_ID,
+});
 
 function localIntent(...paths: ReadonlyArray<string>): WorktreeIntent {
   return {
@@ -2120,6 +2127,7 @@ function sentQueueEdit(harness: Harness): WorktreeIntent | null {
 function saveEdit(h: Harness, intent: "save" | "steer"): string {
   const id = h.handle.store.getState().submitQueueEdit({
     queueItemId: QUEUE_ITEM_ID,
+    editSessionId: EDIT_SESSION_ID,
     content: EDITED,
     restore: { content: EDITED, browserAnnotations: [] },
     settings: SETTINGS,
@@ -2159,19 +2167,38 @@ describe("a queue edit carries the folders picked while editing", () => {
     { line: "below the gating minor", supported: false },
     { line: "without the probe", supported: null },
   ])(
-    "sends null and leaves the picks in the edit's slot $line",
+    "refuses an edit whose picks change folders $line: nothing is sent, no record is made, the slot keeps the picks",
     ({ supported }) => {
       harness = openWithQueuedRowOnLine(supported);
       stageEditPicks("/repo/a");
 
-      saveEdit(harness, "save");
+      const id = harness.handle.store.getState().submitQueueEdit({
+        queueItemId: QUEUE_ITEM_ID,
+        editSessionId: EDIT_SESSION_ID,
+        content: EDITED,
+        restore: { content: EDITED, browserAnnotations: [] },
+        settings: SETTINGS,
+        intent: "save",
+        steerRestartConfirmed: false,
+        steerInitiatorId: "tile-1",
+      });
 
-      expect(sentQueueEdit(harness)).toBeNull();
+      expect(id).toBeNull();
+      expect(harness.sent).toEqual([]);
+      expect(harness.handle.store.getState().queueEditRecords).toEqual({});
       expect(readStagedWorktreeIntent(EDIT_SLOT)).toEqual(
         localIntent("/repo/a"),
       );
     },
   );
+
+  it("still saves a text-only edit below the gating minor, carrying no folders", () => {
+    harness = openWithQueuedRowOnLine(false);
+
+    saveEdit(harness, "save");
+
+    expect(sentQueueEdit(harness)).toBeNull();
+  });
 
   it("refuses to submit while the edit's slot is suspended", () => {
     harness = openWithQueuedRowOnLine(true);
@@ -2193,6 +2220,7 @@ describe("a queue edit carries the folders picked while editing", () => {
 
     const id = harness.handle.store.getState().submitQueueEdit({
       queueItemId: QUEUE_ITEM_ID,
+      editSessionId: EDIT_SESSION_ID,
       content: EDITED,
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
@@ -2230,7 +2258,9 @@ describe("a queue edit carries the folders picked while editing", () => {
   });
 
   describe("when the host refuses the edit", () => {
-    function refuseEditWithPick(): { readonly editActionId: string } {
+    const REMOVED_WORKTREE = "/wt/gone";
+
+    function refuseEditWithPicks(): { readonly editActionId: string } {
       const open = openWithQueuedRowOnLine(true);
       harness = open;
       useWorktreeIntentStagingStore
@@ -2246,35 +2276,99 @@ describe("a queue edit carries the folders picked while editing", () => {
       return { editActionId };
     }
 
-    it("hands the folders back with the text, merged onto an earlier pick on another folder", () => {
-      refuseEditWithPick();
+    function ownerSlot(): WorktreeIntent | null {
+      return readStagedWorktreeIntent(OWNER_SLOT);
+    }
 
-      expect(
-        harness?.handle.store.getState().failedSendRestoration?.content,
-      ).toEqual(EDITED);
-      expect(readStagedWorktreeIntent(OWNER_SLOT)).toEqual(
-        localIntent("/repo/earlier", "/repo/a"),
-      );
+    it("holds the folders on the restoration and leaves the chat's own slot alone until the composer takes the text", () => {
+      refuseEditWithPicks();
+
+      const restoration =
+        harness?.handle.store.getState().failedSendRestoration ?? null;
+      expect(restoration?.content).toEqual(EDITED);
+      expect(restoration?.worktreeIntent).toEqual(localIntent("/repo/a"));
+      expect(ownerSlot()).toEqual(localIntent("/repo/earlier"));
     });
 
-    it("puts the chat's slot back to the earlier pick when the composer does not take the text", () => {
-      const { editActionId } = refuseEditWithPick();
-
-      harness?.handle.store.getState().stateFailedSendRestoration(editActionId);
-
-      expect(readStagedWorktreeIntent(OWNER_SLOT)).toEqual(
-        localIntent("/repo/earlier"),
-      );
-    });
-
-    it("keeps the folders staged when the composer takes the text", () => {
-      const { editActionId } = refuseEditWithPick();
+    it("stages the folders on the chat's slot, merged over an earlier pick on another folder, when the composer takes the text", () => {
+      const { editActionId } = refuseEditWithPicks();
 
       harness?.handle.store.getState().ackFailedSendRestoration(editActionId);
 
-      expect(readStagedWorktreeIntent(OWNER_SLOT)).toEqual(
-        localIntent("/repo/earlier", "/repo/a"),
+      expect(ownerSlot()).toEqual(localIntent("/repo/earlier", "/repo/a"));
+    });
+
+    it("never writes the chat's slot, and names the folder for a re-pick, when the draft is displaced", () => {
+      const { editActionId } = refuseEditWithPicks();
+
+      harness?.handle.store.getState().stateFailedSendRestoration(editActionId);
+
+      expect(ownerSlot()).toEqual(localIntent("/repo/earlier"));
+      expect(
+        harness?.handle.store.getState().lastCopyPrompts[editActionId]?.reason,
+      ).toContain(
+        "It was staged to run in the folder checkout /repo/a - re-pick that before resending",
       );
+    });
+
+    it("never writes the chat's slot when the session is disposed before the composer takes the text", () => {
+      refuseEditWithPicks();
+
+      harness?.handle.dispose();
+
+      expect(ownerSlot()).toEqual(localIntent("/repo/earlier"));
+    });
+
+    it("names the folder, and writes no slot, when the restoration slot is already held by another draft", () => {
+      const open = openWithQueuedRowOnLine(true);
+      harness = open;
+      rejectSendIntoRestorationSlot(open);
+      stageEditPicks("/repo/a");
+      const editActionId = saveEdit(open, "save");
+
+      ack(open, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+      });
+
+      expect(
+        open.handle.store.getState().lastCopyPrompts[editActionId]?.reason,
+      ).toContain("It was staged to run in the folder checkout /repo/a");
+      expect(ownerSlot()).toBeNull();
+    });
+
+    it("drops a worktree removed from the host before the composer took the text", () => {
+      const open = openWithQueuedRowOnLine(true);
+      harness = open;
+      useWorktreeIntentStagingStore.getState().setIntent(EDIT_SLOT, {
+        entries: [
+          ...localIntent("/repo/a").entries,
+          {
+            kind: "import",
+            workspacePath: "/repo/b",
+            repoIdentifier: null,
+            isPrimary: false,
+            worktreePath: REMOVED_WORKTREE,
+          },
+        ],
+      });
+      const editActionId = saveEdit(open, "save");
+      ack(open, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+      });
+      useWorktreeIntentStagingStore
+        .getState()
+        .purgeRemovedWorktreeIntents(HOST_ID, {
+          worktreePaths: new Set([REMOVED_WORKTREE]),
+          branches: [],
+        });
+
+      open.handle.store.getState().ackFailedSendRestoration(editActionId);
+
+      expect(ownerSlot()).toEqual(localIntent("/repo/a"));
     });
   });
 });

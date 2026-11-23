@@ -294,20 +294,82 @@ export function forkChatStagingKeysForEpic(
  * send, and cancelling the edit must leave whatever the chat had staged before
  * it untouched. Saving the edit takes it; ending the edit any other way clears
  * it. Transient like the launcher slots: an edit does not survive a reload.
+ *
+ * One slot per editing SESSION, not per row: two panes editing the same row
+ * each pick for their own edit, and one pane ending its edit leaves the other's
+ * picks alone. Once {@link closeQueueEditStaging} has ended the session, the
+ * slot takes no more writes.
  */
 export function queueEditStagingKey(
   hostId: string | null,
   epicId: string,
   chatId: string,
-  queueItemId: string,
+  edit: { readonly queueItemId: string; readonly sessionId: string },
 ): WorktreeStagingKey {
   return {
     surface: "owner",
     hostId,
     epicId,
     ownerKind: "chat",
-    ownerId: `${QUEUE_EDIT_OWNER_PREFIX}${chatId}:${queueItemId}`,
+    ownerId: `${QUEUE_EDIT_OWNER_PREFIX}${chatId}:${edit.queueItemId}:${edit.sessionId}`,
   };
+}
+
+// The queue-edit slots whose edit session has ended, by serialized key. A
+// session id is never reused, so an entry is never wrong; each is one short
+// string per edit made while the app is open. Session state, like the slots.
+const endedQueueEditSlotIds = new Set<string>();
+
+/**
+ * Take writes for an edit session again. Only React's development re-run of an
+ * effect ends a session and then resumes it; a real edit is opened once.
+ */
+export function openQueueEditStaging(key: WorktreeStagingKey): void {
+  endedQueueEditSlotIds.delete(worktreeStagingKeyString(key));
+}
+
+/**
+ * End one edit session: its picks are dropped, and any pick that arrives for
+ * it afterwards is refused. A pick can trail the edit - an autosave flushed
+ * when the closing picker unmounts - and would otherwise stage folders for an
+ * edit nobody is making any more.
+ */
+export function closeQueueEditStaging(key: WorktreeStagingKey): void {
+  const id = worktreeStagingKeyString(key);
+  endedQueueEditSlotIds.add(id);
+  useWorktreeIntentStagingStore.setState((state) => ({
+    intentByKey: withoutKey(state.intentByKey, id),
+    suspendedWorkspacePathsByKey: withoutKey(
+      state.suspendedWorkspacePathsByKey,
+      id,
+    ),
+    revisionByKey: withoutKey(state.revisionByKey, id),
+    consumedForDispatchByKey: withoutKey(state.consumedForDispatchByKey, id),
+    sweptRefsByKey: withoutKey(state.sweptRefsByKey, id),
+  }));
+}
+
+function withoutKey<T>(
+  record: Readonly<Record<string, T | undefined>>,
+  id: string,
+): Readonly<Record<string, T | undefined>> {
+  if (!Object.hasOwn(record, id)) return record;
+  const next = { ...record };
+  delete next[id];
+  return next;
+}
+
+/**
+ * A pick for a queued message's edit session that has ended. Suspended paths
+ * are not picks and stay writable: the picker records them for its key before
+ * the session's own effect runs.
+ */
+function refusesQueueEditWrite(key: WorktreeStagingKey): boolean {
+  return (
+    key.surface === "owner" &&
+    key.ownerId.startsWith(QUEUE_EDIT_OWNER_PREFIX) &&
+    endedQueueEditSlotIds.has(worktreeStagingKeyString(key))
+  );
 }
 
 export function pendingForkTerminalAgentStagingKey(
@@ -987,6 +1049,7 @@ export const useWorktreeIntentStagingStore =
         sessionSweptRefsByHost: {},
         stageEntry: (key, entry) =>
           set((state) => {
+            if (refusesQueueEditWrite(key)) return state;
             const id = worktreeStagingKeyString(key);
             const existing = state.intentByKey[id] ?? null;
             return {
@@ -1009,6 +1072,7 @@ export const useWorktreeIntentStagingStore =
           }),
         stageIntent: (key, intent) =>
           set((state) => {
+            if (refusesQueueEditWrite(key)) return state;
             const id = worktreeStagingKeyString(key);
             const existing = state.intentByKey[id] ?? null;
             const merged = intent.entries.reduce<WorktreeIntent>(
@@ -1051,6 +1115,7 @@ export const useWorktreeIntentStagingStore =
           }),
         restoreIntentForDispatch: (key, intent, clientActionId) =>
           set((state) => {
+            if (refusesQueueEditWrite(key)) return state;
             const id = worktreeStagingKeyString(key);
             // Only this dispatch's own records go with the write. Another
             // dispatch's mark - and, critically, its accumulated swept refs -
@@ -1071,6 +1136,7 @@ export const useWorktreeIntentStagingStore =
           }),
         setIntent: (key, intent) =>
           set((state) => {
+            if (refusesQueueEditWrite(key)) return state;
             const id = worktreeStagingKeyString(key);
             const next = { ...state.intentByKey };
             if (intent === null || intent.entries.length === 0) {
@@ -1186,6 +1252,7 @@ export const useWorktreeIntentStagingStore =
           }),
         stageScripts: (key, workspacePath, scripts) =>
           set((state) => {
+            if (refusesQueueEditWrite(key)) return state;
             const id = worktreeStagingKeyString(key);
             const existing = state.intentByKey[id] ?? null;
             const next = setWorktreeIntentEntryScripts(
@@ -1206,6 +1273,7 @@ export const useWorktreeIntentStagingStore =
           }),
         stageBranchName: (key, workspacePath, name) =>
           set((state) => {
+            if (refusesQueueEditWrite(key)) return state;
             const id = worktreeStagingKeyString(key);
             const existing = state.intentByKey[id] ?? null;
             const next = setWorktreeIntentEntryBranchName(
@@ -1290,6 +1358,7 @@ export const useWorktreeIntentStagingStore =
           }),
         rollBackDispatch: (key, restore) =>
           set((state) => {
+            if (refusesQueueEditWrite(key)) return state;
             const id = worktreeStagingKeyString(key);
             const intentByKey = { ...state.intentByKey };
             if (
@@ -1446,7 +1515,8 @@ export const useWorktreeIntentStagingStore =
                 }
               : state;
           }),
-        resetForTests: () =>
+        resetForTests: () => {
+          endedQueueEditSlotIds.clear();
           set({
             intentByKey: {},
             suspendedWorkspacePathsByKey: {},
@@ -1454,7 +1524,8 @@ export const useWorktreeIntentStagingStore =
             consumedForDispatchByKey: {},
             sweptRefsByKey: {},
             sessionSweptRefsByHost: {},
-          }),
+          });
+        },
       }),
       {
         ...basePersistOptions(worktreeIntentStagingKey(null)),

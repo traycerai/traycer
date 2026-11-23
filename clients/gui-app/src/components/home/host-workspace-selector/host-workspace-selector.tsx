@@ -137,6 +137,7 @@ import { effectiveMissingWorktreePaths } from "@/lib/composer/workspace-composer
 import { WorkspaceFolderSummaryControl } from "./workspace-folder-summary-control";
 import type { WorkspaceRunItem, WorkspaceRunMode } from "./workspace-run-item";
 import {
+  QUEUE_EDIT_FOLDERS_FIXED_NOTE,
   QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE,
   locationSelectionChanges,
   workspaceRunBranchLabel,
@@ -236,6 +237,7 @@ type BoundOwnerSurface = {
    */
   readonly queueEdit: {
     readonly queueItemId: string;
+    readonly editSessionId: string;
     readonly readOnly: boolean;
   } | null;
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
@@ -2239,9 +2241,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     (s) => s.releaseIntentForDispatch,
   );
   const queueEditItemId = surface.queueEdit?.queueItemId ?? null;
+  const queueEditSessionId = surface.queueEdit?.editSessionId ?? null;
   const stagedKey = useMemo<WorktreeStagingKey>(
     () =>
-      queueEditItemId === null
+      queueEditItemId === null || queueEditSessionId === null
         ? {
             surface: "owner",
             hostId: ownerHostId,
@@ -2249,13 +2252,18 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             ownerKind,
             ownerId: surface.ownerId,
           }
-        : queueEditStagingKey(
-            ownerHostId,
-            surface.epicId,
-            surface.ownerId,
-            queueEditItemId,
-          ),
-    [ownerHostId, surface.epicId, ownerKind, surface.ownerId, queueEditItemId],
+        : queueEditStagingKey(ownerHostId, surface.epicId, surface.ownerId, {
+            queueItemId: queueEditItemId,
+            sessionId: queueEditSessionId,
+          }),
+    [
+      ownerHostId,
+      surface.epicId,
+      ownerKind,
+      surface.ownerId,
+      queueEditItemId,
+      queueEditSessionId,
+    ],
   );
   const stagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(stagedKey)],
@@ -2794,7 +2802,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   useEffect(() => {
     const pending = pendingDefaultPathsRef.current;
-    if (pending.size === 0) return;
+    // A new folder's default is the chat's, so it waits out a queued message's
+    // edit rather than landing in that edit's slot.
+    if (pending.size === 0 || queueEditItemId !== null) return;
     for (const path of [...pending]) {
       const summary = resolvedSummariesByPath.get(path) ?? null;
       if (summary === null) continue; // unresolved or not loaded yet - wait
@@ -2832,6 +2842,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     defaultBranchByPath,
     stageWorktreeIntent,
     stagedKey,
+    queueEditItemId,
   ]);
 
   // `fork-on-switch` mode (and therefore this handler) is only offered for a
@@ -2850,12 +2861,19 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     surface.kind,
     surface.hasActiveTurn,
   );
-  const activeRunLocksBinding =
-    surface.kind === "chat" && surface.isOwnerActive;
-  const activeRunLocksBindingRef = useRef(activeRunLocksBinding);
+  // While a queued message is edited the picker changes only where, and on
+  // which branch, the folders already there run. Adding, removing or locating
+  // a folder writes the chat's binding at once, before Save, and Cancel could
+  // not take that back.
+  const bindingLocked =
+    (surface.kind === "chat" && surface.isOwnerActive) ||
+    queueEditItemId !== null;
+  const bindingLockNotice =
+    queueEditItemId === null ? activeRunNotice : QUEUE_EDIT_FOLDERS_FIXED_NOTE;
+  const bindingLockedRef = useRef(bindingLocked);
   useLayoutEffect(() => {
-    activeRunLocksBindingRef.current = activeRunLocksBinding;
-  }, [activeRunLocksBinding]);
+    bindingLockedRef.current = bindingLocked;
+  }, [bindingLocked]);
 
   const activatePreparedFoldersForOwner = useCallback(
     async (
@@ -2865,7 +2883,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       const activatedPaths: string[] = [];
       const addedPaths: string[] = [];
       for (const folder of folders) {
-        if (surface.kind === "chat" && activeRunLocksBindingRef.current) break;
+        if (surface.kind === "chat" && bindingLockedRef.current) break;
         if (activePaths.has(folder.workspacePath)) {
           activatedPaths.push(folder.workspacePath);
           continue;
@@ -2945,12 +2963,17 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             source: "direct_ui",
           });
         }
+        if (queueEditItemId !== null) {
+          // The edited message's own choice: no binding write, and nothing
+          // remembered for the folder, which is the chat's, not this message's.
+          stageWorktreeIntent(stagedKey, { entries: [intent] });
+          return;
+        }
         // Persist the per-folder choice immediately (not at send) so it survives
         // a reload and seeds future adds of this folder.
         setFolderIntent(intent, Date.now());
         if (
           surface.kind === "terminal-agent" ||
-          queueEditItemId !== null ||
           surface.isOwnerActive ||
           surface.failedWorktreePaths.includes(ws.workspacePath)
         ) {
@@ -3038,9 +3061,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       const entry = findBindingEntry(surface.binding, ws.workspacePath);
       const pendingNewBranch =
         pendingBranchByPath.get(ws.workspacePath) ?? null;
-      const { mode: currentMode, label: modeLabel } = computeInEpicFolderMode({
-        boundMode: entry?.mode ?? null,
-        boundBranch: entry?.branch ?? null,
+      const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
+      const { mode: currentMode, label: modeLabel } = inEpicRowMode({
+        queueEditing: queueEditItemId !== null,
+        visibleEntry,
+        entry,
         pendingNewBranch,
       });
       const removePending = pendingRemovePaths.has(ws.workspacePath);
@@ -3050,7 +3075,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       const worktreeFailed =
         stagedEntry === null &&
         surface.failedWorktreePaths.includes(ws.workspacePath);
-      const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
       const currentIntent =
         visibleEntry ??
         bindingEntryToFolderIntent(entry, ws.repoIdentifier, isPrimary);
@@ -3096,6 +3120,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       metadataPending,
       pendingBranchByPath,
       pendingRemovePaths,
+      queueEditItemId,
       stagedEntryByPath,
       summariesByPath,
       surface.binding,
@@ -3156,12 +3181,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               // No last-folder guard: removing the only entry is a legitimate
               // rebind to folderless (the host writes the explicit folderless
               // binding on the last `removeEntry`).
-              removeDisabled: activeRunLocksBinding || removePending,
+              removeDisabled: bindingLocked || removePending,
               removeDisabledReason: removeDisabledReasonFor(
-                activeRunLocksBinding,
-                activeRunNotice,
+                bindingLocked,
+                bindingLockNotice,
               ),
-              onLocate: activeRunLocksBinding
+              onLocate: bindingLocked
                 ? null
                 : () => {
                     // Locate REPLACes only after ≥1 DISTINCT add succeeds — never
@@ -3226,7 +3251,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                     })();
                   },
               onRemove: () => {
-                if (activeRunLocksBinding || removePending) return;
+                if (bindingLocked || removePending) return;
                 if (surface.kind === "terminal-agent") {
                   stageFolderRemoval(ws.workspacePath);
                   return;
@@ -3272,10 +3297,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             hasStagedIntent: stagedEntry !== null,
             worktreeFailed,
             // No last-folder guard - see the absent-row branch above.
-            removeDisabled: activeRunLocksBinding || removePending,
+            removeDisabled: bindingLocked || removePending,
             removeDisabledReason: removeDisabledReasonFor(
-              activeRunLocksBinding,
-              activeRunNotice,
+              bindingLocked,
+              bindingLockNotice,
             ),
             removePending,
             onEmit: emit,
@@ -3297,7 +3322,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             },
             onLocate: null,
             onRemove: () => {
-              if (removePending) return;
+              if (bindingLocked || removePending) return;
               if (surface.kind === "terminal-agent") {
                 stageFolderRemoval(ws.workspacePath);
                 return;
@@ -3307,8 +3332,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           };
         }),
     [
-      activeRunNotice,
-      activeRunLocksBinding,
+      bindingLockNotice,
+      bindingLocked,
       addFolderMutation,
       deriveInEpicRowState,
       folderActions,
@@ -3337,9 +3362,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     activePaths: bindingWorkspacePaths,
     activatePreparedFolders: activatePreparedFoldersForOwner,
     disabled:
-      surface.kind !== "chat" ||
-      activeRunLocksBinding ||
-      !surface.bindingResolved,
+      surface.kind !== "chat" || bindingLocked || !surface.bindingResolved,
     surface: stagedKey.surface,
   });
   const {
@@ -3358,9 +3381,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             item.removePending ||
             recentWorkspacesMovingPath === item.displayPath,
           onRemove: () => {
-            if (activeRunLocksBindingRef.current) return;
+            if (bindingLockedRef.current) return;
             void moveBoundWorkspaceToRecent(item.displayPath).then((moved) => {
-              if (moved && !activeRunLocksBindingRef.current) {
+              if (moved && !bindingLockedRef.current) {
                 removeFromBinding();
               }
             });
@@ -3511,10 +3534,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               addFolderMutation.isPending ||
               worktreeCreatePending
             }
-            addFolderDisabled={activeRunLocksBinding}
-            addFolderDisabledReason={
-              activeRunLocksBinding ? activeRunNotice : null
-            }
+            addFolderDisabled={bindingLocked}
+            addFolderDisabledReason={bindingLocked ? bindingLockNotice : null}
             onAddFolder={addFoldersToOwnerBinding}
             onUpdate={
               surface.kind === "terminal-agent"
@@ -3654,6 +3675,31 @@ function deriveHomeRowMode(
     return isGitRepo ? "worktree" : "local";
   }
   return capturedEntry.kind === "local" ? "local" : "worktree";
+}
+
+/**
+ * A bound row's location. While a queued message is edited the row shows THAT
+ * message's folder - its own choice or a pick of the edit - over the binding.
+ */
+function inEpicRowMode(input: {
+  readonly queueEditing: boolean;
+  readonly visibleEntry: WorktreeFolderIntent | null;
+  readonly entry: WorktreeBindingEntry | null;
+  readonly pendingNewBranch: string | null;
+}): { readonly mode: "local" | "worktree"; readonly label: string } {
+  const { visibleEntry, entry } = input;
+  if (!input.queueEditing || visibleEntry === null) {
+    return computeInEpicFolderMode({
+      boundMode: entry?.mode ?? null,
+      boundBranch: entry?.branch ?? null,
+      pendingNewBranch: input.pendingNewBranch,
+    });
+  }
+  if (visibleEntry.kind === "local") return { mode: "local", label: "Local" };
+  if (visibleEntry.kind === "worktree") {
+    return { mode: "worktree", label: visibleEntry.branch.name };
+  }
+  return { mode: "worktree", label: "Worktree" };
 }
 
 function findBindingEntry(

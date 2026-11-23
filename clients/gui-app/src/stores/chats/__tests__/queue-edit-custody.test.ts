@@ -124,6 +124,30 @@ function worktreeIntentFor(path: string): WorktreeIntent {
   };
 }
 
+function newBranchIntent(
+  path: string,
+  policy: { readonly collision?: "fail" },
+): WorktreeIntent {
+  return {
+    entries: [
+      {
+        kind: "worktree",
+        workspacePath: path,
+        repoIdentifier: null,
+        isPrimary: false,
+        branch: {
+          type: "new",
+          name: "feature",
+          source: "main",
+          carryUncommittedChanges: false,
+          ...policy,
+        },
+        scripts: null,
+      },
+    ],
+  };
+}
+
 const ORIGINAL = textDoc("original text");
 const EDITED = textDoc("edited text");
 
@@ -142,6 +166,7 @@ function record(
     intent,
     restore: RESTORE,
     wireContent: EDITED,
+    changesText: true,
     worktreeIntent: null,
     settings: SETTINGS,
     accountContext: PERSONAL,
@@ -1535,38 +1560,96 @@ describe("a queue edit that carries folders", () => {
 
   describe("when the host never answered", () => {
     const folders = localIntent("/a");
-    const unanswered = record(
-      { worktreeIntent: folders, followUpIsNoOp: true },
-      "save",
-    );
 
-    it("is handed back, record retained, while the row shows the text but not the folders", () => {
+    it("counts a text-changing edit applied once the row shows the text, whatever folders it shows", () => {
       const fold = accountForQueueEdits({
-        records: recordsOf(unanswered),
-        sweptActionIds: BOTH_SWEPT,
-        evidence: evidence({ items: [rowHolding(EDITED, {})], messages: [] }),
-      });
-      expect(fold.settlements).toEqual([
-        expect.objectContaining({
-          kind: "content_returned",
-          cause: "unconfirmed",
-          worktreeIntent: folders,
-        }),
-      ]);
-      expect(fold.records[EDIT_ACTION_ID]?.edit).toBe("unconfirmed");
-    });
-
-    it("is applied, with nothing settled, when the row shows the text and the folders", () => {
-      const fold = accountForQueueEdits({
-        records: recordsOf(unanswered),
+        records: recordsOf(
+          record({ worktreeIntent: folders, followUpIsNoOp: true }, "save"),
+        ),
         sweptActionIds: BOTH_SWEPT,
         evidence: evidence({
-          items: [rowHolding(EDITED, { worktreeIntent: folders })],
+          items: [rowHolding(EDITED, { worktreeIntent: null })],
           messages: [],
         }),
       });
       expect(fold.settlements).toEqual([]);
       expect(fold.records).toEqual({});
     });
+
+    describe("a folders-only edit", () => {
+      const foldersOnly = record(
+        {
+          changesText: false,
+          wireContent: ORIGINAL,
+          worktreeIntent: folders,
+          followUpIsNoOp: true,
+        },
+        "save",
+      );
+      const unconfirmed = [
+        { kind: "workspace_unconfirmed", clientActionId: EDIT_ACTION_ID },
+      ];
+
+      it("is retired with a workspace_unconfirmed settlement, and no text back, when the row is gone and its message holds the same text", () => {
+        const fold = accountForQueueEdits({
+          records: recordsOf(foldersOnly),
+          sweptActionIds: BOTH_SWEPT,
+          evidence: evidence({
+            items: [],
+            messages: [userMessage(MESSAGE_ID, ORIGINAL)],
+          }),
+        });
+        expect(fold.settlements).toEqual(unconfirmed);
+        expect(fold.records).toEqual({});
+      });
+
+      it("is retired the same way when the row is still queued without the folders", () => {
+        const fold = accountForQueueEdits({
+          records: recordsOf(foldersOnly),
+          sweptActionIds: BOTH_SWEPT,
+          evidence: evidence({ items: [row({})], messages: [] }),
+        });
+        expect(fold.settlements).toEqual(unconfirmed);
+        expect(fold.records).toEqual({});
+      });
+
+      it("is applied, with nothing settled, when the row holds the folders", () => {
+        const fold = accountForQueueEdits({
+          records: recordsOf(foldersOnly),
+          sweptActionIds: BOTH_SWEPT,
+          evidence: evidence({
+            items: [row({ worktreeIntent: folders })],
+            messages: [],
+          }),
+        });
+        expect(fold.settlements).toEqual([]);
+        expect(fold.records).toEqual({});
+      });
+
+      it("is applied when the row holds the same new branch without the collision policy the edit sent", () => {
+        const sent = newBranchIntent("/a", { collision: "fail" });
+        const fold = accountForQueueEdits({
+          records: recordsOf({ ...foldersOnly, worktreeIntent: sent }),
+          sweptActionIds: BOTH_SWEPT,
+          evidence: evidence({
+            items: [row({ worktreeIntent: newBranchIntent("/a", {}) })],
+            messages: [],
+          }),
+        });
+        expect(fold.settlements).toEqual([]);
+        expect(fold.records).toEqual({});
+      });
+    });
+  });
+});
+
+describe("queueEditWorktreeIntent against a stored implicit collision policy", () => {
+  it("reads a new branch sent with collision fail as the row's own when the row lacks it", () => {
+    expect(
+      queueEditWorktreeIntent(
+        newBranchIntent("/a", { collision: "fail" }),
+        newBranchIntent("/a", {}),
+      ),
+    ).toBeNull();
   });
 });

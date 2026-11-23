@@ -92,6 +92,10 @@ export const FAILED_WORKTREE_LABEL = "Worktree · failed";
 export const QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE =
   "Update this host to change a queued message's folders.";
 
+/** Why folders cannot be added or removed while a queued message is edited. */
+export const QUEUE_EDIT_FOLDERS_FIXED_NOTE =
+  "Finish the edit to add or remove folders";
+
 /**
  * Copy for a staged (not-yet-committed) folder change, or for an owed worktree
  * that failed. `null` when the row is showing the committed binding.

@@ -241,6 +241,7 @@ function surfacesProps(
       editingItem: null,
       editingItemId: null,
       editChangesWorkspace: false,
+      editFoldersBlocked: false,
       value: { status: "idle", items: [] },
       resumeRequested: false,
       keepPausedRequested: false,

@@ -5,7 +5,10 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import {
+  worktreeFolderIntentSchema,
+  type WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import type {
   ChatSendRestore,
@@ -84,6 +87,13 @@ export interface QueueEditRecord {
   readonly restore: ChatSendRestore;
   /** The document the `queueEdit` frame carried - what the host would hold. */
   readonly wireContent: JsonContent;
+  /**
+   * Whether that document differs from the row's when the edit left. The host
+   * commits an edit's text and folders in one step, so a changed text that is
+   * seen on the row says the folders landed too; an edit that left the text as
+   * it was can only be seen by its folders.
+   */
+  readonly changesText: boolean;
   /**
    * The folders the `queueEdit` frame carried, picked while the row was being
    * edited: only those the edit changes, `null` when it left the workspace as
@@ -218,6 +228,16 @@ export type QueueEditSettlement =
       readonly intent: QueueEditIntent;
       /** See {@link QueueEditRecord.requestedChanges}. */
       readonly requestedChanges: ReadonlyArray<string>;
+    }
+  /**
+   * An edit that changed only a queued message's folders, unanswered, and the
+   * host does not show them on the row. Nothing can settle it: the text it
+   * would hand back is the row's own and would invite a duplicate send. The
+   * record is retired and the person is told once.
+   */
+  | {
+      readonly kind: "workspace_unconfirmed";
+      readonly clientActionId: string;
     };
 
 export interface QueueEditFold {
@@ -608,6 +628,12 @@ export function queueEditWorktreeIntent(
   return entries.length === 0 ? null : { entries };
 }
 
+/**
+ * Whether `held` already names `entry`'s choice for its folder, compared as
+ * the wire carries both: each side parsed through the live schema first, which
+ * strips what it does not keep (a new branch's implicit `collision: "fail"`).
+ * A side the schema refuses matches nothing.
+ */
 function holdsFolderChoice(
   held: WorktreeIntent | null,
   entry: WorktreeIntent["entries"][number],
@@ -615,7 +641,14 @@ function holdsFolderChoice(
   const own = held?.entries.find(
     (candidate) => candidate.workspacePath === entry.workspacePath,
   );
-  return own !== undefined && canonicalJson(own) === canonicalJson(entry);
+  if (own === undefined) return false;
+  const ownOnWire = worktreeFolderIntentSchema.safeParse(own);
+  const entryOnWire = worktreeFolderIntentSchema.safeParse(entry);
+  return (
+    ownOnWire.success &&
+    entryOnWire.success &&
+    canonicalJson(ownOnWire.data) === canonicalJson(entryOnWire.data)
+  );
 }
 
 /** What the host can be seen to hold, at the moment a record is accounted for. */
@@ -635,13 +668,20 @@ export interface QueueEditEvidence {
   ) => boolean;
 }
 
-type QueueEditVerdict = "applied" | "not_applied" | "unknown";
+/**
+ * `unconfirmable`: a folders-only edit the host does not show on a still-queued
+ * row - see the `workspace_unconfirmed` settlement.
+ */
+type QueueEditVerdict = "applied" | "not_applied" | "unknown" | "unconfirmable";
 
 /**
- * Whether the host saved the edited text, as far as it can be SEEN.
+ * Whether the host saved the edit, as far as it can be SEEN.
  *
- * - The edited document on the row, with the folders the edit carried, or on
- *   the message the row became: applied.
+ * An edit that changed the text is settled by the text alone, folders and all:
+ * the host commits both in one step. An edit that changed only the folders is
+ * settled by {@link folderEditVerdict}.
+ *
+ * - The edited document on the row, or on the message the row became: applied.
  * - The message the row became, holding something else: not applied. The host
  *   refuses an edit to a prompt that has started, so nothing can change it now.
  *   Only when BOTH documents can be compared: one carrying an image with no
@@ -660,14 +700,12 @@ function queueEditVerdict(
   row: OpenChatQueuedItem | null,
   evidence: QueueEditEvidence,
 ): QueueEditVerdict {
+  if (!record.changesText && record.worktreeIntent !== null) {
+    return folderEditVerdict(record.worktreeIntent, row);
+  }
   if (row !== null) {
-    // The folders too: an edit that changes only the workspace leaves the
-    // text as it was, so the text alone would read every such edit as saved.
     return row.kind === "prompt" &&
-      queueEditContentMatches(record.wireContent, row.message.content) &&
-      (record.worktreeIntent?.entries ?? []).every((entry) =>
-        holdsFolderChoice(row.worktreeIntent ?? null, entry),
-      )
+      queueEditContentMatches(record.wireContent, row.message.content)
       ? "applied"
       : "unknown";
   }
@@ -691,6 +729,25 @@ function queueEditVerdict(
       : "unknown";
   }
   return "unknown";
+}
+
+/**
+ * A folders-only edit: applied when the row is still queued and holds every
+ * folder the edit sent. Otherwise nothing can say: the row's text is the same
+ * either way, and once it has left the queue the message it became carries no
+ * folders to compare.
+ */
+function folderEditVerdict(
+  sent: WorktreeIntent,
+  row: OpenChatQueuedItem | null,
+): QueueEditVerdict {
+  return row !== null &&
+    row.kind === "prompt" &&
+    sent.entries.every((entry) =>
+      holdsFolderChoice(row.worktreeIntent ?? null, entry),
+    )
+    ? "applied"
+    : "unconfirmable";
 }
 
 /**
@@ -746,6 +803,14 @@ function accountForUnconfirmedRecord(
     record.followUp === "accepted" ||
     (record.followUp === "unconfirmed" &&
       followUpShownApplied(record, row, evidence));
+  if (verdict === "unconfirmable") {
+    return {
+      record: null,
+      settlements: [
+        { kind: "workspace_unconfirmed", clientActionId: record.editActionId },
+      ],
+    };
+  }
   if (verdict === "applied" && record.contentReturned) {
     return {
       record: null,

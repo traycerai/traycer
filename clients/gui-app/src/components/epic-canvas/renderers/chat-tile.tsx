@@ -2523,10 +2523,43 @@ function useChatTileSessionViewModel(
       stagedChatWorktreeIntent.entries.map((entry) => entry.workspacePath),
     );
   }, [stagedChatWorktreeIntent]);
-  const effectiveMissingPaths = effectiveMissingWorktreePaths(
+  // Only a prompt item can be loaded into the composer for editing, so narrow
+  // here rather than at each consumer: this feeds the composer's settings seed
+  // and its remount key, neither of which a content-free managed-command item
+  // could supply.
+  const editingQueueItem =
+    projectedQueue.items.find(
+      (item): item is OpenChatQueuedPromptItem =>
+        item.kind === "prompt" &&
+        item.queueItemId === uiState.editingQueueItemId,
+    ) ?? null;
+  const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
+  const queueEditWorkspace = useQueueEditWorkspace({
+    hostId: viewModelHostId,
+    epicId: currentEpicId,
+    chatId: node.id,
+    edit:
+      activeEditingQueueItemId === null || uiState.queueEditSessionId === null
+        ? null
+        : {
+            queueItemId: activeEditingQueueItemId,
+            sessionId: uiState.queueEditSessionId,
+          },
+    rowWorktreeIntent: editingQueueItem?.worktreeIntent ?? null,
+    seeded: seededChatWorktreeIntent,
+    carriesWorktreeIntent: state.queuedWorktreeIntentProtocolSupported,
+    missingWorktreePaths: state.missingWorktreePaths,
+  });
+  // While a queued message is edited, Save is gated on THAT message's folders,
+  // the ones the picker shows, not on what the chat's next send would use.
+  const chatMissingPaths = effectiveMissingWorktreePaths(
     state.missingWorktreePaths,
     stagedChatWorkspacePaths,
   );
+  const effectiveMissingPaths =
+    queueEditWorkspace === null
+      ? chatMissingPaths
+      : queueEditWorkspace.missingWorktreePaths;
   const refreshMissingWorktreePaths = state.refreshMissingWorktreePaths;
   const clearMissingPathsAfterBindingCommit = useCallback(
     (changedWorkspacePaths: ReadonlyArray<string>): void => {
@@ -2760,27 +2793,6 @@ function useChatTileSessionViewModel(
     },
     renderedDisplayContext,
   );
-  // Only a prompt item can be loaded into the composer for editing, so narrow
-  // here rather than at each consumer: this feeds the composer's settings seed
-  // and its remount key, neither of which a content-free managed-command item
-  // could supply.
-  const editingQueueItem =
-    projectedQueue.items.find(
-      (item): item is OpenChatQueuedPromptItem =>
-        item.kind === "prompt" &&
-        item.queueItemId === uiState.editingQueueItemId,
-    ) ?? null;
-  const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
-  const queueEditWorkspace = useQueueEditWorkspace({
-    hostId: viewModelHostId,
-    epicId: currentEpicId,
-    chatId: node.id,
-    editingQueueItemId: activeEditingQueueItemId,
-    rowWorktreeIntent: editingQueueItem?.worktreeIntent ?? null,
-    seeded: seededChatWorktreeIntent,
-    carriesWorktreeIntent: state.queuedWorktreeIntentProtocolSupported,
-    missingWorktreePaths: state.missingWorktreePaths,
-  });
   const chatSettingsSeed = state.chat?.settings ?? null;
   const importedSourceProvider =
     importedProvenance(state.events)?.sourceProvider ?? null;
@@ -3668,7 +3680,8 @@ function useChatTileSessionViewModel(
       )
         return false;
       if (activeEditingQueueItemId !== null) {
-        if (!canAct) return false;
+        const editSessionId = uiState.queueEditSessionId;
+        if (!canAct || editSessionId === null) return false;
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
         // carries the settings and the host picks safe-point vs interrupt-restart
         // (any drift was already confirmed by the composer's steer dialog).
@@ -3680,6 +3693,7 @@ function useChatTileSessionViewModel(
         // the draft stays where it is.
         const actionId = chatActions.submitQueueEdit({
           queueItemId: activeEditingQueueItemId,
+          editSessionId,
           content: input.content,
           restore: input.restore,
           settings: input.settings,
@@ -3695,7 +3709,7 @@ function useChatTileSessionViewModel(
           steerInitiatorId: node.instanceId,
         });
         if (actionId === null) return false;
-        dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+        dispatchUi({ type: "endQueueEdit" });
         return true;
       }
       if (props.restingSandbox !== undefined)
@@ -3710,6 +3724,7 @@ function useChatTileSessionViewModel(
     },
     [
       activeEditingQueueItemId,
+      uiState.queueEditSessionId,
       props.restingSandbox,
       submitBoundSandboxMessage,
       evictedSend,
@@ -3835,7 +3850,7 @@ function useChatTileSessionViewModel(
       // The composer clears its accepted draft immediately. End that edit
       // now too, so a delayed create cannot clear a subsequent queue edit.
       if (activeEditingQueueItemId !== null) {
-        dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+        dispatchUi({ type: "endQueueEdit" });
       }
       return true;
     },
@@ -4199,10 +4214,7 @@ function useChatTileSessionViewModel(
               ? failedChatWorktreePaths
               : queueEditWorkspace.failedWorktreePaths,
           queueEdit: queueEditWorkspace?.surface ?? null,
-          missingWorktreePaths:
-            queueEditWorkspace === null
-              ? effectiveMissingPaths
-              : queueEditWorkspace.missingWorktreePaths,
+          missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
           onForkOnHost: forkChatOnHost,
@@ -4497,6 +4509,7 @@ function useChatTileSessionViewModel(
       editingItem: editingQueueItem,
       editingItemId: activeEditingQueueItemId,
       editChangesWorkspace: queueEditWorkspace?.changesWorkspace === true,
+      editFoldersBlocked: queueEditWorkspace?.foldersBlocked === true,
       value: projectedQueue,
       resumeRequested: pendingQueueIntent.resumeRequested,
       keepPausedRequested: pendingQueueIntent.keepPausedRequested,

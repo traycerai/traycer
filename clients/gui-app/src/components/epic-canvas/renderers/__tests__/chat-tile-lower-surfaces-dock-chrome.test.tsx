@@ -409,6 +409,7 @@ function surfacesProps(patch: {
       editingItem: null,
       editingItemId: null,
       editChangesWorkspace: false,
+      editFoldersBlocked: false,
       value: { status: "idle", items: [...patch.queueItems] },
       resumeRequested: false,
       keepPausedRequested: false,

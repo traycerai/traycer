@@ -146,6 +146,7 @@ function props(
       editingItem,
       editingItemId: editingItem?.queueItemId ?? null,
       editChangesWorkspace: false,
+      editFoldersBlocked: false,
       value: { status: "idle", items: [] },
       resumeRequested: false,
       keepPausedRequested: false,

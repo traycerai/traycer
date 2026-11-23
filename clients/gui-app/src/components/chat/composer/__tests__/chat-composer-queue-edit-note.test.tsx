@@ -308,6 +308,7 @@ beforeEach(() => {
 function mountEditingComposer(input: {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly changesWorkspace: boolean;
+  readonly foldersBlocked: boolean;
 }) {
   return render(
     <QueryClientProvider client={queryClient}>
@@ -337,6 +338,7 @@ function mountEditingComposer(input: {
         editingQueueItemId="queue-item-1"
         onCancelQueueEdit={() => undefined}
         queueEditChangesWorkspace={input.changesWorkspace}
+        queueEditFoldersBlocked={input.foldersBlocked}
         hasPendingApprovals={false}
         stopDisabled={false}
         onStopTurn={null}
@@ -358,6 +360,7 @@ describe("the editing pill's steer-off note", () => {
     mountEditingComposer({
       activeTurnStatus: "running",
       changesWorkspace: true,
+      foldersBlocked: false,
     });
 
     expect(screen.getByTestId("queue-edit-draft-note").textContent).toBe(NOTE);
@@ -367,6 +370,7 @@ describe("the editing pill's steer-off note", () => {
     mountEditingComposer({
       activeTurnStatus: "running",
       changesWorkspace: false,
+      foldersBlocked: false,
     });
 
     expect(screen.getByTestId("queue-edit-draft-pill")).toBeDefined();
@@ -374,7 +378,11 @@ describe("the editing pill's steer-off note", () => {
   });
 
   it("is absent when no turn is running, since nothing would steer", () => {
-    mountEditingComposer({ activeTurnStatus: null, changesWorkspace: true });
+    mountEditingComposer({
+      activeTurnStatus: null,
+      changesWorkspace: true,
+      foldersBlocked: false,
+    });
 
     expect(screen.getByTestId("queue-edit-draft-pill")).toBeDefined();
     expect(screen.queryByTestId("queue-edit-draft-note")).toBeNull();
@@ -385,8 +393,21 @@ describe("the editing pill's steer-off note", () => {
     mountEditingComposer({
       activeTurnStatus: "running",
       changesWorkspace: true,
+      foldersBlocked: false,
     });
 
     expect(screen.queryByTestId("queue-edit-draft-note")).toBeNull();
+  });
+
+  it("says the host must be updated, whatever the turn, when the folders cannot be saved", () => {
+    mountEditingComposer({
+      activeTurnStatus: null,
+      changesWorkspace: false,
+      foldersBlocked: true,
+    });
+
+    expect(screen.getByTestId("queue-edit-draft-note").textContent).toBe(
+      "Update this host to change a queued message's folders.",
+    );
   });
 });

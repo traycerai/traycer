@@ -119,6 +119,7 @@ import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { ChatComposerAttachmentsStrip } from "./chat-composer-attachments-strip";
 import { QUEUE_EDIT_STEER_OFF_NOTE } from "./queue-edit-draft-pill";
+import { QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE } from "@/components/home/host-workspace-selector/workspace-run-item";
 import { ChatComposerEditorSlot } from "./chat-composer-editor-slot";
 import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
@@ -299,6 +300,11 @@ interface ChatComposerProps {
    * the editing pill says so.
    */
   readonly queueEditChangesWorkspace?: boolean;
+  /**
+   * The edit changes the folders and the chat's host can no longer take them,
+   * so saving is refused; the pill says why. Cancelling the edit discards them.
+   */
+  readonly queueEditFoldersBlocked?: boolean;
   readonly hasPendingApprovals: boolean;
   readonly stopDisabled: boolean;
   readonly onStopTurn: (() => void) | null;
@@ -546,16 +552,20 @@ function useChatComposerTopBanner(input: {
 }
 
 /**
- * The editing pill's note while a save-and-steer would only save. Said only
- * when a Mod-Enter would otherwise steer, on the conditions
- * `resolveSubmitDeliveryPolicy` steers on.
+ * The editing pill's note. While the picked folders cannot be saved, why; while
+ * a save-and-steer would only save, that - said only when a Mod-Enter would
+ * otherwise steer, on the conditions `resolveSubmitDeliveryPolicy` steers on.
  */
-function queueEditSteerOffNote(input: {
+function queueEditNoteFor(input: {
   readonly queueEditChangesWorkspace: boolean | undefined;
+  readonly queueEditFoldersBlocked: boolean | undefined;
   readonly steerEnabled: boolean;
   readonly steerProtocolSupported: boolean;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
 }): string | null {
+  if (input.queueEditFoldersBlocked === true) {
+    return QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE;
+  }
   return input.queueEditChangesWorkspace === true &&
     input.steerEnabled &&
     input.steerProtocolSupported &&
@@ -590,6 +600,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editingQueueItemId,
     onCancelQueueEdit,
     queueEditChangesWorkspace,
+    queueEditFoldersBlocked,
     hasPendingApprovals,
     stopDisabled,
     onStopTurn,
@@ -1082,8 +1093,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     steerEnabled,
     steerProtocolSupported,
   });
-  const queueEditNote = queueEditSteerOffNote({
+  const queueEditNote = queueEditNoteFor({
     queueEditChangesWorkspace,
+    queueEditFoldersBlocked,
     steerEnabled,
     steerProtocolSupported,
     activeTurnStatus,
