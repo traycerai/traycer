@@ -2419,6 +2419,46 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
+  // A sibling's sign-in saved after the failure was reported, before the probe settles on it: the probe settles on the sign-in now stored.
+  it("does not report unauthorized when a sibling's sign-in is saved after the refusal of the one this lease held was reported", async () => {
+    const SIBLING = "sibling-sign-in";
+    const warned: string[] = [];
+    // The failure is reported through the provisioning's own log line; from then on the store serves the sibling's sign-in.
+    const logger: typeof noopLogger = {
+      ...noopLogger,
+      warn: (message, fields) => {
+        warned.push(message);
+        mocks.siblingSave.signIn = SIBLING;
+        noopLogger.warn(message, fields);
+      },
+    };
+    mocks.hostTokenTable = new Map();
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.hostTokenMintMock.mockResolvedValue({ kind: "sign-in-rejected" });
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        // The dial asks for its host-only token: the mint runs for the host the socket was selected for.
+        capturedClientOptions().bearer("host-1");
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn(), logger }),
+    );
+
+    expect(
+      warned.filter(
+        (message) => message === "Host credential provisioning token mint refused",
+      ),
+    ).toHaveLength(1);
+    expect(mocks.providedLease.current?.getBearerToken()).toBe(SIBLING);
+    expect(outcome).not.toEqual<HostCredentialProvisionOutcome>({
+      kind: "unauthorized",
+    });
+    expectCleanTeardown();
+  }, 10_000);
+
   it("reports a refused mint when a fatal close follows it", async () => {
     const mint = createDeferred<{
       readonly kind: "not-a-member";
