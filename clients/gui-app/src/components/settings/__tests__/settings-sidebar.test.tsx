@@ -208,6 +208,15 @@ vi.mock(
   "@/components/settings/panels/agent-memories-settings-panel",
   async () => ({ AgentMemoriesSettingsPanel: await probe("agent-memories") }),
 );
+// Agents' own panel is real, since it picks its body by the host: only what
+// each body holds is a probe.
+vi.mock(
+  "@/components/settings/panels/agent-selection-guide-section",
+  async () => ({ AgentSelectionGuideSection: await probe("agents-guide") }),
+);
+vi.mock("@/components/settings/panels/agent-definitions-tab", async () => ({
+  AgentDefinitionsTab: await probe("agents-definitions"),
+}));
 // The surface the search navigates through: an overlay that swaps the section
 // in place, which the test's own surface (below) implements. Nothing else
 // publishes an API, so every other case keeps the real bridge.
@@ -2112,6 +2121,31 @@ describe("<SettingsSidebar /> the section held under an old host's Local pick", 
     expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
     expect(sectionHeading("Secrets")).toBeTruthy();
     expect(router.state.location.pathname).toBe("/settings/secrets");
+  });
+
+  it("keeps Agents on Connecting, never the current host's tabs, until a listed old computer's handshake lands, then draws the guide alone", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    const router = await renderRoutedTab("/settings/agents", null);
+
+    expect(cardText("host-scope-connecting")).toContain(
+      "Connecting to Old laptop",
+    );
+    expect(screen.queryByTestId("agents-tab-definitions")).toBeNull();
+    expect(probeMounts["agents-guide"] ?? 0).toBe(0);
+
+    act(() => {
+      recordOldHost();
+    });
+
+    expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
+    expect(screen.getByTestId("agents-guide-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("agents-tab-definitions")).toBeNull();
+    expect(screen.queryByTestId("agents-guide-caption")).toBeNull();
+    // One mount: no current-host body held the guide before this one.
+    expect(probeMounts["agents-guide"]).toBe(1);
+    expect(router.state.location.pathname).toBe("/settings/agents");
   });
 
   it.each(["secrets", "mcp-servers"] as const)(

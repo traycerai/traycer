@@ -40,6 +40,10 @@ import {
 import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   readRulesEditForTests,
   resetRulesEditForTests,
   useRulesEditLifetime,
@@ -263,6 +267,7 @@ function resetStores(): void {
     error: null,
   });
   useSettingsHostScopeStore.getState().reset();
+  resetNegotiatedManifests();
   // host-a's own Permissions page, through its Local row: Personal waits on
   // the window host's environment status, which this harness never answers.
   useSettingsEnvironmentPickStore.setState({
@@ -401,6 +406,11 @@ describe("Rules edit through the system-tab modal shell", () => {
       readState: "fresh",
     };
     resetStores();
+    // A Local pick's page waits for its computer's handshake: host-a's has
+    // landed, and it is a current host.
+    recordNegotiatedHostManifest("host-a", {
+      "environment.status": { major: 1, minor: 3 },
+    });
   });
 
   afterEach(() => {

@@ -126,9 +126,10 @@ function sectionAnswer(facts: SectionFacts): SectionAnswer {
  * A Local pick reads its own computer's handshake, never a pool's answer: a
  * computer the list does not name is not connected, an old one has only
  * `oldHostSectionShown`'s pages, and a current one lacks Secrets only without
- * `environment.secrets.list`. Every host serves `oldHostSectionShown`'s pages,
- * so they are served before the handshake lands: its answer cannot change
- * theirs.
+ * `environment.secrets.list`. Even a page every host serves waits for the
+ * handshake: its frame, and Agents' body, differ on an old host
+ * (`useOldHostLocalPick`), so drawing one first would swap it when the answer
+ * lands.
  */
 function localSectionAnswer(
   facts: SectionFacts,
@@ -140,12 +141,11 @@ function localSectionAnswer(
       ? { kind: "pending", hostName: pickedName }
       : { kind: "unlisted", hostName: pickedName };
   }
-  if (oldHostSectionShown(section)) return { kind: "served" };
   if (facts.environmentStatus === null) {
     return { kind: "pending", hostName: host.name };
   }
   if (facts.environmentStatus === false) {
-    return { kind: "update", hostId: host.hostId, hostName: host.name };
+    return servedOr(oldHostSectionShown(section), host);
   }
   return section === "secrets"
     ? servedOr(facts.secretsList, host)
