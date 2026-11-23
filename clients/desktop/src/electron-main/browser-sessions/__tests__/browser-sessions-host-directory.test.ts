@@ -522,38 +522,6 @@ describe("main resolves the browser.sessions host itself", () => {
       }
     });
 
-    it("starts no read once the clock is past its ceiling, though the ceiling's timer has not run, and answers false when it runs", async () => {
-      vi.useFakeTimers();
-      try {
-        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
-        const confirmation: { running: Promise<boolean> | null } = {
-          running: null,
-        };
-        const released = confirmRowWithin(
-          (stillWaiting) => {
-            confirmation.running = directory.confirmRows(stillWaiting);
-            return confirmation.running;
-          },
-          { current: () => true },
-        );
-        await vi.waitFor(() => expect(gets()).toBe(1));
-
-        // Read A can no longer answer; the clock passes the ceiling without
-        // the timer's callback running.
-        directory.reset();
-        vi.setSystemTime(Date.now() + ROW_CONFIRM_CEILING_MS + 1);
-        firstRead.resolve(remoteResponse("host-1"));
-        const answer = await confirmation.running;
-
-        expect(gets()).toBe(1);
-        await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
-        await released;
-        expect(answer).toBe(false);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
     // Date and performance are faked without the timers: the wall clock and
     // the monotonic one move independently (`setSystemTime` moves only the
     // wall clock, `advanceTimersByTime` both), and no timer callback runs.
@@ -577,6 +545,25 @@ describe("main resolves the browser.sessions host itself", () => {
         },
       };
     }
+
+    it("starts no read once the monotonic clock is past its ceiling, though the ceiling's timer has not run, and answers false", async () => {
+      vi.useFakeTimers(BOTH_CLOCKS);
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation = holdConfirmation(directory);
+        expect(gets()).toBe(1);
+
+        directory.reset();
+        vi.advanceTimersByTime(ROW_CONFIRM_CEILING_MS + 1);
+        firstRead.resolve(remoteResponse("host-1"));
+        const answer = await confirmation.running();
+
+        expect(gets()).toBe(1);
+        expect(answer).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
 
     it("keeps its deadline when the wall clock is set back past it: no read starts, and the answer is false", async () => {
       vi.useFakeTimers(BOTH_CLOCKS);
