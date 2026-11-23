@@ -34,6 +34,7 @@ import {
 } from "../host-messenger";
 import type { IWebSocketFactory } from "../ws-factory";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
+import { RECONNECT_MAX_BACKOFF_MS } from "@traycer/protocol/host-transport/remote/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import {
@@ -1530,7 +1531,9 @@ describe("released personal host, local stream", () => {
       signIn: MutableBearerLease,
       recovery: SignInRecovery,
     ): {
+      readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
       readonly sockets: StubStreamWebSocket[];
+      readonly session: IStreamSession;
       readonly statuses: string[];
     } {
       const { factory, sockets } = makeStubSocketFactory();
@@ -1548,7 +1551,7 @@ describe("released personal host, local stream", () => {
         ),
         recordingDoor().door,
       );
-      return { sockets, ...subscribe(client) };
+      return { client, sockets, ...subscribe(client) };
     }
 
     it("runs the refresh once when the host refuses every sign-in bare and each refresh answers rotated with a new bearer", async () => {
@@ -1627,6 +1630,111 @@ describe("released personal host, local stream", () => {
 
       expect(asked).toEqual([SIGN_IN]);
       expect((await openFrame(sockets[2])).token).toBe("sign-in-of-a-sibling");
+    });
+
+    it("starts no rotation when the consumer closes the stream as the sign-in's refusal moves it to reconnecting", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      let calls = 0;
+      const { sockets, session, statuses } = releasedStream(signIn, {
+        revalidateForReconnect: () => {
+          calls += 1;
+          signIn.rotate("sign-in-refreshed");
+          return Promise.resolve("rotated");
+        },
+      });
+      await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+      expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
+      sockets[0].fireText(releasedRefusal());
+      await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+      expect((await openFrame(sockets[1])).token).toBe(SIGN_IN);
+      // The consumer ends the stream in the status callback of the refusal's
+      // own move to reconnecting, while the recovery's owner stays alive.
+      session.onStatusChange((status) => {
+        statuses.push(status);
+        if (status === "reconnecting") session.close();
+      });
+
+      sockets[1].fireText(releasedRefusal());
+      await vi.waitFor(() => expect(statuses).toContain("reconnecting"), WAIT);
+      // Past the longest redial backoff: nothing follows the end.
+      await vi.advanceTimersByTimeAsync(RECONNECT_MAX_BACKOFF_MS);
+
+      expect(calls).toBe(0);
+      expect(sockets).toHaveLength(2);
+      expect(statuses).not.toContain("open");
+    });
+
+    describe("a refusal judged against a sign-in a credential update has since replaced", () => {
+      const REPLACED_BY = "sign-in-renewed";
+
+      /**
+       * The stream is admitted on sign-in A, the renewal installs B and the
+       * stream writes the credential update (never acked), then the host's
+       * fatal sign-in refusal arrives: it may be of A or of B.
+       */
+      async function ambiguousRefusal(): Promise<{
+        readonly sockets: StubStreamWebSocket[];
+        readonly statuses: string[];
+        readonly asked: Array<string | null>;
+      }> {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+        const asked: Array<string | null> = [];
+        const { client, sockets, statuses } = releasedStream(signIn, {
+          revalidateForReconnect: (refused) => {
+            asked.push(refused);
+            signIn.rotate("sign-in-refreshed");
+            return Promise.resolve("rotated");
+          },
+        });
+        await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+        expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
+        sockets[0].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+        const open = await openFrame(sockets[1]);
+        expect(open.token).toBe(SIGN_IN);
+        ack(sockets[1], open, ["credentialUpdate"]);
+        await untilStatus(statuses, "open");
+        signIn.rotate(REPLACED_BY);
+        client.notifyBearerRotated();
+        await vi.waitFor(
+          () =>
+            expect(credentialUpdateTokens(sockets[1])).toEqual([REPLACED_BY]),
+          WAIT,
+        );
+
+        sockets[1].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+        // One reconnect, on the renewed sign-in, and no rotation for it.
+        expect(asked).toEqual([]);
+        expect((await openFrame(sockets[2])).token).toBe(REPLACED_BY);
+        return { sockets, statuses, asked };
+      }
+
+      it("reconnects once on the stored sign-in with no rotation, and spends none when that one is admitted", async () => {
+        const { sockets, statuses, asked } = await ambiguousRefusal();
+        const open = readFrame(sockets[2].textSent[0]);
+
+        ack(sockets[2], open, ["credentialUpdate"]);
+        await vi.waitFor(
+          () => expect(statuses.filter((s) => s === "open")).toHaveLength(2),
+          WAIT,
+        );
+
+        expect(asked).toEqual([]);
+        expect(sockets).toHaveLength(3);
+      });
+
+      it("rotates exactly once, for the renewed sign-in, when the one reconnect is refused too", async () => {
+        const { sockets, asked } = await ambiguousRefusal();
+
+        sockets[2].fireText(releasedRefusal());
+        await vi.waitFor(() => expect(sockets).toHaveLength(4), WAIT);
+
+        expect(asked).toEqual([REPLACED_BY]);
+        expect((await openFrame(sockets[3])).token).toBe("sign-in-refreshed");
+      });
     });
 
     it("lets a new sequence spend one again once the host admitted a connection", async () => {
