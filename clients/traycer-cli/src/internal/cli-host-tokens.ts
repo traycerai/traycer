@@ -434,8 +434,9 @@ export interface CliHostTokens {
    * met that may end the command, until the returned stop is called. It is
    * evidence, never a verdict: the command acts only on
    * {@link refusalEndingCommandNow}'s judgement. One rule for every command:
-   * `not-a-member`, `sandbox-frozen`, a `sign-in-rejected` its refresh could
-   * not answer, and `no-sign-in` are told at once. `not-admitted` (authn has
+   * `not-a-member`, `sandbox-frozen` and a `sign-in-rejected` its refresh could
+   * not answer are told at once; `no-sign-in` is told at once while no sign-in
+   * is stored, and not once one is. `not-admitted` (authn has
    * no row) is told only when no sign-in can follow: the host named a reason
    * in this process and no sign-in it invited is on the wire unanswered, or
    * it declined this person's probe. It is told nothing while an open of that
