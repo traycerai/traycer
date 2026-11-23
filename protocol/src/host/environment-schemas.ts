@@ -670,6 +670,11 @@ export type ConfigEnvLocalOverrideClearRequest = z.infer<
   typeof configEnvLocalOverrideClearRequestSchema
 >;
 
+/** Personal accepted the value. The caller can now clear this computer's override. */
+export const configEnvLocalOverrideSaveToPersonalResponseSchema = lazySchema(
+  () => z.object({ saved: z.literal(true) }),
+);
+
 /** Both answer the host's overrides after the write, or `needs_grant`. */
 export const configEnvLocalOverrideResponseSchema = lazySchema(() =>
   z.discriminatedUnion("outcome", [

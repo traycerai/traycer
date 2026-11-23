@@ -560,6 +560,25 @@ export const ENVIRONMENT_RPC_METHODS = {
       downgradePathsFromLatest: {},
     },
   },
+  "config.env.localOverride.saveToPersonal": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: defineRpcContract({
+            method: "config.env.localOverride.saveToPersonal",
+            schemaVersion: { major: 1, minor: 0 },
+            requestSchema: schemas.configEnvLocalOverrideSetRequestSchema,
+            responseSchema:
+              schemas.configEnvLocalOverrideSaveToPersonalResponseSchema,
+          }),
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "environment.localOverrides": {
     degrade: { kind: "unsupported" },
     1: {
