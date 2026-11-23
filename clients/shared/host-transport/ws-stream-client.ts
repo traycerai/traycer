@@ -258,8 +258,7 @@ export interface WsStreamClientOptions<
    * short-lived provisioning probe (CLI `host install`) is who needs it.
    */
   readonly onHostCredentialState:
-    | ((hostId: string, state: HostCredentialState) => void)
-    | null;
+    ((hostId: string, state: HostCredentialState) => void) | null;
   /**
    * Where this transport's observations reach the selection authority.
    *
@@ -3369,11 +3368,15 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    * report. A refusal while the sequence's refresh runs joins it. Only an
    * answer from authn spends it, and only for the sequence it started under:
    * a sibling's rotation adopted from the store is redialed on like a
-   * rotation, and the next refusal may still make one real refresh.
+   * rotation, and the next refusal may still make one real refresh. A refresh
+   * starts only while the refusal still owns this stream (`askedAt`, the dial
+   * count it was heard at): after a close or a newer dial it starts nothing,
+   * and its answer is one `revalidateThenReconnect` discards.
    */
   private refreshSignInWithinBudget(
     refusedBy: HostInstance | null,
     refused: string | null,
+    askedAt: number,
     recovery: SignInRecovery,
   ): Promise<RevalidateOutcome> {
     const current = this.dialSequence;
@@ -3385,7 +3388,11 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     if (sequence.spent) return Promise.resolve("rotated");
     if (sequence.running !== null) return sequence.running;
     const running: Promise<RevalidateOutcome> = Promise.resolve()
-      .then(() => recovery.revalidateForReconnect(refused))
+      .then(() =>
+        this.disposed || this.dialsStarted !== askedAt
+          ? ("network-error" as const)
+          : recovery.revalidateForReconnect(refused),
+      )
       .then((outcome): RevalidateOutcome => {
         if (outcome === "adopted") return "rotated";
         if (outcome !== "network-error") sequence.spent = true;
@@ -3662,16 +3669,14 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     // ends the stream on that refusal, and its surface shows it.
     markReleasedSignInRefusal(details);
     this.planNext("sign-in-next");
-    const refusedBy = this.socketOwner;
-    const refused = this.refusedSignIn();
     if (recovery === null) {
       this.goTerminal(details);
       return;
     }
-    this.handleUnauthorizedFatalError(details, {
-      revalidateForReconnect: () =>
-        this.refreshSignInWithinBudget(refusedBy, refused, recovery),
-    });
+    this.handleUnauthorizedFatalError(
+      details,
+      this.signInRefusalRecovery(this.socketOwner, recovery),
+    );
   }
 
   /**
@@ -3712,7 +3717,6 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     expired: boolean,
   ): void {
     const refusedBy = this.socketOwner;
-    const refused = this.refusedSignIn();
     const recovery = this.config.releasedSignOn?.recovery ?? null;
     if (!expired) {
       const reason = readDoorReason(details.doorReason);
@@ -3728,20 +3732,38 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       return;
     }
     // Reads the refused plan as a refused sign-in before the plan moves on.
-    this.handleUnauthorizedFatalError(details, {
-      revalidateForReconnect: () =>
-        this.refreshSignInWithinBudget(refusedBy, refused, recovery),
-    });
+    this.handleUnauthorizedFatalError(
+      details,
+      this.signInRefusalRecovery(refusedBy, recovery),
+    );
     this.releasedPlan = "host-token";
   }
 
   /**
-   * The sign-in a refusal on this connection judged, read before the teardown
-   * clears it: `null` once a `credentialUpdate` wrote a different one, or when
-   * a session grant, not the sign-in, was on the wire.
+   * How a refusal of the sign-in recovers, read before the teardown clears
+   * what this connection presented.
+   *
+   * After a `credentialUpdate` wrote a different sign-in on this connection,
+   * the refusal may have judged either: the host never answers an update. It
+   * refreshes nothing. It answers `rotated`, which a refused sign-in counts
+   * against the no-progress bound, and the redial carries the stored sign-in,
+   * whose refusal names it.
+   *
+   * Otherwise the refresh names the sign-in refused, or `null` under a session
+   * grant, where the sign-in was not on the wire.
    */
-  private refusedSignIn(): string | null {
-    return this.usesSessionGrant ? null : this.presentedToken;
+  private signInRefusalRecovery(
+    refusedBy: HostInstance | null,
+    recovery: SignInRecovery,
+  ): StreamAuthRevalidator {
+    if (!this.usesSessionGrant && this.presentedToken === null)
+      return { revalidateForReconnect: () => Promise.resolve("rotated") };
+    const refused = this.usesSessionGrant ? null : this.presentedToken;
+    const askedAt = this.dialsStarted;
+    return {
+      revalidateForReconnect: () =>
+        this.refreshSignInWithinBudget(refusedBy, refused, askedAt, recovery),
+    };
   }
 
   /**

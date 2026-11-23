@@ -635,6 +635,9 @@ export class WsRpcClient<
           if (signInRefreshSpent || hostBearerFor === undefined) throw cause;
           const recovery =
             this.ownerSignInAuthorities.get(authority)?.recovery ?? null;
+          // A call whose caller ended starts no rotation: it fails as it
+          // would after one.
+          throwIfAuthorityAborted(options.authority, cause.requestId, method);
           const outcome =
             recovery === null || cause.fatalDetails === null
               ? "rejected"
@@ -706,6 +709,9 @@ export class WsRpcClient<
           if (signInRefreshSpent) throw cause;
           const recovery =
             this.signInAuthorities.get(authority)?.recovery ?? null;
+          // A call whose caller ended starts no rotation: it fails as it
+          // would after one.
+          throwIfAuthorityAborted(options.authority, cause.requestId, method);
           const outcome =
             recovery === null || cause.fatalDetails === null
               ? "rejected"
