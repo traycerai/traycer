@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nameReason } from "./released-memory-test-support";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
-import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type HostRequestOptions,
+} from "../../../../shared/host-transport/host-messenger";
+import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
+import { createCliHostTokens } from "../cli-host-tokens";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 
 const state = vi.hoisted(() => {
@@ -44,6 +53,8 @@ const logger = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
+type ClientOptions = WsRpcClientOptions<HostRpcRegistry>;
+
 vi.mock(
   "../../../../shared/host-transport/ws-rpc-client",
   async (importOriginal) => {
@@ -51,11 +62,21 @@ vi.mock(
       await importOriginal<
         typeof import("../../../../shared/host-transport/ws-rpc-client")
       >();
+    const { resolveStubbedCallBearer } = await import("./stub-rpc-bearer");
     return {
       ...actual,
       WsRpcClient: class {
-        constructor() {}
-        request = state.requests;
+        constructor(private readonly clientOptions: ClientOptions) {}
+        request = async (
+          method: string,
+          params: unknown,
+          options: HostRequestOptions,
+        ) =>
+          state.requests(
+            method,
+            params,
+            await resolveStubbedCallBearer(this.clientOptions, method, options),
+          );
         releaseIdleLocalSessions = vi.fn();
       },
     };
@@ -85,6 +106,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: vi.fn(() => ({ dispose: state.dispose })),
     createStoreBackedRevalidator: vi.fn(() => ({
       revalidateCurrentContext: state.revalidate,
+      rotateSignIn: state.revalidate,
     })),
   };
 });
@@ -175,22 +197,6 @@ describe("callHostRpc host-token mint recovery", () => {
     expect(state.requests).not.toHaveBeenCalled();
   });
 
-  it("reports authn unreachable, never the rejected line, when sign-in refresh cannot reach authn", async () => {
-    state.mintOutcomes.push({ kind: "sign-in-rejected" });
-    state.revalidate.mockResolvedValue("network-error");
-
-    await expect(
-      toAgentCliError(callHostRpcAtEndpoint("agent.list", params, endpoint)),
-    ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-      message: "",
-      exitCode: 1,
-    });
-    expect(state.mint).toHaveBeenCalledTimes(1);
-    expect(state.revalidate).toHaveBeenCalledTimes(1);
-    expect(state.requests).not.toHaveBeenCalled();
-  });
-
   it.each(["token_expired", "not_admitted"] as const)(
     "does not send a third request when the replacement token is refused again for %s",
     async (doorReason) => {
@@ -213,4 +219,57 @@ describe("callHostRpc host-token mint recovery", () => {
       });
     },
   );
+});
+
+describe("createCliHostTokens refusals that end a command", () => {
+  it("ends the command on a not-admitted mint begun in the same millisecond as the admission before it, once that connection has left", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      nameReason("host-same-millisecond");
+      const tokens = createCliHostTokens({
+        lease: new MutableBearerLease("signin", "user-1"),
+        refresh: async () => "network-error",
+        signal: null,
+      });
+      await tokens.whenLoaded();
+      const ending: string[] = [];
+      tokens.onRefusalEndingCommand((hostId, failure) => {
+        ending.push(`${hostId}:${failure.kind}`);
+      });
+      // An open is admitted and its connection leaves; a mint then starts in
+      // the same millisecond and authn has no row for it.
+      tokens.admitted("host-same-millisecond")();
+      state.mintOutcomes.push({ kind: "not-admitted" });
+
+      await tokens.mintFresh("host-same-millisecond", null);
+
+      expect(ending).toEqual(["host-same-millisecond:not-admitted"]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("asks once more for the host process observed now when the process was replaced before the mint started, and the command goes on", async () => {
+    const hostId = "host-replaced-before-mint";
+    processReleasedHosts.observeInstance(hostId, "process-a");
+    const ending: string[] = [];
+    const tokens = createCliHostTokens({
+      lease: new MutableBearerLease("signin", "user-1"),
+      refresh: async () => "network-error",
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    tokens.onRefusalEndingCommand((id, failure) => {
+      ending.push(`${id}:${failure.kind}`);
+    });
+
+    // The host is replaced after the wrapper read the process it asks for and
+    // before the mint starts.
+    const minting = tokens.mintFresh(hostId, null);
+    processReleasedHosts.observeInstance(hostId, "process-b");
+
+    await expect(minting).resolves.toMatchObject({ kind: "ok" });
+    expect(state.mint).toHaveBeenCalledTimes(1);
+    expect(ending).toEqual([]);
+  });
 });

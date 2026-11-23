@@ -383,7 +383,7 @@ function freshIdentity(): RemoteSessionIdentity {
     relayAttachUrl: `wss://relay.test/authz-loss-attach-${nextIdentitySeq}`,
     authRecovery: "revalidate",
     authEpoch: "authz-loss-lease-1",
-    openAuth: "user-bearer",
+    openAuth: "session-grant-or-sign-in",
   };
 }
 

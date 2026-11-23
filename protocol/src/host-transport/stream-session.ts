@@ -286,6 +286,31 @@ export interface IStreamSession {
 }
 
 /**
+ * A session that says when its transport waits out a backoff before its next
+ * dial or attach, apart from its status: a `reconnecting` alone does not say
+ * whether the next attempt follows at once. No status reader counts it.
+ */
+export interface BackoffSignalling {
+  /**
+   * Told each time this session enters backoff. Not told for an attempt that
+   * follows at once, including a recovery's own timed redial after a
+   * `rotated`, nor at a terminal end, which `closed` reports. Returns the
+   * unsubscribe.
+   */
+  onBackoffEntered(listener: () => void): () => void;
+}
+
+/** Whether `session` says when it enters backoff ({@link BackoffSignalling}). */
+export function signalsBackoff(
+  session: IStreamSession,
+): session is IStreamSession & BackoffSignalling {
+  return (
+    "onBackoffEntered" in session &&
+    typeof session.onBackoffEntered === "function"
+  );
+}
+
+/**
  * What a transport can currently say about whether the connected host serves
  * a stream method: `"unknown"` until the handshake (or a subscribe attempt)
  * has produced evidence either way.

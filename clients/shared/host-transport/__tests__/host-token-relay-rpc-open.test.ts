@@ -141,6 +141,7 @@ async function expiryRelayHarness(refusals: readonly FatalErrorDetails[]) {
       expiresAtMs: Date.now() + 60_000,
     },
     hostTokens.era(USER_ID),
+    () => true,
   );
   vi.stubGlobal(
     "fetch",
@@ -167,7 +168,8 @@ async function expiryRelayHarness(refusals: readonly FatalErrorDetails[]) {
     },
   };
   const transport = createRemoteHostTransport({
-    opensReleasedWay: false,
+    opensReleasedWay: () => false,
+    confirmRowBeforeSignIn: null,
     hostId: entry.hostId,
     userId: USER_ID,
     relayAttachUrl: entry.websocketUrl ?? "",
@@ -193,6 +195,14 @@ async function expiryRelayHarness(refusals: readonly FatalErrorDetails[]) {
   return { entry, hostTokens, mintCalls, peer, sockets, states, transport };
 }
 
+/** What a released host says when it refuses the host-only token, and the sign-in, bare. */
+const RELEASED_BARE_REFUSAL: FatalErrorDetails = {
+  code: "UNAUTHORIZED",
+  reason: "released-host-token-refusal",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
+
 const RELAY_GRANT_BODY = JSON.stringify({
   grant: "relay-pass",
   role: "client",
@@ -205,6 +215,7 @@ const RELAY_GRANT_BODY = JSON.stringify({
 function signInRelayHarness(
   answer: (call: number) => Response,
   recovers: boolean,
+  opensReleasedWay: () => boolean,
 ) {
   const peer = new RemoteMuxTestPeer();
   const entry = directoryEntryFor(
@@ -234,7 +245,8 @@ function signInRelayHarness(
     now: () => Date.now(),
   });
   const transport = createRemoteHostTransport({
-    opensReleasedWay: false,
+    opensReleasedWay,
+    confirmRowBeforeSignIn: null,
     hostId: entry.hostId,
     userId: USER_ID,
     relayAttachUrl: entry.websocketUrl ?? "",
@@ -292,6 +304,7 @@ describe("relay door sign-in refusal", () => {
               headers: { "Content-Type": "application/json" },
             }),
       true,
+      () => false,
     );
 
     try {
@@ -318,28 +331,103 @@ describe("relay door sign-in refusal", () => {
     }
   });
 
-  it("backs off after a second 401, refreshing once on each dial, with no state and no end", async () => {
+  // Measured 2.0 s under parallel load (load average 5).
+  it("refreshes the sign-in once across a dial sequence, then backs off through every later 401 with no refresh, no state and no end", async () => {
     const test = signInRelayHarness(
       () => new Response("", { status: 401 }),
       true,
+      () => false,
     );
 
     try {
       test.transport.session.start();
-      // The backoff's dial comes only if the first dial's second 401 left the session retrying.
+      // The later dials come only if the first dial's second 401 left the session retrying.
       await vi.waitFor(() => expect(test.sentSignIns).toHaveLength(4), WAIT);
 
       expect(test.sentSignIns).toEqual([
         `Bearer ${SIGN_IN_TOKEN}`,
         "Bearer sign-in-refreshed-1",
         "Bearer sign-in-refreshed-1",
-        "Bearer sign-in-refreshed-2",
+        "Bearer sign-in-refreshed-1",
       ]);
-      expect(test.refreshes()).toBe(2);
+      expect(test.refreshes()).toBe(1);
       expect(test.transport.session.terminalFatal()).toBeNull();
       expect(test.transport.session.isClosed()).toBe(false);
       expect(test.states).toEqual([]);
       expect(test.peer.openCount).toBe(0);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
+  }, 10_000);
+
+  // Measured 4.6-6.4 s under parallel load (load average 5): waits out the relay's own backoff.
+  it("never refreshes the sign-in a second time when the attach grant is refused after a released sign-in open's recovery rotated it", async () => {
+    // The host refuses the host-token open, then the sign-in open, both bare.
+    // The sign-in's refusal rotates the sign-in; the attach that follows asks
+    // authn for its grant with the rotated sign-in, and authn refuses that too.
+    const test = signInRelayHarness(
+      (call) =>
+        call <= 2
+          ? new Response(RELAY_GRANT_BODY, {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            })
+          : new Response("", { status: 401 }),
+      true,
+      () => true,
+    );
+    test.peer.refuseNextOpens([RELEASED_BARE_REFUSAL, RELEASED_BARE_REFUSAL]);
+
+    try {
+      test.transport.session.start();
+      await vi.waitFor(() => expect(test.sentSignIns).toHaveLength(4), WAIT);
+
+      // One refresh covers the open's recovery and the grant mint together.
+      expect(test.sentSignIns).toEqual([
+        `Bearer ${SIGN_IN_TOKEN}`,
+        `Bearer ${SIGN_IN_TOKEN}`,
+        "Bearer sign-in-refreshed-1",
+        "Bearer sign-in-refreshed-1",
+      ]);
+      expect(test.peer.opens.map((open) => open.bearer)).toEqual([
+        "",
+        SIGN_IN_TOKEN,
+      ]);
+      expect(test.transport.session.terminalFatal()).toBeNull();
+      expect(test.states).toEqual([]);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
+  }, 20_000);
+
+  it("presents the sign-in once the row allows it, though the row did not when the session was built", async () => {
+    let rowAllows = false;
+    const test = signInRelayHarness(
+      () =>
+        new Response(RELAY_GRANT_BODY, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      false,
+      () => rowAllows,
+    );
+    test.peer.refuseNextOpens([RELEASED_BARE_REFUSAL]);
+    rowAllows = true;
+
+    try {
+      test.transport.session.start();
+      await vi.waitFor(
+        () => expect(test.transport.session.isReady()).toBe(true),
+        WAIT,
+      );
+
+      expect(test.peer.opens.map((open) => open.bearer)).toEqual([
+        "",
+        SIGN_IN_TOKEN,
+      ]);
+      expect(test.peer.opens[1]?.authz).toBeNull();
     } finally {
       test.transport.session.close();
       retireAllRemoteSessions();
@@ -350,6 +438,7 @@ describe("relay door sign-in refusal", () => {
     const test = signInRelayHarness(
       () => new Response("", { status: 401 }),
       false,
+      () => false,
     );
 
     try {
@@ -398,6 +487,7 @@ describe("relay door sign-in refusal", () => {
     const test = signInRelayHarness(
       () => new Response("", { status: 503 }),
       true,
+      () => false,
     );
 
     try {
@@ -440,6 +530,7 @@ describe("remote RPC relay OPEN host-token frame", () => {
           headers: { "Content-Type": "application/json" },
         }),
       false,
+      () => false,
     );
 
     try {
@@ -468,6 +559,7 @@ describe("remote RPC relay OPEN host-token frame", () => {
     const test = signInRelayHarness(
       () => new Response("", { status: 404 }),
       false,
+      () => false,
     );
 
     try {
@@ -499,6 +591,7 @@ describe("remote RPC relay OPEN host-token frame", () => {
           headers: { "Content-Type": "application/json" },
         }),
       false,
+      () => false,
     );
 
     try {
@@ -543,7 +636,8 @@ describe("remote RPC relay OPEN host-token frame", () => {
       });
       const bearer = () => new MutableBearerLease(SIGN_IN_TOKEN, USER_ID);
       const transport = createRemoteHostTransport({
-        opensReleasedWay: false,
+        opensReleasedWay: () => false,
+        confirmRowBeforeSignIn: null,
         hostId: entry.hostId,
         userId: USER_ID,
         relayAttachUrl: entry.websocketUrl ?? "",
@@ -637,6 +731,7 @@ describe("remote RPC relay OPEN host-token frame", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       hostTokens.era(USER_ID),
+      () => true,
     );
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
@@ -653,7 +748,8 @@ describe("remote RPC relay OPEN host-token frame", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const transport = createRemoteHostTransport({
-      opensReleasedWay: false,
+      opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId: entry.hostId,
       userId: USER_ID,
       relayAttachUrl: entry.websocketUrl ?? "",

@@ -11,18 +11,23 @@ import {
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CONTROL_STREAM_ID,
 } from "@traycer/protocol/host-transport/mux";
-import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
+import type {
+  AttachGrantProvider,
+  AttachGrantProvision,
+} from "@traycer/protocol/host-transport/remote/grant";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hostDoorStateOfRefusal } from "../../host-door-state";
+import {
+  hostDoorStateOfRefusal,
+  type HostDoorObserver,
+} from "../../host-door-state";
 import { resetNegotiatedManifests } from "../../negotiated-manifest-registry";
 import {
   createReleasedHostMemory,
   opensReleasedWay,
-  type ReleasedSignOn,
   type ReleasedSignOnRow,
 } from "../../released-sign-on";
 import type { RevalidateOutcome } from "@traycer-clients/shared/auth/bearer-revalidator";
-import { RemoteSession } from "../remote-session";
+import { RemoteSession, type RemoteReleasedSignOn } from "../remote-session";
 import { emptyStreamRegistry, FakeRelayHost } from "./fake-relay-host";
 
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
@@ -45,10 +50,21 @@ const SANDBOX_ROW: ReleasedSignOnRow = {
   sandbox: { id: "box" },
 };
 
+/** What a released host says when its own check refuses a credential. */
+const RELEASED_HOST_REASONS = [
+  "Authenticated user does not own this host",
+  "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+  "Token has been revoked",
+] as const;
+
 function releasedRefusal(): FatalErrorDetails {
+  return releasedRefusalSaying("released-host-token-refusal");
+}
+
+function releasedRefusalSaying(reason: string): FatalErrorDetails {
   return {
     code: "UNAUTHORIZED",
-    reason: "released-host-token-refusal",
+    reason,
     incompatibleMethods: null,
     upgradeGuidance: null,
   };
@@ -73,7 +89,7 @@ function credentialBearers(relay: FakeRelayHost): string[] {
 }
 
 function recordingDoor(): {
-  readonly door: SessionDoorObserver;
+  readonly door: HostDoorObserver;
   readonly refusals: FatalErrorDetails[];
 } {
   const refusals: FatalErrorDetails[] = [];
@@ -83,8 +99,21 @@ function recordingDoor(): {
       refused: (details) => {
         refusals.push(details);
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     },
+  };
+}
+
+function namedRefusalOf(
+  doorReason: NonNullable<FatalErrorDetails["doorReason"]>,
+): FatalErrorDetails {
+  return {
+    code: "UNAUTHORIZED",
+    reason: "current-host-refusal",
+    doorReason,
+    retryable: false,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
   };
 }
 
@@ -120,22 +149,34 @@ function scriptHost(relay: FakeRelayHost, released: { value: boolean }): void {
   };
 }
 
+const OK_GRANT: AttachGrantProvision = {
+  kind: "ok",
+  grant: { grant: "grant-jws", expiresInSeconds: 300 },
+};
+
 function openSession(
   relay: FakeRelayHost,
   signIn: MutableBearerLease,
-  releasedSignOn: ReleasedSignOn | null,
-  door: SessionDoorObserver,
+  releasedSignOn: RemoteReleasedSignOn | null,
+  door: HostDoorObserver,
+): RemoteSession<typeof emptyRpcRegistry, typeof emptyStreamRegistry> {
+  return openSessionWithGrants(relay, releasedSignOn, door, () =>
+    Promise.resolve(OK_GRANT),
+  );
+}
+
+function openSessionWithGrants(
+  relay: FakeRelayHost,
+  releasedSignOn: RemoteReleasedSignOn | null,
+  door: HostDoorObserver,
+  grantProvider: AttachGrantProvider,
 ): RemoteSession<typeof emptyRpcRegistry, typeof emptyStreamRegistry> {
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: "host-1",
     attachBaseUrl: "wss://relay.test/attach",
     hostStaticPublicKey: relay.hostStaticPublicKey,
-    grantProvider: () =>
-      Promise.resolve({
-        kind: "ok" as const,
-        grant: { grant: "grant-jws", expiresInSeconds: 300 },
-      }),
+    grantProvider,
     hostToken: () => HOST_TOKEN,
     releasedSignOn,
     auth: null,
@@ -154,7 +195,16 @@ function openSession(
 function signOnFor(
   row: ReleasedSignOnRow,
   signIn: MutableBearerLease,
-): ReleasedSignOn | null {
+): RemoteReleasedSignOn | null {
+  return signOnWithLiveRow(row, signIn, () => true);
+}
+
+/** `rowAllows` is the live read of the row the session's host has in the directory. */
+function signOnWithLiveRow(
+  row: ReleasedSignOnRow,
+  signIn: MutableBearerLease,
+  rowAllows: () => boolean,
+): RemoteReleasedSignOn | null {
   return opensReleasedWay(row, USER_ID)
     ? {
         signIn: () => signIn,
@@ -163,7 +213,10 @@ function signOnFor(
         ownerSignInEligible: () => false,
         heldTokenRefused: () => false,
         forgetHeldRefusal: () => undefined,
+        mayPresentSignIn: rowAllows,
         hosts: createReleasedHostMemory(),
+        opensReleasedWay: rowAllows,
+        confirmRow: null,
       }
     : null;
 }
@@ -198,6 +251,33 @@ describe("released personal host, remote door", () => {
       session.notifyBearerRotated();
       await vi.waitFor(
         () => expect(credentialBearers(relay)).toEqual([ROTATED_SIGN_IN]),
+        WAIT,
+      );
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
+  it("pushes the host-only token, never the sign-in, on the next credential update once another transport has heard the host name a reason", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const hosts = createReleasedHostMemory();
+    const { door, refusals } = recordingDoor();
+    scriptHost(relay, { value: true });
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    const session = openSession(relay, signIn, { ...personal, hosts }, door);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      hosts.refusedNamingReason(hosts.currentInstance("host-1"), false);
+      signIn.rotate(ROTATED_SIGN_IN);
+      session.notifyBearerRotated();
+      await vi.waitFor(
+        () => expect(credentialBearers(relay)).toEqual([HOST_TOKEN]),
         WAIT,
       );
       expect(refusals).toEqual([]);
@@ -386,7 +466,7 @@ describe("released personal host, remote door", () => {
       await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
       expect(relay.openBearers).toEqual(["", SIGN_IN]);
       // Another transport hears this host name a reason while the refresh runs.
-      hosts.refusedNamingReason("host-1");
+      hosts.refusedNamingReason(hosts.currentInstance("host-1"), false);
       refreshes[0]("rotated");
       await vi.waitFor(
         () => expect(relay.openBearers.length).toBeGreaterThanOrEqual(3),
@@ -463,7 +543,208 @@ describe("released personal host, remote door", () => {
     20_000,
   );
 
-  it("reports the refusal once when the personal host refuses the sign-in too", async () => {
+  it("opens the redial with the refreshed sign-in when the refresh that ran past the budget answers rotated after the redial's attach began and before its open was read, with no admission remembered", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
+    const heldGrants: Array<(grant: AttachGrantProvision) => void> = [];
+    let grantsAsked = 0;
+    const { door, refusals } = recordingDoor();
+    relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+    relay.decideOpen = (_grant, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: releasedRefusal() }
+        : { kind: "ack" };
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    // The third attach, the redial after the budget, waits for the test to
+    // release its grant: the session has begun the dial and read no open.
+    const session = openSessionWithGrants(
+      relay,
+      {
+        ...personal,
+        recovery: {
+          revalidateForReconnect: () =>
+            new Promise<RevalidateOutcome>((resolve) => {
+              refreshes.push(resolve);
+            }),
+        },
+      },
+      door,
+      () => {
+        grantsAsked += 1;
+        return grantsAsked < 3
+          ? Promise.resolve(OK_GRANT)
+          : new Promise<AttachGrantProvision>((resolve) => {
+              heldGrants.push(resolve);
+            });
+      },
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(heldGrants).toHaveLength(1), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      signIn.rotate(ROTATED_SIGN_IN);
+      refreshes[0]("rotated");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+      heldGrants[0](OK_GRANT);
+
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN, ROTATED_SIGN_IN]);
+      expect(relay.openAuthz[2]).toBeNull();
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it("opens the redial with the host-only token when the row read for the attach begun under a sign-in plan commits a row that no longer opens the released way, though the capped refresh then answers rotated before its open was read", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
+    const heldGrants: Array<(grant: AttachGrantProvision) => void> = [];
+    let grantsAsked = 0;
+    let confirmationsAsked = 0;
+    let rowOpensReleasedWay = true;
+    const { door, refusals } = recordingDoor();
+    relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+    relay.decideOpen = (_grant, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: releasedRefusal() }
+        : { kind: "ack" };
+    const personal = signOnWithLiveRow(
+      PERSONAL_ROW,
+      signIn,
+      () => rowOpensReleasedWay,
+    );
+    if (personal === null) throw new Error("personal row must open released");
+    const session = openSessionWithGrants(
+      relay,
+      {
+        ...personal,
+        // The first attach under the sign-in plan reads the row and leaves it
+        // released; the read for the attach begun after the refresh's budget
+        // commits a row that is no longer the person's.
+        confirmRow: () => {
+          confirmationsAsked += 1;
+          if (confirmationsAsked === 2) rowOpensReleasedWay = false;
+          return Promise.resolve();
+        },
+        recovery: {
+          revalidateForReconnect: () =>
+            new Promise<RevalidateOutcome>((resolve) => {
+              refreshes.push(resolve);
+            }),
+        },
+      },
+      door,
+      () => {
+        grantsAsked += 1;
+        return grantsAsked < 3
+          ? Promise.resolve(OK_GRANT)
+          : new Promise<AttachGrantProvision>((resolve) => {
+              heldGrants.push(resolve);
+            });
+      },
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(heldGrants).toHaveLength(1), WAIT);
+
+      signIn.rotate(ROTATED_SIGN_IN);
+      refreshes[0]("rotated");
+      await vi.advanceTimersByTimeAsync(0);
+      heldGrants[0](OK_GRANT);
+
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(confirmationsAsked).toBe(2);
+      expect(relay.openBearers).toEqual(["", SIGN_IN, ""]);
+      expect(relay.openAuthz[2]).toEqual({
+        v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
+        grant: HOST_TOKEN,
+      });
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it.each(["rejected", "local-plane-retained"] as const)(
+    "tells the door nothing when a sign-in refresh that ran past the budget answers %s after the newer attach began and before its open was read",
+    async (late) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
+      const heldGrants: Array<(grant: AttachGrantProvision) => void> = [];
+      let grantsAsked = 0;
+      const { door, refusals } = recordingDoor();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+      relay.decideOpen = (_grant, openIndex) =>
+        openIndex < 2
+          ? { kind: "fatal", details: releasedRefusal() }
+          : { kind: "ack" };
+      const personal = signOnFor(PERSONAL_ROW, signIn);
+      if (personal === null) throw new Error("personal row must open released");
+      const session = openSessionWithGrants(
+        relay,
+        {
+          ...personal,
+          recovery: {
+            revalidateForReconnect: () =>
+              new Promise<RevalidateOutcome>((resolve) => {
+                refreshes.push(resolve);
+              }),
+          },
+        },
+        door,
+        () => {
+          grantsAsked += 1;
+          return grantsAsked < 3
+            ? Promise.resolve(OK_GRANT)
+            : new Promise<AttachGrantProvision>((resolve) => {
+                heldGrants.push(resolve);
+              });
+        },
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
+        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.waitFor(() => expect(heldGrants).toHaveLength(1), WAIT);
+        expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+        // The newer attach is under way and its open has not been read.
+        refreshes[0](late);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refusals).toEqual([]);
+
+        heldGrants[0](OK_GRANT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(refusals).toEqual([]);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    20_000,
+  );
+
+  it("ends the session and tells the door nothing when the personal host refuses the sign-in too", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const relay = new FakeRelayHost();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
@@ -480,8 +761,8 @@ describe("released personal host, remote door", () => {
       await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
       expect(relay.openBearers).toEqual(["", SIGN_IN]);
       expect(relay.openAuthz[1]).toBeNull();
-      expect(refusals).toHaveLength(1);
-      expect(hostDoorStateOfRefusal(refusals[0])).toBe("older-host");
+      // A refusal of the sign-in is never the "older host" cover.
+      expect(refusals).toEqual([]);
       const opensAtClose = relay.openBearers.length;
       await vi.advanceTimersByTimeAsync(30_000);
       expect(session.isClosed()).toBe(true);
@@ -489,6 +770,226 @@ describe("released personal host, remote door", () => {
     } finally {
       session.close();
       vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it.each(
+    RELEASED_HOST_REASONS.flatMap((reason) =>
+      (["absent", "rejected", "local-plane-retained"] as const).map(
+        (recovery) => ({ reason, recovery }),
+      ),
+    ),
+  )(
+    "tells the door nothing when the personal host refuses the sign-in bare with $reason and the recovery is $recovery",
+    async ({ reason, recovery }) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const { door, refusals } = recordingDoor();
+      // The host-only token's open is refused the released way; the sign-in's,
+      // bare, with `reason`. The open's own bearer picks the refusal: the first
+      // argument is the relay grant, the same for both.
+      relay.decideOpen = (_grant, openIndex) => ({
+        kind: "fatal",
+        details:
+          relay.openBearers[openIndex] === SIGN_IN
+            ? releasedRefusalSaying(reason)
+            : releasedRefusal(),
+      });
+      const base = signOnFor(PERSONAL_ROW, signIn);
+      if (base === null) throw new Error("personal row must open released");
+      const session = openSession(
+        relay,
+        signIn,
+        {
+          ...base,
+          recovery:
+            recovery === "absent"
+              ? null
+              : {
+                  revalidateForReconnect: () => Promise.resolve(recovery),
+                },
+        },
+        door,
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(relay.openBearers.slice(0, 2)).toEqual(["", SIGN_IN]);
+        // The session ended on the sign-in's own refusal, not the token's.
+        expect(session.terminalFatal()?.reason).toBe(reason);
+        expect(refusals).toEqual([]);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    20_000,
+  );
+
+  it("spends one sign-in refresh in a dial sequence when the host refuses every sign-in bare and each refresh answers rotated with a new bearer", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    relay.decideOpen = () => ({ kind: "fatal", details: releasedRefusal() });
+    const base = signOnFor(PERSONAL_ROW, signIn);
+    if (base === null) throw new Error("personal row must open released");
+    let refreshes = 0;
+    const rotate = (): Promise<RevalidateOutcome> => {
+      refreshes += 1;
+      signIn.rotate(`sign-in-${refreshes}`);
+      return Promise.resolve("rotated");
+    };
+    const session = openSession(
+      relay,
+      signIn,
+      {
+        ...base,
+        recovery: {
+          revalidateForReconnect: rotate,
+        },
+      },
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      // The rotation to sign-in-1 is progress; the two laps after its first
+      // open present it again and make none.
+      expect(relay.openBearers).toEqual([
+        "",
+        SIGN_IN,
+        "sign-in-1",
+        "sign-in-1",
+        "sign-in-1",
+      ]);
+      expect(refreshes).toBe(1);
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it("refreshes the sign-in for real on the next refusal when the first refresh only adopted a sibling's rotation", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door } = recordingDoor();
+    relay.decideOpen = () => ({ kind: "fatal", details: releasedRefusal() });
+    const base = signOnFor(PERSONAL_ROW, signIn);
+    if (base === null) throw new Error("personal row must open released");
+    let refreshCalls = 0;
+    // The first answer is a sibling's rotation taken from the store, which
+    // authn did not answer for this sequence; the second is authn's own.
+    const refresh = (): Promise<RevalidateOutcome | "adopted"> => {
+      refreshCalls += 1;
+      signIn.rotate(`sign-in-${refreshCalls}`);
+      return Promise.resolve(refreshCalls === 1 ? "adopted" : "rotated");
+    };
+    const session = openSession(
+      relay,
+      signIn,
+      { ...base, recovery: { revalidateForReconnect: refresh } },
+      door,
+    );
+    try {
+      session.start();
+      // The second refusal's refresh answers `rotated`, and the open after it
+      // presents the sign-in it rotated to.
+      await vi.waitFor(
+        () => expect(relay.openBearers).toContain("sign-in-2"),
+        WAIT,
+      );
+      expect(refreshCalls).toBe(2);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it("keeps redialing through an authn outage without ending, and refreshes the sign-in once authn answers", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    // The host refuses the expired sign-in bare and admits only the rotated one.
+    relay.decideOpen = (_grant, openIndex) =>
+      relay.openBearers[openIndex] === ROTATED_SIGN_IN &&
+      relay.openAuthz[openIndex] === null
+        ? { kind: "ack" }
+        : { kind: "fatal", details: releasedRefusal() };
+    const base = signOnFor(PERSONAL_ROW, signIn);
+    if (base === null) throw new Error("personal row must open released");
+    let authnReachable = false;
+    const refresh = (): Promise<RevalidateOutcome> => {
+      if (!authnReachable) return Promise.resolve("network-error");
+      signIn.rotate(ROTATED_SIGN_IN);
+      return Promise.resolve("rotated");
+    };
+    const session = openSession(
+      relay,
+      signIn,
+      {
+        ...base,
+        recovery: {
+          revalidateForReconnect: refresh,
+        },
+      },
+      door,
+    );
+    const OUTAGE_REDIALS = 5;
+    try {
+      session.start();
+      await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(session.isClosed()).toBe(false);
+        expect(relay.openBearers.length).toBeGreaterThanOrEqual(
+          2 + OUTAGE_REDIALS,
+        );
+      }, WAIT);
+      expect(session.terminalFatal()).toBeNull();
+
+      authnReachable = true;
+      await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(session.isReady()).toBe(true);
+      }, WAIT);
+      expect(relay.openBearers[relay.openBearers.length - 1]).toBe(
+        ROTATED_SIGN_IN,
+      );
+      expect(session.terminalFatal()).toBeNull();
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it("asks the replacement process its own open, and sets no mark, when a refusal answers an open dialed to the earlier process", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance("host-1", "process-a");
+    const { door } = recordingDoor();
+    relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+    // The host restarts while the first refusal is on its way; its replacement admits.
+    relay.decideOpen = (_grant, openIndex) => {
+      if (openIndex > 0) return { kind: "ack" };
+      hosts.observeInstance("host-1", "process-b");
+      return { kind: "fatal", details: namedNotAdmitted() };
+    };
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    const session = openSession(relay, signIn, { ...personal, hosts }, door);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", ""]);
+      expect(hosts.namedReason("host-1")).toBe(false);
+    } finally {
+      session.close();
     }
   }, 20_000);
 
@@ -507,7 +1008,6 @@ describe("released personal host, remote door", () => {
         ...base,
         recovery: {
           revalidateForReconnect: () => Promise.resolve("rotated"),
-          revalidateRefused: () => Promise.resolve("rotated"),
         },
       },
       door,
@@ -558,6 +1058,339 @@ describe("released personal host, remote door", () => {
     } finally {
       session.close();
       vi.useRealTimers();
+    }
+  }, 20_000);
+  it("sends no sign-in on a redial or a credential push once the row leaves the person, and the door hears the refusal", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    let rowStillTheirs = true;
+    scriptHost(relay, { value: true });
+    const session = openSession(
+      relay,
+      signIn,
+      signOnWithLiveRow(PERSONAL_ROW, signIn, () => rowStillTheirs),
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      // The directory now says another owner has the computer.
+      rowStillTheirs = false;
+      signIn.rotate(ROTATED_SIGN_IN);
+      session.notifyBearerRotated();
+      await vi.waitFor(
+        () => expect(credentialBearers(relay)).toEqual([HOST_TOKEN]),
+        WAIT,
+      );
+
+      const opensBeforeDrop = relay.openBearers.length;
+      relay.dropCurrentConnection();
+      await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      expect(relay.openBearers.slice(opensBeforeDrop)).toEqual([""]);
+      expect(relay.openBearers).not.toContain(ROTATED_SIGN_IN);
+      expect(refusals).toHaveLength(1);
+      expect(hostDoorStateOfRefusal(refusals[0])).toBe("older-host");
+      const opensAtClose = relay.openBearers.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(relay.openBearers).toHaveLength(opensAtClose);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it.each([
+    "keys_unavailable",
+    "clock_skew",
+    "enrolment_broken",
+    "membership_removed",
+    "host_claimed",
+  ] as const)(
+    "reports a remembered host's %s refusal of the sign-in to the door at once",
+    async (reason) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const { door, refusals } = recordingDoor();
+      const hosts = createReleasedHostMemory();
+      hosts.signInAdmitted(USER_ID, hosts.currentInstance("host-1"));
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: namedRefusalOf(reason),
+      });
+      const personal = signOnFor(PERSONAL_ROW, signIn);
+      if (personal === null) throw new Error("personal row must open released");
+      const session = openSession(relay, signIn, { ...personal, hosts }, door);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(refusals).toHaveLength(1), WAIT);
+        expect(refusals[0].doorReason).toBe(reason);
+        // The sign-in dial was the remembered one; no host-only token dial
+        // is spent before the door hears the host.
+        expect(relay.openBearers).toEqual([SIGN_IN]);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(relay.openBearers).toEqual([SIGN_IN]);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    20_000,
+  );
+
+  describe("a sign-in refresh left running across an admission", () => {
+    /** An admitted released connection whose control stream a bare refusal then reaches, leaving its refresh pending. */
+    async function admittedWithRefreshPending() {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const { door, refusals } = recordingDoor();
+      // Authn's received refresh requests, each answered when the test says so.
+      const refreshRequests: Array<(outcome: RevalidateOutcome) => void> = [];
+      const refresh = (): Promise<RevalidateOutcome> =>
+        new Promise<RevalidateOutcome>((resolve) => {
+          refreshRequests.push(resolve);
+        });
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+      relay.decideOpen = (_grant, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: releasedRefusal() }
+          : { kind: "ack" };
+      const personal = signOnFor(PERSONAL_ROW, signIn);
+      if (personal === null) throw new Error("personal row must open released");
+      const session = openSession(
+        relay,
+        signIn,
+        {
+          ...personal,
+          recovery: {
+            revalidateForReconnect: refresh,
+          },
+        },
+        door,
+      );
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+      await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, releasedRefusal());
+      await vi.waitFor(() => expect(refreshRequests).toHaveLength(1), WAIT);
+
+      // The protocol's recovery gives up on the pending refresh; the replacement attach is admitted.
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => {
+        expect(relay.openBearers).toEqual(["", SIGN_IN, SIGN_IN]);
+        expect(session.isReady()).toBe(true);
+      }, WAIT);
+      return {
+        relay,
+        signIn,
+        session,
+        refusals,
+        refreshRequests,
+        /** Authn answers a refresh request: the sign-in rotates, and the request returns `rotated`. */
+        answerRotated: (index: number, rotatedTo: string) => {
+          signIn.rotate(rotatedTo);
+          refreshRequests[index]("rotated");
+        },
+      };
+    }
+
+    it("asks authn for the newer connection's own refresh when the older refresh answers after the admission and before the newer connection's refusal", async () => {
+      const rig = await admittedWithRefreshPending();
+      try {
+        rig.answerRotated(0, "sign-in-from-the-older-refresh");
+        await vi.advanceTimersByTimeAsync(0);
+
+        await rig.relay.sendStreamFatal(
+          SESSION_CONTROL_STREAM_ID,
+          releasedRefusal(),
+        );
+        await vi.waitFor(
+          () => expect(rig.refreshRequests).toHaveLength(2),
+          WAIT,
+        );
+        rig.answerRotated(1, "sign-in-from-the-newer-refresh");
+        await vi.waitFor(() => {
+          expect(rig.relay.openBearers[rig.relay.openBearers.length - 1]).toBe(
+            "sign-in-from-the-newer-refresh",
+          );
+        }, WAIT);
+        expect(rig.refusals).toEqual([]);
+      } finally {
+        rig.session.close();
+        vi.useRealTimers();
+      }
+    }, 20_000);
+
+    it("asks authn for the newer connection's own refresh when its refusal arrives while the older refresh still runs", async () => {
+      const rig = await admittedWithRefreshPending();
+      try {
+        await rig.relay.sendStreamFatal(
+          SESSION_CONTROL_STREAM_ID,
+          releasedRefusal(),
+        );
+        await vi.waitFor(
+          () => expect(rig.refreshRequests).toHaveLength(2),
+          WAIT,
+        );
+        rig.answerRotated(1, "sign-in-from-the-newer-refresh");
+        await vi.waitFor(() => {
+          expect(rig.relay.openBearers[rig.relay.openBearers.length - 1]).toBe(
+            "sign-in-from-the-newer-refresh",
+          );
+        }, WAIT);
+        expect(rig.refusals).toEqual([]);
+      } finally {
+        rig.session.close();
+        vi.useRealTimers();
+      }
+    }, 20_000);
+  });
+
+  describe("a host process replaced while a relay session is dialing", () => {
+    /** A door that counts the connections it holds admitted, as the app's does, and drops a refusal while any is. */
+    function admissionCountingDoor(): {
+      readonly door: HostDoorObserver;
+      readonly liveAdmissions: () => number;
+    } {
+      let live = 0;
+      return {
+        liveAdmissions: () => live,
+        door: {
+          refused: () => undefined,
+          admitted: () => {
+            live += 1;
+            let released = false;
+            return () => {
+              if (released) return;
+              released = true;
+              live -= 1;
+            };
+          },
+        },
+      };
+    }
+
+    it("credits the door nothing for an admission delivered after the host was replaced, and the replacement's own refusal still gets its own sign-in refresh", async () => {
+      const relay = new FakeRelayHost();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const hosts = createReleasedHostMemory();
+      hosts.observeInstance("host-1", "process-a");
+      const { door, liveAdmissions } = admissionCountingDoor();
+      const refreshRequests: Array<(outcome: RevalidateOutcome) => void> = [];
+      const refresh = (): Promise<RevalidateOutcome> =>
+        new Promise<RevalidateOutcome>((resolve) => {
+          refreshRequests.push(resolve);
+        });
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+      // The host is replaced before the first admission is delivered; the
+      // replacement then refuses every open bare, as a released host does.
+      relay.decideOpen = (_grant, openIndex) => {
+        if (openIndex > 0) return { kind: "fatal", details: releasedRefusal() };
+        hosts.observeInstance("host-1", "process-b");
+        return { kind: "ack" };
+      };
+      const personal = signOnFor(PERSONAL_ROW, signIn);
+      if (personal === null) throw new Error("personal row must open released");
+      const session = openSession(
+        relay,
+        signIn,
+        {
+          ...personal,
+          hosts,
+          recovery: {
+            revalidateForReconnect: refresh,
+          },
+        },
+        door,
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(liveAdmissions()).toBe(0);
+
+        relay.dropCurrentConnection();
+        await vi.waitFor(() => expect(refreshRequests).toHaveLength(1), WAIT);
+        expect(relay.openBearers).toEqual(["", "", SIGN_IN]);
+      } finally {
+        session.close();
+      }
+    }, 20_000);
+
+    it("presents the host-only token, not the sign-in a plan made for the earlier process, when the host is replaced before the redial", async () => {
+      const relay = new FakeRelayHost();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const hosts = createReleasedHostMemory();
+      hosts.observeInstance("host-1", "process-a");
+      const { door, refusals } = recordingDoor();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+      // The first open is refused bare, which plans the sign-in for the redial.
+      relay.decideOpen = (_grant, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: releasedRefusal() }
+          : { kind: "ack" };
+      // The host is replaced between that plan and the redial's open: the redial's attach grant is asked in between.
+      let attaches = 0;
+      const personal = signOnFor(PERSONAL_ROW, signIn);
+      if (personal === null) throw new Error("personal row must open released");
+      const session = openSessionWithGrants(
+        relay,
+        { ...personal, hosts },
+        door,
+        () => {
+          attaches += 1;
+          if (attaches === 2) hosts.observeInstance("host-1", "process-b");
+          return Promise.resolve(OK_GRANT);
+        },
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers).toEqual(["", ""]);
+        expect(isHostTokenAuthz(relay.openAuthz[1])).toBe(true);
+        expect(refusals).toEqual([]);
+      } finally {
+        session.close();
+      }
+    }, 20_000);
+  });
+
+  it("reports nothing to the door when the sign-in's refresh answers rejected after the session closed", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
+    const { door, refusals } = recordingDoor();
+    relay.decideOpen = () => ({ kind: "fatal", details: releasedRefusal() });
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    const session = openSession(
+      relay,
+      signIn,
+      {
+        ...personal,
+        recovery: {
+          revalidateForReconnect: () =>
+            new Promise<RevalidateOutcome>((resolve) => {
+              refreshes.push(resolve);
+            }),
+        },
+      },
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+      session.close();
+      refreshes[0]("rejected");
+      await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
     }
   }, 20_000);
 });

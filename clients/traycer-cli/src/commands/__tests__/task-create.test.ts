@@ -25,6 +25,7 @@ import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transpo
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import { noopLogger } from "../../logger";
+import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import {
   taskCreateKeyRecordPath,
   writeTaskCreateKey,
@@ -32,6 +33,7 @@ import {
 
 const keysDir = vi.hoisted(() => ({ current: "" }));
 const fetchMock = vi.hoisted(() => vi.fn());
+const heldTokens = vi.hoisted(() => ({ table: new Map() as HostTokenTable }));
 
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -87,6 +89,26 @@ vi.mock(
     };
   },
 );
+
+// The host-only tokens held on this machine; a test seeds one to be presented by the first dial.
+vi.mock("../../../../shared/auth/host-token-file", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/host-token-file")
+    >();
+  return {
+    ...actual,
+    createHostTokenFilePersistence: () => ({
+      load: async () => heldTokens.table,
+      update: async (
+        change: (table: HostTokenTable) => HostTokenTable,
+      ): Promise<HostTokenTable> => {
+        heldTokens.table = change(heldTokens.table);
+        return heldTokens.table;
+      },
+    }),
+  };
+});
 
 const storeRotate = vi.hoisted(() => vi.fn());
 
@@ -250,6 +272,7 @@ beforeEach(async () => {
   authMock.mockResolvedValue(AUTH);
   endpointMock.mockResolvedValue(ENDPOINT);
   answerRpc(() => CREATED);
+  heldTokens.table = new Map();
   fetchMock.mockReset();
   fetchMock.mockImplementation(async () =>
     hostTokenResponse(`task-host-token-${fetchMock.mock.calls.length}`),
@@ -745,14 +768,29 @@ describe("task create: a refusal answered after an earlier send", () => {
     const retry = await rejection(run({ idempotencyKey: "slot-1" }));
     expect(retry.code).toBe(CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN);
     expect(socketRequest).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // No mint by construction: only the dial asks for a host-only token, and the socket client is the test's stub that never dials.
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(storeRotate).not.toHaveBeenCalled();
   });
 
   it("refreshes sign-in after a refused fresh host-token mint, then creates", async () => {
     delegateCreatesToRealSend();
+    // A usable host-only token is held, so the first dial presents it with no mint.
+    heldTokens.table = new Map([
+      [
+        "u1",
+        new Map([
+          [
+            "host-1",
+            {
+              token: "task-host-token-held",
+              expiresAtMs: Date.now() + 3_600_000,
+            },
+          ],
+        ]),
+      ],
+    ]);
     fetchMock
-      .mockResolvedValueOnce(hostTokenResponse("task-host-token-initial"))
       .mockResolvedValueOnce(new Response("", { status: 401 }))
       .mockResolvedValueOnce(
         hostTokenResponse("task-host-token-after-refresh"),
@@ -766,9 +804,9 @@ describe("task create: a refusal answered after an earlier send", () => {
         user: { id: "u1", email: "a@b.c", name: "A" },
       },
     });
-    // The first host-only token is refused before the request frame. A fresh
-    // mint finds the sign-in expired, so it is refreshed once before minting
-    // the token used by the successful request.
+    // The held host-only token is refused before the request frame. The
+    // recovery's fresh mint finds the sign-in expired, so it is refreshed once
+    // before minting the token used by the successful request.
     socketRequest
       .mockRejectedValueOnce(
         new HostRpcError({
@@ -792,7 +830,7 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(result.data).toMatchObject({ alreadyCreated: false });
     expect(socketRequest).toHaveBeenCalledTimes(2);
     expect(storeRotate).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
@@ -827,7 +865,8 @@ describe("task create: a refusal answered after an earlier send", () => {
     const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
     expect(error.message).toContain(path);
     expect(socketRequest).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // No mint by construction: only the dial asks for a host-only token, and the socket client is the test's stub that never dials.
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(storeRotate).not.toHaveBeenCalled();
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;

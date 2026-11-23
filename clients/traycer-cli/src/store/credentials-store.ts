@@ -65,6 +65,9 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
   });
 }
 
+/** A sign-in refresh's outcome, telling an adopted sibling's rotation ("adopted") from one authn answered. */
+export type SignInRotation = RevalidateOutcome | "adopted";
+
 /**
  * The CLI's on-`UNAUTHORIZED` bearer revalidator, backed by the locked `rotate`
  * mutation (§7). Replaces the retired `createBearerRevalidator` + `cliBearerStore`
@@ -97,9 +100,11 @@ export function createStoreBackedRevalidator(args: {
 }): AuthRevalidator &
   AuthorityBoundAuthRevalidator & {
     revalidateCurrentContext(): Promise<RevalidateOutcome>;
+    /** As `revalidateCurrentContext`, but "adopted" when a sibling's rotation was taken from the store: authn was not asked. */
+    rotateSignIn(): Promise<SignInRotation>;
   } {
   const { store, lease, signal } = args;
-  const revalidateCurrentContext = async (): Promise<RevalidateOutcome> => {
+  const rotateSignIn = async (): Promise<SignInRotation> => {
     // Boundary contract (matches the retired `createBearerRevalidator`): NEVER
     // throws — every failure, including a released lease or a store I/O fault,
     // maps to an outcome so the unary messenger and the stream monitor decide
@@ -135,7 +140,7 @@ export function createStoreBackedRevalidator(args: {
           if (result.credentials !== null) {
             lease.rotate(result.credentials.token);
           }
-          return "rotated";
+          return result.outcome === "superseded" ? "adopted" : "rotated";
         case "refresh-network":
         case "lock-busy":
         case "spend-pending":
@@ -165,8 +170,13 @@ export function createStoreBackedRevalidator(args: {
       return "network-error";
     }
   };
+  const revalidateCurrentContext = async (): Promise<RevalidateOutcome> => {
+    const outcome = await rotateSignIn();
+    return outcome === "adopted" ? "rotated" : outcome;
+  };
   return {
     revalidateCurrentContext,
+    rotateSignIn,
     // The unary auth-aware messenger (#534) is authority-bound: it revalidates
     // the exact bearer that produced the rejected open frame. Refresh only when
     // that bearer is still THIS lease; a `superseded` bearer means a newer

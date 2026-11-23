@@ -106,6 +106,7 @@ import {
 import { normalizePickedFilePath } from "../browser-view/storage/login-import/sources";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { config } from "../../config";
 import { BrowserSessionsRegistry } from "../browser-sessions/browser-sessions-owner";
 import {
@@ -618,6 +619,23 @@ export function registerBrowserViewIpc(
     return { token, userId: profile.userId };
   };
 
+  // This process's released-host memory learns each local host's process
+  // instance, as its pid. The same id under another pid is a restarted host,
+  // and nothing the earlier process answered applies to it, including answers
+  // still in flight on its sockets. An absent host is not an instance. The
+  // snapshot carries no start time, so a pid that the same host id reuses
+  // goes unseen.
+  const observeHostInstance = (): void => {
+    const snapshot = bridge.options.host.getSnapshot();
+    if (snapshot !== null)
+      processReleasedHosts.observeInstance(
+        snapshot.hostId,
+        String(snapshot.pid),
+      );
+  };
+  observeHostInstance();
+  bridge.options.host.on("change", observeHostInstance);
+
   const browserSessionsDirectory = createBrowserSessionsHostDirectory({
     authnBaseUrl: () => bridge.options.authnBaseUrl,
     relayBaseUrl: config.relayBaseUrl,
@@ -641,6 +659,9 @@ export function registerBrowserViewIpc(
     openBrowserSessionsTransport(target, userId, {
       authnBaseUrl: () => bridge.options.authnBaseUrl,
       endpoint: () => browserSessionsDirectory.endpoint(target.hostId),
+      liveRow: () => browserSessionsDirectory.peek(target.hostId),
+      confirmRow: (stillWaiting) =>
+        browserSessionsDirectory.confirmRows(stillWaiting),
       bearer: () => {
         const principal = jarPlanePrincipal();
         if (principal === null) return null;
@@ -1282,6 +1303,7 @@ export function registerBrowserViewIpc(
   );
 
   bridge.disposeFns.push(() => {
+    bridge.options.host.off("change", observeHostInstance);
     // Before the manager goes: no answer can arrive once the plane is down,
     // and an unanswered dangerous download must not stay on disk.
     discardHeldBrowserViewDownloads();

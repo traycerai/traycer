@@ -1,7 +1,6 @@
 import {
   hostTokenBearer,
-  hostTokenHeldPastExpiry,
-  hostTokenSessionAuth,
+  hostTokenStreamAuth,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
@@ -461,7 +460,10 @@ export function createLocalHostInventoryStreamClient(deps: {
   return (endpoint, userId) => {
     if (hostVersionNeedsUpdate(endpoint.version, MINIMUM_HOST_VERSION))
       return null;
-    const hostTokens = trackHostTokenMints(deps.hostTokens);
+    const hostTokens = trackHostTokenMints(
+      deps.hostTokens,
+      processReleasedHosts,
+    );
     const client = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
@@ -481,30 +483,27 @@ export function createLocalHostInventoryStreamClient(deps: {
         endpoint.hostId,
         ignoreHostTokenState,
       ),
-      presentsHeldPastExpiry: hostTokenHeldPastExpiry(
-        hostTokens,
-        deps.bearer,
-        endpoint.hostId,
-      ),
       // Main never refreshes the sign-in, so a refused one ends the stream too.
       // It holds no row and reads none: the sign-in goes only after this dial
       // sequence's refusal showed the released level.
       releasedSignOn: {
         signIn: deps.bearer,
+        mayPresentSignIn: () => true,
         recovery: null,
-        hostTokenUnobtainable: () =>
-          hostTokenUnobtainable(hostTokens, userId, endpoint.hostId),
-        ownerSignInEligible: () =>
-          ownerSignInEligible(hostTokens, userId, endpoint.hostId),
-        heldTokenRefused: (presented) =>
-          heldTokenRefused(hostTokens, userId, endpoint.hostId, presented),
-        forgetHeldRefusal: () =>
-          hostTokens.forgetHeldRefused(userId, endpoint.hostId),
+        hostTokenUnobtainable: (hostId) =>
+          hostTokenUnobtainable(hostTokens, userId, hostId),
+        ownerSignInEligible: (hostId) =>
+          ownerSignInEligible(hostTokens, userId, hostId),
+        heldTokenRefused: (instance, presented) =>
+          heldTokenRefused(hostTokens, userId, instance, presented),
+        forgetHeldRefusal: (hostId) =>
+          hostTokens.forgetHeldRefused(userId, hostId),
         hosts: processReleasedHosts,
       },
-      ...hostTokenSessionAuth(
+      ...hostTokenStreamAuth(
         {
           tokens: hostTokens,
+          hosts: processReleasedHosts,
           currentUserId: () => deps.bearer()?.identity.userId ?? null,
           hostId: endpoint.hostId,
           signInRecovery: null,

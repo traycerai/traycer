@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import { RECONNECT_INITIAL_BACKOFF_MS } from "@traycer/protocol/host-transport/remote/config";
 import {
   hostRpcRegistry,
@@ -21,10 +20,12 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { createRemoteHostTransport } from "../remote/create-remote-transport";
+import { createReleasedHostMemory } from "../released-sign-on";
 import { retireAllRemoteSessions } from "../remote/active-remote-sessions";
 import { RemoteMuxTestPeer } from "./remote-mux-test-peer";
 import {
   hostDoorStateOfRefusal,
+  type HostDoorObserver,
   type HostDoorStateKind,
 } from "../host-door-state";
 
@@ -54,7 +55,7 @@ interface RecoveryHarness {
   readonly signInCalls: string[];
   readonly recover: HostTokenRevalidator;
   // What a relay session tells the lease when the host admits its open.
-  readonly door: SessionDoorObserver;
+  readonly door: HostDoorObserver;
 }
 
 async function harness(
@@ -84,6 +85,7 @@ async function harness(
       expiresAtMs: NOW + 10_000,
     },
     tokens.era(USER_ID),
+    () => true,
   );
   const recovery = signInRecovery ?? {
     revalidateForReconnect: () => {
@@ -94,6 +96,7 @@ async function harness(
   const session = hostTokenSessionAuth(
     {
       tokens,
+      hosts: createReleasedHostMemory(),
       currentUserId: () => USER_ID,
       hostId: HOST_ID,
       signInRecovery: recovery,
@@ -340,6 +343,7 @@ describe("host-token refusal recovery", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       tokens.era(USER_ID),
+      () => true,
     );
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
@@ -356,7 +360,8 @@ describe("host-token refusal recovery", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const transport = createRemoteHostTransport({
-      opensReleasedWay: false,
+      opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId: HOST_ID,
       userId: USER_ID,
       relayAttachUrl: "wss://relay.test/attach",

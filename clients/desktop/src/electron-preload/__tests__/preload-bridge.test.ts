@@ -18,6 +18,7 @@ import {
   hostTokenBearer,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
+import { createReleasedHostMemory } from "@traycer-clients/shared/host-transport/released-sign-on";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -30,6 +31,15 @@ import {
 type IpcHandler = (event: unknown, payload: unknown) => void;
 
 type InvokeFn = (channel: string, ...args: unknown[]) => Promise<unknown>;
+
+// Main's answer to a window's token snapshot while no one is signed in; every
+// other channel answers nothing.
+const answerNothingButEmptySnapshot: InvokeFn = (channel) =>
+  Promise.resolve(
+    channel === RunnerHostInvoke.hostTokensSnapshot
+      ? { userId: null, era: -1, tokens: [] }
+      : undefined,
+  );
 type SendSyncFn = (channel: string, ...args: unknown[]) => unknown;
 
 interface SyncCall {
@@ -50,7 +60,7 @@ interface FakeElectron {
 const fakeElectron: FakeElectron = {
   channels: new Map(),
   exposed: new Map(),
-  invokeFn: () => Promise.resolve(undefined),
+  invokeFn: answerNothingButEmptySnapshot,
   sendSyncFn: (channel: string) => {
     if (channel === RunnerHostSync.windowId) {
       return "preload-window";
@@ -70,7 +80,7 @@ const fakeElectron: FakeElectron = {
   reset(): void {
     fakeElectron.channels.clear();
     fakeElectron.exposed.clear();
-    fakeElectron.invokeFn = () => Promise.resolve(undefined);
+    fakeElectron.invokeFn = answerNothingButEmptySnapshot;
     fakeElectron.sendSyncFn = (channel: string) => {
       if (channel === RunnerHostSync.windowId) {
         return "preload-window";
@@ -1552,7 +1562,7 @@ describe("preload host-token era reads", () => {
       getBearerToken: () => "sign-in-token",
     };
     const bearer = hostTokenBearer(
-      trackHostTokenMints(tokens),
+      trackHostTokenMints(tokens, createReleasedHostMemory()),
       () => signInLease,
       hostId,
       () => undefined,
@@ -1560,7 +1570,7 @@ describe("preload host-token era reads", () => {
 
     expect(knownEra).toBe(0);
     expect(tokens.current("user-a", hostId)?.token).toBe("host-token");
-    expect(bearer()).not.toBeNull();
+    expect(bearer(hostId, () => true)).not.toBeNull();
     expect(fakeElectron.syncCalls).toHaveLength(callsBeforeReads);
   });
 
@@ -1570,20 +1580,24 @@ describe("preload host-token era reads", () => {
       authnApiUrl: undefined,
       desktopDev: undefined,
       initialRouteArg: undefined,
-      invokeFn: (channel) => {
+      invokeFn: (channel, ...args) => {
         invoked.push(channel);
-        return Promise.resolve(undefined);
+        return answerNothingButEmptySnapshot(channel, ...args);
       },
       sendSyncFn: () => null,
     });
     const tokens = createDesktopHostTokenSource(bridge.hostTokens);
 
     await expect(
-      tokens.obtain("user-a", "computer-a", false, null),
+      tokens.obtain("user-a", "computer-a", false, {
+        signal: null,
+        owner: null,
+      }),
     ).resolves.toEqual({
       kind: "superseded",
     });
-    expect(invoked).toEqual([]);
+    // Only the snapshot a window's copy takes as it starts.
+    expect(invoked).toEqual([RunnerHostInvoke.hostTokensSnapshot]);
   });
 
   it.each([

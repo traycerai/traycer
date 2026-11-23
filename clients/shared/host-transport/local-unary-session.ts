@@ -55,6 +55,8 @@ export function localUnarySessionKey(
 
 export interface PersistentSocketHandlers {
   onFrame(frame: HostFrame): void;
+  /** A frame from a host process that is no longer the host's (see `openSession`). */
+  onReplacedProcessFrame(frame: HostFrame): void;
   onTransportClosed(message: string, selfInitiated: boolean): void;
 }
 
@@ -200,6 +202,9 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     this.handlers = {
       onFrame: (frame) => {
         this.onFrame(frame);
+      },
+      onReplacedProcessFrame: (frame) => {
+        this.onReplacedProcessFrame(frame);
       },
       onTransportClosed: (message, selfInitiated) => {
         this.onTransportClosed(message, selfInitiated);
@@ -711,6 +716,24 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       this.failQueued(null);
     }
     this.retireIfUnoccupied(true);
+  }
+
+  /**
+   * A frame from a host process that is no longer the host's. Only a call's
+   * own answer that says it ran there is delivered ({@link answersAsRun}).
+   * Every other frame, a door refusal or a fatal included, is the socket's
+   * loss: sent calls are left uncertain and queued ones fail before send, as
+   * on any loss.
+   */
+  private onReplacedProcessFrame(frame: HostFrame): void {
+    if (answersAsRun(frame)) {
+      this.onFrame(frame);
+      return;
+    }
+    this.onPeerLoss(
+      `Unexpected host frame '${frame.kind}' on the persistent session`,
+      false,
+    );
   }
 
   private onTransportClosed(message: string, selfInitiated: boolean): void {
@@ -1385,6 +1408,19 @@ function abortedCall(
     method: call.method,
     mayHaveDispatched,
   });
+}
+
+/**
+ * A response that says its call ran on the host: a result, or a method error.
+ * A retryable error or a door refusal (a `doorReason`) is about whether the
+ * call was let in, not its outcome.
+ */
+export function answersAsRun(frame: HostFrame): boolean {
+  return (
+    frame.kind === "response" &&
+    (frame.error === null ||
+      (frame.error.retryable !== true && frame.error.doorReason === undefined))
+  );
 }
 
 function preSendRetryable(

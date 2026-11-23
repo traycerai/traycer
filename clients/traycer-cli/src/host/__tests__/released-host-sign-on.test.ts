@@ -1,6 +1,8 @@
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import {
   createReleasedHostMemory,
+  type HostInstance,
+  type InvitationMark,
   type ReleasedHostMemory,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
@@ -102,28 +104,50 @@ vi.mock(
     return {
       ...actual,
       processReleasedHosts: {
+        currentInstance: (hostId: string): HostInstance =>
+          releasedMemory.read().currentInstance(hostId),
+        isCurrent: (instance: HostInstance): boolean =>
+          releasedMemory.read().isCurrent(instance),
+        observeInstance: (hostId: string, observed: string): void => {
+          releasedMemory.read().observeInstance(hostId, observed);
+        },
         opensReleasedWay: (userId: string, hostId: string): boolean =>
           releasedMemory.read().opensReleasedWay(userId, hostId),
         namedReason: (hostId: string): boolean =>
           releasedMemory.read().namedReason(hostId),
-        signInAdmitted: (userId: string, hostId: string): void => {
-          releasedMemory.read().signInAdmitted(userId, hostId);
+        signInAdmitted: (userId: string, instance: HostInstance): void => {
+          releasedMemory.read().signInAdmitted(userId, instance);
         },
-        hostTokenAdmitted: (hostId: string): void => {
-          releasedMemory.read().hostTokenAdmitted(hostId);
+        hostTokenAdmitted: (instance: HostInstance): void => {
+          releasedMemory.read().hostTokenAdmitted(instance);
         },
-        refusedNamingReason: (hostId: string): void => {
-          releasedMemory.read().refusedNamingReason(hostId);
+        refusedNamingReason: (
+          instance: HostInstance,
+          invitation: boolean,
+        ): void => {
+          releasedMemory.read().refusedNamingReason(instance, invitation);
         },
-        declineProbe: (userId: string, hostId: string): void => {
-          releasedMemory.read().declineProbe(userId, hostId);
+        invitationHeard: (instance: HostInstance): InvitationMark =>
+          releasedMemory.read().invitationHeard(instance),
+        invitationWithdrawn: (mark: InvitationMark): boolean =>
+          releasedMemory.read().invitationWithdrawn(mark),
+        declineProbe: (userId: string, instance: HostInstance): void => {
+          releasedMemory.read().declineProbe(userId, instance);
         },
         probeDeclined: (userId: string, hostId: string): boolean =>
           releasedMemory.read().probeDeclined(userId, hostId),
+        invitedSignInPending: (hostId: string): boolean =>
+          releasedMemory.read().invitedSignInPending(hostId),
+        invitedSignInWritten: (instance: HostInstance): void => {
+          releasedMemory.read().invitedSignInWritten(instance);
+        },
+        invitedSignInAnswered: (instance: HostInstance): void => {
+          releasedMemory.read().invitedSignInAnswered(instance);
+        },
         forgetAll: (): void => {
           releasedMemory.read().forgetAll();
         },
-      },
+      } satisfies ReleasedHostMemory,
     };
   },
 );
@@ -444,15 +468,20 @@ afterEach(() => {
 });
 
 describe("CLI credential probe against a released host", () => {
-  it("opens every dial sequence with the host-only token, then the sign-in after its bare refusal, and sends hostCredentialProvision while authn answers nothing for the host's row", async () => {
+  it("probes the first dial sequence without waiting for the mint, then signs in after the bare refusal; the next sequence opens with the host-only token that mint bought, and signs in only after the released host refuses it bare", async () => {
     const outcome = await probe("personal", 20_000);
-    const tokens = openTokens();
     expect(outcome).toEqual({ kind: "active", minted: true });
-    expect(tokens.length).toBeGreaterThanOrEqual(2);
-    expect(tokens.length % 2).toBe(0);
-    tokens.forEach((token, index) => {
-      expect(token).toBe(index % 2 === 0 ? HOST_TOKEN : SIGN_IN);
-    });
+    // Sequence 1 holds no token, so it goes at once with the probe while the
+    // mint runs in the background. The sequence's sign-in is admitted (`missing`),
+    // and the 750 ms push drain that follows lets the mint land. Sequence 2
+    // therefore opens with the held token, which this released host refuses as
+    // it would any host-only token; that refusal is its own, so the sign-in follows.
+    expect(openTokens()).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+      HOST_TOKEN,
+      SIGN_IN,
+    ]);
     expect(harness.state.hostRowReads).toEqual([]);
     expect(provisionFrames()).toEqual([
       {
@@ -478,10 +507,13 @@ describe("CLI credential probe against a released host", () => {
     expect(provisionFrames()).toHaveLength(1);
   }, 30_000);
 
-  it("never sends the sign-in when a current host names its refusal of the host-only token", async () => {
+  it("opens the probe, then the host-only token twice, and never the sign-in, when a current host names its refusal of each", async () => {
     const outcome = await probe("current-token", 8_000);
-    // The one fresh-token recovery opens again with a host-only token.
-    expect(openTokens()).toEqual([HOST_TOKEN, HOST_TOKEN]);
+    // The probe goes at once while the mint runs; the host names its refusal
+    // of it, so no sign-in follows and the next open carries the token the
+    // mint bought. Its refusal takes the one fresh-token recovery, which opens
+    // again with a host-only token; a second refusal is final.
+    expect(openTokens()).toEqual([NO_HOST_TOKEN_PROBE, HOST_TOKEN, HOST_TOKEN]);
     expect(outcome).toEqual({
       kind: "error",
       message:

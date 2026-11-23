@@ -77,6 +77,7 @@ function openStream(hostToken: string | null): {
       ownerSignInEligible: () => hostToken === null,
       heldTokenRefused: () => false,
       forgetHeldRefusal: () => undefined,
+      mayPresentSignIn: () => true,
       hosts: processReleasedHosts,
     },
     auth: null,
@@ -159,7 +160,10 @@ describe("released host memory across a gui sign-out", () => {
         <div />
       </EpicSessionLifecycleBridge>,
     );
-    processReleasedHosts.signInAdmitted(USER_ID, HOST_ID);
+    processReleasedHosts.signInAdmitted(
+      USER_ID,
+      processReleasedHosts.currentInstance(HOST_ID),
+    );
     expect(processReleasedHosts.opensReleasedWay(USER_ID, HOST_ID)).toBe(true);
 
     act(() => setSignedOut());

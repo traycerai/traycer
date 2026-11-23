@@ -47,6 +47,7 @@ import {
   type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
+import type { RowConfirmationAttach } from "@traycer-clients/shared/host-transport/row-confirmation";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
@@ -101,6 +102,20 @@ export interface BuildRawHostMessengerForTargetParams<
   Registry extends VersionedRpcRegistry,
 > {
   readonly target: HostDirectoryEntry;
+  /**
+   * The in-memory directory's current row for a host, read on every remote
+   * dial: `target` is this binding's snapshot, and the session it builds
+   * redials on its own after the row has moved on.
+   */
+  readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
+  /**
+   * Waited on before a remote attach whose open would carry the sign-in
+   * (`confirmRowWhenHidden`): `resolveTarget`'s row is current only while the
+   * window applies registry changes.
+   */
+  readonly confirmRowBeforeSignIn: (
+    attach: RowConfirmationAttach,
+  ) => Promise<unknown>;
   readonly registry: Registry;
   /**
    * Reads the bearer the CURRENT request is authorized under. The remote
@@ -192,7 +207,11 @@ export function buildRawHostMessengerForTarget<
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       hostTokens: params.hostTokens,
-      opensReleasedWay: opensReleasedWay(params.target, params.userId),
+      opensReleasedWay: () => {
+        const row = params.resolveTarget(params.target.hostId);
+        return row !== null && opensReleasedWay(row, params.userId);
+      },
+      confirmRowBeforeSignIn: params.confirmRowBeforeSignIn,
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -282,6 +301,10 @@ export interface BuildRuntimeHostMessengerParams<
    * looked up here rather than threaded through the transport contract.
    */
   readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
+  /** See `BuildRawHostMessengerForTargetParams.confirmRowBeforeSignIn`. */
+  readonly confirmRowBeforeSignIn: (
+    attach: RowConfirmationAttach,
+  ) => Promise<unknown>;
   /**
    * Auth recovery the remote transport uses when the host FATALs the shared
    * session `UNAUTHORIZED` (see `BuildRawHostMessengerForTargetParams.auth`).
@@ -354,6 +377,9 @@ class RuntimeHostMessenger<
 > implements IHostMessenger<Registry> {
   private readonly registry: Registry;
   private readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
+  private readonly confirmRowBeforeSignIn: (
+    attach: RowConfirmationAttach,
+  ) => Promise<unknown>;
   private readonly auth: StreamAuthRevalidator | null;
   private readonly authnBaseUrl: string;
   private readonly hostTokens: HostTokenSource;
@@ -442,6 +468,7 @@ class RuntimeHostMessenger<
   constructor(params: BuildRuntimeHostMessengerParams<Registry>) {
     this.registry = params.registry;
     this.resolveTarget = params.resolveTarget;
+    this.confirmRowBeforeSignIn = params.confirmRowBeforeSignIn;
     this.auth = params.auth;
     this.authnBaseUrl = params.authnBaseUrl;
     this.hostTokens = params.hostTokens;
@@ -671,6 +698,8 @@ class RuntimeHostMessenger<
 
     const built = buildRawHostMessengerForTarget({
       target,
+      resolveTarget: this.resolveTarget,
+      confirmRowBeforeSignIn: this.confirmRowBeforeSignIn,
       userId,
       registry: this.registry,
       bearer: () => this.currentBearer,
@@ -1058,16 +1087,16 @@ function localDoorBearers(
   | "heldTokenRefusedFor"
   | "forgetHeldRefusalFor"
 > {
-  const tracked = trackHostTokenMints(tokens);
+  const tracked = trackHostTokenMints(tokens, processReleasedHosts);
   return {
     hostBearerFor: hostTokenBearerFor(tracked, noteHostTokenRefusal),
     releasedSignOnFor: signInForLocalRow(resolveRow, recovery, tracked),
     releasedHosts: processReleasedHosts,
-    heldTokenRefusedFor: (authority, presented) =>
+    heldTokenRefusedFor: (authority, presented, instance) =>
       heldTokenRefused(
         tracked,
         authority.bearer.identity.userId,
-        authority.endpoint.hostId,
+        instance,
         presented,
       ),
     forgetHeldRefusalFor: (authority) =>
@@ -1096,9 +1125,9 @@ function remoteTransportKey(entry: HostDirectoryEntry): string | null {
   // `status` is deliberately excluded: it doesn't feed `createRemoteHostTransport`,
   // so folding it into the identity key would rotate the session (tearing down a
   // healthy Noise/relay transport) on every availability/busy poll update.
-  // The owner is part of it: the binding's session decides at build whether
-  // the sign-in may go to this host (`opensReleasedWay`), so an owner change
-  // must rebuild it, as the stream key does.
+  // The owner is part of it: the session's cache key says whether it may ever
+  // present the sign-in (`opensReleasedWay` at build), so an owner change
+  // rebuilds it, as the stream key does. Each dial reads the row again.
   return [
     entry.hostId,
     entry.websocketUrl,

@@ -25,6 +25,7 @@ const NOOP_CALLBACKS = {
   onCommandFailed: () => undefined,
   onUnsupported: () => undefined,
   onConnectionStatus: () => undefined,
+  onBackoffEntered: () => undefined,
 };
 
 function openBatchClient(

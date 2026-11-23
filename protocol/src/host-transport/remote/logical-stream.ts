@@ -117,6 +117,7 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
 
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
+  private readonly backoffListeners = new Set<() => void>();
   private outboundProgressHandler: (() => void) | null = null;
   private status: StreamConnectionStatus = "connecting";
   private statusReason: StreamCloseReason | null = null;
@@ -304,6 +305,27 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     }
     handler(envelope, binaryPayload);
     return true;
+  }
+
+  /**
+   * Called each time the session puts this stream on a wait: a delayed
+   * redial or re-open, or a park that only something outside can end. Never
+   * for an attach that follows at once, nor for a recovery's own timed redial.
+   * Internal: no status changes with it.
+   */
+  onBackoffEntered(listener: () => void): () => void {
+    this.backoffListeners.add(listener);
+    return () => {
+      this.backoffListeners.delete(listener);
+    };
+  }
+
+  /** The session's side of {@link onBackoffEntered}. */
+  notifyBackoffEntered(): void {
+    if (this.disposed) {
+      return;
+    }
+    for (const listener of [...this.backoffListeners]) listener();
   }
 
   /**

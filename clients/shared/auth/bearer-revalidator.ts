@@ -36,6 +36,8 @@ export interface RefusalAwareAuthRevalidator extends AuthorityBoundAuthRevalidat
     expected: OpenFrameBearerSource,
     hostId: string,
     refusal: FatalErrorDetails | null,
+    /** The call this recovery is for: a mint it starts reports nothing once this is aborted. */
+    callSignal: AbortSignal,
   ): Promise<RevalidateOutcome | "superseded">;
   /**
    * Asked as a call starts; what it returns runs once the host has answered that

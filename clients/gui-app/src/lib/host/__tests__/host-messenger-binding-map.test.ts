@@ -137,6 +137,7 @@ function harness() {
   const opened: Array<
     CreateRemoteTransportOptions<HostRpcRegistry, HostStreamRpcRegistry>
   > = [];
+  const releasedWayWhenBuilt: boolean[] = [];
   const build = (label: string) => {
     const session = countingSession(label);
     sessions.push(session);
@@ -157,6 +158,7 @@ function harness() {
       >,
     ) => {
       opened.push(params);
+      releasedWayWhenBuilt.push(params.opensReleasedWay());
       return build(`${params.hostId}/${params.hostPublicKey}`);
     },
   );
@@ -179,6 +181,7 @@ function harness() {
   ];
   const hostTokens = inertHostTokenSource();
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     registry: hostRpcRegistry,
     resolveTarget: (hostId) =>
       entries().find((entry) => entry.hostId === hostId) ?? null,
@@ -226,6 +229,7 @@ function harness() {
       return physicalHost;
     },
     opened,
+    releasedWayWhenBuilt,
     hostTokens,
     sandbox: () => sandbox,
     otherHost: () => otherHost,
@@ -288,10 +292,9 @@ describe("RuntimeHostMessenger binding map", () => {
     expect(h.sessions).toHaveLength(2);
     expect(h.sessions[0]?.closeCalls).toBe(1);
     expect(h.sessions[1]?.closeCalls).toBe(0);
-    expect(h.opened.map((options) => options.opensReleasedWay)).toEqual([
-      true,
-      false,
-    ]);
+    expect(h.releasedWayWhenBuilt).toEqual([true, false]);
+    // The replaced session's row is read live, so it too sends no sign-in now.
+    expect(h.opened[0]?.opensReleasedWay()).toBe(false);
     h.dispose();
   });
 

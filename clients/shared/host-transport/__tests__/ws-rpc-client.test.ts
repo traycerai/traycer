@@ -70,7 +70,10 @@ import type {
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
-import type { HostTokenMintOutcome } from "@traycer-clients/shared/auth/host-token-source";
+import type {
+  HostTokenMintFailure,
+  HostTokenMintOutcome,
+} from "@traycer-clients/shared/auth/host-token-source";
 import {
   hostTokenBearerFor,
   trackHostTokenMints,
@@ -320,16 +323,21 @@ function mutableTokenAccess(
   readonly setCurrent: (token: HostToken | null) => void;
 } {
   let current = initial;
+  let lastFailure: HostTokenMintFailure | null = null;
   return {
     access: {
       current: () => current,
+      loaded: () => true,
+      whenLoaded: () => Promise.resolve(),
       obtain: async () => {
         const outcome =
           outcomes.shift() ??
           ({ kind: "unavailable", detail: "authn offline" } as const);
         if (outcome.kind === "ok") current = outcome.token;
+        lastFailure = outcome.kind === "ok" ? null : outcome.kind;
         return outcome;
       },
+      lastFailureOf: () => lastFailure,
     },
     setCurrent: (token) => {
       current = token;
@@ -343,8 +351,8 @@ function makeReleasedUnaryRig(input: {
   readonly outcomes: HostTokenMintOutcome[];
 }) {
   const mutable = mutableTokenAccess(input.initialToken, input.outcomes);
-  const tokens = trackHostTokenMints(mutable.access);
   const hosts = createReleasedHostMemory();
+  const tokens = trackHostTokenMints(mutable.access, hosts);
   const { factory, sockets } = makeFactory();
   let requestNumber = 0;
   let doorRefusals = 0;
@@ -367,15 +375,10 @@ function makeReleasedUnaryRig(input: {
       refused: () => {
         doorRefusals += 1;
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     }),
-    heldTokenRefusedFor: (_authority, presented) =>
-      heldTokenRefused(
-        tokens,
-        RELEASED_TEST_USER,
-        RELEASED_TEST_HOST,
-        presented,
-      ),
+    heldTokenRefusedFor: (_authority, presented, instance) =>
+      heldTokenRefused(tokens, RELEASED_TEST_USER, instance, presented),
     forgetHeldRefusalFor: () =>
       tokens.forgetHeldRefused(RELEASED_TEST_USER, RELEASED_TEST_HOST),
   });
@@ -472,7 +475,10 @@ async function completeReleasedStatusCall(
 
 function doorFatal(
   doorReason:
-    "not_admitted" | "owner_sign_in" | "not_provisioned" | "token_expired",
+    | "not_admitted"
+    | "owner_sign_in"
+    | "not_provisioned"
+    | "token_expired",
   reason: string,
 ): HostFrame {
   return {
@@ -1073,7 +1079,7 @@ describe("WsRpcClient", () => {
         RELEASED_TEST_USER,
         RELEASED_TEST_HOST,
         false,
-        null,
+        { signal: null, owner: null },
       );
       expect(minted.kind).toBe("ok");
 

@@ -27,10 +27,14 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
-import type {
-  HostTokenEraReply,
-  HostTokenObtainReply,
-  HostTokenRenewReply,
+import {
+  NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenAdoptReply,
+  type HostTokenEraReply,
+  type HostTokenObtainOwner,
+  type HostTokenObtainReply,
+  type HostTokenRenewReply,
+  type HostTokenSnapshotReply,
 } from "../../ipc-contracts/host-token-types";
 import {
   listUserSessionsViaHttp,
@@ -127,6 +131,7 @@ import {
   readSenderWebContentsId,
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { registerLocalAuthSessionRestore } from "./local-auth-session";
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -152,6 +157,18 @@ function hostIdsOf(value: unknown): readonly string[] {
     assertString(hostId, "hostTokensRenew.hostIds[]");
     return hostId;
   });
+}
+
+function ownerOf(value: unknown, context: string): HostTokenObtainOwner {
+  if (typeof value !== "object" || value === null)
+    throw new Error(`${context} requires an object argument`);
+  const observed: unknown = Reflect.get(value, "observed");
+  if (observed !== null) assertString(observed, `${context}.observed`);
+  return { observed };
+}
+
+function obtainOwnerOf(value: unknown): HostTokenObtainOwner | null {
+  return value === null ? null : ownerOf(value, "hostTokensObtain.owner");
 }
 
 function hostTokenOf(value: unknown): HostToken {
@@ -219,16 +236,35 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       hostId: unknown,
       fresh: unknown,
       expectedEra: unknown,
+      owner: unknown,
     ): Promise<HostTokenObtainReply> => {
       assertString(userId, "hostTokensObtain.userId");
       assertString(hostId, "hostTokensObtain.hostId");
       assertBoolean(fresh, "hostTokensObtain.fresh");
       assertNumber(expectedEra, "hostTokensObtain.expectedEra");
+      const asked = obtainOwnerOf(owner);
       const outcome: HostTokenMintOutcome =
         tokens.era(userId) === expectedEra
-          ? await tokens.obtain(userId, hostId, fresh, null)
+          ? await tokens.obtain(
+              userId,
+              hostId,
+              fresh,
+              asked === null
+                ? { signal: null, owner: null }
+                : {
+                    signal: null,
+                    owner: { hostId, observed: asked.observed },
+                    // Main's own observation, read at the write.
+                    observedNow: () =>
+                      processReleasedHosts.currentInstance(hostId).observed,
+                  },
+            )
           : { kind: "superseded" };
-      return { outcome, era: tokens.era(userId) };
+      // The window installs a token only if it is the one main holds now.
+      const held =
+        outcome.kind === "ok" &&
+        tokens.current(userId, hostId)?.token === outcome.token.token;
+      return { outcome, held, era: tokens.era(userId) };
     },
   );
   bridge.handleInvoke(
@@ -262,12 +298,27 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       hostId: unknown,
       token: unknown,
       expectedEra: unknown,
-    ): Promise<HostTokenEraReply> => {
+      owner: unknown,
+    ): Promise<HostTokenAdoptReply> => {
       assertString(userId, "hostTokensAdopt.userId");
       assertString(hostId, "hostTokensAdopt.hostId");
       assertNumber(expectedEra, "hostTokensAdopt.expectedEra");
-      await tokens.adopt(userId, hostId, hostTokenOf(token), expectedEra);
-      return { era: tokens.era(userId) };
+      const { observed } = ownerOf(owner, "hostTokensAdopt.owner");
+      // What main can know of the window's attempt: the host process it was
+      // for, compared with the one main observes now, in the step that writes.
+      // A host main never observes (reached only through the relay) reads
+      // `null` on both sides for life, so there only the era and the order
+      // apply. Whether the window retired the attempt for another reason main
+      // cannot see; the token is still this person's for this process and era.
+      const kept = await tokens.adopt(
+        userId,
+        hostId,
+        hostTokenOf(token),
+        expectedEra,
+        () =>
+          processReleasedHosts.currentInstance(hostId).observed === observed,
+      );
+      return { kept, era: tokens.era(userId) };
     },
   );
   bridge.handleInvoke(
@@ -278,13 +329,33 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       return { era: tokens.era(userId) };
     },
   );
+  // Only the person signed in here: a window may obtain nothing for anyone
+  // else. Tokens and era are read in one step, after the table is read.
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensSnapshot,
+    async (): Promise<HostTokenSnapshotReply> => {
+      await tokens.whenLoaded();
+      const userId = (await bridge.authTokenStore.get())?.user.id ?? null;
+      if (userId === null)
+        return { userId, era: NO_ISSUED_HOST_TOKEN_ERA, tokens: [] };
+      return {
+        userId,
+        era: tokens.era(userId),
+        tokens: Array.from(tokens.heldFor(userId), ([hostId, token]) => ({
+          hostId,
+          token,
+        })),
+      };
+    },
+  );
   bridge.disposeFns.push(
-    tokens.subscribe(({ userId, hostId }) => {
+    tokens.subscribe(({ userId, hostId, replaced }) => {
       bridge.fanOut(RunnerHostEvent.hostTokensChange, {
         userId,
         hostId,
         token: tokens.current(userId, hostId),
         era: tokens.era(userId),
+        replaced,
       });
     }),
   );

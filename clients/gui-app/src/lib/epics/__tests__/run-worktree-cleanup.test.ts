@@ -21,6 +21,10 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
+// No deadline bounds the cleanup's wait before the request is sent: it settles
+// only when the stream enters backoff (`onBackoffEntered`) or closes.
+const LONG_WAIT_MS = 10 * 60_000;
+
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
 // Recording every construction is what lets a test assert the migration's core
 // claim - N approved paths produce one command, not N streams.
@@ -379,11 +383,65 @@ describe("runWorktreeCleanup on a current host", () => {
     expect(legacyMock.paths).toEqual([]);
   });
 
-  it("reports a drop BEFORE the command was sent as failed", async () => {
+  it("ignores every reconnecting BEFORE the command was sent, with no deadline, and reports the paths failed when the stream enters backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const promise = runTaskCleanup(["/wt/a"]);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      // The subscribe frame never got to a socket, so nothing was attempted and
+      // there is nothing uncertain about it; the stream is still dialing.
+      commandCallbacks().onConnectionStatus(
+        status("reconnecting", null, false),
+      );
+      commandCallbacks().onConnectionStatus(
+        status("reconnecting", null, false),
+      );
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
+      expect(settled).toBe(false);
+
+      commandCallbacks().onBackoffEntered(false);
+      await expect(promise).resolves.toEqual({
+        removed: [],
+        failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
+        uncertain: [],
+      });
+      expect(legacyMock.paths).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores the stream entering backoff AFTER the command was sent, and settles it unconfirmed on the later drop", async () => {
+    vi.useFakeTimers();
+    try {
+      const promise = runTaskCleanup(["/wt/a"]);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      commandCallbacks().onConnectionStatus(status("connecting", null, true));
+      commandCallbacks().onBackoffEntered(true);
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
+      expect(settled).toBe(false);
+
+      commandCallbacks().onConnectionStatus(status("reconnecting", null, true));
+      await expect(promise).resolves.toEqual({
+        removed: [],
+        failed: [],
+        uncertain: ["/wt/a"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a close BEFORE the command was sent as failed at once", async () => {
     const promise = runTaskCleanup(["/wt/a"]);
-    // The subscribe frame never got to a socket, so nothing was attempted and
-    // there is nothing uncertain about it.
-    commandCallbacks().onConnectionStatus(status("reconnecting", null, false));
+    commandCallbacks().onConnectionStatus(status("closed", null, false));
 
     await expect(promise).resolves.toEqual({
       removed: [],
@@ -470,23 +528,36 @@ describe("runWorktreeCleanup on an older host", () => {
   // (exactly one subscribe, no reconnect re-run), and let the overall promise
   // settle so the summary toast + cache invalidation still fire. Unchanged by
   // the migration: an older host has no command to keep running without us.
-  it("fails fast and settles when a per-target stream drops", async () => {
-    const promise = runTaskCleanup(["/wt/a"]);
-    await reportUnsupported();
-    legacyCallbacksFor("/wt/a").onConnectionStatus(
-      "reconnecting",
-      null,
-      null,
-      null,
-    );
+  it("ignores every reconnecting of a per-target stream before the request, with no deadline, and fails the paths when the stream enters backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const promise = runTaskCleanup(["/wt/a"]);
+      await reportUnsupported();
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      legacyCallbacksFor("/wt/a").onConnectionStatus(
+        "reconnecting",
+        null,
+        null,
+        null,
+      );
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
+      expect(settled).toBe(false);
 
-    await expect(promise).resolves.toEqual({
-      removed: [],
-      failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
-      uncertain: [],
-    });
-    expect(legacyMock.paths).toEqual(["/wt/a"]);
-    expect(legacyMock.closeCount).toBe(1);
+      legacyCallbacksFor("/wt/a").onBackoffEntered();
+      await expect(promise).resolves.toEqual({
+        removed: [],
+        failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
+        uncertain: [],
+      });
+      expect(legacyMock.paths).toEqual(["/wt/a"]);
+      expect(legacyMock.closeCount).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("treats a per-target close before a terminal frame as a failure", async () => {
