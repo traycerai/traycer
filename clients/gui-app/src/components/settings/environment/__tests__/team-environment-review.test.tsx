@@ -998,6 +998,37 @@ describe("Team Review through the addressed page", () => {
     ).toBe(false);
   });
 
+  it("shows an HTTP MCP definition and keeps its Apply and Discard choices", async () => {
+    const url = "https://docs.example.test/mcp";
+    const { harness } = createReviewHarness("admin", [
+      held({
+        id: "mcp-http",
+        kind: "mcp_server",
+        key: "docs-server",
+        proposed: {
+          definition: { transport: "http", url },
+          toolToggles: {},
+        },
+        current: null,
+        liveRevision: null,
+      }),
+    ]);
+    renderTeamPage(harness);
+
+    const dialog = await openReview();
+    const row = await within(dialog).findByTestId(
+      "retrospective-held-mcp-http",
+    );
+
+    expect(row.textContent).toContain(url);
+    expect(
+      within(row).getByTestId("retrospective-held-mcp-http-approve"),
+    ).toBeTruthy();
+    expect(
+      within(row).getByTestId("retrospective-held-mcp-http-discard"),
+    ).toBeTruthy();
+  });
+
   it("renders deletes as Remove and withholds actions for unreadable held values", async () => {
     const rows = [
       held({
