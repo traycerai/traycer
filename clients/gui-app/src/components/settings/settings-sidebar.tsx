@@ -74,6 +74,27 @@ export interface SettingsSidebarProps {
  * `settings-sections.ts` for the grouping itself.
  */
 export function SettingsSidebar(props: SettingsSidebarProps) {
+  // The modal holds its section and reads no route: it is not always mounted
+  // under a router, so only the routed tab asks the route which row it holds.
+  return props.mode.kind === "modal" ? (
+    <SettingsSidebarBody {...props} heldSection={props.mode.activeSection} />
+  ) : (
+    <RoutedSettingsSidebar {...props} />
+  );
+}
+
+function RoutedSettingsSidebar(props: SettingsSidebarProps) {
+  const routedSection = useRoutedSectionId();
+  return <SettingsSidebarBody {...props} heldSection={routedSection} />;
+}
+
+function SettingsSidebarBody(
+  props: SettingsSidebarProps & {
+    /** The row the rail highlights: the section the surface holds. */
+    readonly heldSection: SettingsSectionId | null;
+  },
+) {
+  const { heldSection } = props;
   const scope = useHostScope();
   const globalScope = useHostScopeFor(WINDOW_HOST_SELECTION);
   // Read here, not in the search component, because a running search REPLACES
@@ -94,10 +115,6 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // The kind of pick decides the Environment rows, and nothing a host answers
   // does, so the rail keeps its shape while a handshake is pending.
   const environmentSectionShown = useEnvironmentSectionShown(globalScope);
-  // The row the rail highlights: the section the surface holds.
-  const routedSection = useRoutedSectionId();
-  const heldSection =
-    props.mode.kind === "modal" ? props.mode.activeSection : routedSection;
   // The Guide group leaves the rail once every Getting started step is done.
   const guideComplete = useGettingStartedGuideIsComplete();
   const groups = guideComplete
