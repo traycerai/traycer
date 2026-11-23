@@ -441,7 +441,10 @@ describe("<EnvironmentPicker />", () => {
 
     const row = screen.getByTestId("environment-picker-local-old");
     expect(row.textContent).toContain("Old laptop");
-    expect(row.textContent).toContain(LOCAL_ROW_NOT_MOVED);
+    expect(row.textContent).toContain(
+      "its own settings, update to move to Personal",
+    );
+    expect(row.textContent).not.toContain(LOCAL_ROW_NOT_MOVED);
     expect(row.getAttribute("aria-disabled")).toBeNull();
     expect(screen.queryByTestId("environment-picker-move-old")).toBeNull();
 

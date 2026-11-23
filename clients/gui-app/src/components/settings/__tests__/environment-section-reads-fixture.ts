@@ -49,6 +49,10 @@ export const personalHostScopeModule = {
     hostScopeFixture(personalHostScopeOverrides.current),
   usePersonalHostScope: (): HostScope =>
     hostScopeFixture(personalHostScopeOverrides.current),
+  usePickHostScope: (): HostScope =>
+    hostScopeFixture(personalHostScopeOverrides.current),
+  useHostScopeForHostId: (): HostScope =>
+    hostScopeFixture(personalHostScopeOverrides.current),
   WINDOW_HOST_SELECTION: {
     scopedHostId: null,
     setScopedHostId: () => undefined,

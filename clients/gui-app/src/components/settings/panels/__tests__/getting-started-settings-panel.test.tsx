@@ -8,7 +8,13 @@ import type { ThisComputer } from "@/components/settings/move/this-computer";
 import type { ThisComputersMove } from "@/components/settings/move/use-this-computers-move";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   userSubscription,
@@ -21,10 +27,25 @@ import {
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
-import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { recordOldHost } from "@/components/settings/__tests__/old-host-pick-fixture";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  pickOldHostLocal,
+  recordOldHost,
+} from "@/components/settings/__tests__/old-host-pick-fixture";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-import { UNRESOLVED_PICK } from "@/lib/settings-environment-pages";
+import {
+  personalHostScopeOverrides,
+  resetEnvironmentSectionReads,
+  windowHostRunsPersonal,
+} from "@/components/settings/__tests__/environment-section-reads-fixture";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  PERSONAL_PICK,
+  UNRESOLVED_PICK,
+} from "@/lib/settings-environment-pages";
 
 const secretRoute = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -206,6 +227,24 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ signInUrl: "https://traycer.ai/sign-in" }),
 }));
 
+// The card is judged on the default pick's page, which reads the window's host
+// through one scope and whether it runs Personal: the shared fixtures answer
+// both, so these cases stay about the cards.
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).personalHostScopeModule,
+);
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).windowHostRunsPersonalModule,
+);
+
 const navigateMock = vi.hoisted(() => vi.fn());
 const activateTabIntentMock = vi.hoisted(() =>
   vi.fn((_navigate: unknown, _intent: unknown, _options: unknown) => true),
@@ -300,6 +339,16 @@ function positiveUser(): AuthenticatedUser {
   );
 }
 
+const OLD_HOST_OPTION = hostScopeOptionFixture({
+  hostId: "host-old",
+  name: "Old laptop",
+});
+const OLD_LOCAL_PICK = {
+  kind: "local",
+  hostId: "host-old",
+  hostName: "Old laptop",
+} as const;
+
 describe("GettingStartedSettingsPanel", () => {
   beforeEach(() => {
     mocks.providers = [];
@@ -324,7 +373,7 @@ describe("GettingStartedSettingsPanel", () => {
     setSectionMock.mockReset();
     useSettingsEnvironmentPickStore.setState({
       pick: null,
-      defaultPick: UNRESOLVED_PICK,
+      defaultPick: PERSONAL_PICK,
       defaultHostId: null,
     });
   });
@@ -332,6 +381,7 @@ describe("GettingStartedSettingsPanel", () => {
   afterEach(() => {
     cleanup();
     resetNegotiatedManifests();
+    resetEnvironmentSectionReads();
     useSelectionAuthorityStore.setState({ effectiveHostId: null });
     useMoveSheetStore.setState({ target: null });
   });
@@ -502,7 +552,15 @@ describe("GettingStartedSettingsPanel", () => {
   it("offers no Secrets card in an old host's window, whatever the pick, since the card lands on the default", () => {
     recordOldHost();
     useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
-    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    personalHostScopeOverrides.current = {
+      host: OLD_HOST_OPTION,
+      hosts: [OLD_HOST_OPTION],
+    };
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "personal" },
+      defaultPick: OLD_LOCAL_PICK,
+      defaultHostId: "host-old",
+    });
     render(<GettingStartedSettingsPanel />);
 
     expect(screen.queryByTestId("getting-started-card-secret")).toBeNull();
@@ -522,6 +580,101 @@ describe("GettingStartedSettingsPanel", () => {
 
     expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
     expect(setSectionMock).toHaveBeenCalledWith("secrets");
+  });
+
+  const SECRET_CARD = "getting-started-card-secret";
+
+  /** Whether the Secrets card was ever added to the document while `container` rendered. */
+  function watchForSecretCard(container: HTMLElement): () => boolean {
+    let appeared = false;
+    const holdsCard = (node: Node): boolean =>
+      node instanceof Element &&
+      (node.getAttribute("data-testid") === SECRET_CARD ||
+        node.querySelector(`[data-testid="${SECRET_CARD}"]`) !== null);
+    const note = (records: readonly MutationRecord[]): void => {
+      for (const record of records) {
+        if (Array.from(record.addedNodes).some(holdsCard)) appeared = true;
+      }
+    };
+    const observer = new MutationObserver(note);
+    observer.observe(container, { childList: true, subtree: true });
+    return () => {
+      note(observer.takeRecords());
+      observer.disconnect();
+      return appeared;
+    };
+  }
+
+  it("never shows the Secrets card while the window host's manifest is pending, nor after the default resolves to its old Local row", () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
+    personalHostScopeOverrides.current = {
+      host: OLD_HOST_OPTION,
+      hosts: [OLD_HOST_OPTION],
+    };
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: UNRESOLVED_PICK,
+      defaultHostId: null,
+    });
+    const { container } = render(<GettingStartedSettingsPanel />);
+    const cardWasShown = watchForSecretCard(container);
+    expect(screen.queryByTestId(SECRET_CARD)).toBeNull();
+
+    act(() => {
+      recordOldHost();
+      useSettingsEnvironmentPickStore.setState({
+        defaultPick: OLD_LOCAL_PICK,
+        defaultHostId: "host-old",
+      });
+    });
+
+    expect(screen.queryByTestId(SECRET_CARD)).toBeNull();
+    expect(cardWasShown()).toBe(false);
+  });
+
+  it("shows the Secrets card when the default is Personal on a current host", () => {
+    recordNegotiatedHostMethods("host-new", [
+      "environment.status",
+      "environment.secrets.list",
+    ]);
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-new" });
+    windowHostRunsPersonal.current = true;
+    personalHostScopeOverrides.current = {
+      host: hostScopeOptionFixture({ hostId: "host-new", name: "New laptop" }),
+    };
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+      defaultHostId: "host-new",
+    });
+    render(<GettingStartedSettingsPanel />);
+
+    expect(screen.getByTestId(SECRET_CARD)).toBeTruthy();
+  });
+
+  it("holds the Secrets card back while a Personal default waits for the window host to say whether it runs Personal", () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-new" });
+    windowHostRunsPersonal.current = null;
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+      defaultHostId: "host-new",
+    });
+    render(<GettingStartedSettingsPanel />);
+
+    expect(screen.queryByTestId(SECRET_CARD)).toBeNull();
+  });
+
+  it("shows the Secrets card under the person's own Local pick of an old host while the default is Personal, because the card opens the default", () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-new" });
+    pickOldHostLocal();
+    useSettingsEnvironmentPickStore.setState({
+      defaultPick: PERSONAL_PICK,
+      defaultHostId: "host-new",
+    });
+    render(<GettingStartedSettingsPanel />);
+
+    expect(screen.getByTestId(SECRET_CARD)).toBeTruthy();
   });
 
   it("marks credits complete once the balance is above zero", () => {
