@@ -37,7 +37,7 @@ function failedRowRetryScope(
  */
 async function sendClaimedRetry(
   send: () => Promise<unknown>,
-  accountAndRow: string,
+  accountAndRow: string | null,
   requestKey: string,
 ): Promise<void> {
   let clearKey = false;
