@@ -82,9 +82,7 @@ export function EnvironmentPicker(props: {
   const model = useEnvironmentPickerModel(props.scope);
   const running = useHostsRunningPersonal(true);
   const openAddHost = useAddHostDialogStore((state) => state.openDialog);
-  const pick = useSettingsEnvironmentPickStore(
-    (state) => state.pick ?? model.defaultPick,
-  );
+  const { pick } = model;
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const choose = (next: EnvironmentPick): void => {

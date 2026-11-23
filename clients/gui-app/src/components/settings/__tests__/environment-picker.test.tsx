@@ -469,7 +469,7 @@ describe("<EnvironmentPicker />", () => {
     );
   });
 
-  it("drops a Local pick only once that host has answered and moved", () => {
+  it("reads a Local pick as the default only once that host has answered and moved", () => {
     const pick = {
       kind: "local",
       hostId: "old",
@@ -478,12 +478,19 @@ describe("<EnvironmentPicker />", () => {
     useSettingsEnvironmentPickStore.setState({ pick });
     answer("old", null, V11);
     renderPicker("mac");
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(pick);
+    expect(
+      useSettingsEnvironmentPickStore.getState().staleLocalHostIds,
+    ).toEqual([]);
     cleanup();
 
     answer("old", running, V11);
     renderPicker("mac");
-    expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+    expect(
+      useSettingsEnvironmentPickStore.getState().staleLocalHostIds,
+    ).toEqual(["old"]);
+    const trigger = screen.getByTestId("environment-picker-trigger");
+    expect(trigger.textContent).not.toContain("Old laptop");
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(pick);
   });
 
   it("keeps an unresolved setup computer selected until it reports Personal", async () => {
@@ -519,11 +526,16 @@ describe("<EnvironmentPicker />", () => {
     answer("mac", running, V11);
     view.rerender(pickerElement("mac"));
     await waitFor(() => {
-      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+      expect(
+        useSettingsEnvironmentPickStore.getState().staleLocalHostIds,
+      ).toEqual(["mac"]);
       expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
         PERSONAL_PICK,
       );
     });
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).not.toContain("MacBook Pro");
     openMenu();
     expect(screen.queryByTestId("environment-picker-local-mac")).toBeNull();
   });

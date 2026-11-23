@@ -224,7 +224,7 @@ export function environmentPickerModel(input: {
 /**
  * Whether the person's per-computer pick is gone: its computer answered and
  * has neither local settings nor unfinished setup (or is too old). The pick
- * then returns to the default, so a page does not retain a finished setup's
+ * then reads as the default, so a page does not retain a finished setup's
  * per-computer entry. A computer that has not answered
  * yet keeps the pick: nothing is known.
  */
@@ -233,8 +233,23 @@ export function isStaleLocalPick(
   model: EnvironmentPickerModel,
   statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>,
 ): boolean {
-  if (pick === null || pick.kind !== "local") return false;
-  if ((statuses.get(pick.hostId) ?? null) === null) return false;
-  const row = model.localRows.find((entry) => entry.hostId === pick.hostId);
-  return row === undefined || row.needsUpdate;
+  return (
+    pick !== null &&
+    pick.kind === "local" &&
+    staleLocalHostIds(model, statuses).includes(pick.hostId)
+  );
+}
+
+/** The computers a Local pick would be stale on: see `isStaleLocalPick`. */
+export function staleLocalHostIds(
+  model: EnvironmentPickerModel,
+  statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>,
+): readonly string[] {
+  const ids: string[] = [];
+  for (const [hostId, status] of statuses) {
+    if (status === null) continue;
+    const row = model.localRows.find((entry) => entry.hostId === hostId);
+    if (row === undefined || row.needsUpdate) ids.push(hostId);
+  }
+  return ids;
 }

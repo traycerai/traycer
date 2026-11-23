@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { findHostOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
+import { useEnvironmentPickerModel } from "@/components/settings/environment/use-environment-picker-model";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   environmentSectionShown,
@@ -9,7 +10,6 @@ import {
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
-import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 /**
  * Whether Secrets can draw under `pick`, on the road `PersonalPageFrame`
@@ -45,7 +45,7 @@ function secretsServedOn(
 export function useEnvironmentSectionShown(
   windowScope: HostScope,
 ): (section: SettingsSectionId) => boolean {
-  const pick = useEnvironmentPick();
+  const { pick } = useEnvironmentPickerModel(windowScope);
   const windowHostRuns = useWindowHostRunsPersonal(windowScope);
   const secretsHostId =
     pick.kind === "local"

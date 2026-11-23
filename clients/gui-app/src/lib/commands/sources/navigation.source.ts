@@ -17,7 +17,6 @@
  * refreshes live when the user rebinds `app.settings.open`.
  */
 import { useMemo } from "react";
-import { useEnvironmentPickerModel } from "@/components/settings/environment/use-environment-picker-model";
 import { useEnvironmentSectionShown } from "@/components/settings/environment/use-environment-section-shown";
 import {
   useHostScopeFor,
@@ -93,7 +92,6 @@ const SETTINGS_SUBPAGE: CommandSubpage = {
   title: "Open settings",
   useItems: (ctx: CommandContext) => {
     const windowScope = useHostScopeFor(WINDOW_HOST_SELECTION);
-    useEnvironmentPickerModel(windowScope);
     const sectionShown = useEnvironmentSectionShown(windowScope);
     return useMemo<ReadonlyArray<CommandItem>>(
       () => settingsSectionItems(ctx.pathname, sectionShown),
