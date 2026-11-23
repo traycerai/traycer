@@ -6,7 +6,11 @@ import {
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 
 /** The three ways the credentials file answers a rotation that no refresh can follow. */
-export const SIGN_OUT_ARMS = ["deleted", "tombstoned", "user-mismatch"] as const;
+export const SIGN_OUT_ARMS = [
+  "deleted",
+  "tombstoned",
+  "user-mismatch",
+] as const;
 export type SignOutArm = (typeof SIGN_OUT_ARMS)[number];
 
 /**

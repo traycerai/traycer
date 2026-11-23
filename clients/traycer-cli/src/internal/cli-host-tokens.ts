@@ -208,8 +208,8 @@ function sharedMint(
           return outcome;
         })
         .finally(() => {
-        if (mintFlights.get(key) === started) mintFlights.delete(key);
-      }),
+          if (mintFlights.get(key) === started) mintFlights.delete(key);
+        }),
     };
     // Settled for nobody once every asker has left.
     started.answer.catch(() => undefined);
@@ -607,21 +607,22 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     askedOwner: HostInstance | null,
   ): Promise<Asked> => {
     let owner = askedOwner ?? hosts.currentInstance(hostId);
-    const askFor = (asker: HostInstance, freshAsk: boolean): Promise<Answered> =>
+    const askFor = (
+      asker: HostInstance,
+      freshAsk: boolean,
+    ): Promise<Answered> =>
       stored
         .obtainIdentified(id, hostId, freshAsk, {
           signal: signal ?? signIn.signal,
           owner: asker,
           observedNow: () => hosts.currentInstance(hostId).observed,
         })
-        .catch(
-          (): Answered => ({
-            outcome: { kind: "unavailable", detail: "host-only token not saved" },
-            signIn: null,
-            order: null,
-            purchase: null,
-          }),
-        );
+        .catch((): Answered => ({
+          outcome: { kind: "unavailable", detail: "host-only token not saved" },
+          signIn: null,
+          order: null,
+          purchase: null,
+        }));
     let freshAsk = fresh;
     let replaced = false;
     for (;;) {
@@ -631,9 +632,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       const askedAt = mintRequestsSent;
       const answered = await askFor(owner, freshAsk);
       const { outcome } = answered;
-      const settled = (
-        settledOutcome: HostTokenMintOutcome,
-      ): Asked => ({
+      const settled = (settledOutcome: HostTokenMintOutcome): Asked => ({
         outcome: settledOutcome,
         refusal: null,
         owner,
@@ -824,9 +823,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     const outcome = await refreshSignIn();
     if (outcome !== "rejected") return outcome;
     await signIn.adoptStored();
-    return tried !== null &&
-      tried === storedKey() &&
-      rejectedFor(facts, tried)
+    return tried !== null && tried === storedKey() && rejectedFor(facts, tried)
       ? "rejected"
       : "adopted";
   };
@@ -892,8 +889,13 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // refusal final. A restarted host starts with a recovery of its own, never
   // one an earlier instance spent; the process a recovery acts for is the
   // owner it is handed.
-  const recoveries = new WeakMap<HostInstance, CliHostTokenSessionRevalidator>();
-  const recoveryOf = (instance: HostInstance): CliHostTokenSessionRevalidator => {
+  const recoveries = new WeakMap<
+    HostInstance,
+    CliHostTokenSessionRevalidator
+  >();
+  const recoveryOf = (
+    instance: HostInstance,
+  ): CliHostTokenSessionRevalidator => {
     let recovery = recoveries.get(instance);
     if (recovery === undefined) {
       recovery = hostTokenRevalidator({
@@ -980,7 +982,12 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     const retried = await askTracked(userId, hostId, true, signal, owner);
     if (retried.refusal === null) {
       if (retried.outcome.kind === "no-sign-in")
-        report(retried.owner, retried.outcome, retried.startedAt, retried.order);
+        report(
+          retried.owner,
+          retried.outcome,
+          retried.startedAt,
+          retried.order,
+        );
       return answer(hostId, retried.outcome);
     }
     // The same sign-in refused again: final if it is final now (the
@@ -1133,7 +1140,12 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       );
       if (renewed.refusal === null) {
         if (renewed.outcome.kind === "no-sign-in")
-          report(renewed.owner, renewed.outcome, renewed.startedAt, renewed.order);
+          report(
+            renewed.owner,
+            renewed.outcome,
+            renewed.startedAt,
+            renewed.order,
+          );
         return renewed.outcome.kind === "ok";
       }
       return (await recoverRefusedSignIn(renewed, null)).kind === "ok";

@@ -460,9 +460,7 @@ async function signInMonitorCredential(
     // Wanted for as long as the command runs: the tokens' own session check
     // covers its end.
     recover: (hostId, details) =>
-      hostTokens
-        .streamRecovery(hostId)
-        .revalidateRefused(details, () => true),
+      hostTokens.streamRecovery(hostId).revalidateRefused(details, () => true),
     admitted: (instance) => hostTokens.admitted(instance),
     signInRejected: () => hostTokens.signInRejected(),
     adoptStoredSignIn: () => hostTokens.adoptStoredSignIn(),

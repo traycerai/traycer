@@ -63,7 +63,10 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
             token: answer.token,
             refreshToken: `rt-${answer.token}`,
           }
-        : { kind: "rejected", rejection: { kind: "credential", revocation: null } };
+        : {
+            kind: "rejected",
+            rejection: { kind: "credential", revocation: null },
+          };
     },
   };
 });
@@ -91,7 +94,10 @@ function gate(): Gate {
 function holdingReads(
   store: CredentialsMutationStore,
   gates: readonly Gate[],
-): { readonly store: CredentialsMutationStore; readonly started: () => number } {
+): {
+  readonly store: CredentialsMutationStore;
+  readonly started: () => number;
+} {
   let started = 0;
   return {
     started: () => started,
