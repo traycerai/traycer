@@ -1617,9 +1617,16 @@ describe("a mint's refusal belongs to the sign-in the mint was sent with", () =>
   const owner = hosts.currentInstance(HOST_ID);
   const ask = { signal: null, owner, observedNow: () => owner.observed };
 
-  /** Every mint waits for the test, and says which sign-in it was sent with. */
-  function rig() {
+  /**
+   * Every mint waits for the test, and says which sign-in it was sent with.
+   * With a sign-in to rotate to, the source's bound sync waits for the test
+   * (`releaseSync`) and then moves the stored sign-in there; with none, the
+   * source stays unbound.
+   */
+  function rig(rotateTo: string | null) {
     let stored = SIGN_IN_A;
+    const sync = deferred<void>();
+    const syncCalls: string[] = [];
     const mints: Array<{
       readonly signIn: string;
       readonly answer: (outcome: HostTokenMintOutcome) => void;
@@ -1633,9 +1640,18 @@ describe("a mint's refusal belongs to the sign-in the mint was sent with", () =>
       signIn: (userId) => (userId === USER_ID ? stored : null),
       now: () => Date.now(),
     });
+    if (rotateTo !== null)
+      tokens.bindSignInSync(async () => {
+        syncCalls.push("called");
+        await sync.promise;
+        stored = rotateTo;
+        syncCalls.push("moved");
+      });
     return {
       tokens,
       mints,
+      syncCalls,
+      releaseSync: (): void => sync.resolve(),
       moveSignInTo: (next: string): void => {
         stored = next;
       },
@@ -1643,7 +1659,7 @@ describe("a mint's refusal belongs to the sign-in the mint was sent with", () =>
   }
 
   it("is seen by an ask on the same sign-in, and by none once the stored sign-in moved", async () => {
-    const { tokens, mints, moveSignInTo } = rig();
+    const { tokens, mints, moveSignInTo } = rig(null);
     await tokens.whenLoaded();
     const refused = tokens.obtain(USER_ID, HOST_ID, true, ask);
     await vi.waitFor(() => expect(mints).toHaveLength(1));
@@ -1663,7 +1679,7 @@ describe("a mint's refusal belongs to the sign-in the mint was sent with", () =>
   });
 
   it("is not set for the sign-in that replaced the one a late refusal arrives for, while that sign-in's retry is still pending", async () => {
-    const { tokens, mints, moveSignInTo } = rig();
+    const { tokens, mints, moveSignInTo } = rig(null);
     await tokens.whenLoaded();
     const onA = tokens.obtain(USER_ID, HOST_ID, true, ask);
     await vi.waitFor(() => expect(mints).toHaveLength(1));
@@ -1678,5 +1694,41 @@ describe("a mint's refusal belongs to the sign-in the mint was sent with", () =>
     expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
     mints[1].answer({ kind: "ok", token: TOKEN });
     await expect(retryOnB).resolves.toEqual({ kind: "ok", token: TOKEN });
+  });
+
+  it("brings the sign-in up to date before it compares a refusal, and records none for the sign-in it moved to", async () => {
+    const { tokens, mints, syncCalls, releaseSync, moveSignInTo } =
+      rig(SIGN_IN_B);
+    await tokens.whenLoaded();
+    const refused = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(syncCalls).toEqual(["called"]));
+    releaseSync();
+    await expect(refused).resolves.toEqual({ kind: "sign-in-rejected" });
+
+    expect(syncCalls).toEqual(["called", "moved"]);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+    moveSignInTo(SIGN_IN_A);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+    moveSignInTo(SIGN_IN_B);
+
+    const next = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    mints[1].answer({ kind: "ok", token: TOKEN });
+    await expect(next).resolves.toEqual({ kind: "ok", token: TOKEN });
+    expect(mints.map((mint) => mint.signIn)).toEqual([SIGN_IN_A, SIGN_IN_B]);
+  });
+
+  it("records the refusal under the sign-in it was sent with when the source has no hook", async () => {
+    const { tokens, mints } = rig(null);
+    await tokens.whenLoaded();
+    const refused = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await expect(refused).resolves.toEqual({ kind: "sign-in-rejected" });
+
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
   });
 });
