@@ -1732,3 +1732,108 @@ describe("a mint's refusal belongs to the sign-in the mint was sent with", () =>
     expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
   });
 });
+
+describe("a sign-in is identified by itself, never by its end", () => {
+  const HOST_ID = "computer-sign-in-identity";
+  const TOKEN = hostTokenIssuedAt("bought-on-b", 2_000);
+  const hosts = createReleasedHostMemory();
+  const owner = hosts.currentInstance(HOST_ID);
+  const ask = { signal: null, owner, observedNow: () => owner.observed };
+  /** Two sign-ins of one person with the same `exp` and different content. */
+  const withEnd = (claim: string): string =>
+    `header.${Buffer.from(JSON.stringify({ exp: 2_000_000, iat: claim })).toString("base64url")}.signature`;
+  const SIGN_IN_A = withEnd("issued-a");
+  const SIGN_IN_B = withEnd("issued-b");
+
+  function rig(first: string | null) {
+    let stored = first;
+    const mints: Array<{
+      readonly signIn: string;
+      readonly answer: (outcome: HostTokenMintOutcome) => void;
+    }> = [];
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: (_hostId, sentWith) =>
+        new Promise<HostTokenMintOutcome>((resolve) => {
+          mints.push({ signIn: sentWith, answer: resolve });
+        }),
+      signIn: (userId) => (userId === USER_ID ? stored : null),
+      now: () => Date.now(),
+    });
+    return {
+      tokens,
+      mints,
+      moveSignInTo: (next: string | null): void => {
+        stored = next;
+      },
+    };
+  }
+
+  it("reads no refusal of one sign-in once another with the same end is current, and mints with the current one", async () => {
+    const { tokens, mints, moveSignInTo } = rig(SIGN_IN_A);
+    await tokens.whenLoaded();
+    const refused = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await expect(refused).resolves.toEqual({ kind: "sign-in-rejected" });
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
+
+    moveSignInTo(SIGN_IN_B);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+
+    const next = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    mints[1].answer({ kind: "ok", token: TOKEN });
+    await expect(next).resolves.toEqual({ kind: "ok", token: TOKEN });
+    expect(mints.map((mint) => mint.signIn)).toEqual([SIGN_IN_A, SIGN_IN_B]);
+  });
+
+  it("asks authn with the sign-in an asker presents, and does not join a mint held for another with the same end", async () => {
+    const { tokens, mints, moveSignInTo } = rig(SIGN_IN_A);
+    await tokens.whenLoaded();
+    const onA = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    moveSignInTo(SIGN_IN_B);
+
+    const onB = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    expect(mints.map((mint) => mint.signIn)).toEqual([SIGN_IN_A, SIGN_IN_B]);
+
+    mints[0].answer({ kind: "sign-in-rejected" });
+    mints[1].answer({ kind: "ok", token: TOKEN });
+    await expect(onA).resolves.toEqual({ kind: "sign-in-rejected" });
+    await expect(onB).resolves.toEqual({ kind: "ok", token: TOKEN });
+  });
+
+  it("shares no mint and reads no refusal across sign-ins whose content cannot be read", async () => {
+    const { tokens, mints, moveSignInTo } = rig("opaque-sign-in-one");
+    await tokens.whenLoaded();
+    const first = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    moveSignInTo("opaque-sign-in-two");
+    const second = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    expect(mints.map((mint) => mint.signIn)).toEqual([
+      "opaque-sign-in-one",
+      "opaque-sign-in-two",
+    ]);
+
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await expect(first).resolves.toEqual({ kind: "sign-in-rejected" });
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+    mints[1].answer({ kind: "sign-in-rejected" });
+    await expect(second).resolves.toEqual({ kind: "sign-in-rejected" });
+  });
+
+  it("reads no refusal when there is no sign-in", async () => {
+    const { tokens, mints, moveSignInTo } = rig(SIGN_IN_A);
+    await tokens.whenLoaded();
+    const refused = tokens.obtain(USER_ID, HOST_ID, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await expect(refused).resolves.toEqual({ kind: "sign-in-rejected" });
+
+    moveSignInTo(null);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+  });
+});
