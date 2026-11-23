@@ -80,6 +80,7 @@ import {
   resetNegotiatedManifests,
 } from "../../negotiated-manifest-registry";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostTokenSessionRevalidator } from "@traycer-clients/shared/auth/host-token-lease";
 import type { DialPriority } from "../../dial-priority";
 import type {
   IStreamWebSocketFactory,
@@ -467,6 +468,25 @@ class RecordingEvidence implements TransportEvidenceReporter {
   }
 }
 
+/**
+ * The host-token session's revalidator over a fake that answers a refusal as
+ * it answers a revalidation, unless it has an answer of its own for one. A
+ * session with no revalidator stays without one.
+ */
+function sessionAuth(
+  auth: StreamAuthRevalidator | null,
+): HostTokenSessionRevalidator | null {
+  if (auth === null) return null;
+  return {
+    revalidateForReconnect: () => auth.revalidateForReconnect(),
+    revalidateRefused: (refusal) =>
+      auth.revalidateRefused !== undefined
+        ? auth.revalidateRefused(refusal)
+        : auth.revalidateForReconnect(),
+    admitted: () => undefined,
+  };
+}
+
 function buildSession(
   relay: FakeRelayHost,
   lease: MutableBearerLease,
@@ -499,7 +519,7 @@ function buildSessionOptions(
         return null;
       }
     },
-    auth,
+    auth: sessionAuth(auth),
     door: null,
     clock: null,
     rpcRegistry: emptyRpcRegistry,
