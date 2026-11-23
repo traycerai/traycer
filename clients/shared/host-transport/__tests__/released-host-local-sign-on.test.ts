@@ -3955,7 +3955,7 @@ describe("released personal host, local unary", () => {
     const recoveryCalls: string[] = [];
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const driven = driveUnaryRefresh(signIn, {
-      revalidateForReconnect: () => {
+      revalidateForReconnect: (): Promise<RevalidateOutcome> => {
         recoveryCalls.push("revalidateForReconnect");
         signIn.rotate(ROTATED_SIGN_IN);
         return Promise.resolve("rotated");
@@ -4015,7 +4015,7 @@ describe("released personal host, local unary", () => {
     const recoveryCalls: string[] = [];
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const driven = driveUnaryRefresh(signIn, {
-      revalidateForReconnect: () => {
+      revalidateForReconnect: (): Promise<RevalidateOutcome> => {
         recoveryCalls.push("revalidateForReconnect");
         return Promise.resolve("rejected");
       },
