@@ -1,5 +1,4 @@
-// The grant minter a write carries is read from the host binding. Mocked at
-// that boundary, as the other Personal suites do; the client itself is a REAL
+// The page's authn reads use the host binding. The client is a real
 // `HostClient` over an in-memory messenger (`buildAccessHost`), so every
 // request travels the path the app uses and only the host is faked.
 const hostMock = vi.hoisted(
@@ -38,6 +37,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
   EnvironmentStatusResponse,
   LocalOverride,
@@ -59,12 +59,19 @@ import {
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
+import {
+  createFakeEnvironmentCloudAuth,
+  createFakeEnvironmentCloudTransport,
+  jsonEnvironmentAnswer,
+} from "../../../../../__tests__/create-fake-runner-host";
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   hostMock.binding = null;
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   navigateToSettingsSectionMock.mockReset();
   window.localStorage.clear();
   useHostAccessPromptsStore.setState({
@@ -120,6 +127,82 @@ function renderTab(
     </QueryClientProvider>,
   );
   return { queryClient };
+}
+
+function bindLocalHostId(hostId: string): void {
+  hostMock.binding = {
+    auth: {},
+    directory: {
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalHostId: () => hostId,
+    },
+  };
+}
+
+const PERSONAL_ENVIRONMENT: EnvironmentDescriptorV11 = {
+  environmentId: "environment-personal",
+  ownerKind: "user",
+  ownerId: "user-me",
+  roomId: "room-personal",
+  label: "Personal",
+  effectiveRole: "owner",
+  kind: "personal",
+  hostCount: 1,
+  providerHandle: null,
+};
+
+function serveNoticesFromAuthn(host: AccessHost): { notices: number } {
+  const log = { notices: 0 };
+  hostMock.binding = {
+    directory: null,
+    auth: createFakeEnvironmentCloudAuth({
+      listEnvironments: () =>
+        Promise.resolve({
+          kind: "ok" as const,
+          list: { environments: [PERSONAL_ENVIRONMENT] },
+        }),
+      transport: createFakeEnvironmentCloudTransport({
+        environments: () => [PERSONAL_ENVIRONMENT],
+        onRequest: (request) => {
+          const path = new URL(request.url).pathname;
+          if (request.method !== "GET" || !path.endsWith("/notices")) {
+            return null;
+          }
+          log.notices += 1;
+          return jsonEnvironmentAnswer({
+            // authn lists a change only while no later change superseded it.
+            notices: host.state.notices.flatMap((notice, index) =>
+              notice.undoAvailable
+                ? [
+                    {
+                      kind: notice.kind,
+                      key: notice.key,
+                      os: notice.os === "any" ? null : notice.os,
+                      revision: index + 1,
+                      writtenAt: notice.writtenAt,
+                      source: notice.source,
+                      hostId:
+                        notice.from.kind === "host" ? notice.from.hostId : null,
+                      hostName:
+                        notice.from.kind === "host"
+                          ? notice.from.hostLabel
+                          : null,
+                      displaced: "previous",
+                    },
+                  ]
+                : [],
+            ),
+          });
+        },
+      }),
+    }),
+  };
+  // The read of Personal's id and its notices waits for a verified viewer.
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-me", username: "user-me" },
+  });
+  return log;
 }
 
 function hostWith(
@@ -464,13 +547,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
   });
 
   it("says this computer in the sign-in sentence of this machine's own host", async () => {
-    hostMock.binding = {
-      auth: {},
-      directory: {
-        onChange: () => ({ dispose: () => undefined }),
-        getLocalHostId: () => ACCESS_HOST_ID,
-      },
-    };
+    bindLocalHostId(ACCESS_HOST_ID);
     const host = hostWith({}, { providers: [claudeAmbient(true)] });
     renderTab(host, READY);
 
@@ -509,7 +586,8 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     ).toBeTruthy();
   });
 
-  it("tells a team host's reader that an admin links a plan on the team's Providers", async () => {
+  it("uses this computer's sign-in sentence for a team's own computer", async () => {
+    bindLocalHostId(ACCESS_HOST_ID);
     const host = hostWith(
       { principal: { kind: "team", teamName: "Acme" } },
       { providers: [claudeAmbient(true)] },
@@ -519,10 +597,29 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     await screen.findByTestId("terminal-account-row");
     expect(
       screen.getByText(
-        "This host's own sign-in, which stays on this host. An admin can link a plan on Acme's Providers to use one everywhere.",
+        "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.",
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/This computer's own sign-in/)).toBeNull();
+    expect(screen.queryByText(/This host's own sign-in/)).toBeNull();
+    expect(screen.queryByText(/An admin can link a plan/)).toBeNull();
+  });
+
+  it("uses the named computer's sign-in sentence for a team's other computer", async () => {
+    bindLocalHostId("another-computer");
+    const host = hostWith(
+      { principal: { kind: "team", teamName: "Acme" } },
+      { providers: [claudeAmbient(true)] },
+    );
+    renderTab(host, READY);
+
+    await screen.findByTestId("terminal-account-row");
+    expect(
+      screen.getByText(
+        "dev-box's own sign-in, which stays on dev-box. Sign in on Providers to use one everywhere.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/This host's own sign-in/)).toBeNull();
+    expect(screen.queryByText(/An admin can link a plan/)).toBeNull();
   });
 
   it("has no terminal accounts section when no provider has an ambient profile", async () => {
@@ -636,19 +733,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
     expect(screen.queryByTestId("local-values-section")).toBeNull();
   });
 
-  it("Edit then Save sends the target and the new value, with the grant", async () => {
-    hostMock.binding = {
-      directory: null,
-      auth: {
-        mintExecutableWriteGrant: () =>
-          Promise.resolve({
-            kind: "ok" as const,
-            grant: "grant-1",
-            expiresInSeconds: 600,
-          }),
-        getCredentialGeneration: () => 0,
-      },
-    };
+  it("Edit then Save sends the target and the new value", async () => {
     const host = hostWith(
       {},
       { overrides: [variableOverride("LOG_LEVEL", "debug")] },
@@ -673,7 +758,6 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
         {
           target: { kind: "variable", key: "LOG_LEVEL" },
           value: "info",
-          executableWriteGrant: "grant-1",
         },
       ]);
     });
@@ -713,7 +797,6 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
             key: "ANTHROPIC_BASE_URL",
           },
           value: "b",
-          executableWriteGrant: null,
         },
       ]);
     });
@@ -779,6 +862,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
+    serveNoticesFromAuthn(host);
     renderTab(host, READY);
 
     const notice = await screen.findByTestId("moved-to-personal-notice");
@@ -797,12 +881,13 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: { stage: "moving_settings", state: "running" } },
       { notices: [noticeFixture({ source: "migration" })] },
     );
+    const log = serveNoticesFromAuthn(host);
     renderTab(host, READY);
 
     await screen.findByTestId("host-setup-section");
     await settle();
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
-    expect(host.reads.notices).toBe(0);
+    expect(log.notices).toBe(0);
   });
 
   it("is not shown when no change came from the move", async () => {
@@ -810,10 +895,11 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "offline" })] },
     );
+    const log = serveNoticesFromAuthn(host);
     renderTab(host, READY);
 
     await waitFor(() => {
-      expect(host.reads.notices).toBeGreaterThan(0);
+      expect(log.notices).toBeGreaterThan(0);
     });
     await settle();
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
@@ -824,12 +910,13 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE, principal: { kind: "team", teamName: "Acme" } },
       { notices: [noticeFixture({ source: "migration" })] },
     );
+    const log = serveNoticesFromAuthn(host);
     renderTab(host, READY);
 
     await screen.findByTestId("team-owned-line");
     await settle();
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
-    expect(host.reads.notices).toBe(0);
+    expect(log.notices).toBe(0);
   });
 
   it("Dismiss hides it and records the dismissal for that host only", async () => {
@@ -837,6 +924,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
+    serveNoticesFromAuthn(host);
     renderTab(host, READY);
     await screen.findByTestId("moved-to-personal-notice");
 
@@ -859,10 +947,11 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
+    const log = serveNoticesFromAuthn(host);
     renderTab(host, READY);
 
     await waitFor(() => {
-      expect(host.reads.notices).toBeGreaterThan(0);
+      expect(log.notices).toBeGreaterThan(0);
     });
     await settle();
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
@@ -873,6 +962,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
+    serveNoticesFromAuthn(host);
     renderTab(host, READY);
     const notice = await screen.findByTestId("moved-to-personal-notice");
 

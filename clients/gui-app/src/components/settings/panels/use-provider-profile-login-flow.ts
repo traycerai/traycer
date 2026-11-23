@@ -1,19 +1,33 @@
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { readHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
-import type {
+import {
+  HostMethodVersionUnsatisfiedError,
   HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import type {
+  AwaitLoginAnswer,
+  AwaitLoginVariables,
+} from "@/hooks/providers/use-providers-await-login-mutation";
 import {
   providerProfileSchema,
   type ProviderCliState,
   type ProviderLoginCapability,
+  type ProviderLoginProfileOutcome,
+  type ProviderLoginTarget,
+  type ProviderLoginTargetRefusal,
   type ProviderLoginRefusal,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import { resolveProfilePin } from "@/components/providers/provider-profile-model";
+import type {
+  CachedProviderProfilesRead,
+  CachedProviderProfilesReader,
+} from "@/hooks/providers/use-cached-providers-list";
 import {
   providerLoginAnswerHeldForNobody,
   providerLoginAnswerHoldsLogin,
@@ -56,7 +70,7 @@ export type StartLoginMutation = UseMutationResult<
   LoginMutationContext
 >;
 export type AwaitLoginMutation = UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.awaitLogin">,
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   LoginMutationContext
@@ -70,7 +84,7 @@ export type CancelLoginMutation = UseMutationResult<
 export type SubmitLoginCodeMutation = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">
+  Omit<RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">, "code">
 >;
 export type TouchLoginMutation = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.touchLogin">,
@@ -85,6 +99,17 @@ export type EnsurePackMutation = UseMutationResult<
 >;
 
 export type ProviderProfileLoginFlowMode = "create" | "reauth";
+
+export type ProviderTargetLoginResult =
+  | {
+      readonly kind: "target-refused";
+      readonly targetRefusal: ProviderLoginTargetRefusal;
+    }
+  | (AwaitLoginAnswer & {
+      readonly kind: "target-outcome";
+      readonly profileOutcome: ProviderLoginProfileOutcome | null;
+      readonly admissionId: string | null;
+    });
 
 export type ProviderProfileLoginFlowState =
   | { readonly kind: "start" }
@@ -104,6 +129,7 @@ export type ProviderProfileLoginFlowState =
   | {
       readonly kind: "identity";
       readonly profileId: string;
+      readonly recordProfileId: string | null;
       readonly profile: ProviderProfile;
       readonly profiles: readonly ProviderProfile[];
       readonly existingProfileId: string | null;
@@ -118,7 +144,118 @@ export type ProviderProfileLoginFlowState =
        */
       readonly refusal: ProviderLoginRefusal | null;
     }
-  | { readonly kind: "cancelled" };
+  | { readonly kind: "cancelled" }
+  | { readonly kind: "already-signed-in"; readonly profile: ProviderProfile }
+  /**
+   * The host answered the duplicate check and the profile is not listed yet,
+   * or kept answering with no profile past the re-ask cap (`profileId` null).
+   */
+  | { readonly kind: "completed"; readonly profileId: string | null }
+  | {
+      readonly kind: "not-changed";
+      readonly reason: "account-mismatch" | "account-unproven";
+    }
+  | { readonly kind: "list-unread" }
+  | ProviderTargetLoginResult;
+
+interface ListedOutcome {
+  readonly kind: "signed-in" | "already-signed-in";
+  readonly profileId: string;
+}
+
+type ProfileOutcomeResolution =
+  | {
+      readonly kind: "signed-in";
+      readonly profile: ProviderProfile;
+      readonly profiles: readonly ProviderProfile[];
+    }
+  | { readonly kind: "already-signed-in"; readonly profile: ProviderProfile }
+  | { readonly kind: "completed"; readonly profileId: string | null }
+  | { readonly kind: "list-unread"; readonly pending: ListedOutcome }
+  | {
+      readonly kind: "not-changed";
+      readonly reason: "account-mismatch" | "account-unproven";
+    }
+  | { readonly kind: "failed" };
+
+const NOTHING_CHANGED: ProfileOutcomeResolution = { kind: "failed" };
+
+function profileRowIn(
+  profiles: readonly ProviderProfile[],
+  profileId: string,
+): ProviderProfile | null {
+  const pin = resolveProfilePin(profiles, [], profileId);
+  return pin.kind === "row" ? pin.profile : null;
+}
+
+/** Never a name the rows do not give; after a failed read nothing is known and the list is retried. */
+function resolveListedOutcome(
+  pending: ListedOutcome,
+  echoedProfiles: () => readonly ProviderProfile[],
+  listedProfiles: () => CachedProviderProfilesRead,
+): ProfileOutcomeResolution {
+  const named = (
+    profile: ProviderProfile,
+    profiles: readonly ProviderProfile[],
+  ): ProfileOutcomeResolution =>
+    pending.kind === "signed-in"
+      ? { kind: "signed-in", profile, profiles }
+      : { kind: "already-signed-in", profile };
+  const echoes = echoedProfiles();
+  const echoed = profileRowIn(echoes, pending.profileId);
+  if (echoed !== null) return named(echoed, echoes);
+  const read = listedProfiles();
+  const listed = profileRowIn(read.profiles, pending.profileId);
+  if (listed !== null) return named(listed, read.profiles);
+  if (read.readFailed) return { kind: "list-unread", pending };
+  // A duplicate names a record that already holds the account, so it is listed.
+  return pending.kind === "signed-in"
+    ? { kind: "completed", profileId: pending.profileId }
+    : NOTHING_CHANGED;
+}
+
+const NO_ECHOED_PROFILES = (): readonly ProviderProfile[] => [];
+
+/** What the host names; its answer with no profile is asked again, never settled. */
+type SettledProfileOutcome = Exclude<
+  ProviderLoginProfileOutcome,
+  { readonly kind: "waiting-for-profile" }
+>;
+
+/**
+ * An outcome that does not belong here ends on the failed state, never a success,
+ * without reading the answer's other keys.
+ */
+function resolveProfileOutcome(
+  outcome: SettledProfileOutcome | null,
+  mode: ProviderProfileLoginFlowMode,
+  echoedProfiles: () => readonly ProviderProfile[],
+  listedProfiles: () => CachedProviderProfilesRead,
+): ProfileOutcomeResolution | null {
+  if (outcome === null) return null;
+  switch (outcome.kind) {
+    case "signed-in":
+      return resolveListedOutcome(
+        { kind: "signed-in", profileId: outcome.profileId },
+        echoedProfiles,
+        listedProfiles,
+      );
+    case "already-signed-in":
+      return resolveListedOutcome(
+        { kind: "already-signed-in", profileId: outcome.profileId },
+        echoedProfiles,
+        listedProfiles,
+      );
+    case "account-mismatch":
+    case "account-unproven":
+      return mode === "reauth"
+        ? { kind: "not-changed", reason: outcome.kind }
+        : NOTHING_CHANGED;
+    case "target-refused":
+    case "staged-for-leave":
+      return NOTHING_CHANGED;
+  }
+}
 
 /**
  * Bounded auto-restart on a rejected/expired code-paste attempt:
@@ -158,6 +295,7 @@ type AwaitLoginResolution =
   | {
       readonly kind: "authenticated";
       readonly payload: {
+        readonly recordProfileId: null;
         readonly profile: ProviderProfile;
         readonly profiles: readonly ProviderProfile[];
         readonly existingProfileId: string | null;
@@ -212,7 +350,7 @@ function classifyAmbientAwaitResult(
  * still in flight is "not settled yet", never a failure. Managed rows get an
  * awaited per-profile probe host-side, so that window is ambient-only.
  */
-function classifyProfileAwaitResult(
+export function classifyProfileAwaitResult(
   result: AwaitLoginResult,
   awaitedProfileId: string | null,
 ): AwaitLoginResolution {
@@ -229,7 +367,7 @@ function classifyProfileAwaitResult(
   if (profile !== null && profile.auth.status === "authenticated") {
     return {
       kind: "authenticated",
-      payload: { profile, profiles, existingProfileId },
+      payload: { profile, profiles, existingProfileId, recordProfileId: null },
     };
   }
   if (result.codeRejected) return { kind: "codeRejected" };
@@ -242,6 +380,26 @@ function classifyProfileAwaitResult(
     return { kind: "authPending" };
   }
   return { kind: "notAuthenticated" };
+}
+
+function classifyAwaitResultForAttempt(
+  result: AwaitLoginResult,
+  attempt: {
+    readonly target: ProviderLoginTarget | null;
+    readonly mode: ProviderProfileLoginFlowMode;
+    readonly existingProfileId: string | null;
+    readonly nextProfileId: string | null;
+    readonly awaitProfileId: string | null;
+  },
+): AwaitLoginResolution {
+  const { target, mode, existingProfileId, nextProfileId, awaitProfileId } =
+    attempt;
+  return target === null && mode === "reauth" && existingProfileId === null
+    ? classifyAmbientAwaitResult(result)
+    : classifyProfileAwaitResult(
+        result,
+        target === null ? nextProfileId : awaitProfileId,
+      );
 }
 
 /**
@@ -366,6 +524,7 @@ interface UseProviderProfileLoginFlowInput {
   readonly awaitLogin: AwaitLoginMutation;
   readonly cancelLogin: CancelLoginMutation;
   readonly submitLoginCode: SubmitLoginCodeMutation;
+  readonly setSubmittedLoginCode: (code: string) => void;
   readonly touchLogin: TouchLoginMutation;
   /** Fetches the provider's pack again. Only ever called from `start`, i.e.
    *  from a press, and only when the previous attempt ended on a failed
@@ -380,7 +539,7 @@ interface UseProviderProfileLoginFlowInput {
   /** Fires once, the instant the flow lands on `failed` - lets a caller
    *  surface the failure outside the dialog (the Settings panel's inline
    *  retry banner). Reauth mode, which has no such banner, passes a no-op. */
-  readonly onFailed: (message: string) => void;
+  readonly onFailed: (message: string, hostSentence: boolean) => void;
 }
 
 export interface ProviderProfileLoginFlow {
@@ -404,6 +563,9 @@ export interface ProviderProfileLoginFlow {
     readonly shareSkillsAndPlugins: boolean;
   }) => void;
   readonly cancel: () => void;
+  /** Never starts a sign-in. */
+  readonly retryListRead: () => void;
+  readonly listRereadPending: boolean;
   /** `providers.cancelLogin`'s own pending state, for the Cancel button's
    *  UX (gui-app AGENTS.md pending recipe: `disabled` + unchanged label +
    *  inline spinner, never a swapped label). Distinct from `busy` /
@@ -455,6 +617,22 @@ export interface ProviderProfileLoginFlow {
 export function useProviderProfileLoginFlow(
   input: UseProviderProfileLoginFlowInput,
 ): ProviderProfileLoginFlow {
+  return useProviderProfileOutcomeLoginFlow(input, null);
+}
+
+export function useProviderProfileOutcomeLoginFlow(
+  input: UseProviderProfileLoginFlowInput,
+  profileOutcomes: CachedProviderProfilesReader | null,
+): ProviderProfileLoginFlow {
+  return useProviderDestinationLoginFlow(input, profileOutcomes, null, null);
+}
+
+export function useProviderDestinationLoginFlow(
+  input: UseProviderProfileLoginFlowInput,
+  profileOutcomes: CachedProviderProfilesReader | null,
+  target: ProviderLoginTarget | null,
+  targetClient: HostClient<HostRpcRegistry> | null,
+): ProviderProfileLoginFlow {
   const {
     hostBlock,
     supportsLoginOwnership,
@@ -466,14 +644,17 @@ export function useProviderProfileLoginFlow(
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode,
     touchLogin,
     ensurePack,
     failureMessages,
     onFailed,
   } = input;
-  const [state, setState] = useState<ProviderProfileLoginFlowState>({
-    kind: "start",
-  });
+  const [state, setState] = useState<ProviderProfileLoginFlowState>(() =>
+    target !== null && !providerLoginDestinationSupported(targetClient)
+      ? { kind: "target-refused", targetRefusal: "unsupported-computer" }
+      : { kind: "start" },
+  );
   const [restartNotice, setRestartNotice] = useState<string | null>(null);
   // Mirrors `attemptIdRef` for render-safe reads (`codePaste.attemptId` is
   // read during render, where refs must not be touched). `attemptIdRef`
@@ -553,6 +734,7 @@ export function useProviderProfileLoginFlow(
   // arbiter after success already latched) and needs it without a second
   // copy of `result` in scope.
   const successPayloadRef = useRef<{
+    readonly recordProfileId: string | null;
     readonly profile: ProviderProfile;
     readonly profiles: readonly ProviderProfile[];
     readonly existingProfileId: string | null;
@@ -587,6 +769,9 @@ export function useProviderProfileLoginFlow(
   // it without depending on it, or the mutation's own state changes would
   // re-run that effect and drain the owed releases mid-flow.
   const settleOwedReleasesRef = useRef<() => void>(() => {});
+  const releaseLeaveOnUnmountRef = useRef<() => void>(() => {});
+  const listedOutcomeRef = useRef<ListedOutcome | null>(null);
+  const [listRereadPending, setListRereadPending] = useState(false);
 
   const clearRepollTimer = useCallback((): void => {
     if (repollTimerRef.current !== null) {
@@ -609,6 +794,7 @@ export function useProviderProfileLoginFlow(
     return () => {
       unmountedRef.current = true;
       clearRepollTimer();
+      releaseLeaveOnUnmountRef.current();
       settleOwedReleasesRef.current();
     };
   }, [clearRepollTimer]);
@@ -783,6 +969,7 @@ export function useProviderProfileLoginFlow(
       message: string,
       blocker: AnalyticsBlocker,
       refusal: ProviderLoginRefusal | null,
+      hostSentence: boolean,
     ): void => {
       releaseEndedAttempt();
       // Flow-level failures otherwise surface only as inline dialog copy -
@@ -802,7 +989,7 @@ export function useProviderProfileLoginFlow(
         blocker,
       });
       setState({ kind: "failed", message, refusal });
-      onFailed(message);
+      onFailed(message, hostSentence);
     },
     [mode, onFailed, providerId, releaseEndedAttempt],
   );
@@ -820,7 +1007,7 @@ export function useProviderProfileLoginFlow(
         return;
       }
       if (restartCountRef.current >= CODE_PASTE_RESTART_CAP) {
-        fail(CODE_PASTE_RESTART_LIMIT_MESSAGES[cause], "timeout", null);
+        fail(CODE_PASTE_RESTART_LIMIT_MESSAGES[cause], "timeout", null, false);
         return;
       }
       restartCountRef.current += 1;
@@ -878,6 +1065,7 @@ export function useProviderProfileLoginFlow(
         setState({
           kind: "identity",
           profileId: payload.profile.profileId,
+          recordProfileId: payload.recordProfileId,
           profile: payload.profile,
           profiles: payload.profiles,
           existingProfileId: payload.existingProfileId,
@@ -896,7 +1084,7 @@ export function useProviderProfileLoginFlow(
         setState({ kind: "start" });
         return;
       }
-      fail(failureMessages.notFinished, "authentication", null);
+      fail(failureMessages.notFinished, "authentication", null, false);
     },
     [
       existingProfileId,
@@ -907,6 +1095,47 @@ export function useProviderProfileLoginFlow(
       releaseEndedAttempt,
       restart,
     ],
+  );
+
+  // Every arm but `failed` releases nothing: a cancel would retire the answer the
+  // computer keeps for the sign-in.
+  const settleProfileOutcome = useCallback(
+    (thisAttemptId: number, outcome: ProfileOutcomeResolution): void => {
+      if (attemptIdRef.current !== thisAttemptId) return;
+      if (outcome.kind === "signed-in") {
+        awaitOutcomeRef.current = "authenticated";
+        successPayloadRef.current = {
+          recordProfileId: outcome.profile.profileId,
+          profile: outcome.profile,
+          profiles: outcome.profiles,
+          existingProfileId: null,
+        };
+        settleAttempt(thisAttemptId);
+        return;
+      }
+      if (outcome.kind === "not-changed") {
+        setState({ kind: "not-changed", reason: outcome.reason });
+        return;
+      }
+      if (outcome.kind === "failed") {
+        // Today's failed state, whole: its release retires only the answer
+        // the computer keeps for this sign-in, which undid nothing.
+        fail(failureMessages.notFinished, "authentication", null, false);
+        return;
+      }
+      if (outcome.kind === "list-unread") {
+        listedOutcomeRef.current = outcome.pending;
+        setState({ kind: "list-unread" });
+        return;
+      }
+      listedOutcomeRef.current = null;
+      Analytics.getInstance().track(
+        AnalyticsEvent.ProviderProfileLinkSucceeded,
+        { provider: providerId, mode },
+      );
+      setState(outcome);
+    },
+    [fail, failureMessages, mode, providerId, settleAttempt],
   );
 
   const beginLogin = useCallback(
@@ -934,6 +1163,7 @@ export function useProviderProfileLoginFlow(
       awaitOutcomeRef.current = null;
       submitOutcomeRef.current = "none";
       successPayloadRef.current = null;
+      listedOutcomeRef.current = null;
       liveLoginRef.current = null;
       lastAnswerRef.current = null;
       lastTouchAtRef.current = 0;
@@ -976,9 +1206,10 @@ export function useProviderProfileLoginFlow(
         request: {
           providerId,
           holderId,
-          profileId: existingProfileId,
+          target,
+          profileId: target === null ? existingProfileId : null,
           createProfile:
-            mode === "create"
+            mode === "create" && target?.kind !== "leave-to-local"
               ? {
                   label: options.label ?? "",
                   shareSkillsAndPlugins: options.shareSkillsAndPlugins,
@@ -992,8 +1223,12 @@ export function useProviderProfileLoginFlow(
           if (startAbandoned()) return;
           if (progress.kind === "launching") {
             liveLoginRef.current = {
-              profileId:
-                mode === "reauth" ? existingProfileId : answer.profileId,
+              profileId: loginHandle(
+                mode,
+                existingProfileId,
+                answer.profileId,
+                target,
+              ),
             };
             attemptProfileRef.current = liveLoginRef.current.profileId;
           }
@@ -1010,11 +1245,14 @@ export function useProviderProfileLoginFlow(
           // A newer attempt asks the same question and attaches to the same
           // login, so whatever this answer holds is that attempt's now.
           if (attemptIdRef.current !== thisAttemptId) return;
-          // Reauth always awaits the profile it was invoked for - the
-          // response never mints a different id for an existing profile.
-          // Create has no id until this response supplies one.
-          const nextProfileId =
-            mode === "reauth" ? existingProfileId : data.profileId;
+          // Untargeted reauth keeps its existing handle. A destination's
+          // scratch sign-in is addressed by the handle the start returns.
+          const nextProfileId = loginHandle(
+            mode,
+            existingProfileId,
+            data.profileId,
+            target,
+          );
           attemptProfileRef.current = nextProfileId;
           // Ahead of the unmount check: a Cancel pressed while the pack was
           // downloading ends the flow at once (`cancel`), and the dialog can
@@ -1036,20 +1274,21 @@ export function useProviderProfileLoginFlow(
             // Nobody will open this login's page or wait for it. Only a
             // provider that opens its own page keeps its login: that page may
             // be open in a browser, where the user can still finish.
-            if (providerLoginAnswerHeldForNobody(data, loginCapability)) {
+            if (abandonedStartHoldsLogin(data, target, loginCapability)) {
               cancelProfile(nextProfileId);
             }
             return;
           }
           lastAnswerRef.current = data;
-          // Create mode must have a minted profile id to proceed; reauth
-          // mode never derives `nextProfileId` from this response (it is
-          // always the caller's own `existingProfileId`, including the
-          // ambient `null`), so there is nothing to validate there beyond
-          // `data.started`.
+          const targetRefusal =
+            target === null ? null : (data.targetRefusal ?? null);
+          if (targetRefusal !== null) {
+            setState({ kind: "target-refused", targetRefusal });
+            return;
+          }
           const refusal = startAnswerRefusal(
             data,
-            mode === "create" && nextProfileId === null,
+            (mode === "create" || target !== null) && nextProfileId === null,
           );
           if (refusal !== null) {
             if (refusal.releaseHostLogin) cancelProfile(nextProfileId);
@@ -1061,6 +1300,7 @@ export function useProviderProfileLoginFlow(
               ),
               refusal.blocker,
               null,
+              false,
             );
             return;
           }
@@ -1078,6 +1318,7 @@ export function useProviderProfileLoginFlow(
           // the constant's doc comment). Scoped to this attempt's closure -
           // an auto-restart mints a fresh attempt with a fresh budget.
           let authPendingRepolls = 0;
+          let profileLessRepolls = 0;
           let lastSeenReaderCount: number | null = null;
           let awaitProfileId = nextProfileId;
           // A resolution this attempt must no longer act on: a later attempt
@@ -1107,8 +1348,35 @@ export function useProviderProfileLoginFlow(
             }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
             return true;
           };
-          const handleAwaitSuccess = (result: AwaitLoginResult): void => {
-            if (attemptAbandoned()) return;
+          const settleAwaitAnswer = (
+            result: AwaitLoginAnswer,
+            profileOutcome: SettledProfileOutcome | null,
+          ): void => {
+            if (target !== null && profileOutcome !== null) {
+              setState({
+                ...result,
+                kind: "target-outcome",
+                profileOutcome,
+                admissionId: nextProfileId,
+              });
+              return;
+            }
+            const outcome =
+              target !== null || profileOutcomes === null
+                ? null
+                : resolveProfileOutcome(
+                    profileOutcome,
+                    mode,
+                    () =>
+                      (result.state?.profiles ?? []).map((profile) =>
+                        providerProfileSchema.parse(profile),
+                      ),
+                    profileOutcomes.listedProfiles,
+                  );
+            if (outcome !== null) {
+              settleProfileOutcome(thisAttemptId, outcome);
+              return;
+            }
             const installation = result.installation ?? null;
             if (installation !== null) {
               lastSeenReaderCount = installation.count;
@@ -1124,10 +1392,32 @@ export function useProviderProfileLoginFlow(
               awaitOnce();
               return;
             }
-            const resolution =
-              mode === "reauth" && existingProfileId === null
-                ? classifyAmbientAwaitResult(result)
-                : classifyProfileAwaitResult(result, nextProfileId);
+            const resolution = classifyAwaitResultForAttempt(result, {
+              target,
+              mode,
+              existingProfileId,
+              nextProfileId,
+              awaitProfileId,
+            });
+            if (resolution.kind === "codeRejected") {
+              restart("codeRejected");
+              return;
+            }
+            if (
+              resolution.kind === "authPending" &&
+              scheduleAuthPendingRepoll()
+            ) {
+              return;
+            }
+            if (target !== null) {
+              setState({
+                ...result,
+                kind: "target-outcome",
+                profileOutcome: null,
+                admissionId: awaitProfileId,
+              });
+              return;
+            }
             if (resolution.kind === "authenticated") {
               awaitOutcomeRef.current = "authenticated";
               successPayloadRef.current = resolution.payload;
@@ -1142,24 +1432,62 @@ export function useProviderProfileLoginFlow(
                 resolution.refusal.reason,
                 "authentication",
                 resolution.refusal,
+                false,
               );
-              return;
-            }
-            if (resolution.kind === "codeRejected") {
-              restart("codeRejected");
-              return;
-            }
-            if (
-              resolution.kind === "authPending" &&
-              scheduleAuthPendingRepoll()
-            ) {
               return;
             }
             awaitOutcomeRef.current = "notAuthenticated";
             settleAttempt(thisAttemptId);
           };
+          // A restarted host's recovered answer, or an older host's ordinary
+          // one, can carry no profile: the await is asked again, and past the
+          // same cap as the ambient re-poll the sign-in settles as completed.
+          const askAgainWithoutProfile = (): void => {
+            if (profileLessRepolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) {
+              settleProfileOutcome(thisAttemptId, {
+                kind: "completed",
+                profileId: null,
+              });
+              return;
+            }
+            profileLessRepolls += 1;
+            repollTimerRef.current = window.setTimeout(() => {
+              repollTimerRef.current = null;
+              if (attemptAbandoned()) return;
+              awaitOnce();
+            }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+          };
+          const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
+            if (attemptAbandoned()) return;
+            const profileOutcome = result.profileOutcome ?? null;
+            if (profileOutcome?.kind === "waiting-for-profile") {
+              askAgainWithoutProfile();
+              return;
+            }
+            settleAwaitAnswer(result, profileOutcome);
+          };
           const handleAwaitError = (error: unknown): void => {
             if (attemptAbandoned()) return;
+            if (
+              target !== null &&
+              error instanceof HostMethodVersionUnsatisfiedError
+            ) {
+              setState({
+                kind: "target-refused",
+                targetRefusal: "unsupported-computer",
+              });
+              return;
+            }
+            // The host's own sentence answers a refusal as held by the
+            // environment.
+            if (
+              error instanceof HostRpcError &&
+              error.code === "environment-managed"
+            ) {
+              awaitOutcomeRef.current = "notAuthenticated";
+              fail(error.message, "authentication", null, true);
+              return;
+            }
             // The await rejected without a host verdict, so the attempt ends
             // on the "did not finish" copy; the reason is the only record of
             // why. A closed word set: the coordinator's control-flow reason,
@@ -1181,6 +1509,8 @@ export function useProviderProfileLoginFlow(
                   lastSeenReaderCount,
                 },
                 signal: awaitAbort.signal,
+                readsProfileOutcome:
+                  profileOutcomes !== null || target !== null,
               },
               { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
             );
@@ -1200,10 +1530,21 @@ export function useProviderProfileLoginFlow(
             reportCancellation();
             return;
           }
+          if (
+            target !== null &&
+            error instanceof HostMethodVersionUnsatisfiedError
+          ) {
+            setState({
+              kind: "target-refused",
+              targetRefusal: "unsupported-computer",
+            });
+            return;
+          }
           fail(
             failureMessages.notStarted,
             analyticsBlockerFromError(error),
             null,
+            false,
           );
         },
       );
@@ -1219,9 +1560,12 @@ export function useProviderProfileLoginFlow(
       loginCapability,
       mode,
       providerId,
+      profileOutcomes,
+      target,
       reportCancellation,
       restart,
       settleAttempt,
+      settleProfileOutcome,
       startLogin,
       supportsLoginOwnership,
       submitLoginCode,
@@ -1234,6 +1578,13 @@ export function useProviderProfileLoginFlow(
   useEffect(() => {
     beginLoginRef.current = beginLogin;
     settleOwedReleasesRef.current = settleOwedReleases;
+    releaseLeaveOnUnmountRef.current = () => {
+      if (
+        target?.kind === "leave-to-local" &&
+        (state.kind === "starting" || state.kind === "waiting")
+      )
+        cancelProfile(attemptProfileRef.current);
+    };
   });
 
   const start = useCallback(
@@ -1241,6 +1592,13 @@ export function useProviderProfileLoginFlow(
       readonly label: string | null;
       readonly shareSkillsAndPlugins: boolean;
     }): void => {
+      if (target !== null && !providerLoginDestinationSupported(targetClient)) {
+        setState({
+          kind: "target-refused",
+          targetRefusal: "unsupported-computer",
+        });
+        return;
+      }
       // Guard every caller, including reauth's automatic mount-effect start.
       if (hostBlock?.kind === "macos") {
         const message = providerHostBlockLabel(
@@ -1248,7 +1606,7 @@ export function useProviderProfileLoginFlow(
           providerDisplayName(providerId),
         );
         setState({ kind: "failed", message, refusal: null });
-        onFailed(message);
+        onFailed(message, false);
         return;
       }
       // `starting`, not `startLogin.isPending`: see `busy` below.
@@ -1286,6 +1644,8 @@ export function useProviderProfileLoginFlow(
       awaitLogin.isPending,
       beginLogin,
       hostBlock,
+      target,
+      targetClient,
       mode,
       onFailed,
       providerId,
@@ -1293,6 +1653,35 @@ export function useProviderProfileLoginFlow(
       state.kind,
     ],
   );
+
+  // One list read per press, never a sign-in.
+  const retryListRead = useCallback((): void => {
+    const pending = listedOutcomeRef.current;
+    if (
+      state.kind !== "list-unread" ||
+      pending === null ||
+      profileOutcomes === null ||
+      listRereadPending
+    ) {
+      return;
+    }
+    const thisAttemptId = attemptIdRef.current;
+    setListRereadPending(true);
+    void profileOutcomes.rereadList().then(() => {
+      if (unmountedRef.current || attemptIdRef.current !== thisAttemptId) {
+        return;
+      }
+      setListRereadPending(false);
+      settleProfileOutcome(
+        thisAttemptId,
+        resolveListedOutcome(
+          pending,
+          NO_ECHOED_PROFILES,
+          profileOutcomes.listedProfiles,
+        ),
+      );
+    });
+  }, [listRereadPending, profileOutcomes, settleProfileOutcome, state.kind]);
 
   const waitingForReaders =
     state.kind === "waiting" && state.readerCount !== undefined;
@@ -1372,8 +1761,9 @@ export function useProviderProfileLoginFlow(
       // still pending, `settleAttempt` must wait for the real verdict
       // instead of failing early (the lost-update race).
       submitOutcomeRef.current = "pending";
+      setSubmittedLoginCode(code);
       submitLoginCode.mutate(
-        { providerId, profileId: state.profileId, code },
+        { providerId, profileId: state.profileId },
         {
           onSuccess: (result) => {
             if (attemptIdRef.current !== thisAttemptId) return;
@@ -1393,7 +1783,7 @@ export function useProviderProfileLoginFlow(
         },
       );
     },
-    [providerId, settleAttempt, state, submitLoginCode],
+    [providerId, settleAttempt, state, submitLoginCode, setSubmittedLoginCode],
   );
 
   const touchLoginMutate = touchLogin.mutate;
@@ -1449,6 +1839,8 @@ export function useProviderProfileLoginFlow(
         : null,
     start,
     cancel,
+    retryListRead,
+    listRereadPending,
     cancelPending: cancelLogin.isPending,
     commitPending,
     codePaste: {
@@ -1461,4 +1853,43 @@ export function useProviderProfileLoginFlow(
       touch,
     },
   };
+}
+
+export function providerLoginDestinationSupported(
+  client: HostClient<HostRpcRegistry> | null,
+): boolean {
+  const hostId = client?.getActiveHostId() ?? null;
+  const start = readHostMethodSchemaVersion(hostId, "providers.startLogin");
+  const awaitLogin = readHostMethodSchemaVersion(
+    hostId,
+    "providers.awaitLogin",
+  );
+  return (
+    start?.major === 1 &&
+    start.minor >= 5 &&
+    awaitLogin?.major === 2 &&
+    awaitLogin.minor >= 4
+  );
+}
+
+function abandonedStartHoldsLogin(
+  data: ProviderStartLoginAnswer,
+  target: ProviderLoginTarget | null,
+  capability: ProviderLoginCapability | null,
+): boolean {
+  return target?.kind === "leave-to-local"
+    ? providerLoginAnswerHoldsLogin(data)
+    : providerLoginAnswerHeldForNobody(data, capability);
+}
+
+/** A targeted start returns a scratch handle; the destination is never a login handle. */
+function loginHandle(
+  mode: ProviderProfileLoginFlowMode,
+  existingProfileId: string | null,
+  returnedProfileId: string | null,
+  target: ProviderLoginTarget | null,
+): string | null {
+  return target === null && mode === "reauth"
+    ? existingProfileId
+    : returnedProfileId;
 }

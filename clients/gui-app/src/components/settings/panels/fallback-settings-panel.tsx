@@ -2,6 +2,7 @@
  * Docs: see ../SETTINGS.md (Fallback).
  * Update that file whenever this settings surface changes.
  */
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import {
   useCallback,
@@ -687,6 +688,15 @@ function FallbackPolicyEditor(props: {
           });
         })
         .catch((error: unknown) => {
+          if (reportedSaveFailure(error) === null) {
+            setOverrideOrigins((origins) => {
+              const nextOrigins = new Map(origins);
+              nextOrigins.delete(requestId);
+              return nextOrigins;
+            });
+            dispatch({ type: "save-abandoned", requestId });
+            return;
+          }
           const failure = classifyFallbackSaveFailure(error, "draft");
           dispatch({
             type: "save-failed",

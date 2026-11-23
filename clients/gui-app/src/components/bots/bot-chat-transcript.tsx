@@ -8,6 +8,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -22,7 +23,13 @@ import {
 } from "@tanstack/react-query";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
-import { useChatLocateRowAnswer } from "@/hooks/chats/use-chat-locate-row";
+import {
+  useChatLocateRowAnswer,
+  type ChatLocateRowAnswer,
+} from "@/hooks/chats/use-chat-locate-row";
+import { toast } from "sonner";
+import { NOTIFICATION_MESSAGE_UNAVAILABLE } from "@/lib/notifications/destination-copy";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { replyRowIdFor, sendCardFor } from "@/lib/bots/reply-row";
 import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
@@ -66,6 +73,7 @@ import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-li
 import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
+import { TRANSCRIPT_JUMP_TTL_MS } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
@@ -111,8 +119,10 @@ export type BotTranscriptSurface =
         | null;
       /** The rows of the bot its host opens their own thread under. */
       readonly threadAnchorKinds: readonly string[];
-      /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
-      readonly chooseOption: ((choice: string) => void) | null;
+      /** Posts a direct reply's chosen option as a new post, replying to the reply where the bot's host takes replies; `null` while one is being sent. */
+      readonly chooseOption:
+        | ((messageId: string | null, choice: string) => void)
+        | null;
       /** Names a row of the channel in the channel's box as the message its send replies to (T166); `null` where none can. */
       readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
@@ -143,8 +153,10 @@ export type BotTranscriptSurface =
     }
   | {
       readonly kind: "thread";
-      /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
-      readonly chooseOption: ((choice: string) => void) | null;
+      /** Posts a reply's chosen option in the thread, replying to the reply where the bot's host takes replies; `null` while one is being sent. */
+      readonly chooseOption:
+        | ((messageId: string | null, choice: string) => void)
+        | null;
       /** Names a row of the thread in the thread's box as the message its send replies to (T166); `null` where none can. */
       readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer in the thread; `null` where the thread takes no send. */
@@ -341,6 +353,8 @@ export function BotChatTranscript(props: {
   readonly botId: string;
   readonly chatId: string;
   readonly hostId: string;
+  /** The bot's bound host, whose payer the rows read; `null` when none runs it. */
+  readonly boundHostId: string | null;
   readonly title: string;
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
@@ -402,6 +416,7 @@ export function BotChatTranscript(props: {
             botId={botId}
             chatId={chatId}
             hostId={hostId}
+            boundHostId={props.boundHostId}
             title={title}
             instanceId={instanceId}
             surface={surface}
@@ -527,6 +542,7 @@ function BotChatTranscriptBody(props: {
   readonly botId: string;
   readonly chatId: string;
   readonly hostId: string;
+  readonly boundHostId: string | null;
   readonly title: string;
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
@@ -624,7 +640,11 @@ function BotChatTranscriptBody(props: {
     (landing: BotTranscriptLanding) =>
       jumpTo(
         landing.sendPostId === null
-          ? { kind: "message", messageId: landing.messageId }
+          ? {
+              kind: "message",
+              messageId: landing.messageId,
+              reportsMiss: landing.reportsMiss === true,
+            }
           : {
               kind: "send",
               postId: landing.sendPostId,
@@ -636,8 +656,11 @@ function BotChatTranscriptBody(props: {
   // The row a pending jump waited on has rendered: settle it during render
   // (the adjust-state-on-prop-change pattern), so the scroll is issued in the
   // same pass the row appears in and no effect sets state.
-  const pendingTarget =
-    pendingJump === null ? null : jumpTargetIn(messages, pendingJump);
+  const pendingTarget = renderedJumpTarget(
+    messages,
+    pendingJump,
+    landOn === null,
+  );
   if (pendingTarget !== null) {
     setPendingJump(null);
     issueScroll(pendingTarget);
@@ -662,8 +685,58 @@ function BotChatTranscriptBody(props: {
     setPendingJump({
       kind: "message",
       messageId: pendingJump.fallbackMessageId,
+      reportsMiss: false,
     });
   }
+  useReportedMiss({
+    pendingJump,
+    withdrawn: landOn === null,
+    located,
+    end: () => setPendingJump(null),
+  });
+  // Invariant, with `usePendingJumpBound`: between commits a bound's timer
+  // exists only for the jump the last commit left pending, in a pane it left
+  // in view, and this names that jump until a write outside render ends or
+  // replaces it. Both are kept in the layout phase, inside the commit, so no
+  // timer outlives the commit that lands or ends its jump, hides its pane or
+  // unmounts it. What a commit cannot cover is a write made outside render,
+  // in an event or an effect, whose render comes later (a wheel's comes a
+  // task later): until it commits, the timer could speak of a jump already
+  // ended or clear the one that replaced it. So every such write goes
+  // through `writeJumpOutsideRender`, which clears this first, and the timer
+  // asks here before it acts. The writes made during render (a landing, a
+  // reported miss, a send's fallback, a landing's new jump) never touch
+  // this: a render may be discarded or run twice.
+  const liveJumpRef = useRef<PendingJump | null>(null);
+  useLayoutEffect(() => {
+    liveJumpRef.current = pendingJump;
+    return () => {
+      liveJumpRef.current = null;
+    };
+  }, [pendingJump]);
+  const writeJumpOutsideRender = useCallback((write: () => void) => {
+    liveJumpRef.current = null;
+    write();
+  }, []);
+  const expireJump = useCallback(
+    (jump: PendingJump): boolean => {
+      if (liveJumpRef.current !== jump) return false;
+      writeJumpOutsideRender(() => setPendingJump(null));
+      return true;
+    },
+    [writeJumpOutsideRender],
+  );
+  usePendingJumpBound(pendingJump, expireJump);
+  // The reader moved the view while a jump waited on its row: where they went
+  // is where they stay. Clearing the jump is what releases the range the
+  // store holds open for it, below. The list is given this only while a jump
+  // waits: React keeps a write that changes nothing and replays it in a later
+  // render, after the jump that render set (`useLandOnMessage` lands during
+  // render), which would clear a jump asked after the reader moved.
+  const dropPendingJump = useCallback(
+    () => writeJumpOutsideRender(() => setPendingJump(null)),
+    [writeJumpOutsideRender],
+  );
   const locatedOrdinal = located.status === "found" ? located.ordinal : null;
   const { requestTranscriptOrdinal } = state;
   // The store's pending-jump ordinal follows the pending jump: named while
@@ -691,7 +764,8 @@ function BotChatTranscriptBody(props: {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const rowIdOf = useCallback(
     (messageId: string): string | null =>
-      jumpTargetIn(messages, { kind: "message", messageId })?.rowId ?? null,
+      jumpTargetIn(messages, { kind: "message", messageId, reportsMiss: false })
+        ?.rowId ?? null,
     [messages],
   );
   useBotSearchWordMarks(transcriptRef, chatId, rowIdOf);
@@ -791,9 +865,19 @@ function BotChatTranscriptBody(props: {
     return {
       ...repliesBase,
       above: (messageId) => above.get(messageId) ?? null,
-      open: (messageId) => jumpTo({ kind: "message", messageId }),
+      open: (messageId) =>
+        writeJumpOutsideRender(() =>
+          jumpTo({ kind: "message", messageId, reportsMiss: false }),
+        ),
     };
-  }, [flow, jumpTo, messages, repliesBase, transcriptWindow]);
+  }, [
+    flow,
+    jumpTo,
+    messages,
+    repliesBase,
+    transcriptWindow,
+    writeJumpOutsideRender,
+  ]);
   const listHeader = surface?.kind === "channel" ? surface.history : header;
   const intro = channelIntro(
     surface,
@@ -822,7 +906,7 @@ function BotChatTranscriptBody(props: {
         return;
       }
       setSeekOrdinal(null);
-      setPendingJump(null);
+      writeJumpOutsideRender(() => setPendingJump(null));
       setScroll((previous) => ({
         request: {
           kind: "boundary",
@@ -832,7 +916,7 @@ function BotChatTranscriptBody(props: {
         issued: previous.issued + 1,
       }));
     },
-    [setSeekOrdinal],
+    [setSeekOrdinal, writeJumpOutsideRender],
   );
 
   // The channel's first screen, as a created channel nobody has written in
@@ -889,6 +973,7 @@ function BotChatTranscriptBody(props: {
                   taskId={chatId}
                   epicId={botId}
                   hostId={hostId}
+                  payerHostId={props.boundHostId}
                   messages={messages}
                   transcriptWindow={transcriptWindow}
                   onVisibleOrdinalRangeChange={
@@ -906,6 +991,7 @@ function BotChatTranscriptBody(props: {
                   systemOverlayActive={false}
                   scrollRequest={scrollRequest}
                   onScrollRequestSettled={onScrollRequestSettled}
+                  onReaderMoved={pendingJump === null ? null : dropPendingJump}
                   composerOverlayHeight={0}
                   subagentDrillIn={subagentDrillIn}
                 />
@@ -1354,6 +1440,12 @@ export interface BotTranscriptLanding {
   readonly messageId: string;
   readonly sendPostId: string | null;
   readonly visit: number;
+  /**
+   * Set by a landing the person was told they would see (a notification's
+   * message): the list says so when the message cannot be opened. Any other
+   * landing that finds no row is left unlanded quietly.
+   */
+  readonly reportsMiss?: boolean;
 }
 
 /**
@@ -1374,11 +1466,86 @@ function useLandOnMessage(
 }
 
 /**
+ * A jump that reports its miss is one the person was told they would see. It
+ * ends unlanded, and says so, once the host answers that it has no such row
+ * or cannot be asked; a host that locates no rows says nothing about this
+ * one, whose transcript may still carry it. It ends silently once the landing
+ * that asked for it is withdrawn, or the pane it waited in view of leaves
+ * view: an answer arriving after that moves nothing. One asked of a pane not
+ * yet in view waits for it to show. Settled during render, as a pending jump
+ * is.
+ */
+function useReportedMiss(args: {
+  readonly pendingJump: PendingJump | null;
+  readonly withdrawn: boolean;
+  readonly located: ChatLocateRowAnswer;
+  readonly end: () => void;
+}): void {
+  const { pendingJump, withdrawn, located, end } = args;
+  const paneVisible = usePaneVisible();
+  const [seenJump, setSeenJump] = useState<PendingJump | null>(null);
+  const [unopened, setUnopened] = useState<PendingJump | null>(null);
+  const toldUnopened = useRef<PendingJump | null>(null);
+  useEffect(() => {
+    if (unopened === null || toldUnopened.current === unopened) return;
+    toldUnopened.current = unopened;
+    toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
+  }, [unopened]);
+  if (pendingJump?.kind !== "message" || !pendingJump.reportsMiss) return;
+  if (paneVisible && seenJump !== pendingJump) setSeenJump(pendingJump);
+  if (withdrawn || (!paneVisible && seenJump === pendingJump)) {
+    end();
+    return;
+  }
+  if (!paneVisible) return;
+  if (located.status === "missing" && located.cause !== "unsupported") {
+    end();
+    setUnopened(pendingJump);
+  }
+}
+
+/**
+ * A pending jump is given up once its pane has been in view for
+ * `TRANSCRIPT_JUMP_TTL_MS` without its row, the bound a task chat's parked
+ * jump and find's index read have: a row the host located whose range never
+ * loads, or one it never answers for, would otherwise wait for as long as the
+ * list is mounted and scroll whenever the row came. The clock runs only while
+ * the pane is in view and starts again each time it returns, so nobody comes
+ * back to a jump that ended while they could not see it. One that reports its
+ * miss says so; any other ends silently. The timer is armed and cancelled in
+ * the layout phase: a passive cleanup runs after its commit, and a timer
+ * firing in between would end a jump whose pane that commit hid, or speak of
+ * one it landed. `expire` answers whether an event has ended the jump since
+ * that commit. The bound is this mount's and this jump's: a landing a remount
+ * tries again starts another, as does the turn a send falls back to.
+ */
+function usePendingJumpBound(
+  pendingJump: PendingJump | null,
+  expire: (jump: PendingJump) => boolean,
+): void {
+  const paneVisible = usePaneVisible();
+  useLayoutEffect(() => {
+    if (pendingJump === null || !paneVisible) return;
+    const timer = window.setTimeout(() => {
+      if (!expire(pendingJump)) return;
+      if (pendingJump.kind === "message" && pendingJump.reportsMiss) {
+        toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
+      }
+    }, TRANSCRIPT_JUMP_TTL_MS);
+    return () => window.clearTimeout(timer);
+  }, [expire, paneVisible, pendingJump]);
+}
+
+/**
  * A jump waiting on its row: to a message, or to the card of the send that
  * wrote a post, landing on `fallbackMessageId` where the session has none.
  */
 type PendingJump =
-  | { readonly kind: "message"; readonly messageId: string }
+  | {
+      readonly kind: "message";
+      readonly messageId: string;
+      readonly reportsMiss: boolean;
+    }
   | {
       readonly kind: "send";
       readonly postId: string;
@@ -1393,6 +1560,21 @@ function jumpTargetIn(
   if (jump.kind === "send") return sendCardFor(messages, jump.postId);
   const rowId = replyRowIdFor(messages, jump.messageId);
   return rowId === null ? null : { rowId, blockId: null };
+}
+
+/**
+ * The row a pending jump lands on in this pass. A jump that reports its miss
+ * and whose landing was withdrawn has none, even in the pass its row renders
+ * in: `useReportedMiss` ends it unlanded.
+ */
+function renderedJumpTarget(
+  messages: ReadonlyArray<ChatMessage>,
+  jump: PendingJump | null,
+  withdrawn: boolean,
+): { readonly rowId: string; readonly blockId: string | null } | null {
+  if (jump === null) return null;
+  if (withdrawn && jump.kind === "message" && jump.reportsMiss) return null;
+  return jumpTargetIn(messages, jump);
 }
 
 function sameLanding(

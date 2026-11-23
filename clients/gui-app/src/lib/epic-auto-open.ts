@@ -75,9 +75,12 @@ function isAutoOpenLandingKind(
  * is the oldest node in the task rather than the one being worked in.
  *
  * `recencyByNodeId` is data, not a source: this resolver never reads a store,
- * so an epic whose projection has produced no agent rows yet is expressed by
- * passing an empty map, and the resolution degrades to the tree-first
- * behaviour rather than waiting on anything.
+ * so an epic with no agent rows is expressed by passing an empty map.
+ *
+ * It is `null` while the agent rows are incomplete. Artifacts sync with the
+ * task while agent rows come from record lists answered later, so until then
+ * only the remembered focus may be chosen: anything else could
+ * be an artifact, or an older chat, standing in for the latest one.
  *
  * The first step answers a REQUEST and the other three pick a LANDING, so they
  * admit different kinds - see `isAutoOpenLandingKind` and
@@ -87,7 +90,7 @@ export function resolveAutoOpenTarget(
   records: ReadonlyArray<AutoOpenRecord>,
   focusArtifactId: string | null,
   persistedFocus: string | null,
-  recencyByNodeId: AutoOpenRecencyByNodeId,
+  recencyByNodeId: AutoOpenRecencyByNodeId | null,
 ): AutoOpenTarget | null {
   if (focusArtifactId !== null) {
     return findRequestedRecord(records, focusArtifactId);
@@ -95,6 +98,8 @@ export function resolveAutoOpenTarget(
 
   const persistedMatch = findLandingRecord(records, persistedFocus);
   if (persistedMatch !== null) return persistedMatch;
+
+  if (recencyByNodeId === null) return null;
 
   const mostRecent = findMostRecentlyActiveInTree(records, recencyByNodeId);
   if (mostRecent !== null) return mostRecent;

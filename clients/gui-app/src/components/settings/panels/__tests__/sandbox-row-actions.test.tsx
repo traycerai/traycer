@@ -13,13 +13,16 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
-  SandboxCreateRequest,
+  SandboxCreateAccepted,
   SandboxPod,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
 import { useSandboxDetailsStore } from "@/stores/sandboxes/sandbox-details-store";
-import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import {
+  SandboxCreateError,
+  type SandboxCreateSubmit,
+} from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
@@ -29,6 +32,7 @@ import {
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSandboxFailedRowRetryStore } from "@/stores/sandboxes/sandbox-failed-row-retry-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   recordNegotiatedHostMethods,
@@ -39,16 +43,8 @@ import { terminalFocusOwnsInstance } from "@/lib/terminals/terminal-focus-regist
 const SURFACE = "landing:window-test";
 
 const mutation = () => ({ mutate: vi.fn(), isPending: false });
-const createMutate = vi.hoisted(() =>
-  vi.fn<
-    (
-      variables: { readonly request: SandboxCreateRequest },
-      callbacks: {
-        readonly onSuccess: () => void;
-        readonly onError: (error: Error) => void;
-      },
-    ) => void
-  >(),
+const createMutateAsync = vi.hoisted(() =>
+  vi.fn<(variables: SandboxCreateSubmit) => Promise<SandboxCreateAccepted>>(),
 );
 const destroyMutate = vi.hoisted(() => vi.fn());
 
@@ -122,7 +118,10 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-create-mutation")
     >()),
-    useSandboxCreate: () => ({ mutate: createMutate, isPending: false }),
+    useSandboxCreate: () => ({
+      mutateAsync: createMutateAsync,
+      isPending: false,
+    }),
   }),
 );
 type SettingsMutate = (variables: Record<string, never>) => void;
@@ -248,7 +247,8 @@ beforeEach(() => {
     status: "signed-in",
     contextMetadata: { userId: "u1", username: "ada" },
   });
-  createMutate.mockClear();
+  createMutateAsync.mockReset();
+  createMutateAsync.mockImplementation(() => new Promise(() => undefined));
   destroyMutate.mockClear();
   settings.retry.mockReset();
   settings.legacy.mockReset();
@@ -259,6 +259,7 @@ beforeEach(() => {
   useSurfaceHostSelectionStore.setState({ selections: {} });
   useLandingPanelStore.getState().resetForTests();
   useSandboxDetailsStore.setState({ sandboxId: null });
+  useSandboxFailedRowRetryStore.setState({ byAccountAndRow: {} });
 });
 
 afterEach(() => {
@@ -266,6 +267,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   useSandboxDetailsStore.setState({ sandboxId: null });
+  useSandboxFailedRowRetryStore.setState({ byAccountAndRow: {} });
 });
 
 function TerminalPaneHarness() {
@@ -307,8 +309,9 @@ describe("<SandboxRowActions />", () => {
     });
     const props = {
       configuration: { kind: "personal" } as const,
+      credits: { kind: "personal" } as const,
       unreachable: false,
-      frozenNeedsOwnCredits: false,
+      frozenOffersAddCredits: false,
       settingsFailed: false,
     };
     renderRow(
@@ -354,8 +357,9 @@ describe("<SandboxRowActions />", () => {
           guestConfigured: true,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -385,8 +389,9 @@ describe("<SandboxRowActions />", () => {
           frozen: false,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -429,8 +434,9 @@ describe("<SandboxRowActions />", () => {
             guestConfigured: true,
           })}
           configuration={{ kind: "personal" }}
+          credits={{ kind: "personal" }}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
@@ -460,8 +466,9 @@ describe("<SandboxRowActions />", () => {
           frozen: false,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -510,8 +517,9 @@ describe("<SandboxRowActions />", () => {
           frozen: false,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -545,28 +553,53 @@ describe("<SandboxRowActions />", () => {
             destroyAfterRestingMinutes: period,
           })}
           configuration={{ kind: "personal" }}
+          credits={{ kind: "personal" }}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
 
       await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-      expect(createMutate).toHaveBeenCalledTimes(1);
+      expect(createMutateAsync).toHaveBeenCalledTimes(1);
       expect(
-        createMutate.mock.calls[0]?.[0].request.destroyAfterRestingMinutes,
+        createMutateAsync.mock.calls[0]?.[0].request.destroyAfterRestingMinutes,
       ).toBe(sent);
     },
   );
 
   it("keeps Retry's key until the server refuses it before creating, or accepts it", async () => {
+    const answers: Array<{
+      readonly onSuccess: () => void;
+      readonly onError: (error: Error) => void;
+    }> = [];
+    createMutateAsync.mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          answers.push({
+            onSuccess: () =>
+              resolve({
+                sandboxId: "created-sandbox",
+                hostId: "created-host",
+                sandbox: sandboxSummaryFixture({
+                  id: "created-sandbox",
+                  hostId: "created-host",
+                  state: "creating",
+                }),
+              }),
+            onError: reject,
+          });
+        }),
+    );
+    const summary = sandboxSummaryFixture({ state: "failed" });
     renderRow(
       <SandboxRowActions
-        summary={sandboxSummaryFixture({ state: "failed" })}
+        summary={summary}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -578,9 +611,11 @@ describe("<SandboxRowActions />", () => {
       };
     }> => {
       await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-      const call = createMutate.mock.calls.at(-1);
+      const call = createMutateAsync.mock.calls.at(-1);
+      const answer = answers.at(-1);
       if (call === undefined) throw new Error("expected a create");
-      return { key: call[0].request.clientRequestId, answer: call[1] };
+      if (answer === undefined) throw new Error("expected a pending create");
+      return { key: call[0].request.clientRequestId, answer };
     };
     const refusal = (failure: SandboxControlFailure) =>
       new SandboxCreateError("no", null, null, failure);
@@ -591,6 +626,13 @@ describe("<SandboxRowActions />", () => {
       first.answer.onError(
         refusal({ kind: "network-error", detail: "timeout" }),
       ),
+    );
+    await waitFor(() =>
+      expect(
+        useSandboxFailedRowRetryStore.getState().byAccountAndRow[
+          `u1:${summary.id}`
+        ],
+      ).toEqual({ key: first.key, inFlight: false }),
     );
     const second = await press();
     expect(second.key).toBe(first.key);
@@ -609,10 +651,24 @@ describe("<SandboxRowActions />", () => {
         }),
       ),
     );
+    await waitFor(() =>
+      expect(
+        useSandboxFailedRowRetryStore.getState().byAccountAndRow[
+          `u1:${summary.id}`
+        ],
+      ).toBeUndefined(),
+    );
     const third = await press();
     expect(third.key).not.toBe(second.key);
 
     act(() => third.answer.onSuccess());
+    await waitFor(() =>
+      expect(
+        useSandboxFailedRowRetryStore.getState().byAccountAndRow[
+          `u1:${summary.id}`
+        ],
+      ).toBeUndefined(),
+    );
     const fourth = await press();
     expect(fourth.key).not.toBe(third.key);
   });
@@ -691,8 +747,9 @@ describe("<SandboxRowActions />", () => {
         <SandboxRowActions
           summary={summary}
           configuration={configuration}
+          credits={configuration}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
@@ -1157,8 +1214,9 @@ describe("<SandboxRowActions />", () => {
           guestConfigured: true,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -1195,8 +1253,9 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
           ...overrides,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={settingsFailed}
       />,
     );
@@ -1459,8 +1518,9 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
             guestConfigured: true,
           })}
           configuration={{ kind: "personal" }}
+          credits={{ kind: "personal" }}
           unreachable
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );

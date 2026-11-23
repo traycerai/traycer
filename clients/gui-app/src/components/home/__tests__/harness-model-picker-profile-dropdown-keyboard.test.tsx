@@ -17,7 +17,10 @@ import {
   ProfileDropdown,
   type ProfileDropdownShortcutHint,
 } from "@/components/providers/profile-dropdown";
-import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
+import {
+  resolveProfilePin,
+  type ProfileRowAdmission,
+} from "@/components/providers/provider-profile-model";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 const PROFILES: ReadonlyArray<ProviderProfile> = [
@@ -105,7 +108,7 @@ function NestedPickerSurface() {
             <ProfileDropdown
               providerLabel="Claude"
               profiles={PROFILES}
-              activeProfileId={null}
+              pin={resolveProfilePin(PROFILES, [], null)}
               onSelectProfile={vi.fn()}
               onCreateProfile={vi.fn()}
               createProfileDisabled={false}
@@ -118,6 +121,7 @@ function NestedPickerSurface() {
               eligibilityControls={null}
               admissionByProfileId={null}
               showTerminalBadge
+              terminalComputerName={null}
             />
           )}
         </div>
@@ -256,7 +260,7 @@ function OpenProfileDropdownSurface() {
             <ProfileDropdown
               providerLabel="Claude"
               profiles={PROFILES_WITH_MIDDLE_DISABLED}
-              activeProfileId={null}
+              pin={resolveProfilePin(PROFILES_WITH_MIDDLE_DISABLED, [], null)}
               onSelectProfile={vi.fn()}
               onCreateProfile={vi.fn()}
               createProfileDisabled={false}
@@ -269,6 +273,7 @@ function OpenProfileDropdownSurface() {
               eligibilityControls={null}
               admissionByProfileId={WORK_LOCKED_ADMISSION}
               showTerminalBadge
+              terminalComputerName={null}
             />
           )}
         </div>

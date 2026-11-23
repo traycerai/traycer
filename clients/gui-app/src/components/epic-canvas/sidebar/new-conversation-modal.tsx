@@ -1,4 +1,5 @@
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -102,6 +103,7 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
+  pressedSignInCurrent,
   isAttachEnvironmentUnsupported,
   toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachmentClient,
@@ -214,6 +216,8 @@ import {
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useSignedOutTerminalDefaultAccount } from "@/hooks/providers/use-signed-out-terminal-default-account";
+import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
@@ -238,6 +242,7 @@ import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-to
 import {
   catalogSettledFor,
   chipModelName,
+  withoutDefaultAccount,
 } from "@/stores/composer/composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
@@ -458,7 +463,6 @@ function NewConversationModalAttachmentStrip(props: {
                 <BrowserAnnotationCard
                   key={record.annotationId}
                   record={record}
-                  targetControl={undefined}
                   onRemove={(annotationId) =>
                     useNewConversationAnnotationStore
                       .getState()
@@ -1125,11 +1129,15 @@ export function NewConversationModalBody(props: {
   const setEpicRunSettings = useComposerRunSettingsStore(
     (state) => state.setEpicRunSettings,
   );
+  const setAccountFollowsDefault = useNewConversationModalStore(
+    (state) => state.setAccountFollowsDefault,
+  );
   const handleToolbarSettingsChange = useCallback(
-    (settings: ChatRunSettings): void => {
+    (settings: ChatRunSettings, accountChosen: boolean): void => {
       setSettings(epicId, settings);
+      setAccountFollowsDefault(epicId, !accountChosen);
     },
-    [epicId, setSettings],
+    [epicId, setAccountFollowsDefault, setSettings],
   );
   // `draftSettings` can fall back to `runSettingsSeed`/`latestSettingsSeed`
   // (see `useNewConversationModalSeed`), neither of which is host-scoped or
@@ -1171,6 +1179,21 @@ export function NewConversationModalBody(props: {
       onShownPickKept: (settings) => setSettings(epicId, settings),
     });
   }, [epicId, setSettings, toolbarStore]);
+  // A draft whose account a person chose keeps it; otherwise its Terminal login
+  // starts on the default account.
+  const draftAccountFollowsDefault = useNewConversationModalStore((state) => {
+    const patch = state.draftPatchesByEpicId[epicId];
+    return (
+      patch === undefined ||
+      patch.settings === null ||
+      patch.accountFollowsDefault === true
+    );
+  });
+  useLayoutEffect(() => {
+    toolbarStore.getState().setAccountChosen(!draftAccountFollowsDefault);
+  }, [draftAccountFollowsDefault, toolbarStore]);
+  const surfaceActive = useSurfaceActivity();
+  useSignedOutTerminalDefaultAccount(toolbarStore, surfaceActive, hostClient);
   const harnessId = useStore(
     toolbarStore,
     (state) => state.selection.harnessId,
@@ -1681,8 +1704,10 @@ export function NewConversationModalBody(props: {
       // new-chat carries them forward, mirroring the chat-tile composer's
       // on-send write. Keyed by the host the chat is actually created on
       // (`activeHostId`: the pinned host, else the active one resolved above).
-      setGlobalRunSettings(activeHostId, settings, now);
-      setEpicRunSettings(epicId, activeHostId, settings, now);
+      // A default account is nobody's last choice, so it is not remembered.
+      const lastRunSettings = withoutDefaultAccount(settings, toolbar);
+      setGlobalRunSettings(activeHostId, lastRunSettings, now);
+      setEpicRunSettings(epicId, activeHostId, lastRunSettings, now);
       const profile = useAuthStore.getState().profile;
       const userId = profile?.userId ?? null;
       const worktreeIntent = worktreeIntentForSubmit();
@@ -2542,6 +2567,7 @@ export function NewConversationModalBody(props: {
   // no agent there.
   useLayoutEffect(() => {
     const providers = stagedProviders.data?.providers;
+    const removedProfiles = stagedProviders.data?.removedProfiles ?? [];
     stagedSubmitRef.current =
       stagedTerminalLaunch === null
         ? () => false
@@ -2550,6 +2576,7 @@ export function NewConversationModalBody(props: {
               stagedTerminalLaunch,
               toolbarStore.getState(),
               providers,
+              removedProfiles,
             );
             if (launch === null) return false;
             return dispatchStartTerminal(launch)
@@ -2687,6 +2714,7 @@ function useStagedTaskAttachment(input: {
     input.sessionClient ?? input.placementClient,
   );
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "modal");
+  const takeOperation = useEnvironmentCloud();
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
   const stageAttachmentRef = useRef<StagedSandbox | null>(null);
   // A team's sandbox can serve this task only after the person's own host
@@ -2707,6 +2735,8 @@ function useStagedTaskAttachment(input: {
         return;
       }
       const userId = useAuthStore.getState().profile?.userId ?? null;
+      // The sign-in taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const generation = captureComposerSubmitGeneration(
         () =>
           useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
@@ -2721,13 +2751,16 @@ function useStagedTaskAttachment(input: {
             current: generation.stillCurrent(),
             owns: true,
             epicConfirmed: true,
-            accountActive:
-              (useAuthStore.getState().profile?.userId ?? null) === userId,
+            accountActive: pressedSignInCurrent(operation, userId),
             stageCurrent: readStagedSandbox(surfaceKey) === staged,
           },
         ).effects.includes("handoff");
       stageAttachmentRef.current = staged;
-      void attachEnvironmentAsync({ epicId, teamId: configuration.teamId })
+      void attachEnvironmentAsync({
+        epicId,
+        teamId: configuration.teamId,
+        operation,
+      })
         .then(() => {
           if (stillCurrent()) hand();
         })
@@ -2740,7 +2773,13 @@ function useStagedTaskAttachment(input: {
           }
         });
     },
-    [attachClient, attachEnvironmentAsync, epicId, taskHostTeamId],
+    [
+      attachClient,
+      attachEnvironmentAsync,
+      epicId,
+      takeOperation,
+      taskHostTeamId,
+    ],
   );
   return {
     isSubmitting: input.otherCreatePending || attachEnvironment.isPending,

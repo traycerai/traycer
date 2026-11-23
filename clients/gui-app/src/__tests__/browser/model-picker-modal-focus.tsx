@@ -9,6 +9,7 @@ import { buildAllHarnessModelRows } from "@/components/home/data/harness-model-s
 import { ComposerPromptEditor } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model-picker-panel";
+import { EMPTY_REMOVED_PROFILES_BY_HARNESS_ID } from "@/components/home/pickers/harness-rail-providers";
 import { handleHarnessModelPickerKeyDown } from "@/components/home/pickers/harness-model-picker-keyboard";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
@@ -156,6 +157,7 @@ export function ModalFixture() {
               fallbackHarnesses={[HARNESS]}
               offeredAgents={null}
               profilesByHarnessId={new Map()}
+              removedProfilesByHarnessId={EMPTY_REMOVED_PROFILES_BY_HARNESS_ID}
               resolvedActiveProviderId="claude"
               activeProfileId={null}
               activeProfileIdByHarnessId={new Map()}

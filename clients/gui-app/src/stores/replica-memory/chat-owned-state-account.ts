@@ -173,6 +173,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   accumulatedSummaryAssemblyStarted:
     "boolean included in the fixed store charge; private array is charged separately",
   backgroundItems: "charged by chatWholeSetSliceBytes",
+  accountWait: true,
   pendingFallback: true,
   pendingReturn: true,
   lastFailedAttempt: true,

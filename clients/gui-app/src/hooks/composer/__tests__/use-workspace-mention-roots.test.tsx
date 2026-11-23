@@ -1,8 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createElement, type ReactNode } from "react";
-import { hostQueryKeys } from "@/lib/query-keys";
-import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorktreeBinding,
@@ -480,7 +476,9 @@ describe("runDirectoryFromWorktreeBindingAndIntent", () => {
       bindingEntry({ workspacePath: "/other", isPrimary: false }),
       bindingEntry({ workspacePath: "/repo" }),
     ]);
-    const worktree = binding([bindingEntry({ worktreePath: "/checkout" })]);
+    const worktree = binding([
+      bindingEntry({ mode: "worktree", worktreePath: "/checkout" }),
+    ]);
     expect(runDirectoryFromWorktreeBindingAndIntent(local, null)).toBe("/repo");
     expect(runDirectoryFromWorktreeBindingAndIntent(worktree, null)).toBe(
       "/checkout",
@@ -502,7 +500,13 @@ describe("runDirectoryFromWorktreeBindingAndIntent", () => {
         local,
         worktreeIntent("/repo", "create", null),
       ),
-    ).toBeNull();
+    ).toBe("/repo");
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        worktree,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toBe("/repo");
   });
 
   it("cannot determine a directory for empty or folderless bindings", () => {
@@ -520,40 +524,11 @@ describe("runDirectoryFromWorktreeBindingAndIntent", () => {
 });
 
 describe("useLandingRunWorkingDirectory", () => {
-  let queryClient: QueryClient;
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    createElement(QueryClientProvider, { client: queryClient }, children);
-  const cacheKey = (hostId: string, folders: string[]) =>
-    hostQueryKeys.method(hostId, "worktree.listByWorkspacePaths", {
-      workspacePaths: folders,
-      scriptRefs: [],
-      forceRefresh: false,
-    });
-  const gitSummary = (path: string): WorktreeWorkspaceSummaryV14 => ({
-    workspacePath: path,
-    isGitRepo: true,
-    repoIdentifier: { owner: "acme", repo: "app" },
-    mainBranch: "main",
-    worktrees: [
-      {
-        worktreePath: path,
-        branch: "main",
-        head: null,
-        isMain: true,
-        isLocked: false,
-      },
-    ],
-    scripts: null,
-    repoBranchPrefix: { status: "absent" },
-    resolvedAt: 1,
-  });
   beforeEach(() => {
     resetStores();
-    queryClient = new QueryClient();
   });
   afterEach(() => {
     cleanup();
-    queryClient.clear();
     resetStores();
   });
 
@@ -576,9 +551,7 @@ describe("useLandingRunWorkingDirectory", () => {
           : null;
       if (draftId !== null) setGlobalFolders(["/other"]);
       const key = { surface: "landing" as const, hostId: HOST_A, draftId };
-      const hook = renderHook(() => useLandingRunWorkingDirectory(draftId), {
-        wrapper,
-      });
+      const hook = renderHook(() => useLandingRunWorkingDirectory(draftId));
       expect(hook.result.current).toBe("/primary");
       act(() =>
         useWorktreeIntentStagingStore
@@ -591,138 +564,32 @@ describe("useLandingRunWorkingDirectory", () => {
           .getState()
           .stageIntent(key, worktreeIntent("/primary", "create", null)),
       );
-      expect(hook.result.current).toBeNull();
+      expect(hook.result.current).toBe("/primary");
     },
   );
-  it("reacts to cached git defaults arriving and being removed, with staged choices taking precedence", async () => {
-    setGlobalFolders(["/repo"]);
-    const key = cacheKey(HOST_A, ["/repo"]);
-    const stagingKey = {
-      surface: "landing" as const,
-      hostId: HOST_A,
-      draftId: null,
-    };
-    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
-      wrapper,
-    });
-    expect(hook.result.current).toBe("/repo");
-    act(() => {
-      queryClient.setQueryData(key, { workspaces: [gitSummary("/repo")] });
-    });
-    await waitFor(() => expect(hook.result.current).toBeNull());
-    act(() =>
-      useWorktreeIntentStagingStore
-        .getState()
-        .stageIntent(stagingKey, worktreeIntent("/repo", "local", null)),
-    );
-    expect(hook.result.current).toBe("/repo");
-    act(() =>
-      useWorktreeIntentStagingStore
-        .getState()
-        .stageIntent(
-          stagingKey,
-          worktreeIntent("/repo", "import", "/checkout"),
-        ),
-    );
-    expect(hook.result.current).toBe("/checkout");
-    act(() => queryClient.removeQueries({ queryKey: key, exact: true }));
-    await waitFor(() => expect(queryClient.getQueryData(key)).toBeUndefined());
-    expect(hook.result.current).toBe("/checkout");
-  });
-  it("returns to local cwd when an unstaged cached default is removed", async () => {
-    setGlobalFolders(["/repo"]);
-    const key = cacheKey(HOST_A, ["/repo"]);
-    queryClient.setQueryData(key, { workspaces: [gitSummary("/repo")] });
-    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
-      wrapper,
-    });
-    expect(hook.result.current).toBeNull();
-    act(() => queryClient.removeQueries({ queryKey: key, exact: true }));
-    await waitFor(() => expect(hook.result.current).toBe("/repo"));
-  });
-  it("preserves the primary non-git or staged-only choice when another folder has a git default", () => {
-    setGlobalFolders(["/primary", "/git"]);
-    queryClient.setQueryData(cacheKey(HOST_A, ["/primary", "/git"]), {
-      workspaces: [gitSummary("/git")],
-    });
-    const stagingKey = {
-      surface: "landing" as const,
-      hostId: HOST_A,
-      draftId: null,
-    };
-    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
-      wrapper,
-    });
-    expect(hook.result.current).toBe("/primary");
-    act(() =>
-      useWorktreeIntentStagingStore
-        .getState()
-        .stageIntent(
-          stagingKey,
-          worktreeIntent("/primary", "import", "/primary-checkout"),
-        ),
-    );
-    expect(hook.result.current).toBe("/primary-checkout");
-  });
-  it("does not borrow cached defaults from another host or workspace", () => {
-    setGlobalFolders(["/repo"]);
-    queryClient.setQueryData(cacheKey("host-b", ["/repo"]), {
-      workspaces: [gitSummary("/repo")],
-    });
-    queryClient.setQueryData(cacheKey(HOST_A, ["/other"]), {
-      workspaces: [gitSummary("/other")],
-    });
-    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
-      wrapper,
-    });
-    expect(hook.result.current).toBe("/repo");
-  });
-  it("uses the draft workspace cache even when global folders change", async () => {
-    setGlobalFolders(["/draft-repo"]);
-    const draftId = useLandingDraftStore.getState().createDraft(null);
-    setGlobalFolders(["/global-repo"]);
-    const hook = renderHook(() => useLandingRunWorkingDirectory(draftId), {
-      wrapper,
-    });
-    expect(hook.result.current).toBe("/draft-repo");
-    act(() => {
-      queryClient.setQueryData(cacheKey(HOST_A, ["/global-repo"]), {
-        workspaces: [gitSummary("/global-repo")],
-      });
-    });
-    expect(hook.result.current).toBe("/draft-repo");
-    act(() => {
-      queryClient.setQueryData(cacheKey(HOST_A, ["/draft-repo"]), {
-        workspaces: [gitSummary("/draft-repo")],
-      });
-    });
-    await waitFor(() => expect(hook.result.current).toBeNull());
-  });
-  it("keeps the primary local while its cached git summary is unresolved", () => {
-    setGlobalFolders(["/repo"]);
-    queryClient.setQueryData(cacheKey(HOST_A, ["/repo"]), {
-      workspaces: [{ ...gitSummary("/repo"), resolvedAt: null }],
-    });
-    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
-      wrapper,
-    });
-    expect(hook.result.current).toBe("/repo");
-  });
 
-  it("keeps the cached primary create default when only a sibling is staged", () => {
+  it("keeps the primary when only a sibling is staged", () => {
     setGlobalFolders(["/primary", "/sibling"]);
-    queryClient.setQueryData(cacheKey(HOST_A, ["/primary", "/sibling"]), {
-      workspaces: [gitSummary("/primary")],
-    });
     useWorktreeIntentStagingStore
       .getState()
       .stageIntent(
         { surface: "landing", hostId: HOST_A, draftId: null },
-        worktreeIntent("/sibling", "local", null),
+        worktreeIntent("/sibling", "import", "/sibling-checkout"),
       );
-    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
-      wrapper,
-    });
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null));
+    expect(hook.result.current).toBe("/primary");
+  });
+
+  it("has no directory without folders", () => {
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null));
     expect(hook.result.current).toBeNull();
+  });
+
+  it("uses the draft workspace even when global folders change", () => {
+    setGlobalFolders(["/draft-repo"]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    setGlobalFolders(["/global-repo"]);
+    const hook = renderHook(() => useLandingRunWorkingDirectory(draftId));
+    expect(hook.result.current).toBe("/draft-repo");
   });
 });

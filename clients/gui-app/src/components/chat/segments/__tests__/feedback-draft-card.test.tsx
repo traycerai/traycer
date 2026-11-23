@@ -33,7 +33,11 @@ import {
   recordFeedbackDraftDecision,
   settleFeedbackDraftDecision,
 } from "@/lib/chats/feedback-draft-decisions";
-import { FeedbackDraftCard } from "@/components/chat/segments/feedback-draft-card";
+import {
+  FeedbackDraftCard,
+  FeedbackDraftView,
+  type LiveDraftActions,
+} from "@/components/chat/segments/feedback-draft-card";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
 const mocks = vi.hoisted(() => ({
@@ -216,6 +220,16 @@ describe("FeedbackDraftCard", () => {
     );
   });
 
+  it.each(["category_from_a_newer_build", "constructor"])(
+    "heads a draft of category %s plainly as Feedback",
+    (category) => {
+      renderCard({ ...PENDING, category }, SCOPE);
+
+      expect(
+        screen.getByText("Feedback for Traycer · Feedback · traycer_run_shell"),
+      ).toBeTruthy();
+    },
+  );
   it("sends without diagnostics once the box is unticked, and skips with none", () => {
     renderCard(PENDING, SCOPE);
     fireEvent.click(
@@ -368,5 +382,50 @@ describe("FeedbackDraftCard", () => {
     expect(
       readFeedbackDraftDecision(queryClient, sessionId, address)?.stamp ?? null,
     ).toBeNull();
+  });
+});
+
+describe("FeedbackDraftView diagnostics preview", () => {
+  function viewTree(readOnly: LiveDraftActions["readOnly"]): ReactNode {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <FeedbackDraftView
+          id="block-1"
+          draft={PENDING}
+          headerFindUnitId={null}
+          live={{
+            blockRef: {
+              epicId: SCOPE.epicId,
+              chatId: SCOPE.chatId,
+              blockId: "block-1",
+            },
+            client: null,
+            readOnly,
+            isPending: false,
+            decide: vi.fn(),
+          }}
+        />
+      </QueryClientProvider>
+    );
+  }
+
+  it("keeps an unticked diagnostics box and leaves the preview closed when the actions return from read-only", () => {
+    const view = render(viewTree(null));
+    const box = (): HTMLElement =>
+      screen.getByRole("checkbox", { name: "Include diagnostic data" });
+    expect(box()).toHaveProperty("dataset.state", "checked");
+    fireEvent.click(box());
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    view.rerender(viewTree("source-unavailable"));
+    view.rerender(viewTree(null));
+
+    expect(box()).toHaveProperty("dataset.state", "unchecked");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("1.6.0")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.getByText("1.6.0")).toBeTruthy();
   });
 });

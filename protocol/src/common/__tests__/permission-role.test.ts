@@ -11,15 +11,20 @@ describe("grantedRole", () => {
     expect(grantedRole("editor")).toBe("editor");
   });
 
-  it("resolves the retired viewer role, an unknown role and no role to no access", () => {
-    expect(grantedRole("viewer")).toBeNull();
+  it("resolves the viewer role to the access of an editor", () => {
+    expect(grantedRole("viewer")).toBe("editor");
+  });
+
+  it("resolves an unknown role and no role to no access", () => {
     expect(grantedRole("some-role-a-newer-host-invented")).toBeNull();
+    expect(grantedRole("Viewer")).toBeNull();
+    expect(grantedRole("VIEWER")).toBeNull();
     expect(grantedRole("")).toBeNull();
     expect(grantedRole(null)).toBeNull();
   });
 });
 
-describe("the retired viewer role in the decodable vocabulary", () => {
+describe("the viewer role in the decodable vocabulary", () => {
   it("still parses, so released peers and existing rooms keep decoding", () => {
     expect(LatestPermissionRoleSchema.parse("viewer")).toBe("viewer");
   });
@@ -30,10 +35,11 @@ describe("the retired viewer role in the decodable vocabulary", () => {
     }
   });
 
-  it("grants nothing for the decodable role that is not granted", () => {
+  it("keeps viewer as the one decodable role that is not itself a granted role, and it reads as editor", () => {
     const notGranted = LatestPermissionRoleSchema.options.filter(
       (role) => !grantedPermissionRoleSchema.options.some((g) => g === role),
     );
     expect(notGranted).toEqual(["viewer"]);
+    expect(grantedRole("viewer")).toBe("editor");
   });
 });

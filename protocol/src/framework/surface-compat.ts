@@ -122,15 +122,21 @@ export const compatExceptionSchema = z.object({
    * `"M.m"` version key, or `"*"` to match any negotiated version.
    */
   version: z.string().min(1),
-  /** Payload slot: request/response (unary) or openRequest/serverFrame/clientFrame (stream). */
-  payload: z.string().min(1),
+  /**
+   * Payload slot: request/response (unary) or openRequest/serverFrame/clientFrame (stream).
+   * `null` together with a `null` path names the method-level verdict instead
+   * of a schema path: an optional method whose canonical major cannot bridge a
+   * released peer's. Such an entry must name one exact method.
+   */
+  payload: z.string().min(1).nullable(),
   /**
    * Finding path glob. Path segments are `.`-separated with bracket depth
    * respected (`anyOf[{...}]` is one segment). `*` matches one segment (and
    * also works as a within-segment wildcard when the segment pattern itself
    * contains `*`, e.g. `anyOf[*]`). `**` matches zero or more segments.
+   * `null` only with a `null` payload (see `payload`).
    */
-  path: z.string().min(1),
+  path: z.string().min(1).nullable(),
   reason: z.string().min(1),
 });
 export type CompatException = z.infer<typeof compatExceptionSchema>;
@@ -625,7 +631,16 @@ export function exceptionMatchesFinding(
   }
   if (exception.family !== finding.family) return false;
   if (exception.payload !== finding.payload) return false;
-  if (finding.path === null) return false;
+  // A method-level verdict carries no path. Only a method-level entry naming
+  // exactly this method reaches it; a path entry never does.
+  if (finding.path === null || exception.path === null) {
+    return (
+      finding.path === null &&
+      exception.path === null &&
+      exception.method === finding.method &&
+      matchVersionGlob(exception.version, finding.version)
+    );
+  }
   if (!matchMethodGlob(exception.method, finding.method)) return false;
   if (!matchVersionGlob(exception.version, finding.version)) return false;
   return matchPathGlob(exception.path, finding.path);
@@ -640,6 +655,16 @@ export function validateCompatExceptions(
 ): string[] {
   const problems: string[] = [];
   for (const exception of exceptions) {
+    if ((exception.payload === null) !== (exception.path === null)) {
+      problems.push(
+        `exception for ${JSON.stringify(exception.method)} sets only one of payload and path to null - a method-level entry sets both`,
+      );
+    }
+    if (exception.path === null && exception.method.includes("*")) {
+      problems.push(
+        `method-level exception ${JSON.stringify(exception.method)} uses a glob - it must name one exact method`,
+      );
+    }
     // Only known client→host slots are exempt from the catalog ban;
     // unrecognized payload names count as host→client (fail closed).
     if (isClientToHostPayload(exception.payload)) {

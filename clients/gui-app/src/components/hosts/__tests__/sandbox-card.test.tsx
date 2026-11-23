@@ -631,7 +631,7 @@ describe("per state", () => {
     mocks.catalogue = {
       providers: [
         {
-          provider: "tensorlake",
+          provider: "firecracker",
           os: ["linux"],
           shape: {
             cpuMin: 1,
@@ -680,7 +680,7 @@ describe("per state", () => {
     // A provider serving two OSes is one catalogue entry per OS, each with
     // its own suspend: the card of one OS never says what the other keeps.
     const entry = {
-      provider: "daytona",
+      provider: "multi-os-test-provider",
       shape: {
         cpuMin: 1,
         cpuMax: 4,
@@ -718,13 +718,21 @@ describe("per state", () => {
       ],
     };
     renderCard(
-      sandboxOf("awake", false, { provider: "daytona", os: "windows" }),
+      sandboxOf("awake", false, {
+        provider: "multi-os-test-provider",
+        os: "windows",
+      }),
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toContain(
       "keeps memory",
     );
     cleanup();
-    renderCard(sandboxOf("awake", false, { provider: "daytona", os: "linux" }));
+    renderCard(
+      sandboxOf("awake", false, {
+        provider: "multi-os-test-provider",
+        os: "linux",
+      }),
+    );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toContain(
       "disk only",
     );
@@ -904,7 +912,7 @@ describe("facts as the scope resolves them", () => {
     ]);
   });
 
-  it("control: shows a frozen row when the host list says frozen, whatever the summary says", () => {
+  it("keeps a frozen row's payer unknown when the creator-less summary has no environment", () => {
     const sandbox = resolvedSandbox({
       listed: { state: "suspended", frozen: true },
       summaryFrozen: false,
@@ -913,13 +921,11 @@ describe("facts as the scope resolves them", () => {
 
     renderCard(sandbox);
 
-    expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Your credits ran out/,
-    );
+    expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
 
-  it("control: falls back to the summary's frozen flag when the host list carries no sandbox facts", () => {
+  it("keeps a frozen summary's payer unknown when the host list carries no sandbox facts", () => {
     const sandbox = resolvedSandbox({ listed: null, summaryFrozen: true });
     // The builder's fallback, not a hand-written prop.
     expect(sandbox.frozen).toBe(true);
@@ -927,9 +933,7 @@ describe("facts as the scope resolves them", () => {
 
     renderCard(sandbox);
 
-    expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Your credits ran out/,
-    );
+    expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
 });

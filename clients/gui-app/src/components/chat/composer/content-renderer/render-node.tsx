@@ -20,6 +20,7 @@ import { FileAttachmentTranscriptChip } from "./file-attachment-transcript-chip"
 import type { ComposerContentRenderContext } from "./types";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { ownValue } from "@/lib/own-value";
 const SKIPPED_NODES = new Set(["attachmentGroup"]);
 
 type NodeRenderer = (
@@ -251,7 +252,7 @@ export function RenderedComposerNode(props: {
   const type = node.type ?? "text";
   if (SKIPPED_NODES.has(type)) return null;
 
-  const renderer = RENDERERS[type];
+  const renderer = ownValue(RENDERERS, type);
   if (renderer !== undefined) return renderer(node, nodeKey, context);
 
   const children = node.content;

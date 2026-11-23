@@ -37,6 +37,7 @@ import {
 } from "@/stores/chats/open-store-scope";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { SegmentCard } from "./segment-card";
+import { ownValue } from "@/lib/own-value";
 
 const CATEGORY_LABELS: Readonly<Record<string, string>> = {
   tool_problem: "Tool problem",
@@ -47,7 +48,7 @@ const CATEGORY_LABELS: Readonly<Record<string, string>> = {
 
 /** The category's label; one this build has not heard of reads generically. */
 function feedbackDraftCategoryLabel(category: string): string {
-  return CATEGORY_LABELS[category] ?? "Feedback";
+  return ownValue(CATEGORY_LABELS, category) ?? "Feedback";
 }
 
 /**
@@ -58,9 +59,12 @@ function feedbackDraftCategoryLabel(category: string): string {
 export type FeedbackDraftReadOnlyReason =
   | "no-chat"
   | "not-allowed"
-  | "host-unsupported";
+  | "host-unsupported"
+  | "source-unavailable";
 
 const READ_ONLY_COPY: Record<FeedbackDraftReadOnlyReason, string> = {
+  "source-unavailable":
+    "This feedback draft is unavailable. Try again when its computer is connected.",
   "no-chat": "Open this chat in the desktop app to send it.",
   "not-allowed": "Only someone who can act in this chat can send it.",
   "host-unsupported": "Update Traycer on this computer to send it.",
@@ -181,7 +185,7 @@ function liveReadOnlyReason(
   return null;
 }
 
-interface LiveDraftActions {
+export interface LiveDraftActions {
   readonly blockRef: FeedbackDraftBlockRef;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly readOnly: FeedbackDraftReadOnlyReason | null;
@@ -192,7 +196,7 @@ interface LiveDraftActions {
   ) => void;
 }
 
-function FeedbackDraftView(
+export function FeedbackDraftView(
   props: FeedbackDraftCardProps & { readonly live: LiveDraftActions | null },
 ): ReactNode {
   const { draft, live } = props;
@@ -294,7 +298,6 @@ function FeedbackDraftActions(props: {
   const [includeDiagnostics, setIncludeDiagnostics] = useState(
     draft.suggestDiagnostics,
   );
-  const [viewing, setViewing] = useState(false);
   const checkboxId = useId();
   const sessionReadOnly = useContext(ChatStatusReadOnlyContext);
   const readOnly: FeedbackDraftReadOnlyReason | null =
@@ -323,13 +326,7 @@ function FeedbackDraftActions(props: {
             {draft.suggestDiagnostics
               ? "The agent suggested this. You can untick it."
               : "Logs from this machine and app and host details, as in Report an issue."}{" "}
-            <Button
-              variant="link"
-              size="inline-xs"
-              onClick={() => setViewing(true)}
-            >
-              View
-            </Button>
+            <FeedbackDraftPreviewLink live={live} />
           </span>
         </div>
       </div>
@@ -357,12 +354,29 @@ function FeedbackDraftActions(props: {
           Skip
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Owns whether the preview is open, so the preview closes with the actions:
+ * it opens again only from a View click, never on the actions returning.
+ */
+function FeedbackDraftPreviewLink(props: {
+  readonly live: LiveDraftActions;
+}): ReactNode {
+  const [viewing, setViewing] = useState(false);
+  return (
+    <>
+      <Button variant="link" size="inline-xs" onClick={() => setViewing(true)}>
+        View
+      </Button>
       <FeedbackDraftPreviewDialog
         open={viewing}
         onOpenChange={setViewing}
-        live={live}
+        live={props.live}
       />
-    </div>
+    </>
   );
 }
 

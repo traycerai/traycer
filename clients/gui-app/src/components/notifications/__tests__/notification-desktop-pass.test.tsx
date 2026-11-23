@@ -1064,7 +1064,12 @@ describe("notification desktop-pass design corrections", () => {
       );
       renderPopoverRouter(noopFilterMenuOpenChange);
 
-      const separators = await screen.findAllByTestId(
+      // The list's first commit is drawn from the clock's earlier real-time
+      // sample, where every row is Earlier; Today exists once it re-samples.
+      await screen.findByText("Today", {
+        selector: '[data-testid="notification-temporal-separator"]',
+      });
+      const separators = screen.getAllByTestId(
         "notification-temporal-separator",
       );
       expect(separators.map((node) => node.textContent)).toEqual([

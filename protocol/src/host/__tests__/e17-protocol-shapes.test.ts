@@ -22,11 +22,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import { epicListTaskHostsV10 } from "@traycer/protocol/host/epic/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
-import {
-  credentialUpdatePayloadSchema,
-  SESSION_CAPABILITY_CREDENTIAL_UPDATE,
-  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
-} from "../../host-transport/mux";
+import { credentialUpdatePayloadSchema } from "../../host-transport/mux";
 import { HOST_LIST_ITEM_GOLDEN_FIXTURE } from "../__fixtures__/host-status-golden-fixture";
 import { hostListItemSchema, hostListItemSchemaV10 } from "../host-status";
 import {
@@ -45,7 +41,7 @@ import {
  * Wire shapes for the team host: the `principal_mismatch` error code,
  * the `agent.list@10.2` freeze and `@10.3` head, the host list `owner`, the
  * sandbox card's member names, the task host row and `epic.listTaskHosts`, and
- * the member-credential handoff on the `CREDENTIAL_UPDATE` frame. Each case
+ * the bearer-only `CREDENTIAL_UPDATE` frame. Each case
  * reads the shape through the schema a peer would, so a missing key, a
  * loosened arm or a wrong default fails here rather than on a released client.
  */
@@ -394,7 +390,7 @@ describe("SandboxSummary createdBy and wakePayer", () => {
     id: "sbx_1",
     hostId: "8f6f2d7e-1f43-4c1e-9d63-1e3a7d2c9b10",
     kind: "agent",
-    provider: "tensorlake",
+    provider: "firecracker",
     region: "us-east",
     os: "linux",
     cpus: 2,
@@ -678,102 +674,19 @@ describe("epic.listTaskHosts", () => {
 });
 
 describe("credentialUpdatePayloadSchema", () => {
-  const HANDOFF = {
-    token: "member-access",
-    refreshToken: "member-refresh",
-    familyId: "family-1",
-    provisionedAt: "2026-10-16T12:00:00.000Z",
-  };
-
-  it("pins the wire value of the member-credential capability tag, apart from credentialUpdate", () => {
-    expect(SESSION_CAPABILITY_MEMBER_CREDENTIAL).toBe("memberCredential");
-    expect(SESSION_CAPABILITY_MEMBER_CREDENTIAL).not.toBe(
-      SESSION_CAPABILITY_CREDENTIAL_UPDATE,
-    );
-  });
-
-  it("reads a released-shape bearer frame with memberCredential: null", () => {
-    expect(credentialUpdatePayloadSchema.parse({ bearer: "x" })).toEqual({
-      bearer: "x",
-      memberCredential: null,
-    });
-  });
-
-  it("rejects a frame with a null bearer and no member credential, absent or null", () => {
-    expect(
-      credentialUpdatePayloadSchema.safeParse({ bearer: null }).success,
-    ).toBe(false);
-    expect(
-      credentialUpdatePayloadSchema.safeParse({
-        bearer: null,
-        memberCredential: null,
-      }).success,
-    ).toBe(false);
-  });
-
-  it("accepts a member credential beside a null bearer, and beside a bearer", () => {
-    expect(
-      credentialUpdatePayloadSchema.parse({
-        bearer: null,
-        memberCredential: HANDOFF,
-      }),
-    ).toEqual({ bearer: null, memberCredential: HANDOFF });
+  it("reads a released client's renewal frame, its null memberCredential stripped", () => {
     expect(
       credentialUpdatePayloadSchema.parse({
         bearer: "x",
-        memberCredential: HANDOFF,
+        memberCredential: null,
       }),
-    ).toEqual({ bearer: "x", memberCredential: HANDOFF });
+    ).toEqual({ bearer: "x" });
   });
 
-  it("rejects a provisionedAt that is not an ISO millisecond timestamp", () => {
-    for (const provisionedAt of [
-      "yesterday",
-      "2026-10-16",
-      "2026-10-16T12:00:00Z",
-      "2026-10-16T12:00:00.5Z",
-      "",
-    ]) {
-      expect(
-        credentialUpdatePayloadSchema.safeParse({
-          bearer: null,
-          memberCredential: { ...HANDOFF, provisionedAt },
-        }).success,
-        provisionedAt,
-      ).toBe(false);
-    }
-  });
-
-  it("rejects an extra key inside memberCredential (the handoff is strict)", () => {
+  it("rejects a frame with no bearer", () => {
     expect(
-      credentialUpdatePayloadSchema.safeParse({
-        bearer: null,
-        memberCredential: { ...HANDOFF, scope: "admin" },
-      }).success,
+      credentialUpdatePayloadSchema.safeParse({ bearer: null }).success,
     ).toBe(false);
-  });
-
-  it("rejects a handoff missing a field or carrying an empty one", () => {
-    for (const field of [
-      "token",
-      "refreshToken",
-      "familyId",
-      "provisionedAt",
-    ] as const) {
-      const { [field]: _omitted, ...without } = HANDOFF;
-      expect(
-        credentialUpdatePayloadSchema.safeParse({
-          bearer: null,
-          memberCredential: without,
-        }).success,
-        `missing ${field}`,
-      ).toBe(false);
-    }
-    expect(
-      credentialUpdatePayloadSchema.safeParse({
-        bearer: null,
-        memberCredential: { ...HANDOFF, token: "" },
-      }).success,
-    ).toBe(false);
+    expect(credentialUpdatePayloadSchema.safeParse({}).success).toBe(false);
   });
 });

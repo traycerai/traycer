@@ -65,7 +65,7 @@ const TRAYCER_MODEL: GuiAgentModelOption = {
 const CATALOGUE: SandboxCatalogue = {
   providers: [
     {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,
@@ -273,7 +273,7 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.taskReads.homePending = false;
   mocks.taskReads.homeRefused = false;
   mocks.membersQueries.length = 0;
-  mocks.state.membersSupport = true;
+  mocks.state.membersReadAvailable = true;
   mocks.state.snapshot = snapshot();
   mocks.state.deleted = false;
   mocks.state.error = null;
@@ -285,6 +285,7 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.state.listAppearance = new Map();
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
+  mocks.state.threadListSupport = "inherit";
   mocks.state.onboardingSupport = true;
   mocks.state.onboardingVersion = { major: 1, minor: 1 };
   mocks.state.readAt = 1_000;

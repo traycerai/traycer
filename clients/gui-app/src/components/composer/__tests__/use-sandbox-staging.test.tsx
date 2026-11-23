@@ -35,7 +35,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
@@ -100,13 +100,25 @@ const mocks = vi.hoisted(() => ({
   catalogue: null as SandboxCatalogue | null,
   catalogueError: false,
   catalogueRefetch: vi.fn(),
-  registeredStatuses: new Map<string, EnvironmentStatusResponseV12 | null>(),
+  registeredStatuses: new Map<string, EnvironmentStatusResponseV13 | null>(),
   defaults: {} as Record<string, SandboxConfigurationDefaults>,
   costs: null as UserSandboxCost | null,
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),
   /** Whether the directory has a row for the composer's host. */
   directoryNamesHost: true,
+  teamBalancesMc: new Map<string, number>(),
 }));
+
+vi.mock(
+  "@/hooks/sandboxes/use-team-bundle-balances",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-team-bundle-balances")
+    >()),
+    useTeamBundleBalances: () => (teamId: string) =>
+      mocks.teamBalancesMc.get(teamId) ?? null,
+  }),
+);
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
@@ -204,7 +216,7 @@ const SURFACE = "landing:window-test";
 const MEMORY_HOST = "laptop";
 
 const PROVIDER: SandboxCatalogueProvider = {
-  provider: "tensorlake",
+  provider: "firecracker",
   os: ["linux"],
   shape: {
     cpuMin: 1,
@@ -475,6 +487,7 @@ beforeEach(() => {
   mocks.costs = null;
   mocks.openSettings.mockClear();
   mocks.directoryNamesHost = true;
+  mocks.teamBalancesMc = new Map();
   useStagedSandboxStore.setState({ bySurface: {} });
   usePendingSandboxSendStore.setState({ sends: {} });
   useSandboxShapeMemoryStore.setState({
@@ -803,7 +816,7 @@ describe("useSandboxStaging New rows", () => {
       configuration: { kind: "personal" },
     });
     expect(composer.newRows[1].label).toBe("New acme sandbox");
-    expect(composer.newRows[1].subLine).toContain("uses your acme credits");
+    expect(composer.newRows[1].subLine).toContain("uses acme's credits");
     expect(composer.newRows[0].subLine).toContain("2 vCPU");
   });
 
@@ -848,26 +861,30 @@ describe("useSandboxStaging New rows", () => {
 
     it("names the OS and the full price, and whose credits, at a short balance", () => {
       withBalances(0, 0);
+      mocks.teamBalancesMc.set("team-1", 0);
       const { composer } = mount([LAPTOP]);
 
       expect(composer.newRows[0].subLine).toBe(
         "Linux · 2 vCPU · 4 GB · from $0.21 an hour · uses your credits",
       );
       expect(composer.newRows[1].subLine).toBe(
-        "Linux · 2 vCPU · 4 GB · from $0.21 an hour · uses your acme credits",
+        "Linux · 2 vCPU · 4 GB · from $0.21 an hour · uses acme's credits",
       );
+      expect(composer.newRows[1].subLine).not.toContain("your acme");
     });
 
     it("names the OS and the exact price while awake when funded", () => {
       withBalances(1_000, 1_000);
+      mocks.teamBalancesMc.set("team-1", 1_000_000);
       const { composer } = mount([LAPTOP]);
 
       expect(composer.newRows[0].subLine).toBe(
         "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your credits",
       );
       expect(composer.newRows[1].subLine).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses acme's credits",
       );
+      expect(composer.newRows[1].subLine).not.toContain("your acme");
     });
 
     it("includes the exact short price on the staged chip", () => {
@@ -1149,6 +1166,7 @@ describe("useSandboxStaging New rows", () => {
   });
 
   it("keeps the hourly price and payer under a created settings failure at a short balance", () => {
+    mocks.teamBalancesMc.set("team-1", 0);
     mocks.user = userWith(
       userSubscription({
         totalPlanCredits: 0,
@@ -1245,9 +1263,9 @@ describe("useSandboxStaging New rows", () => {
     expect(
       within(setupLine).queryByText("Compute is charged while it is awake."),
     ).toBeNull();
-    expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+    expect(screen.queryByTestId("consequences-add-credits")).toBeNull();
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "from $0.12 an hour while awake · uses your acme credits",
+      "from $0.12 an hour while awake · uses acme's credits",
     );
     expect(screen.getByTestId("consequences-clause-team").textContent).toBe(
       "Everyone in acme can use it; another member's agent can read what yours can.",
@@ -1531,7 +1549,7 @@ describe("useSandboxStaging sandbox rows' lines", () => {
     );
 
     expect(lineOf(awakeTeamBox)).toEqual([
-      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your acme credits",
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses acme's credits",
       "acme · $0.05 today",
     ]);
   });
@@ -1993,7 +2011,7 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
   it("names the team on a team sandbox's price", () => {
     expect(
       stagedPrice(pricedHost("team-box", "suspended", teamOwnedItem())),
-    ).toBe("Waking team-box uses your acme allowance and makes you the payer.");
+    ).toBe("Waking team-box uses acme's credits.");
   });
 
   it.each([

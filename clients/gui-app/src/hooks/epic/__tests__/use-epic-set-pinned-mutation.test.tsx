@@ -19,6 +19,7 @@ import {
   cloudEpicTasksPageGeneration,
   useCloudEpicTasksPagesStore,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -36,6 +37,16 @@ const mockClient = {
   getActiveHostId: () => testState.activeHostId,
   getRequestContextUserId: () => testState.userId,
 };
+
+function pinnedRpcError(message: string): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message,
+    requestId: "request-epic-set-pinned",
+    method: "epic.setPinned",
+    fatalDetails: null,
+  });
+}
 
 // `useHostBinding` is mocked alongside `useHostClient` because the hook resolves
 // its client PER DISPATCH now (`variables.hostId`), and a named host's requester
@@ -305,8 +316,9 @@ describe("useEpicSetPinned", () => {
       "epic-1": true,
     });
 
+    vi.mocked(toast.error).mockClear();
     capturedOptions.onError?.(
-      { code: "RPC_ERROR", message: "test", fatalDetails: null },
+      pinnedRpcError("test"),
       followingVars("epic-1", true),
       context,
     );
@@ -321,6 +333,7 @@ describe("useEpicSetPinned", () => {
         ][0],
       ),
     ).toEqual({ "epic-1": false });
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
   });
 
@@ -363,7 +376,7 @@ describe("useEpicSetPinned", () => {
     });
 
     capturedOptions.onError?.(
-      { code: "RPC_ERROR", message: "test", fatalDetails: null },
+      pinnedRpcError("test"),
       followingVars("tail-only", false),
       context,
     );
@@ -420,16 +433,14 @@ describe("useEpicSetPinned", () => {
       scopedQueryKey,
       pageWith([epicTask("epic-1", false)]),
     );
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
     renderHook(() => useEpicSetPinned(), {
       wrapper: makeWrapper(queryClient),
     });
 
+    vi.mocked(toast.error).mockClear();
     capturedOptions.onError?.(
-      {
-        code: "RPC_ERROR",
-        message: EPIC_PIN_UNAUTHORIZED_MESSAGE,
-        fatalDetails: null,
-      },
+      pinnedRpcError(EPIC_PIN_UNAUTHORIZED_MESSAGE),
       followingVars("epic-1", true),
       undefined,
     );
@@ -438,6 +449,7 @@ describe("useEpicSetPinned", () => {
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": false,
     });
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith(
       "Your sign-in couldn't be confirmed. Pinning will work again once it is.",
     );
@@ -480,14 +492,16 @@ describe("useEpicSetPinned", () => {
     expect(removeQueries).not.toHaveBeenCalled();
     expect(invalidateQueries).not.toHaveBeenCalled();
 
+    vi.mocked(toast.error).mockClear();
     capturedOptions.onError?.(
-      { code: "RPC_ERROR", message: "test", fatalDetails: null },
+      pinnedRpcError("test"),
       followingVars("epic-1", true),
       context,
     );
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": false,
     });
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
   });
 
@@ -683,11 +697,7 @@ describe("useEpicSetPinned", () => {
       "epic-1": true,
     });
 
-    capturedOptions.onError?.(
-      { code: "RPC_ERROR", message: "test", fatalDetails: null },
-      variables,
-      context,
-    );
+    capturedOptions.onError?.(pinnedRpcError("test"), variables, context);
 
     // Back to the host's real state. The rollback needs no enrollment of its
     // own - it inverts the bit through the same patch function - which is why
@@ -889,12 +899,14 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(new QueryClient()),
     });
 
+    vi.mocked(toast.error).mockClear();
     capturedOptions.onError?.(
-      { code: "RPC_ERROR", message: "test", fatalDetails: null },
+      pinnedRpcError("test"),
       followingVars("epic-1", true),
       undefined,
     );
 
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
   });
 });

@@ -10,7 +10,17 @@ import {
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DEFAULT_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-transport/transport-config";
+import {
+  FakeNativeWebSocket,
+  openAckFrame,
+  sentFramesOfKind,
+  sentTokens,
+  settle,
+} from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
   CredentialsMigrationOutcome,
@@ -52,6 +62,12 @@ import type {
   UninstallOk,
 } from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import {
+  createSigningKey,
+  jwksResponse,
+  userBearerClaims,
+  type BearerSigningKey,
+} from "../../auth/__tests__/jws-fixture";
 import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import { PerWindowState } from "../../windows/per-window-state";
@@ -78,6 +94,16 @@ vi.mock(
     >()),
     fetchRegisteredHostsViaHttp: fetchRegisteredHostsMock,
   }),
+);
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
 );
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
@@ -576,7 +602,7 @@ interface Snapshot {
   readonly preferredHostId: string | null;
   readonly targetHostId: string | null;
   readonly effectiveHostId: string | null;
-  readonly leases: readonly unknown[];
+  readonly leases: readonly HostLeaseSnapshot[];
 }
 
 type AttachResult =
@@ -880,31 +906,43 @@ function refreshFleetHandler(): InvokeHandler {
   return handler;
 }
 
+/**
+ * This machine's own host, running and enrolled: what a cold start finds on
+ * disk before any account call is possible.
+ */
+async function runningLocalHost(): Promise<{
+  readonly host: FakeHost;
+  readonly directory: string;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "traycer-local-auth-"));
+  const enrollmentFile = join(directory, "identity", "enrollment.json");
+  await mkdir(dirname(enrollmentFile), { recursive: true });
+  await writeFile(
+    enrollmentFile,
+    JSON.stringify({ hostId: "local-host" }),
+    "utf8",
+  );
+  const host = new FakeHost();
+  host.identityEnrollmentFile = enrollmentFile;
+  host.setSnapshot({
+    hostId: "local-host",
+    websocketUrl: "ws://127.0.0.1:1",
+    version: MINIMUM_HOST_VERSION,
+    pid: 123,
+    systemHostName: "test-host",
+    displayName: "Test Host",
+    availability: "available",
+  });
+  return { host, directory };
+}
+
 describe("local auth-session restore", () => {
   it("restores a matching file identity into an empty main and selects its available local host without cloud access", async () => {
     const webSocketConstructor = vi.fn(function WebSocketConstructor() {
       throw new Error("unexpected local inventory connection");
     });
     vi.stubGlobal("WebSocket", webSocketConstructor);
-    const directory = await mkdtemp(join(tmpdir(), "traycer-local-auth-"));
-    const enrollmentFile = join(directory, "identity", "enrollment.json");
-    await mkdir(dirname(enrollmentFile), { recursive: true });
-    await writeFile(
-      enrollmentFile,
-      JSON.stringify({ hostId: "local-host" }),
-      "utf8",
-    );
-    const host = new FakeHost();
-    host.identityEnrollmentFile = enrollmentFile;
-    host.setSnapshot({
-      hostId: "local-host",
-      websocketUrl: "ws://127.0.0.1:1",
-      version: "1.0.0",
-      pid: 123,
-      systemHostName: "test-host",
-      displayName: "Test Host",
-      availability: "available",
-    });
+    const { host, directory } = await runningLocalHost();
     const stored = buildStoredCredentials("user-a", "stored-token");
     const tokenStore = new FakeAuthTokenStore(async () => stored);
     const { bridge, registry, authSession } = await buildBridge({
@@ -961,6 +999,121 @@ describe("local auth-session restore", () => {
       bridge.dispose();
       await rm(directory, { recursive: true, force: true });
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("carries the PID snapshot version through the installed inventory endpoint and refuses a below-floor reconnect", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    FakeNativeWebSocket.instances.length = 0;
+
+    const host = new FakeHost();
+    const floorSnapshot: DesktopPublishedHostSnapshot = {
+      hostId: "local-host",
+      websocketUrl: "ws://127.0.0.1:4455/ws",
+      version: MINIMUM_HOST_VERSION,
+      pid: 123,
+      systemHostName: "test-host",
+      displayName: "Test Host",
+      availability: "available",
+    };
+    host.setSnapshot(floorSnapshot);
+    const { bridge } = await buildBridge({
+      signedIn: { userId: "user-a", token: "user-sign-in-token" },
+      host,
+    });
+    await bridge.hostTokens.adopt(
+      "user-a",
+      floorSnapshot.hostId,
+      {
+        token: "host-only-token",
+        expiresAtMs: Date.now() + 60_000,
+      },
+      bridge.hostTokens.era("user-a"),
+    );
+
+    const observedSnapshotVersions: Array<string | null> = [];
+    const readSnapshot = host.getSnapshot.bind(host);
+    const snapshotReader = vi
+      .spyOn(host, "getSnapshot")
+      .mockImplementation(() => {
+        const snapshot = readSnapshot();
+        observedSnapshotVersions.push(snapshot?.version ?? null);
+        return snapshot;
+      });
+
+    try {
+      bridge.install();
+      await vi.waitFor(() =>
+        expect(FakeNativeWebSocket.instances).toHaveLength(2),
+      );
+      const initialSockets = [...FakeNativeWebSocket.instances];
+      for (const socket of initialSockets) socket.fireOpen();
+      await settle();
+      for (const socket of initialSockets) {
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1);
+        socket.fireMessage(openAckFrame([], null));
+      }
+      expect(sentTokens()).toContain("host-only-token");
+
+      const subscriptionMethodsFor = (socket: FakeNativeWebSocket): string[] =>
+        sentFramesOfKind(socket, "subscribe").flatMap((frame) =>
+          typeof frame.method === "string" ? [frame.method] : [],
+        );
+      await vi.waitFor(() => {
+        const methods = initialSockets.flatMap(subscriptionMethodsFor);
+        expect(methods).toContain("host.hostInventory.subscribe");
+        expect(methods).toContain("host.browserPreparation.subscribe");
+      });
+      const inventorySockets = initialSockets.filter((socket) =>
+        subscriptionMethodsFor(socket).includes("host.hostInventory.subscribe"),
+      );
+      const browserPreparationSockets = initialSockets.filter((socket) =>
+        subscriptionMethodsFor(socket).includes(
+          "host.browserPreparation.subscribe",
+        ),
+      );
+      expect(inventorySockets).toHaveLength(1);
+      expect(browserPreparationSockets).toHaveLength(1);
+      const initialSocket = inventorySockets[0];
+      if (initialSocket === undefined) {
+        throw new Error("at-floor local inventory subscription was not opened");
+      }
+      const browserPreparationSocket = browserPreparationSockets.at(0);
+      if (browserPreparationSocket === undefined) {
+        throw new Error("browser preparation subscription was not opened");
+      }
+      expect(browserPreparationSocket).not.toBe(initialSocket);
+
+      const readsBeforeReconnect = observedSnapshotVersions.length;
+      const belowFloorSnapshot = { ...floorSnapshot, version: "1.5.4" };
+      expect({ ...belowFloorSnapshot, version: floorSnapshot.version }).toEqual(
+        floorSnapshot,
+      );
+      host.setSnapshot(belowFloorSnapshot);
+      initialSocket.fireClose(1006, "inventory socket interrupted");
+      await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS);
+      await settle();
+
+      expect(observedSnapshotVersions.slice(readsBeforeReconnect)).toContain(
+        "1.5.4",
+      );
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      const inventorySocketsAfterReconnect =
+        FakeNativeWebSocket.instances.filter((socket) =>
+          subscriptionMethodsFor(socket).includes(
+            "host.hostInventory.subscribe",
+          ),
+        );
+      expect(inventorySocketsAfterReconnect).toHaveLength(1);
+      expect(inventorySocketsAfterReconnect.at(0)).toBe(initialSocket);
+    } finally {
+      bridge.dispose();
+      snapshotReader.mockRestore();
+      await settle();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      FakeNativeWebSocket.instances.length = 0;
     }
   });
 
@@ -1089,11 +1242,17 @@ describe("local auth-session restore", () => {
   it("re-reads the same pair after a duplicate credentials watcher hint", async () => {
     const { promise: pendingFirstRead, resolve: resolveRead } =
       Promise.withResolvers<StoredCredentials | null>();
+    const installRead = Promise.resolve<StoredCredentials | null>(null);
     const stored = buildStoredCredentials("user-a", "stored-token");
     const readResults = [pendingFirstRead, Promise.resolve(stored)];
-    const tokenStore = new FakeAuthTokenStore(
-      () => readResults.shift() ?? Promise.resolve(null),
-    );
+    let servingInstallRead = true;
+    const tokenStore = new FakeAuthTokenStore(() => {
+      if (servingInstallRead) {
+        servingInstallRead = false;
+        return installRead;
+      }
+      return readResults.shift() ?? Promise.resolve(null);
+    });
     const { bridge, registry, authSession } = await buildBridge({
       authTokenStore: tokenStore,
     });
@@ -1101,6 +1260,10 @@ describe("local auth-session restore", () => {
     bridge.install();
 
     try {
+      expect(servingInstallRead).toBe(false);
+      await installRead;
+      tokenStore.readCount = 0;
+
       const restorePending = restoreLocalHandler()(sender(101), {
         userId: "user-a",
         token: "stored-token",
@@ -1122,13 +1285,19 @@ describe("local auth-session restore", () => {
   it("discards a stale first read when a credentials watcher hint reveals deletion", async () => {
     const { promise: pendingFirstRead, resolve: resolveRead } =
       Promise.withResolvers<StoredCredentials | null>();
+    const installRead = Promise.resolve<StoredCredentials | null>(null);
     const readResults = [
       pendingFirstRead,
       Promise.resolve<StoredCredentials | null>(null),
     ];
-    const tokenStore = new FakeAuthTokenStore(
-      () => readResults.shift() ?? Promise.resolve(null),
-    );
+    let servingInstallRead = true;
+    const tokenStore = new FakeAuthTokenStore(() => {
+      if (servingInstallRead) {
+        servingInstallRead = false;
+        return installRead;
+      }
+      return readResults.shift() ?? Promise.resolve(null);
+    });
     const { bridge, registry, authSession } = await buildBridge({
       authTokenStore: tokenStore,
     });
@@ -1136,6 +1305,10 @@ describe("local auth-session restore", () => {
     bridge.install();
 
     try {
+      expect(servingInstallRead).toBe(false);
+      await installRead;
+      tokenStore.readCount = 0;
+
       const restorePending = restoreLocalHandler()(sender(101), {
         userId: "user-a",
         token: "stored-token",
@@ -1149,6 +1322,234 @@ describe("local auth-session restore", () => {
       bridge.dispose();
     }
   });
+});
+
+describe("an offline start", () => {
+  const USER_ID = "user-a";
+  const PROFILE = {
+    userId: USER_ID,
+    userName: USER_ID,
+    email: `${USER_ID}@example.com`,
+  };
+  const START = new Date("2026-11-16T00:00:00.000Z");
+  const COOLDOWN_MS = 61_000;
+
+  function handOver(token: string): DesktopAuthSessionSnapshot {
+    return { status: "signed-in", token, profile: PROFILE };
+  }
+
+  function invokeHandler(channel: string): InvokeHandler {
+    const handler = ipcMainState.handlers.get(channel);
+    if (handler === undefined) throw new Error(`${channel} handler missing`);
+    return handler;
+  }
+
+  /** The key source: down until `answer()`, then authn's published keys. */
+  function recordedKeySource(publicJwk: Record<string, unknown>): {
+    readonly answer: () => void;
+    readonly attempts: () => number;
+  } {
+    let up = false;
+    const fetchMock = vi.fn(() =>
+      up
+        ? Promise.resolve(jwksResponse([publicJwk]))
+        : Promise.reject(new TypeError("fetch failed")),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return {
+      answer: () => {
+        up = true;
+      },
+      attempts: () => fetchMock.mock.calls.length,
+    };
+  }
+
+  async function listedHostIds(webContentsId: number): Promise<string[]> {
+    const seq = invokeSyncWithSender(
+      RunnerHostSync.selectionAttachSeq,
+      webContentsId,
+    );
+    const attached = await attachOk(attachHandler(), webContentsId, seq, []);
+    return attached.snapshot.leases.map((lease) => lease.hostId);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(START);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("lists the local computer with the keys unreachable, keeps the hold, and verifies once the keys answer, for every window", async () => {
+    const { host, directory } = await runningLocalHost();
+    const key = createSigningKey("kid-1", "bearer");
+    const keys = recordedKeySource(key.publicJwk);
+    const token = key.sign(userBearerClaims(USER_ID, Date.now() + 3_600_000));
+    const stored = buildStoredCredentials(USER_ID, token);
+    const tokenStore = new FakeAuthTokenStore(() => Promise.resolve(stored));
+    const { bridge, registry, authSession } = await buildBridge({
+      authTokenStore: tokenStore,
+      host,
+    });
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, buildWindow());
+    bridge.install();
+    await flushIo();
+    const registryReadsAtStart = fetchRegisteredHostsMock.mock.calls.length;
+
+    try {
+      await expect(
+        invokeHandler(RunnerHostInvoke.authSessionSet)(
+          sender(101),
+          handOver(token),
+        ),
+      ).resolves.toEqual({
+        outcome: "refused",
+        reason: "key-source-unavailable",
+      });
+      expect(authSession.get().status).toBe("signed-out");
+      expect(await listedHostIds(101)).toEqual([]);
+      expect(
+        fetchRegisteredHostsMock.mock.calls.length,
+        "registry reads after the refusal",
+      ).toBe(registryReadsAtStart);
+
+      await expect(
+        restoreLocalHandler()(sender(101), { userId: USER_ID, token }),
+      ).resolves.toBe("restored");
+      expect(authSession.get()).toEqual({
+        status: "unverified",
+        token,
+        profile: {
+          userId: USER_ID,
+          userName: stored.user.name,
+          email: stored.user.email,
+        },
+        verified: false,
+      });
+      await awaitSelectionTarget(windowA, "local-host");
+      expect(await listedHostIds(101)).toEqual(["local-host"]);
+      expect(
+        fetchRegisteredHostsMock.mock.calls.length,
+        "registry reads after the local restore",
+      ).toBe(registryReadsAtStart);
+      await expect(
+        invokeHandler(RunnerHostInvoke.authSessionGet)(sender(202)),
+      ).resolves.toMatchObject({ status: "unverified", token });
+      expect(await listedHostIds(202)).toEqual(["local-host"]);
+
+      const attemptsBefore = keys.attempts();
+      await expect(
+        invokeHandler(RunnerHostInvoke.authSessionSet)(
+          sender(101),
+          handOver(token),
+        ),
+      ).resolves.toEqual({
+        outcome: "refused",
+        reason: "key-source-unavailable",
+      });
+      expect(keys.attempts()).toBe(attemptsBefore);
+      expect(authSession.get()).toMatchObject({
+        status: "unverified",
+        verified: false,
+      });
+
+      keys.answer();
+      vi.setSystemTime(Date.now() + COOLDOWN_MS);
+      fetchRegisteredHostsMock.mockResolvedValue({
+        kind: "ok",
+        response: {
+          hosts: [
+            buildHostListItem("local-host"),
+            buildHostListItem("team-host"),
+          ],
+        },
+      });
+      await expect(
+        invokeHandler(RunnerHostInvoke.authSessionSet)(
+          sender(101),
+          handOver(token),
+        ),
+      ).resolves.toEqual({ outcome: "accepted" });
+      expect(authSession.get()).toEqual({ ...handOver(token), verified: true });
+      await refreshFleetHandler()(sender(101));
+      await flushIo();
+      expect(await listedHostIds(101)).toEqual(
+        expect.arrayContaining(["local-host", "team-host"]),
+      );
+    } finally {
+      bridge.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      label: "a wrong signature",
+      reason: "bad-signature" as const,
+      tokenFor: (_key: BearerSigningKey) =>
+        createSigningKey("kid-1", "bearer").sign(
+          userBearerClaims(USER_ID, Date.now() + 3_600_000),
+        ),
+    },
+    {
+      label: "an unknown signing key",
+      reason: "unknown-signing-key" as const,
+      tokenFor: (_key: BearerSigningKey) =>
+        createSigningKey("kid-unpublished", "bearer").sign(
+          userBearerClaims(USER_ID, Date.now() + 3_600_000),
+        ),
+    },
+    {
+      label: "an expired token",
+      reason: "expired" as const,
+      tokenFor: (key: BearerSigningKey) =>
+        key.sign(userBearerClaims(USER_ID, Date.now() - 120_000)),
+    },
+  ])(
+    "adopts nothing and lists no computer for $label, with the keys reachable",
+    async ({ reason, tokenFor }) => {
+      const { host, directory } = await runningLocalHost();
+      const key = createSigningKey("kid-1", "bearer");
+      const keys = recordedKeySource(key.publicJwk);
+      keys.answer();
+      const token = tokenFor(key);
+      const tokenStore = new FakeAuthTokenStore(() =>
+        Promise.resolve(buildStoredCredentials(USER_ID, token)),
+      );
+      const { bridge, registry, authSession } = await buildBridge({
+        authTokenStore: tokenStore,
+        host,
+      });
+      registry.add("window-a", 101, buildWindow());
+      bridge.install();
+
+      try {
+        await expect(
+          invokeHandler(RunnerHostInvoke.authSessionSet)(
+            sender(101),
+            handOver(token),
+          ),
+        ).resolves.toEqual({ outcome: "refused", reason });
+
+        expect(authSession.get()).toEqual({
+          status: "signed-out",
+          token: null,
+          profile: null,
+          verified: false,
+        });
+        expect(await listedHostIds(101)).toEqual([]);
+        expect(fetchRegisteredHostsMock).not.toHaveBeenCalled();
+      } finally {
+        bridge.dispose();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("selection authority IPC binding", () => {

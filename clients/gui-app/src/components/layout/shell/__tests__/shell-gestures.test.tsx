@@ -1626,6 +1626,27 @@ describe("useEdgeNavSwipe", () => {
     expect(probe.navigations).toEqual([]);
   });
 
+  // A surface that declares `touch-action: none` handles its own touches, and
+  // nothing blocks the edges here, so the refusal is the recognizer's own: the
+  // same swipe on a plain element navigates through the same mounted hook.
+  it("does not navigate on a surface that declares its own touch handling", () => {
+    const probe = mountOnBareScreen();
+    const ownHandling = document.createElement("div");
+    ownHandling.style.touchAction = "none";
+    document.body.appendChild(ownHandling);
+    const plain = document.createElement("div");
+    document.body.appendChild(plain);
+
+    swipe({ from: 8, to: 60, target: ownHandling, dropY: 0 });
+
+    expect(probe.dragStarts).toEqual([]);
+    expect(probe.navigations).toEqual([]);
+
+    swipe({ from: 8, to: 60, target: plain, dropY: 0 });
+
+    expect(probe.navigations).toEqual(["back"]);
+  });
+
   // The composer spans the full width, so its own leading edge sits inside the
   // zone. A horizontal drag there is the caret being dragged through the text,
   // and it belongs to the field whether or not the field held focus when the
@@ -1835,6 +1856,45 @@ describe("useEdgeNavSwipe", () => {
       const move = touchTo({ clientX: 60, clientY: 300 }, composer);
 
       expect(move.cancelled).toBe(false);
+    });
+
+    // The same inward drag on a plain element is reserved, so the page's
+    // handling is not cancelled only for the surface that handles its own touches.
+    it("leaves a drag on a surface that declares its own touch handling to the page", () => {
+      mountOnBareScreen();
+      const ownHandling = document.createElement("div");
+      ownHandling.style.touchAction = "none";
+      document.body.appendChild(ownHandling);
+      const plain = document.createElement("div");
+      document.body.appendChild(plain);
+
+      touchDown(8, ownHandling);
+      const own = touchTo({ clientX: 60, clientY: 300 }, ownHandling);
+      touchDown(8, plain);
+      const reserved = touchTo({ clientX: 60, clientY: 300 }, plain);
+
+      expect(own.cancelled).toBe(false);
+      expect(reserved.cancelled).toBe(true);
+    });
+
+    // A rail that already pans sideways owns the drag, so the reservation must
+    // not cancel it; the same drag on a plain element is reserved.
+    it("leaves a drag on a rail that already pans sideways to the page", () => {
+      mountOnBareScreen();
+      const rail = document.createElement("div");
+      rail.style.overflowX = "auto";
+      stubHorizontalPan(rail, { scrollWidth: 600, clientWidth: 300 });
+      document.body.appendChild(rail);
+      const plain = document.createElement("div");
+      document.body.appendChild(plain);
+
+      touchDown(8, rail);
+      const panning = touchTo({ clientX: 60, clientY: 300 }, rail);
+      touchDown(8, plain);
+      const reserved = touchTo({ clientX: 60, clientY: 300 }, plain);
+
+      expect(panning.cancelled).toBe(false);
+      expect(reserved.cancelled).toBe(true);
     });
 
     it("leaves a drag alone while the edges are claimed", () => {

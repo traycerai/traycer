@@ -42,8 +42,8 @@ export const attachmentMentionNodeSchema = lazySchema(() =>
  * Every role value a wire payload or a persisted room may still DECODE,
  * `viewer` among them.
  *
- * `viewer` is retired: no grant names it, no writer stores it, and every
- * reader resolves it to no access through `grantedRole`
+ * `viewer` is no longer offered, but stored grants and released peers still
+ * carry it, and every reader resolves it to `editor` through `grantedRole`
  * (`protocol/common/permission-role`). It stays in the vocabulary because
  * removing it would break decoding in three places at once, and a role that
  * cannot be decoded is not a role that is refused - it is a payload that

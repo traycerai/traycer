@@ -1,23 +1,27 @@
 import {
   environmentMoveItemChoiceKey,
-  type EnvironmentMoveAcceptRequest,
-  type EnvironmentMovePlanResponseV12,
+  type EnvironmentMovePlanResponseV20,
+  type EnvironmentMoveStaysChoice,
 } from "@traycer/protocol/host/environment/move-contracts";
 import {
   envOverrideProviderName,
   itemPageName,
+  moveRowLabel,
 } from "@/components/settings/personal/personal-page-status";
+import { ownValue } from "@/lib/own-value";
 
-export type MovePlan = EnvironmentMovePlanResponseV12;
+export type MovePlan = EnvironmentMovePlanResponseV20;
 export type MoveRow = MovePlan["rows"]["moves"][number];
-export type MoveKeyChoice =
-  EnvironmentMoveAcceptRequest["keyChoices"][number]["choice"];
+export type MoveKeyChoice = EnvironmentMoveStaysChoice["choice"];
 
 export const MOVE_DISCLOSURE =
   "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
 
-export const MOVE_ACCEPTS_AS_SHOWN =
-  "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.";
+/**
+ * The plan's `disclosureVersion` that {@link MOVE_DISCLOSURE} is. A plan of
+ * any other version shows the needs-an-update line and no accept.
+ */
+export const MOVE_DISCLOSURE_VERSION = 2;
 
 export const PLAN_CHANGED_TEXT = "This list changed. Read it again.";
 
@@ -63,48 +67,33 @@ export function moveReachSentence(
 
 /**
  * The custody sentence's recipient boundary: the computers that receive a
- * moved secret's value today, and every one that starts running Personal
- * later.
+ * moved provider key's value today, and every one that starts running
+ * Personal later.
  */
 export function moveRecipientSentence(hostNames: readonly string[]): string {
   const later =
-    "computer that starts running Personal later receives these keys and secrets as values its tools and agents can read.";
+    "computer that starts running Personal later receives these keys as values its tools and agents can read.";
   if (hostNames.length === 0) {
     return `No other computer runs Personal yet. Any ${later}`;
   }
   return `Today that is ${namedOthers(hostNames)}, and any ${later}`;
 }
 
-/**
- * The disclosure when this move stores nothing as a secret but Personal
- * holds keys or secrets: they reach this computer once it runs Personal.
- */
-export function existingSecretsArriveSentence(hostName: string): string {
-  return `Nothing new is stored as a secret. Once ${hostName} runs Personal, it receives Personal's existing keys and secrets as values its tools and agents can read.`;
-}
-
 /** What moving gives the computer, under the sheet's title. */
 export const MOVE_SHEET_DESCRIPTION =
-  "It then uses your Personal settings, the same ones every computer and sandbox running Personal uses. You can move it back any time.";
+  "It will use your Personal settings. Nothing is deleted from this computer, and you can move it back any time.";
 
 /** A plan with no Moves row: the computer still moves, with nothing in it. */
 export function nothingToMoveLine(hostName: string): string {
   return `Nothing on ${hostName} needs moving.`;
 }
 
-/** A plan with Moves rows: what moves is copied, never taken off. */
-export function nothingDeletedLine(hostName: string): string {
-  return `Everything also stays on ${hostName}; nothing is deleted.`;
-}
-
 /**
- * The note above Moves when this computer's agent selection guide has the
- * person's edits (`guideDiffers`): where it goes, and that Personal's guide,
- * or its removal, stands.
+ * The line in Details when this computer's agent selection guide has the
+ * person's edits (`guideDiffers`): the move never puts it over Personal's.
  */
-export function guideDiffersNote(hostName: string): string {
-  return `Agent selection guide: this computer's guide has your edits. It moves to Personal only if Personal has never had a guide. Otherwise it is set aside on ${hostName}, and ${hostName} uses Personal's guide, or the built-in one if Personal's was removed. Nothing in Personal is replaced or restored.`;
-}
+export const GUIDE_DIFFERS_NOTE =
+  "Agent selection guide: yours moves only if Personal never had one; otherwise this computer uses Personal's and yours is set aside.";
 
 /** Nothing would leave this computer: no row moves. */
 export function planMovesNothing(plan: MovePlan): boolean {
@@ -124,17 +113,17 @@ export function moveItemChoiceKey(row: MoveRow): string {
 }
 
 /**
- * The choices a Moves row offers, on a host that honours them
- * (`plan.itemChoices`): `Leave on this computer only` on a variable, a
- * provider override and a provider key. Any other row moves as planned.
+ * The choices a Moves row offers: `Leave on this computer only` on a
+ * variable, a provider override and a provider key. Any other row moves as
+ * planned.
  */
-export function moveRowChoices(
-  plan: MovePlan,
-  row: MoveRow,
-): { readonly stays: boolean } {
-  if (!plan.itemChoices) return { stays: false };
-  const plain = row.kind === "variable" || row.kind === "env_override";
-  return { stays: plain || row.kind === "secret" };
+export function moveRowChoices(row: MoveRow): { readonly stays: boolean } {
+  return {
+    stays:
+      row.kind === "variable" ||
+      row.kind === "env_override" ||
+      row.kind === "secret",
+  };
 }
 
 export interface MovesSectionRow {
@@ -154,8 +143,7 @@ export function movesSectionRows(
 ): readonly MovesSectionRow[] {
   return plan.rows.moves.flatMap((row): MovesSectionRow[] => {
     const choiceKey = moveItemChoiceKey(row);
-    const choice = plan.itemChoices ? choices.get(choiceKey) : undefined;
-    if (choice === "stays") return [];
+    if (choices.get(choiceKey) === "stays") return [];
     return [{ row, choiceKey }];
   });
 }
@@ -169,11 +157,9 @@ export function rowsLeftHere(
   plan: MovePlan,
   choices: MoveChoices,
 ): readonly MoveRow[] {
-  return plan.itemChoices
-    ? plan.rows.moves.filter(
-        (row) => choices.get(moveItemChoiceKey(row)) === "stays",
-      )
-    : [];
+  return plan.rows.moves.filter(
+    (row) => choices.get(moveItemChoiceKey(row)) === "stays",
+  );
 }
 
 const SUMMARY_WORDS: Readonly<
@@ -207,7 +193,10 @@ function summaryLabel(group: string, count: number): string {
   }
   const pageName = itemPageName(group);
   if (pageName !== null) return pageName;
-  const words = SUMMARY_WORDS[group] ?? { one: "item", many: "items" };
+  const words = ownValue(SUMMARY_WORDS, group) ?? {
+    one: "item",
+    many: "items",
+  };
   return count === 1 ? `1 ${words.one}` : `${String(count)} ${words.many}`;
 }
 
@@ -224,6 +213,30 @@ export function movesSummary(rows: readonly MovesSectionRow[]): string {
   return [...counts]
     .map(([group, count]) => summaryLabel(group, count))
     .join(" · ");
+}
+
+/** What Stays names together by name alone, under {@link STAYS_MCP_SERVERS_TITLE}. */
+const STAYS_BY_NAME_KINDS: ReadonlySet<MoveRow["kind"]> = new Set([
+  "mcp_server",
+  "mcp_server_held",
+]);
+
+export const STAYS_MCP_SERVERS_TITLE = "MCP servers";
+
+/**
+ * Stays rows as Details draws them: every MCP server by its name, and every
+ * other row on its own, with its sentence.
+ */
+export function staysRowsByName(rows: readonly MoveRow[]): {
+  readonly mcpServerNames: readonly string[];
+  readonly others: readonly MoveRow[];
+} {
+  return {
+    mcpServerNames: rows
+      .filter((row) => STAYS_BY_NAME_KINDS.has(row.kind))
+      .map((row) => moveRowLabel(row)),
+    others: rows.filter((row) => !STAYS_BY_NAME_KINDS.has(row.kind)),
+  };
 }
 
 /**
@@ -260,7 +273,7 @@ export const MOVE_SECTIONS = [
   {
     rows: "alreadyInPersonal",
     title: "Already in Personal",
-    empty: "Nothing yet.",
+    empty: null,
     detailSeparator: " · ",
   },
   {
@@ -277,21 +290,16 @@ export const MOVE_SECTIONS = [
 }>;
 
 /**
- * The accept request for `plan` as the person left it: the plan's hash and,
- * on a host that honours them, each Moves row's choice.
+ * The person's choices as the computer stages them: one per key, in the
+ * order the Moves rows come, so the staged list comes back exactly as sent.
  */
-export function moveAcceptRequest(
+export function moveKeyChoices(
   plan: MovePlan,
   choices: MoveChoices,
-): EnvironmentMoveAcceptRequest {
-  return {
-    planHash: plan.planHash,
-    keyChoices: plan.itemChoices
-      ? plan.rows.moves.flatMap((row) => {
-          const key = moveItemChoiceKey(row);
-          const choice = choices.get(key);
-          return choice === undefined ? [] : [{ key, choice }];
-        })
-      : [],
-  };
+): readonly EnvironmentMoveStaysChoice[] {
+  const keys = new Set(plan.rows.moves.map(moveItemChoiceKey));
+  return [...keys].flatMap((key) => {
+    const choice = choices.get(key);
+    return choice === undefined ? [] : [{ key, choice }];
+  });
 }

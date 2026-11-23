@@ -432,7 +432,7 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     client.close();
   });
 
-  it("delivers a permission frame naming the retired viewer role as no role, never as a grant", () => {
+  it("delivers a permission frame naming the viewer role as editor, the access it gives", () => {
     const { factory, sockets } = makeFactory();
     const recorder = makeRecorder();
     const client = new EpicStreamClient({
@@ -450,7 +450,37 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
       hasBinaryPayload: false,
     });
 
-    expect(recorder.permissionChanges).toEqual([null]);
+    expect(recorder.permissionChanges).toEqual(["editor"]);
+    client.close();
+  });
+
+  it("delivers a role nothing recognises as no role, never as a grant", () => {
+    const { factory, sockets } = makeFactory();
+    const recorder = makeRecorder();
+    const client = new EpicStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      callbacks: recorder.callbacks,
+      seedOfferProvider: () => null,
+    });
+    completeHandshake(sockets[0]);
+
+    // A value a newer host invented. Whether the transport drops the frame or
+    // hands it on, it must never arrive as a role somebody holds.
+    sockets[0].fireText(
+      Object.assign(
+        {
+          kind: "permissionChanged" as const,
+          epicId: "epic-1",
+          hasBinaryPayload: false as const,
+        },
+        { permissionRole: "supervisor" },
+      ),
+    );
+
+    expect(recorder.permissionChanges.every((role) => role === null)).toBe(
+      true,
+    );
     client.close();
   });
 

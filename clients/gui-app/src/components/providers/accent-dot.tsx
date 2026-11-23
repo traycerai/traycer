@@ -18,9 +18,9 @@ interface AccentDotProps {
  * Deterministic profile-identity dot: a
  * bottom-right corner badge on the rail's provider icon, or an inline swatch
  * next to the profile dropdown's trigger/row label. Both variants resolve the
- * same accent color (`resolveProfileAccentColor`) - the dot signals PRESENCE
- * of 2+ profiles, never the sole identity signal; callers must always pair it
- * with a visible or accessible name.
+ * same accent color (`resolveProfileAccentColor`) - the dot marks which
+ * account a provider runs on, never the sole identity signal; callers must
+ * always pair it with a visible or accessible name.
  */
 export function AccentDot(props: AccentDotProps) {
   const { profileId, accentColor, label, variant, size, className } = props;

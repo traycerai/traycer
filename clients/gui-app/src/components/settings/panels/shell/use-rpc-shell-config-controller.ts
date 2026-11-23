@@ -1,9 +1,5 @@
 import { useMemo } from "react";
-import {
-  useMutation,
-  useQueryClient,
-  type QueryKey,
-} from "@tanstack/react-query";
+import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   toHostRpcError,
@@ -14,7 +10,6 @@ import type { ConfigShellProbeResponse } from "@traycer/protocol/host/config/ind
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { configMutationKeys, queryKeys } from "@/lib/query-keys";
 import type {
   ShellConfigController,
@@ -23,6 +18,35 @@ import type {
 } from "@/components/settings/panels/shell/shell-config-controller";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import { waitForShellEnvRead } from "@/components/settings/panels/shell/wait-for-shell-env-read";
+import {
+  shellAddSelection,
+  shellRemoveSelection,
+  shellRevertSelection,
+  shellSetSelection,
+} from "@/components/settings/panels/shell/shell-save-selection";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
+import {
+  captureSettingsSaveOrigin,
+  type SettingsSaveOrigin,
+} from "@/lib/environment/settings-save-origin";
+import type { SettingsSave } from "@traycer/protocol/host/environment/settings-save-mapping";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
+import {
+  useSettingsSave,
+  type PrepareSettingsSave,
+} from "@/hooks/environment/use-settings-save";
+import {
+  everyAnswerProposes,
+  sendFollowedSave,
+  type PendingSettingsSave,
+} from "@/lib/environment/settings-save-follow";
+
+interface PressedEnvRename {
+  readonly prepare: PrepareSettingsSave;
+  readonly origin: SettingsSaveOrigin;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+}
 
 /**
  * Detected shells barely change; the picker always accepts a typed path. The
@@ -33,6 +57,8 @@ import { waitForShellEnvRead } from "@/components/settings/panels/shell/wait-for
  * already open.
  */
 const SHELL_LIST_STALE_MS = Number.POSITIVE_INFINITY;
+
+const SAVED_KINDS = ["shell", "variable"] as const;
 
 /**
  * The Shell panel over the selected host's own config RPC.
@@ -90,40 +116,85 @@ export function useRpcShellConfigController(props: {
     options: { enabled: props.enabled },
   });
 
-  // Every write below can choose what starts on the host (a shell, a
-  // launch-sensitive variable), so each carries the executable-write grant.
-  const grant = useExecutableWriteGrant();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+
+  const cloudSource = useEnvironmentCloud();
   const setMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.set",
-    prepareRequest: grant,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.set", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     mutationKey: configMutationKeys.shellSet(),
     errorMessage: "Couldn't update the shell configuration",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const resetMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.reset",
-    prepareRequest: grant,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.reset", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     mutationKey: configMutationKeys.shellReset(),
     errorMessage: "Couldn't use the system default shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const addMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.add",
-    prepareRequest: grant,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.add", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     mutationKey: configMutationKeys.shellAdd(),
     errorMessage: "Couldn't add that shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const removeMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.remove",
-    prepareRequest: grant,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.remove", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     mutationKey: configMutationKeys.shellRemove(),
     errorMessage: "Couldn't remove that shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const revertMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.revertArgs",
-    prepareRequest: grant,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.shell.revertArgs", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     mutationKey: configMutationKeys.shellRevertArgs(),
     errorMessage: "Couldn't restore the default flags",
     invalidateMethods: ["config.shell.get"],
@@ -131,22 +202,39 @@ export function useRpcShellConfigController(props: {
   const queryClient = useQueryClient();
   const envSetMutation = useHostScopedMutationForClient(client, {
     method: "config.env.set",
-    prepareRequest: grant,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.env.set", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     mutationKey: configMutationKeys.envSet(),
     errorMessage: "Couldn't save the variable",
     invalidateMethods: ["config.env.list"],
   });
   const envDeleteMutation = useHostScopedMutationForClient(client, {
     method: "config.env.delete",
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "config.env.delete", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     mutationKey: configMutationKeys.envDelete(),
     errorMessage: "Couldn't remove the variable",
     invalidateMethods: ["config.env.list"],
   });
 
-  // Both writes inside ONE `mutationFn`, so there is no observer boundary
-  // between them to lose the second half at. The host id is captured in
-  // `onMutate` and used for the invalidation, matching every other write here.
-  const envRenameMutation = useMutation<
+  // Both host writes use one press's editor, sign-in classification and client.
+  const envRenameMutation = usePressCapturedMutation<
     void,
     HostRpcError,
     {
@@ -154,47 +242,62 @@ export function useRpcShellConfigController(props: {
       readonly newKey: string;
       readonly value: string | null;
     },
+    PressedEnvRename,
     { readonly hostId: string | null }
-  >({
-    mutationKey: configMutationKeys.envRename(),
-    mutationFn: async (rename) => {
-      if (client === null) {
-        // Normalized so `onError` always receives the `HostRpcError` shape the
-        // toast helper reads, rather than a bare `Error` it cannot classify.
-        throw toHostRpcError(
-          new Error("No host client to rename the environment variable"),
-          "config.env.set",
+  >(
+    () => ({
+      prepare: prepareSave,
+      origin: captureSettingsSaveOrigin(cloudSource),
+      client,
+      hostId: client?.getActiveHostId() ?? null,
+    }),
+    {
+      mutationKey: configMutationKeys.envRename(),
+      mutationFn: async (rename, pressed) => {
+        const { client: pressedClient, hostId: sentOn } = pressed;
+        if (pressedClient === null) {
+          // Normalized so `onError` always receives the `HostRpcError` shape the
+          // toast helper reads, rather than a bare `Error` it cannot classify.
+          throw toHostRpcError(
+            new Error("No host client to rename the environment variable"),
+            "config.env.set",
+          );
+        }
+        const prepare = (save: SettingsSave): Promise<PendingSettingsSave> =>
+          pressed.prepare(save, sentOn, pressed.origin);
+        const set = {
+          key: rename.newKey,
+          value: rename.value,
+        };
+        await sendFollowedSave(
+          await prepare({ method: "config.env.set", request: set }),
+          () => pressedClient.request("config.env.set", set),
+          everyAnswerProposes,
         );
-      }
-      await client.request(
-        "config.env.set",
-        await grant(
-          {
-            key: rename.newKey,
-            value: rename.value,
-            executableWriteGrant: null,
-          },
-          client,
-        ),
-      );
-      if (rename.oldKey.length === 0) return;
-      await client.request("config.env.delete", { key: rename.oldKey });
+        if (rename.oldKey.length === 0) return;
+        const remove = { key: rename.oldKey };
+        await sendFollowedSave(
+          await prepare({ method: "config.env.delete", request: remove }),
+          () => pressedClient.request("config.env.delete", remove),
+          everyAnswerProposes,
+        );
+      },
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      // SETTLED, not success - the same two-write staleness the bridge twin has:
+      // a set that lands followed by a delete that rejects leaves both keys on
+      // the host with the editor showing the pre-rename list.
+      onSettled: (_data, _error, _variables, context) => {
+        const hostId = context?.hostId ?? null;
+        if (hostId === null) return;
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.hostMethodScope(hostId, "config.env.list"),
+        });
+      },
+      onError: (error) => {
+        toastFromHostError(error, "Couldn't rename the variable");
+      },
     },
-    onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-    // SETTLED, not success - the same two-write staleness the bridge twin has:
-    // a set that lands followed by a delete that rejects leaves both keys on
-    // the host with the editor showing the pre-rename list.
-    onSettled: (_data, _error, _variables, context) => {
-      const hostId = context?.hostId ?? null;
-      if (hostId === null) return;
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.hostMethodScope(hostId, "config.env.list"),
-      });
-    },
-    onError: (error) => {
-      toastFromHostError(error, "Couldn't rename the variable");
-    },
-  });
+  );
 
   const probeSource = useMemo(
     (): ShellProbeSource => ({
@@ -256,25 +359,42 @@ export function useRpcShellConfigController(props: {
       envRenameMutation.isPending,
     probeSource,
     setShell: (request, callbacks) =>
-      setMutation.mutate({ ...request, executableWriteGrant: null }, callbacks),
-    resetShell: (callbacks) =>
-      resetMutation.mutate({ executableWriteGrant: null }, callbacks),
-    addShell: (path, callbacks) =>
-      addMutation.mutate({ path, executableWriteGrant: null }, callbacks),
-    removeShell: (path, callbacks) =>
-      removeMutation.mutate({ path, executableWriteGrant: null }, callbacks),
-    revertShellArgs: (path, callbacks) =>
-      revertMutation.mutate({ path, executableWriteGrant: null }, callbacks),
-    setEnv: (entry, callbacks) =>
-      envSetMutation.mutate(
-        { ...entry, executableWriteGrant: null },
-        afterEnvRead(callbacks),
+      setMutation.mutate(
+        {
+          ...request,
+          selection: shellSetSelection(request, configQuery.data),
+        },
+        callbacks,
       ),
+    resetShell: (callbacks) => resetMutation.mutate({}, callbacks),
+    addShell: (path, callbacks) =>
+      addMutation.mutate(
+        {
+          path,
+          selection: shellAddSelection(path),
+        },
+        callbacks,
+      ),
+    removeShell: (path, callbacks) =>
+      removeMutation.mutate(
+        {
+          path,
+          selection: shellRemoveSelection(path, configQuery.data),
+        },
+        callbacks,
+      ),
+    revertShellArgs: (path, callbacks) =>
+      revertMutation.mutate(
+        {
+          path,
+          selection: shellRevertSelection(path, configQuery.data),
+        },
+        callbacks,
+      ),
+    setEnv: (entry, callbacks) =>
+      envSetMutation.mutate(entry, afterEnvRead(callbacks)),
     setEnvAsync: async (entry) => {
-      await envSetMutation.mutateAsync({
-        ...entry,
-        executableWriteGrant: null,
-      });
+      await envSetMutation.mutateAsync(entry);
     },
     deleteEnv: (key, callbacks) =>
       envDeleteMutation.mutate({ key }, afterEnvRead(callbacks)),

@@ -22,6 +22,7 @@ import type {
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import type { AwaitLoginTestAnswer } from "./provider-profile-login-flow-test-support";
 import { PROVIDER_LOGIN_PACK_POLL_MS } from "@/components/providers/provider-login-start";
 import {
   useProviderProfileLoginFlow,
@@ -64,13 +65,10 @@ type CancelLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
 >;
-type AwaitLoginResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
->;
-type SubmitLoginCodeRequest = RequestOfMethod<
-  HostRpcRegistry,
-  "providers.submitLoginCode"
+type AwaitLoginResponse = AwaitLoginTestAnswer;
+type SubmitLoginCodeRequest = Omit<
+  RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
+  "code"
 >;
 type SubmitLoginCodeResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -239,6 +237,7 @@ function LoginFlowHarness(props: {
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: () => undefined,
     touchLogin,
     ensurePack,
     failureMessages: {

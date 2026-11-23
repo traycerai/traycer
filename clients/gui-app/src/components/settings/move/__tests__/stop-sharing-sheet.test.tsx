@@ -59,6 +59,7 @@ function renderSheet(
       changedRows={null}
       previewStatus="ready"
       confirmPending={false}
+      personalAccounts={null}
       onOpenChange={vi.fn()}
       onStop={onStop}
     />,
@@ -124,6 +125,7 @@ describe("StopSharingSheet row names", () => {
         changedRows={null}
         previewStatus="ready"
         confirmPending={false}
+        personalAccounts={null}
         onOpenChange={vi.fn()}
         onStop={vi.fn()}
       />,
@@ -213,6 +215,7 @@ describe("StopSharingSheet", () => {
         changedRows={null}
         previewStatus="ready"
         confirmPending={false}
+        personalAccounts={null}
         onOpenChange={vi.fn()}
         onStop={onStop}
       />,
@@ -290,6 +293,7 @@ describe("StopSharingSheet", () => {
           changedRows={null}
           previewStatus="ready"
           confirmPending={false}
+          personalAccounts={null}
           onOpenChange={vi.fn()}
           onStop={vi.fn()}
         />,
@@ -321,6 +325,7 @@ describe("StopSharingSheet groups", () => {
         changedRows={null}
         previewStatus="ready"
         confirmPending={false}
+        personalAccounts={null}
         onOpenChange={vi.fn()}
         onStop={vi.fn()}
       />,

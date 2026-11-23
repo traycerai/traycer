@@ -15,7 +15,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -33,6 +33,10 @@ import type {
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import {
+  FakeIntersectionObserver,
+  intersectTarget,
+} from "@/components/bots/__tests__/bot-read-observer-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -271,81 +275,6 @@ export function card(threadId: string): HTMLElement {
   return found;
 }
 
-/** What an IntersectionObserver was built with, and what it watches. */
-type ObserverOptions = { root: Element | null; rootMargin: string | undefined };
-type ObserverEntries = ReadonlyArray<{
-  target: Element;
-  isIntersecting: boolean;
-  boundingClientRect: DOMRect;
-  intersectionRect: DOMRect;
-}>;
-
-/** A controllable IntersectionObserver: nothing fires until the case says so. */
-export class FakeIntersectionObserver {
-  static all: FakeIntersectionObserver[] = [];
-  readonly targets = new Set<Element>();
-  readonly options: ObserverOptions;
-  constructor(
-    private readonly callback: (entries: ObserverEntries) => void,
-    init: IntersectionObserverInit | undefined,
-  ) {
-    this.options = {
-      root: init?.root instanceof Element ? init.root : null,
-      rootMargin: init?.rootMargin,
-    };
-    FakeIntersectionObserver.all.push(this);
-  }
-  observe(target: Element): void {
-    this.targets.add(target);
-  }
-  unobserve(target: Element): void {
-    this.targets.delete(target);
-  }
-  disconnect(): void {
-    this.targets.clear();
-  }
-  fire(entries: ObserverEntries): void {
-    this.callback(entries);
-  }
-}
-
-/** The observers watching `target`: the near one has a margin, the view one none. */
-export function observersOf(
-  target: Element,
-  kind: "near" | "view",
-): FakeIntersectionObserver[] {
-  return FakeIntersectionObserver.all.filter(
-    (observer) =>
-      observer.targets.has(target) &&
-      (observer.options.rootMargin !== undefined) === (kind === "near"),
-  );
-}
-
-/** Tells the observers of `kind` on `target` that it is (not) intersecting. */
-export function intersectTarget(
-  target: Element,
-  kind: "near" | "view",
-  isIntersecting: boolean,
-): void {
-  const observers = observersOf(target, kind);
-  expect(observers.length).toBeGreaterThan(0);
-  act(() => {
-    for (const observer of observers) {
-      // A row in view is whole in view, as a person looking at it sees it.
-      const rect = new DOMRect(0, 0, 100, 100);
-      target.getBoundingClientRect = () => rect;
-      observer.fire([
-        {
-          target,
-          isIntersecting,
-          boundingClientRect: rect,
-          intersectionRect: isIntersecting ? rect : new DOMRect(0, 0, 0, 0),
-        },
-      ]);
-    }
-  });
-}
-
 const BOUND_ELSEWHERE = "host-elsewhere";
 const BOUND_EPOCH = 3;
 
@@ -379,15 +308,6 @@ export function mountBotBoundElsewhere(input: {
   mocks.hosted[TRACY] = script([], {});
   mocks.replyRows["team-new"] = input.rows;
   mount();
-}
-
-/**
- * Reading needs a window the person is in; jsdom's own answer depends on which
- * cases ran before, so a case that reads says so itself.
- */
-export function foregroundWindow(): void {
-  const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
-  onTestFinished(() => hasFocus.mockRestore());
 }
 
 /** The row the card's reading watches for the reply drawn as `text`. */

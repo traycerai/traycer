@@ -19,6 +19,7 @@ import {
   ensureSandboxAwake,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   isSandboxAsleep,
   isSandboxFrozenInEffect,
@@ -33,6 +34,7 @@ import {
   type SandboxVerbFetchResult,
   type SandboxWakeBudget,
 } from "../sandbox-control";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
@@ -61,7 +63,7 @@ const OLDER_SUMMARY_BODY = {
   id: "sbx_1",
   hostId: "host-1",
   kind: "agent",
-  provider: "tensorlake",
+  provider: "firecracker",
   region: "us-east",
   os: "linux",
   cpus: 2,
@@ -891,6 +893,26 @@ describe("fetchSandboxCostsViaHttp", () => {
       kind: "network-error",
       detail: "the sandbox cost did not match the contract",
     });
+  });
+});
+
+describe("fetchTraycerModelsViaHttp", () => {
+  it("groups a row under its maker and keeps the provider for the rest", async () => {
+    stubFetch(async () =>
+      jsonResponse(200, [
+        { id: "kimi-k3", provider: "openrouter", vendor: "Moonshot AI" },
+        { id: "glm-5.2", provider: "openrouter", vendor: null },
+      ]),
+    );
+    const result = await fetchTraycerModelsViaHttp(BASE, BEARER, null);
+    if (result.kind !== "ok") throw new Error("expected ok");
+    expect(result.models.map((model) => model.metadata)).toEqual([
+      {
+        openCodeProviderId: "moonshot-ai",
+        openCodeProviderLabel: "Moonshot AI",
+      },
+      { openCodeProviderId: "openrouter", openCodeProviderLabel: "OpenRouter" },
+    ]);
   });
 });
 
@@ -1853,4 +1875,36 @@ describe("the IAP proxy credential", () => {
       Accept: "application/json",
     });
   });
+});
+
+describe("a redirect answered to a sandbox control call", () => {
+  it.each([
+    {
+      name: "a 302 with a Location",
+      answer: () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://elsewhere.test/sandboxes" },
+        }),
+      status: 302,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: createOpaqueRedirectResponse,
+      status: 0,
+    },
+  ])(
+    "reads $name as a network error and follows nothing",
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(async () => answer());
+
+      await expect(listSandboxesViaHttp(BASE, BEARER, null)).resolves.toEqual({
+        kind: "network-error",
+        detail: `the control plane answered HTTP ${status} without a typed refusal`,
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][1]?.redirect).toBe("manual");
+    },
+  );
 });

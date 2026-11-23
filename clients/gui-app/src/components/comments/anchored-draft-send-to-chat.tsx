@@ -7,7 +7,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ChatTargetMenu } from "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu";
 import { useChatTargetMenuClosed } from "@/components/epic-canvas/renderers/chat-target-menu/use-chat-target-menu-closed";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
-import { appendCommentTextToDraft } from "@/components/chat/quote/append-comment-text-to-draft";
+import { commentDraftText } from "@/lib/comments/comment-draft-text";
 import type { CanvasAnnotationScope } from "@/components/canvas-artifact/canvas-annotation-action";
 import {
   canvasSelectionAnnotationRecord,
@@ -58,12 +58,6 @@ export function AnchoredDraftSendToChatSlot(
   );
 }
 
-/**
- * The draft box's other destination. Picking a chat moves everything the box
- * holds: the element goes as the same annotation card the selection bar
- * attaches, and the typed text becomes the chat composer's text. The box then
- * closes for good - a draft that was sent somewhere has nothing left to keep.
- */
 function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
   const { scope, frameFor } = props.surface;
   const targets = useCanvasAnnotationChatTargets(scope);
@@ -80,11 +74,11 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
     mutationFn: async (chatId: string | null) => {
       // Read the text before anything moves: the capture and the attach are
       // async, and the box is gone once they land.
-      const text = props.readDraft();
       const record = canvasSelectionAnnotationRecord(
         scope,
         props.selection,
         source.data,
+        commentDraftText(props.readDraft()),
       );
       const capture = {
         captureRect: (): CanvasBox | null => {
@@ -96,11 +90,10 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
         awaitPickerClosed: menuClosed.awaitClosed,
       };
       if (chatId === null) {
-        await newChat.send({ ...capture, record, text });
+        await newChat.send({ ...capture, record });
         return null;
       }
       await captureAndAttachCanvasAnnotation({ ...capture, chatId, record });
-      appendCommentTextToDraft(chatId, text);
       return chatId;
     },
     onSuccess: (chatId) => {

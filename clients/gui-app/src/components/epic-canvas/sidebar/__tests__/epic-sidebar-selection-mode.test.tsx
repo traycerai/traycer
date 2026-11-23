@@ -799,6 +799,8 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => testState.activeHostClient,
+  // A local chat row asks whether a team owns its host; no sign-in, no read.
+  useHostBinding: () => null,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
@@ -1276,6 +1278,7 @@ function fakeEpicStoreState() {
     // so the real `useEpicNodeHostIds`/`useSurfaceHostPin` selector can see
     // this task's GUI hosts alongside `tuiAgents`' TUI ones.
     chatRecordHeads: {},
+    chatRecordStarters: {},
     chats: {
       allIds: chatRecords.map((record) => record.id),
       byId: Object.fromEntries(

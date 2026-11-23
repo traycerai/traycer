@@ -294,6 +294,10 @@ interface Harness {
   readonly scope: HostScope;
   readonly providersListCalls: { value: number };
   readonly rateLimitUsageRequests: Array<ProviderId | undefined>;
+  readonly hostTokenRenewals: Array<{
+    readonly hostId: string;
+    readonly delayed: boolean;
+  }>;
 }
 
 async function createHarness(
@@ -330,10 +334,15 @@ async function createHarness(
   await directory.startSeeded();
   const providersListCalls = { value: 0 };
   const rateLimitUsageRequests: Array<ProviderId | undefined> = [];
+  const hostTokenRenewals: Harness["hostTokenRenewals"] = [];
   let requestSeq = 0;
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: (hostId, delayed) => {
+      hostTokenRenewals.push({ hostId, delayed });
+    },
     registry: hostRpcRegistry,
+    singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `inventory-${++requestSeq}`,
@@ -389,6 +398,7 @@ async function createHarness(
     scope,
     providersListCalls,
     rateLimitUsageRequests,
+    hostTokenRenewals,
   };
 }
 
@@ -912,7 +922,6 @@ async function mountInventoryConsumers(
                     kind: "ready",
                     status: environmentStatusFixture({}),
                   },
-                  line: null,
                   hostName: HOST_NAME,
                   localOverrides: NO_OVERRIDES,
                   hostId: HOST_ID,

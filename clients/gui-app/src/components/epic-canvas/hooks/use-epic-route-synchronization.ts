@@ -42,10 +42,14 @@ import {
   useEpicArtifactRecords,
   useEpicChatRecordListAuthoritative,
   useEpicTuiAgentRecordListAuthoritative,
+  useEpicTuiAgentRecordListFailed,
   useEpicLastFocusedArtifactId,
   useEpicSnapshotLoaded,
 } from "@/lib/epic-selectors";
-import { resolveAutoOpenTarget } from "@/lib/epic-auto-open";
+import {
+  resolveAutoOpenTarget,
+  type AutoOpenRecencyByNodeId,
+} from "@/lib/epic-auto-open";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { requestCommentThreadAnchorReveal } from "@/lib/comments/comment-editor-registry";
@@ -113,6 +117,13 @@ export function useEpicRouteSynchronization(
   const snapshotLoaded = useEpicSnapshotLoaded();
   const persistedFocus = useEpicLastFocusedArtifactId();
   const records = useEpicArtifactRecords();
+  const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
+  const tuiAgentRecordListAuthoritative =
+    useEpicTuiAgentRecordListAuthoritative();
+  const tuiAgentRecordListFailed = useEpicTuiAgentRecordListFailed();
+  const agentRecordsAnswered =
+    chatRecordListAuthoritative &&
+    (tuiAgentRecordListAuthoritative || tuiAgentRecordListFailed);
   // Same-host counterpart of the cross-host cloud fallback:
   // `epic.listCloudChats` already excludes anything this host's
   // own registry has tombstoned, so "still cloud-known" is what tells a
@@ -178,7 +189,7 @@ export function useEpicRouteSynchronization(
   const hasRestoredCanvas = canvas.root !== null;
   // Whether the canvas shows anything. A canvas whose only pane is the empty
   // opener is NOT a layout to preserve: `EmptyEpicRoot` seeds that pane the
-  // moment the snapshot lands with no records, and on a task opened for the
+  // moment the snapshot lands with no layout, and on a task opened for the
   // first time on this machine the chat records arrive later, from the
   // polled record list. Gating auto-open on `root !== null` latched on that
   // seeded pane and left the task on the opener with its chats one click
@@ -189,7 +200,7 @@ export function useEpicRouteSynchronization(
       collectPanes(canvas.root).some((pane) => pane.tabInstanceIds.length > 0),
     [canvas.root],
   );
-  const landingAwaitsFirstRecords = useSeededOpenerAwaitsLanding(
+  const landingAwaitsFirstRecords = useCanvasAwaitsLanding(
     tabId,
     canvas.root,
     canvasHoldsTiles,
@@ -545,13 +556,12 @@ export function useEpicRouteSynchronization(
     // one `records` comes from, so the two are always in step: whatever agent
     // rows this device has, it has their activity clocks, and an epic whose
     // projection carries no agent rows yields an empty map - the resolver's
-    // "no recency available" input, which lands on the first node in tree
-    // order exactly as before.
+    // "no recency available" input.
     const target = resolveAutoOpenTarget(
       records,
       focusArtifactId ?? null,
       persistedFocus,
-      epicNodeRecency(handle.store.getState()),
+      landingRecency(handle.store.getState(), agentRecordsAnswered),
     );
     // The person acted while this request was waiting, so it is theirs to lose
     // rather than ours to honour over whatever they moved to. Spend the key so
@@ -575,9 +585,15 @@ export function useEpicRouteSynchronization(
       // of `openResolvedArtifact` only navigates once
       // `epic.resolveArtifactByPath` has confirmed one.
       //
-      // A LANDING still spends its key on a null resolve, with the one
-      // exception `nullResolveSpendsKey` names.
-      if (nullResolveSpendsKey(hasExplicitFocus, landingAwaitsFirstRecords)) {
+      // A LANDING still spends its key on a null resolve, with the
+      // exceptions `nullResolveSpendsKey` names.
+      if (
+        nullResolveSpendsKey({
+          hasExplicitFocus,
+          landingAwaitsFirstRecords,
+          agentRecordsAnswered,
+        })
+      ) {
         lastAutoOpenKey.current = key;
       }
       return;
@@ -661,6 +677,7 @@ export function useEpicRouteSynchronization(
     lastReturnSeq,
     focusRequestOutrunsNestedRoute,
     landingAwaitsFirstRecords,
+    agentRecordsAnswered,
   ]);
 
   const lastSyncedFocus = useRef<string | null>(persistedFocus);
@@ -687,9 +704,6 @@ export function useEpicRouteSynchronization(
   // host's projection, and the policing identity moves WITH the records - on
   // a committed re-point both flip together, never one before the other.
   const activeHostId = useCanvasHostId();
-  const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
-  const tuiAgentRecordListAuthoritative =
-    useEpicTuiAgentRecordListAuthoritative();
 
   // Close any open tab whose underlying record was removed (sidebar delete,
   // server-side cascade, or remote delete by another collaborator). The
@@ -856,18 +870,18 @@ function replaceNestedFocusRoute(
 }
 
 /**
- * Whether the canvas is still exactly the empty opener pane this session
- * seeded for it: a task this machine had no layout and no records for, whose
- * chat records come later from the polled record list. Only that landing is
- * unanswered. The seed is recorded by the store rather than inferred from an
- * empty canvas, because a pane the person emptied and a restored empty pane
- * look the same from here and must stay empty.
+ * Whether the canvas has no layout, or still exactly the empty opener pane
+ * this session seeded in place of one: a task opened for the first time on
+ * this machine, whose chat records come later from the polled record list.
+ * Only that landing is unanswered. The seed is recorded by the store rather
+ * than inferred from an empty canvas, because a pane the person emptied and a
+ * restored empty pane look the same from here and must stay empty.
  *
  * One way: once the seeded pane has held a tile or left the layout the record
  * is retired, so a pane that is empty later is the person's, whatever id it
  * carries.
  */
-function useSeededOpenerAwaitsLanding(
+function useCanvasAwaitsLanding(
   tabId: string,
   root: TileLayoutNode | null,
   canvasHoldsTiles: boolean,
@@ -879,10 +893,11 @@ function useSeededOpenerAwaitsLanding(
     (s) => s.retireSeededOpenerPane,
   );
   const awaitsLanding =
-    seededOpenerPaneId !== undefined &&
-    root?.kind === "pane" &&
-    root.id === seededOpenerPaneId &&
-    !canvasHoldsTiles;
+    root === null ||
+    (seededOpenerPaneId !== undefined &&
+      root.kind === "pane" &&
+      root.id === seededOpenerPaneId &&
+      !canvasHoldsTiles);
   useEffect(() => {
     if (seededOpenerPaneId === undefined) return;
     if (awaitsLanding) return;
@@ -919,20 +934,34 @@ function gateLegacyAutoOpen(args: {
   return anyKeySpent ? "skip" : "resolve";
 }
 
+/** The resolver's recency input: `null` until the agent records are complete. */
+function landingRecency(
+  state: Pick<OpenEpicState, "chats" | "tuiAgents">,
+  agentRecordsAnswered: boolean,
+): AutoOpenRecencyByNodeId | null {
+  return agentRecordsAnswered ? epicNodeRecency(state) : null;
+}
+
 /**
  * Whether a resolve that found nothing ends the wait for this key.
  *
  * A request never does: its record has not projected yet. A landing does,
- * because it runs once per epic - except on the seeded opener pane, which is
- * still waiting for a record it may choose. A first batch holding only kinds a
- * landing never picks (html, canvas, file) must not close the door on the chat
- * records that follow it.
+ * because it runs once per epic - except while the agent records are
+ * unanswered, and on a canvas with no layout of its own, which is still waiting
+ * for a record it may choose. A first batch holding only kinds a landing never
+ * picks (html, canvas, file) must not close the door on the chat records that
+ * follow it.
  */
-function nullResolveSpendsKey(
-  hasExplicitFocus: boolean,
-  landingAwaitsFirstRecords: boolean,
-): boolean {
-  return !hasExplicitFocus && !landingAwaitsFirstRecords;
+function nullResolveSpendsKey(args: {
+  readonly hasExplicitFocus: boolean;
+  readonly landingAwaitsFirstRecords: boolean;
+  readonly agentRecordsAnswered: boolean;
+}): boolean {
+  return (
+    !args.hasExplicitFocus &&
+    !args.landingAwaitsFirstRecords &&
+    args.agentRecordsAnswered
+  );
 }
 
 interface FocusRequestBaseline {
@@ -1049,11 +1078,12 @@ function shouldSuppressLegacyAutoOpen(args: {
    */
   readonly requestOutrunsNestedRoute: boolean;
   /**
-   * Whether the canvas is still the empty opener pane this session seeded.
-   * The nested-route effect writes that pane into the URL, so the route names
-   * a target nobody chose, and it does not stand the landing down. Every
-   * other empty pane in a route is one the person left empty, and governs as
-   * before, as does any target once an explicit request is present.
+   * Whether the canvas has no layout, or still the empty opener pane this
+   * session seeded. The nested-route effect writes that pane into the URL, so
+   * the route names a target nobody chose, or it names a pane of a layout that
+   * is gone; neither stands the landing down. Every other empty pane in a
+   * route is one the person left empty, and governs as before, as does any
+   * target once an explicit request is present.
    */
   readonly landingAwaitsFirstRecords: boolean;
 }): boolean {

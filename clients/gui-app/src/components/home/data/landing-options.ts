@@ -685,6 +685,9 @@ export function findModelLabel(
 }
 
 export function modelDisplayLabel(model: ModelOption): string {
+  // Traycer inference groups by maker ("DeepSeek"), and the maker is part of
+  // the model's name ("DeepSeek V4 Pro"), so its names are shown in full.
+  if (model.harnessId === "traycer") return model.label;
   // Harness-agnostic: strip the group prefix the label may carry when the host
   // declared a group (OpenCode `Anthropic: Claude` -> `Claude`). OpenRouter
   // labels carry no such prefix, so this is a no-op for them.

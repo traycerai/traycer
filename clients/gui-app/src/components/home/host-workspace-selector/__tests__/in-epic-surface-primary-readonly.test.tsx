@@ -1799,7 +1799,7 @@ describe("the chat chip is the composer's picker", () => {
   const CATALOGUE: SandboxCatalogue = {
     providers: [
       {
-        provider: "tensorlake",
+        provider: "firecracker",
         os: ["linux"],
         shape: {
           cpuMin: 1,

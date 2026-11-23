@@ -799,6 +799,8 @@ async function returnBoundMessage(
       content: send.content,
       browserAnnotations: request.browserAnnotations ?? [],
       reason,
+      // `boundMessageReturnReason` is the app's own sentence.
+      reasonIsRemovedProfile: false,
       readHashImage: (hash) => resolveDraftImageBytes(hash, target),
       stillCurrent: () => boundReturnCurrent(send),
       returnedSandbox: destination,

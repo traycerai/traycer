@@ -22,7 +22,7 @@ const SANDBOX_VIEW = {
   id: "sbx_1",
   hostId: "8f6f2d7e-1f43-4c1e-9d63-1e3a7d2c9b10",
   kind: "agent",
-  provider: "tensorlake",
+  provider: "firecracker",
   region: "us-east",
   os: "linux",
   cpus: 2,
@@ -124,7 +124,7 @@ describe("sandbox control plane mirror", () => {
       offeredAgents: ["traycer"],
       providers: [
         {
-          provider: "tensorlake",
+          provider: "firecracker",
           os: ["linux"],
           shape: {
             cpuMin: 1,
@@ -156,6 +156,11 @@ describe("sandbox control plane mirror", () => {
       ],
     });
     expect(parsed.providers[0]?.shape.diskDefaultMb).toBe(20480);
+    expect(parsed.providers[0]?.regions[0]?.fromPriceMcPerHour).toEqual({
+      awakeMc: 60,
+      suspendedMc: 2,
+      stoppedMc: 1,
+    });
     expect(parsed.offeredAgents).toEqual(["traycer"]);
   });
 
@@ -174,7 +179,7 @@ describe("sandbox control plane mirror", () => {
       diskDefaultMb: 20480,
     };
     const ROW = {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: BOUNDS,
       suspendFidelity: "memory",
@@ -224,7 +229,7 @@ describe("sandbox control plane mirror", () => {
   describe("creatable and notCreatableReason", () => {
     // An older server's provider row: neither field.
     const OLDER_ROW = {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,

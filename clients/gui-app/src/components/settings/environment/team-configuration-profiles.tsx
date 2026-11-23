@@ -1,5 +1,8 @@
 import { useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { z } from "zod";
+import { PROFILE_RECORD_FAILURE_COPY } from "@traycer-clients/shared/host-client/profile-record-actions";
 import {
   providerProfileAccentColorSchema,
   type ProviderProfile,
@@ -7,16 +10,25 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { ProfileDropdown } from "@/components/providers/profile-dropdown";
-import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
+import {
+  profileDisplayLabel,
+  resolveProfilePin,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import { ProfileSummaryActions } from "@/components/settings/panels/profile-summary-actions";
 import { ProfileEditDialogPresentation } from "@/components/settings/panels/profile-edit-dialog-presentation";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
+import { useEnvironmentCloudMutation } from "@/hooks/environment/use-environment-cloud";
+import { environmentMutationKeys } from "@/lib/query-keys";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
   useCanEditConfiguration,
   useConfigurationSource,
 } from "./configuration-source";
+
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 /** Configuration profiles have no live auth or usage standing. */
 function pickerProfile(item: ConfigurationItem): ProviderProfile {
@@ -43,8 +55,8 @@ function pickerProfile(item: ConfigurationItem): ProviderProfile {
 
 /**
  * A team's profiles in the personal profile picker. An editor turns each
- * profile on or off from its row and manages the selected one; a reader sees
- * On or Off and no Manage profile. A team profile has no sign-in, so there is
+ * profile on or off from its row and manages the selected one; a reader has the
+ * switch too, and the host's refusal answers its press, with no Manage profile. A team profile has no sign-in, so there is
  * no Add a profile and no Sign in.
  */
 export function ConfigurationProfiles(props: {
@@ -56,7 +68,17 @@ export function ConfigurationProfiles(props: {
 }): ReactNode {
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
-  const { put } = useConfigurationItemMutations();
+  const queries = useQueryClient();
+  // A reader's refused press says the permission sentence, not the generic save failure: this
+  // write keeps the refusal out of the shared toast and says the sentence itself. An editor's
+  // stale press is the page line's, as before.
+  const setEnabledPut = useEnvironmentCloudMutation({
+    method: "environment.configuration.items.put",
+    mutationKey: environmentMutationKeys.configurationItemsPut(),
+    errorMessage: "Couldn't save these settings.",
+    invalidateMethods: [],
+    silentCodes: canEdit ? [] : ["E_ROLE_FORBIDDEN"],
+  });
   const [pickedKey, setPickedKey] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editSession, setEditSession] = useState(0);
@@ -64,26 +86,43 @@ export function ConfigurationProfiles(props: {
   const selected =
     props.profiles.find((item) => item.key === pickedKey) ?? props.profiles[0];
   const profiles = props.profiles.map(pickerProfile);
-  const selectedProfile =
-    profiles.find((profile) => profile.profileId === selected.key) ??
-    profiles[0];
   const value = configurationProfileValueSchema.parse(selected.value);
   const setEnabled = (profileId: string | null, enabled: boolean): void => {
-    if (!canEdit || source.kind !== "pool" || put.isPending) return;
+    if (source.kind !== "pool" || setEnabledPut.isPending) return;
     const item = props.profiles.find(
       (candidate) => candidate.key === profileId,
     );
     if (item === undefined) return;
-    put.mutate(
+    const environmentId = source.environmentId;
+    const reread = (): void =>
+      invalidateConfigurationReads(queries, environmentId, [
+        "environment.configuration.items",
+      ]);
+    setEnabledPut.mutate(
       {
-        environmentId: source.environmentId,
+        environmentId,
         kind: "managed_profile",
         key: item.key,
         os: null,
         value: { ...z.record(z.string(), z.json()).parse(item.value), enabled },
         revision: item.revision,
       },
-      { onSuccess: props.onOutcome },
+      {
+        onSuccess: (result) => {
+          // authn's 403 on an item write is an answer, not an error. A reader's refusal says the
+          // sentence and leaves nothing on the page: stored, it would read as lost access if the
+          // reader is promoted while the page is open.
+          if (!canEdit && result.outcome === "forbidden")
+            toast.error(PROFILE_RECORD_FAILURE_COPY.forbidden);
+          else props.onOutcome(result);
+          reread();
+        },
+        onError: (error) => {
+          if (!canEdit && error.code === "E_ROLE_FORBIDDEN")
+            toast.error(PROFILE_RECORD_FAILURE_COPY.forbidden);
+          reread();
+        },
+      },
     );
   };
   return (
@@ -92,23 +131,24 @@ export function ConfigurationProfiles(props: {
       <ProfileDropdown
         providerLabel={props.providerLabel}
         profiles={profiles}
-        activeProfileId={selected.key}
+        pin={resolveProfilePin(profiles, NO_REMOVED_PROFILES, selected.key)}
         onSelectProfile={setPickedKey}
         onCreateProfile={null}
         createProfileDisabled={false}
         createProfileDisabledReason={undefined}
         shortcutHintForIndex={() => null}
-        profileEnablementPending={() => put.isPending}
+        profileEnablementPending={() => setEnabledPut.isPending}
         contentContainer={null}
         onCloseAutoFocus={null}
         usagePresentation={null}
         eligibilityControls={{
-          pending: () => put.isPending,
+          pending: () => setEnabledPut.isPending,
           disabledReason: () => null,
-          onSetEnabled: canEdit ? setEnabled : null,
+          onSetEnabled: setEnabled,
         }}
         admissionByProfileId={null}
         showTerminalBadge={false}
+        terminalComputerName={null}
       />
       <ProfileSummaryActions
         onManage={
@@ -132,7 +172,6 @@ export function ConfigurationProfiles(props: {
         <ConfigurationProfileEditor
           key={`${selected.key}:${editSession}`}
           item={selected}
-          profile={selectedProfile}
           profiles={profiles}
           open={editOpen}
           onOpenChange={setEditOpen}
@@ -145,7 +184,6 @@ export function ConfigurationProfiles(props: {
 
 function ConfigurationProfileEditor(props: {
   readonly item: ConfigurationItem;
-  readonly profile: ProviderProfile;
   readonly profiles: readonly ProviderProfile[];
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -155,27 +193,37 @@ function ConfigurationProfileEditor(props: {
 }): ReactNode {
   const source = useConfigurationSource();
   const { put, remove } = useConfigurationItemMutations();
-  // Only this person's edits are held. A field they did not touch follows the
-  // stored profile, so a save after a conflict re-read never writes back a
-  // value a teammate has since changed. A picked color is never null, so null
-  // means untouched.
+  // The fields and this person's edits are one snapshot: a save names the baseline's
+  // revision, so an edit over a teammate's change is refused. A picked color is never
+  // null, so null means untouched.
+  const [baseline, setBaseline] = useState(props.item);
+  const [adoptNext, setAdoptNext] = useState(false);
   const [labelOverride, setLabel] = useState<string | null>(null);
   const [accentColorOverride, setAccentColor] =
     useState<ProviderProfileAccentColor | null>(null);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
-  const label = labelOverride ?? props.profile.label;
-  const accentColor = accentColorOverride ?? props.profile.accentColor;
+  const profile = pickerProfile(baseline);
+  const label = labelOverride ?? profile.label;
+  const accentColor = accentColorOverride ?? profile.accentColor;
   const trimmedLabel = label.trim();
   const invalid = trimmedLabel.length === 0 || trimmedLabel.length > 64;
   const changed =
-    (labelOverride !== null && trimmedLabel !== props.profile.label) ||
+    (labelOverride !== null && trimmedLabel !== profile.label) ||
     (accentColorOverride !== null &&
-      accentColorOverride !== props.profile.accentColor);
+      accentColorOverride !== profile.accentColor);
+  if (props.item.revision !== baseline.revision && (adoptNext || !changed)) {
+    const next = pickerProfile(props.item);
+    setBaseline(props.item);
+    if (next.label !== profile.label) setLabel(null);
+    if (next.accentColor !== profile.accentColor) setAccentColor(null);
+    setAdoptNext(false);
+  }
   const busy = put.isPending || remove.isPending;
   const onSuccess = (
     result: EnvironmentConfigurationItemWriteResponse,
   ): void => {
     props.onOutcome(result);
+    if (result.outcome === "conflict") setAdoptNext(true);
     if (result.outcome !== "saved") return;
     props.onOpenChange(false);
     setConfirmRemoveOpen(false);
@@ -186,16 +234,16 @@ function ConfigurationProfileEditor(props: {
       {
         environmentId: source.environmentId,
         kind: "managed_profile",
-        key: props.item.key,
+        key: baseline.key,
         os: null,
         value: {
-          ...z.record(z.string(), z.json()).parse(props.item.value),
+          ...z.record(z.string(), z.json()).parse(baseline.value),
           ...(labelOverride === null ? {} : { name: trimmedLabel }),
           ...(accentColorOverride === null
             ? {}
             : { color: accentColorOverride }),
         },
-        revision: props.item.revision,
+        revision: baseline.revision,
       },
       { onSuccess },
     );
@@ -206,9 +254,9 @@ function ConfigurationProfileEditor(props: {
       {
         environmentId: source.environmentId,
         kind: "managed_profile",
-        key: props.item.key,
+        key: baseline.key,
         os: null,
-        revision: props.item.revision,
+        revision: baseline.revision,
       },
       { onSuccess },
     );
@@ -216,13 +264,14 @@ function ConfigurationProfileEditor(props: {
   const error = put.error ?? remove.error;
   return (
     <ProfileEditDialogPresentation
-      profile={props.profile}
+      profile={profile}
       profiles={props.profiles}
       title="Edit profile"
-      description={`Update how ${profileDisplayLabel(props.profile)} appears.`}
+      description={`Update how ${profileDisplayLabel(profile)} appears.`}
       open={props.open}
       onOpenChange={props.onOpenChange}
       switchingAccount={false}
+      signInSettled={false}
       label={label}
       onLabelChange={setLabel}
       accentColor={accentColor}
@@ -242,6 +291,7 @@ function ConfigurationProfileEditor(props: {
       confirmRemoveOpen={confirmRemoveOpen}
       onConfirmRemoveOpenChange={setConfirmRemoveOpen}
       removeDescription="Remove this profile from the team."
+      removeConfirmation={null}
       onConfirmRemove={confirmRemove}
     >
       {error === null ? null : (

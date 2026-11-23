@@ -1,17 +1,16 @@
-import { useRef, useState, type ReactNode } from "react";
-import { v4 as uuidv4 } from "uuid";
+import { useState, type ReactNode } from "react";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { SandboxDestroyDialog } from "@/components/hosts/sandbox-confirm-dialogs";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   sandboxConfigurationOf,
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import {
@@ -19,23 +18,54 @@ import {
   type SandboxPageConfiguration,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { sandboxVerbPendingLine } from "@/lib/sandboxes/sandbox-strings";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
+import { useSandboxFailedRowRetryStore } from "@/stores/sandboxes/sandbox-failed-row-retry-store";
+
+function failedRowRetryScope(
+  userId: string | null,
+  sandboxId: string,
+): string | null {
+  return userId === null ? null : `${userId}:${sandboxId}`;
+}
+
+/**
+ * Sends a claimed Retry and always releases the claim. The key is cleared
+ * after an accepted create or an answer proving nothing was created.
+ */
+async function sendClaimedRetry(
+  send: () => Promise<unknown>,
+  accountAndRow: string | null,
+  requestKey: string,
+): Promise<void> {
+  let clearKey = false;
+  try {
+    await send();
+    clearKey = true;
+  } catch (error: unknown) {
+    clearKey = error instanceof Error && createErrorNeedsFreshKey(error);
+  } finally {
+    useSandboxFailedRowRetryStore
+      .getState()
+      .settle(accountAndRow, requestKey, clearKey);
+  }
+}
 
 /** A chat's Retry waits until its sandbox's environment is identified. */
 export function SandboxFailedChatActions(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
-  const { configurations } = useSandboxConfigurations();
+  const configurations = useSandboxConfigurations();
   const environments = useEnvironmentListQuery(
-    useTabHostClient(),
     props.summary.environmentId !== null,
   );
   const configuration = sandboxConfigurationOf(props.summary, configurations);
   // The resolver's Personal fallback is not proof: both personal sandboxes
-  // and team pods can carry an environment id without a recorded creator.
+  // and team pods can carry an environment id without a recorded creator,
+  // and a missing environment id says nothing about whose it is.
   const personal =
-    props.summary.environmentId === null ||
     environments.data?.environments.some(
       (environment) =>
         environment.environmentId === props.summary.environmentId &&
@@ -44,64 +74,78 @@ export function SandboxFailedChatActions(props: {
   const resolved =
     configuration?.kind === "personal" && !personal ? null : configuration;
   return (
-    <SandboxFailedRowActions summary={props.summary} configuration={resolved} />
+    <SandboxFailedRowActions
+      summary={props.summary}
+      configuration={resolved}
+      credits={resolved}
+    />
   );
 }
 
 /** The failed-create row's safe actions, shared by Settings and the chat slot. */
 export function SandboxFailedRowActions(props: {
   readonly summary: SandboxSummary;
+  /** `null` holds Retry back. */
   readonly configuration: SandboxPageConfiguration | null;
+  readonly credits: SandboxPageConfiguration | null;
 }): ReactNode {
-  const { summary, configuration } = props;
-  const create = useSandboxCreate("toast");
+  const { summary, configuration, credits } = props;
+  // Not known whose sandbox it is: worded as for someone who cannot buy.
+  const buysTeamCredits = useOffersAddCredits(credits);
+  const create = useSandboxCreate("toast", buysTeamCredits);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
   const [destroyOpen, setDestroyOpen] = useState(false);
-  // An unanswered request may already have created a sandbox. Reuse its key
-  // until the server accepts it or refuses it before creating anything.
-  const retryKey = useRef<string | null>(null);
   const actions = sandboxRowActions({
     summary,
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
   });
   const pendingVerb = operation?.kind === "pending" ? operation.verb : null;
-  const busy = pendingVerb !== null || create.isPending;
+  const accountAndRow = useAuthStore((state) =>
+    failedRowRetryScope(state.contextMetadata?.userId ?? null, summary.id),
+  );
+  const retryInFlight = useSandboxFailedRowRetryStore(
+    (state) =>
+      accountAndRow !== null &&
+      state.byAccountAndRow[accountAndRow]?.inFlight === true,
+  );
+  const busy = pendingVerb !== null || create.isPending || retryInFlight;
 
-  const retry = (): void => {
+  const retry = async (): Promise<void> => {
     if (configuration === null || actions.primary !== "retry" || busy) return;
-    if (retryKey.current === null) retryKey.current = uuidv4();
-    create.mutate(
-      {
-        request: {
-          os: summary.os,
-          cpus: summary.cpus,
-          memoryMb: summary.memoryMb,
-          diskMb: summary.diskMb,
-          region: summary.region,
-          displayName: summary.displayName,
-          idleMinutes: summary.idleMinutes,
-          burst: false,
-          createdByHostId: null,
-          createdByAgentId: null,
-          environmentId: summary.environmentId,
-          // A row's null is never; on a create, null uses the default.
-          destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
-          createdByTaskId: null,
-          clientRequestId: retryKey.current,
-        },
-        teamName: configuration.kind === "team" ? configuration.teamName : null,
-      },
-      {
-        onSuccess: () => {
-          retryKey.current = null;
-        },
-        onError: (error) => {
-          if (createErrorNeedsFreshKey(error)) retryKey.current = null;
-        },
-      },
+    if (failedRowRetryScope(signedInUserId(), summary.id) !== accountAndRow)
+      return;
+    const requestKey = useSandboxFailedRowRetryStore
+      .getState()
+      .claim(accountAndRow);
+    if (requestKey === null) return;
+    await sendClaimedRetry(
+      () =>
+        create.mutateAsync({
+          request: {
+            os: summary.os,
+            cpus: summary.cpus,
+            memoryMb: summary.memoryMb,
+            diskMb: summary.diskMb,
+            region: summary.region,
+            displayName: summary.displayName,
+            idleMinutes: summary.idleMinutes,
+            burst: false,
+            createdByHostId: null,
+            createdByAgentId: null,
+            environmentId: summary.environmentId,
+            // A row's null is never; on a create, null uses the default.
+            destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
+            createdByTaskId: null,
+            clientRequestId: requestKey,
+          },
+          teamName:
+            configuration.kind === "team" ? configuration.teamName : null,
+        }),
+      accountAndRow,
+      requestKey,
     );
   };
 
@@ -114,7 +158,7 @@ export function SandboxFailedRowActions(props: {
           size="sm"
           data-testid="sandbox-row-retry"
           disabled={busy || configuration === null}
-          onClick={retry}
+          onClick={() => void retry()}
         >
           {busy ? (
             <AgentSpinningDots
@@ -155,7 +199,7 @@ export function SandboxFailedRowActions(props: {
         sandboxId={summary.id}
         name={summary.displayName}
         hostId={summary.hostId}
-        configuration={configuration ?? undefined}
+        configuration={credits ?? undefined}
         operation={operation}
         busy={busy}
         onRetry={

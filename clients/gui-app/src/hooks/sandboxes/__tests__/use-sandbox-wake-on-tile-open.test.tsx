@@ -14,6 +14,7 @@ import {
   type FakeSandboxBinding,
 } from "./sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "./sandbox-fixtures";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 
 const HOST_ID = "host-sbx-1";
 
@@ -409,6 +410,9 @@ describe("useSandboxWakeForOpenedTile", () => {
     mocks.entry = entryFor("sandbox", "suspended", false);
     const auth = mocks.binding?.auth;
     auth?.listSandboxes.mockImplementation(listOf({ state: "suspended" }));
+    mocks.binding?.directory.findById.mockReturnValue(
+      sandboxHostEntry(HOST_ID, null),
+    );
     auth?.runSandboxVerb.mockResolvedValue({
       ...refusal(402, "insufficient_credit"),
       shortfallMc: 7_000,

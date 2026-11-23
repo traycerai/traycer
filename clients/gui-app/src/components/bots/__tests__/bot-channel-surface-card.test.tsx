@@ -1135,14 +1135,20 @@ describe("<BotChannelView tiles={null} /> a post's surface card: answering and d
     await user.click(within(denyCard).getByRole("button", { name: "Deny" }));
 
     expect(
-      acts.map((each) => ({ messageId: each.messageId, action: each.action })),
+      acts.map((each) => ({
+        messageId: each.messageId,
+        surface: each.surface,
+        action: each.action,
+      })),
     ).toEqual([
       {
         messageId: "post-allow",
+        surface: APPROVAL,
         action: { kind: "decide", decision: { approved: true } },
       },
       {
         messageId: "post-deny",
+        surface: { ...APPROVAL, approvalId: "approval-second" },
         action: { kind: "decide", decision: { approved: false } },
       },
     ]);
@@ -1363,6 +1369,15 @@ describe("<BotChannelView tiles={null} /> a post's surface card: answering and d
     expect(
       isDisabled(within(card()).getByRole("button", { name: "Allow" })),
     ).toBe(false);
+
+    answer = () => Promise.resolve(SETTLED);
+    await user.click(within(card()).getByRole("button", { name: "Deny" }));
+
+    expect(acts).toHaveLength(2);
+    expect(acts[1]).toEqual(acts[0]);
+    expect(acts[1]?.surface).toEqual(APPROVAL);
+    await vi.waitFor(() => expect(stateLine()).toBe("Denied by you"));
+    expect(cardButtons()).toEqual(["Open"]);
   });
 
   it("says to answer in the task, and offers Open, when the task's machine takes no answer from here", async () => {

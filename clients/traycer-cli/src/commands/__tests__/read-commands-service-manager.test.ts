@@ -355,7 +355,7 @@ describe.each([
     platform: "linux",
     registers: "systemctl --user enable",
     serviceStatusCalls: [],
-    doctorCalls: ["systemctl --user show-environment"],
+    doctorCalls: ["systemctl --user show --property=Version --value"],
   },
   {
     platform: "win32",
