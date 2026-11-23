@@ -131,6 +131,7 @@ function baseArgs(overrides: Partial<StartSideChatArgs>): StartSideChatArgs {
     sourceChatId: SOURCE_CHAT_ID,
     sourceChatTitle: "",
     sourceOwnerUserId: null,
+    command: "side",
     content: QUESTION_CONTENT,
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
