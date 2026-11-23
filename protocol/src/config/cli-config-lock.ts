@@ -15,7 +15,12 @@ import { errorCode } from "./credentials-fs";
 import {
   holderProvablyDead,
   ownPidStartFingerprintAsync,
+  queryPidStartFingerprintAsync,
 } from "./credentials-lock";
+import {
+  probeProcessLivenessAsync,
+  type ProcessLivenessVerdict,
+} from "./process-liveness";
 
 /**
  * Cross-process lock for `config.json` read-modify-writes
@@ -37,8 +42,8 @@ import {
  * holder that is provably dead: the pid is gone, or its start-time
  * fingerprint changed (the pid was reused). A live holder, one whose liveness
  * cannot be decided, and a lock that names no holder (empty or unparseable)
- * are never broken, however old - the contender times out with an error
- * naming the lock path instead. The age guard keeps a holder whose pid this
+ * are never broken, however old. A bounded contender reports a timeout
+ * naming the lock path. Host writes wait for release or recovery. The age guard keeps a holder whose pid this
  * process cannot see (another pid namespace sharing the home directory) from
  * being judged dead mid-write; a legitimate hold lasts one read, merge, write
  * and rename.
@@ -180,8 +185,23 @@ function retryRelease(lockPath: string, record: LockRecord): Promise<boolean> {
  * Throws when the wait runs out, naming only the lock path, so the caller
  * writes nothing without the lock.
  */
-export async function acquireCliConfigLock(
+export function acquireCliConfigLock(
   lockPath: string,
+): Promise<CliConfigLockHandle> {
+  return acquireLock(lockPath, null);
+}
+
+/** Host acquisition waits without a deadline and reports an unknown holder once. */
+export function acquireHostCliConfigLock(
+  lockPath: string,
+  onUnknownHolder: (lockPath: string) => void,
+): Promise<CliConfigLockHandle> {
+  return acquireLock(lockPath, onUnknownHolder);
+}
+
+async function acquireLock(
+  lockPath: string,
+  onUnknownHolder: ((lockPath: string) => void) | null,
 ): Promise<CliConfigLockHandle> {
   const timing = currentTiming();
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
@@ -192,7 +212,13 @@ export async function acquireCliConfigLock(
     acquiredAt: Date.now(),
   };
   const serialized = JSON.stringify(record);
-  const deadline = Date.now() + timing.waitMs;
+  const deadline = onUnknownHolder === null ? Date.now() + timing.waitMs : null;
+  let reportedUnknownHolder = false;
+  const reportUnknownHolder = (): void => {
+    if (reportedUnknownHolder || onUnknownHolder === null) return;
+    reportedUnknownHolder = true;
+    onUnknownHolder(lockPath);
+  };
   let liveVerdict: { readonly raw: string; readonly until: number } | null =
     null;
   const tokenVerdicts: TokenVerdicts = {
@@ -212,11 +238,14 @@ export async function acquireCliConfigLock(
       // Released between our create and read: retry at once, within the wait.
       // A create a Windows filter blocked means the released entry is still
       // delete-pending, which can last as long as a handle on it: poll.
-      if (Date.now() >= deadline) throw lockTimeoutError(timing, lockPath);
+      if (deadline !== null && Date.now() >= deadline)
+        throw lockTimeoutError(timing, lockPath);
       if (created === "blocked") await sleep(timing.pollMs);
       continue;
     }
     const ageMs = await lockAgeMs(lockPath);
+    if (holder.record === null && ageMs !== null && ageMs >= timing.staleAgeMs)
+      reportUnknownHolder();
     if (
       holder.record !== null &&
       ageMs !== null &&
@@ -227,7 +256,14 @@ export async function acquireCliConfigLock(
         liveVerdict.raw === holder.raw &&
         Date.now() < liveVerdict.until;
       if (!reuseVerdict) {
-        if (await recordHolderDead(holder.record)) {
+        const verdict =
+          onUnknownHolder === null
+            ? (await recordHolderDead(holder.record))
+              ? "dead"
+              : "alive"
+            : await probeHolder(holder.record);
+        if (verdict === "indeterminate") reportUnknownHolder();
+        if (verdict === "dead") {
           if (
             await breakDeadLock(
               lockPath,
@@ -249,7 +285,8 @@ export async function acquireCliConfigLock(
         }
       }
     }
-    if (Date.now() >= deadline) throw lockTimeoutError(timing, lockPath);
+    if (deadline !== null && Date.now() >= deadline)
+      throw lockTimeoutError(timing, lockPath);
     await sleep(timing.pollMs);
   }
 }
@@ -273,7 +310,7 @@ function lockTimeoutError(
  * the directory on each attempt of the polled wait, and is taken only when
  * every existing token's creator died holding it. There is no fixed number of
  * generations: however many breakers died mid-break, the next one can still
- * break, and the acquire deadline is the only bound.
+ * break. Bounded acquisitions stop at their deadline.
  */
 async function breakDeadLock(
   lockPath: string,
@@ -281,7 +318,7 @@ async function breakDeadLock(
   deadNonce: string,
   serialized: string,
   timing: CliConfigLockTiming,
-  deadline: number,
+  deadline: number | null,
   tokenVerdicts: TokenVerdicts,
 ): Promise<boolean> {
   const tokenBase = breakTokenBase(lockPath, deadNonce);
@@ -291,7 +328,7 @@ async function breakDeadLock(
   for (const generation of generations) {
     // A liveness probe can take seconds (`tasklist` on Windows), so a long
     // chain is checked against the deadline before each one.
-    if (Date.now() >= deadline) return false;
+    if (deadline !== null && Date.now() >= deadline) return false;
     if (
       !(await tokenCreatorDead(
         `${tokenBase}.${generation}`,
@@ -304,7 +341,7 @@ async function breakDeadLock(
   }
   // The probes above, the holder's included, can outlast the wait: a write
   // that timed out must not break and go on to mutate.
-  if (Date.now() >= deadline) return false;
+  if (deadline !== null && Date.now() >= deadline) return false;
   const next = generations.reduce((max, g) => Math.max(max, g + 1), 0);
   const tokenPath = `${tokenBase}.${next}`;
   // Another breaker claimed that generation first, or a Windows filter held
@@ -440,6 +477,17 @@ async function sweepBreakTokens(
       await rm(join(dir, entry), { force: true }).catch(() => undefined);
     }
   }
+}
+
+async function probeHolder(
+  record: LockRecord,
+): Promise<ProcessLivenessVerdict> {
+  const liveness = await probeProcessLivenessAsync(record.pid);
+  if (liveness !== "alive") return liveness;
+  const fingerprint = await queryPidStartFingerprintAsync(record.pid);
+  if (record.pidStartTime === null || fingerprint === null)
+    return "indeterminate";
+  return record.pidStartTime === fingerprint ? "alive" : "dead";
 }
 
 function recordHolderDead(record: LockRecord): Promise<boolean> {
