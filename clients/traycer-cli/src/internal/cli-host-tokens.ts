@@ -132,8 +132,8 @@ function sharedMint(
           return outcome;
         })
         .finally(() => {
-        if (mintFlights.get(key) === started) mintFlights.delete(key);
-      }),
+          if (mintFlights.get(key) === started) mintFlights.delete(key);
+        }),
     };
     // Settled for nobody once every asker has left.
     started.answer.catch(() => undefined);
