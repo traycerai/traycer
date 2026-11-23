@@ -533,8 +533,8 @@ describe("a staged name at create", () => {
     const client = new QueryClient();
     let completed = Promise.resolve();
     let pendingId: string | null = null;
-    const runner: StagedSandboxRunner = (surfaceKey, fresh, request) => {
-      completed = runStagedSandbox(surfaceKey, fresh, request, {
+    const runner: StagedSandboxRunner = (surfaceKey, request) => {
+      completed = runStagedSandbox(surfaceKey, request, {
         auth,
         directory,
         queryClient: client,
@@ -562,9 +562,10 @@ describe("a staged name at create", () => {
           now: Date.now(),
         });
         if (pendingId === null) throw new Error("expected a handed stage");
-        runner(pendingSendSurfaceKey(pendingId), true, {
+        runner(pendingSendSurfaceKey(pendingId), {
           taskId: "epic-1",
           resume: false,
+          createKey: null,
         });
       }
       await completed;
@@ -920,7 +921,6 @@ describe("useSandboxStaging New rows", () => {
     const stage = readStagedSandbox(SURFACE);
     expect(stage).toMatchObject({
       phase: "staged",
-      clientRequestId: null,
       target: {
         kind: "new",
         configuration: { kind: "personal" },
@@ -928,6 +928,7 @@ describe("useSandboxStaging New rows", () => {
         wakeString: WAKE_STRING_MEMORY,
       },
     });
+    expect(stage?.clientRequestId).toMatch(/^stage:/);
     expect(
       useSandboxShapeMemoryStore.getState().lastConfigurationByHost[
         MEMORY_HOST
@@ -966,10 +967,11 @@ describe("useSandboxStaging New rows", () => {
     });
     renderStagedConsequences();
 
-    expect(readStagedSandbox(SURFACE)).toMatchObject({
+    const stage = readStagedSandbox(SURFACE);
+    expect(stage).toMatchObject({
       phase: "staged",
-      clientRequestId: null,
     });
+    expect(stage?.clientRequestId).toMatch(/^stage:/);
     expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
       "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.",
     );
@@ -1125,7 +1127,9 @@ describe("useSandboxStaging New rows", () => {
       composer.onPickNew("personal");
     });
     act(() => {
-      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
+      useStagedSandboxStore
+        .getState()
+        .begin(SURFACE, Date.now(), { resume: false, createKey: null });
     });
     expect(staging().composer.stagedBusy).toBe(true);
 
@@ -1188,7 +1192,7 @@ describe("useSandboxStaging New rows", () => {
     });
 
     const store = useStagedSandboxStore.getState();
-    store.begin(SURFACE, false, Date.now(), false);
+    store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
     act(() =>
       store.report(SURFACE, {
         createdSandboxId: "sbx-created-settings-failure",
@@ -1318,7 +1322,7 @@ describe("useSandboxStaging New rows", () => {
     expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Use Laptop" })).toBeTruthy();
     const store = useStagedSandboxStore.getState();
-    store.begin(SURFACE, false, Date.now(), false);
+    store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
     act(() =>
       store.report(SURFACE, {
         createdSandboxId: "sbx-no-provider-handoff",
@@ -1354,7 +1358,7 @@ describe("useSandboxStaging New rows", () => {
       const view = render(<ConsequencesHarness hosts={[LAPTOP, host]} />);
       act(() => staging().composer.onPickHost(host));
       const store = useStagedSandboxStore.getState();
-      store.begin(SURFACE, false, Date.now(), false);
+      store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
       act(() =>
         store.report(SURFACE, {
           createdSandboxId: "sbx-box-prewake",
@@ -1397,7 +1401,7 @@ describe("useSandboxStaging New rows", () => {
         staging().composer.onPickNew("personal");
       });
       const store = useStagedSandboxStore.getState();
-      store.begin(SURFACE, false, Date.now(), false);
+      store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
       act(() =>
         store.report(SURFACE, {
           createdSandboxId: "sbx-prewake-handoff",
@@ -1735,9 +1739,9 @@ describe("useSandboxStaging host picks", () => {
 
     act(() => composer.onPickHost(SUSPENDED));
 
-    expect(readStagedSandbox(SURFACE)).toMatchObject({
+    const stage = readStagedSandbox(SURFACE);
+    expect(stage).toMatchObject({
       phase: "staged",
-      clientRequestId: null,
       target: {
         kind: "existing",
         hostId: "box-suspended",
@@ -1747,6 +1751,7 @@ describe("useSandboxStaging host picks", () => {
         verb: "resume",
       },
     });
+    expect(stage?.clientRequestId).toMatch(/^stage:/);
     expect(staging().composer.stagedLabel).toContain("suspended");
   });
 
@@ -1754,7 +1759,7 @@ describe("useSandboxStaging host picks", () => {
     const { composer } = mount([LAPTOP, SUSPENDED]);
     act(() => composer.onPickHost(SUSPENDED));
     const store = useStagedSandboxStore.getState();
-    store.begin(SURFACE, false, Date.now(), false);
+    store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
     store.report(SURFACE, { step: "booting", stepAt: Date.now() });
     expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
       "box-suspended · suspended, resumes on send",
@@ -1773,7 +1778,7 @@ describe("useSandboxStaging host picks", () => {
     const { composer } = mount([LAPTOP, STOPPED]);
     act(() => composer.onPickHost(STOPPED));
     const store = useStagedSandboxStore.getState();
-    store.begin(SURFACE, false, Date.now(), false);
+    store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
 
     act(() => store.report(SURFACE, { phase: "handoff", step: "delivering" }));
 
@@ -2041,11 +2046,12 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
 
       act(() => composer.onPickHost(host));
 
-      expect(readStagedSandbox(SURFACE)).toMatchObject({
+      const stage = readStagedSandbox(SURFACE);
+      expect(stage).toMatchObject({
         phase: "staged",
-        clientRequestId: null,
         target: { kind: "existing", hostId },
       });
+      expect(stage?.clientRequestId).toMatch(/^stage:/);
       renderStagedConsequences();
       if (limited) {
         expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();

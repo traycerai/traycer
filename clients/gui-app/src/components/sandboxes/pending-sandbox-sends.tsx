@@ -197,7 +197,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   holdHandoffOwner,
   readStagedSandbox,
-  stagedCreateNeedsFreshKey,
+  stagedRetryKey,
   stagedSandboxRested,
   useStagedSandbox,
   useStagedSandboxStore,
@@ -470,7 +470,7 @@ function usePendingStagedRun(
       }),
     );
     if (!plan.effects.includes("run-stage") || current === null) return;
-    executePendingStageRun(send, current, runner);
+    executePendingStageRun(send, current, runner, null);
   }, [runner, send, stage, surfaceKey]);
 }
 
@@ -479,13 +479,16 @@ function executePendingStageRun(
   send: PendingSandboxSend,
   stage: StagedSandbox,
   runner: StagedSandboxRunner,
+  press: { readonly createKey: string | null } | null,
 ): void {
   const surfaceKey = pendingSendSurfaceKey(send.id);
   if (send.request.kind === "terminal" && !stage.openTerminal)
     useStagedSandboxStore.getState().report(surfaceKey, { openTerminal: true });
-  runner(surfaceKey, stagedCreateNeedsFreshKey(stage), {
+  runner(surfaceKey, {
     taskId: send.epicId,
-    resume: stage.phase === "creating" && stage.failure === null,
+    resume:
+      press === null && stage.phase === "creating" && stage.failure === null,
+    createKey: press?.createKey ?? null,
   });
 }
 
@@ -657,8 +660,7 @@ function PendingSendDelivery(
 interface PendingStageObservation {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
-  readonly action: PendingStageRetryAction;
-  readonly manualRetry: boolean;
+  readonly press: { readonly createKey: string | null } | null;
   readonly decision: PendingSendTransition;
   /** The row the decision observed; a withdrawal keeps a resting sandbox. */
   readonly rowState: HostSandboxState | null;
@@ -704,8 +706,7 @@ function pendingStageObservation(
   return {
     send,
     stage,
-    action,
-    manualRetry: requestedRetry,
+    press: requestedRetry ? { createKey: retry.createKey ?? null } : null,
     decision,
     rowState,
   };
@@ -737,22 +738,21 @@ function executePendingStageDecision(
   plan: PendingStageObservation,
   runner: StagedSandboxRunner,
 ): boolean {
-  const { send, stage, action, manualRetry, decision, rowState } = plan;
+  const { send, stage, press, decision, rowState } = plan;
+  const retry = decision.effects.includes("retry");
   if (
-    decision.effects.includes("retry") &&
+    retry &&
     usePendingSandboxSendStore.getState().holdObservation(send.id, decision) ===
       null
   )
     return true;
   const running = decision.effects.includes("run-stage");
-  if (decision.effects.includes("retry") && !running)
+  if (retry && !running)
     useStagedSandboxStore
       .getState()
       .report(pendingSendSurfaceKey(send.id), { failure: null });
   if (running) {
-    if (manualRetry && decision.effects.includes("retry"))
-      executePendingStageRetry(send, stage, action, runner);
-    else executePendingStageRun(send, stage, runner);
+    executePendingStageRun(send, stage, runner, retry ? press : null);
     return true;
   }
   if (
@@ -1324,8 +1324,7 @@ function returnWatchedSend(
  * The sandbox a send's message stays on in its task's composer, as that
  * composer's own pick of it would be: an awake one is its host, a resting
  * one is staged to wake, and one not created yet is its own stage again,
- * with the create's key whenever Cancel would keep it, so an accepted
- * create still unanswered is named again rather than billed twice. A
+ * with the same create key in case the server already accepted it. A
  * created sandbox only wakes, so it needs no key.
  */
 function returnedSandboxPick(
@@ -1338,9 +1337,12 @@ function returnedSandboxPick(
     return {
       kind: "stage",
       target,
-      clientRequestId: stagedCreateNeedsFreshKey(stage)
-        ? null
-        : stage.clientRequestId,
+      clientRequestId: target.kind === "new" ? stage.clientRequestId : null,
+      ...(target.kind === "new" &&
+      stage.lastCreateKey !== undefined &&
+      stage.lastCreateKey !== stage.clientRequestId
+        ? { lastCreateKey: stage.lastCreateKey }
+        : {}),
     };
   const created: Extract<StagedSandboxTarget, { kind: "existing" }> = {
     kind: "existing",
@@ -2800,25 +2802,10 @@ function PendingMessageReturnItem(props: {
   );
 }
 
-/** Manual stage retries preserve the captured failure until the runner has read it. */
-function executePendingStageRetry(
-  send: PendingSandboxSend,
-  stage: StagedSandbox,
-  action: PendingStageRetryAction,
-  runner: StagedSandboxRunner,
-): void {
-  let fresh = false;
-  if (action === "retry-creation") fresh = true;
-  else if (action === "retry-stage") fresh = stagedCreateNeedsFreshKey(stage);
-  runner(pendingSendSurfaceKey(send.id), fresh, {
-    taskId: send.epicId,
-    resume: false,
-  });
-}
-
 /** A queued strip publishes intent; only the owning window runs stage or host effects. */
 function usePendingStagedSendRetry(
   send: PendingSandboxSend,
+  shownStage: StagedSandbox | null,
   runner: StagedSandboxRunner,
 ): (action: PendingStageRetryAction) => void {
   return useCallback(
@@ -2826,7 +2813,17 @@ function usePendingStagedSendRetry(
       const surfaceKey = pendingSendSurfaceKey(send.id);
       const current = readStagedSandbox(surfaceKey);
       const { sends } = usePendingSandboxSendStore.getState();
-      if (current === null || !Object.hasOwn(sends, send.id)) return;
+      if (
+        shownStage === null ||
+        current === null ||
+        current.clientRequestId !== shownStage.clientRequestId ||
+        !Object.hasOwn(sends, send.id)
+      )
+        return;
+      const createKey =
+        action === "retry-stage" || action === "retry-creation"
+          ? stagedRetryKey(shownStage)
+          : (shownStage.lastCreateKey ?? shownStage.clientRequestId);
       const publish =
         action === "send-again" || !ownsPendingSandboxSend(send.id);
       const plan = transitionPendingSend(
@@ -2843,20 +2840,19 @@ function usePendingStagedSendRetry(
       if (plan.effects.includes("request-retry"))
         void useStagedSandboxStore
           .getState()
-          .requestRetry(surfaceKey, send.userId, action);
+          .requestRetry(surfaceKey, send.userId, action, createKey);
       executePendingStageDecision(
         {
           send: sends[send.id],
           stage: current,
-          action,
-          manualRetry: true,
+          press: { createKey },
           decision: plan,
           rowState: null,
         },
         runner,
       );
     },
-    [send, runner],
+    [send, shownStage, runner],
   );
 }
 
@@ -3198,7 +3194,7 @@ function PendingStagedSendItem(props: {
   );
   const facts = useSetupLineFacts(stage);
   const runner = useStagedSandboxRunner();
-  const retrySend = usePendingStagedSendRetry(send, runner);
+  const retrySend = usePendingStagedSendRetry(send, stage, runner);
   const sandboxId = stage?.createdSandboxId ?? "";
   const verb = useSandboxVerb(sandboxId);
   const activeVerbs = useIsMutatingOf({
@@ -3207,39 +3203,37 @@ function PendingStagedSendItem(props: {
   const sandboxList = useSandboxList();
   const { openTile } = useEpicTileNavigation();
   const epicId = send.epicId;
-  const run = useCallback(
-    (fresh: boolean): void => {
-      const { sends } = usePendingSandboxSendStore.getState();
-      if (!Object.hasOwn(sends, send.id)) return;
-      const current = readStagedSandbox(surfaceKey);
-      let event: PendingSendEvent = "observe";
-      if (current?.failure !== null && current?.failure !== undefined)
-        event = "retry";
-      if (current?.failure?.kind === "settings") event = "settings-repaired";
-      const plan = transitionPendingSend(
-        pendingSendState(sends[send.id], stageBlocker(current)),
-        event,
-        pendingSandboxSendFacts(send.id, {
-          ...UNKNOWN_PENDING_SEND_FACTS,
-          settingsReady: true,
-          stageStatus: current?.phase ?? "missing",
-          wakeInFlight: stagedRunActive(surfaceKey),
-        }),
-      );
-      if (
-        event === "settings-repaired" &&
-        plan.outcome === "applied" &&
-        plan.state.blocker !== "stop"
-      )
-        useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
-      if (!plan.effects.includes("run-stage")) return;
-      runner(surfaceKey, fresh, {
-        taskId: epicId,
-        resume: false,
-      });
-    },
-    [epicId, runner, send.id, surfaceKey],
-  );
+  const run = useCallback((): void => {
+    const { sends } = usePendingSandboxSendStore.getState();
+    if (!Object.hasOwn(sends, send.id)) return;
+    const current = readStagedSandbox(surfaceKey);
+    let event: PendingSendEvent = "observe";
+    if (current?.failure !== null && current?.failure !== undefined)
+      event = "retry";
+    if (current?.failure?.kind === "settings") event = "settings-repaired";
+    const plan = transitionPendingSend(
+      pendingSendState(sends[send.id], stageBlocker(current)),
+      event,
+      pendingSandboxSendFacts(send.id, {
+        ...UNKNOWN_PENDING_SEND_FACTS,
+        settingsReady: true,
+        stageStatus: current?.phase ?? "missing",
+        wakeInFlight: stagedRunActive(surfaceKey),
+      }),
+    );
+    if (
+      event === "settings-repaired" &&
+      plan.outcome === "applied" &&
+      plan.state.blocker !== "stop"
+    )
+      useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+    if (!plan.effects.includes("run-stage")) return;
+    runner(surfaceKey, {
+      taskId: epicId,
+      resume: false,
+      createKey: null,
+    });
+  }, [epicId, runner, send.id, surfaceKey]);
   const terminal = useMemo(
     () => ({
       epicId,

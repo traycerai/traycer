@@ -4,13 +4,16 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
+  SANDBOX_REFUSAL_CODE_NOT_FOUND,
+  SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   type SandboxCreateAccepted,
   type SandboxCreateRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
+import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import {
   authQueryKeys,
@@ -20,12 +23,17 @@ import {
 import {
   sandboxCreateFailureMessage,
   sandboxFailureMessageFor,
+  sandboxFailureCodeMessage,
 } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  sandboxCreateKey,
+  sandboxCreateKeyForPress,
+} from "@/lib/sandboxes/sandbox-create-key";
 
 /**
  * What a create sends: the request, and the team's name when it belongs to
@@ -34,32 +42,59 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 export interface SandboxCreateSubmit {
   readonly request: SandboxCreateRequest;
   readonly teamName: string | null;
+  /** Keeps the originating failed-row button pending while the press walks. */
+  readonly sourceSandboxId?: string;
 }
 
 /**
- * A refused create, carrying the server's refusal `code` and its `reason`
- * (`null` for a failure with none) so a caller can answer
- * `insufficient_credit` on a team pick with the capacity line rather than
- * only a toast, and the `failure` itself (`null` when nothing was sent) so a
- * Retry can tell a refusal from an answer that never came.
+ * A refused create, carrying the server's refusal code for cache invalidation.
  */
 export class SandboxCreateError extends Error {
-  readonly code: string | null;
-  readonly reason: string | null;
-  readonly failure: SandboxControlFailure | null;
-
   constructor(
     message: string,
-    code: string | null,
-    reason: string | null,
-    failure: SandboxControlFailure | null,
+    readonly code: string | null,
+    readonly failedSandboxId: string | null,
+    readonly startKey: string | null,
   ) {
     super(message);
     this.name = "SandboxCreateError";
-    this.code = code;
-    this.reason = reason;
-    this.failure = failure;
   }
+}
+
+export function sandboxCreatePressKey(
+  baseKey: string,
+  error: Error | null,
+): string {
+  return error instanceof SandboxCreateError
+    ? sandboxCreateKeyForPress(baseKey, error.failedSandboxId, error.startKey)
+    : baseKey;
+}
+
+/** One press can pass previous destroyed attempts and reserve at most one row. */
+async function walkSandboxCreate(
+  auth: AuthService,
+  request: SandboxCreateRequest,
+  userId: string | null,
+): Promise<SandboxCreateFetchResult> {
+  const walked = new Set<string | null>();
+  let clientRequestId = request.clientRequestId;
+  while (signedInUserId() === userId) {
+    walked.add(clientRequestId);
+    const result = await auth.createSandbox({ ...request, clientRequestId });
+    if (
+      result.kind !== "ok" ||
+      result.joined !== true ||
+      result.accepted.sandbox.state !== "destroyed" ||
+      result.accepted.sandbox.failureCode === "credit-gate"
+    ) {
+      return result;
+    }
+    const next = sandboxCreateKey("retry", result.accepted.sandboxId);
+    // A repeated key cannot advance the walk, even if the response was stale.
+    if (walked.has(next)) return result;
+    clientRequestId = next;
+  }
+  return { kind: "unauthorized" };
 }
 
 interface SandboxCreateContext {
@@ -110,15 +145,26 @@ export function useSandboxCreate(
           "Sign in to create a sandbox.",
           null,
           null,
-          null,
+          request.clientRequestId,
         );
       }
-      const result = await binding.auth.createSandbox(request);
+      const result = await walkSandboxCreate(binding.auth, request, userId);
       if (result.kind === "ok") {
-        return result.accepted;
+        const { accepted } = result;
+        const { state } = accepted.sandbox;
+        if (state !== "destroyed" && state !== "failed") return accepted;
+        const code =
+          state === "failed"
+            ? SANDBOX_REFUSAL_CODE_PROVIDER_FAILED
+            : SANDBOX_REFUSAL_CODE_NOT_FOUND;
+        throw new SandboxCreateError(
+          sandboxFailureCodeMessage(code),
+          code,
+          accepted.sandboxId,
+          request.clientRequestId,
+        );
       }
-      // Worded for whoever sent it: a refusal for want of the team's
-      // credits tells only someone who can buy them how much to add.
+      // A refusal for the team's credits tells only a buyer how much to add.
       throw new SandboxCreateError(
         sandboxFailureMessageFor(
           result,
@@ -126,8 +172,8 @@ export function useSandboxCreate(
           { buysTeamCredits, teamName },
         ),
         result.kind === "refused" ? result.code : null,
-        result.kind === "refused" ? result.reason : null,
-        result,
+        result.kind === "refused" ? (result.sandboxId ?? null) : null,
+        request.clientRequestId,
       );
     },
     onSuccess: (_accepted, { request }, context) => {

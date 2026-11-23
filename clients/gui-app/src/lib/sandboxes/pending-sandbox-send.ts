@@ -39,7 +39,7 @@ import {
 } from "@/lib/provider-ordering";
 import {
   readStagedSandbox,
-  stagedCreateNeedsFreshKey,
+  stagedRetryKey,
   useStagedSandboxStore,
   type StagedSandbox,
   type StagedSandboxTarget,
@@ -222,11 +222,23 @@ export function handPendingSandboxSend(
   reservePendingSandboxSendOwnership(id);
   markPendingSandboxSendHanded(id);
   const store = useStagedSandboxStore.getState();
+  const chosenKey = stage.failure === null ? null : stagedRetryKey(stage);
   store.adopt(input.fromSurfaceKey, surfaceKey);
   // Publish the stage first: a different window must never see a send with
   // its stage missing, nor mint a different sandbox create key for it.
   store.report(surfaceKey, {
-    clientRequestId: stage.clientRequestId ?? id,
+    ...(chosenKey !== null &&
+    chosenKey !== (stage.lastCreateKey ?? stage.clientRequestId)
+      ? {
+          lastCreateKey: chosenKey,
+          phase: "staged",
+          createdSandboxId: null,
+          createdHostId: null,
+          createAttempt: null,
+          rateLimit: null,
+          failure: null,
+        }
+      : {}),
     ownerId: null,
     sendTaken: true,
     terminalLaunch: null,
@@ -437,6 +449,7 @@ export type ReturnedSandboxPick =
       readonly kind: "stage";
       readonly target: StagedSandboxTarget;
       readonly clientRequestId: string | null;
+      readonly lastCreateKey?: string;
     }
   /**
    * Awake: recorded, and the task composer's host. `target` names the
@@ -467,6 +480,9 @@ export function returnPendingSandboxSendToSandbox(
     {
       target: pick.target,
       clientRequestId: pick.kind === "stage" ? pick.clientRequestId : null,
+      ...(pick.kind === "stage" && pick.lastCreateKey !== undefined
+        ? { lastCreateKey: pick.lastCreateKey }
+        : {}),
     },
   );
   // The task draft holds the destination; its composer stages it when shown
@@ -537,8 +553,7 @@ export function returnPendingSandboxSendOnItsSandbox(
 
 /**
  * The sandbox a send's stage names, as a draft keeps it: not created yet,
- * the stage itself with the create's key whenever Cancel would keep it (an
- * existing sandbox needs no key); created, that sandbox, to wake (the wake
+ * the stage itself with its create key; created, that sandbox, to wake (the wake
  * reads the sandbox's own state). A created stage is always named: its
  * create names a blank one first.
  */
@@ -549,10 +564,12 @@ export function stagedSandboxDestination(
   if (createdSandboxId === null || createdHostId === null)
     return {
       target,
-      clientRequestId:
-        target.kind === "existing" || stagedCreateNeedsFreshKey(stage)
-          ? null
-          : stage.clientRequestId,
+      clientRequestId: target.kind === "new" ? stage.clientRequestId : null,
+      ...(target.kind === "new" &&
+      stage.lastCreateKey !== undefined &&
+      stage.lastCreateKey !== stage.clientRequestId
+        ? { lastCreateKey: stage.lastCreateKey }
+        : {}),
     };
   return {
     target: {

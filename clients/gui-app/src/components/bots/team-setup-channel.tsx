@@ -2,7 +2,6 @@ import { TeamComputerUnattendedSetup } from "@/components/settings/team/team-com
 import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type {
@@ -33,6 +32,7 @@ import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   SandboxCreateError,
+  sandboxCreatePressKey,
   useSandboxCreate,
 } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import {
@@ -48,7 +48,7 @@ import {
   configurationStageShape,
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
-import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
+import { sandboxCreateKey } from "@/lib/sandboxes/sandbox-create-key";
 import {
   useTeamCloudCreate,
   useTeamCloudCreateStore,
@@ -412,11 +412,12 @@ function EnableTeamCloudAction(props: {
   const enable = (): void => {
     if (blocked !== null || shape === undefined || shape === null) return;
     if (pending) return;
-    // An unanswered request may already have created the sandbox: its key is
-    // reused until the server accepts it or refuses it before creating.
-    const requestKey = pressed?.requestKey ?? uuidv4();
+    const clientRequestId = sandboxCreatePressKey(
+      sandboxCreateKey("team-setup", environmentId),
+      create.error,
+    );
     const store = useTeamCloudCreateStore.getState();
-    store.start(environmentId, requestKey);
+    store.start(environmentId);
     // The promise, not `mutate`'s callbacks, which are dropped when the card
     // unmounts before the answer.
     void create
@@ -437,18 +438,14 @@ function EnableTeamCloudAction(props: {
           // configuration's default and `0` is never.
           destroyAfterRestingMinutes: shape.destroyAfterRestingMinutes ?? 0,
           createdByTaskId: null,
-          clientRequestId: requestKey,
+          clientRequestId,
         },
         teamName: props.teamName,
       })
       .then(
         (accepted) =>
           store.accept(environmentId, accepted.sandboxId, Date.now()),
-        (error: unknown) =>
-          store.fail(
-            environmentId,
-            !(error instanceof Error && createErrorNeedsFreshKey(error)),
-          ),
+        () => store.fail(environmentId),
       );
   };
 

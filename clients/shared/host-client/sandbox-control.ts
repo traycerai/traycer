@@ -2,6 +2,7 @@ import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
   SANDBOX_REFUSAL_CODE_FROZEN,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
   sandboxAutomationOpenResponseSchema,
   sandboxAutomationResponseSchema,
@@ -95,6 +96,8 @@ export type SandboxControlFailure =
       readonly currentAwakeBurnMcPerHour: number | null;
       /** A server-composed sentence for the person, shown verbatim. */
       readonly message: string | null;
+      /** The row left by a failed create, when the server names it. */
+      readonly sandboxId?: string;
     }
   | { readonly kind: "network-error"; readonly detail: string }
   /**
@@ -124,7 +127,11 @@ export type SandboxCostsFetchResult =
   | SandboxControlFailure;
 
 export type SandboxCreateFetchResult =
-  | { readonly kind: "ok"; readonly accepted: SandboxCreateAccepted }
+  | {
+      readonly kind: "ok";
+      readonly accepted: SandboxCreateAccepted;
+      readonly joined?: true;
+    }
   | SandboxControlFailure;
 
 export type SandboxAutomationFetchResult =
@@ -653,7 +660,18 @@ export async function createSandboxViaHttp(
     proxyToken,
   );
   if (raw.kind === "network-error") return raw;
-  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  if (!isSuccess(raw.status)) {
+    const failure = failureOf(raw.status, raw.body);
+    if (
+      failure.kind !== "refused" ||
+      failure.code !== SANDBOX_REFUSAL_CODE_PROVIDER_FAILED
+    )
+      return failure;
+    const row = createFailureRowSchema.safeParse(raw.body);
+    return row.success
+      ? { ...failure, sandboxId: row.data.sandboxId }
+      : failure;
+  }
   const parsed = sandboxCreateAcceptedSchema.safeParse(raw.body);
   if (!parsed.success) {
     return {
@@ -661,8 +679,16 @@ export async function createSandboxViaHttp(
       detail: "the create answer did not match the contract",
     };
   }
-  return { kind: "ok", accepted: parsed.data };
+  return {
+    kind: "ok",
+    accepted: parsed.data,
+    ...(raw.status === 200 ? { joined: true } : {}),
+  };
 }
+
+const createFailureRowSchema = z.object({
+  sandboxId: z.string().min(1).max(36),
+});
 
 /**
  * `DELETE /api/sandboxes/:id`: `200` destroyed, `202` still destroying (both

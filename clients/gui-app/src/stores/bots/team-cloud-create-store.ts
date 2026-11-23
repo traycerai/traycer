@@ -5,14 +5,11 @@ import { sandboxListReadSentAt } from "@/hooks/sandboxes/use-sandbox-list-query"
 
 /**
  * A team's Enable cloud create, from the press until the sandbox list carries
- * the sandbox it made. `requestKey` is reused until the server accepts the
- * create or refuses it before creating anything (an unanswered request may
- * already have created one); `pending` while the request is out;
+ * the sandbox it made. `pending` while the request is out;
  * `acceptedSandboxId` once the server answered with the sandbox, and
  * `acceptedAt` when this app received that answer (epoch milliseconds).
  */
 export interface TeamCloudCreate {
-  readonly requestKey: string | null;
   readonly pending: boolean;
   readonly acceptedSandboxId: string | null;
   readonly acceptedAt: number | null;
@@ -20,16 +17,14 @@ export interface TeamCloudCreate {
 
 interface TeamCloudCreateState {
   readonly byEnvironmentId: Readonly<Partial<Record<string, TeamCloudCreate>>>;
-  /** The create for `environmentId` was sent with `requestKey`. */
-  readonly start: (environmentId: string, requestKey: string) => void;
+  readonly start: (environmentId: string) => void;
   /** The server accepted it and made `sandboxId`; this app heard at `acceptedAt`. */
   readonly accept: (
     environmentId: string,
     sandboxId: string,
     acceptedAt: number,
   ) => void;
-  /** It failed; `keepKey` when the server may still have created one. */
-  readonly fail: (environmentId: string, keepKey: boolean) => void;
+  readonly fail: (environmentId: string) => void;
   /** A list read since `sandboxId` was accepted speaks for the team. */
   readonly settle: (environmentId: string, sandboxId: string) => void;
 }
@@ -43,12 +38,11 @@ interface TeamCloudCreateState {
 export const useTeamCloudCreateStore = create<TeamCloudCreateState>()(
   (set) => ({
     byEnvironmentId: {},
-    start: (environmentId, requestKey) =>
+    start: (environmentId) =>
       set((state) => ({
         byEnvironmentId: {
           ...state.byEnvironmentId,
           [environmentId]: {
-            requestKey,
             pending: true,
             acceptedSandboxId: null,
             acceptedAt: null,
@@ -60,28 +54,19 @@ export const useTeamCloudCreateStore = create<TeamCloudCreateState>()(
         byEnvironmentId: {
           ...state.byEnvironmentId,
           [environmentId]: {
-            requestKey: null,
             pending: false,
             acceptedSandboxId: sandboxId,
             acceptedAt,
           },
         },
       })),
-    fail: (environmentId, keepKey) =>
+    fail: (environmentId) =>
       set((state) => {
-        const entry = state.byEnvironmentId[environmentId];
-        if (entry === undefined) return state;
-        return {
-          byEnvironmentId: {
-            ...state.byEnvironmentId,
-            [environmentId]: {
-              requestKey: keepKey ? entry.requestKey : null,
-              pending: false,
-              acceptedSandboxId: null,
-              acceptedAt: null,
-            },
-          },
-        };
+        if (state.byEnvironmentId[environmentId]?.pending !== true)
+          return state;
+        const next = { ...state.byEnvironmentId };
+        delete next[environmentId];
+        return { byEnvironmentId: next };
       }),
     settle: (environmentId, sandboxId) =>
       set((state) => {

@@ -16,6 +16,11 @@ import type {
   StageConfiguration,
   StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
+import {
+  sandboxCreateKey,
+  sandboxCreateKeyForPress,
+} from "@/lib/sandboxes/sandbox-create-key";
+import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createPendingStageStorage,
@@ -68,7 +73,8 @@ export type StagedSandboxStep =
   | "applying"
   | "delivering";
 
-type StagedSandboxFailureDetail =
+/** Why the first action stopped short, said on the line or above the draft. */
+export type StagedSandboxFailure =
   | {
       readonly kind: "credits";
       readonly shortfallMc: number | null;
@@ -78,7 +84,11 @@ type StagedSandboxFailureDetail =
   | { readonly kind: "shape" }
   | { readonly kind: "unavailable" }
   /** Refused for any other reason; the sentence is the refusal copy. */
-  | { readonly kind: "refused"; readonly message: string }
+  | {
+      readonly kind: "refused";
+      readonly message: string;
+      readonly sandboxId?: string;
+    }
   /** Failed after the create was accepted, or the wake failed. */
   | {
       readonly kind: "failed";
@@ -109,18 +119,6 @@ type StagedSandboxFailureDetail =
   /** The sandbox is up; the send handed to it stopped short of its create. */
   | { readonly kind: "not-sent" };
 
-/** Why the first action stopped short, said on the line or above the draft. */
-export type StagedSandboxFailure =
-  | StagedSandboxFailureDetail
-  | (StagedSandboxFailureDetail & {
-      /**
-       * The create or its preflight stopped before the app learned a sandbox ID.
-       * Only a reply that proves it is safe to start a new create sets this true.
-       * Older persisted failures lack this field and keep their original key rule.
-       */
-      readonly freshCreateKey: boolean;
-    });
-
 export interface StagedSandbox {
   /** The original create bound and this driver's post-preflight clock; absent on legacy stages. */
   readonly createAttempt?: {
@@ -136,11 +134,12 @@ export interface StagedSandbox {
   readonly target: StagedSandboxTarget;
   readonly phase: StagedSandboxPhase;
   /**
-   * The create's idempotency key, one per send: minted when a send starts
-   * and reused by every repeat of that send (Keep waiting, Retry), so the
-   * server answers with the same row. `null` before the first send.
+   * The stage's identity and create key, assigned when the stage is picked.
+   * Legacy stages persisted before a create started may still carry `null`.
    */
   readonly clientRequestId: string | null;
+  /** The POST a reload or Keep waiting repeats. Older stages only have the base key. */
+  readonly lastCreateKey?: string;
   /**
    * The draft whose send started the action, where a surface holds several
    * (the landing composer's drafts share one window pin): only its composer
@@ -178,46 +177,25 @@ export interface StagedSandbox {
   readonly sendTaken: boolean;
 }
 
-/**
- * A new create verdict comes from the answer, since the same failure kind can
- * also mean a retry never reached replay. Only legacy failures with no
- * recorded verdict use the original rule based on the kind.
- */
-function refusedBeforeCreate(failure: StagedSandboxFailure): boolean {
-  if ("freshCreateKey" in failure) return failure.freshCreateKey;
-  switch (failure.kind) {
-    case "credits":
-    case "shape":
-    case "unavailable":
-    case "refused":
-      return true;
-    case "unverified":
-    case "failed":
-    case "settings":
-    case "timed-out":
-    case "rested":
-    case "no-provider":
-    case "traycer-off":
-    case "agent-not-offered":
-    case "agent-setup-failed":
-    case "not-sent":
-      return false;
-  }
+/** A stage can replace a failed create while a failed wake keeps its sandbox. */
+function stagedFailedSandboxId(stage: StagedSandbox): string | null {
+  if (stage.target.kind !== "new") return null;
+  const { failure } = stage;
+  if (failure?.kind === "refused") return failure.sandboxId ?? null;
+  return failure?.kind === "failed" && failure.code !== "wake"
+    ? stage.createdSandboxId
+    : null;
 }
 
-/**
- * The stage's next action takes a fresh key if it has none, has a create
- * refusal that permits a fresh key, or must replace a failed new sandbox.
- * Reusing the key lets an uncertain retry rejoin an earlier create. A wake
- * failure keeps the sandbox, including one originally picked as New.
- */
-export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
-  if (stage.clientRequestId === null) return true;
-  if (stage.failure === null) return false;
-  if (stage.failure.kind === "failed") {
-    return stage.target.kind === "new" && stage.failure.code !== "wake";
-  }
-  return stage.createdSandboxId === null && refusedBeforeCreate(stage.failure);
+/** The key for the failure shown in the window where Retry was pressed. */
+export function stagedRetryKey(stage: StagedSandbox): string | null {
+  if (stage.target.kind !== "new" || stage.clientRequestId === null)
+    return null;
+  return sandboxCreateKeyForPress(
+    stage.clientRequestId,
+    stagedFailedSandboxId(stage),
+    stage.lastCreateKey ?? null,
+  );
 }
 
 /**
@@ -253,6 +231,8 @@ interface StagedSandboxStoreState {
   readonly teardowns: number;
   /** Stages a pick, replacing whatever the surface had staged. */
   readonly stage: (surfaceKey: string, target: StagedSandboxTarget) => void;
+  /** Restages a returned draft's pick under its existing create key. */
+  readonly restore: (surfaceKey: string, returned: ReturnedSandbox) => void;
   /** Drops the stage: another pick, or the handoff completed. */
   readonly clear: (surfaceKey: string) => void;
   /**
@@ -261,20 +241,16 @@ interface StagedSandboxStoreState {
    * server may have accepted is named again) and the composer stages nothing.
    */
   readonly adopt: (fromSurfaceKey: string, toSurfaceKey: string) => void;
-  /** Rewrites the staged target in place (the shape sheet's Use this shape). */
+  /** Updates the staged target while retaining its identity. */
   readonly setTarget: (surfaceKey: string, target: StagedSandboxTarget) => void;
   /**
-   * Starts an action: a new `clientRequestId` when `fresh`
-   * ({@link stagedCreateNeedsFreshKey}, or Retry creation after a terminal
-   * failure) or when the stage has none, else the one it holds. Returns the
-   * id, `null` when nothing is staged. `resume` takes up a run a reload
-   * stopped: its step and times stay as they were persisted.
+   * Starts an action and returns the stage's identity, or `null` if no
+   * stage exists. `resume` keeps the step and times of an interrupted run.
    */
   readonly begin: (
     surfaceKey: string,
-    fresh: boolean,
     now: number,
-    resume: boolean,
+    options: { readonly resume: boolean; readonly createKey: string | null },
   ) => string | null;
   /**
    * Takes up the run still driving the stage's key after a Cancel: back to
@@ -288,6 +264,7 @@ interface StagedSandboxStoreState {
         StagedSandbox,
         | "phase"
         | "clientRequestId"
+        | "lastCreateKey"
         | "ownerId"
         | "createdSandboxId"
         | "createdHostId"
@@ -304,12 +281,13 @@ interface StagedSandboxStoreState {
       >
     >,
   ) => void;
-  /** Back to staged with the draft kept (Cancel and keep the draft). */
-  readonly cancel: (surfaceKey: string) => void;
+  /** Keeps the draft. A person's start-over action restages a failed pick. */
+  readonly cancel: (surfaceKey: string, restageFailed: boolean) => void;
   readonly requestRetry: (
     surfaceKey: string,
     userId: string | null,
     action: PendingStageRetryAction,
+    createKey: string | null,
   ) => Promise<string | null>;
   /**
    * The account changed: drops every composer's stage. A send's stage stays:
@@ -329,12 +307,17 @@ function withStage(
   return { ...bySurface, [surfaceKey]: update(stage) };
 }
 
-function freshStage(target: StagedSandboxTarget): StagedSandbox {
+function stagedPick({
+  target,
+  clientRequestId,
+  lastCreateKey,
+}: ReturnedSandbox): StagedSandbox {
   return {
     target,
     createAttempt: null,
     phase: "staged",
-    clientRequestId: null,
+    clientRequestId: clientRequestId ?? sandboxCreateKey("stage", uuidv4()),
+    ...(lastCreateKey === undefined ? {} : { lastCreateKey }),
     ownerId: null,
     createdSandboxId: null,
     createdHostId: null,
@@ -370,8 +353,10 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
       bySurface: {},
       teardowns: 0,
       stage: (surfaceKey, target) =>
+        get().restore(surfaceKey, { target, clientRequestId: null }),
+      restore: (surfaceKey, returned) =>
         set((state) => ({
-          bySurface: { ...state.bySurface, [surfaceKey]: freshStage(target) },
+          bySurface: { ...state.bySurface, [surfaceKey]: stagedPick(returned) },
         })),
       clear: (surfaceKey) =>
         set((state) => {
@@ -395,23 +380,31 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             target,
           })),
         })),
-      begin: (surfaceKey, fresh, now, resume) => {
+      begin: (surfaceKey, now, { resume, createKey }) => {
         const stage = get().bySurface[surfaceKey];
         if (stage === undefined) return null;
+        // A legacy pending stage with no key still has its durable send ID.
         const clientRequestId =
-          fresh || stage.clientRequestId === null
-            ? uuidv4()
-            : stage.clientRequestId;
-        const resumed = resume && !fresh && stage.startedAt !== null;
+          stage.clientRequestId ??
+          sandboxCreateKey(
+            "stage",
+            surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
+          );
+        const previousKey = stage.lastCreateKey ?? clientRequestId;
+        const lastCreateKey = createKey ?? previousKey;
+        const replacing =
+          lastCreateKey !== previousKey && stage.target.kind === "new";
+        const resumed = resume && !replacing && stage.startedAt !== null;
         set((state) => ({
           bySurface: withStage(state.bySurface, surfaceKey, (current) => ({
             ...current,
             phase: "creating",
             clientRequestId,
-            createdSandboxId: fresh ? null : current.createdSandboxId,
-            createdHostId: fresh ? null : current.createdHostId,
-            createAttempt: fresh ? null : current.createAttempt,
-            rateLimit: fresh ? null : current.rateLimit,
+            lastCreateKey,
+            createdSandboxId: replacing ? null : current.createdSandboxId,
+            createdHostId: replacing ? null : current.createdHostId,
+            createAttempt: replacing ? null : current.createAttempt,
+            rateLimit: replacing ? null : current.rateLimit,
             startedAt: resumed ? current.startedAt : now,
             step: resumed ? current.step : "creating",
             stepAt: resumed ? current.stepAt : now,
@@ -434,27 +427,28 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             ...patch,
           })),
         })),
-      cancel: (surfaceKey) =>
+      cancel: (surfaceKey, restageFailed) =>
         set((state) => ({
           bySurface: withStage(state.bySurface, surfaceKey, (stage) => {
-            // The key stays while a create may have been accepted, so the next
-            // send names it again rather than billing a second sandbox; so do
-            // its times, for a send that takes up the run still on its way.
-            if (!stagedCreateNeedsFreshKey(stage)) {
+            if (!restageFailed || stagedFailedSandboxId(stage) === null) {
               return { ...stage, phase: "staged", failure: null };
             }
             return {
               ...stage,
               phase: "staged",
-              clientRequestId: null,
+              clientRequestId: sandboxCreateKey("stage", uuidv4()),
+              lastCreateKey: undefined,
+              createdSandboxId: null,
+              createdHostId: null,
               createAttempt: null,
+              rateLimit: null,
               startedAt: null,
               stepAt: null,
               failure: null,
             };
           }),
         })),
-      requestRetry: async (surfaceKey, userId, action) => {
+      requestRetry: async (surfaceKey, userId, action, createKey) => {
         if ((useAuthStore.getState().profile?.userId ?? null) !== userId)
           return null;
         const stage = get().bySurface[surfaceKey];
@@ -470,6 +464,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           clientRequestId: stage.clientRequestId,
           sendId: surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
           action,
+          createKey,
         });
         if (id !== null) await useStagedSandboxStore.persist.rehydrate();
         return id;

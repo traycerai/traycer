@@ -169,8 +169,7 @@ describe("SandboxSetupLine, rendered live against a real runStagedSandbox", () =
     await act(async () => {
       await runStagedSandbox(
         surfaceKey,
-        false,
-        { taskId: null, resume: false },
+        { taskId: null, resume: false, createKey: null },
         observing,
       );
     });

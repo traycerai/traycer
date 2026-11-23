@@ -169,10 +169,7 @@ function useReturnedSandboxStage(
       !sameReturnedSandbox(read(), returned)
     )
       return;
-    const staged = useStagedSandboxStore.getState();
-    staged.stage(surfaceKey, returned.target);
-    if (returned.clientRequestId !== null)
-      staged.report(surfaceKey, { clientRequestId: returned.clientRequestId });
+    useStagedSandboxStore.getState().restore(surfaceKey, returned);
     markReturnedSandboxRestored(surfaceKey, returned);
   }, [read, returned, surfaceKey, teardowns]);
 

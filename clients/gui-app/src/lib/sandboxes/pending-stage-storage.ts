@@ -14,6 +14,7 @@ export interface PendingStageRetryRequest {
   readonly id: string;
   readonly userId: string | null;
   readonly clientRequestId: string | null;
+  readonly createKey?: string | null;
 }
 
 export interface PendingDispatchRetryRequest {
@@ -164,6 +165,7 @@ export function requestPendingStageRetry(input: {
   readonly clientRequestId: string | null;
   readonly sendId: string;
   readonly action: PendingStageRetryAction;
+  readonly createKey: string | null;
 }): string | null {
   const { name, surfaceKey, userId, clientRequestId, sendId } = input;
   try {
@@ -191,6 +193,7 @@ export function requestPendingStageRetry(input: {
       action: input.action,
       userId,
       clientRequestId,
+      createKey: input.createKey,
     };
     const key = recordMapStorageKey(
       name,

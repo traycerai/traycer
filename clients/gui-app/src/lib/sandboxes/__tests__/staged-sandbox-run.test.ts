@@ -1,5 +1,13 @@
 import { createPendingStageStorage } from "@/lib/sandboxes/pending-stage-storage";
-import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
+import {
+  persistKey,
+  recordMapStorageKey,
+  STORE_KEYS,
+} from "@/lib/persist/keys";
+import {
+  persistedStageStorage,
+  restoreStageStorage,
+} from "@/lib/sandboxes/__tests__/staged-sandbox-storage-fixture";
 import { budgetCatalogue } from "./sandbox-catalogue-fixture";
 import {
   afterEach,
@@ -18,6 +26,7 @@ import type {
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
 } from "@traycer/protocol/host/sandbox-control";
@@ -35,6 +44,7 @@ import {
   holdHandoffOwner,
   ownerGoneOnUnmount,
   readStagedSandbox,
+  stagedRetryKey,
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -90,7 +100,10 @@ function harness(overrides: Partial<Script>, wakeResult: boolean) {
   return built;
 }
 
-function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
+function run(
+  createKey: string | null,
+  deps: StagedSandboxRunDeps,
+): Promise<void> {
   // A run starts from a send, made by a draft whose composer is mounted,
   // unless the case set up its own ask.
   const stage = readStagedSandbox(surfaceKey);
@@ -100,8 +113,7 @@ function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
   }
   return runStagedSandbox(
     surfaceKey,
-    fresh,
-    { taskId: null, resume: false },
+    { taskId: null, resume: false, createKey },
     deps,
   );
 }
@@ -129,7 +141,7 @@ describe("runStagedSandbox creating", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness({}, true);
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.requests).toHaveLength(1);
     const [request] = auth.requests;
@@ -147,9 +159,142 @@ describe("runStagedSandbox creating", () => {
       destroyAfterRestingMinutes: 4_320,
       displayName: stageOf().target.name,
     });
-    expect(request.clientRequestId).not.toBeNull();
-    expect(request.clientRequestId).toBe(stageOf().clientRequestId);
+    const clientRequestId = request.clientRequestId;
+    if (clientRequestId === null) throw new Error("the create key is missing");
+    expect(clientRequestId).toBe(stageOf().clientRequestId);
+    expect(clientRequestId).toMatch(/^stage:/);
+    expect(clientRequestId.length).toBeGreaterThanOrEqual(1);
+    expect(clientRequestId.length).toBeLessThanOrEqual(64);
     expect(auth.environmentReads).toEqual([]);
+  });
+
+  it("loads an old persisted stage and sends its plain clientRequestId", async () => {
+    const sendId = "legacy-stage-key";
+    surfaceKey = pendingSendSurfaceKey(sendId);
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
+    usePendingSandboxSendStore
+      .getState()
+      .add(pendingSend({ id: sendId, userId: "user-1" }));
+    onTestFinished(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+    });
+    const ownership = holdPendingSandboxSendOwnership(sendId);
+    onTestFinished(ownership.release);
+    await ownership.ready;
+
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      failure: { kind: "unverified" },
+    });
+    const name = persistKey(STORE_KEYS.stagedSandboxSend);
+    const recordKey = recordMapStorageKey(name, surfaceKey);
+    const entries = persistedStageStorage();
+    const storedRecord = entries.find(([key]) => key === recordKey)?.[1];
+    if (storedRecord === undefined) throw new Error("expected persisted stage");
+    const legacyKey = "legacy-create-key";
+    const oldSchema = storedRecord
+      .replace(/,"lastCreateKey":"[^"]+"/, "")
+      .replace(/"lastCreateKey":"[^"]+",/, "")
+      .replace(/"clientRequestId":"[^"]+"/, `"clientRequestId":"${legacyKey}"`)
+      .replace(
+        '"failure":{"kind":"unverified"}',
+        '"failure":{"kind":"unverified","freshCreateKey":true}',
+      );
+    const legacyEntries = entries.map(([key, value]) =>
+      key === recordKey ? ([key, oldSchema] as const) : ([key, value] as const),
+    );
+    useStagedSandboxStore.setState({ bySurface: {} });
+    restoreStageStorage(legacyEntries);
+    expect(persistedStageStorage()).toContainEqual([recordKey, oldSchema]);
+    expect(createPendingStageStorage().getItem(name)).toContain(legacyKey);
+    await useStagedSandboxStore.persist.rehydrate();
+
+    expect(stageOf().clientRequestId).toBe(legacyKey);
+    const { auth, deps } = harness({}, true);
+    await runStagedSandbox(
+      surfaceKey,
+      { taskId: null, resume: true, createKey: null },
+      deps,
+    );
+
+    expect(auth.requests).toHaveLength(1);
+    expect(auth.requests[0]?.clientRequestId).toBe(legacyKey);
+  });
+
+  it("uses retry of the 502 row on the next staged press", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      {
+        createSandbox: () => ({
+          ...refusal(502, SANDBOX_REFUSAL_CODE_PROVIDER_FAILED),
+          sandboxId: "sbx_failed_502",
+        }),
+      },
+      true,
+    );
+
+    await run(null, deps);
+    const stage = stageOf();
+    const retryKey = stagedRetryKey(stage);
+
+    expect(stage.failure).toMatchObject({
+      kind: "refused",
+      sandboxId: "sbx_failed_502",
+    });
+    expect(retryKey).toBe("retry:sbx_failed_502");
+    await run(retryKey, deps);
+
+    expect(auth.requests.map((request) => request.clientRequestId)).toEqual([
+      stage.clientRequestId,
+      retryKey,
+    ]);
+    expect(stageOf().clientRequestId).toBe(stage.clientRequestId);
+    expect(stageOf().lastCreateKey).toBe(retryKey);
+  });
+
+  it("uses retry of a joined HTTP 200 failed row on the next staged press", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      {
+        createSandbox: () => ({
+          kind: "ok",
+          joined: true,
+          accepted: {
+            sandboxId: "sbx_joined_failed",
+            hostId: NEW_HOST_ID,
+            sandbox: row({
+              id: "sbx_joined_failed",
+              state: "failed",
+              failureCode: "PROVIDER_CREATE_FAILED",
+            }),
+          },
+        }),
+      },
+      true,
+    );
+
+    await run(null, deps);
+    const stage = stageOf();
+    const retryKey = stagedRetryKey(stage);
+
+    expect(stage.failure).toMatchObject({ kind: "failed" });
+    expect(stage.createdSandboxId).toBe("sbx_joined_failed");
+    expect(retryKey).toBe("retry:sbx_joined_failed");
+    await run(retryKey, deps);
+
+    expect(auth.requests.map((request) => request.clientRequestId)).toEqual([
+      stage.clientRequestId,
+      retryKey,
+    ]);
+    expect(stageOf().clientRequestId).toBe(stage.clientRequestId);
+    expect(stageOf().lastCreateKey).toBe(retryKey);
   });
 
   it("sends a resting period the sheet cleared as 0, never as the configuration default", async () => {
@@ -162,7 +307,7 @@ describe("runStagedSandbox creating", () => {
     });
     const { auth, deps } = harness({}, true);
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.requests[0].destroyAfterRestingMinutes).toBe(0);
   });
@@ -173,8 +318,7 @@ describe("runStagedSandbox creating", () => {
 
     await runStagedSandbox(
       surfaceKey,
-      false,
-      { taskId: "epic-1", resume: false },
+      { taskId: "epic-1", resume: false, createKey: null },
       deps,
     );
 
@@ -185,7 +329,7 @@ describe("runStagedSandbox creating", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
     const { auth, deps } = harness({}, true);
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.environmentReads).toEqual(["team-acme"]);
     expect(auth.requests[0]).toMatchObject({
@@ -201,16 +345,15 @@ describe("runStagedSandbox creating", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.requests).toEqual([]);
     expect(stageOf().failure).toEqual({
       kind: "unavailable",
-      freshCreateKey: false,
     });
   });
 
-  it("repeats the create with the same key after a refusal, and a fresh run mints a new one", async () => {
+  it("repeats the last attempted Retry key after a no-row refusal and explicit Retry", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness(
       {
@@ -222,15 +365,44 @@ describe("runStagedSandbox creating", () => {
       true,
     );
 
-    await run(false, deps);
-    await run(false, deps);
-    await run(true, deps);
+    await run("retry:shown-failure", deps);
+    await run(null, deps);
+    await run(stageOf().lastCreateKey ?? null, deps);
 
     const [first, second, third] = auth.requests.map(
       (request) => request.clientRequestId,
     );
-    expect(second).toBe(first);
-    expect(third).not.toBe(first);
+    expect([first, second, third]).toEqual([
+      "retry:shown-failure",
+      "retry:shown-failure",
+      "retry:shown-failure",
+    ]);
+  });
+
+  it("automatically resumes a no-row stage with its last attempted Retry key", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      {
+        createSandbox: () => ({
+          kind: "network-error",
+          detail: "the request never completed",
+        }),
+      },
+      true,
+    );
+
+    await run("retry:shown-failure", deps);
+    await runStagedSandbox(
+      surfaceKey,
+      { taskId: null, resume: true, createKey: null },
+      deps,
+    );
+
+    expect(auth.requests.map((request) => request.clientRequestId)).toEqual([
+      "retry:shown-failure",
+      "retry:shown-failure",
+    ]);
+    expect(stageOf().lastCreateKey).toBe("retry:shown-failure");
   });
 
   it("reports the create's own queued rateLimit onto the stage while still waiting, and a fresh poll with none clears it", async () => {
@@ -262,7 +434,7 @@ describe("runStagedSandbox creating", () => {
       },
     };
 
-    await run(false, observing);
+    await run(null, observing);
 
     // Still waiting, under the vendor's quota: the queued state is on the
     // stage for the setup line to read.
@@ -279,7 +451,7 @@ describe("runStagedSandbox through the query cache", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { deps } = harness({}, true);
 
-    await run(false, deps);
+    await run(null, deps);
 
     // The key holds the live AuthService, whose hash moves with the scripted
     // auth's counters, so the list is found by its prefix.
@@ -333,7 +505,7 @@ describe("runStagedSandbox through the query cache", () => {
       return pending;
     });
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(wake).toHaveBeenCalledTimes(1);
     expect(stageOf().failure).toBeNull();
@@ -348,7 +520,7 @@ describe("runStagedSandbox through the query cache", () => {
     );
     const invalidate = vi.spyOn(deps.queryClient, "invalidateQueries");
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(directory.refreshes).toBe(1);
     expect(invalidate).toHaveBeenCalledWith({
@@ -368,7 +540,7 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness({ lists: [missing, missing, awake] }, true);
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.listReads).toBe(1);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
@@ -383,11 +555,10 @@ describe("runStagedSandbox refusals", () => {
       new Error("createSandbox.request.destroyAfterRestingMinutes"),
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(stageOf().failure).toEqual({
       kind: "unverified",
-      freshCreateKey: false,
     });
   });
 
@@ -404,13 +575,12 @@ describe("runStagedSandbox refusals", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(stageOf().failure).toEqual({
       kind: "credits",
       shortfallMc: 1_200_000,
       creditSource: "personal",
-      freshCreateKey: true,
     });
     expect(stageOf().phase).toBe("creating");
     expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
@@ -423,22 +593,22 @@ describe("runStagedSandbox refusals", () => {
         ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
         reason: "unverified",
       },
-      { kind: "unverified", freshCreateKey: true },
+      { kind: "unverified" },
     ],
     [
       "a shape the region does not offer",
       refusal(400, SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED),
-      { kind: "shape", freshCreateKey: true },
+      { kind: "shape" },
     ],
     [
       "an unavailable provider",
       refusal(503, SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE),
-      { kind: "unavailable", freshCreateKey: true },
+      { kind: "unavailable" },
     ],
     [
       "a request that never completed",
       { kind: "network-error" as const, detail: "offline" },
-      { kind: "unverified", freshCreateKey: false },
+      { kind: "unverified" },
     ],
   ] as const)("maps %s", (_name, failure, expected) => {
     expect(createFailure(failure, null)).toEqual(expected);
@@ -455,7 +625,7 @@ describe("runStagedSandbox settling", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { directory, deps } = harness({}, true);
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(stageOf()).toMatchObject({
       phase: "handoff",
@@ -487,7 +657,7 @@ describe("runStagedSandbox settling", () => {
       }
       const { deps } = harness({}, true);
 
-      await run(false, deps);
+      await run(null, deps);
 
       expect(readStagedSandbox(surfaceKey)?.phase ?? null).toBe(phase);
       expect(
@@ -509,8 +679,7 @@ describe("runStagedSandbox settling", () => {
     // Straight to the run: `run` would stand a send in for the abandoned one.
     await runStagedSandbox(
       surfaceKey,
-      false,
-      { taskId: null, resume: false },
+      { taskId: null, resume: false, createKey: null },
       deps,
     );
 
@@ -528,7 +697,7 @@ describe("runStagedSandbox settling", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(clock.sleeps).toBe(2);
     expect(directory.lookups).toBe(3);
@@ -552,7 +721,7 @@ describe("runStagedSandbox settling", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(stageOf().failure).toEqual({
       kind: "settings",
@@ -610,7 +779,7 @@ describe("runStagedSandbox settling", () => {
     ): Promise<void> => {
       useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
       const { deps } = harness({}, true);
-      await run(false, { ...deps, readSettings: answer });
+      await run(null, { ...deps, readSettings: answer });
     };
 
     it("fails with the failed step named, never a raw item key, when an MCP server did not apply", async () => {
@@ -699,7 +868,7 @@ describe("runStagedSandbox settling", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(stageOf().failure).toEqual({
       kind: "failed",
@@ -720,7 +889,7 @@ describe("runStagedSandbox settling", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(clock.sleeps).toBe(1);
     expect(stageOf().phase).toBe("handoff");
@@ -739,7 +908,7 @@ describe("runStagedSandbox settling", () => {
     const sleep = deps.sleep;
     let legacyDeadlinePhase: string | undefined;
     let legacyDeadlineFailure: object | null | undefined;
-    await run(false, {
+    await run(null, {
       ...deps,
       sleep: async (ms) => {
         await sleep(ms);
@@ -774,7 +943,7 @@ describe("runStagedSandbox settling", () => {
         .spyOn(auth, "getSandboxCatalogue")
         .mockImplementation(answer);
 
-      await run(false, deps);
+      await run(null, deps);
 
       expect(preflight).toHaveBeenCalledTimes(1);
       expect(preflight).toHaveBeenCalledWith({
@@ -829,7 +998,7 @@ describe("runStagedSandbox settling", () => {
           }),
         );
 
-        const running = run(false, deps);
+        const running = run(null, deps);
         await vi.advanceTimersByTimeAsync(1_999);
         expect(preflight).toHaveBeenCalledTimes(1);
         expect(auth.requests).toEqual([]);
@@ -863,7 +1032,7 @@ describe("runStagedSandbox settling", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
     expect(stageOf().phase).toBe("creating");
@@ -885,13 +1054,13 @@ describe("runStagedSandbox settling", () => {
       sleep: (ms) => {
         if (!cancelled) {
           cancelled = true;
-          useStagedSandboxStore.getState().cancel(surfaceKey);
+          useStagedSandboxStore.getState().cancel(surfaceKey, true);
         }
         return sleep(ms);
       },
     };
 
-    await run(false, cancelling);
+    await run(null, cancelling);
 
     expect(stageOf()).toMatchObject({ phase: "staged", failure: null });
   });
@@ -917,7 +1086,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(wake).toHaveBeenCalledTimes(1);
     expect(wake).toHaveBeenCalledWith("host-resting", "send");
@@ -939,7 +1108,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
     });
     const { deps } = harness({}, false);
 
-    await run(false, {
+    await run(null, {
       ...deps,
       wake: () =>
         Promise.resolve({
@@ -960,7 +1129,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
   it("wakes a New sandbox that was already created after a failed wake instead of creating it again", async () => {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);
-    store.begin(surfaceKey, false, 1_000_000, false);
+    store.begin(surfaceKey, 1_000_000, { resume: false, createKey: null });
     store.report(surfaceKey, {
       createdSandboxId: SANDBOX_ID,
       createdHostId: NEW_HOST_ID,
@@ -971,7 +1140,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.requests).toEqual([]);
     expect(wake).toHaveBeenCalledTimes(1);
@@ -986,7 +1155,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
   it("keeps the accepted New sandbox and request key when its wake fails again", async () => {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);
-    store.begin(surfaceKey, false, 1_000_000, false);
+    store.begin(surfaceKey, 1_000_000, { resume: false, createKey: null });
     store.report(surfaceKey, {
       createdSandboxId: SANDBOX_ID,
       createdHostId: NEW_HOST_ID,
@@ -995,7 +1164,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
     const requestId = stageOf().clientRequestId;
     const { auth, wake, deps } = harness({}, false);
 
-    await run(true, deps);
+    await run(null, deps);
 
     expect(auth.requests).toEqual([]);
     expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "send");
@@ -1011,13 +1180,13 @@ describe("runStagedSandbox on a resting sandbox", () => {
   it("wakes the same created sandbox after Cancel retains it while it is resting", async () => {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);
-    store.begin(surfaceKey, false, 1_000_000, false);
+    store.begin(surfaceKey, 1_000_000, { resume: false, createKey: null });
     store.report(surfaceKey, {
       createdSandboxId: SANDBOX_ID,
       createdHostId: NEW_HOST_ID,
     });
     const requestId = stageOf().clientRequestId;
-    store.cancel(surfaceKey);
+    store.cancel(surfaceKey, true);
     const { auth, wake, deps } = harness(
       {
         lists: [
@@ -1028,7 +1197,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.requests).toEqual([]);
     expect(wake).toHaveBeenCalledTimes(1);
@@ -1053,7 +1222,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
     function stageWoken(step: "applying" | "booting"): void {
       const store = useStagedSandboxStore.getState();
       store.stage(surfaceKey, RESTING);
-      store.begin(surfaceKey, false, 1_000_000, false);
+      store.begin(surfaceKey, 1_000_000, { resume: false, createKey: null });
       store.report(surfaceKey, {
         createdSandboxId: "sbx_resting",
         createdHostId: "host-resting",
@@ -1067,8 +1236,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
     function runWith(resume: boolean, deps: StagedSandboxRunDeps) {
       return runStagedSandbox(
         surfaceKey,
-        false,
-        { taskId: "task-1", resume },
+        { taskId: "task-1", resume, createKey: null },
         deps,
       );
     }
@@ -1153,7 +1321,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(wake).toHaveBeenCalledTimes(1);
     expect(wake).toHaveBeenCalledWith("host-resting", "send");
@@ -1166,7 +1334,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
   it("does not wake a sandbox that rested on its own after its settings step began", async () => {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);
-    store.begin(surfaceKey, false, 1_000_000, false);
+    store.begin(surfaceKey, 1_000_000, { resume: false, createKey: null });
     store.report(surfaceKey, {
       createdSandboxId: SANDBOX_ID,
       createdHostId: NEW_HOST_ID,
@@ -1185,7 +1353,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.requests).toEqual([]);
     expect(wake).not.toHaveBeenCalled();
@@ -1201,7 +1369,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
     const { auth, deps } = harness({}, false);
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.requests).toEqual([]);
     expect(stageOf().failure).toEqual({
@@ -1215,12 +1383,12 @@ describe("runStagedSandbox on a resting sandbox", () => {
 describe("runStagedSandbox guards", () => {
   it("does nothing when nothing is staged, or the stage is already handing off", async () => {
     const { auth, deps } = harness({}, true);
-    await run(false, deps);
+    await run(null, deps);
     expect(auth.requests).toEqual([]);
 
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     useStagedSandboxStore.getState().report(surfaceKey, { phase: "handoff" });
-    await run(false, deps);
+    await run(null, deps);
     expect(auth.requests).toEqual([]);
   });
 
@@ -1228,7 +1396,7 @@ describe("runStagedSandbox guards", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness({}, true);
 
-    await Promise.all([run(false, deps), run(false, deps)]);
+    await Promise.all([run(null, deps), run(null, deps)]);
 
     expect(auth.requests).toHaveLength(1);
   });
@@ -1247,15 +1415,15 @@ describe("runStagedSandbox guards", () => {
     });
     const listReads = vi.spyOn(auth, "listSandboxes");
 
-    const cancelledSend = run(false, deps);
+    const cancelledSend = run(null, deps);
     await vi.waitFor(() => {
       expect(auth.requests).toHaveLength(1);
     });
     const { startedAt, step, stepAt } = stageOf();
-    useStagedSandboxStore.getState().cancel(surfaceKey);
+    useStagedSandboxStore.getState().cancel(surfaceKey, true);
     clock.now += 30_000;
     // The send's key rule: the create may have been accepted.
-    await run(false, deps);
+    await run(null, deps);
     // The line goes on from where the run is, not from a new start.
     expect(stageOf()).toMatchObject({
       phase: "creating",
@@ -1275,7 +1443,7 @@ describe("runStagedSandbox guards", () => {
     });
   });
 
-  it("starts a fresh create while a cancelled send's create is still in flight, when the stage asks for a new key", async () => {
+  it("starts a new create after Cancel restages a terminally failed stage with a fresh key", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness({}, true);
     let release = (): void => undefined;
@@ -1288,12 +1456,17 @@ describe("runStagedSandbox guards", () => {
       return created;
     });
 
-    const cancelledSend = run(false, deps);
+    const cancelledSend = run(null, deps);
     await vi.waitFor(() => {
       expect(auth.requests).toHaveLength(1);
     });
-    useStagedSandboxStore.getState().cancel(surfaceKey);
-    await run(true, deps);
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      failure: { kind: "failed", code: "provider-failed", step: "booting" },
+    });
+    useStagedSandboxStore.getState().cancel(surfaceKey, true);
+    await run(null, deps);
 
     expect(auth.requests).toHaveLength(2);
     expect(auth.requests[1].clientRequestId).not.toBe(
@@ -1373,7 +1546,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       return read();
     });
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.listReads).toBeGreaterThanOrEqual(3);
     // The accepted create is on the record before the first read, and the
@@ -1414,7 +1587,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       .mockImplementation(() => (clock += 1_000));
     onTestFinished(() => now.mockRestore());
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
     expect(
@@ -1446,7 +1619,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       return read();
     });
 
-    await run(false, deps);
+    await run(null, deps);
 
     // Handing off on the first read would leave a claim that can never use absence.
     expect(auth.listReads).toBeGreaterThanOrEqual(3);
@@ -1464,7 +1637,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.listReads).toBeGreaterThan(1);
     expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
@@ -1493,7 +1666,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(wake).toHaveBeenCalledTimes(1);
     expect(stageOf().phase).toBe("handoff");
@@ -1504,7 +1677,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
     const { auth, wake, deps } = harness({}, true);
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(wake).not.toHaveBeenCalled();
     expect(auth.requests).toEqual([]);
@@ -1532,7 +1705,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       true,
     );
 
-    await run(false, deps);
+    await run(null, deps);
 
     expect(auth.requests).toHaveLength(1);
     expect(stageOf().phase).not.toBe("handoff");
@@ -1629,7 +1802,7 @@ describe("retained create attempt", () => {
   function retained() {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);
-    store.begin(surfaceKey, false, 900_000, false);
+    store.begin(surfaceKey, 900_000, { resume: false, createKey: null });
     store.report(surfaceKey, {
       createdSandboxId: SANDBOX_ID,
       createdHostId: NEW_HOST_ID,
@@ -1655,8 +1828,7 @@ describe("retained create attempt", () => {
       .mockRejectedValue(new Error("offline"));
     await runStagedSandbox(
       surfaceKey,
-      false,
-      { taskId: null, resume: true },
+      { taskId: null, resume: true, createKey: null },
       deps,
     );
     expect(preflight).not.toHaveBeenCalled();
@@ -1678,7 +1850,7 @@ describe("retained create attempt", () => {
     const preflight = vi
       .spyOn(auth, "getSandboxCatalogue")
       .mockRejectedValue(new Error("offline"));
-    await run(false, deps);
+    await run(null, deps);
     expect(auth.requests).toHaveLength(1);
     expect(preflight).not.toHaveBeenCalled();
     expect(clock.now).toBe(1_480_000);
@@ -1723,8 +1895,7 @@ describe("retained create attempt", () => {
     );
     await runStagedSandbox(
       surfaceKey,
-      false,
-      { taskId: null, resume: true },
+      { taskId: null, resume: true, createKey: null },
       deps,
     );
     expect(clock.now).toBe(1_480_000);
@@ -1744,7 +1915,7 @@ describe("retained create attempt", () => {
     const preflight = vi
       .spyOn(auth, "getSandboxCatalogue")
       .mockRejectedValue(new Error("offline"));
-    await run(false, deps);
+    await run(null, deps);
     expect(clock.now).toBe(1_680_000);
     expect(preflight).not.toHaveBeenCalled();
     expect(stageOf().createAttempt).toEqual({
@@ -1755,6 +1926,11 @@ describe("retained create attempt", () => {
 
   it("a fresh retry discards the old attempt and reads the new bound", async () => {
     retained();
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      createdSandboxId: "sbx_failed-create",
+      createdHostId: "host-failed-create",
+      failure: { kind: "failed", code: "provider-failed", step: "booting" },
+    });
     const { auth, deps, clock } = harness(
       { lists: [listOf(row({ state: "creating" }))] },
       true,
@@ -1762,7 +1938,7 @@ describe("retained create attempt", () => {
     const preflight = vi
       .spyOn(auth, "getSandboxCatalogue")
       .mockResolvedValue({ kind: "ok", catalogue: budgetCatalogue(600_000) });
-    await run(true, deps);
+    await run("retry:sbx_failed-create", deps);
     expect(preflight).toHaveBeenCalledTimes(1);
     expect(clock.now).toBe(1_600_000);
     expect(stageOf().createAttempt).toEqual({

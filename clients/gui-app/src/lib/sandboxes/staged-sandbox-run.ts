@@ -13,8 +13,6 @@ import type {
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
-  SANDBOX_REFUSAL_CODE_NOT_FOUND,
-  SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   type SandboxCreateRequest,
@@ -29,7 +27,6 @@ import {
   markPendingSandboxStageRowSeen,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
-import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import {
   sandboxListQueryOptions,
   sandboxListReadSentAt,
@@ -123,14 +120,11 @@ export function stagedRunActive(surfaceKey: string): boolean {
  * task driver delivers it, or a composer-owned action resubmits there.
  *
  * Owned by the store, not by a component: the composer may unmount, and the
- * stage, its idempotency key and the draft outlive it. An action on a stage
- * that may have an accepted create behind it reuses the key, so the server
- * answers with the row it already made. Retry creation after a terminal
- * sandbox failure mints a new one; a wake failure keeps the sandbox and key.
+ * stage and the draft outlive it. A re-drive repeats the last create key;
+ * an explicit Retry can name the failed row it answers.
  */
 export async function runStagedSandbox(
   surfaceKey: string,
-  fresh: boolean,
   request: StagedRunRequest,
   deps: StagedSandboxRunDeps,
 ): Promise<void> {
@@ -141,16 +135,7 @@ export async function runStagedSandbox(
     !pendingSandboxStageRunAllowed(surfaceKey)
   )
     return;
-  // A wake failure still names a usable sandbox, even when the original
-  // pick was New. No retry of that wake may replace the sandbox or its key.
-  const retryingWake =
-    stage.failure?.kind === "failed" && stage.failure.code === "wake";
-  const freshCreate = fresh && !retryingWake;
-  if (
-    !freshCreate &&
-    stage.clientRequestId !== null &&
-    running.get(surfaceKey) === stage.clientRequestId
-  ) {
+  if (running.get(surfaceKey) === stage.clientRequestId) {
     // The run this key drives is still on its way: a repeat joins it, and a
     // send after Cancel takes it up again (it is current once more), rather
     // than a second run racing it on the same key. Its step and times stay
@@ -162,14 +147,21 @@ export async function runStagedSandbox(
   }
   const clientRequestId = useStagedSandboxStore
     .getState()
-    .begin(surfaceKey, freshCreate, deps.now(), request.resume);
+    .begin(surfaceKey, deps.now(), request);
   if (clientRequestId === null) return;
+  const active = readStagedSandbox(surfaceKey);
+  if (active?.clientRequestId !== clientRequestId) return;
   running.set(surfaceKey, clientRequestId);
   try {
     await drivePreparedRun(
-      { surfaceKey, clientRequestId, ...request },
+      {
+        surfaceKey,
+        clientRequestId,
+        ...request,
+        createKey: active.lastCreateKey ?? clientRequestId,
+      },
       stage,
-      freshCreate,
+      sandboxAlreadyMade(active, request.resume),
       deps,
     );
   } finally {
@@ -181,14 +173,14 @@ export async function runStagedSandbox(
 async function drivePreparedRun(
   run: Omit<StagedRun, "environmentId">,
   stage: StagedSandbox,
-  fresh: boolean,
+  made: StartedSandbox | null,
   deps: StagedSandboxRunDeps,
 ): Promise<void> {
   const { surfaceKey, clientRequestId } = run;
-  const prepared = await prepareRun(run, stage, fresh, deps);
+  const prepared = await prepareRun(run, stage, made, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return;
   if (prepared === null) {
-    fail(surfaceKey, { kind: "unavailable", freshCreateKey: false });
+    fail(surfaceKey, { kind: "unavailable" });
     return;
   }
   const started = await startStagedRun(
@@ -196,11 +188,12 @@ async function drivePreparedRun(
       surfaceKey,
       clientRequestId,
       resume: run.resume,
+      createKey: run.createKey,
       taskId: run.taskId,
       environmentId: prepared.environmentId,
     },
     stage,
-    fresh,
+    made,
     deps,
   );
   if (started === null) return;
@@ -234,7 +227,7 @@ interface PreparedRun extends PreparedCreate {
 async function prepareRun(
   run: Omit<StagedRun, "environmentId">,
   stage: StagedSandbox,
-  fresh: boolean,
+  made: StartedSandbox | null,
   deps: StagedSandboxRunDeps,
 ): Promise<PreparedRun | null> {
   if (stage.target.kind === "existing") {
@@ -244,9 +237,9 @@ async function prepareRun(
       startedAt: deps.now(),
     };
   }
-  const attempt = fresh ? null : (stage.createAttempt ?? null);
+  const attempt = readStagedSandbox(run.surfaceKey)?.createAttempt ?? null;
   const prepared =
-    sandboxAlreadyMade(stage, fresh, run.resume) === null
+    made === null
       ? await prepareCreate(stage.target, deps, attempt?.budgetMs ?? null)
       : {
           environmentId: null,
@@ -302,19 +295,15 @@ async function prepareCreate(
 }
 
 /**
- * The new sandbox this key already made, if any. It is read, never created
- * again: a repeat or a resume after a reload waits on that row, and a row
- * that failed or is gone stops the wait rather than naming the key a second
- * time. So is an existing sandbox on a resumed run: it is read for what it
- * is now, never woken for a reload.
+ * The sandbox this stage can still use. A known failed create goes back to
+ * the server with the same key. An existing sandbox on a resumed run is
+ * read for what it is now, without an explicit wake.
  */
 function sandboxAlreadyMade(
   stage: StagedSandbox,
-  fresh: boolean,
   resume: boolean,
 ): StartedSandbox | null {
   if (
-    fresh ||
     (stage.target.kind !== "new" && !resume) ||
     stage.createdSandboxId === null ||
     stage.createdHostId === null
@@ -426,12 +415,15 @@ export interface StagedRunRequest {
    * a send, Keep waiting or Retry, which start the wait again.
    */
   readonly resume: boolean;
+  /** The press's chosen key; a re-drive keeps the stage's last attempted key. */
+  readonly createKey: string | null;
 }
 
 /** Which run a step belongs to, and what its create adds. */
-interface StagedRun extends StagedRunRequest {
+interface StagedRun extends Omit<StagedRunRequest, "createKey"> {
   readonly surfaceKey: string;
   readonly clientRequestId: string;
+  readonly createKey: string;
   readonly environmentId: string | null;
 }
 
@@ -439,10 +431,9 @@ interface StagedRun extends StagedRunRequest {
 async function startStagedRun(
   run: StagedRun,
   stage: StagedSandbox,
-  fresh: boolean,
+  made: StartedSandbox | null,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const made = sandboxAlreadyMade(stage, fresh, run.resume);
   if (made === null) return startTarget(run, stage.target, deps);
   if (
     stage.target.kind === "new" &&
@@ -469,7 +460,7 @@ async function startTarget(
   target: StagedSandboxTarget,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const { surfaceKey, clientRequestId, taskId, environmentId } = run;
+  const { surfaceKey, clientRequestId, taskId, environmentId, createKey } = run;
   if (target.kind === "existing") {
     useStagedSandboxStore.getState().report(surfaceKey, {
       createdSandboxId: target.sandboxId,
@@ -512,7 +503,7 @@ async function startTarget(
     // The task that owns the run. A pending landing send already created it
     // on its placement host; a landing terminal ask may have no task yet.
     createdByTaskId: taskId,
-    clientRequestId,
+    clientRequestId: createKey,
   };
   if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
   const result = await createSandbox(request, deps);
@@ -529,15 +520,20 @@ async function startTarget(
     );
     return null;
   }
-  const { sandboxId, hostId } = result.accepted;
+  const { sandboxId, hostId, sandbox } = result.accepted;
   if (!recordPendingSandboxStageCreated(surfaceKey, sandboxId)) return null;
   useStagedSandboxStore.getState().report(surfaceKey, {
     createdSandboxId: sandboxId,
     createdHostId: hostId,
-    rateLimit: result.accepted.sandbox.rateLimit ?? null,
+    rateLimit: sandbox.rateLimit ?? null,
     step: "booting",
     stepAt: deps.now(),
   });
+  if (sandbox.state === "failed" || sandbox.state === "destroyed") {
+    const verdict = settleVerdict(sandbox);
+    if (verdict?.kind === "failure") fail(surfaceKey, verdict.failure);
+    return null;
+  }
   return { sandboxId, hostId };
 }
 
@@ -614,18 +610,8 @@ function createSandbox(
     .finally(unsubscribe);
 }
 
-/** A create failure's line and the verdict to persist with it. */
+/** A create failure as shown on the stage's line. */
 export function createFailure(
-  failure: SandboxControlFailure,
-  teamName: string | null,
-): StagedSandboxFailure {
-  return {
-    ...createFailureForLine(failure, teamName),
-    freshCreateKey: createAnswerNeedsFreshKey(failure),
-  };
-}
-
-function createFailureForLine(
   failure: SandboxControlFailure,
   teamName: string | null,
 ): StagedSandboxFailure {
@@ -650,40 +636,10 @@ function createFailureForLine(
   return {
     kind: "refused",
     message: sandboxCreateFailureMessage(failure, teamName),
+    ...(failure.kind === "refused" && failure.sandboxId !== undefined
+      ? { sandboxId: failure.sandboxId }
+      : {}),
   };
-}
-
-/** These create replies follow replay and report a refusal or a failed row. */
-function createAnswerNeedsFreshKey(failure: SandboxControlFailure): boolean {
-  if (failure.kind !== "refused") return false;
-  switch (failure.code) {
-    case SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT:
-      return failure.status === 402;
-    case SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED:
-      return failure.status === 400;
-    case SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE:
-      return failure.status === 503;
-    case SANDBOX_REFUSAL_CODE_NOT_FOUND:
-      // The GUI sends a person's create with no creating host. The route's
-      // earlier sandbox_not_found requires an inaccessible creating sandbox.
-      return failure.status === 404;
-    case SANDBOX_REFUSAL_CODE_PROVIDER_FAILED:
-      return failure.status === 502;
-    default:
-      return false;
-  }
-}
-
-/**
- * A failed row's Retry and team setup use the same create answer verdict as
- * a stage. Any other error keeps the key available to rejoin an earlier create.
- */
-export function createErrorNeedsFreshKey(error: Error): boolean {
-  return (
-    error instanceof SandboxCreateError &&
-    error.failure !== null &&
-    createAnswerNeedsFreshKey(error.failure)
-  );
 }
 
 interface SandboxSettlement {

@@ -1311,7 +1311,10 @@ describe("LandingComposer direct submit gate", () => {
     });
     const store = useStagedSandboxStore.getState();
     store.stage("landing:window-test", EXISTING_RESUME);
-    store.begin("landing:window-test", false, Date.now(), false);
+    store.begin("landing:window-test", Date.now(), {
+      resume: false,
+      createKey: null,
+    });
     store.report("landing:window-test", {
       ownerId: "draft-a",
       sendTaken: true,
@@ -1589,7 +1592,10 @@ describe("LandingComposer direct submit gate", () => {
     useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
     const clientRequestId = useStagedSandboxStore
       .getState()
-      .begin("landing:window-test", false, 1_000, false);
+      .begin("landing:window-test", 1_000, {
+        resume: false,
+        createKey: null,
+      });
 
     await sendFromComposer();
 
@@ -1837,11 +1843,12 @@ describe("LandingComposer direct submit gate", () => {
         expect(
           Object.keys(usePendingSandboxSendStore.getState().sends),
         ).toEqual([]);
-        expect(readStagedSandbox("landing:window-test")).toMatchObject({
+        const stage = readStagedSandbox("landing:window-test");
+        expect(stage).toMatchObject({
           target,
           phase: "staged",
-          clientRequestId: null,
         });
+        expect(stage?.clientRequestId).toMatch(/^stage:/);
         expect(
           screen.getByRole("button", { name: "Submit landing" }),
         ).toBeDefined();
@@ -1903,11 +1910,12 @@ describe("LandingComposer direct submit gate", () => {
       expect(testState.startTask).not.toHaveBeenCalled();
       expect(testState.submit).not.toHaveBeenCalled();
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-      expect(readStagedSandbox("landing:window-test")).toMatchObject({
+      const stage = readStagedSandbox("landing:window-test");
+      expect(stage).toMatchObject({
         target: NEW_STAGE,
         phase: "staged",
-        clientRequestId: null,
       });
+      expect(stage?.clientRequestId).toMatch(/^stage:/);
       expect(
         screen.getByRole("button", { name: "Submit landing" }),
       ).toBeDefined();
@@ -1949,11 +1957,12 @@ describe("LandingComposer direct submit gate", () => {
         expect(testState.startTask).not.toHaveBeenCalled();
         expect(testState.submit).not.toHaveBeenCalled();
         expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-        expect(readStagedSandbox("landing:window-test")).toMatchObject({
+        const stage = readStagedSandbox("landing:window-test");
+        expect(stage).toMatchObject({
           target,
           phase: "staged",
-          clientRequestId: null,
         });
+        expect(stage?.clientRequestId).toMatch(/^stage:/);
 
         fireEvent.click(screen.getByTestId("composer-host-notice-action"));
         expect(testState.refetchCatalogue).toHaveBeenCalledOnce();

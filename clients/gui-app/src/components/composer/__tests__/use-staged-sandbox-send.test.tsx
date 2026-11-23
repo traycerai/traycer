@@ -96,7 +96,6 @@ const mocks = vi.hoisted(() => ({
   runStagedSandbox: vi.fn<
     (
       surfaceKey: string,
-      fresh: boolean,
       request: StagedRunRequest,
       deps: StagedSandboxRunDeps,
     ) => Promise<void>
@@ -323,7 +322,7 @@ function stageCreated(
     name: "api-refactor",
     wakeString: null,
   });
-  store.begin(SURFACE, false, Date.now(), false);
+  store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
   store.report(SURFACE, {
     createdSandboxId: "sbx-1",
     createdHostId: NEW_HOST,
@@ -474,8 +473,7 @@ describe("useStagedSandboxSend's setup line", () => {
     expect(mocks.repairMutate).toHaveBeenCalledTimes(1);
     expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
-      false,
-      expect.objectContaining({ taskId: "epic-1" }),
+      expect.objectContaining({ taskId: "epic-1", createKey: null }),
       expect.any(Object),
     );
   });
@@ -486,7 +484,7 @@ describe("useStagedSandboxSend's setup line", () => {
       stageCreated("applying", { kind: "settings", code: "SBX-0520" });
       mount(vi.fn());
       fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
-      const deps = mocks.runStagedSandbox.mock.calls.at(0)?.[3];
+      const deps = mocks.runStagedSandbox.mock.calls.at(0)?.[2];
       if (deps === undefined) throw new Error("no run started");
       return deps;
     }
@@ -653,6 +651,7 @@ describe("useStagedSandboxSend's setup line", () => {
       code: "wake",
       step: "booting",
     });
+    const stageKey = readStagedSandbox(SURFACE)?.clientRequestId;
     mount(vi.fn());
 
     fireEvent.click(screen.getByTestId("sandbox-setup-retry"));
@@ -660,8 +659,7 @@ describe("useStagedSandboxSend's setup line", () => {
     expect(screen.queryByTestId("sandbox-setup-retry-creation")).toBeNull();
     expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
-      false,
-      expect.objectContaining({ taskId: "epic-1" }),
+      expect.objectContaining({ taskId: "epic-1", createKey: stageKey }),
       expect.any(Object),
     );
   });
@@ -771,7 +769,7 @@ describe("useStagedSandboxSend's setup line", () => {
           name: "api-refactor",
           verb: state === "stopped" ? "start" : "resume",
         });
-        store.begin(SURFACE, false, Date.now(), false);
+        store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
         // What the runner publishes before it awaits the wake.
         store.report(SURFACE, {
           createdSandboxId: "sbx-1",
@@ -841,7 +839,10 @@ describe("useStagedSandboxSend's setup line", () => {
 
     act(() => {
       latestSend?.intercept("fix the login bug", null);
-      store.begin(SURFACE, false, Date.now() - 8_000, false);
+      store.begin(SURFACE, Date.now() - 8_000, {
+        resume: false,
+        createKey: null,
+      });
     });
 
     expect(
@@ -849,7 +850,7 @@ describe("useStagedSandboxSend's setup line", () => {
     ).toContain("Starting sandbox·sandbox-ab12·0:08");
   });
 
-  it("starts each send under its own idempotency key", () => {
+  it("starts a Send with the staged key", () => {
     useStagedSandboxStore.getState().stage(SURFACE, {
       kind: "existing",
       hostId: NEW_HOST,
@@ -866,10 +867,10 @@ describe("useStagedSandboxSend's setup line", () => {
 
     expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
-      true,
-      expect.objectContaining({ taskId: "epic-1" }),
+      expect.objectContaining({ taskId: "epic-1", createKey: null }),
       expect.any(Object),
     );
+    expect(readStagedSandbox(SURFACE)?.clientRequestId).toMatch(/^stage:/);
   });
 });
 
@@ -958,14 +959,16 @@ describe("useStagedSandboxSend's line after a refusal", () => {
 
   it("retries a create whose answer never came under its own key", () => {
     stageRefused({ kind: "unverified" });
+    const stage = readStagedSandbox(SURFACE);
+    if (stage === null) throw new Error("Expected a refused stage");
+    const lastCreateKey = stage.lastCreateKey ?? stage.clientRequestId;
     mount(vi.fn());
 
     fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
 
     expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
-      false,
-      expect.any(Object),
+      expect.objectContaining({ createKey: lastCreateKey }),
       expect.any(Object),
     );
   });
@@ -998,7 +1001,9 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
       configuration: { kind: "personal" },
       verb: "resume",
     });
-    useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
+    useStagedSandboxStore
+      .getState()
+      .begin(SURFACE, Date.now(), { resume: false, createKey: null });
   }
 
   function detail(): string {
@@ -1401,7 +1406,9 @@ describe("useStagedSandboxSend's handoff", () => {
     act(() => {
       sendA?.intercept("fix the login bug", null);
       // Phase 1 is under way.
-      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
+      useStagedSandboxStore
+        .getState()
+        .begin(SURFACE, Date.now(), { resume: false, createKey: null });
     });
     let takenFromB = false;
     act(() => {
@@ -1445,7 +1452,9 @@ describe("useStagedSandboxSend on a boot a terminal ask started", () => {
       verb: "resume",
     });
     useStagedSandboxStore.getState().report(SURFACE, { openTerminal: true });
-    useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
+    useStagedSandboxStore
+      .getState()
+      .begin(SURFACE, Date.now(), { resume: false, createKey: null });
     const submit = vi.fn(() => true);
     let send: StagedSandboxSend | null = null;
     render(
@@ -1609,43 +1618,36 @@ async function sendAgainAfter(
 
 describe("useStagedSandboxSend's send after a failed create", () => {
   it.each([
-    ["401", { kind: "unauthorized" }, false],
-    [
-      "503 environment_unavailable",
-      refusal(503, "environment_unavailable"),
-      false,
-    ],
-    ["503 BACKEND_PRESSURE", refusal(503, "BACKEND_PRESSURE"), false],
+    ["401", { kind: "unauthorized" }],
+    ["503 environment_unavailable", refusal(503, "environment_unavailable")],
+    ["503 BACKEND_PRESSURE", refusal(503, "BACKEND_PRESSURE")],
     [
       "409 sandbox_transition_conflict",
       refusal(409, "sandbox_transition_conflict"),
-      false,
     ],
-    ["500 INTERNAL_ERROR", refusal(500, "INTERNAL_ERROR"), false],
-    ["network error", "network-error", false],
+    ["500 INTERNAL_ERROR", refusal(500, "INTERNAL_ERROR")],
+    ["network error", "network-error"],
     [
       "402 insufficient_credit with an unverified balance",
       {
         ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
         reason: "unverified",
       },
-      true,
     ],
     [
       "402 insufficient_credit denied",
       refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
-      true,
     ],
-    ["400 shape_not_offered", refusal(400, "shape_not_offered"), true],
-    ["503 provider_unavailable", refusal(503, "provider_unavailable"), true],
-    ["404 sandbox_not_found", refusal(404, "sandbox_not_found"), true],
-    ["502 provider_failed", refusal(502, "provider_failed"), true],
+    ["400 shape_not_offered", refusal(400, "shape_not_offered")],
+    ["503 provider_unavailable", refusal(503, "provider_unavailable")],
+    ["404 sandbox_not_found", refusal(404, "sandbox_not_found")],
+    ["502 provider_failed", refusal(502, "provider_failed")],
   ] as const)(
     "uses the right next create key after %s",
-    async (_name, answer, fresh) => {
+    async (_name, answer) => {
       const [first, second] = await sendAgainAfter(answer, true);
 
-      expect(second === first).toBe(!fresh);
+      expect(second).toBe(first);
     },
   );
 
@@ -1659,20 +1661,17 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     expect(screen.queryByTestId("sandbox-refusal-retry")).toBeNull();
   });
 
-  it("makes a new create after the sandbox the last one made failed", () => {
+  it("retries a failed create with the key for its shown row", () => {
     stageCreated("booting", {
       kind: "failed",
       code: "PROVIDER_CREATE_FAILED",
       step: "booting",
     });
-    const failed = readStagedSandbox(SURFACE)?.clientRequestId;
-    const keys: (string | null)[] = [];
-    mocks.runStagedSandbox.mockImplementation((surfaceKey, fresh) => {
-      keys.push(
-        useStagedSandboxStore
-          .getState()
-          .begin(surfaceKey, fresh, Date.now(), false),
-      );
+    const identity = readStagedSandbox(SURFACE)?.clientRequestId;
+    const createKeys: (string | null)[] = [];
+    mocks.runStagedSandbox.mockImplementation((surfaceKey, request) => {
+      createKeys.push(request.createKey);
+      useStagedSandboxStore.getState().begin(surfaceKey, Date.now(), request);
       return Promise.resolve();
     });
     mount(vi.fn());
@@ -1681,9 +1680,10 @@ describe("useStagedSandboxSend's send after a failed create", () => {
       latestSend?.intercept("second", null);
     });
 
-    expect(failed).toBeDefined();
-    expect(keys).toHaveLength(1);
-    expect(keys[0]).not.toBe(failed);
+    expect(identity).toBeDefined();
+    expect(createKeys).toEqual(["retry:sbx-1"]);
+    expect(readStagedSandbox(SURFACE)?.clientRequestId).toBe(identity);
+    expect(readStagedSandbox(SURFACE)?.lastCreateKey).toBe("retry:sbx-1");
   });
 
   it("repeats the same create after an accepted sandbox froze for credits while it settled", () => {
@@ -1691,13 +1691,10 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     // reports, after a billed create.
     stageCreated("booting", { kind: "credits", shortfallMc: null });
     const accepted = readStagedSandbox(SURFACE)?.clientRequestId;
-    const keys: (string | null)[] = [];
-    mocks.runStagedSandbox.mockImplementation((surfaceKey, fresh) => {
-      keys.push(
-        useStagedSandboxStore
-          .getState()
-          .begin(surfaceKey, fresh, Date.now(), false),
-      );
+    const createKeys: (string | null)[] = [];
+    mocks.runStagedSandbox.mockImplementation((surfaceKey, request) => {
+      createKeys.push(request.createKey);
+      useStagedSandboxStore.getState().begin(surfaceKey, Date.now(), request);
       return Promise.resolve();
     });
     mount(vi.fn());
@@ -1707,7 +1704,7 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     });
 
     expect(accepted).toBeDefined();
-    expect(keys).toEqual([accepted]);
+    expect(createKeys).toEqual([accepted]);
   });
 });
 
@@ -1755,7 +1752,11 @@ describe("startStagedTerminal", () => {
 
       expect(startStagedTerminal(SURFACE, start).kind).toBe(kind);
 
-      expect(start.mock.calls).toEqual(starts === null ? [] : [[starts]]);
+      const stageKey = readStagedSandbox(SURFACE)?.clientRequestId;
+      const createKey = failure?.kind === "failed" ? "retry:sbx-1" : stageKey;
+      expect(start.mock.calls).toEqual(
+        starts === null ? [] : [[createKey ?? null]],
+      );
       expect(readStagedSandbox(SURFACE)?.openTerminal).toBe(true);
     },
   );
@@ -1770,14 +1771,14 @@ describe("startStagedTerminal", () => {
       configuration: { kind: "personal" },
       verb: "resume",
     });
-    store.begin(SURFACE, false, Date.now(), false);
+    store.begin(SURFACE, Date.now(), { resume: false, createKey: null });
     store.report(SURFACE, {
       failure: { kind: "failed", code: "wake", step: "booting" },
     });
     const start = vi.fn();
 
     expect(startStagedTerminal(SURFACE, start).kind).toBe("taken");
-    expect(start.mock.calls).toEqual([[false]]);
+    expect(start.mock.calls).toEqual([[null]]);
   });
 
   it("takes the ask on a stage nothing ran for yet, starting its first run", () => {
@@ -1792,7 +1793,7 @@ describe("startStagedTerminal", () => {
     const start = vi.fn();
 
     expect(startStagedTerminal(SURFACE, start).kind).toBe("taken");
-    expect(start.mock.calls).toEqual([[true]]);
+    expect(start.mock.calls).toEqual([[null]]);
   });
 
   it("opens the terminal on a sandbox that is up with settings that did not apply", () => {
@@ -1843,10 +1844,10 @@ describe("openLandingStagedTerminal", () => {
     });
 
     expect(runner).toHaveBeenCalledTimes(1);
-    expect(runner).toHaveBeenCalledWith(SURFACE, true, {
-      taskId: null,
-      resume: false,
-    });
+    expect(runner).toHaveBeenCalledWith(
+      SURFACE,
+      expect.objectContaining({ taskId: null, resume: false, createKey: null }),
+    );
     expect(readStagedSandbox(SURFACE)?.openTerminal).toBe(true);
     expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
@@ -1961,6 +1962,9 @@ describe("useStagedSandboxSend after the sending tab is gone", () => {
       ownerId: null,
       sendTaken: false,
     });
+    const stage = readStagedSandbox(SURFACE);
+    if (stage === null) throw new Error("Expected the pending stage");
+    const lastCreateKey = stage.lastCreateKey ?? stage.clientRequestId;
 
     fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
     expect(readStagedSandbox(SURFACE)).toMatchObject({
@@ -1969,8 +1973,7 @@ describe("useStagedSandboxSend after the sending tab is gone", () => {
     });
     expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
-      false,
-      expect.any(Object),
+      expect.objectContaining({ createKey: lastCreateKey }),
       expect.any(Object),
     );
 

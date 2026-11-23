@@ -1114,12 +1114,10 @@ export function seed(options: SeedOptions): void {
     .add(pendingSend({ id: SEND_ID, ...options.send }));
   const store = useStagedSandboxStore.getState();
   store.stage(SURFACE, options.target);
-  store.begin(
-    SURFACE,
-    false,
-    Date.now() - options.elapsedSeconds * 1000,
-    false,
-  );
+  store.begin(SURFACE, Date.now() - options.elapsedSeconds * 1000, {
+    resume: false,
+    createKey: null,
+  });
   store.report(SURFACE, {
     ownerId: null,
     sendTaken: true,

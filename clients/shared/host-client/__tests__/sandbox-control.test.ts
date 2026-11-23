@@ -1021,6 +1021,75 @@ describe("the other sandbox routes parse or fail the same way", () => {
       reason: "cpus-out-of-range",
     });
   });
+
+  it("create: marks raw 200 joins and preserves the failed row id from 502", async () => {
+    const accepted = {
+      sandboxId: "sbx_create",
+      hostId: "host_create",
+      sandbox: SUMMARY,
+    };
+    const answers = [
+      jsonResponse(200, accepted),
+      jsonResponse(202, accepted),
+      jsonResponse(502, {
+        code: "provider_failed",
+        sandboxId: "sbx_failed_create",
+      }),
+    ];
+    let answerIndex = 0;
+    stubFetch(async () => {
+      const answer = answers[answerIndex];
+      answerIndex += 1;
+      if (answer === undefined) throw new Error("unexpected create request");
+      return answer;
+    });
+    const request = {
+      os: "linux" as const,
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: null,
+      displayName: "create",
+      idleMinutes: null,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: null,
+      destroyAfterRestingMinutes: null,
+      createdByTaskId: null,
+      clientRequestId: "retry:sbx_failed_create",
+    };
+
+    await expect(
+      createSandboxViaHttp(BASE, BEARER, null, request),
+    ).resolves.toMatchObject({
+      kind: "ok",
+      joined: true,
+      accepted: {
+        sandboxId: accepted.sandboxId,
+        hostId: accepted.hostId,
+        sandbox: { id: SUMMARY.id },
+      },
+    });
+    const created = await createSandboxViaHttp(BASE, BEARER, null, request);
+    expect(created).toMatchObject({
+      kind: "ok",
+      accepted: {
+        sandboxId: accepted.sandboxId,
+        hostId: accepted.hostId,
+        sandbox: { id: SUMMARY.id },
+      },
+    });
+    expect(created.kind === "ok" && "joined" in created).toBe(false);
+    await expect(
+      createSandboxViaHttp(BASE, BEARER, null, request),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 502,
+      code: "provider_failed",
+      sandboxId: "sbx_failed_create",
+    });
+  });
 });
 
 describe("getSandboxAutomationViaHttp", () => {

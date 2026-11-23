@@ -664,7 +664,10 @@ vi.mock(
               terminalLaunch,
               sendTaken: true,
             });
-            store.begin(input.surfaceKey, false, Date.now(), false);
+            store.begin(input.surfaceKey, Date.now(), {
+              resume: false,
+              createKey: null,
+            });
             return true;
           },
           line: null,
@@ -1284,10 +1287,11 @@ describe("new-conversation modal refusals at Send", () => {
     expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
       [],
     );
-    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+    const stage = readStagedSandbox(SANDBOX_SURFACE);
+    expect(stage).toMatchObject({
       phase: "staged",
-      clientRequestId: null,
     });
+    expect(stage?.clientRequestId).toMatch(/^stage:/);
     expect(draftSurvived()).toBe(true);
     expect(testState.onSubmitted).not.toHaveBeenCalled();
 

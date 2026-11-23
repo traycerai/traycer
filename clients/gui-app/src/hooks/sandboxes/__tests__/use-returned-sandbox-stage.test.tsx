@@ -129,6 +129,7 @@ describe("useNewConversationReturnedSandbox", () => {
     act(() => {
       useStagedSandboxStore.getState().stage(SURFACE, LOCAL_PICK);
     });
+    const localPickKey = readStagedSandbox(SURFACE)?.clientRequestId;
 
     // The other window's give-back reaches this window's draft.
     act(() => {
@@ -138,7 +139,7 @@ describe("useNewConversationReturnedSandbox", () => {
     expect(readStagedSandbox(SURFACE)).toMatchObject({
       phase: "staged",
       target: LOCAL_PICK,
-      clientRequestId: null,
+      clientRequestId: localPickKey,
     });
     expect(returnedOnDraft()).toEqual(stored(RETURNED));
   });
@@ -362,7 +363,7 @@ describe("a restored stage a send has taken up", () => {
       );
       act(() => {
         const staged = useStagedSandboxStore.getState();
-        staged.begin(SURFACE, false, Date.now(), true);
+        staged.begin(SURFACE, Date.now(), { resume: true, createKey: null });
         if (phase === "handoff") staged.report(SURFACE, { phase: "handoff" });
       });
       expect(readStagedSandbox(SURFACE)?.phase).toBe(phase);
@@ -544,10 +545,11 @@ describe("useLandingReturnedSandbox", () => {
       });
 
       show("draft-b");
-      expect(readStagedSandbox(WINDOW_SURFACE)).toMatchObject({
+      const stage = readStagedSandbox(WINDOW_SURFACE);
+      expect(stage).toMatchObject({
         target: second.target,
-        clientRequestId: null,
       });
+      expect(stage?.clientRequestId).toMatch(/^stage:/);
       expect(landingReturned("draft-a")).toEqual(stored(first));
       expect(landingReturned("draft-b")).toEqual(stored(second));
 

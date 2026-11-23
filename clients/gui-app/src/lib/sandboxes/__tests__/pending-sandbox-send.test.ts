@@ -593,7 +593,10 @@ describe("handPendingSandboxSend", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
     store.report(SURFACE, { ownerId: "draft-a", openTerminal: true });
-    const clientRequestId = store.begin(SURFACE, false, 1_000, false);
+    const clientRequestId = store.begin(SURFACE, 1_000, {
+      resume: false,
+      createKey: null,
+    });
 
     const id = hand(SURFACE);
 

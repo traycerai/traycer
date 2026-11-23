@@ -18,6 +18,7 @@ import type {
 export interface ReturnedSandbox {
   readonly target: StagedSandboxTarget;
   readonly clientRequestId: string | null;
+  readonly lastCreateKey?: string;
 }
 
 /**
@@ -40,6 +41,9 @@ export function storeReturnedSandbox(
   return {
     target: returned.target,
     clientRequestId: returned.clientRequestId,
+    ...(returned.lastCreateKey === undefined
+      ? {}
+      : { lastCreateKey: returned.lastCreateKey }),
     userId:
       "userId" in returned
         ? returned.userId
@@ -116,8 +120,8 @@ export function takeReturnedSandboxRestored(
 
 /**
  * Whether a stage is the returned destination, not a pick of the person's. A
- * sandbox not yet created is known by its create key; one whose create was
- * never sent has none, and is the unstarted stage of the same request.
+ * sandbox not yet created is known by its create key. Legacy returned
+ * drafts without a key can only match their original pick.
  */
 export function stageIsReturnedSandbox(
   stage: StagedSandbox | null,
@@ -133,10 +137,7 @@ export function stageIsReturnedSandbox(
   if (target.kind !== "new") return false;
   if (returned.clientRequestId !== null)
     return stage.clientRequestId === returned.clientRequestId;
-  return (
-    stage.clientRequestId === null &&
-    JSON.stringify(target) === JSON.stringify(returned.target)
-  );
+  return JSON.stringify(target) === JSON.stringify(returned.target);
 }
 
 /** Whether two returned sandboxes name the same destination and create key. */
@@ -147,6 +148,7 @@ export function sameReturnedSandbox(
   if (a === null || b === null) return a === b;
   return (
     a.clientRequestId === b.clientRequestId &&
+    a.lastCreateKey === b.lastCreateKey &&
     JSON.stringify(a.target) === JSON.stringify(b.target)
   );
 }
@@ -191,6 +193,9 @@ export function returnedSandboxToJson(
             wakeString: target.wakeString,
           },
     clientRequestId: returned.clientRequestId,
+    ...(returned.lastCreateKey === undefined
+      ? {}
+      : { lastCreateKey: returned.lastCreateKey }),
     userId: returned.userId,
   };
 }
@@ -209,6 +214,9 @@ export function parseReturnedSandbox(
     target,
     clientRequestId:
       typeof value.clientRequestId === "string" ? value.clientRequestId : null,
+    ...(typeof value.lastCreateKey === "string"
+      ? { lastCreateKey: value.lastCreateKey }
+      : {}),
     userId: typeof value.userId === "string" ? value.userId : null,
   };
 }
