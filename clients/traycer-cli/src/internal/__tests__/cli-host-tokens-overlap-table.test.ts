@@ -11,13 +11,14 @@ import {
   type HostInstance,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { Environment } from "../../runner/environment";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
 } from "../../store/credentials-store";
-import { createCliHostTokens } from "../cli-host-tokens";
+import { createCliHostTokens, type CliHostTokens } from "../cli-host-tokens";
 
 // Two overlapping mints, in either completion order, over the real token path
 // (`createCliHostTokens`) and a real credentials file, against a scripted authn.
@@ -49,6 +50,7 @@ type Event =
   | {
       readonly kind: "left";
       /** The refusal's request, `null` for an outcome that is not a refusal. */
+      readonly hostId: string;
       readonly refusalOf: MintRequest | null;
       readonly obeysRule: boolean;
       /** Whether a request sent with our rotation's sign-in had bought a token by then. */
@@ -157,6 +159,7 @@ vi.mock("../../../../shared/auth/host-token-lease", async (importOriginal) => {
                 ));
             harness.events.push({
               kind: "left",
+              hostId,
               refusalOf,
               obeysRule,
               boughtOnOurs: harness.requests.some(
@@ -359,41 +362,62 @@ const answerOf = (answer: Answer, seq: number): HostTokenMintOutcome =>
       }
     : { kind: "sign-in-rejected" };
 
+/**
+ * One command's tokens over a real credentials file holding sign-in A, with a
+ * second handle on the same file (another process's save). Authn's refresh
+ * hands out our rotation's sign-in first, then a run of recovery ones.
+ */
+interface OpenTokens {
+  readonly store: CredentialsMutationStore;
+  readonly otherProcess: CredentialsMutationStore;
+  readonly lease: MutableBearerLease;
+  readonly tokens: CliHostTokens;
+  readonly reports: string[];
+}
+
+async function openTokens(): Promise<OpenTokens> {
+  const store = createCliCredentialsStore();
+  const otherProcess = createCliCredentialsStore();
+  await store.signIn(credentialsOf(SIGN_IN_A), false, null);
+  credentialsFile.refreshed.push(
+    OURS,
+    "sign-in-recovery-1",
+    "sign-in-recovery-2",
+    "sign-in-recovery-3",
+    "sign-in-recovery-4",
+    "sign-in-recovery-5",
+    "sign-in-recovery-6",
+  );
+  const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+  const revalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+    signal: null,
+  });
+  const tokens = createCliHostTokens({
+    lease,
+    refresh: () => revalidator.rotateSignIn(),
+    adoptStored: () => revalidator.adoptStoredSignIn(),
+    signal: null,
+  });
+  await tokens.whenLoaded();
+  harness.signInRejected = () => tokens.signInRejected();
+  const reports: string[] = [];
+  tokens.onRefusalEndingCommand((reportedHostId) => {
+    reports.push(reportedHostId);
+  });
+  return { store, otherProcess, lease, tokens, reports };
+}
+
+const rotationsStarted = (): number =>
+  harness.events.filter((event) => event.kind === "rotation-started").length;
+
 describe.each(scenarios)(
   "two overlapping mints: $hostIds host id(s), $hostProcesses host process(es), sign-in $transition",
   (scenario) => {
     it(nameOf(scenario), async () => {
-      const store = createCliCredentialsStore();
-      // A second handle on the same file: another process's save.
-      const otherProcess = createCliCredentialsStore();
-      await store.signIn(credentialsOf(SIGN_IN_A), false, null);
-      credentialsFile.refreshed.push(
-        OURS,
-        "sign-in-recovery-1",
-        "sign-in-recovery-2",
-        "sign-in-recovery-3",
-        "sign-in-recovery-4",
-        "sign-in-recovery-5",
-        "sign-in-recovery-6",
-      );
-      const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
-      const revalidator = createStoreBackedRevalidator({
-        store,
-        lease,
-        signal: null,
-      });
-      const tokens = createCliHostTokens({
-        lease,
-        refresh: () => revalidator.rotateSignIn(),
-        adoptStored: () => revalidator.adoptStoredSignIn(),
-        signal: null,
-      });
-      await tokens.whenLoaded();
-      harness.signInRejected = () => tokens.signInRejected();
-      const reports: string[] = [];
-      tokens.onRefusalEndingCommand((reportedHostId) => {
-        reports.push(reportedHostId);
-      });
+      const { store, otherProcess, lease, tokens, reports } =
+        await openTokens();
       processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
       if (scenario.hostIds === 2)
         processReleasedHosts.observeInstance(otherHostId, FIRST_PROCESS);
@@ -513,26 +537,36 @@ describe.each(scenarios)(
       }
       expect(clearedByOlderToken).toEqual([]);
       if (scenario.hostIds === 2) {
-        // (5) The second host's session is then revoked, and its recovery asks
-        // the process for the refusal to act on. When the process's latest
-        // refusal is one of a sign-in no longer stored, it spends no rotation
-        // for it; and it reports nothing.
-        const latestRefusal = left.at(-1)?.refusalOf ?? null;
-        const stale =
-          latestRefusal !== null &&
-          latestRefusal.signIn !== harness.storedSignIn();
-        const rotationsBefore = harness.events.filter(
-          (event) => event.kind === "rotation-started",
-        ).length;
+        // (5) The second host's session is then revoked. The refusal its
+        // recovery reads is that host's own latest mint outcome, when that is
+        // a refusal; the first host's never steers it. With none of its own,
+        // it refreshes the stored sign-in (the store adopts a newer file
+        // instead of spending); and it reports nothing.
+        const ownLatest = harness.events
+          .filter(
+            (event) => event.kind === "left" && event.hostId === otherHostId,
+          )
+          .at(-1);
+        const holdsOwnRefusal =
+          ownLatest?.kind === "left" && ownLatest.refusalOf !== null;
+        const leaseBehindFile =
+          lease.getBearerToken() !== harness.storedSignIn();
+        const rotationsBefore = rotationsStarted();
         const reportsBefore = reports.length;
         await tokens.streamRecovery(otherHostId).revalidateRefused(REVOKED);
-        const rotationsDuring =
-          harness.events.filter((event) => event.kind === "rotation-started")
-            .length - rotationsBefore;
         expect({
-          rotations: stale ? rotationsDuring : 0,
+          rotations: holdsOwnRefusal
+            ? "its own refusal's"
+            : rotationsStarted() - rotationsBefore,
           reports: reports.length - reportsBefore,
-        }).toEqual({ rotations: 0, reports: 0 });
+        }).toEqual({
+          rotations: holdsOwnRefusal
+            ? "its own refusal's"
+            : leaseBehindFile
+              ? 0
+              : 1,
+          reports: 0,
+        });
       }
 
       tokens.dispose();
@@ -541,3 +575,28 @@ describe.each(scenarios)(
     });
   },
 );
+
+describe("a revoked session's recovery reads the host's own latest mint outcome", () => {
+  it("one host: a refusal on A, a rotation, a token bought on B, then a revoked session: the recovery refreshes", async () => {
+    const { store, otherProcess, tokens } = await openTokens();
+    processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
+    harness.hold = 1;
+    const minting = tokens.mintFresh(hostId, null);
+    await vi.waitFor(() => expect(harness.requests).toHaveLength(1));
+    // A is refused; the recovery rotates to B and buys a token on it.
+    harness.requests[0]?.answer({ kind: "sign-in-rejected" });
+    await expect(minting).resolves.toMatchObject({ kind: "ok" });
+    expect(harness.requests.map((request) => request.signIn)).toEqual([
+      SIGN_IN_A,
+      OURS,
+    ]);
+    const rotationsBefore = rotationsStarted();
+
+    await tokens.streamRecovery(hostId).revalidateRefused(REVOKED);
+
+    expect(rotationsStarted() - rotationsBefore).toBe(1);
+    tokens.dispose();
+    store.dispose();
+    otherProcess.dispose();
+  });
+});
