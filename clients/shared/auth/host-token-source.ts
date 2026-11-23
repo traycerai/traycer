@@ -454,9 +454,22 @@ export function createHostTokenSource(deps: {
   const observedFlights = new Map<string, Promise<OrderedMintAnswer>>();
   // This source's request order, for a mint dependency that draws none.
   let sentOrder = 0;
-  // Per pair, the latest order of a request whose token a kept write stored:
-  // a failure answered for an earlier-started request is outlived by it.
-  const keptOrder = new Map<string, number>();
+  // Per host process and pair, the highest order of that process's own
+  // purchase, with the era it was made in: a failure that process was
+  // answered for an earlier request is outlived by it. Read only in the same
+  // era, so a purchase from before a sign-out outlives nothing after it.
+  const purchasedOrder = new WeakMap<
+    HostMintOwner,
+    Map<string, { readonly era: number; readonly order: number }>
+  >();
+  const outlivedBy = (
+    owner: HostMintOwner,
+    key: string,
+    era: number,
+  ): number | null => {
+    const latest = purchasedOrder.get(owner)?.get(key);
+    return latest !== undefined && latest.era === era ? latest.order : null;
+  };
   // Each pair's minting sign-in (its key, never the token), so a refresh mints
   // once per host; and the sign-in the pair's latest mint was sent with, so a
   // late flight sent with an earlier one never moves it back. Process memory
@@ -667,11 +680,8 @@ export function createHostTokenSource(deps: {
         mayWrite: mayWriteFor(asker),
         replaces,
       });
-      if (written.kind === "kept") {
+      if (written.kind === "kept")
         mintedToken.set(key, { token: outcome.token.token, signIn: mark });
-        if (order !== null && (keptOrder.get(key) ?? 0) < order)
-          keptOrder.set(key, order);
-      }
       refreshMoved(written);
       const answer = answerAfter(userId, hostId, era, written, outcome.token);
       if (answer.kind !== "ok")
@@ -692,6 +702,17 @@ export function createHostTokenSource(deps: {
         mayWriteFor(asker)()
           ? { owner, signIn: mark, order }
           : null;
+      if (
+        purchase !== null &&
+        (outlivedBy(purchase.owner, key, era) ?? 0) < purchase.order
+      ) {
+        let byPair = purchasedOrder.get(purchase.owner);
+        if (byPair === undefined) {
+          byPair = new Map();
+          purchasedOrder.set(purchase.owner, byPair);
+        }
+        byPair.set(key, { era, order: purchase.order });
+      }
       return {
         identified: {
           outcome: answer,
@@ -786,7 +807,7 @@ export function createHostTokenSource(deps: {
       if (
         kind !== "ok" &&
         order !== null &&
-        (keptOrder.get(keyOf(userId, hostId)) ?? 0) > order
+        (outlivedBy(owner, keyOf(userId, hostId), era) ?? 0) > order
       )
         return;
       records.record(owner, userId, era, sentWith, started, kind);
@@ -925,8 +946,6 @@ export function createHostTokenSource(deps: {
         if (key.startsWith(`${userId}\u0000`)) sentLatest.delete(key);
       for (const key of Array.from(mintedToken.keys()))
         if (key.startsWith(`${userId}\u0000`)) mintedToken.delete(key);
-      for (const key of Array.from(keptOrder.keys()))
-        if (key.startsWith(`${userId}\u0000`)) keptOrder.delete(key);
       for (const key of Array.from(storedIn.keys()))
         if (key.startsWith(`${userId}\u0000`)) storedIn.delete(key);
       await loaded;
