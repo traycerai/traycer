@@ -253,23 +253,42 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       // This ask's own: nothing else records under it.
       const mintOwner =
         asked === null ? null : { hostId, observed: asked.observed };
-      const outcome: HostTokenMintOutcome =
-        tokens.era(userId) === expectedEra
-          ? await tokens.obtain(
-              userId,
-              hostId,
-              fresh,
-              mintOwner === null
-                ? { signal: null, owner: null }
-                : {
-                    signal: null,
-                    owner: mintOwner,
-                    // Main's own observation, read at the write.
-                    observedNow: () =>
-                      processReleasedHosts.currentInstance(hostId).observed,
-                  },
-            )
-          : { kind: "superseded" };
+      let outcome: HostTokenMintOutcome;
+      try {
+        outcome =
+          tokens.era(userId) === expectedEra
+            ? await tokens.obtain(
+                userId,
+                hostId,
+                fresh,
+                mintOwner === null
+                  ? { signal: null, owner: null }
+                  : {
+                      signal: null,
+                      owner: mintOwner,
+                      // Main's own observation, read at the write.
+                      observedNow: () =>
+                        processReleasedHosts.currentInstance(hostId).observed,
+                    },
+              )
+            : { kind: "superseded" };
+      } catch (cause) {
+        // A mint main's source failed and recorded as unavailable (a token it
+        // could not save): the window is told what main recorded, so an
+        // earlier refusal stops standing there too. Any other throw rejects.
+        if (
+          mintOwner === null ||
+          tokens.lastFailureOf(userId, mintOwner) !== "unavailable"
+        )
+          throw cause;
+        return {
+          outcome: { kind: "unavailable", detail: "host token not saved" },
+          held: false,
+          recorded: true,
+          signIn: tokens.signInKey(userId),
+          era: tokens.era(userId),
+        };
+      }
       // The window installs a token only if it is the one main holds now.
       const held =
         outcome.kind === "ok" &&
