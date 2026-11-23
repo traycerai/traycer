@@ -552,3 +552,187 @@ describe("an admission resets only the host process that admitted", () => {
     tokens.dispose();
   });
 });
+
+describe("a refusal a later purchase outlived hands its caller the held token (P4)", () => {
+  /** A store over the real file whose `read` number `heldRead` is held after its snapshot until released. */
+  function holdingRead(
+    store: CredentialsMutationStore,
+    heldRead: number,
+  ): { readonly store: CredentialsMutationStore; readonly held: Gate } {
+    const held = gate();
+    let reads = 0;
+    return {
+      held,
+      store: {
+        ...store,
+        read: async () => {
+          reads += 1;
+          const snapshot = await store.read();
+          if (reads === heldRead) {
+            held.markReached();
+            await held.release;
+          }
+          return snapshot;
+        },
+      },
+    };
+  }
+
+  it("answers the held token of the later purchase when the refusal to report was outlived during the final adopting read", async () => {
+    harness.answerFor = (index) => (index === 0 ? "refused" : "ok");
+    credentialsFile.refreshes.push("rejected");
+    const real = createCliCredentialsStore();
+    const rejected = gate();
+    const store: CredentialsMutationStore = {
+      ...real,
+      rotate: async (args) => {
+        const result = await real.rotate(args);
+        rejected.markReached();
+        await rejected.release;
+        return result;
+      },
+    };
+    await store.signIn(credentialsOf(SIGN_IN_A), false, null);
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const revalidator = createStoreBackedRevalidator({
+      store,
+      lease,
+      signal: null,
+    });
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => revalidator.rotateSignIn(),
+      adoptStored: () => revalidator.adoptStoredSignIn(),
+      signal: null,
+    });
+    const asking = tokens.mintFresh(hostId, null);
+    // authn has refused the refresh of A; a later request for the same host process buys a token while the caller waits to report.
+    await rejected.reached;
+    expect((await tokens.mintFresh(hostId, null)).kind).toBe("ok");
+    rejected.open();
+
+    expect(await asking).toMatchObject({ kind: "ok" });
+    tokens.dispose();
+    real.dispose();
+  });
+
+  it("answers the held token of the later purchase when the recovery's own re-check finds its refusal outlived", async () => {
+    harness.answerFor = (index) => (index === 0 ? "refused" : "ok");
+    const real = createCliCredentialsStore();
+    await real.signIn(credentialsOf(SIGN_IN_A), false, null);
+    // Reads 1 and 2 are the tracker's, before the refusal counts; read 3 is the recovery's own.
+    const { store, held } = holdingRead(real, 3);
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const revalidator = createStoreBackedRevalidator({
+      store,
+      lease,
+      signal: null,
+    });
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => revalidator.rotateSignIn(),
+      adoptStored: () => revalidator.adoptStoredSignIn(),
+      signal: null,
+    });
+    const asking = tokens.mintFresh(hostId, null);
+    await held.reached;
+    expect((await tokens.mintFresh(hostId, null)).kind).toBe("ok");
+    held.open();
+
+    expect(await asking).toMatchObject({ kind: "ok" });
+    tokens.dispose();
+    real.dispose();
+  });
+});
+
+describe("a direct recovery sends no retry on a sign-in that did not change (P8)", () => {
+  it("sends none after a rotation answered rotated while the presented sign-in is still the refused one", async () => {
+    harness.answerFor = (index) => (index === 0 ? "refused" : "ok");
+    const tokens = createCliHostTokens({
+      lease: new MutableBearerLease(SIGN_IN_A, USER_ID),
+      // authn accepted a refresh, but nothing installed it: the lease still holds A.
+      refresh: async () => ({
+        outcome: "rotated",
+        installed: SIGN_IN_A,
+        refused: null,
+        accepted: SIGN_IN_B,
+      }),
+      adoptStored: async () => undefined,
+      signal: null,
+    });
+
+    const answered = await tokens.mintFresh(hostId, null);
+
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([SIGN_IN_A]);
+    expect(answered.kind).toBe("failed");
+    tokens.dispose();
+  });
+});
+
+describe("two token instances of one process share one order of purchases for a host process (P3)", () => {
+  it("lets a purchase through the second instance outlive a refusal through the first, by order", async () => {
+    harness.answerFor = (index) => (index === 0 ? "refused" : "ok");
+    const real = createCliCredentialsStore();
+    await real.signIn(credentialsOf(SIGN_IN_A), false, null);
+    // Instance 1's mint on A is refused; it waits in its adopting read.
+    const holding = ((): { store: CredentialsMutationStore; held: Gate } => {
+      const held = gate();
+      let reads = 0;
+      return {
+        held,
+        store: {
+          ...real,
+          read: async () => {
+            reads += 1;
+            const snapshot = await real.read();
+            if (reads === 1) {
+              held.markReached();
+              await held.release;
+            }
+            return snapshot;
+          },
+        },
+      };
+    })();
+    const lease1 = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const revalidator1 = createStoreBackedRevalidator({
+      store: holding.store,
+      lease: lease1,
+      signal: null,
+    });
+    let refreshes = 0;
+    const first = createCliHostTokens({
+      lease: lease1,
+      refresh: async () => {
+        refreshes += 1;
+        return revalidator1.rotateSignIn();
+      },
+      adoptStored: () => revalidator1.adoptStoredSignIn(),
+      signal: null,
+    });
+    const second = createCliHostTokens({
+      lease: new MutableBearerLease(SIGN_IN_A, USER_ID),
+      refresh: async () => ({
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted: null,
+      }),
+      adoptStored: async () => undefined,
+      signal: null,
+    });
+    const asking = first.mintFresh(hostId, null);
+    await holding.held.reached;
+
+    // A later request for the same host process, through the other instance, buys and keeps a token.
+    expect((await second.mintFresh(hostId, null)).kind).toBe("ok");
+    holding.held.open();
+    await asking;
+
+    // The older refusal is outlived for every instance of the process: it earns no recovery.
+    expect(refreshes).toBe(0);
+    first.dispose();
+    second.dispose();
+    real.dispose();
+  });
+});
