@@ -388,12 +388,15 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   );
   // The one judge of a rejected sign-in, for every mint this process makes:
   // a refresh authn refused, or a 401 on the first mint after a refresh it
-  // accepted for this process. A token minted, or a refresh accepted (a
-  // sibling's adopted included), starts it again; an adopted one spends
-  // nothing, so a 401 after it is not yet the judge's.
+  // accepted for this process, sent with the very sign-in that refresh
+  // installed. A token minted, or a refresh accepted (a sibling's adopted
+  // included), starts it again; an adopted one spends nothing, so a 401 after
+  // it is not yet the judge's, nor is a 401 for a sign-in a sibling installed.
   let refreshRefused = false;
   let refreshedSinceLastMint = false;
   let refusedAfterRefresh = false;
+  // The sign-in this process's latest accepted rotation installed.
+  let installedByRefresh: string | null = null;
   // The session or command these tokens belong to has ended: no rotation
   // starts for it. A refresh already entered is left to finish.
   const sessionEnded = (): boolean =>
@@ -403,6 +406,13 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const refusedSignInReplaced = (refused: HostTokenMintOutcome): boolean => {
     const sentWith = mintSentWith.get(refused);
     return sentWith !== undefined && sentWith !== readLeaseBearer(signIn.lease);
+  };
+  // Whether a refused mint was sent with the sign-in this process's own
+  // rotation installed, and so refused after that refresh. A refusal with no
+  // recorded sign-in is judged as today's, as `refusedSignInReplaced` reads it.
+  const refusedOurRefresh = (refused: HostTokenMintOutcome): boolean => {
+    const sentWith = mintSentWith.get(refused);
+    return sentWith === undefined || sentWith === installedByRefresh;
   };
   // The sign-in the latest refused mint was sent with, for the transports'
   // recovery, which is asked to refresh with no outcome in hand.
@@ -415,6 +425,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       refreshRefused = false;
       refusedAfterRefresh = false;
       refreshedSinceLastMint = outcome === "rotated";
+      installedByRefresh =
+        outcome === "rotated" ? readLeaseBearer(signIn.lease) : null;
     }
     return outcome;
   };
@@ -466,7 +478,11 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
           refusedSignInReplaced(outcome)
         )
           return outcome;
-        if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
+        if (
+          outcome.kind === "sign-in-rejected" &&
+          refreshedSinceLastMint &&
+          refusedOurRefresh(outcome)
+        )
           refusedAfterRefresh = true;
         if (outcome.kind === "ok") refusedAfterRefresh = false;
         refreshedSinceLastMint = false;
@@ -600,11 +616,14 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     });
     if (second.kind !== "sign-in-rejected") return answer(hostId, second);
     // The retry is judged by its own sign-in: one replaced while it was
-    // pending is no second refusal of the stored one, and is asked again.
+    // pending is no second refusal of the stored one, and is asked again; one
+    // a sibling installed is that sign-in's first refusal, and earns its own
+    // refresh. Only a refusal of the sign-in this rotation installed is final.
     if (
       refreshed === "adopted" ||
       refreshed === "replaced" ||
-      refusedSignInReplaced(second)
+      refusedSignInReplaced(second) ||
+      !refusedOurRefresh(second)
     )
       return recoverRefusedSignIn(owner, second, startedAt, signal);
     report(owner, second, startedAt);
