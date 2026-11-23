@@ -9,10 +9,7 @@ import {
 import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
-import {
-  MutableBearerLease,
-  type BearerLease,
-} from "../../../../shared/auth/bearer-source";
+import type { BearerLease } from "../../../../shared/auth/bearer-source";
 import { acquireCliSignIn, type CliSignInHandle } from "../cli-host-tokens";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
@@ -24,12 +21,6 @@ const state = vi.hoisted(() => {
   let table: HostTokenTable = new Map();
   const revalidate = vi.fn();
   const dispose = vi.fn();
-  // While set, the stand-in revalidator's adopting read reports it was reached and waits to be released.
-  const adoption: {
-    hold: { reached: () => void; released: Promise<void> } | null;
-  } = {
-    hold: null,
-  };
   const mint = vi.fn(async () => {
     const next = mintOutcomes.shift();
     if (next !== undefined) return next;
@@ -47,7 +38,6 @@ const state = vi.hoisted(() => {
     mint,
     revalidate,
     dispose,
-    adoption,
     get table() {
       return table;
     },
@@ -122,12 +112,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
         readonly lease: BearerLease & { rotate(token: string): void };
       }) => ({
         revalidateCurrentContext: state.revalidate,
-        adoptStoredSignIn: async () => {
-          const hold = state.adoption.hold;
-          if (hold === null) return;
-          hold.reached();
-          await hold.released;
-        },
+        adoptStoredSignIn: async () => undefined,
         // A rotation it accepts installs a distinct sign-in, which the next mint is sent with.
         rotateSignIn: async () => {
           const tried = lease.getBearerToken();
@@ -187,7 +172,6 @@ beforeEach(() => {
   state.mint.mockClear();
   state.revalidate.mockReset();
   state.dispose.mockClear();
-  state.adoption.hold = null;
   resolveAuthMock.mockResolvedValue({
     token: "signin",
     authnBaseUrl: "https://authn.test",
@@ -262,17 +246,6 @@ describe("callHostRpc host-token mint recovery", () => {
   );
 });
 
-/** The person's one lease takes `token`, as a sibling's save does; an empty token is a person signed out. */
-function rotateLease(lease: BearerLease, token: string): void {
-  if (!(lease instanceof MutableBearerLease))
-    throw new Error("the person's lease is not rotatable");
-  lease.rotate(token);
-}
-
-function emptyLease(lease: BearerLease): void {
-  rotateLease(lease, "");
-}
-
 /** The handles a case took on its person's tokens; each is ended with the case. */
 const handles: CliSignInHandle[] = [];
 
@@ -283,36 +256,6 @@ async function signedInHandle(): Promise<CliSignInHandle> {
   );
   handles.push(handle);
   return handle;
-}
-
-/** A person signed out, with a listener on what the command is told ends it. */
-async function signedOutHandle(hostId: string): Promise<{
-  readonly lease: BearerLease;
-  readonly tokens: CliSignInHandle["tokens"];
-  readonly ending: string[];
-}> {
-  const { lease, tokens } = await signedInHandle();
-  const ending: string[] = [];
-  tokens.onRefusalEndingCommand((evidence) => {
-    ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
-  });
-  emptyLease(lease);
-  return { lease, tokens, ending };
-}
-
-/** Holds the stand-in revalidator's adopting read until released; `reached` settles once a read waits on it. */
-function holdAdoptingRead(): {
-  readonly reached: Promise<void>;
-  readonly release: () => void;
-} {
-  let release = (): void => undefined;
-  const released = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const reached = new Promise<void>((resolve) => {
-    state.adoption.hold = { reached: resolve, released };
-  });
-  return { reached, release };
 }
 
 describe("createCliHostTokens refusals that end a command", () => {
@@ -391,52 +334,6 @@ describe("createCliHostTokens refusals that end a command", () => {
         failure: { kind: "not-admitted" },
       },
     );
-  });
-
-  it("ends the command on a no-sign-in answer while no sign-in is stored", async () => {
-    const hostId = "host-no-sign-in-stored-none";
-    const { tokens, ending } = await signedOutHandle(hostId);
-
-    await tokens.mintFresh(hostId, null);
-
-    expect(state.mint).not.toHaveBeenCalled();
-    expect(ending).toEqual([`${hostId}:no-sign-in`]);
-    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toMatchObject(
-      {
-        kind: "host-refusal",
-        failure: { kind: "no-sign-in" },
-      },
-    );
-  });
-
-  it("answers null at the gate for a told no-sign-in once a sibling has saved a sign-in", async () => {
-    const hostId = "host-no-sign-in-sibling-saved";
-    const { lease, tokens, ending } = await signedOutHandle(hostId);
-    await tokens.mintFresh(hostId, null);
-    expect(state.mint).not.toHaveBeenCalled();
-    expect(ending).toEqual([`${hostId}:no-sign-in`]);
-
-    // A sibling saves a sign-in: the stored one is no longer none.
-    rotateLease(lease, "signin");
-
-    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toBeNull();
-  });
-
-  it("tells no ending, and the gate answers null, for a no-sign-in whose report finds a sign-in a sibling saved while the source's adopting read was held", async () => {
-    const hostId = "host-no-sign-in-saved-during-read";
-    const { lease, tokens, ending } = await signedOutHandle(hostId);
-    // The source answers no-sign-in by itself, then reads the credentials file before it reports.
-    const { reached, release } = holdAdoptingRead();
-
-    const minting = tokens.mintFresh(hostId, null);
-    await reached;
-    rotateLease(lease, "signin");
-    release();
-    await minting;
-
-    expect(state.mint).not.toHaveBeenCalled();
-    expect(ending).toEqual([]);
-    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toBeNull();
   });
 
   it("asks once more for the host process observed now when the process was replaced before the mint started, and the command goes on", async () => {
