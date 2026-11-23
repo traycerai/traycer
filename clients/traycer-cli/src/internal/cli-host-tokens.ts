@@ -9,6 +9,7 @@ import type {
   RefusalAwareAuthRevalidator,
   RevalidateOutcome,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
+import { drawHostMintOrder } from "@traycer-clients/shared/auth/host-mint-order";
 import { createHostTokenFilePersistence } from "@traycer-clients/shared/auth/host-token-file";
 import {
   heldWhileAuthnUnreachable,
@@ -101,9 +102,15 @@ function processMintFlights(instance: HostInstance): Map<string, MintFlight> {
   return flights;
 }
 
-// One order for every authn mint request this process sends, drawn as it is
-// sent: a refusal, a purchase and the source's kept writes are compared on it.
-let mintRequestsSent = 0;
+/**
+ * The request order of the newest purchase for each host process: a token a
+ * live asker's own write kept, for a current owner. Kept for the process, so
+ * every token instance reads one watermark. It only moves forward, and an
+ * answer to an earlier request is outlived by it.
+ */
+const purchaseOrderByProcess = new WeakMap<HostInstance, number>();
+const outlived = (owner: HostInstance, order: number): boolean =>
+  (purchaseOrderByProcess.get(owner) ?? 0) > order;
 
 /**
  * What this process has learned of each of a person's sign-ins, by sign-in
@@ -192,7 +199,7 @@ function sharedMint(
     const started: MintFlight = {
       controller,
       askers: 0,
-      order: ++mintRequestsSent,
+      order: drawHostMintOrder(),
       answer: mintHostTokenViaHttp(
         config.authnBaseUrl,
         hostId,
@@ -297,18 +304,24 @@ function isHostRefusal(
 
 /** The CLI's recovery always judges a spent refusal by its sign-in's facts. */
 export type JudgedSignInRecovery = SignInRecovery & {
-  readonly signInRejectedFor: (refusal: SignInRefusal | null) => boolean;
+  readonly signInRejectedFor: (
+    refusal: SignInRefusal | null,
+  ) => Promise<boolean>;
 };
 
 /**
- * A recovery whose mint was lost to a host process replacement, answered as
- * every caller but the monitor's lap count answers it: like an unreachable
- * authn.
+ * The CLI's one mapping of the lease's two internal values for every caller
+ * but the monitor: a recovery lost to a host process replacement answers as
+ * an unreachable authn does, and a sign-in verdict as any rejection does.
  */
 export const replacedAsNetworkError = (
   outcome: HostTokenRecoveryOutcome,
 ): RevalidateOutcome =>
-  outcome === "process-replaced" ? "network-error" : outcome;
+  outcome === "process-replaced"
+    ? "network-error"
+    : outcome === "sign-in-rejected"
+      ? "rejected"
+      : outcome;
 
 export type CliHostBearer =
   | { readonly kind: "ok"; readonly bearer: OpenFrameBearerSource }
@@ -374,10 +387,13 @@ export interface CliHostTokens {
   /** The `not-admitted` the command went on past, while no open was admitted after its mint started. */
   deferredNotAdmitted(hostId: string): CliHostTokenFailure | null;
   /**
-   * Authn refused the refresh, or a mint again right after an accepted refresh. Until
-   * then a refused mint is the sign-in recovering.
+   * Whether the sign-in stored now (the credentials file is read first) is
+   * rejected: its refresh was refused, or a mint refused it after this
+   * process's own refresh installed it with nothing bought on it since. With
+   * a refusal, only while the refused sign-in is the stored one. The one read
+   * of this verdict outside the judge.
    */
-  signInRejected(): boolean;
+  signInRejectedNow(refusal: SignInRefusal | null): Promise<boolean>;
   /**
    * The one sign-in recovery for every refusal these tokens recover: the
    * host-only token's, and a released host's refusal of the sign-in.
@@ -440,7 +456,8 @@ type SignInRefused = Extract<
 interface AskedAt {
   readonly owner: HostInstance;
   readonly startedAt: number;
-  readonly order: number;
+  /** The order of the request behind the answer; `null` when none was sent. */
+  readonly order: number | null;
 }
 type Asked = AskedAt &
   (
@@ -468,18 +485,12 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     {
       readonly failure: CliHostTokenFailure;
       readonly startedAt: number;
-      readonly order: number;
+      readonly order: number | null;
     }
   >();
   const admittedSince = (owner: HostInstance, startedAt: number): boolean =>
     (admittedOpen.get(owner) ?? 0) > 0 ||
     (admittedAt.get(owner) ?? 0) > startedAt;
-  // The request order of the newest purchase for each host process: a token
-  // this process's own write kept, for a current owner and a live asker. It
-  // only moves forward, and an answer to an earlier request is outlived by it.
-  const mintedAt = new WeakMap<HostInstance, number>();
-  const outlived = (owner: HostInstance, order: number): boolean =>
-    (mintedAt.get(owner) ?? 0) > order;
   // Each host process's latest counting refusal, by sign-in key and request
   // order: what its door's revocation, with no refusal in hand, recovers.
   const held = new WeakMap<HostInstance, SignInRefusal>();
@@ -489,7 +500,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     owner: HostInstance,
     failure: CliHostTokenFailure,
     startedAt: number,
-    order: number,
+    order: number | null,
   ): boolean => {
     if (failure.kind !== "not-admitted") return true;
     if (admittedSince(owner, startedAt)) return false;
@@ -504,16 +515,17 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   };
   // A mint's refusal concerns the host process it started for: once another
   // is observed, or a purchase for it on a later request, it ends nothing and
-  // is deferred for nothing.
+  // is deferred for nothing. An answer with no request behind it has no order
+  // to be outlived.
   const report = (
     owner: HostInstance,
     failure: CliHostTokenFailure,
     startedAt: number,
-    order: number,
+    order: number | null,
   ): void => {
     if (
       !hosts.isCurrent(owner) ||
-      outlived(owner, order) ||
+      (order !== null && outlived(owner, order)) ||
       !endsCommand(owner, failure, startedAt, order)
     )
       return;
@@ -568,7 +580,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     signIn: storedKey(),
     process: hosts.currentInstance(hostId),
     bearer: stored.current(userId, hostId)?.token ?? null,
-    minted: mintedAt.get(owner) ?? 0,
+    minted: purchaseOrderByProcess.get(owner) ?? 0,
   });
   const advanced = (before: Progress, after: Progress): boolean =>
     before.signIn !== after.signIn ||
@@ -628,8 +640,6 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     for (;;) {
       const before = progressOf(owner, hostId);
       const startedAt = nextEvent();
-      // Every request sent after this point is ordered after it.
-      const askedAt = mintRequestsSent;
       const answered = await askFor(owner, freshAsk);
       const { outcome } = answered;
       const settled = (settledOutcome: HostTokenMintOutcome): Asked => ({
@@ -637,7 +647,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         refusal: null,
         owner,
         startedAt,
-        order: askedAt,
+        order: answered.order,
       });
       // A token for a process since retired is never progress, nor the
       // replacement's bearer: it answers as a replaced process does, and the
@@ -667,14 +677,15 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         // bought, for this owner; the owner is current (checked above, with
         // no await since) and the asker live.
         if (purchase !== null && purchase.owner === owner) {
-          if ((mintedAt.get(owner) ?? 0) < purchase.order)
-            mintedAt.set(owner, purchase.order);
+          if ((purchaseOrderByProcess.get(owner) ?? 0) < purchase.order)
+            purchaseOrderByProcess.set(owner, purchase.order);
           if (purchase.signIn === storedKey()) held.delete(owner);
         }
         return settled(outcome);
       }
       if (outcome.kind !== "sign-in-rejected") {
-        if (isHostRefusal(outcome)) report(owner, outcome, startedAt, askedAt);
+        if (isHostRefusal(outcome))
+          report(owner, outcome, startedAt, answered.order);
         return settled(outcome);
       }
       // The stored sign-in is the credentials file's: read it first,
@@ -702,7 +713,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
           refusal,
           owner,
           startedAt,
-          order: order ?? askedAt,
+          order,
         };
       }
       // A refusal that does not count records, judges, refreshes and
@@ -768,7 +779,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         refusal: null,
         owner: owner ?? hosts.currentInstance(hostId),
         startedAt: nextEvent(),
-        order: mintRequestsSent,
+        order: null,
       }
     );
   };
@@ -803,9 +814,19 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       );
     },
   };
-  const signInRejected = (): boolean => {
+  // The one read of "is the sign-in rejected" for anything outside the judge:
+  // the stored sign-in is the file's, so the file is read first. With a
+  // refusal, only while its sign-in is the stored one.
+  const signInRejectedNow = async (
+    refusal: SignInRefusal | null,
+  ): Promise<boolean> => {
+    await signIn.adoptStored();
     const current = storedKey();
-    return current !== null && rejectedFor(facts, current);
+    return (
+      current !== null &&
+      (refusal === null || refusal.signIn === current) &&
+      rejectedFor(facts, current)
+    );
   };
   // The one sign-in recovery, for every refusal this process recovers. Its
   // owner and refusal are its caller's, never captured. What is stored, which
@@ -854,15 +875,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   };
   const signInRecovery: JudgedSignInRecovery = {
     revalidateForReconnect: recoverSignIn,
-    // Read at the lease's gate, after its last await.
-    signInRejectedFor: (refusal) => {
-      const current = storedKey();
-      return (
-        current !== null &&
-        (refusal === null || refusal.signIn === current) &&
-        rejectedFor(facts, current)
-      );
-    },
+    signInRejectedFor: signInRejectedNow,
   };
   const bearerOf = (hostId: string): OpenFrameBearerSource => ({
     identity: { userId },
@@ -927,27 +940,30 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   };
   const streamBearers = new Map<string, BearerSourceProvider>();
 
-  // A counting refusal reported as final, only if it still is after an
-  // adopting read: its sign-in still the stored one, its process current, its
-  // asker live, and the sign-in rejected. Otherwise nothing is reported, and
-  // the mint is asked again on the stored sign-in for the current process.
+  // A counting refusal is a terminal effect, reported and handed to its
+  // caller, only if it still is after the verdict read: its sign-in still the
+  // stored one and rejected, its process current, no later purchase for that
+  // process outliving it, and its asker live. Otherwise there is no terminal
+  // effect at all: an outlived refusal is answered by the later purchase's
+  // held token, and any other is asked again on the stored sign-in for the
+  // current process.
   const reportRejected = async (
     refused: RefusedAsk,
     signal: AbortSignal | null,
   ): Promise<CliHostBearer> => {
     const { owner, refusal, outcome } = refused;
-    await signIn.adoptStored();
+    const rejectedNow = await signInRejectedNow(refusal);
     const exit = endedExit(signal);
     if (exit !== null) return answer(owner.hostId, abandonedMint(exit));
-    if (
-      refusal.signIn === storedKey() &&
-      hosts.isCurrent(owner) &&
-      rejectedFor(facts, refusal.signIn)
-    ) {
+    const current = hosts.isCurrent(owner);
+    const overtaken = refusal.order !== null && outlived(owner, refusal.order);
+    if (rejectedNow && current && !overtaken) {
       report(owner, outcome, refused.startedAt, refused.order);
       return answer(owner.hostId, outcome);
     }
-    return obtain(hosts.currentInstance(owner.hostId), true, signal);
+    return current && overtaken
+      ? obtain(owner, false, signal)
+      : obtain(hosts.currentInstance(owner.hostId), true, signal);
   };
 
   // One recovery, then one more ask. A counting refusal of a final sign-in,
@@ -971,6 +987,15 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       refusal,
       () => signal?.aborted !== true,
     );
+    // Declined because a later purchase for this process outlived the
+    // refusal: that purchase's held token answers.
+    if (
+      recovered === "network-error" &&
+      refusal.order !== null &&
+      outlived(owner, refusal.order) &&
+      hosts.isCurrent(owner)
+    )
+      return obtain(owner, false, signal);
     // Its one mapping: a recovery its owner's replacement declined is as
     // transient here as an unreachable refresh.
     if (recovered === "network-error" || recovered === "process-replaced")
@@ -979,6 +1004,13 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         detail: "sign-in refresh unavailable",
       });
     if (recovered === "rejected") return reportRejected(refused, signal);
+    // "rotated" or "adopted": the retry is sent only once the stored sign-in
+    // is shown to have moved past the refused one. Unmoved after one more
+    // read, nothing is sent and the held token or a transient answers.
+    if (storedKey() === refusal.signIn) {
+      await signIn.adoptStored();
+      if (storedKey() === refusal.signIn) return answer(hostId, unmoved(hostId));
+    }
     const retried = await askTracked(userId, hostId, true, signal, owner);
     if (retried.refusal === null) {
       if (retried.outcome.kind === "no-sign-in")
@@ -1099,7 +1131,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       }
       return provider;
     },
-    signInRejected,
+    signInRejectedNow,
     signInRecovery,
     refreshSignIn,
     adoptStoredSignIn: () => signIn.adoptStored(),
@@ -1122,7 +1154,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       const waiting = deferred.get(owner);
       return waiting === undefined ||
         admittedSince(owner, waiting.startedAt) ||
-        outlived(owner, waiting.order)
+        (waiting.order !== null && outlived(owner, waiting.order))
         ? null
         : waiting.failure;
     },

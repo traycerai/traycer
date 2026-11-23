@@ -340,11 +340,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           watching,
         };
       },
-      // Judged after an adopting read: the stored sign-in is the file's.
-      async () => {
-        await credential.adoptStoredSignIn();
-        return credential.signInRejected();
-      },
+      () => credential.signInRejectedNow(),
       (listener) =>
         credential.onRefusalEndingCommand((hostId, failure) => {
           if (endpoint?.hostId === hostId)
@@ -386,9 +382,8 @@ interface MonitorCredential {
    * its mint began before now.
    */
   readonly admitted: (instance: HostInstance) => DoorAdmissionRelease;
-  readonly signInRejected: () => boolean;
-  /** See `CliHostTokens.adoptStoredSignIn`. */
-  readonly adoptStoredSignIn: () => Promise<void>;
+  /** See `CliHostTokens.signInRejectedNow`: the file is read first. */
+  readonly signInRejectedNow: () => Promise<boolean>;
   /** See `CliHostTokens.onRefusalEndingCommand`. */
   readonly onRefusalEndingCommand: (
     listener: CliMintRefusalListener,
@@ -462,8 +457,7 @@ async function signInMonitorCredential(
     recover: (hostId, details) =>
       hostTokens.streamRecovery(hostId).revalidateRefused(details, () => true),
     admitted: (instance) => hostTokens.admitted(instance),
-    signInRejected: () => hostTokens.signInRejected(),
-    adoptStoredSignIn: () => hostTokens.adoptStoredSignIn(),
+    signInRejectedNow: () => hostTokens.signInRejectedNow(null),
     onRefusalEndingCommand: (listener) =>
       hostTokens.onRefusalEndingCommand(listener),
     releasedSignOn: cliReleasedSignOn(lease, hostTokens),
@@ -536,8 +530,7 @@ function capabilityMonitorCredential(
     bearer: () => capability.streamBearer,
     recover: () => capability.streamRecovery(),
     admitted: () => () => undefined,
-    signInRejected: () => false,
-    adoptStoredSignIn: () => Promise.resolve(),
+    signInRejectedNow: () => Promise.resolve(false),
     onRefusalEndingCommand: () => () => undefined,
     hostCredentialMint: null,
     releasedSignOn: null,
@@ -557,11 +550,12 @@ type InboxRecovery = (
  * process, at the endpoint it watches), and the host id the monitor watches
  * now. `null` for a refusal no door heard.
  */
-type InboxRefusalOf = (details: FatalErrorDetails) => {
+interface InboxRefusal {
   readonly hostId: string;
   readonly current: boolean;
   readonly watching: string | null;
-} | null;
+}
+type InboxRefusalOf = (details: FatalErrorDetails) => InboxRefusal | null;
 
 type InboxMintRefusals = (
   listener: (failure: CliHostTokenFailure, tookReleasedWay: boolean) => void,
@@ -584,7 +578,7 @@ const SESSION_EXPIRED_LINE =
  *   - `network-error` → transient; keep the bearer and re-subscribe after a
  *                       delay (don't kill a long-running monitor on a flaky link);
  *   - `rejected`      → terminal, with the door's line: sign-in advice only
- *                       when `signInRejected()` says this machine is signed
+ *                       when `signInRejectedNow` says this machine is signed
  *                       out in fact.
  * Once the host process that refused has been replaced, or the monitor has
  * moved to another host, only a `rotated` step still counts (per host id) and
@@ -810,21 +804,21 @@ function runInboxSubscription(
       });
       // The count is read only for the host id watched now: a verdict from a
       // host id the monitor has moved off counts nothing and starts the new
-      // host id's count.
-      const moved = (): boolean => {
-        if (refusal === null || refusal.watching === refusal.hostId)
-          return false;
+      // host id's count. Each takes the refusal as read at its decision, so
+      // nothing read before an await decides after it.
+      const moved = (seen: InboxRefusal | null): boolean => {
+        if (seen === null || seen.watching === seen.hostId) return false;
         authRefreshCount = 0;
-        countedHostId = refusal.watching;
+        countedHostId = seen.watching;
         subscribeAfterDelay();
         return true;
       };
       // One step of this host id's count; `true` when it reached the bound
       // and ended the monitor.
-      const countedToBound = (): boolean => {
-        if (refusal !== null && refusal.hostId !== countedHostId) {
+      const countedToBound = (seen: InboxRefusal | null): boolean => {
+        if (seen !== null && seen.hostId !== countedHostId) {
           authRefreshCount = 0;
-          countedHostId = refusal.hostId;
+          countedHostId = seen.hostId;
         }
         authRefreshCount += 1;
         if (authRefreshCount <= MAX_CONSECUTIVE_AUTH_REFRESHES) return false;
@@ -844,7 +838,7 @@ function runInboxSubscription(
         return true;
       };
       if (outcome === "rotated") {
-        if (moved() || countedToBound()) return;
+        if (moved(refusal) || countedToBound(refusal)) return;
         // The bearer genuinely rotated on every attempt yet the host
         // still rejected the freshly-minted token. The `/stream` fatal
         // frame only carries `UNAUTHORIZED` / `INCOMPATIBLE` (see
@@ -872,7 +866,7 @@ function runInboxSubscription(
       // and the replacement is asked after the ordinary delay. An outage
       // answers "network-error" below and counts nothing.
       if (outcome === "process-replaced") {
-        if (moved() || countedToBound()) return;
+        if (moved(refusal) || countedToBound(refusal)) return;
         subscribeAfterDelay();
         return;
       }
@@ -887,17 +881,37 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
-      // The exit is judged after the adopting read, against the process and
+      // The exit is judged after the verdict read, against the process and
       // host watched then: a sign-in saved elsewhere meanwhile is not signed
       // out, and a process replaced meanwhile is not the one that refused.
+      // Nothing read before the await decides after it.
       const signedOut = await signedOutNow();
       if (settled) return;
       const refusalNow = refusalOf(details);
       const leftNow = refusalNow !== null && !refusalNow.current;
+      // A sign-in verdict its own read withdrew (another sign-in was saved,
+      // or a purchase on it landed) is no terminal effect: the monitor redials
+      // on the live sign-in after the ordinary delay, as after a transient,
+      // and counts nothing.
+      if (outcome === "sign-in-rejected" && !signedOut) {
+        if (moved(refusalNow)) return;
+        logger.debug("Monitor sign-in verdict withdrawn; retry scheduled", {
+          environment: config.environment,
+          retryDelayMs: AUTH_RETRY_DELAY_MS,
+          agentId: target.agentId,
+          epicId: target.epicId,
+        });
+        retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
+        return;
+      }
       if (leftNow && !signedOut) {
         // A replaced process's host-tied rejection ends nothing by itself, but
         // counts one step toward the same bound.
-        if (outcome === "rejected" && (moved() || countedToBound())) return;
+        if (
+          outcome === "rejected" &&
+          (moved(refusalNow) || countedToBound(refusalNow))
+        )
+          return;
         subscribeAfterDelay();
         return;
       }
