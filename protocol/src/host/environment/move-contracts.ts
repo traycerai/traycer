@@ -725,6 +725,37 @@ export const environmentMoveStopPreviewUpgradeV12ToV13 = defineUpgradePath<
 });
 
 /**
+ * The digest identifies the sheet that Confirm would apply. If a
+ * keep-personal preview returns `personalProfiles: null`, it shows the plain
+ * sheet and carries the plain Stop's digest. Older previews upgrade to null.
+ */
+export const environmentMoveStopPreviewResponseSchemaV14 = lazySchema(() =>
+  environmentMoveStopPreviewResponseSchemaV13.extend({
+    sheetDigest: sha256HexSchema.nullable(),
+  }),
+);
+export type EnvironmentMoveStopPreviewResponseV14 = z.infer<
+  typeof environmentMoveStopPreviewResponseSchemaV14
+>;
+
+export const environmentMoveStopPreviewV14 = defineRpcContract({
+  method: "environment.move.stopPreview",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: environmentMoveStopPreviewRequestSchemaV12,
+  responseSchema: environmentMoveStopPreviewResponseSchemaV14,
+});
+
+export const environmentMoveStopPreviewUpgradeV13ToV14 = defineUpgradePath<
+  typeof environmentMoveStopPreviewV13,
+  typeof environmentMoveStopPreviewV14
+>({
+  from: environmentMoveStopPreviewV13.schemaVersion,
+  to: environmentMoveStopPreviewV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, sheetDigest: null }),
+});
+
+/**
  * One `needsChoice` row's answer, by the row's `kind` and `key`: a key alone
  * does not name a row, since a variable and a skill can share one.
  */
@@ -907,5 +938,46 @@ export const environmentMoveStopUpgradeV11ToV12 = defineUpgradePath<
         : choice,
     ),
   }),
+  upgradeResponse: (response) => response,
+});
+
+const environmentMoveStopRequestSchemaV13 = lazySchema(() =>
+  environmentMoveStopRequestSchemaV12.extend({
+    sheetDigest: sha256HexSchema.nullable().default(null),
+  }),
+);
+export type EnvironmentMoveStopRequestV13 = z.infer<
+  typeof environmentMoveStopRequestSchemaV13
+>;
+
+const environmentMoveStopResponseSchemaV13 = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    environmentMoveStopResponseSchemaV11,
+    z.object({
+      outcome: z.literal("sheet_changed"),
+      preview: environmentMoveStopPreviewResponseSchemaV14.extend({
+        sheetDigest: sha256HexSchema,
+      }),
+    }),
+  ]),
+);
+export type EnvironmentMoveStopResponseV13 = z.infer<
+  typeof environmentMoveStopResponseSchemaV13
+>;
+
+export const environmentMoveStopV13 = defineRpcContract({
+  method: "environment.move.stop",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: environmentMoveStopRequestSchemaV13,
+  responseSchema: environmentMoveStopResponseSchemaV13,
+});
+
+export const environmentMoveStopUpgradeV12ToV13 = defineUpgradePath<
+  typeof environmentMoveStopV12,
+  typeof environmentMoveStopV13
+>({
+  from: environmentMoveStopV12.schemaVersion,
+  to: environmentMoveStopV13.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, sheetDigest: null }),
   upgradeResponse: (response) => response,
 });

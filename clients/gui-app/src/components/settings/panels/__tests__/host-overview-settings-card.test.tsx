@@ -25,7 +25,7 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import { environmentPreviewLocalFactsRequestSchema } from "@traycer/protocol/host/environment/contracts";
 import type {
-  EnvironmentMoveStopPreviewResponseV11,
+  EnvironmentMoveStopPreviewResponseV14,
   EnvironmentMoveStopRequestV12,
 } from "@traycer/protocol/host/environment/move-contracts";
 import type {
@@ -1304,6 +1304,7 @@ describe("<HostOverviewSettingsCard />", () => {
         "environment.move.stopPreview": () => ({
           managed: [],
           needsChoice: [],
+          sheetDigest: null,
         }),
       },
     );
@@ -1422,9 +1423,9 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       origin: "depended_on" as const,
       usedBy: [],
     };
-    const previews: EnvironmentMoveStopPreviewResponseV11[] = [
-      { managed: [], needsChoice: [logLevel] },
-      { managed: [], needsChoice: [logLevel, editor] },
+    const previews: EnvironmentMoveStopPreviewResponseV14[] = [
+      { managed: [], needsChoice: [logLevel], sheetDigest: null },
+      { managed: [], needsChoice: [logLevel, editor], sheetDigest: null },
     ];
     let previewReads = 0;
     const sent: EnvironmentMoveStopRequestV12[] = [];
@@ -1468,6 +1469,7 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
     expect(sent[1]).toEqual({
       profileMode: null,
       profileSignIns: [],
+      sheetDigest: null,
       choices: [
         { kind: "variable", key: "LOG_LEVEL", choice: "keep_locally" },
         {
