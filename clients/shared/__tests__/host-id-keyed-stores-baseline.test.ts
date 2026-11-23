@@ -573,8 +573,11 @@ describe("host-id-keyed stores of host and mint answers", () => {
       const text = readFileSync(file, "utf8");
       for (const name of constructors) {
         const call = new RegExp(`\\b${name}\\s*\\(`);
-        const defines = new RegExp(`function\\s+${name}\\b`);
-        if (call.test(text) && !defines.test(text)) {
+        const implementationOnly = text.replace(
+          new RegExp(`(function\\s+)${name}(\\s*\\()`),
+          "$1definition$2",
+        );
+        if (call.test(implementationOnly)) {
           callers.push(`${relative(CLIENTS_ROOT, file)}: ${name}`);
         }
       }

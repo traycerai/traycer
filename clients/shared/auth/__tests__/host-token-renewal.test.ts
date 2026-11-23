@@ -17,6 +17,7 @@ import {
   createMemoryHostTokenPersistence,
   type HostTokenRenewal,
   type HostTokenMintOutcome,
+  type HostTokenPersistence,
   type HostTokenSource,
 } from "../host-token-source";
 import { mintHostTokenViaHttp } from "../../host-transport/remote/grant-client";
@@ -1252,6 +1253,7 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
 
   interface Rig {
     readonly source: HostTokenSource;
+    readonly persistence: HostTokenPersistence;
     readonly mints: Array<{
       readonly answer: (outcome: HostTokenMintOutcome) => void;
     }>;
@@ -1278,7 +1280,7 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
       signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
       now: () => 1_000,
     });
-    return { source, mints };
+    return { source, mints, persistence: inner };
   }
 
   const NO_FILE_WRITER = { onWrite: () => null };
@@ -1312,6 +1314,12 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
   it("does not overwrite a later-issued token another process wrote to the file between the mint and its write, and answers with the one held", async () => {
     let writeForeignToken: () => Promise<void> | null = () => null;
     const rig = sourceOverSharedFile({ onWrite: () => writeForeignToken() });
+    const competingSource = createHostTokenSource({
+      persistence: rig.persistence,
+      mint: () => Promise.resolve({ kind: "unavailable", detail: "unused" }),
+      signIn: () => SIGN_IN_BEFORE,
+      now: () => 1_000,
+    });
     const asking = rig.source.obtain(USER_ID, HOST_ID, true, {
       signal: null,
       owner: null,
@@ -1320,14 +1328,20 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
     // Another process wrote a later-issued token to the shared file.
     writeForeignToken = () => {
       writeForeignToken = () => null;
-      return rig.source
-        .adopt(USER_ID, HOST_ID, LATER, rig.source.era(USER_ID), () => true)
-        .then(() => undefined);
+      return competingSource
+        .adopt(USER_ID, HOST_ID, LATER, competingSource.era(USER_ID), () => true)
+        .then(() => {
+          expect(rig.source.current(USER_ID, HOST_ID)).toBeNull();
+          return undefined;
+        });
     };
     rig.mints[0].answer({ kind: "ok", token: EARLIER });
 
     await expect(asking).resolves.toEqual({ kind: "ok", token: LATER });
     expect(rig.source.current(USER_ID, HOST_ID)).toEqual(LATER);
+    expect((await rig.persistence.load()).get(USER_ID)?.get(HOST_ID)).toEqual(
+      LATER,
+    );
   });
 
   it("replaces the held token with a fresh mint's token issued a second earlier, once the ask was sent to replace it", async () => {

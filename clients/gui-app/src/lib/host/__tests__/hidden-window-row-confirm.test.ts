@@ -211,7 +211,7 @@ describe("a window's remote sign-in with the real host directory", () => {
   beforeEach(() => {
     processReleasedHosts.forgetAll();
     useAuthStore.setState({ status: "signed-in" });
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
   });
 
   afterEach(() => {

@@ -35,7 +35,6 @@ const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const HOST_TOKEN = "host-only-token";
 const SIGN_IN = "person-sign-in";
 const PATH = "/wt/a";
-const WAIT = { timeout: 10_000, interval: 20 };
 const NEVER_REACHED_HOST_REASON =
   "Couldn't reach the host to start the deletion.";
 const emptyRpcRegistry = defineVersionedRpcRegistry({});
@@ -82,7 +81,7 @@ function hostThatParksTheSession(relay: FakeRelayHost): void {
 }
 
 function startRelayCleanup(relay: FakeRelayHost): {
-  readonly outcome: { current: WorktreeCleanupOutcome | null };
+  readonly settled: Promise<WorktreeCleanupOutcome>;
   readonly close: () => void;
 } {
   const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
@@ -125,19 +124,26 @@ function startRelayCleanup(relay: FakeRelayHost): {
     wsStreamClient: client,
     close: () => session.close(),
   });
-  const outcome: { current: WorktreeCleanupOutcome | null } = {
-    current: null,
-  };
-  void runWorktreeCleanup(openStreamTransport, {
+  const settled = runWorktreeCleanup(openStreamTransport, {
     hostId: "relay-cleanup-host",
     paths: [PATH],
     source: "task_cleanup",
     stopOwnersPaths: new Set(),
-  }).then((settled) => {
-    outcome.current = settled;
   });
   session.start();
-  return { outcome, close: () => session.close() };
+  return { settled, close: () => session.close() };
+}
+
+function onSubscribe(relay: FakeRelayHost): Promise<number> {
+  return new Promise((resolve) => {
+    const push = relay.subscribeStreamIds.push.bind(relay.subscribeStreamIds);
+    vi.spyOn(relay.subscribeStreamIds, "push").mockImplementation((...ids) => {
+      const length = push(...ids);
+      const streamId = ids[0];
+      if (streamId !== undefined) resolve(streamId);
+      return length;
+    });
+  });
 }
 
 afterEach(() => {
@@ -148,15 +154,12 @@ describe("worktree cleanup through the relay", () => {
   it("removes the worktrees of a released personal host once the sign-in attach that follows the refused host-only token is admitted", async () => {
     const relay = new FakeRelayHost();
     releasedHost(relay);
-    const { outcome, close } = startRelayCleanup(relay);
+    const subscribed = onSubscribe(relay);
+    const { settled, close } = startRelayCleanup(relay);
     try {
-      await vi.waitFor(
-        () => expect(relay.subscribeStreamIds).toHaveLength(1),
-        WAIT,
-      );
+      const streamId = await subscribed;
       // The refused host-only token was attached first, then the sign-in.
       expect(relay.openAuthz[relay.openAuthz.length - 1]).toBeNull();
-      const streamId = relay.subscribeStreamIds[0];
       await relay.sendStreamFrame(
         streamId,
         {
@@ -180,15 +183,11 @@ describe("worktree cleanup through the relay", () => {
         null,
         QosClass.INTERACTIVE,
       );
-      await vi.waitFor(
-        () =>
-          expect(outcome.current).toEqual({
-            removed: [PATH],
-            failed: [],
-            uncertain: [],
-          }),
-        WAIT,
-      );
+      await expect(settled).resolves.toEqual({
+        removed: [PATH],
+        failed: [],
+        uncertain: [],
+      });
     } finally {
       close();
     }
@@ -197,17 +196,13 @@ describe("worktree cleanup through the relay", () => {
   it("reports the paths as not reached when the session parks before it is ready and the stream enters backoff", async () => {
     const relay = new FakeRelayHost();
     hostThatParksTheSession(relay);
-    const { outcome, close } = startRelayCleanup(relay);
+    const { settled, close } = startRelayCleanup(relay);
     try {
-      await vi.waitFor(
-        () =>
-          expect(outcome.current).toEqual({
-            removed: [],
-            failed: [{ worktreePath: PATH, reason: NEVER_REACHED_HOST_REASON }],
-            uncertain: [],
-          }),
-        WAIT,
-      );
+      await expect(settled).resolves.toEqual({
+        removed: [],
+        failed: [{ worktreePath: PATH, reason: NEVER_REACHED_HOST_REASON }],
+        uncertain: [],
+      });
       expect(relay.subscribeStreamIds).toEqual([]);
     } finally {
       close();

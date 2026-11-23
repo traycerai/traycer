@@ -646,7 +646,10 @@ describe("desktop host-token source across windows asking for different host pro
    * One window's bridge into `main`, as the auth IPC makes it: an ask crosses
    * with the process its window observed, and main asks its mint with that.
    */
-  function bridgeInto(main: HostTokenSource): HostTokensBridgeSurface {
+  function bridgeInto(
+    main: HostTokenSource,
+    observedNow: () => string | null,
+  ): HostTokensBridgeSurface {
     return {
       era: (userId) => main.era(userId),
       signIn: (userId) => main.signInKey(userId),
@@ -664,7 +667,7 @@ describe("desktop host-token source across windows asking for different host pro
             ? await main.obtain(userId, hostId, fresh, {
                 signal: null,
                 ...(askOwner !== null && typeof observed === "string"
-                  ? { owner: askOwner, observedNow: () => observed }
+                  ? { owner: askOwner, observedNow }
                   : { owner: null }),
               })
             : ({ kind: "superseded" } satisfies HostTokenMintOutcome);
@@ -705,7 +708,7 @@ describe("desktop host-token source across windows asking for different host pro
     };
   }
 
-  it("makes main mint for each window's own process, and tells each window its own outcome", async () => {
+  it("makes main mint for each current process and refuses a stale window against one shared observation", async () => {
     const answers = [
       deferred<HostTokenMintOutcome>(),
       deferred<HostTokenMintOutcome>(),
@@ -714,8 +717,9 @@ describe("desktop host-token source across windows asking for different host pro
     const main = createHostTokenSource({
       persistence: createMemoryHostTokenPersistence(),
       mint: () => {
-        const own = answers[mintRequests];
         mintRequests += 1;
+        const own = answers[mintRequests - 1];
+        if (own === undefined) throw new Error("unexpected mint request");
         return own.promise;
       },
       signIn: (userId) =>
@@ -724,28 +728,40 @@ describe("desktop host-token source across windows asking for different host pro
           : null,
       now: () => Date.now(),
     });
+    let mainObserved = "100";
+    const observedNow = (): string => mainObserved;
     const hostsA = createReleasedHostMemory();
     hostsA.observeInstance(HOST_ID, "100");
     const ownerA = hostsA.currentInstance(HOST_ID);
     const hostsB = createReleasedHostMemory();
     hostsB.observeInstance(HOST_ID, "200");
     const ownerB = hostsB.currentInstance(HOST_ID);
-    const windowA = createDesktopHostTokenSource(bridgeInto(main));
-    const windowB = createDesktopHostTokenSource(bridgeInto(main));
+    const windowA = createDesktopHostTokenSource(bridgeInto(main, observedNow));
+    const windowB = createDesktopHostTokenSource(bridgeInto(main, observedNow));
 
     const askA = windowA.obtain(USER_ID, HOST_ID, true, {
       signal: null,
       owner: ownerA,
-      observedNow: () => ownerA.observed,
+      observedNow,
     });
     await vi.waitFor(() => expect(mintRequests).toBe(1));
+    mainObserved = "200";
     const askB = windowB.obtain(USER_ID, HOST_ID, true, {
       signal: null,
       owner: ownerB,
-      observedNow: () => ownerB.observed,
+      observedNow,
     });
-    // Window A's ask is still held: window B's ask is not its answer.
     await vi.waitFor(() => expect(mintRequests).toBe(2));
+    const staleWindow = createDesktopHostTokenSource(
+      bridgeInto(main, observedNow),
+    );
+    const staleAsk = staleWindow.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: ownerA,
+      observedNow,
+    });
+    await expect(staleAsk).resolves.toEqual({ kind: "process-replaced" });
+    expect(mintRequests).toBe(2);
 
     answers[0].resolve({ kind: "not-admitted" });
     answers[1].resolve({ kind: "ok", token: HOST_TOKEN });

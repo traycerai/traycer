@@ -1963,6 +1963,8 @@ describe("local stream while authn cannot mint", () => {
     expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
     probe.fireMessage(namedRefusal("owner_sign_in"));
     await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS * 4);
+    const followup = await socketCounted(3);
+    expect((await readOpen(followup)).token).toBe(NO_HOST_TOKEN_PROBE);
     expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
     sibling.session.close();
     sibling.client.close("test complete");

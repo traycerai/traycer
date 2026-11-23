@@ -2402,6 +2402,7 @@ describe("a held token's refusal", () => {
       );
     }
 
+    expect(tokens.current(USER_ID, hostId)?.token).toBe("newer-host-token");
     heldTokenRefused(
       tokens,
       USER_ID,
@@ -2417,7 +2418,6 @@ describe("a held token's refusal", () => {
 
     expect(tokens.current(USER_ID, hostId)?.token).toBe("newer-host-token");
     expect(tokens.heldRefused(USER_ID, hostId)).toBe(true);
-    expect(tokens.current(USER_ID, hostId)?.token).toBe("newer-host-token");
   });
 });
 
@@ -2567,10 +2567,7 @@ describe("a frame from a host process that was since replaced crosses nothing", 
     memory.observeInstance(HOST_ID, "200");
     first.fireMessage(ackFrame(open, []));
     // The next call, before anything is said about a redial of the stale one.
-    let nextSettled = false;
-    void requestEcho(driven.client).then(() => {
-      nextSettled = true;
-    });
+    const nextCall = requestEcho(driven.client);
     await vi.waitFor(
       () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
       WAIT,
@@ -2599,8 +2596,12 @@ describe("a frame from a host process that was since replaced crosses nothing", 
     };
     await vi.waitFor(() => {
       answerNewRequests();
-      expect(nextSettled).toBe(true);
+      expect(answered.size).toBeGreaterThan(0);
     }, WAIT);
+    await expect(nextCall).resolves.toEqual({
+      kind: "fulfilled",
+      value: { echoed: "hi" },
+    });
     // A third call rides the same session: one socket does not serve one call.
     const writtenBefore = session.sent.length;
     void requestEcho(driven.client);

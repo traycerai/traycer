@@ -80,13 +80,15 @@ import {
   parseResumeFrame,
   RESUME_RING_BYTES,
   ResumeLedger,
-} from "../../resume-ledger";
+  type ResumeGap,
+} from "@traycer/protocol/host-transport/resume-ledger";
 import {
   HostTransportFailureError,
   mayHaveReachedHost,
   RetryableTransportError,
 } from "../rpc-types";
 import { NoiseChannel } from "../noise-channel";
+import { countWebCrypto, settleNoise } from "./web-crypto-completion-fixture";
 import { PriorityScheduler } from "../scheduler";
 import {
   RemoteSession,
@@ -203,6 +205,7 @@ class FakeSocket implements StreamWebSocketLike {
   closed = false;
   /** Binary frames the client put on this socket, lost or not. */
   binarySends = 0;
+  private readonly binarySendWaiters = new Map<number, () => void>();
 
   private readonly onSend: (data: string | Uint8Array) => void;
 
@@ -213,8 +216,19 @@ class FakeSocket implements StreamWebSocketLike {
   send(data: string | Uint8Array): void {
     if (typeof data !== "string") {
       this.binarySends += 1;
+      for (const [after, resolve] of this.binarySendWaiters) {
+        if (this.binarySends > after) {
+          this.binarySendWaiters.delete(after);
+          resolve();
+        }
+      }
     }
     this.onSend(data);
+  }
+
+  waitForBinarySendAfter(count: number): Promise<void> {
+    if (this.binarySends > count) return Promise.resolve();
+    return new Promise((resolve) => this.binarySendWaiters.set(count, resolve));
   }
 
   close(_code: number, _reason: string): void {
@@ -274,6 +288,8 @@ class FakeHost {
     readonly bearer: unknown;
     readonly plaintext: Uint8Array;
   }[] = [];
+  private readonly credentialUpdateWaiters = new Set<() => void>();
+  private readonly subscriptionWaiters = new Set<() => void>();
   /** Every credential-update frame the host read, whole or one chunk of it. */
   readonly credentialFrames: {
     readonly connection: number;
@@ -507,6 +523,34 @@ class FakeHost {
     );
   }
 
+  async waitForCredentialUpdate(count: number): Promise<void> {
+    if (this.credentialUpdates.length < count) {
+      await new Promise<void>((resolve) => {
+        const waiter = (): void => {
+          if (this.credentialUpdates.length >= count) {
+            this.credentialUpdateWaiters.delete(waiter);
+            resolve();
+          }
+        };
+        this.credentialUpdateWaiters.add(waiter);
+      });
+    }
+    await settleNoise();
+  }
+
+  waitForSubscription(count: number): Promise<void> {
+    if (this.subscribedStreams.length >= count) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiter = (): void => {
+        if (this.subscribedStreams.length >= count) {
+          this.subscriptionWaiters.delete(waiter);
+          resolve();
+        }
+      };
+      this.subscriptionWaiters.add(waiter);
+    });
+  }
+
   // -- Plumbing ------------------------------------------------------------ //
 
   private onClientSend(
@@ -592,6 +636,7 @@ class FakeHost {
         bearer: message.json?.bearer,
         plaintext,
       });
+      for (const resolve of this.credentialUpdateWaiters) resolve();
     }
     if (message !== null) {
       await this.handleMessage(connection, message);
@@ -681,6 +726,7 @@ class FakeHost {
     if (message.type === MuxFrameType.SUBSCRIBE) {
       connection.streamIds.push(message.streamId);
       this.subscribedStreams.push(message.streamId);
+      for (const resolve of this.subscriptionWaiters) resolve();
       if (this.autoTick) {
         await this.tickOn(connection, 0);
       }
@@ -1061,6 +1107,7 @@ async function attachIntoReplay(fixture: Fixture): Promise<void> {
 describe("RemoteSession host-leg resume", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    countWebCrypto();
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
@@ -2877,13 +2924,13 @@ describe("RemoteSession host-leg resume", () => {
       const { host, session } = fixture;
       plane.queue.push(LARGE, LARGE);
       session.notifyBearerRotated();
-      await until(() => host.credentialUpdates.length === 1);
+      await host.waitForCredentialUpdate(1);
       const largeFrameBytes = host.credentialFrames[0]?.plaintext.length ?? 0;
       const drains = Math.floor(CHUNK_PACE_BURST_BYTES / largeFrameBytes) - 1;
       for (let sent = 1; sent < drains; sent += 1) {
         plane.queue.push(LARGE, LARGE);
         session.notifyBearerRotated();
-        await until(() => host.credentialUpdates.length === sent + 1);
+        await host.waitForCredentialUpdate(sent + 1);
       }
       const left = CHUNK_PACE_BURST_BYTES - drains * largeFrameBytes;
       expect(left).toBeGreaterThan(largeFrameBytes + 1_024);
@@ -2906,6 +2953,22 @@ describe("RemoteSession host-leg resume", () => {
       return { fixture, plane };
     }
 
+    async function advancePacer(ms: number): Promise<void> {
+      await vi.advanceTimersByTimeAsync(ms);
+      await settleNoise();
+    }
+
+    async function advancePacerUntil(
+      condition: () => boolean,
+      maxMs: number,
+    ): Promise<void> {
+      for (let elapsed = 0; elapsed < maxMs; elapsed += 250) {
+        if (condition()) return;
+        await advancePacer(250);
+      }
+      if (!condition()) throw new Error("pacing condition was not reached");
+    }
+
     /** Asks for one more unchanged large update and reports whether it went out before the clock moved a millisecond. */
     async function probeGoesOutAtOnce(
       fixture: Fixture,
@@ -2913,12 +2976,14 @@ describe("RemoteSession host-leg resume", () => {
     ): Promise<boolean> {
       const { host, session } = fixture;
       const before = host.credentialUpdates.length;
+      const socket = host.live().socket;
+      const binarySendsBefore = socket.binarySends;
       plane.queue.push(LARGE, LARGE);
       session.notifyBearerRotated();
-      await step(1);
-      const wentOut = host.credentialUpdates.length === before + 1;
+      await advancePacer(1);
+      const wentOut = socket.binarySends > binarySendsBefore;
       // Whatever the pacing, the update goes out once the bucket refills.
-      await advanceUntil(
+      await advancePacerUntil(
         () => host.credentialUpdates.length === before + 1,
         5_000,
       );
@@ -2933,7 +2998,7 @@ describe("RemoteSession host-leg resume", () => {
 
       plane.queue.push(SHORT, LARGE);
       session.notifyBearerRotated();
-      await until(() => host.credentialUpdates.length === sent + 1);
+      await host.waitForCredentialUpdate(sent + 1);
       expect(host.credentialUpdates[sent]?.bearer).toBe(LARGE);
 
       expect(await probeGoesOutAtOnce(fixture, plane)).toBe(false);
@@ -2947,15 +3012,16 @@ describe("RemoteSession host-leg resume", () => {
 
       // The short update is written into a lost leg, so the ledger holds it short.
       const socket = host.live().socket;
-      const sentBefore = socket.binarySends;
+      const binarySend = socket.waitForBinarySendAfter(socket.binarySends);
       host.loseLeg();
       plane.queue.push(SHORT, SHORT);
       session.notifyBearerRotated();
-      await until(() => socket.binarySends > sentBefore);
+      await binarySend;
+      await settleNoise();
       // The bearer has grown by the time the gap is resent.
       plane.queue.push(LARGE);
       host.attach();
-      await until(() => host.credentialUpdates.length === sent + 1);
+      await host.waitForCredentialUpdate(sent + 1);
       expect(host.credentialUpdates[sent]?.bearer).toBe(LARGE);
 
       expect(await probeGoesOutAtOnce(fixture, plane)).toBe(false);
@@ -2969,7 +3035,7 @@ describe("RemoteSession host-leg resume", () => {
 
       plane.queue.push(LARGE, SHORT);
       session.notifyBearerRotated();
-      await until(() => host.credentialUpdates.length === sent + 1);
+      await host.waitForCredentialUpdate(sent + 1);
       expect(host.credentialUpdates[sent]?.bearer).toBe(SHORT);
 
       expect(await probeGoesOutAtOnce(fixture, plane)).toBe(false);
@@ -2979,14 +3045,38 @@ describe("RemoteSession host-leg resume", () => {
       const { fixture, plane } = await pacedFixture(false);
       const { host, session } = fixture;
 
+      await host.waitForSubscription(1);
+      await settleNoise();
       const socket = host.live().socket;
-      const sentBefore = socket.binarySends;
+      const binarySend = socket.waitForBinarySendAfter(socket.binarySends);
       host.loseLeg();
       plane.queue.push(SHORT, LARGE);
       session.notifyBearerRotated();
-      await until(() => socket.binarySends > sentBefore);
+      await binarySend;
+      await settleNoise();
+      let resolveGapSnapshot = (_gap: ResumeGap): void => undefined;
+      const gapSnapshot = new Promise<ResumeGap>((resolve) => {
+        resolveGapSnapshot = resolve;
+      });
+      const originalGapFrom = ResumeLedger.prototype.gapFrom;
+      const gapFrom = vi.spyOn(ResumeLedger.prototype, "gapFrom");
+      gapFrom.mockImplementation(function (
+        this: ResumeLedger,
+        received: number,
+      ) {
+        const result = originalGapFrom.call(this, received);
+        if (result.kind === "gap" && result.frames.length > 0) {
+          resolveGapSnapshot(result);
+        }
+        return result;
+      });
       host.attach();
-      await until(() => host.credentialUpdates.length === 1);
+      const lostCredentialGap = await gapSnapshot;
+      expect(lostCredentialGap.frames).toHaveLength(1);
+      expect(lostCredentialGap.frames[0]?.byteLength).toBe(
+        updateFrameBytes(LARGE),
+      );
+      await host.waitForCredentialUpdate(1);
 
       const [replayed] = host.credentialUpdates;
       if (replayed === undefined) throw new Error("the replay never arrived");

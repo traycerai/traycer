@@ -41,9 +41,12 @@ describe("local door host token after the computer's credential wait", () => {
         finishCredentialMint = resolve;
       },
     );
-    let credentialMintStarted = false;
+    let signalCredentialMintStarted = (): void => undefined;
+    const credentialMintStarted = new Promise<void>((resolve) => {
+      signalCredentialMintStarted = resolve;
+    });
     const runner: HostCredentialMintRunner = () => {
-      credentialMintStarted = true;
+      signalCredentialMintStarted();
       return credentialMint;
     };
     setHostCredentialMintRunner(runner);
@@ -55,7 +58,7 @@ describe("local door host token after the computer's credential wait", () => {
       owner: { hostId: HOST_ID, observed: "process-a" },
       observedNow: () => observed,
     });
-    await expect.poll(() => credentialMintStarted).toBe(true);
+    await credentialMintStarted;
     expect(hostTokenMints).toEqual([HOST_ID]);
 
     observed = "process-b";

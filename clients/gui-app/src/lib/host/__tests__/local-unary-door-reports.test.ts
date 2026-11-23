@@ -294,6 +294,7 @@ describe("a unary call's reports to the app's door", () => {
       socket.fireClose(1006, "test teardown");
     for (const hostId of hostIds) clearHostDoorState(hostId);
     hostIds.clear();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -424,6 +425,7 @@ describe("a unary call's reports to the app's door", () => {
 
   describe("on a current local team computer with no host-only token held", () => {
     it("probes at once, waits for the slow mint after the host names its refusal, and completes on the minted token with no frame carrying the sign-in", async () => {
+      vi.useFakeTimers();
       const hostId = "unary-door-team-slow-mint";
       const mints = heldMints();
       const driven = begin(team(hostId), mints.source, null);
@@ -431,8 +433,9 @@ describe("a unary call's reports to the app's door", () => {
       expect(await answerDial(0, notAdmittedRefusal())).toBe(
         NO_HOST_TOKEN_PROBE,
       );
-      // The call is waiting on the slow mint: it asked, and nothing settled it.
-      await vi.waitFor(() => expect(mints.asked()).toBeGreaterThanOrEqual(1));
+      await vi.advanceTimersByTimeAsync(0);
+      // The probe refusal has been processed; the held mint still owns recovery.
+      expect(mints.asked()).toBeGreaterThanOrEqual(1);
       expect(driven.settled()).toBe(false);
 
       const minted = "team-host-token-after-slow-mint";
