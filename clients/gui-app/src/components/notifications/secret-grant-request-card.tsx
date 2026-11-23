@@ -16,7 +16,6 @@ import {
   type SecretsNotificationDetail,
 } from "@/lib/notifications/secrets-notification-detail";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import { useSectionOffered } from "@/components/settings/personal/use-old-host-local-pick";
 
 type GrantRequestDetail = Extract<
   SecretsNotificationDetail,
@@ -195,7 +194,17 @@ function SecretGrantOutcomeLine(props: {
           There is no secret stored for this destination yet, so there is
           nothing to grant.
         </p>
-        <OpenSecretsButton />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="secret-grant-request-open-secrets"
+          onClick={() => {
+            navigateToSettingsSection("secrets");
+          }}
+        >
+          Secrets
+        </Button>
       </div>
     );
   }
@@ -207,25 +216,6 @@ function SecretGrantOutcomeLine(props: {
     >
       {outcomeText(outcome)}
     </p>
-  );
-}
-
-/** Absent where the pick in effect has no Secrets page to open. */
-function OpenSecretsButton(): ReactNode {
-  const offered = useSectionOffered("secrets");
-  if (!offered) return null;
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant="outline"
-      data-testid="secret-grant-request-open-secrets"
-      onClick={() => {
-        navigateToSettingsSection("secrets");
-      }}
-    >
-      Secrets
-    </Button>
   );
 }
 

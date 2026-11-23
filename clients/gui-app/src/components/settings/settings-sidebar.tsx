@@ -42,7 +42,6 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
 import { useEnvironmentSectionShown } from "@/components/settings/environment/use-environment-section-shown";
-import { useDrawnSection } from "@/components/settings/personal/use-old-host-local-pick";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -92,14 +91,13 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // `switchToSettingsSection` walks this list to resolve that digit back to a
   // section.
   const sections = visibleSettingsSections();
-  // The pick hides the pages its source does not offer.
+  // The kind of pick decides the Environment rows, and nothing a host answers
+  // does, so the rail keeps its shape while a handshake is pending.
   const environmentSectionShown = useEnvironmentSectionShown(globalScope);
-  // The row the rail highlights: the page drawn for the section the surface
-  // holds, worked out once for every row.
+  // The row the rail highlights: the section the surface holds.
   const routedSection = useRoutedSectionId();
-  const drawnSection = useDrawnSection(
-    props.mode.kind === "modal" ? props.mode.activeSection : routedSection,
-  );
+  const heldSection =
+    props.mode.kind === "modal" ? props.mode.activeSection : routedSection;
   // The Guide group leaves the rail once every Getting started step is done.
   const guideComplete = useGettingStartedGuideIsComplete();
   const groups = guideComplete
@@ -150,10 +148,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 />
               ) : null}
               {group.id === "personal" ? (
-                <SettingsSidebarEnvironmentPicker
-                  scope={globalScope}
-                  mode={props.mode}
-                />
+                <div className="mb-1 px-1">
+                  <EnvironmentPicker scope={globalScope} />
+                </div>
               ) : null}
               {group.id === "host" ? (
                 <SettingsSidebarHostPicker
@@ -179,7 +176,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                       key={section.id}
                       section={section}
                       index={index}
-                      active={drawnSection === section.id}
+                      active={heldSection === section.id}
                       mode={props.mode}
                       variant={props.variant}
                     />
@@ -194,38 +191,6 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           down a dialog that is open. */}
       <AddHostDialog />
     </aside>
-  );
-}
-
-/**
- * The Environment dropdown, between the "Environment" heading and the pages
- * it governs. The section on screen comes from the mode: the modal names it,
- * the routed surface has it in its path.
- */
-function SettingsSidebarEnvironmentPicker(props: {
-  readonly scope: HostScope;
-  readonly mode: SettingsSidebarMode;
-}): ReactNode {
-  return (
-    <div className="mb-1 px-1">
-      {props.mode.kind === "modal" ? (
-        <EnvironmentPicker
-          scope={props.scope}
-          activeSection={props.mode.activeSection}
-        />
-      ) : (
-        <RoutedEnvironmentPicker scope={props.scope} />
-      )}
-    </div>
-  );
-}
-
-function RoutedEnvironmentPicker(props: {
-  readonly scope: HostScope;
-}): ReactNode {
-  const activeSection = useRoutedSectionId();
-  return (
-    <EnvironmentPicker scope={props.scope} activeSection={activeSection} />
   );
 }
 

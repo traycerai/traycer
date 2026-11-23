@@ -30,7 +30,6 @@ import {
   type SettingsSectionGroupId,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
-import { useDrawnSection } from "@/components/settings/personal/use-old-host-local-pick";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { withSubpageLabels } from "@/lib/commands/sub-page-keywords";
 import type {
@@ -95,8 +94,7 @@ const SETTINGS_SUBPAGE: CommandSubpage = {
   useItems: (ctx: CommandContext) => {
     const windowScope = useHostScopeFor(WINDOW_HOST_SELECTION);
     const sectionShown = useEnvironmentSectionShown(windowScope);
-    // The page on screen is the one drawn for the section the path names.
-    const onScreen = useDrawnSection(sectionAtPath(ctx.pathname));
+    const onScreen = sectionAtPath(ctx.pathname);
     return useMemo<ReadonlyArray<CommandItem>>(
       () => settingsSectionItems(onScreen, sectionShown),
       [onScreen, sectionShown],
