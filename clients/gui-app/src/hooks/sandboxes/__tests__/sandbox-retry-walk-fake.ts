@@ -14,6 +14,7 @@ interface RowAnswer {
 
 interface HeldKey {
   readonly sandboxId: string;
+  reservationRequest?: SandboxCreateRequest;
   readonly releases: Array<PromiseWithResolvers<void>>;
   readonly arrivals: Array<PromiseWithResolvers<void>>;
   row: RowAnswer | null;
@@ -111,6 +112,7 @@ export function createSandboxRetryWalkFake(
       if (entry === undefined) {
         entry = {
           sandboxId: sandboxIdFor(key),
+          reservationRequest: request,
           releases: [],
           arrivals: [],
           row: null,
@@ -118,6 +120,8 @@ export function createSandboxRetryWalkFake(
         };
         entries.set(key, entry);
       }
+      if (entry.reservationRequest === undefined)
+        entry.reservationRequest = request;
       entry.calls += 1;
       while (entry.releases.length < entry.calls)
         entry.releases.push(Promise.withResolvers<void>());
@@ -152,6 +156,12 @@ export function createSandboxRetryWalkFake(
               id: entry.sandboxId,
               hostId: `host-${entry.sandboxId}`,
               state: row.state,
+              ...(entry.reservationRequest === undefined
+                ? {}
+                : {
+                    createdByTaskId: entry.reservationRequest.createdByTaskId,
+                    displayName: entry.reservationRequest.displayName,
+                  }),
               ...(environmentId === undefined ? {} : { environmentId }),
               ...(row.failureCode === undefined
                 ? {}

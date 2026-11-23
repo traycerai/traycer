@@ -82,6 +82,7 @@ import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { SandboxFailedRowActions } from "@/components/hosts/sandbox-failed-row-actions";
 import {
   act,
   cleanup,
@@ -8046,6 +8047,146 @@ describe("a retry-family button chosen in a window that does not own the send", 
         expect(createChatCalls()).toEqual([]);
       } finally {
         restoreQueued();
+      }
+    },
+  );
+
+  it.each([
+    ["stage first", true],
+    ["failed-row card first", false],
+  ] as const)(
+    "joins stage and failed-row Retry on one reservation with the failed summary attribution when %s",
+    async (_arrival, stageFirst) => {
+      const restoreLocks = installImmediateExclusiveLocks();
+      try {
+        const row = sandboxSummaryFixture({
+          id: "sbx_failed_502",
+          hostId: SANDBOX_HOST,
+          environmentId: "env-acme",
+          state: "failed",
+          failureCode: "PROVIDER_CREATE_FAILED",
+          createdByTaskId: "origin-task",
+          displayName: "origin/main hook",
+        });
+        const retryKey = `retry:${row.id}`;
+        const walk = createSandboxRetryWalkFake(
+          "unused-initial-key",
+          undefined,
+        );
+        userSignedIn();
+        seed({ ...SEEDED, phase: "creating", created: true });
+        useStagedSandboxStore.getState().report(SURFACE, {
+          failure: { kind: "failed", code: "create", step: "creating" },
+        });
+        mocks.createSandbox
+          .mockResolvedValueOnce({
+            kind: "refused",
+            status: 502,
+            code: "provider_failed",
+            reason: null,
+            shortfallMc: null,
+            newRateMcPerHour: null,
+            currentAwakeBurnMcPerHour: null,
+            message: null,
+            sandboxId: row.id,
+            sandbox: row,
+          })
+          .mockImplementation(walk.create);
+        const stageView = mount();
+        await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(true));
+        fireEvent.click(
+          await screen.findByTestId("sandbox-setup-retry-creation"),
+        );
+        await waitFor(() =>
+          expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+            kind: "refused",
+            sandboxId: row.id,
+          }),
+        );
+
+        const rowClient = new QueryClient({
+          defaultOptions: {
+            queries: { retry: false },
+            mutations: { retry: false },
+          },
+        });
+        const configuration: SandboxPageConfiguration = {
+          kind: "team",
+          teamId: "team-acme",
+          teamName: "Acme",
+          environmentId: "env-acme",
+        };
+        const cardView = render(
+          <RunnerHostContext.Provider value={RUNNER_HOST}>
+            <QueryClientProvider client={rowClient}>
+              <SandboxFailedRowActions
+                summary={row}
+                configuration={configuration}
+                credits={configuration}
+              />
+            </QueryClientProvider>
+          </RunnerHostContext.Provider>,
+        );
+        const stageRetry = await screen.findByTestId(
+          "sandbox-setup-retry-creation",
+        );
+        const rowRetry = await screen.findByTestId("sandbox-row-retry");
+        await waitFor(() => expect(rowRetry).toHaveProperty("disabled", false));
+        if (stageFirst) {
+          fireEvent.click(stageRetry);
+          await walk.waitForArrival(retryKey, 1);
+          fireEvent.click(rowRetry);
+        } else {
+          fireEvent.click(rowRetry);
+          await walk.waitForArrival(retryKey, 1);
+          fireEvent.click(stageRetry);
+        }
+        await walk.waitForArrival(retryKey, 2);
+        act(() => {
+          walk.answer(retryKey, 1, { state: "awake" });
+          walk.answer(retryKey, 2, { state: "awake" });
+        });
+        await waitFor(() =>
+          expect(readStagedSandbox(SURFACE)?.createdSandboxId).toBe(
+            "final-holder",
+          ),
+        );
+        await waitFor(() => {
+          const success = rowClient
+            .getMutationCache()
+            .getAll()
+            .some(({ state }) => {
+              const data: unknown = state.data;
+              if (
+                state.status !== "success" ||
+                typeof data !== "object" ||
+                data === null ||
+                !("sandbox" in data)
+              )
+                return false;
+              const sandbox = data.sandbox;
+              return (
+                typeof sandbox === "object" &&
+                sandbox !== null &&
+                "createdByTaskId" in sandbox &&
+                sandbox.createdByTaskId === "origin-task" &&
+                "displayName" in sandbox &&
+                sandbox.displayName === "origin/main hook"
+              );
+            });
+          expect(success).toBe(true);
+        });
+        expect(walk.requests.map((request) => request.clientRequestId)).toEqual(
+          [retryKey, retryKey],
+        );
+        expect(walk.requests).toMatchObject([
+          { createdByTaskId: "origin-task", displayName: "origin/main hook" },
+          { createdByTaskId: "origin-task", displayName: "origin/main hook" },
+        ]);
+        cardView.unmount();
+        stageView.unmount();
+      } finally {
+        restoreLocks();
       }
     },
   );
