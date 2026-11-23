@@ -4643,6 +4643,7 @@ describe("RemoteSession forceReconnect", () => {
   }, 10_000);
 
   it("tells no stream of a backoff for the immediate redial of a ready session still on a positive rung", async () => {
+    const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     relay.streamManifest = buildStreamManifest(
       cursorStreamRegistry,
@@ -4667,22 +4668,21 @@ describe("RemoteSession forceReconnect", () => {
     });
     try {
       session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
       expect(relay.openBearers).toHaveLength(3);
       const backoffsBeforeForce = backoffs;
 
       session.forceReconnect("user-retry");
 
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
-        timeout: 800,
-        interval: 25,
-      });
+      // The fake clock stays where it is, so a redial that waited out any
+      // backoff rung never opens and the test ends at its timeout.
+      while (relay.openBearers.length < 4) {
+        await advanceNoiseClock(0);
+      }
       expect(backoffs).toBe(backoffsBeforeForce);
     } finally {
       session.close();
+      await finishNoise();
     }
   }, 15_000);
 

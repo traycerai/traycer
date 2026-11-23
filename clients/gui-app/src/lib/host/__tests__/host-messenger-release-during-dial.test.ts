@@ -398,7 +398,7 @@ describe("runtime host messenger release during dial", () => {
         expect(FakeWebSocket.instances.length === 2 || secondSettled).toBe(
           true,
         ),
-      { timeout: 2_000, interval: 10 },
+      { interval: 10 },
     );
     expect(FakeWebSocket.instances).toHaveLength(2);
     const secondSocket = FakeWebSocket.instances.at(1);

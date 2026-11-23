@@ -91,7 +91,7 @@ const HOST_TOKEN = "host-only-token";
 const SIGN_IN = "person-sign-in";
 const ROTATED_SIGN_IN = "person-sign-in-rotated";
 const ROTATED_HOST_TOKEN = "host-only-token-rotated";
-const WAIT = { timeout: 2_000, interval: 10 };
+const WAIT = { interval: 10 };
 
 const PERSONAL_ROW: ReleasedSignOnRow = {
   owner: { kind: "user", id: USER_ID },

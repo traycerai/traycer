@@ -647,7 +647,7 @@ const PROBE_DECLINE_HOST_ID = "desktop-startup-probe-decline-host";
 const RELEASED_USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const RELEASED_HOST_TOKEN = "desktop-host-token";
 const RELEASED_SIGN_IN = "desktop-person-sign-in";
-const RELEASED_WAIT = { timeout: 2_000, interval: 10 };
+const RELEASED_WAIT = { interval: 10 };
 const startupClients: WsStreamClient<typeof hostStreamRpcRegistry>[] = [];
 
 function startupReleasedRefusal(): {

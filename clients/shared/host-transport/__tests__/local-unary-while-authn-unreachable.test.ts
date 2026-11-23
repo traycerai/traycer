@@ -137,7 +137,7 @@ let callKey: string | null = null;
 
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const SIGN_IN = "person-sign-in";
-const WAIT = { timeout: 2_000, interval: 10 };
+const WAIT = { interval: 10 };
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 
 const PERSONAL_ROW: ReleasedSignOnRow = {
@@ -637,7 +637,7 @@ describe("local unary while authn cannot mint", () => {
     clients.push(driven.client);
     await vi.waitFor(
       () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
-      { timeout: 500, interval: 10 },
+      { interval: 10 },
     );
     const socket = driven.sockets[0];
     if (socket === undefined) throw new Error("dial missing");

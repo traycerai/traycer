@@ -46,7 +46,7 @@ const SIGN_IN = "person-sign-in";
 const ENDPOINT = { hostId: HOST_ID, websocketUrl: "ws://127.0.0.1:9/rpc" };
 const UNARY_HOST_ID = "22222222-2222-4222-8222-222222222222";
 const UNARY_ENDPOINT = { ...ENDPOINT, hostId: UNARY_HOST_ID };
-const WAIT = { timeout: 2_000, interval: 10 };
+const WAIT = { interval: 10 };
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 
 type DoorMode =

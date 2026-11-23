@@ -39,7 +39,7 @@ import { nextCasePerson } from "../../internal/__tests__/case-person-test-suppor
 let USER_ID = nextCasePerson().userId;
 const SIGN_IN = "pre-open-sign-in";
 const HELD_TOKEN = "pre-open-held-host-token";
-const WAIT = { timeout: 2_000, interval: 10 };
+const WAIT = { interval: 10 };
 
 const harness = vi.hoisted(() => {
   class ScriptSocket {

@@ -313,7 +313,7 @@ function makeClient(options: {
 const RELEASED_TEST_USER = "released-test-user";
 const RELEASED_TEST_HOST = mockLocalHostEntry.hostId;
 const RELEASED_TEST_SIGN_IN = "released-test-sign-in";
-const RELEASED_WAIT = { timeout: 2_000, interval: 10 };
+const RELEASED_WAIT = { interval: 10 };
 
 function mutableTokenAccess(
   initial: HostToken | null,

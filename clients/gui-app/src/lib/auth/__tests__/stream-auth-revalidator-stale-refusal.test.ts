@@ -40,7 +40,7 @@ const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const HOST_TOKEN = "host-only-token";
 const SIGN_IN_A = "window-sign-in-a";
 const SIGN_IN_B = "window-sign-in-b";
-const WAIT = { timeout: 2_000, interval: 10 };
+const WAIT = { interval: 10 };
 const PERSONAL_ROW: ReleasedSignOnRow = {
   owner: { kind: "user", id: USER_ID },
   sandbox: null,
