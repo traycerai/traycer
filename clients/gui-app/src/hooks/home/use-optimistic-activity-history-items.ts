@@ -624,7 +624,7 @@ export interface OptimisticActivityHistoryInput {
 /**
  * Active edges can outrun the cloud outbox. Keep at most 64 stamped rows in a
  * shared, ten-minute overlay; one batched context request supplies missing
- * active rows and one scoped refresh resets retained cursor pages.
+ * active rows and one scoped refresh re-reads the first page.
  */
 export function useOptimisticActivityHistoryItems(
   input: OptimisticActivityHistoryInput,
