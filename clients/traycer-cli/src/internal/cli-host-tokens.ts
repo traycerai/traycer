@@ -458,9 +458,12 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       whenLoaded: () => stored.whenLoaded(),
       lastFailureOf: (id, owner) => stored.lastFailureOf(id, owner),
       obtain: async (id, hostId, fresh, { signal, owner: mintOwner }) => {
-        const askFor = (asker: HostInstance): Promise<HostTokenMintOutcome> =>
+        const askFor = (
+          asker: HostInstance,
+          freshAsk: boolean,
+        ): Promise<HostTokenMintOutcome> =>
           stored
-            .obtain(id, hostId, fresh, {
+            .obtain(id, hostId, freshAsk, {
               signal: signal ?? signIn.signal,
               owner: asker,
               observedNow: () => hosts.currentInstance(hostId).observed,
@@ -472,39 +475,52 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         let owner = mintOwner ?? hosts.currentInstance(hostId);
         // The process was replaced before the mint could start: once more, for the
         // process observed now.
-        const ask = async (): Promise<HostTokenMintOutcome> => {
-          const asked = await askFor(owner);
+        const ask = async (
+          freshAsk: boolean,
+        ): Promise<HostTokenMintOutcome> => {
+          const asked = await askFor(owner, freshAsk);
           if (asked.kind !== "process-replaced") return asked;
           owner = hosts.currentInstance(hostId);
-          const again = await askFor(owner);
+          const again = await askFor(owner, freshAsk);
           return again.kind === "process-replaced"
             ? { kind: "unavailable", detail: "the host process was replaced" }
             : again;
         };
+        // The exit that ended this ask, as an ended mint is told today.
+        const ended = (): AbortSignal | null =>
+          [signal, signIn.signal, callEnded.signal].find(
+            (exit) => exit?.aborted === true,
+          ) ?? null;
         let startedAt = nextEvent();
-        let outcome = await ask();
-        for (;;) {
-          // The stored sign-in is the credentials file's: a refusal whose
-          // sign-in is known reads it first, adopting one a sibling or the
-          // desktop saved, before anything below compares, judges or reports.
-          if (outcome.kind === "sign-in-rejected" && mintSentWith.has(outcome))
-            await signIn.adoptStored();
-          if (outlived(owner, startedAt)) return outcome;
-          if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
-          // The comparison comes first. A refusal of a sign-in already replaced
-          // when its answer arrived is not a refusal for anyone: it judges,
-          // spends and reports nothing, and is never handed upward. The mint is
-          // asked again on the stored sign-in, and that answer is the one every
-          // reader above sees. Each further pass needs the stored sign-in to
-          // have been replaced again while the mint was out.
-          if (
-            outcome.kind !== "sign-in-rejected" ||
-            !refusedSignInReplaced(outcome)
-          )
+        let outcome = await ask(fresh);
+        // A refusal leaves only when, as it leaves, it was sent with the stored
+        // sign-in and no mint for this host process that started after it has
+        // bought a token. Any other refusal is not a refusal for anyone: it
+        // records, judges, refreshes and reports nothing, and the mint is asked
+        // again on the stored sign-in; that answer is the one every reader
+        // above sees. A further pass needs the stored sign-in replaced again,
+        // or another later mint bought, while this one was out.
+        while (outcome.kind === "sign-in-rejected") {
+          // The stored sign-in is the credentials file's: read it first,
+          // adopting one a sibling or the desktop saved.
+          if (mintSentWith.has(outcome)) await signIn.adoptStored();
+          const replaced = refusedSignInReplaced(outcome);
+          const overtaken = outlived(owner, startedAt);
+          if (!replaced && !overtaken) break;
+          const exit = ended();
+          if (exit !== null) {
+            outcome = abandonedMint(exit);
             break;
+          }
           startedAt = nextEvent();
-          outcome = await ask();
+          // Overtaken, the token a later mint bought answers: it is newer
+          // than this ask, so a fresh ask is satisfied by it.
+          outcome = await ask(overtaken ? false : fresh);
         }
+        // Only what is not a refusal may leave unrecorded once overtaken.
+        if (outcome.kind !== "sign-in-rejected" && outlived(owner, startedAt))
+          return outcome;
+        if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
         if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
         if (
           outcome.kind === "sign-in-rejected" &&
