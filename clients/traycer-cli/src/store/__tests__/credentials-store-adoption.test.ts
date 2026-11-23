@@ -263,6 +263,57 @@ describe("the lease follows the credentials file through one serialised path", (
     store.dispose();
   });
 
+  // "rotated" means the lease holds the installed sign-in: after a landed save whose
+  // adopting read fails, the read is retried, and with none installed the answer is transient.
+  it("retries an adopting read that failed after the save landed, and answers rotated once the lease holds the sign-in", async () => {
+    const store = createCliCredentialsStore();
+    await store.signIn(credentialsOf(SIGN_IN_A), false, null);
+    authn.refreshes.push({ kind: "refreshed", token: SIGN_IN_B });
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    let reads = 0;
+    const failingFirstRead: CredentialsMutationStore = {
+      ...store,
+      read: async () => {
+        reads += 1;
+        if (reads === 1) throw new Error("the file could not be read");
+        return store.read();
+      },
+    };
+
+    const result = await createStoreBackedRevalidator({
+      store: failingFirstRead,
+      lease,
+      signal: null,
+    }).rotateSignIn();
+
+    expect(result).toMatchObject({ outcome: "rotated", installed: SIGN_IN_B });
+    expect(lease.getBearerToken()).toBe(SIGN_IN_B);
+    store.dispose();
+  });
+
+  it("answers transient, never rotated, when the adopting read fails every time after the save landed", async () => {
+    const store = createCliCredentialsStore();
+    await store.signIn(credentialsOf(SIGN_IN_A), false, null);
+    authn.refreshes.push({ kind: "refreshed", token: SIGN_IN_B });
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const unreadable: CredentialsMutationStore = {
+      ...store,
+      read: async () => {
+        throw new Error("the file could not be read");
+      },
+    };
+
+    const result = await createStoreBackedRevalidator({
+      store: unreadable,
+      lease,
+      signal: null,
+    }).rotateSignIn();
+
+    expect(result).toMatchObject({ outcome: "network-error", installed: null });
+    expect(lease.getBearerToken()).toBe(SIGN_IN_A);
+    store.dispose();
+  });
+
   // The three arms that answer "rejected" with no refresh to follow carry the
   // sign-in the lease held, as authn's own refusal does.
   it.each(SIGN_OUT_ARMS)(
