@@ -1987,3 +1987,77 @@ describe("a sign-in recovery's allowance across ordinary attempts", () => {
     expect(rig.mints()).toBe(1);
   });
 });
+
+describe("a spent recovery's verdict on a refused sign-in", () => {
+  const HOST_ID = "computer-spent-verdict";
+  const REFUSED_NOT_ADMITTED: FatalErrorDetails = {
+    code: "UNAUTHORIZED",
+    reason: "current-host-refusal",
+    doorReason: "not_admitted",
+    retryable: false,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  it("awaits the recovery's own judgement, which adopts the stored sign-in first, and answers transient when it says the refusal is not rejected", async () => {
+    let storedSignIn = "sign-in-0";
+    let installedByJudgement = false;
+    const judgementGate = deferred<void>();
+    let judgements = 0;
+    const hosts = createReleasedHostMemory();
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "sign-in-rejected" }),
+      signIn: (userId) => (userId === USER_ID ? storedSignIn : null),
+      now: () => Date.now(),
+    });
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      { token: "held-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      source.era(USER_ID),
+      () => true,
+    );
+    const revalidator = hostTokenRevalidator({
+      tokens: trackHostTokenMints(source, hosts),
+      signInKey: () => source.signInKey(USER_ID),
+      hosts,
+      currentUserId: () => USER_ID,
+      hostId: HOST_ID,
+      signInRecovery: {
+        // The refresh landed, and the lease presents what it landed.
+        revalidateForReconnect: () => {
+          storedSignIn = "sign-in-1";
+          return Promise.resolve("rotated");
+        },
+        // The retry's refusal reaches the spent branch: the judgement adopts
+        // a sibling's newer sign-in from the store, then reads the refusal
+        // as outlived.
+        signInRejectedFor: async () => {
+          judgements += 1;
+          await judgementGate.promise;
+          storedSignIn = "sign-in-2";
+          installedByJudgement = true;
+          return false;
+        },
+      },
+      onState: () => undefined,
+      now: () => Date.now(),
+    });
+
+    let answered: RevalidateOutcome | null = null;
+    const pending = revalidator
+      .revalidateRefused(REFUSED_NOT_ADMITTED, () => true)
+      .then((outcome) => {
+        answered = outcome;
+        return outcome;
+      });
+    await vi.waitFor(() => expect(judgements).toBe(1));
+    // Nothing is answered while the judgement is still adopting.
+    expect(answered).toBeNull();
+
+    judgementGate.resolve();
+    await expect(pending).resolves.toBe("network-error");
+    expect(installedByJudgement).toBe(true);
+  });
+});
