@@ -109,6 +109,13 @@ export function createStoreBackedRevalidator(args: {
     revalidateCurrentContext(): Promise<RevalidateOutcome>;
     /** As `revalidateCurrentContext`, but "adopted" when a sibling's rotation was taken from the store (authn was not asked), and with the sign-in its own save wrote. */
     rotateSignIn(): Promise<SignInRotationResult>;
+    /**
+     * Adopts into the lease the sign-in the credentials file holds now, read
+     * through the store's own read, when it is this person's and newer than
+     * the lease's: "the stored sign-in" is the file's, not this process's
+     * memory. Spends nothing, and never throws.
+     */
+    adoptStoredSignIn(): Promise<void>;
   } {
   const { store, lease, signal } = args;
   const rotateSignIn = async (): Promise<SignInRotationResult> => {
@@ -187,9 +194,25 @@ export function createStoreBackedRevalidator(args: {
     const { outcome } = await rotateSignIn();
     return outcome === "adopted" ? "rotated" : outcome;
   };
+  const adoptStoredSignIn = async (): Promise<void> => {
+    try {
+      const stored = await store.read();
+      // No file, another person's, or the lease's own: the lease stands, so a
+      // signed-out file never sends a retry on a sign-in nobody holds.
+      if (
+        stored !== null &&
+        stored.user.id === lease.identity.userId &&
+        stored.token !== lease.getBearerToken()
+      )
+        lease.rotate(stored.token);
+    } catch {
+      // An unreadable file or a released lease leaves the lease as it is.
+    }
+  };
   return {
     revalidateCurrentContext,
     rotateSignIn,
+    adoptStoredSignIn,
     // The unary auth-aware messenger (#534) is authority-bound: it revalidates
     // the exact bearer that produced the rejected open frame. Refresh only when
     // that bearer is still THIS lease; a `superseded` bearer means a newer

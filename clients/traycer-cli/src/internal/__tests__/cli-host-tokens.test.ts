@@ -110,6 +110,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createStoreBackedRevalidator: vi.fn(
       ({ lease }: { readonly lease: BearerLease }) => ({
         revalidateCurrentContext: state.revalidate,
+        adoptStoredSignIn: async () => undefined,
         // The fake rotates no lease: a rotation it accepts installed the
         // sign-in the lease holds, which the next mint is sent with.
         rotateSignIn: async () => {
@@ -242,6 +243,7 @@ describe("createCliHostTokens refusals that end a command", () => {
       const tokens = createCliHostTokens({
         lease: new MutableBearerLease("signin", "user-1"),
         refresh: async () => ({ outcome: "network-error", installed: null }),
+        adoptStored: async () => undefined,
         signal: null,
       });
       await tokens.whenLoaded();
@@ -269,6 +271,7 @@ describe("createCliHostTokens refusals that end a command", () => {
     const tokens = createCliHostTokens({
       lease: new MutableBearerLease("signin", "user-1"),
       refresh: async () => ({ outcome: "network-error", installed: null }),
+      adoptStored: async () => undefined,
       signal: null,
     });
     await tokens.whenLoaded();

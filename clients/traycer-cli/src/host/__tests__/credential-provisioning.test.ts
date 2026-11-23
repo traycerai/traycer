@@ -189,6 +189,7 @@ const mocks = vi.hoisted(() => {
       };
     }) => ({
       revalidateCurrentContext: revalidateCurrentContextMock,
+      adoptStoredSignIn: async () => undefined,
       // The fake rotates no lease: a rotation it accepts installed the
       // sign-in the lease holds, which the next mint is sent with.
       rotateSignIn: async () => {

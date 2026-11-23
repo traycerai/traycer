@@ -440,6 +440,7 @@ async function signInMonitorCredential(
   const hostTokens = createCliHostTokens({
     lease,
     refresh: () => revalidator.rotateSignIn(),
+    adoptStored: () => revalidator.adoptStoredSignIn(),
     signal: null,
   });
   // The tokens on disk, so the first dial presents the held one.

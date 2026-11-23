@@ -179,6 +179,8 @@ export interface CliSignIn {
   readonly lease: BearerLease;
   /** Refreshes the sign-in under the credentials lock and rotates `lease`, answering with the sign-in its save wrote. */
   readonly refresh: () => Promise<SignInRotationResult>;
+  /** Adopts into `lease` the sign-in the credentials file holds now, when it is newer. */
+  readonly adoptStored: () => Promise<void>;
   /** Cancels this process's own mints, so an abandoned one cannot hold the CLI open; `null` lives as long as the command. */
   readonly signal: AbortSignal | null;
 }
@@ -186,6 +188,7 @@ export interface CliSignIn {
 export interface SignInRevalidator {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
   rotateSignIn(): Promise<SignInRotationResult>;
+  adoptStoredSignIn(): Promise<void>;
 }
 
 /** Why no host-only token could be had: authn's answer, after any one refresh. */
@@ -290,6 +293,8 @@ export interface CliHostTokens {
    * caller, so it spends none of any budget.
    */
   refreshSignIn(): Promise<SignInRotation>;
+  /** Adopts into the lease the sign-in the credentials file holds now, when it is newer. */
+  adoptStoredSignIn(): Promise<void>;
   /** `true` when one was minted; its refusal is judged like any other mint's. */
   renewAfterSignInRefresh(hostId: string): Promise<boolean>;
   /** See `hostTokenUnobtainable`. */
@@ -474,6 +479,11 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
               detail: "the host process was replaced",
             };
         }
+        // The stored sign-in is the credentials file's: a refusal whose sign-in
+        // is known reads it first, adopting one a sibling or the desktop saved,
+        // before anything below compares, judges or reports.
+        if (outcome.kind === "sign-in-rejected" && mintSentWith.has(outcome))
+          await signIn.adoptStored();
         if (outlived(owner, startedAt)) return outcome;
         if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
         if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
@@ -522,11 +532,17 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const signInRejected = (): boolean => refreshRefused || refusedAfterRefresh;
   // A refused mint's recovery: nothing is refreshed for a sign-in already
   // replaced, and the mint is asked again as after a sibling's rotation.
+  // The file is read first, so a sign-in saved elsewhere since counts as
+  // replaced; with no refusal known it is not, and the store's own locked
+  // rotate adopts a newer file without spending.
   const signInRecovery = {
-    revalidateForReconnect: (): Promise<SignInRotation> =>
-      lastRefused !== null && refusedSignInReplaced(lastRefused)
-        ? Promise.resolve("adopted")
-        : refreshSignIn(),
+    revalidateForReconnect: async (): Promise<SignInRotation> => {
+      const refused = lastRefused;
+      if (refused === null || !mintSentWith.has(refused))
+        return refreshSignIn();
+      await signIn.adoptStored();
+      return refusedSignInReplaced(refused) ? "adopted" : refreshSignIn();
+    },
   };
   const bearerOf = (hostId: string): OpenFrameBearerSource => ({
     identity: { userId },
@@ -731,6 +747,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     },
     signInRejected,
     refreshSignIn,
+    adoptStoredSignIn: () => signIn.adoptStored(),
     hostTokenUnobtainable: (hostId) =>
       hostTokenUnobtainable(source, userId, hostId),
     ownerSignInEligible: (hostId) =>
@@ -803,6 +820,7 @@ export function cliReleasedSignOn(
   tokens: Pick<
     CliHostTokens,
     | "refreshSignIn"
+    | "adoptStoredSignIn"
     | "hostTokenUnobtainable"
     | "ownerSignInEligible"
     | "heldTokenRefused"
@@ -818,10 +836,15 @@ export function cliReleasedSignOn(
     // of a sign-in the person no longer holds is not of the one stored, so it
     // refreshes nothing; the redial presents the stored one.
     recovery: {
-      revalidateForReconnect: (refused) => {
+      revalidateForReconnect: async (refused) => {
+        // With the refused sign-in known, the file is read first: one saved
+        // elsewhere since is the stored one. Unknown, the lease stands, and
+        // the store's locked rotate adopts a newer file without spending.
+        if (refused === null) return tokens.refreshSignIn();
+        await tokens.adoptStoredSignIn();
         const stored = readLeaseBearer(lease);
-        return refused !== null && stored !== null && refused !== stored
-          ? Promise.resolve("adopted")
+        return stored !== null && refused !== stored
+          ? "adopted"
           : tokens.refreshSignIn();
       },
     },
@@ -889,6 +912,7 @@ export async function requireCliHostSession(
   const tokens = createCliHostTokens({
     lease,
     refresh: () => revalidator.rotateSignIn(),
+    adoptStored: () => revalidator.adoptStoredSignIn(),
     signal,
   });
   await tokens.whenLoaded();

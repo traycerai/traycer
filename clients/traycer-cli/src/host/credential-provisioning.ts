@@ -189,6 +189,7 @@ const SILENT_OPEN_CONFIRMATIONS = 3;
 type ProbeRevalidator = {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
   rotateSignIn(): Promise<SignInRotationResult>;
+  adoptStoredSignIn(): Promise<void>;
 };
 
 type AckObservation =
@@ -384,6 +385,7 @@ export async function provisionInstalledHostCredential(
     const tokens = createCliHostTokens({
       lease,
       refresh: () => revalidator.rotateSignIn(),
+      adoptStored: () => revalidator.adoptStoredSignIn(),
       signal: probeAbort.signal,
     });
     const releasedSignOn = cliReleasedSignOn(lease, tokens);
@@ -726,14 +728,16 @@ export async function provisionInstalledHostCredential(
           // means a later client CAN mint, and `mint-unavailable` stands.
           // A lease that no longer holds the refused sign-in was already
           // rotated: authn never refused what it holds now, so nothing is
-          // spent and `mint-unavailable` stands as after a rotation.
-          if (
+          // spent and `mint-unavailable` stands as after a rotation. The lease
+          // first adopts the credentials file's sign-in, which is the stored
+          // one; every condition is read again after that read.
+          const confirmDue = (): boolean =>
             mintUnauthorized &&
             !mintUnauthorizedConfirmed &&
             !credentialRejected &&
-            readLeaseBearer(lease) === mintRefusedSignIn &&
-            remaining() > 0
-          ) {
+            remaining() > 0;
+          if (confirmDue()) await revalidator.adoptStoredSignIn();
+          if (confirmDue() && readLeaseBearer(lease) === mintRefusedSignIn) {
             // Latched BEFORE awaiting: the rotation is the side effect being
             // guarded, so a second lap must not slip past this branch while
             // the first is still settling.

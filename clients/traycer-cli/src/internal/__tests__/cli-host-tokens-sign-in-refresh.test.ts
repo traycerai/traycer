@@ -165,6 +165,7 @@ describe("a mint refusal's recovery refreshes only the sign-in it was refused fo
     const tokens = createCliHostTokens({
       lease,
       refresh: credentials.refresh,
+      adoptStored: async () => undefined,
       signal: null,
     });
     await tokens.whenLoaded();
@@ -193,6 +194,7 @@ describe("a mint refusal's recovery refreshes only the sign-in it was refused fo
     const tokens = createCliHostTokens({
       lease,
       refresh: credentials.refresh,
+      adoptStored: async () => undefined,
       signal: null,
     });
     await tokens.whenLoaded();
@@ -223,6 +225,7 @@ describe("a mint refusal's recovery belongs to the session that started it", () 
     const tokens = createCliHostTokens({
       lease,
       refresh: credentials.refresh,
+      adoptStored: async () => undefined,
       signal: commandSignal.signal,
     });
     await tokens.whenLoaded();
@@ -251,6 +254,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     const tokens = createCliHostTokens({
       lease,
       refresh: credentials.refresh,
+      adoptStored: async () => undefined,
       signal: null,
     });
     await tokens.whenLoaded();
@@ -297,6 +301,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
     const tokens = createCliHostTokens({
       lease,
       refresh: credentials.refresh,
+      adoptStored: async () => undefined,
       signal: null,
     });
     await tokens.whenLoaded();
@@ -349,6 +354,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
         if (refreshesStarted.length === 2) await refreshOfCHeld;
         return credentials.refresh();
       },
+      adoptStored: async () => undefined,
       signal: null,
     });
     await tokens.whenLoaded();
@@ -420,6 +426,7 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
         lease.rotate(REFRESHED_SIGN_IN);
         return { outcome: "rotated", installed: REFRESHED_SIGN_IN };
       },
+      adoptStored: async () => undefined,
       signal: null,
     });
     await tokens.whenLoaded();
@@ -495,6 +502,7 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     const tokens = createCliHostTokens({
       lease,
       refresh: () => revalidator.rotateSignIn(),
+      adoptStored: () => revalidator.adoptStoredSignIn(),
       signal: null,
     });
     await tokens.whenLoaded();
