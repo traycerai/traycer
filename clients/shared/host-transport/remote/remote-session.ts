@@ -718,8 +718,11 @@ function createReleasedSignOnSessionAuth(
   // Asked at attach start, before the open is read: only an attach whose open
   // would carry the sign-in waits for the row to be read again. An attach
   // begun under a sign-in plan counts: its recovery may still answer before
-  // the open is read, and plan the sign-in for it.
+  // the open is read, and plan the sign-in for it. The answer is the attach's
+  // own: its open carries the sign-in only if it was asked yes here, so no
+  // admission heard during the grant sends the sign-in on an unread row.
   const confirmRow = releasedSignOn.confirmRow;
+  let attachMayPresentSignIn = false;
   const tracking = trackAttaches(
     grantProvider,
     {
@@ -732,6 +735,7 @@ function createReleasedSignOnSessionAuth(
         releasedSignOn.opensReleasedWay() &&
         !hosts.namedReason(hostId) &&
         (plan.kind === "sign-in" || signInPlanned() || remembered() !== null);
+      attachMayPresentSignIn = wouldPresentSignIn;
       if (confirmRow === null || !wouldPresentSignIn) return;
       await confirmRow(attach).catch(() => undefined);
     },
@@ -810,13 +814,17 @@ function createReleasedSignOnSessionAuth(
       signInsGiven.clear();
       dialOwner = hosts.currentInstance(hostId);
       openAdmitted = false;
+      const asked = attachMayPresentSignIn;
+      attachMayPresentSignIn = false;
       signInFromMemory =
-        releasedSignOn.opensReleasedWay() && remembered() !== null;
-      const authority: SignInAuthority | null = signInPlanned()
-        ? plannedAuthority()
-        : signInFromMemory
-          ? { kind: "remembered", owner: dialOwner }
-          : null;
+        asked && releasedSignOn.opensReleasedWay() && remembered() !== null;
+      const authority: SignInAuthority | null = !asked
+        ? null
+        : signInPlanned()
+          ? plannedAuthority()
+          : signInFromMemory
+            ? { kind: "remembered", owner: dialOwner }
+            : null;
       // Asked at the write: another transport may have heard this host name a
       // reason since the refusal that planned the sign-in.
       if (
