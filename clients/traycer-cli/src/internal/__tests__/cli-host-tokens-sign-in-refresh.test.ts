@@ -737,6 +737,133 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     store.dispose();
     otherProcess.dispose();
   });
+
+  it("sends no further mint and writes nothing when the token session is disposed while the refusal's disk read is held", async () => {
+    const store = createCliCredentialsStore();
+    const otherProcess = createCliCredentialsStore();
+    await store.signIn(credentialsOf(SIGN_IN_A), false, null);
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    // The disk read the refusal waits for is held until the test releases it.
+    const readEntered: { resolve: () => void } = { resolve: () => undefined };
+    const readWasEntered = new Promise<void>((resolve) => {
+      readEntered.resolve = resolve;
+    });
+    const releaseRead: { resolve: () => void } = { resolve: () => undefined };
+    const readHeld = new Promise<void>((resolve) => {
+      releaseRead.resolve = resolve;
+    });
+    let readIsHeld = false;
+    const heldRead: CredentialsMutationStore = {
+      ...store,
+      // Only the first read is held: later ones, a later mint's among them, go through.
+      read: async () => {
+        if (!readIsHeld) {
+          readIsHeld = true;
+          readEntered.resolve();
+          await readHeld;
+        }
+        return store.read();
+      },
+    };
+    const revalidator = createStoreBackedRevalidator({
+      store: heldRead,
+      lease,
+      signal: null,
+    });
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => revalidator.rotateSignIn(),
+      adoptStored: () => revalidator.adoptStoredSignIn(),
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    // The mint carries the command's own signal, which outlives this token session.
+    const command = new AbortController();
+    const minting = tokens.mintFresh(hostId, command.signal);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    await readWasEntered;
+
+    // The session ends while the read is held; a newer sign-in is on disk when it is released.
+    tokens.dispose();
+    await otherProcess.signIn(credentialsOf(SIBLING_SIGN_IN), false, null);
+    releaseRead.resolve();
+    await minting;
+
+    expect(harness.mints).toHaveLength(1);
+    expect(Array.from(harness.table)).toEqual([]);
+    store.dispose();
+    otherProcess.dispose();
+  });
+
+  it("answers with the token a later mint on the same sign-in bought, and rotates nothing, when a refusal of it is outlived while its disk read is held", async () => {
+    const store = createCliCredentialsStore();
+    await store.signIn(credentialsOf(SIGN_IN_A), false, null);
+    credentialsFile.refreshed.push(ROTATED_SIGN_IN);
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const readEntered: { resolve: () => void } = { resolve: () => undefined };
+    const readWasEntered = new Promise<void>((resolve) => {
+      readEntered.resolve = resolve;
+    });
+    const releaseRead: { resolve: () => void } = { resolve: () => undefined };
+    const readHeld = new Promise<void>((resolve) => {
+      releaseRead.resolve = resolve;
+    });
+    let readIsHeld = false;
+    const heldRead: CredentialsMutationStore = {
+      ...store,
+      // Only the first read is held: later ones, a later mint's among them, go through.
+      read: async () => {
+        if (!readIsHeld) {
+          readIsHeld = true;
+          readEntered.resolve();
+          await readHeld;
+        }
+        return store.read();
+      },
+    };
+    const revalidator = createStoreBackedRevalidator({
+      store: heldRead,
+      lease,
+      signal: null,
+    });
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => revalidator.rotateSignIn(),
+      adoptStored: () => revalidator.adoptStoredSignIn(),
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    const reports: string[] = [];
+    tokens.onRefusalEndingCommand((reportedHostId) => {
+      reports.push(reportedHostId);
+    });
+    // Mint X on the stored sign-in is refused, and its disk read is held.
+    const refused = tokens.mintFresh(hostId, null);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    await readWasEntered;
+
+    // Mint Y, for the same host process on the same sign-in, finds no flight and is answered ok.
+    expect(await tokens.hostBearerFor(hostId, true)).not.toBeNull();
+    expect(harness.mints).toHaveLength(2);
+    expect(harness.mints[1]?.signIn).toBe(SIGN_IN_A);
+
+    // X's read is released: its refusal was outlived by Y, so it judges nothing and spends nothing.
+    releaseRead.resolve();
+    const answered = await refused;
+
+    expect(answered.kind).toBe("ok");
+    if (answered.kind === "ok")
+      expect(answered.bearer.getBearerToken()).toBe("host-token-2");
+    expect(reports).toEqual([]);
+    expect(tokens.signInRejected()).toBe(false);
+    expect(credentialsFile.refreshed).toEqual([ROTATED_SIGN_IN]);
+    expect(lease.getBearerToken()).toBe(SIGN_IN_A);
+    expect(harness.mints).toHaveLength(2);
+    tokens.dispose();
+    store.dispose();
+  });
 });
 
 /** A sign-in with a readable end and no signature: its key is the end, as authn's sign-ins carry. */
