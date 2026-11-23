@@ -1415,7 +1415,7 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
-  it("the headline path: mints on a missing ack and verifies active on the reconnect lap", async () => {
+  it("the headline path, on a computer with no enrolment record of its own: mints on a missing ack and verifies active on the reconnect lap", async () => {
     const hostId = "host-1";
     const debug = vi.fn();
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
