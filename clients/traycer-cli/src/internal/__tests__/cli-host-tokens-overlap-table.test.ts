@@ -11,6 +11,7 @@ import {
   type HostInstance,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { Environment } from "../../runner/environment";
 import {
   createCliCredentialsStore,
@@ -339,6 +340,14 @@ async function settled(): Promise<void> {
   }
 }
 
+const REVOKED: FatalErrorDetails = {
+  code: "UNAUTHORIZED",
+  reason: "refused at the host door",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+  doorReason: "session_revoked",
+};
+
 const answerOf = (answer: Answer, seq: number): HostTokenMintOutcome =>
   answer === "a token"
     ? {
@@ -363,6 +372,9 @@ describe.each(scenarios)(
         "sign-in-recovery-1",
         "sign-in-recovery-2",
         "sign-in-recovery-3",
+        "sign-in-recovery-4",
+        "sign-in-recovery-5",
+        "sign-in-recovery-6",
       );
       const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
       const revalidator = createStoreBackedRevalidator({
@@ -378,6 +390,10 @@ describe.each(scenarios)(
       });
       await tokens.whenLoaded();
       harness.signInRejected = () => tokens.signInRejected();
+      const reports: string[] = [];
+      tokens.onRefusalEndingCommand((reportedHostId) => {
+        reports.push(reportedHostId);
+      });
       processReleasedHosts.observeInstance(hostId, FIRST_PROCESS);
       if (scenario.hostIds === 2)
         processReleasedHosts.observeInstance(otherHostId, FIRST_PROCESS);
@@ -466,21 +482,58 @@ describe.each(scenarios)(
           : [index];
       });
       expect(rotationsWithoutRefusal).toEqual([]);
-      // (4) With two host ids sharing the sign-in: a refusal of the sign-in our
-      // own rotation installed, while it is still stored and before any token
-      // was bought on it, is judged as it leaves, whatever the other host's
-      // mint did meanwhile.
+      // (4) A refusal of the sign-in our own rotation installed, while it is
+      // still stored and before any token was bought on it, is judged as it
+      // leaves, whatever another mint did meanwhile.
       expect(
-        scenario.hostIds === 1
-          ? []
-          : left.filter(
-              (event) =>
-                event.refusalOf?.signIn === OURS &&
-                event.obeysRule &&
-                !event.boughtOnOurs &&
-                !event.judged,
-            ),
+        left.filter(
+          (event) =>
+            event.refusalOf?.signIn === OURS &&
+            event.obeysRule &&
+            !event.boughtOnOurs &&
+            !event.judged,
+        ),
       ).toEqual([]);
+      // (4b) The judgement stands when a token sent with an earlier sign-in
+      // arrives after it, until a rotation starts: such a token is no mint on
+      // the installed sign-in.
+      let standing = false;
+      const clearedByOlderToken: Event[] = [];
+      for (const event of harness.events) {
+        if (event.kind === "rotation-started") standing = false;
+        else if (event.refusalOf !== null) {
+          if (
+            event.refusalOf.signIn === OURS &&
+            event.obeysRule &&
+            event.judged
+          )
+            standing = true;
+        } else if (standing && !event.boughtOnOurs && !event.judged)
+          clearedByOlderToken.push(event);
+      }
+      expect(clearedByOlderToken).toEqual([]);
+      if (scenario.hostIds === 2) {
+        // (5) The second host's session is then revoked, and its recovery asks
+        // the process for the refusal to act on. When the process's latest
+        // refusal is one of a sign-in no longer stored, it spends no rotation
+        // for it; and it reports nothing.
+        const latestRefusal = left.at(-1)?.refusalOf ?? null;
+        const stale =
+          latestRefusal !== null &&
+          latestRefusal.signIn !== harness.storedSignIn();
+        const rotationsBefore = harness.events.filter(
+          (event) => event.kind === "rotation-started",
+        ).length;
+        const reportsBefore = reports.length;
+        await tokens.streamRecovery(otherHostId).revalidateRefused(REVOKED);
+        const rotationsDuring =
+          harness.events.filter((event) => event.kind === "rotation-started")
+            .length - rotationsBefore;
+        expect({
+          rotations: stale ? rotationsDuring : 0,
+          reports: reports.length - reportsBefore,
+        }).toEqual({ rotations: 0, reports: 0 });
+      }
 
       tokens.dispose();
       store.dispose();
