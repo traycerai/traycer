@@ -189,6 +189,13 @@ const mocks = vi.hoisted(() => {
     } | null;
   } = { current: null };
   const siblingSave: { signIn: string | null } = { signIn: null };
+  // When set, the next adopting read of the revalidator is held until `release` settles.
+  const adoptHold: {
+    current: {
+      readonly reached: () => void;
+      readonly release: Promise<void>;
+    } | null;
+  } = { current: null };
   const createStoreBackedRevalidatorMock = vi.fn(
     (args: {
       readonly signal: AbortSignal | null;
@@ -202,6 +209,12 @@ const mocks = vi.hoisted(() => {
         revalidateCurrentContext: revalidateCurrentContextMock,
         // A sibling's sign-in, once saved, reaches the lease through the adopting read.
         adoptStoredSignIn: async () => {
+          const hold = adoptHold.current;
+          if (hold !== null) {
+            adoptHold.current = null;
+            hold.reached();
+            await hold.release;
+          }
           if (siblingSave.signIn !== null)
             args.lease.rotate(siblingSave.signIn);
         },
@@ -232,6 +245,7 @@ const mocks = vi.hoisted(() => {
     hostTokenRecoveryResult: null as string | null,
     providedLease,
     siblingSave,
+    adoptHold,
     // Fired synchronously from inside `subscribe()`, once per lap, with the
     // just-created session and its 1-based lap index. Tests use it to
     // schedule (via `setTimeout(..., 0)`) their simulated ack/status
@@ -497,6 +511,7 @@ beforeEach(() => {
   mocks.hostTokenRecoveryResult = null;
   mocks.providedLease.current = null;
   mocks.siblingSave.signIn = null;
+  mocks.adoptHold.current = null;
   mocks.onSessionCreated = null;
 
   mocks.subscribeMock.mockClear();
@@ -2458,6 +2473,113 @@ describe("provisionInstalledHostCredential", () => {
     expect(outcome).not.toEqual<HostCredentialProvisionOutcome>({
       kind: "unauthorized",
     });
+    expectCleanTeardown();
+  }, 10_000);
+
+  // Evidence may wait; a verdict may not: a verdict the file's sign-in withdraws is no terminal effect.
+  it("goes on to a new lap on the sibling's sign-in when it is saved before the gate's first adopting read of a refused mint woke the lap", async () => {
+    const SIGN_IN_A = "test-bearer-token";
+    const SIBLING = "sibling-sign-in";
+    const sentWith: string[] = [];
+    const readReached = createDeferred<void>();
+    const readReleased = createDeferred<void>();
+    // The refusal's report wakes the lap; the adopting read that follows it is held.
+    const logger: typeof noopLogger = {
+      ...noopLogger,
+      warn: (message, fields) => {
+        if (message === "Host credential provisioning token mint refused")
+          mocks.adoptHold.current = {
+            reached: () => readReached.resolve(undefined),
+            release: readReleased.promise,
+          };
+        noopLogger.warn(message, fields);
+      },
+    };
+    mocks.hostTokenTable = new Map();
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    // authn refuses the first mint, sent on A, and the refresh of A.
+    mocks.hostTokenMintMock.mockImplementation(
+      async (_authnBaseUrl: string, _hostId: string, signIn: string) => {
+        sentWith.push(signIn);
+        return sentWith.length === 1
+          ? { kind: "sign-in-rejected" }
+          : {
+              kind: "ok",
+              token: {
+                token: "host-token-on-sibling",
+                expiresAtMs: Date.now() + 3_600_000,
+              },
+            };
+      },
+    );
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.onSessionCreated = (_session, lapIndex): void => {
+      setTimeout(() => {
+        const options = capturedClientOptions();
+        // The dial asks for its host-only token: the mint runs for the host the socket was selected for.
+        options.bearer("host-1");
+        if (lapIndex === 1) return;
+        void vi
+          .waitFor(() => expect(sentWith).toHaveLength(2))
+          .then(() => options.onHostCredentialState("host-1", "active"));
+      }, 0);
+    };
+
+    const probe = provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn(), logger }),
+    );
+    const observed = probe.then(
+      (outcome) => ({ status: "resolved" as const, outcome }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await readReached.promise;
+    // The sibling's save lands inside the held read: the file and the lease are on its sign-in.
+    mocks.siblingSave.signIn = SIBLING;
+    mocks.providedLease.current?.rotate(SIBLING);
+    expect(mocks.providedLease.current?.getBearerToken()).toBe(SIBLING);
+    readReleased.resolve(undefined);
+
+    expect(await observed).toEqual({
+      status: "resolved",
+      outcome: { kind: "active", minted: false },
+    });
+    expect(sentWith).toEqual([SIGN_IN_A, SIBLING]);
+    expect(mocks.subscribeMock).toHaveBeenCalledTimes(2);
+    expectCleanTeardown();
+  }, 10_000);
+
+  // The guard for the case above: with no sibling's save, the refusal still stands and ends the probe at once.
+  it("ends unauthorized at the wake, with no new lap, when the sign-in a refused mint woke the lap on is still the one stored", async () => {
+    const SIGN_IN_A = "test-bearer-token";
+    const sentWith: string[] = [];
+    const deadlineMs = 5_000;
+    mocks.hostTokenTable = new Map();
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.hostTokenMintMock.mockImplementation(
+      async (_authnBaseUrl: string, _hostId: string, signIn: string) => {
+        sentWith.push(signIn);
+        return { kind: "sign-in-rejected" };
+      },
+    );
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        // The dial asks for its host-only token: the mint runs for the host the socket was selected for.
+        capturedClientOptions().bearer("host-1");
+      }, 0);
+    };
+
+    const startedAt = Date.now();
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "unauthorized",
+    });
+    expect(Date.now() - startedAt).toBeLessThan(deadlineMs);
+    expect(sentWith).toEqual([SIGN_IN_A]);
+    expect(mocks.subscribeMock).toHaveBeenCalledTimes(1);
     expectCleanTeardown();
   }, 10_000);
 
