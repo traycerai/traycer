@@ -13,6 +13,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import {
   useHistoryQuery,
@@ -180,7 +181,7 @@ function serveFirstPage(firstPage: ListTasksResponse): void {
   });
 }
 
-async function mountWithTwoPagesLoaded() {
+async function mountHistory() {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -211,6 +212,11 @@ async function mountWithTwoPagesLoaded() {
   await waitFor(() => {
     expect(result.current.history.hasNextPage).toBe(true);
   });
+  return { result, listedIds };
+}
+
+async function mountWithTwoPagesLoaded() {
+  const { result, listedIds } = await mountHistory();
   act(() => {
     result.current.history.fetchNextPage();
   });
@@ -345,6 +351,103 @@ describe("history pages across an activity refresh", () => {
     expect([...listedIds()].sort()).toEqual([
       "page-one-a",
       "page-one-b",
+      "page-three-a",
+      "page-two-a",
+      "page-two-b",
+    ]);
+  });
+
+  it("a Show more in flight when an activity refresh displaces a row does not drop that row", async () => {
+    const { result, listedIds } = await mountHistory();
+    let serveSecondPage: () => void = () => undefined;
+    const secondPageGate = new Promise<void>((resolve) => {
+      serveSecondPage = resolve;
+    });
+    mockHostClient.request.mockImplementation(async (_method, params) => {
+      if (params.cursor === "cursor-two") {
+        await secondPageGate;
+        return SECOND_PAGE;
+      }
+      if (params.cursor === "cursor-displaced") {
+        return {
+          tasks: [taskLight("page-one-b"), taskLight("page-two-a")],
+          hasMore: false,
+        };
+      }
+      return {
+        tasks: [taskLight("page-one-new"), taskLight("page-one-a")],
+        hasMore: true,
+        nextCursor: "cursor-displaced",
+      };
+    });
+    act(() => {
+      result.current.history.fetchNextPage();
+    });
+    await waitFor(() => {
+      expect(result.current.history.isFetchingNextPage).toBe(true);
+    });
+
+    await settleActivityRefresh(result);
+    serveSecondPage();
+    await waitFor(() => {
+      expect(result.current.history.isFetchingNextPage).toBe(false);
+    });
+
+    expect(listedIds()).toEqual(["page-one-new", "page-one-a"]);
+    expect(result.current.history.hasNextPage).toBe(true);
+
+    act(() => {
+      result.current.history.fetchNextPage();
+    });
+    await waitFor(() => {
+      expect(listedIds()).toEqual([
+        "page-one-new",
+        "page-one-a",
+        "page-one-b",
+        "page-two-a",
+      ]);
+    });
+  });
+
+  it("Select all includes the refreshed first page", async () => {
+    const { result } = await mountWithTwoPagesLoaded();
+    let serveThirdPage: () => void = () => undefined;
+    const thirdPageGate = new Promise<void>((resolve) => {
+      serveThirdPage = resolve;
+    });
+    mockHostClient.request.mockImplementation(async (_method, params) => {
+      if (params.cursor === "cursor-three") {
+        await thirdPageGate;
+        return THIRD_PAGE;
+      }
+      return {
+        tasks: [taskLight("page-one-new"), taskLight("page-one-a")],
+        hasMore: true,
+        nextCursor: "cursor-two",
+      };
+    });
+    const controller = new AbortController();
+    let selection: Promise<readonly HistoryItem[] | null> =
+      Promise.resolve(null);
+    act(() => {
+      selection = result.current.history.fetchAllItems(controller.signal);
+    });
+    await waitFor(() => {
+      expect(
+        mockHostClient.request.mock.calls.some(
+          ([, params]) => params.cursor === "cursor-three",
+        ),
+      ).toBe(true);
+    });
+
+    await settleActivityRefresh(result);
+    serveThirdPage();
+    const items = await selection;
+
+    expect(items?.map((item) => item.epicId).sort()).toEqual([
+      "page-one-a",
+      "page-one-b",
+      "page-one-new",
       "page-three-a",
       "page-two-a",
       "page-two-b",

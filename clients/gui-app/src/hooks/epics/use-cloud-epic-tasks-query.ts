@@ -772,8 +772,13 @@ export function useCloudEpicTasksQueryForClient(
         }
       }
       if (!isCurrent()) return null;
+      // The first page as it is now, not as this run captured it: a kept-pages
+      // read can replace it mid-run without advancing the generation, and the
+      // retained pages read below already hold the rows it displaced.
       return collectPageTasks([
-        queryData,
+        queryClient.getQueryData<ListTasksResponse>(
+          cloudEpicTasksQueryKey(hostId, userId, effectiveRequest),
+        ) ?? queryData,
         ...(useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity] ??
           []),
       ]);
@@ -786,6 +791,7 @@ export function useCloudEpicTasksQueryForClient(
       isPlaceholderData,
       lastPage,
       mutateNextPageAsync,
+      queryClient,
       queryData,
       userId,
     ],

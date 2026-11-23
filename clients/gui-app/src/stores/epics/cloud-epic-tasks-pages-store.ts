@@ -86,8 +86,9 @@ interface CloudEpicTasksPagesStoreState {
    * Keeps the rows a kept-pages read moved off the first page, in one page
    * ahead of the retained tails: under the Recent order a row newer activity
    * displaced belongs directly below the first page, and no retained cursor
-   * page holds it. A no-op without retained tails, and for a read that began
-   * before the identity's latest reset.
+   * page holds it. Without retained tails it keeps nothing and refuses any
+   * cursor page already in flight, whose rows would follow the displaced ones.
+   * A no-op for a read that began before the identity's latest reset.
    */
   readonly keepRowsLeavingFirstPage: (
     identity: string,
@@ -192,7 +193,6 @@ export const useCloudEpicTasksPagesStore =
       set((state) => {
         if (generation !== currentGeneration(state, identity)) return state;
         const pages = state.pagesByIdentity[identity] ?? [];
-        if (pages.length === 0) return state;
         const extendsDisplacedPage =
           state.identitiesWithDisplacedRowsPage.has(identity);
         const onFirstPage = new Set(nextFirstPage.tasks.map(taskId));
@@ -208,6 +208,18 @@ export const useCloudEpicTasksPagesStore =
           displaced.set(id, task);
         }
         if (displaced.size === 0 && !extendsDisplacedPage) return state;
+        if (pages.length === 0) {
+          // No tail to keep the displaced rows ahead of, but a "Show more"
+          // may already be in flight on the replaced page's cursor; its page
+          // would follow the rows this read displaced and land without them.
+          // Advance the generation so that page is refused, as a reset would.
+          return {
+            generationByIdentity: {
+              ...state.generationByIdentity,
+              [identity]: generation + 1,
+            },
+          };
+        }
         // Spread from a retained page, never from the first page: the first
         // page's completeness can still be a pending local-first statement,
         // which this page would then repeat for as long as it is held.
@@ -370,7 +382,8 @@ export function resetCloudEpicTasksPageIdentity(identity: string): void {
   useCloudEpicTasksPagesStore.getState().resetIdentity(identity);
 }
 
-const identitiesKeepingPages = new Set<string>();
+/** Each kept-pages read in flight, per identity; a read releases only its own. */
+const keptPagesReadsByIdentity = new Map<string, Set<symbol>>();
 
 /**
  * Runs `read` - a first-page refetch of `identity` - with its retained cursor
@@ -382,11 +395,17 @@ export async function readCloudEpicTasksFirstPageKeepingPages<Result>(
   identity: string,
   read: () => Promise<Result>,
 ): Promise<Result> {
-  identitiesKeepingPages.add(identity);
+  const token = Symbol(identity);
+  const reads = keptPagesReadsByIdentity.get(identity) ?? new Set<symbol>();
+  reads.add(token);
+  keptPagesReadsByIdentity.set(identity, reads);
   try {
     return await read();
   } finally {
-    identitiesKeepingPages.delete(identity);
+    reads.delete(token);
+    if (reads.size === 0 && keptPagesReadsByIdentity.get(identity) === reads) {
+      keptPagesReadsByIdentity.delete(identity);
+    }
   }
 }
 
@@ -394,7 +413,7 @@ export async function readCloudEpicTasksFirstPageKeepingPages<Result>(
 export function cloudEpicTasksFirstPageDispatchKeepsPages(
   identity: string,
 ): boolean {
-  return identitiesKeepingPages.has(identity);
+  return keptPagesReadsByIdentity.has(identity);
 }
 
 /**
@@ -403,7 +422,7 @@ export function cloudEpicTasksFirstPageDispatchKeepsPages(
  * list again must get it again even while a background read is in flight.
  */
 export function endCloudEpicTasksKeptPagesRead(identity: string): void {
-  identitiesKeepingPages.delete(identity);
+  keptPagesReadsByIdentity.delete(identity);
 }
 
 export function keepCloudEpicTasksRowsLeavingFirstPage(
