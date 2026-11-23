@@ -11,6 +11,7 @@ import {
   hostTokenUnaryRevalidator,
   trackHostTokenMints,
   type HostTokenAccess,
+  type HostTokenRecoveryOutcome,
 } from "../host-token-lease";
 import {
   createHostTokenSource,
@@ -2065,7 +2066,7 @@ describe("a spent recovery's verdict on a refused sign-in", () => {
       now: () => Date.now(),
     });
 
-    let answered: RevalidateOutcome | null = null;
+    let answered: HostTokenRecoveryOutcome | null = null;
     const pending = revalidator
       .revalidateRefused(REFUSED_NOT_ADMITTED, () => true)
       .then((outcome) => {
