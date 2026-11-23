@@ -158,6 +158,15 @@ function startedHiddenWindow(): Promise<Rig> {
   return startedWindow(true, true);
 }
 
+/**
+ * The monotonic clock passes the confirmation's ceiling while no timer runs.
+ * The wall clock does not decide the ceiling, so it is left where it is.
+ */
+function passTheCeilingOnTheMonotonicClock(): void {
+  const passed = performance.now() + ROW_CONFIRM_CEILING_MS + 1;
+  vi.spyOn(performance, "now").mockReturnValue(passed);
+}
+
 /** Lets what a settled read or an elapsed ceiling resolves run; no timer is due at 0. */
 async function drain(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
@@ -168,6 +177,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of directories.splice(0)) directory.dispose();
   __setBrowserDocumentHiddenForTests(false);
   vi.useRealTimers();
@@ -488,9 +498,9 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(rig.reads.running()).toBe(1);
   });
 
-  // The ceiling is a time: a confirmation whose clock has passed it starts no
-  // read, though its timer's callback has not run yet. The clock is moved with
-  // `setSystemTime`, which fires no timer.
+  // The ceiling is a monotonic time: a confirmation whose clock has passed it
+  // starts no read, though its timer's callback has not run yet. The monotonic
+  // clock is moved without running a timer; a wall clock jump decides nothing.
   it("(past the ceiling, identity change) starts no read once the clock is past the ceiling though its timer has not run, and resolves when it runs", async () => {
     const rig = await startedHiddenWindow();
     rig.push();
@@ -499,7 +509,7 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     // Read A is held; a change of the signed-in person makes it insufficient.
     expect(rig.reads.issued()).toBe(2);
     rig.switchIdentity("user-b");
-    vi.setSystemTime(Date.now() + ROW_CONFIRM_CEILING_MS + 1);
+    passTheCeilingOnTheMonotonicClock();
 
     rig.reads.answer(1, "row-a");
     await drain();
@@ -516,7 +526,7 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     const confirmation = rig.confirm();
     await drain();
     expect(rig.reads.issued()).toBe(2);
-    vi.setSystemTime(Date.now() + ROW_CONFIRM_CEILING_MS + 1);
+    passTheCeilingOnTheMonotonicClock();
 
     rig.rotateCredential();
     rig.directory.invalidateInFlightRefresh();
