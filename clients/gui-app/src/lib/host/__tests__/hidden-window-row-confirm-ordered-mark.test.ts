@@ -11,9 +11,10 @@ import { confirmRowWhenHidden } from "@/lib/host/hidden-window-row-confirm";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
 
-// A hidden window's stale state is an ordered mark: every skipped push moves
-// it, and it ends only when a read that STARTED after the latest mark, in the
-// current era, as the current read, has settled. The confirmation waits for
+// A hidden window's stale state is an ordered mark: every hide, every skipped
+// push, in poll mode every show, and every era change moves it, and it ends
+// only when a read that STARTED after the latest mark, in the current era, as
+// the current read, has settled. The confirmation waits for
 // that, within the one ceiling measured from its own start. Every registry
 // read here is held by hand: nothing is settled by a clock or a turn count
 // except the ceiling itself, on the fake clock.
@@ -281,7 +282,7 @@ describe("a hidden window's row confirmation waits for a read that started after
 // a read, that started at or after the later of the latest mark and, when the
 // document is hidden at the confirmation's start, the confirmation's own start.
 describe("a hidden window reads for every sign-in attach, and a confirmation waits on the condition, not on one read", () => {
-  it("(F2 a) starts a new read for a later attach in the same hidden span, though the earlier attach's read left no mark, and gets the row the computer moved to", async () => {
+  it("(later attach) starts a new read for a later attach in the same hidden span, though the earlier attach's read left no mark, and gets the row the computer moved to", async () => {
     const rig = await startedHiddenWindow();
     rig.push();
     const first = rig.confirm();
@@ -305,7 +306,7 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(rig.reads.mostAtOnce()).toBe(1);
   });
 
-  it("(F2 b) shares a read between two overlapping hidden attaches only when it started after each began, and follows with another read for the one that began later", async () => {
+  it("(overlapping attaches) shares a read between two overlapping hidden attaches only when it started after each began, and follows with another read for the one that began later", async () => {
     const rig = await startedHiddenWindow();
     rig.push();
     const first = rig.confirm();
@@ -334,7 +335,7 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
   });
 
   // A guard: a shown window that skipped nothing has a current row.
-  it("(F2 guard) returns at once, reading nothing, in a visible window with no mark outstanding", async () => {
+  it("(nothing missed) returns at once, reading nothing, in a visible window with no mark outstanding", async () => {
     const rig = await startedWindow(false, true);
 
     const confirmation = rig.confirm();
@@ -344,7 +345,7 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(rig.reads.issued()).toBe(1);
   });
 
-  it("(F4) resolves when the current read of the current era settles, not at the ceiling, though the read it first joined was retired by an era change and never settles", async () => {
+  it("(retired read) resolves when the current read of the current era settles, not at the ceiling, though the read it first joined was retired by an era change and never settles", async () => {
     const rig = await startedHiddenWindow();
     rig.push();
     // The confirmation joins the era-1 read.
@@ -539,10 +540,9 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(rig.reads.issued()).toBe(2);
   });
 
-  // In poll mode a skipped tick is a time. A tick that came due during the
-  // hidden span marks the directory even though no timer ran for it: the clock
-  // passes it, and the show clears the interval before a late callback can.
-  it("(poll tick) reads for a confirmation in a shown window when a poll tick came due while hidden, though no timer ran for it and an earlier read followed the hide", async () => {
+  // In poll mode a hidden span is a mark at both edges: a read that started
+  // during the span satisfies no confirmation in the shown window after it.
+  it("(poll span) waits in a shown window for the show's read, though an earlier read followed the hide and a poll interval passed hidden with no timer run", async () => {
     const rig = await startedWindow(false, false);
     const hiddenAt = Date.now();
     __setBrowserDocumentHiddenForTests(true);
@@ -552,7 +552,7 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(rig.reads.issued()).toBe(2);
     rig.reads.answer(1, "row-r");
     await drain();
-    // The poll's tick comes due; the clock passes it and no timer runs.
+    // A poll interval passes on the clock while hidden; no timer runs.
     vi.setSystemTime(hiddenAt + 60_000 + 1);
     // The show reads once, as the poll does on a show.
     __setBrowserDocumentHiddenForTests(false);
@@ -572,11 +572,10 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(rig.reads.mostAtOnce()).toBe(1);
   });
 
-  // The wall clock can move back while a window is hidden. Vitest's fake timers
-  // fake `performance.now()` too, and `setSystemTime` moves only the wall
-  // clock, so a tick that came due on the monotonic clock is erased from the
-  // wall clock alone.
-  it("(poll tick, wall clock set back) still waits for the show's read when the wall clock was set back after a poll interval had passed hidden", async () => {
+  // The wall clock can move back while a window is hidden, and it decides
+  // nothing: the hidden span is the mark. Vitest's fake timers fake
+  // `performance.now()` too, and `setSystemTime` moves only the wall clock.
+  it("(poll span, wall clock set back) still waits for the show's read when the wall clock was set back after a poll interval had passed hidden", async () => {
     const rig = await startedWindow(false, false);
     const hiddenAt = Date.now();
     __setBrowserDocumentHiddenForTests(true);

@@ -335,8 +335,8 @@ export class HostDirectoryService implements IHostDirectoryService {
   private lastCommitIdentity: string | null = null;
   /**
    * Resume while riding the shell's registry push: no poll clock to rearm, so
-   * a show acts only on a push that arrived while hidden. The window stays
-   * possibly stale until the read this starts settles.
+   * a show acts only on a push skipped while hidden, applying it once. The
+   * hide was a mark ({@link noteVisibility}), and so was each skipped push.
    */
   private readonly handleVisibilityChangeWhileRidingPushes = (): void => {
     this.noteVisibility();
@@ -355,9 +355,9 @@ export class HostDirectoryService implements IHostDirectoryService {
   /** The skipped push a show has already applied its one catch-up push for. */
   private catchUpAppliedThrough: number | null = null;
   /**
-   * Poll mode's clock stops while the window is hidden, so a hidden span may
-   * have skipped ticks: it is a mark, as in push mode. Whether a tick was
-   * actually skipped is never asked, and no elapsed time is computed.
+   * Poll mode's poll stops while the window is hidden, and nothing tells the
+   * window what changed meanwhile: a hidden span is a mark at both of its
+   * edges ({@link noteVisibility}). No elapsed time decides it.
    */
   private readonly handleVisibilityChangeWhilePolling = (): void => {
     this.noteVisibility();
@@ -371,9 +371,10 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private order = 0;
   /**
-   * The latest mark. Every hide, every push skipped while hidden and, in poll
-   * mode, every tick a hidden span skips is a mark, and so is every era change
-   * (a rotation or an identity change). A show ends nothing.
+   * The latest mark. Each observed visibility transition to hidden is a mark;
+   * in poll mode each observed transition back to shown is one too. Each push
+   * skipped while hidden marks itself, and so does every era change (a
+   * rotation or an identity change).
    */
   private latestMark = 0;
   /** The era the latest era mark was taken for; see {@link noteEra}. */

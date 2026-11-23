@@ -450,10 +450,10 @@ describe("a window's remote sign-in with the real host directory", () => {
     expect(run.reads()).toBe(1);
   }, 20_000);
 
-  it("waits for the show tick's read, in a window with no shell push, and sends no sign-in once it commits a team row", async () => {
+  it("waits for the show's poll read, in a window with no shell push, and sends no sign-in once it commits a team row", async () => {
     const run = await startWithDirectory("poll");
-    // The hidden span skipped the poll ticks; showing the window fires one tick,
-    // whose read is in flight when the attach begins.
+    // The hidden span is a mark at both edges; showing the window starts the
+    // poll's read, which is in flight when the attach begins.
     __setBrowserDocumentHiddenForTests(true);
     __setBrowserDocumentHiddenForTests(false);
     await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
