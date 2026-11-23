@@ -76,11 +76,13 @@ function processHeldRefusals(instance: HostInstance): Map<string, string> {
  * One mint request per host process and sign-in at a time for this process:
  * every handle's asks share the person's one source, and the request is
  * shared further by sign-in. The request ends when its last asker stops
- * waiting, or on its own timeout. Each asker stops on its own ask's signal,
- * which carries its handle's stop; it is not cut short by another handle's. A signal outlives its call only where the
- * command means it to (a give's budget, which its next try joins); no request
- * outlives every asker that wants it. Kept on the host process observed when
- * the mint starts, so a replacement never joins its predecessor's.
+ * waiting, or on its own timeout. Each asker stops on its own exit (see
+ * `askSignal`): its own signal, else its caller's, else, with none, its
+ * handle's dispose; it is not cut short by another handle's. A signal
+ * outlives its call only where the command means it to (a give's budget,
+ * which its next try joins); no request outlives every asker that wants it.
+ * Kept on the host process observed when the mint starts, so a replacement
+ * never joins its predecessor's.
  */
 interface MintFlight {
   readonly answer: Promise<HostTokenMintOutcome>;
@@ -171,9 +173,14 @@ const unsentMint = (exit: AbortSignal): OrderedMintAnswer => ({
   order: null,
 });
 
-// `signal` is the ask's, which already carries its handle's stop (see
-// `askSignal`): a NEW request starts only while it is live, and a running one
-// may still be joined.
+/**
+ * Each ask's exit (see `askSignal`), mapped to its handle's stop: a NEW
+ * request starts only while its asker's exit and its handle are both live; a
+ * running one may still be joined, by a handle that has ended too.
+ */
+const startGates = new WeakMap<AbortSignal, AbortSignal>();
+
+// `signal` is the ask's exit: the asker leaves the request when it ends.
 function sharedMint(
   userId: string,
   hostId: string,
@@ -189,6 +196,8 @@ function sharedMint(
   const key = `${hostId}\u0000${signInToken}`;
   let flight = mintFlights.get(key);
   if (flight === undefined) {
+    const gate = signal === null ? undefined : startGates.get(signal);
+    if (gate?.aborted === true) return Promise.resolve(unsentMint(gate));
     const controller = new AbortController();
     const started: MintFlight = {
       controller,
@@ -496,7 +505,12 @@ type RefusedAsk = Extract<Asked, { readonly refusal: SignInRefusal }>;
 // the revalidator its refreshes run on (built with its own signal, so its
 // abort cancels its own refresh's lock wait and fetch).
 interface TokensHandle {
+  /** Its caller's signal (`null`: as long as the command), or its dispose. */
   readonly stop: AbortSignal;
+  /** Its caller's own signal; `null` lives as long as the command. */
+  readonly signal: AbortSignal | null;
+  /** Its dispose. */
+  readonly ended: AbortSignal;
   readonly listeners: Set<CliMintRefusalListener>;
   readonly revalidator: SignInRevalidator;
 }
@@ -512,12 +526,18 @@ interface PersonTokens {
   forgetUser(): Promise<void>;
 }
 
-// An ask's signal: its caller's, ended too when its handle stops.
+// An ask's exit, the signal it leaves a shared request on: its own signal,
+// else its handle's caller's, else its handle's dispose. A dispose pulls off a
+// request only the asks with no signal of their own, and stops a disposed
+// handle starting a new one (`startGates`). Each exit is the ask's own object.
 const askSignal = (
   handle: TokensHandle,
   signal: AbortSignal | null,
-): AbortSignal =>
-  signal === null ? handle.stop : AbortSignal.any([signal, handle.stop]);
+): AbortSignal => {
+  const exit = AbortSignal.any([signal ?? handle.signal ?? handle.ended]);
+  startGates.set(exit, handle.stop);
+  return exit;
+};
 
 function createPersonTokens(
   lease: MutableBearerLease,
@@ -630,17 +650,26 @@ function createPersonTokens(
   stored.bindSignInSync(adoptStored);
   // The key of the sign-in stored now: the lease's, which follows the file.
   const storedKey = (): string | null => hostSignInKey(readLeaseBearer(lease));
-  // The exit that ended an ask, as an ended mint is told today.
-  const endedExit = (signal: AbortSignal | null): AbortSignal | null =>
-    signal?.aborted === true ? signal : null;
+  // The exit that ended an ask, or its handle's stop: an ask whose handle has
+  // ended is answered as abandoned, though its request runs on for others.
+  const endedExit = (
+    handle: TokensHandle | null,
+    signal: AbortSignal | null,
+  ): AbortSignal | null =>
+    signal?.aborted === true
+      ? signal
+      : handle?.stop.aborted === true
+        ? handle.stop
+        : null;
   // One refresh of the stored sign-in at a time for the person: a caller
   // while one runs for the same stored sign-in joins it, and every caller is
   // answered with its one result. The refresh runs on its own controller,
   // aborted only once every caller has left (as `sharedMint`'s request is):
   // no caller's stop cancels another's refresh, and a lone caller's stop
   // still cancels its lock wait and fetch at once. A caller whose stop ends
-  // leaves as a refresh that never started answers, "network-error". No
-  // refresh starts for a handle that has stopped.
+  // leaves as a refresh that never started answers, "network-error"; its
+  // dispose does not pull it off, as a caller's dispose never cancelled its
+  // refresh. No refresh starts for a handle that has stopped.
   interface RefreshFlight {
     readonly signIn: string | null;
     readonly outcome: Promise<SignInRotation>;
@@ -685,18 +714,19 @@ function createPersonTokens(
     }
     const running = flight;
     running.callers += 1;
+    const exit = handle.signal;
     return new Promise<SignInRotation>((resolve) => {
       const leave = (): void => {
         running.callers -= 1;
         if (running.callers === 0) {
           if (refreshing === running) refreshing = null;
-          running.controller.abort(handle.stop.reason);
+          running.controller.abort(exit?.reason);
         }
         resolve("network-error");
       };
-      handle.stop.addEventListener("abort", leave, { once: true });
+      exit?.addEventListener("abort", leave, { once: true });
       void running.outcome.then((outcome) => {
-        handle.stop.removeEventListener("abort", leave);
+        exit?.removeEventListener("abort", leave);
         resolve(outcome);
       });
     });
@@ -792,7 +822,7 @@ function createPersonTokens(
       // The process was replaced before the mint could start: once more, for
       // the process observed now.
       if (outcome.kind === "process-replaced") {
-        const exit = endedExit(signal);
+        const exit = endedExit(handle, signal);
         if (exit !== null) return settled(abandonedMint(exit));
         if (replaced)
           return settled({
@@ -805,7 +835,7 @@ function createPersonTokens(
       }
       if (outcome.kind === "ok") {
         // A usable answer, and the purchase it records, are a live asker's.
-        const exit = endedExit(signal);
+        const exit = endedExit(handle, signal);
         if (exit !== null) return settled(abandonedMint(exit));
         const { purchase } = answered;
         // The source kept this asker's own write of the token the request
@@ -837,7 +867,7 @@ function createPersonTokens(
         refused === storedKey() &&
         (order === null || !outlived(owner, order)) &&
         hosts.isCurrent(owner);
-      const exit = endedExit(signal);
+      const exit = endedExit(handle, signal);
       if (exit !== null) return settled(abandonedMint(exit));
       if (counts) {
         facts.refused.add(refused);
@@ -883,7 +913,9 @@ function createPersonTokens(
           id,
           hostId,
           fresh,
-          handle === null ? ask.signal : askSignal(handle, ask.signal),
+          handle === null || (ask.signal !== null && startGates.has(ask.signal))
+            ? ask.signal
+            : askSignal(handle, ask.signal),
           ask.owner,
         );
         if (ownAsks.has(ask)) askedBy.set(ask, asked);
@@ -1155,7 +1187,7 @@ function createPersonTokens(
       ): Promise<CliHostBearer> => {
         const { owner, refusal, outcome } = refused;
         const rejectedNow = (await signInRejectionNow(refusal)) !== null;
-        const exit = endedExit(signal);
+        const exit = endedExit(handle, signal);
         if (exit !== null) return answer(owner.hostId, abandonedMint(exit));
         const current = hosts.isCurrent(owner);
         const overtaken =
@@ -1188,7 +1220,7 @@ function createPersonTokens(
       ): Promise<CliHostBearer> => {
         const { owner, refusal } = refused;
         const hostId = owner.hostId;
-        if (signal.aborted)
+        if (signal.aborted || handle.stop.aborted)
           return answer(hostId, {
             kind: "unavailable",
             detail: "sign-in refresh not started: its caller ended",
@@ -1301,7 +1333,7 @@ function createPersonTokens(
         const started = obtain(
           owner,
           source.heldRefused(userId, hostId),
-          handle.stop,
+          askSignal(handle, null),
         )
           .catch((): CliHostBearer => ({
             kind: "failed",
@@ -1416,12 +1448,13 @@ function createPersonTokens(
         // recovery's gate; any other recovers as any refusal does.
         renewAfterSignInRefresh: async (hostId) => {
           const owner = hosts.currentInstance(hostId);
+          const exit = askSignal(handle, null);
           const renewed = await askTracked(
             handle,
             userId,
             hostId,
             true,
-            handle.stop,
+            exit,
             owner,
           );
           if (renewed.refusal === null) {
@@ -1436,9 +1469,7 @@ function createPersonTokens(
               );
             return renewed.outcome.kind === "ok";
           }
-          return (
-            (await recoverRefusedSignIn(renewed, handle.stop)).kind === "ok"
-          );
+          return (await recoverRefusedSignIn(renewed, exit)).kind === "ok";
         },
       };
     },
@@ -1518,6 +1549,8 @@ export async function acquireCliSignIn(
   const handle: TokensHandle = {
     stop:
       signal === null ? ended.signal : AbortSignal.any([signal, ended.signal]),
+    signal,
+    ended: ended.signal,
     listeners: new Set(),
     revalidator,
   };
