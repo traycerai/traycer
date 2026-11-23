@@ -433,7 +433,7 @@ describe("a unary call's reports to the app's door", () => {
       expect(await answerDial(0, notAdmittedRefusal())).toBe(
         NO_HOST_TOKEN_PROBE,
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(30_001);
       // The probe refusal has been processed; the held mint still owns recovery.
       expect(mints.asked()).toBeGreaterThanOrEqual(1);
       expect(driven.settled()).toBe(false);
