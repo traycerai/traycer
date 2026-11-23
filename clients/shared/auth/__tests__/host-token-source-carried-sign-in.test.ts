@@ -385,7 +385,75 @@ describe("what the source hands back for a mint carries the sign-in it stands fo
 });
 
 describe("a refusal is recorded at the source only while it still stands for the pair", () => {
-  it("records none for a request that a later-started write, which was kept, has outlived", async () => {
+  it("records none for a request that a later-started write for the same host process, which was kept, has outlived", async () => {
+    const { tokens, mints, ask, owner } = rig(
+      createMemoryHostTokenPersistence(),
+    );
+    // The refusal's record waits for the sign-in to be brought up to date.
+    const syncEntered: string[] = [];
+    const sync = (() => {
+      let release = (): void => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { held, release: () => release() };
+    })();
+    tokens.bindSignInSync(async () => {
+      syncEntered.push("entered");
+      await sync.held;
+    });
+    await tokens.whenLoaded();
+    // The refused request starts first and is answered, and its flight is over.
+    const refused = identify(tokens, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(syncEntered).toEqual(["entered"]));
+    // A later request of the same host process on the same sign-in sends its
+    // own request, and its write is kept and written.
+    const later = identify(tokens, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    mints[1].answer({ kind: "ok", token: hostTokenIssuedAt("later", 2_000) });
+    expect(purchaseOf(await later)).toMatchObject({ owner });
+
+    sync.release();
+    await refused;
+
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+  });
+
+  it("records a request's failure that only a later ownerless renewal's kept write outlived", async () => {
+    const { tokens, mints, ask, owner } = rig(
+      createMemoryHostTokenPersistence(),
+    );
+    // The refusal's record waits for the sign-in to be brought up to date.
+    const syncEntered: string[] = [];
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    tokens.bindSignInSync(async () => {
+      syncEntered.push("entered");
+      await held;
+    });
+    await tokens.whenLoaded();
+    const refused = identify(tokens, true, ask);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    mints[0].answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(syncEntered).toEqual(["entered"]));
+    // A renewal, asked for no host process, sends its own request, and its write is kept.
+    const renewal = tokens.renew(USER_ID, [HOST_ID]);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    mints[1].answer({ kind: "ok", token: hostTokenIssuedAt("renewed", 2_000) });
+    await renewal;
+    expect(tokens.current(USER_ID, HOST_ID)).not.toBeNull();
+
+    release();
+    await refused;
+
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
+  });
+
+  it("records a request's failure that only another host process's later purchase outlived", async () => {
     const { tokens, mints, owner } = rig(createMemoryHostTokenPersistence());
     const otherProcess = createReleasedHostMemory();
     otherProcess.observeInstance(HOST_ID, "process-b");
@@ -398,7 +466,7 @@ describe("a refusal is recorded at the source only while it still stands for the
       observedNow: () => owner.observed,
     });
     await vi.waitFor(() => expect(mints).toHaveLength(1));
-    // A later request for the same pair on the same sign-in starts, and its write is kept.
+    // Another host process asks for the same pair on the same sign-in later, and its write is kept.
     const later = identify(tokens, true, {
       signal: null,
       owner: laterOwner,
@@ -411,6 +479,6 @@ describe("a refusal is recorded at the source only while it still stands for the
     mints[0].answer({ kind: "sign-in-rejected" });
     await refused;
 
-    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("sign-in-rejected");
   });
 });
