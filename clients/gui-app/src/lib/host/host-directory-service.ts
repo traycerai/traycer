@@ -660,9 +660,10 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.order += 1;
     const startedAt = this.order;
     const request = this.performRefresh(era).finally(() => {
-      // Drops a retired read's answer: one a rotation abandoned, or an
-      // identity change superseded, records nothing. Whether a recorded read
-      // satisfies a confirmation is decided by the clock alone.
+      // A retired read (one a rotation abandoned, or an identity change
+      // superseded) earns no settlement credit; the rows it read may already
+      // be committed, by `performRefresh`'s own fences. Whether a credited
+      // read satisfies a confirmation is decided by the clock alone.
       const owned =
         this.refreshInFlight?.request === request && this.isCurrentEra(era);
       // Only clear OUR slot: a request superseded by an identity change must
