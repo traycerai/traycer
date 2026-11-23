@@ -850,10 +850,10 @@ The Environment dropdown shows `useEnvironmentPickerModel()`'s pick, which
 judges each computer's status as it renders; pages read `useEnvironmentPick()`,
 which the dropdown keeps current before paint. A pick seen gone (a Local pick
 whose computer moved, a team the person left) stays gone for the window.
-`PersonalPageFrame` decides each Environment page's source, one rule per pick. A team reads the
-cloud. A Local row reads that computer's own host pages. Personal reads the
-cloud unless the window's host runs Personal by the dropdown's own rule
-(`hostRunsPersonal`: it reports Personal and has no Local row), when that
+`PersonalPageFrame` decides each Environment page's source, one rule per pick. A
+team reads the cloud. A Local row reads that computer's own host pages. Personal
+reads the cloud unless the window's host runs Personal by the dropdown's own
+rule (`hostRunsPersonal`: it reports Personal and has no Local row), when that
 host's pages stay; while that host's status is unknown the page shows
 loading. A cloud-read page mounts `ConfigurationSourceBoundary` before it,
 resolves its descriptor through `environment.list@1.1` (the team's row, or

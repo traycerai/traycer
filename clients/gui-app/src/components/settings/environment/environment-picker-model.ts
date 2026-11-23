@@ -223,10 +223,11 @@ export function environmentPickerModel(input: {
 
 /**
  * Whether the person's per-computer pick is gone: its computer answered and
- * has neither local settings nor unfinished setup (or is too old). The pick
- * then reads as the default for the rest of the window, so a page does not
- * retain a finished setup's per-computer entry. A computer that has not
- * answered yet keeps the pick: nothing is known.
+ * has neither local settings nor unfinished setup (or is too old). A computer
+ * that has not answered yet keeps the pick: nothing is known.
+ * `useEnvironmentPickerModel` marks a gone pick to read as the default for the
+ * rest of the window, so a page does not retain a finished setup's
+ * per-computer entry.
  */
 export function isStaleLocalPick(
   pick: EnvironmentPick | null,
