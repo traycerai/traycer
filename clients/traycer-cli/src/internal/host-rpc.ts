@@ -341,7 +341,6 @@ export async function callHostRpcWithAgentCredential<
         ? NO_RETRY_TRANSPORT_POLICY
         : DEFAULT_TRANSPORT_RETRY_POLICY,
       dispatch,
-      async () => null,
     );
   } catch (err) {
     const refusal = finalRefusalOf(err);
@@ -495,11 +494,22 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       },
       retryPolicy,
       dispatch,
-      () => session.tokens.signInRejectionNow(null),
     );
   } catch (err) {
-    if (ended.refusal === null) throw err;
     // The one judgement for this exit, and the exit in the same turn as it.
+    // With no refusal reported, the gate's verdict on the stored sign-in rides
+    // on the refusal thrown now, to its synchronous mapping.
+    if (ended.refusal === null) {
+      const refusal = finalRefusalOf(err);
+      if (refusal instanceof HostRpcError) {
+        const rejection = await session.tokens.signInRejectionNow(null);
+        if (rejection !== null) {
+          markRefusalAfterRejectedSignIn(refusal);
+          rejectionOfRefusal.set(refusal, rejection);
+        }
+      }
+      throw err;
+    }
     const ending = await session.tokens.refusalEndingCommandNow(
       endpoint.hostId,
     );
@@ -551,7 +561,6 @@ async function requestWithHostToken<
   localDoor: LocalHostDoor | null,
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
-  signInRejection: () => Promise<SignInRejection | null>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const client = new WsRpcClient<HostRpcRegistry>({
@@ -655,17 +664,6 @@ async function requestWithHostToken<
     });
     return response;
   } catch (err) {
-    const refusal = finalRefusalOf(err);
-    // The gate's judgement, read after the credentials file is and attached
-    // to the refusal thrown in the same turn: a sign-in another process saved
-    // since is not the one this call's failure blames.
-    if (refusal instanceof HostRpcError) {
-      const rejection = await signInRejection();
-      if (rejection !== null) {
-        markRefusalAfterRejectedSignIn(refusal);
-        rejectionOfRefusal.set(refusal, rejection);
-      }
-    }
     const error = errorFromUnknown(err);
     logger.debug("Host RPC failed; propagating to command boundary", {
       environment: config.environment,
