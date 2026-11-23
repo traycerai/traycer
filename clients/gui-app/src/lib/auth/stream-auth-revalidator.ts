@@ -16,6 +16,14 @@ import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
  *
  * Lives beside `AuthService` (not under `lib/host/`) so the runtime provider
  * can import it without re-entering the `@/lib/host` barrel it itself feeds.
+ *
+ * It is also this app's `SignInRecovery`, and reads neither `refused` nor
+ * `stillWanted`. Its rotation is the window's single flight, owned by the
+ * sign-in context (`revalidateExpectedContext`), and is decided by authn's
+ * verdict on the CURRENT sign-in: `validateToken`, then `rotateLiveSession`
+ * only on `rejected`. A host's refusal judges nothing here, so a stale one
+ * costs one validate and rotates nothing. A stream that closed may be among
+ * the flight's callers; the stream discards its late answer.
  */
 export function createStreamAuthRevalidator(
   authService: AuthService,
