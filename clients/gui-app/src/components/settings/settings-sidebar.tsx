@@ -41,10 +41,7 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
-import {
-  environmentSectionShown,
-  oldHostSectionShown,
-} from "@/lib/settings-environment-pages";
+import { pickOffersSection } from "@/lib/settings-environment-pages";
 import {
   useDrawnSection,
   useOldHostLocalPick,
@@ -102,6 +99,12 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // A Local row hides the pages only a cloud configuration has.
   const environmentPick = useEnvironmentPick();
   const oldHost = useOldHostLocalPick();
+  // The row the rail highlights: the page drawn for the section the surface
+  // holds, worked out once for every row.
+  const routedSection = useRoutedSectionId();
+  const drawnSection = useDrawnSection(
+    props.mode.kind === "modal" ? props.mode.activeSection : routedSection,
+  );
   // The Guide group leaves the rail once every Getting started step is done.
   const guideComplete = useGettingStartedGuideIsComplete();
   const groups = guideComplete
@@ -172,12 +175,12 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 {sections.map((section, index) =>
                   section.group === group.id &&
                   (group.id !== "personal" ||
-                    (environmentSectionShown(environmentPick, section.id) &&
-                      (!oldHost || oldHostSectionShown(section.id)))) ? (
+                    pickOffersSection(environmentPick, oldHost, section.id)) ? (
                     <SettingsSidebarItem
                       key={section.id}
                       section={section}
                       index={index}
+                      active={drawnSection === section.id}
                       mode={props.mode}
                       variant={props.variant}
                     />
@@ -360,16 +363,14 @@ function SettingsSidebarGroupHeader(props: {
 interface SettingsSidebarItemProps {
   section: SettingsSection;
   index: number;
+  active: boolean;
   mode: SettingsSidebarMode;
   variant: SettingsSidebarVariant;
 }
 
 function SettingsSidebarItem(props: SettingsSidebarItemProps) {
-  const { section, index, mode, variant } = props;
+  const { section, index, active, mode, variant } = props;
   const badgeModifier = useSettingsLeaderModifierForIndex(index);
-  const drawnModalSection = useDrawnSection(
-    mode.kind === "modal" ? mode.activeSection : null,
-  );
   const Icon = section.icon;
   const digit = singleDigitLeaderDigitFor(index);
   const baseClass = cn(
@@ -401,7 +402,6 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
     <span className="min-w-0 flex-1 truncate">{section.label}</span>
   );
   if (mode.kind === "modal") {
-    const active = drawnModalSection === section.id;
     return (
       <button
         type="button"
@@ -438,20 +438,21 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
       badge={badge}
       baseClass={baseClass}
       variant={variant}
+      active={active}
     />
   );
 }
 
 function SettingsSidebarRouteItem(props: {
   readonly section: SettingsSection;
+  readonly active: boolean;
   readonly label: ReactNode;
   readonly badge: ReactNode;
   readonly baseClass: string;
   readonly variant: SettingsSidebarVariant;
 }) {
-  const { section, label, badge, baseClass, variant } = props;
+  const { section, active, label, badge, baseClass, variant } = props;
   const Icon = section.icon;
-  const active = useDrawnSection(useRoutedSectionId()) === section.id;
   // The rail replaces: its sections are peers on one screen, and back should
   // leave settings, not replay every section clicked. The mobile list pushes:
   // there a section is a full-screen drill-down BELOW the list, and a replace

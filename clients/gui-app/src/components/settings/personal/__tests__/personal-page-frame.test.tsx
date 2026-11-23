@@ -215,13 +215,6 @@ const ITEM_PAGE_SECTIONS: readonly SettingsSectionId[] =
     (section) => personalPageItemKinds(section.id) !== null,
   ).map((section) => section.id);
 
-/** The frame has settled on a host that answers no status: nothing more is read. */
-async function settled(): Promise<void> {
-  await act(async () => {
-    await Promise.resolve();
-  });
-}
-
 describe("<PersonalPageFrame /> on a host that does not advertise environment.status", () => {
   it("leaves a Local pick's page editable, with no update line and nothing inert", async () => {
     renderFrame({
@@ -232,7 +225,6 @@ describe("<PersonalPageFrame /> on a host that does not advertise environment.st
       target: VARIABLE_TARGET,
     });
     const edit = await screen.findByRole("button", { name: "Edit the page" });
-    await settled();
 
     expect(screen.queryByTestId("personal-page-read-only")).toBeNull();
     expect(screen.queryByText(UPDATE_HOST_TEXT)).toBeNull();
@@ -259,7 +251,6 @@ describe("<PersonalPageFrame /> on a host that does not advertise environment.st
         target: VARIABLE_TARGET,
       });
       await screen.findByRole("button", { name: "Edit the page" });
-      await settled();
 
       expect(screen.queryByTestId("personal-page-read-only")).toBeNull();
       expect(screen.queryByText(UPDATE_HOST_TEXT)).toBeNull();

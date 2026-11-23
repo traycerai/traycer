@@ -33,6 +33,9 @@ import {
 import { emptySystemTabs, tabItemId } from "@/stores/tabs/layout";
 import type { SystemTabs } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
 import type { TabRef } from "@/stores/tabs/types";
 import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
 import {
@@ -249,6 +252,8 @@ describe("MobileAppHeader", () => {
     useAuthStore.setState({ status: "signed-out" });
     useMobileNavStore.setState({ open: false });
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
+    resetNegotiatedManifests();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
     presentNoTab();
   });
 
@@ -340,6 +345,15 @@ describe("MobileAppHeader", () => {
       "SettingsAppearance",
     );
     expect(screen.getByTestId("mobile-header-settings-crumb")).not.toBeNull();
+  });
+
+  it("crumbs the page an old host's Local pick draws for a settings section it lacks", async () => {
+    pickOldHostLocal();
+    presentSettingsTab("/settings/secrets");
+    renderAt("/");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      "SettingsProviders",
+    );
   });
 
   // Composer surfaces are where you already are, and each opens with a hero

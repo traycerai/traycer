@@ -119,17 +119,26 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
   useHostClientForHostId: () => null,
 }));
 // Settings' pages are their own suites: the panels a search hit can land on
-// are probes, and the frame around them passes its children through. The
-// move offer, the pick upkeep and the search are the real ones.
+// are probes, and the frame around them passes its children through, except
+// in the cases that turn `realFrame` on to follow a default pick resolving.
+// The move offer, the pick upkeep and the search are the real ones.
+const realFrame = vi.hoisted(() => ({ on: false }));
 vi.mock(
   "@/components/settings/personal/personal-page-frame",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/components/settings/personal/personal-page-frame")
-    >()),
-    PersonalPageFrame: (props: { readonly children: React.ReactNode }) =>
-      props.children,
-  }),
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/personal/personal-page-frame")
+      >();
+    return {
+      ...actual,
+      PersonalPageFrame: (props: {
+        readonly section: SettingsSectionId;
+        readonly children: React.ReactNode;
+      }) =>
+        realFrame.on ? <actual.PersonalPageFrame {...props} /> : props.children,
+    };
+  },
 );
 // Each probe counts its mounts: a page that was never drawn mounted zero times.
 const probeMounts = vi.hoisted((): Record<string, number> => ({}));
@@ -1317,9 +1326,9 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
   /** Presses the rail's row for `id` until the route names that section. */
   async function openFromRail(router: AnyRouter, id: string): Promise<void> {
+    const links = await screen.findAllByTestId(`settings-sidebar-item-${id}`);
+    fireEvent.click(links[links.length - 1]);
     await waitFor(() => {
-      const links = screen.getAllByTestId(`settings-sidebar-item-${id}`);
-      fireEvent.click(links[links.length - 1]);
       expect(router.state.location.pathname).toBe(`/settings/${id}`);
     });
   }
@@ -1428,6 +1437,7 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
 
   beforeEach(() => {
     for (const name of Object.keys(probeMounts)) delete probeMounts[name];
+    realFrame.on = false;
     cleanup();
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
@@ -1517,24 +1527,6 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     });
   }
 
-  /** The window's host is the old computer, and its default pick has already resolved to that row. */
-  function arriveOnOldHostDefault(): void {
-    recordNegotiatedHostMethods("host-old", ["host.status"]);
-    useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
-    globalScopeOverrides.current = {
-      host: hostScopeOptionFixture({ hostId: "host-old", name: "Old laptop" }),
-      client: null,
-    };
-    useSettingsEnvironmentPickStore.setState({
-      defaultPick: {
-        kind: "local",
-        hostId: "host-old",
-        hostName: "Old laptop",
-      },
-      defaultHostId: "host-old",
-    });
-  }
-
   /** The routed Settings tab: the real surface, whose section comes from the route or the remembered path. */
   async function renderRoutedTab(path: string, lastPath: string | null) {
     const rootRoute = createRootRoute({
@@ -1583,6 +1575,14 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     },
   );
 
+  it("draws Machine setup as Providers when a deep link opens the routed tab on it", async () => {
+    arriveOnOldHostPick();
+
+    await renderRoutedTab("/settings/machine-setup", null);
+
+    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+  });
+
   it("never mounts a hidden page when the routed tab's remembered path names it", async () => {
     arriveOnOldHostPick();
 
@@ -1593,24 +1593,45 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
   });
 
-  it("never mounts a hidden page when a routed tab's default pick lands on the old host's row", async () => {
-    arriveOnOldHostDefault();
+  /** The window's host is the old computer and no default pick is stored yet: the dropdown resolves it. */
+  function arriveInOldHostWindow(): void {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
+    globalScopeOverrides.current = {
+      host: hostScopeOptionFixture({ hostId: "host-old", name: "Old laptop" }),
+      client: null,
+    };
+    useSettingsEnvironmentPickStore.setState({
+      defaultPick: { kind: "unresolved" },
+      defaultHostId: null,
+    });
+    realFrame.on = true;
+  }
+
+  it("never mounts a hidden page while a routed tab's default pick resolves to the old host's row, and then draws Providers", async () => {
+    arriveInOldHostWindow();
 
     await renderRoutedTab("/settings/skills", null);
 
+    expect(await screen.findByTestId("providers-page-probe")).toBeTruthy();
+    expect(useSettingsEnvironmentPickStore.getState().defaultPick.kind).toBe(
+      "local",
+    );
     expect(probeMounts["skills"] ?? 0).toBe(0);
     expect(screen.queryByTestId("local-move-page")).toBeNull();
-    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
   });
 
-  it("never mounts a hidden page when a window opens on an old host's Local row", async () => {
-    arriveOnOldHostDefault();
+  it("never mounts a hidden page while a window opening on it resolves to the old host's row, and then draws Providers", async () => {
+    arriveInOldHostWindow();
 
     await renderSurface("skills");
 
+    expect(await screen.findByTestId("providers-page-probe")).toBeTruthy();
+    expect(useSettingsEnvironmentPickStore.getState().defaultPick.kind).toBe(
+      "local",
+    );
     expect(probeMounts["skills"] ?? 0).toBe(0);
     expect(screen.queryByTestId("local-move-page")).toBeNull();
-    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
   });
 
   function highlightedRows(): string[] {

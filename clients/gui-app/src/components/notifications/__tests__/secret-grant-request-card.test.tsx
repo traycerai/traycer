@@ -41,6 +41,9 @@ vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 
 type GrantRequestDetail = Extract<
@@ -128,7 +131,11 @@ beforeEach(() => {
   mocks.decideArgs.mockClear();
   navigateToSettingsSectionMock.mockClear();
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetNegotiatedManifests();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+});
 
 describe("<SecretGrantRequestCard />", () => {
   it("shows the secret, destination, sandbox and reason", () => {
@@ -275,6 +282,19 @@ describe("<SecretGrantRequestCard />", () => {
     for (const testId of ANSWER_IDS) {
       expect(isDisabled(testId)).toBe(false);
     }
+  });
+
+  it("offers no Secrets button under an old host's Local pick, and keeps the answers", () => {
+    mocks.state.data = { kind: "secret-required" };
+    pickOldHostLocal();
+    renderCard(DETAIL, false);
+    expect(isAbsent("secret-grant-request-open-secrets")).toBe(true);
+    expect(isDisabled(ANSWER_IDS[0])).toBe(false);
+
+    cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    renderCard(DETAIL, false);
+    expect(isAbsent("secret-grant-request-open-secrets")).toBe(false);
   });
 
   it("hides the answers once the row is resolved", () => {

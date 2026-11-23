@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
 
 vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
@@ -17,6 +17,7 @@ import { setMobileApp } from "@/lib/mobile-app";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
@@ -83,7 +84,12 @@ describe("navigationSource", () => {
   afterEach(() => {
     cleanup();
     resetNegotiatedManifests();
-    useSettingsEnvironmentPickStore.setState({ pick: null });
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: { kind: "unresolved" },
+      defaultHostId: null,
+    });
+    useSelectionAuthorityStore.setState({ effectiveHostId: null });
     soundtrackOfferedMock.value = false;
     setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
@@ -165,6 +171,59 @@ describe("navigationSource", () => {
     for (const kept of ["providers", "permissions", "agents", "shell"]) {
       expect(ids, kept).toContain(`nav:settings/${kept}`);
     }
+  });
+
+  it("lists no hidden page in a window whose host is old before Settings has stored a default or a pick", () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
+
+    const ids = captureSettingsSubpage("/").map((i) => i.id);
+
+    expect(ids).not.toContain("nav:settings/secrets");
+    expect(ids).not.toContain("nav:settings/skills");
+    expect(ids).toContain("nav:settings/providers");
+  });
+
+  it("lists the hidden pages again once the window's host moves to one that advertises environment.status", () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    recordNegotiatedHostManifest("host-new", {
+      "environment.status": { major: 1, minor: 3 },
+    });
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
+    useSettingsEnvironmentPickStore.setState({
+      defaultPick: { kind: "personal" },
+      defaultHostId: "host-new",
+    });
+    const pathname = "/";
+    let captured: ReadonlyArray<CommandItem> = [];
+    const subpage = captureRoot(pathname).find(
+      (i) => i.id === "nav:settings",
+    )?.subpage;
+    if (subpage === null || subpage === undefined)
+      throw new Error("no subpage");
+    function Probe() {
+      captured = subpage?.useItems(ctx(pathname)) ?? [];
+      return null;
+    }
+    render(<Probe />);
+    expect(captured.map((i) => i.id)).not.toContain("nav:settings/secrets");
+
+    act(() => {
+      useSelectionAuthorityStore.setState({ effectiveHostId: "host-new" });
+    });
+    expect(captured.map((i) => i.id)).toContain("nav:settings/secrets");
+  });
+
+  it("offers the page on screen when a hidden path is drawn as another page's", () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
+    });
+
+    const ids = captureSettingsSubpage("/settings/secrets").map((i) => i.id);
+
+    expect(ids).not.toContain("nav:settings/providers");
+    expect(ids).toContain("nav:settings/permissions");
   });
 
   it("lists every page for a Local pick on a host that advertises environment.status", () => {

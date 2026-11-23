@@ -153,7 +153,12 @@ describe("localPickerRow", () => {
   });
 
   it("leaves the Personal row's rule alone for a host whose methods lack environment.status", () => {
-    expect(hostRunsPersonal(OLD_LAPTOP, null, false)).toBe(false);
+    const personal = environmentStatusFixture({
+      principal: { kind: "personal" },
+      setup: { stage: "done", state: "done" },
+    });
+    expect(hostRunsPersonal(OLD_LAPTOP, personal, V11)).toBe(true);
+    expect(hostRunsPersonal(OLD_LAPTOP, personal, false)).toBe(false);
   });
 
   it("greys an old host that has not answered, or has no setup at all", () => {

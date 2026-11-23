@@ -1,4 +1,7 @@
-import type { SettingsSectionId } from "@/lib/settings-sections";
+import {
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+} from "@/lib/settings-sections";
 import {
   navigateToSettingsSection,
   rememberSettingsTabSection,
@@ -10,7 +13,8 @@ import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-v
  * The pages of Settings ▸ Environment, addressed by the configuration they
  * show and the page within it. One table for every configuration: Personal,
  * a team and a Local row show the same pages, and a configuration that
- * does not offer a page hides its row rather than forking a panel.
+ * does not offer a page hides its row. The one fork is an old host's Local
+ * row (`oldHostSectionShown`): the Agents panel draws a different body there.
  */
 export type EnvironmentPageId =
   | "providers"
@@ -139,21 +143,41 @@ const OLD_HOST_PAGES: ReadonlySet<EnvironmentPageId> = new Set([
 ]);
 
 /**
- * Whether `pick` is a Local row on a host that has completed its handshake
- * without advertising `environment.status`. Read from the negotiated manifest
- * by the picked host's id, which need not be the window's host.
+ * Whether `hostId` has completed its handshake without advertising
+ * `environment.status`: a released host from before the Environment group.
  */
-export function isOldHostLocalPick(pick: EnvironmentPick): boolean {
-  return (
-    pick.kind === "local" &&
-    readNegotiatedMethodVersion(pick.hostId, "environment.status") === false
-  );
+export function hostLacksEnvironmentStatus(hostId: string): boolean {
+  return readNegotiatedMethodVersion(hostId, "environment.status") === false;
 }
 
-/** Whether such an old host's Local row offers `section`. */
+/**
+ * Whether `pick` is a Local row on such a host. Read from the negotiated
+ * manifest by the picked host's id, which need not be the window's host.
+ */
+export function isOldHostLocalPick(pick: EnvironmentPick): boolean {
+  return pick.kind === "local" && hostLacksEnvironmentStatus(pick.hostId);
+}
+
+/** Every section of the Environment group, the Environment dropdown's pages. */
+const ENVIRONMENT_GROUP_SECTIONS: ReadonlySet<SettingsSectionId> = new Set(
+  SETTINGS_SECTIONS.filter((entry) => entry.group === "personal").map(
+    (entry) => entry.id,
+  ),
+);
+
+const OLD_HOST_SECTIONS: ReadonlySet<SettingsSectionId> = new Set(
+  [...OLD_HOST_PAGES].map(environmentPageSection),
+);
+
+/**
+ * Whether such an old host's Local row offers `section`: the five pages it
+ * has, and every section outside the Environment group. Any other Environment
+ * section, a retired one (`machine-setup`) included, is not offered.
+ */
 export function oldHostSectionShown(section: SettingsSectionId): boolean {
-  const pageId = pageIdForSection(section);
-  return pageId === null || OLD_HOST_PAGES.has(pageId);
+  return (
+    !ENVIRONMENT_GROUP_SECTIONS.has(section) || OLD_HOST_SECTIONS.has(section)
+  );
 }
 
 /**
@@ -167,6 +191,24 @@ export function environmentSectionShown(
 ): boolean {
   const pageId = pageIdForSection(section);
   return pageId === null || !PAGES_HIDDEN_BY_PICK[pick.kind].has(pageId);
+}
+
+/**
+ * Whether `pick` offers `section`: the Environment group's rule
+ * (`environmentSectionShown`), and for an old host's Local pick (`oldHost`,
+ * read from the manifest by the caller) only the pages that host has. The one
+ * predicate behind the rail, `moveEnvironmentPick` and every in-app entry to a
+ * page.
+ */
+export function pickOffersSection(
+  pick: EnvironmentPick,
+  oldHost: boolean,
+  section: SettingsSectionId,
+): boolean {
+  return (
+    environmentSectionShown(pick, section) &&
+    (!oldHost || oldHostSectionShown(section))
+  );
 }
 
 /**
@@ -187,8 +229,8 @@ export function environmentSectionShown(
  * rather than inheriting one, and `moveEnvironmentSurface` has the two.
  *
  * A Local row on a host that serves no `environment.status` offers only
- * `oldHostSectionShown`'s pages; that is read from the negotiated manifest at
- * the move, by the picked host's id.
+ * `oldHostSectionShown`'s pages (`pickOffersSection`); that is read from the
+ * negotiated manifest at the move, by the picked host's id.
  */
 export function moveEnvironmentPick(input: {
   readonly next: EnvironmentPick;
@@ -199,10 +241,7 @@ export function moveEnvironmentPick(input: {
   input.setPick(input.next);
   const section = input.activeSection;
   if (section === null) return;
-  if (
-    !environmentSectionShown(input.next, section) ||
-    (isOldHostLocalPick(input.next) && !oldHostSectionShown(section))
-  ) {
+  if (!pickOffersSection(input.next, isOldHostLocalPick(input.next), section)) {
     input.moveSurface("providers");
   }
 }

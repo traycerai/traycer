@@ -21,6 +21,8 @@ import {
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
 
 const secretRoute = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -323,6 +325,7 @@ describe("GettingStartedSettingsPanel", () => {
 
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     useMoveSheetStore.setState({ target: null });
   });
 
@@ -488,6 +491,20 @@ describe("GettingStartedSettingsPanel", () => {
       expect(setSectionMock).toHaveBeenCalledWith(section);
     },
   );
+
+  it("offers no Secrets card under an old host's Local pick, and keeps it under Personal", () => {
+    pickOldHostLocal();
+    render(<GettingStartedSettingsPanel />);
+
+    expect(screen.queryByTestId("getting-started-card-secret")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("0 of 3 complete");
+
+    cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    render(<GettingStartedSettingsPanel />);
+
+    expect(screen.getByTestId("getting-started-card-secret")).toBeTruthy();
+  });
 
   it("marks credits complete once the balance is above zero", () => {
     mocks.staged = { target: { kind: "new" } };

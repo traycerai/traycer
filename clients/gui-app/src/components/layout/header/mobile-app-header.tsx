@@ -21,6 +21,7 @@ import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useDrawnSection } from "@/components/settings/personal/use-old-host-local-pick";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 
 /**
@@ -59,7 +60,7 @@ export function MobileAppHeader(): ReactNode {
   const epicTabId = surface.kind === "epic" ? surface.tabId : null;
   const epicId = useMobileHeaderEpicId(epicTabId);
   const title = useMobileHeaderTitle(surface, epicId, epicTabId);
-  const settingsSection = settingsSectionLabel(surface);
+  const settingsSection = useSettingsSectionLabel(surface);
   const collapsed = useKeyboardFocusOwner() !== null;
   return (
     <header
@@ -296,13 +297,19 @@ function useMobileHeaderEpicId(epicTabId: string | null): string | null {
  * committed settings navigation - so it names the section on a cold restore
  * too, where the router has not been to `/settings` at all.
  */
-function settingsSectionLabel(surface: MobileHeaderSurface): string | null {
-  if (surface.kind !== "settings" || surface.path === null) return null;
-  const path = surface.path;
-  const section = SETTINGS_SECTIONS.find((s) =>
-    path.startsWith(`/settings/${s.id}`),
-  );
-  return section === undefined ? null : section.label;
+function useSettingsSectionLabel(surface: MobileHeaderSurface): string | null {
+  const path = surface.kind === "settings" ? surface.path : null;
+  const named =
+    path === null
+      ? null
+      : (SETTINGS_SECTIONS.find((s) => path.startsWith(`/settings/${s.id}`)) ??
+        null);
+  // The label of the page drawn: an old host's Local pick draws Providers for
+  // a section it lacks, and the crumb names what is on screen.
+  const drawn = useDrawnSection(named === null ? null : named.id);
+  return drawn === null
+    ? null
+    : (SETTINGS_SECTIONS.find((s) => s.id === drawn)?.label ?? null);
 }
 
 /**

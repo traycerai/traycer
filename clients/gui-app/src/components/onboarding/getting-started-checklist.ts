@@ -23,6 +23,7 @@ import { providerSetUp } from "@/components/onboarding/set-up-personal";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useThisComputer } from "@/components/settings/move/this-computer";
+import { useSectionOffered } from "@/components/settings/personal/use-old-host-local-pick";
 import {
   useThisComputersMove,
   type ThisComputersMove,
@@ -77,6 +78,8 @@ export interface GettingStartedFacts {
   readonly hasSecondPersonalComputer: boolean;
   readonly sandboxStaged: boolean;
   readonly creditsAboveZero: boolean;
+  /** Whether the pick in effect has a Secrets page to open. */
+  readonly secretsOffered: boolean;
   /** Where this computer's own settings stand against Personal. */
   readonly thisComputersMove: ThisComputersMove;
 }
@@ -114,18 +117,20 @@ function stepIsDone(
 }
 
 /**
- * Whether a card is shown at all. Two are conditional, each on a fact about
- * whether the step EXISTS for this person rather than whether it is done:
- * credits while a sandbox is staged in this window, and the move while this
- * computer can say where its settings stand - a card nobody can finish would
- * hold the checklist open for ever. A computer that runs a team's settings
- * (`team`) has no move to offer, so it shows no move card.
+ * Whether a card is shown at all. Some depend on a fact about whether the step
+ * EXISTS for this person rather than whether it is done: Secrets needs a
+ * Secrets page under the pick in effect (an old host's Local pick has none),
+ * credits needs a sandbox staged in this window, and the move needs this
+ * computer to be able to say where its settings stand - a card nobody can
+ * finish would hold the checklist open for ever. A computer that runs a team's
+ * settings (`team`) has no move to offer, so it shows no move card.
  */
 function cardApplies(
   card: GettingStartedCard,
   facts: GettingStartedFacts,
 ): boolean {
   if (card.id === "credits") return facts.sandboxStaged;
+  if (card.id === "secret") return facts.secretsOffered;
   if (card.id === "move") {
     const move = facts.thisComputersMove;
     return move === "not_moved" || move === "moved";
@@ -207,6 +212,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   // the one the sheet the card opens is for.
   const computer = useThisComputer();
   const thisComputersMove = useThisComputersMove(computer, true);
+  const secretsOffered = useSectionOffered("secrets");
   return {
     providerSetUp:
       providers.data !== undefined && providerSetUp(providers.data.providers),
@@ -216,6 +222,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
       running.hosts.filter((host) => host.kind === "personal").length >= 2,
     sandboxStaged: sandboxIsStagedInThisWindow(staged),
     creditsAboveZero: (sandboxBalanceMc(user) ?? 0) > 0,
+    secretsOffered,
     thisComputersMove,
   };
 }

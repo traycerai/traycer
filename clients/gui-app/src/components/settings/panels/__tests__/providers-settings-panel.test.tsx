@@ -39,6 +39,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -2871,9 +2872,12 @@ describe("<ProvidersSettingsPanel />", () => {
     // (see `permissionsTab`), through the real manifest registry - only the
     // scope's host id is mocked. `9.1` is the line `auto` became expressible
     // on, so this is the ordinary auto-capable host; the cases about the gate
-    // record their own manifest over it.
+    // record their own manifest over it. It advertises `environment.status`:
+    // the suite's Local pick is on this host, and a host without it is an old
+    // one, whose pick offers no Secrets page.
     recordNegotiatedHostManifest(hostScopeMocks.hostId, {
       "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+      "environment.status": { major: 1, minor: 3 },
     });
     guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
     useProvidersFocusStore.setState({
@@ -4804,6 +4808,25 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.refreshedHostIds).toEqual(["host-selected"]);
     });
     expect(providerMocks.refreshedHostIds).not.toContain("host-ambient");
+  });
+
+  it("offers Open Secrets under Personal, and not under an old host's Local pick", () => {
+    pickOldHostLocal();
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "Open Secrets" })).toBeNull();
+
+    cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Open Secrets" })).toBeDefined();
   });
 
   it("mounts NO global control - and no RPC - until the scope is ready", () => {

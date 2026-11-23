@@ -14,13 +14,17 @@
  */
 import { useMemo } from "react";
 import {
+  SETTINGS_SECTIONS,
   SETTINGS_SECTION_GROUPS,
   visibleSettingsSections,
   type SettingsSection,
   type SettingsSectionGroupId,
 } from "@/lib/settings-sections";
 import { oldHostSectionShown } from "@/lib/settings-environment-pages";
-import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
+import {
+  useDrawnSection,
+  useOldHostLocalPick,
+} from "@/components/settings/personal/use-old-host-local-pick";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { withSubpageLabels } from "@/lib/commands/sub-page-keywords";
 import type {
@@ -80,17 +84,23 @@ const SETTINGS_SUBPAGE: CommandSubpage = {
   title: "Open settings",
   useItems: (ctx: CommandContext) => {
     // A Local pick on an old host offers only some Environment pages, so no
-    // row is listed for another.
+    // row is listed for another, and the page on screen is the one drawn for
+    // the section the path names.
     const oldHost = useOldHostLocalPick();
+    const onScreen = useDrawnSection(
+      SETTINGS_SECTIONS.find(
+        (section) => ctx.pathname === `/settings/${section.id}`,
+      )?.id ?? null,
+    );
     return useMemo<ReadonlyArray<CommandItem>>(
       () =>
         visibleSettingsSections().flatMap((section) =>
-          ctx.pathname !== `/settings/${section.id}` &&
+          section.id !== onScreen &&
           (!oldHost || oldHostSectionShown(section.id))
             ? [buildSectionItem(section)]
             : [],
         ),
-      [ctx.pathname, oldHost],
+      [onScreen, oldHost],
     );
   },
 };
