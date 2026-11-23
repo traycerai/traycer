@@ -73,8 +73,8 @@ describe("a row confirmation's loop in the host directory", () => {
 
     let loopEnded = false;
     const confirmation = confirmRowWithin(
-      (stillWaiting) =>
-        directory.catchUpAfterHidden(stillWaiting).then(() => {
+      (stillWaiting, ended) =>
+        directory.catchUpAfterHidden(stillWaiting, ended).then(() => {
           loopEnded = true;
         }),
       { current: () => true },
@@ -98,8 +98,8 @@ describe("a row confirmation's loop in the host directory", () => {
     let loopsEnded = 0;
     const confirm = (): Promise<void> =>
       confirmRowWithin(
-        (stillWaiting) =>
-          directory.catchUpAfterHidden(stillWaiting).then(() => {
+        (stillWaiting, ended) =>
+          directory.catchUpAfterHidden(stillWaiting, ended).then(() => {
             loopsEnded += 1;
           }),
         { current: () => true },
