@@ -189,6 +189,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: () => ({ dispose: () => undefined }),
     createStoreBackedRevalidator: () => ({
       revalidateCurrentContext: async () => "rotated" as const,
+      adoptStoredSignIn: async () => undefined,
     }),
   };
 });

@@ -111,6 +111,19 @@ vi.mock("../../../../shared/auth/host-token-file", async (importOriginal) => {
 });
 
 const storeRotate = vi.hoisted(() => vi.fn());
+// The store's `read` serves what its `rotate` landed once it has answered, and
+// before that the signed-in credentials the case starts with: the adopting read
+// after a landed save installs them in the lease.
+const landed = vi.hoisted(() => {
+  const holder: { credentials: object | null } = { credentials: null };
+  return holder;
+});
+const SIGNED_IN = {
+  token: "tok",
+  refreshToken: "tok-refresh",
+  savedAt: "2026-01-01T00:00:00.000Z",
+  user: { id: "u1", email: "a@b.c", name: "A" },
+};
 
 vi.mock("../../store/credentials-store", async (importOriginal) => {
   const actual =
@@ -119,7 +132,14 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     ...actual,
     createCliCredentialsStore: () => ({
       dispose: () => undefined,
-      rotate: storeRotate,
+      read: async (): Promise<unknown> => landed.credentials ?? SIGNED_IN,
+      rotate: async (...args: unknown[]): Promise<unknown> => {
+        const result: unknown = await storeRotate(...args);
+        const credentials: unknown = Reflect.get(Object(result), "credentials");
+        landed.credentials =
+          typeof credentials === "object" ? credentials : null;
+        return result;
+      },
     }),
   };
 });
@@ -287,6 +307,7 @@ afterEach(async () => {
   // A one-attempt send leaves a queued socket answer unread.
   socketRequest.mockReset();
   storeRotate.mockReset();
+  landed.credentials = null;
   await rm(keysDir.current, { recursive: true, force: true });
 });
 

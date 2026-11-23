@@ -105,6 +105,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: () => ({ dispose: () => undefined }),
     createStoreBackedRevalidator: () => ({
       revalidateCurrentContext: async () => harness.state.refresh,
+      adoptStoredSignIn: async () => undefined,
     }),
   };
 });

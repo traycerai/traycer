@@ -197,6 +197,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: () => ({ dispose: () => undefined }),
     createStoreBackedRevalidator: () => ({
       revalidateCurrentContext: async () => "network-error" as const,
+      adoptStoredSignIn: async () => undefined,
     }),
   };
 });
