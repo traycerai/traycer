@@ -102,7 +102,10 @@ import {
   type HostTokenSnapshotReply,
   type HostTokensBridgeSurface,
 } from "../ipc-contracts/host-token-types";
-import { readSyncNumberFor } from "./sync-bootstrap";
+import {
+  readSyncNullableNumberFor,
+  readSyncNumberFor,
+} from "./sync-bootstrap";
 
 /**
  * Eagerly subscribe at module load so a cold-start browser-return deep link
@@ -770,6 +773,8 @@ export function buildHostTokensBridge(): HostTokensBridgeSurface {
         userId,
         NO_ISSUED_HOST_TOKEN_ERA,
       ),
+    signIn: (userId) =>
+      readSyncNullableNumberFor(RunnerHostSync.hostTokensSignIn, userId),
     obtain: (userId, hostId, fresh, expectedEra, owner) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.hostTokensObtain,

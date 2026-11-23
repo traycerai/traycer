@@ -228,6 +228,13 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
     assertString(userId, "hostTokensEra.userId");
     return tokens.era(userId);
   });
+  bridge.handleSync(
+    RunnerHostSync.hostTokensSignIn,
+    (_event, userId: unknown) => {
+      assertString(userId, "hostTokensSignIn.userId");
+      return tokens.signInKey(userId);
+    },
+  );
   bridge.handleInvoke(
     RunnerHostInvoke.hostTokensObtain,
     async (
@@ -243,17 +250,20 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       assertBoolean(fresh, "hostTokensObtain.fresh");
       assertNumber(expectedEra, "hostTokensObtain.expectedEra");
       const asked = obtainOwnerOf(owner);
+      // This ask's own: nothing else records under it.
+      const mintOwner =
+        asked === null ? null : { hostId, observed: asked.observed };
       const outcome: HostTokenMintOutcome =
         tokens.era(userId) === expectedEra
           ? await tokens.obtain(
               userId,
               hostId,
               fresh,
-              asked === null
+              mintOwner === null
                 ? { signal: null, owner: null }
                 : {
                     signal: null,
-                    owner: { hostId, observed: asked.observed },
+                    owner: mintOwner,
                     // Main's own observation, read at the write.
                     observedNow: () =>
                       processReleasedHosts.currentInstance(hostId).observed,
@@ -264,7 +274,19 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       const held =
         outcome.kind === "ok" &&
         tokens.current(userId, hostId)?.token === outcome.token.token;
-      return { outcome, held, era: tokens.era(userId) };
+      // A failure main's source did not keep, for a sign-in main no longer
+      // holds or an era it has left, is not the window's to record either.
+      const recorded =
+        mintOwner !== null &&
+        (outcome.kind === "ok" ||
+          tokens.lastFailureOf(userId, mintOwner) === outcome.kind);
+      return {
+        outcome,
+        held,
+        recorded,
+        signIn: tokens.signInKey(userId),
+        era: tokens.era(userId),
+      };
     },
   );
   bridge.handleInvoke(

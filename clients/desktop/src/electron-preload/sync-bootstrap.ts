@@ -28,6 +28,15 @@ export function readSyncNumberFor(
   return syncNumberOf(ipcRenderer.sendSync(channel, argument), fallback);
 }
 
+/** A synchronous numeric read for one argument; anything but a finite number is null. */
+export function readSyncNullableNumberFor(
+  channel: string,
+  argument: string,
+): number | null {
+  const value: unknown = ipcRenderer.sendSync(channel, argument);
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function syncNumberOf(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isSafeInteger(value)
     ? value

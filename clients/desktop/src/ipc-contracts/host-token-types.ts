@@ -31,6 +31,16 @@ export interface HostTokenObtainReply extends HostTokenEraReply {
   readonly outcome: HostTokenMintOutcome;
   /** The outcome's token is the one main holds for the pair as it replies. */
   readonly held: boolean;
+  /**
+   * Main kept this outcome as how the ask ended, under the sign-in main holds
+   * as it replies: the window records only such an outcome.
+   */
+  readonly recorded: boolean;
+  /**
+   * The key of the sign-in main holds as it replies (its expiry, in ms; `null`:
+   * none, or unreadable): a kept outcome was kept under it. No token crosses.
+   */
+  readonly signIn: number | null;
 }
 
 export interface HostTokenAdoptReply extends HostTokenEraReply {
@@ -67,6 +77,11 @@ export const NO_ISSUED_HOST_TOKEN_ERA = -1;
  */
 export interface HostTokensBridgeSurface {
   era(userId: string): number;
+  /**
+   * The key of the sign-in main holds for the person (its expiry, in ms), or
+   * null when main holds none or cannot read its expiry. No token crosses.
+   */
+  signIn(userId: string): number | null;
   /**
    * `owner` is the host process the window asks for, as the window observes it
    * (`null`: none): main never joins asks for two different observed processes.

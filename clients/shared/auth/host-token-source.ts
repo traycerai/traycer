@@ -65,6 +65,12 @@ export type HostTokenMintFailure = Exclude<
  * ask that started later has already recorded one in the same era, so a late
  * refusal never replaces a newer success. Keyed by the instance itself: a
  * replaced process starts with no record. Process memory only.
+ *
+ * Each result belongs to the sign-in its mint was sent with (`signIn`: its
+ * key, {@link hostSignInKey}): it is read only for that same key, and a
+ * result for another sign-in replaces it whatever its place in the order.
+ * Two sign-ins with no readable end share the key `null`, as their mints
+ * share a flight.
  */
 export interface HostMintRecords {
   readonly start: () => number;
@@ -72,6 +78,7 @@ export interface HostMintRecords {
     owner: HostMintOwner,
     userId: string,
     era: number,
+    signIn: number | null,
     started: number,
     kind: HostTokenMintOutcome["kind"],
   ) => void;
@@ -79,7 +86,17 @@ export interface HostMintRecords {
     owner: HostMintOwner,
     userId: string,
     era: number,
+    signIn: number | null,
   ) => HostTokenMintFailure | null;
+}
+
+/**
+ * A sign-in's key: its end (`exp`, epoch ms, read unverified), the value the
+ * mints' flights are keyed by; `null` with no sign-in or no readable end.
+ * Only this crosses to a window, never the sign-in itself.
+ */
+export function hostSignInKey(signInToken: string | null): number | null {
+  return signInToken === null ? null : readAccessTokenExpiryMs(signInToken);
 }
 
 // A token write: the era it began in, the writer's own check, and the token
@@ -158,6 +175,13 @@ function mayWriteFor(asker: MintAsker): () => boolean {
   return () => asker.observedNow() === asker.observed;
 }
 
+// A mint as asked: the key of the sign-in it was sent with (`null`: none
+// sent, or one with no readable end), and its answer.
+interface MintSent {
+  readonly sentWith: number | null;
+  readonly outcome: Promise<HostTokenMintOutcome>;
+}
+
 // What a mint is asked with, beyond the pair and era.
 interface MintAsk {
   readonly signal: AbortSignal | null;
@@ -173,6 +197,7 @@ export function createHostMintRecords(): HostMintRecords {
       string,
       {
         readonly era: number;
+        readonly signIn: number | null;
         readonly started: number;
         readonly failure: HostTokenMintFailure | null;
       }
@@ -180,7 +205,7 @@ export function createHostMintRecords(): HostMintRecords {
   >();
   return {
     start: () => ++order,
-    record: (owner, userId, era, started, kind) => {
+    record: (owner, userId, era, signIn, started, kind) => {
       let byUser = records.get(owner);
       if (byUser === undefined) {
         byUser = new Map();
@@ -190,18 +215,22 @@ export function createHostMintRecords(): HostMintRecords {
       if (
         recorded !== undefined &&
         recorded.era === era &&
+        recorded.signIn === signIn &&
         recorded.started > started
       )
         return;
       byUser.set(userId, {
         era,
+        signIn,
         started,
         failure: kind === "ok" ? null : kind,
       });
     },
-    lastFailureOf: (owner, userId, era) => {
+    lastFailureOf: (owner, userId, era, signIn) => {
       const recorded = records.get(owner)?.get(userId);
-      return recorded !== undefined && recorded.era === era
+      return recorded !== undefined &&
+        recorded.era === era &&
+        recorded.signIn === signIn
         ? recorded.failure
         : null;
     },
@@ -259,7 +288,8 @@ export interface HostTokenSource {
   /**
    * How `owner`'s last {@link obtain} for the person ended without a token
    * (see {@link HostMintRecords}): `null` until one failed, and again once one
-   * started later succeeds or the person's era moves.
+   * started later succeeds, the person's era moves, or the sign-in they hold
+   * is no longer the one that mint was sent with.
    */
   lastFailureOf(
     userId: string,
@@ -284,6 +314,11 @@ export interface HostTokenSource {
   forgetUser(userId: string): Promise<void>;
   /** Work begun in an earlier era is dropped; a value `isIssuedHostTokenEra` refuses starts nothing. */
   era(userId: string): number;
+  /**
+   * The key ({@link hostSignInKey}) of the sign-in a mint for the person
+   * would be sent with now: {@link lastFailureOf} answers only for it.
+   */
+  signInKey(userId: string): number | null;
   bindSignIn(signIn: VerifiedSignIn): void;
   subscribe(listener: (change: HostTokenChange) => void): () => void;
 }
@@ -340,8 +375,12 @@ export function createHostTokenSource(deps: {
       ? token
       : null;
   };
+  // The key of the person's sign-in as a mint would be sent with it now: a
+  // mint's result is recorded and read only under it.
+  const signInKeyOf = (userId: string): number | null =>
+    hostSignInKey(signIn?.(userId) ?? null);
 
-  const announce = (change: HostTokenChange): void => {
+  const announce =(change: HostTokenChange): void => {
     for (const listener of Array.from(listeners)) listener(change);
   };
 
@@ -434,12 +473,14 @@ export function createHostTokenSource(deps: {
     hostId: string,
     era: number,
     { signal, asker, replaces }: MintAsk,
-  ): Promise<HostTokenMintOutcome> => {
-    if (eraOf(userId) !== era) return Promise.resolve({ kind: "superseded" });
+  ): MintSent => {
+    if (eraOf(userId) !== era)
+      return { sentWith: null, outcome: Promise.resolve({ kind: "superseded" }) };
     const signInToken = signIn?.(userId) ?? null;
-    if (signInToken === null) return Promise.resolve({ kind: "no-sign-in" });
+    if (signInToken === null)
+      return { sentWith: null, outcome: Promise.resolve({ kind: "no-sign-in" }) };
     const key = keyOf(userId, hostId);
-    const mark = readAccessTokenExpiryMs(signInToken);
+    const mark = hostSignInKey(signInToken);
     // Keyed by refresh and era too: a mint begun before a refresh or a sign-out must
     // not stand in for a later ask.
     const flightKey = `${key}\u0000${mark ?? "unknown"}\u0000${era}`;
@@ -474,7 +515,8 @@ export function createHostTokenSource(deps: {
       refreshMoved(written);
       return answerAfter(userId, hostId, era, written, outcome.token);
     };
-    if (running !== undefined) return running.then(answerFor);
+    if (running !== undefined)
+      return { sentWith: mark, outcome: running.then(answerFor) };
     const attempt = (async (): Promise<HostTokenMintOutcome> => {
       const outcome = await deps.mint(hostId, signInToken, signal);
       return eraOf(userId) !== era ? { kind: "superseded" } : outcome;
@@ -502,7 +544,7 @@ export function createHostTokenSource(deps: {
     else if (asker.kind === "unknown") unknownFlights.set(flightKey, attempt);
     else observedFlights.set(ownerKey(flightKey, asker.observed), attempt);
     latestFlight.set(flightKey, attempt);
-    return starterAnswer;
+    return { sentWith: mark, outcome: starterAnswer };
   };
 
   return {
@@ -529,13 +571,23 @@ export function createHostTokenSource(deps: {
       await loaded;
       if (eraOf(userId) !== era) return { kind: "superseded" };
       const token = held(userId, hostId);
-      // An answer from an era the person has left says nothing of the new one.
-      const record = (kind: HostTokenMintOutcome["kind"]): void => {
-        if (owner === null || eraOf(userId) !== era) return;
-        records.record(owner, userId, era, started, kind);
+      // An answer from an era the person has left, or for a sign-in the
+      // person no longer holds, says nothing of the one they hold now:
+      // compared as it is written, and again as it is read.
+      const record = (
+        kind: HostTokenMintOutcome["kind"],
+        sentWith: number | null,
+      ): void => {
+        if (
+          owner === null ||
+          eraOf(userId) !== era ||
+          signInKeyOf(userId) !== sentWith
+        )
+          return;
+        records.record(owner, userId, era, sentWith, started, kind);
       };
       if (!fresh && isUsableHostToken(token, deps.now())) {
-        record("ok");
+        record("ok", signInKeyOf(userId));
         return { kind: "ok", token };
       }
       // No mint starts for a process no longer the one observed, as none
@@ -545,27 +597,28 @@ export function createHostTokenSource(deps: {
         return token === null
           ? { kind: "process-replaced" }
           : { kind: "ok", token };
+      // The token this ask was sent to replace, refused or unusable: a mint
+      // for it replaces it whatever its issue second.
+      const { sentWith, outcome: minting } = mintOnce(userId, hostId, era, {
+        signal,
+        asker,
+        replaces: token?.token ?? null,
+      });
       let outcome: HostTokenMintOutcome;
       try {
-        // The token this ask was sent to replace, refused or unusable: a
-        // mint for it replaces it whatever its issue second.
-        outcome = await mintOnce(userId, hostId, era, {
-          signal,
-          asker,
-          replaces: token?.token ?? null,
-        });
+        outcome = await minting;
       } catch (cause) {
         // A token that could not be saved leaves none to present, like an
         // unreachable authn: an earlier refusal no longer stands.
-        record("unavailable");
+        record("unavailable", sentWith);
         throw cause;
       }
-      record(outcome.kind);
+      record(outcome.kind, sentWith);
       return outcome;
     },
 
     lastFailureOf: (userId, owner) =>
-      records.lastFailureOf(owner, userId, eraOf(userId)),
+      records.lastFailureOf(owner, userId, eraOf(userId), signInKeyOf(userId)),
 
     renew: async (userId, hostIds) => {
       const era = eraOf(userId);
@@ -587,7 +640,7 @@ export function createHostTokenSource(deps: {
             signal: null,
             asker: NO_ASKER,
             replaces: null,
-          }),
+          }).outcome,
         ),
       );
       if (eraOf(userId) !== era) return { kind: "superseded" };
@@ -632,6 +685,8 @@ export function createHostTokenSource(deps: {
     },
 
     era: eraOf,
+
+    signInKey: signInKeyOf,
 
     bindSignIn: (next) => {
       signIn = next;

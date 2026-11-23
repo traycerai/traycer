@@ -193,16 +193,40 @@ export function createDesktopHostTokenSource(
       // never taken in.
       if (reply.outcome.kind === "ok" && reply.held)
         apply(userId, hostId, reply.outcome.token, reply.era, replaces);
-      // A mint never started for a replaced process says nothing of authn.
-      if (owner !== null && reply.outcome.kind !== "process-replaced")
-        records.record(owner, userId, era, started, reply.outcome.kind);
+      // Only what main kept as how the ask ended, under the sign-in main
+      // still holds: main mints with its own sign-in and judges a refusal by
+      // it, so the record carries that sign-in's key and is read only while
+      // main holds the same one. A mint never started for a replaced process
+      // says nothing of authn.
+      if (
+        owner !== null &&
+        reply.recorded &&
+        reply.signIn !== null &&
+        reply.signIn === bridge.signIn(userId) &&
+        reply.outcome.kind !== "process-replaced"
+      )
+        records.record(
+          owner,
+          userId,
+          era,
+          reply.signIn,
+          started,
+          reply.outcome.kind,
+        );
       return reply.outcome;
     },
+    // Read against main now, as `hostTokensEra` and `hostTokensSignIn` answer
+    // it: a record is this window's answer only in main's current era and for
+    // the sign-in main holds now; an unknown key answers as no record.
     lastFailureOf: (userId, owner) => {
       const era = reported.get(userId);
-      return era === undefined || forgetting.has(userId)
+      const signIn = bridge.signIn(userId);
+      return era === undefined ||
+        signIn === null ||
+        forgetting.has(userId) ||
+        issued(bridge.era(userId)) !== era
         ? null
-        : records.lastFailureOf(owner, userId, era);
+        : records.lastFailureOf(owner, userId, era, signIn);
     },
     renew: async (userId, hostIds) => {
       const era = eraOf(userId);
@@ -246,6 +270,7 @@ export function createDesktopHostTokenSource(
       }
     },
     era: eraOf,
+    signInKey: (userId) => bridge.signIn(userId),
     // Main mints with its own verified sign-in.
     bindSignIn: () => undefined,
     subscribe: (listener) => {
