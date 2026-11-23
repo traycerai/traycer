@@ -64,13 +64,25 @@ export interface InitialChatHandoffDriverOptions {
    * the session as it was before any of that.
    */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  /**
+   * A queued message is being edited in this tile's composer. Its editor holds
+   * that message, not an ordinary draft, so a returned draft is never adopted
+   * into it - even while it is empty.
+   */
+  readonly queueEditOpen: boolean;
 }
 
 export function useInitialChatHandoffDriver(
   options: InitialChatHandoffDriverOptions,
 ): void {
-  const { handle, nodeId, scope, profileUserId, getDraftBlobBridgeSupported } =
-    options;
+  const {
+    handle,
+    nodeId,
+    scope,
+    profileUserId,
+    getDraftBlobBridgeSupported,
+    queueEditOpen,
+  } = options;
   const handoff = useInitialChatHandoffStore((state) =>
     selectInitialChatHandoff(state, scope),
   );
@@ -134,6 +146,7 @@ export function useInitialChatHandoffDriver(
       handoff,
       nodeId,
       profileUserId,
+      queueEditOpen,
       replaceDraftContent,
       scope,
       sendContent,
@@ -151,6 +164,7 @@ export function useInitialChatHandoffDriver(
     messages,
     nodeId,
     profileUserId,
+    queueEditOpen,
     replaceDraftContent,
     scope,
     sendContent,
@@ -295,6 +309,8 @@ interface ApplyInitialChatHandoffStepInput {
   readonly handoff: InitialChatHandoff | null;
   readonly nodeId: string;
   readonly profileUserId: string | null;
+  /** See {@link InitialChatHandoffDriverOptions.queueEditOpen}. */
+  readonly queueEditOpen: boolean;
   readonly replaceDraftContent: (
     taskId: string,
     content: InitialChatHandoff["content"],
@@ -405,8 +421,9 @@ function applyInitialChatHandoffStep(
       // The newer draft wins the composer and the older prompt is STATED with
       // its text inlined. That keeps the founding invariant intact - restored
       // XOR stated, never neither - with the composer going to whichever text
-      // the user is actually looking at.
-      if (composerDraftIsEmpty(input.nodeId)) {
+      // the user is actually looking at. An open queue edit is occupied too,
+      // whatever its editor holds: the text would land in that edit.
+      if (!input.queueEditOpen && composerDraftIsEmpty(input.nodeId)) {
         input.replaceDraftContent(input.nodeId, input.step.content, null);
         useComposerDraftStore
           .getState()

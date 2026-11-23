@@ -52,8 +52,10 @@ import {
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { QUEUE_EDIT_FOLDERS_FIXED_NOTE } from "@/components/home/host-workspace-selector/workspace-run-item";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
+  openQueueEditStaging,
   queueEditStagingKey,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -355,7 +357,9 @@ vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () => null,
 }));
 vi.mock("@/components/home/worktree/worktree-scripts-dialog", () => ({
-  WorktreeScriptsDialog: () => null,
+  // Open or not is all this suite reads of it.
+  WorktreeScriptsDialog: (props: { readonly open: boolean }) =>
+    props.open ? <div data-testid="scripts-dialog-open" /> : null,
 }));
 vi.mock("@/hooks/use-mutation-state-of", () => ({
   useIsMutatingOf: () => 0,
@@ -575,6 +579,14 @@ it("keeps a dispatched new-worktree branch visible while the binding is unchange
   ).toContain("feat-replacement");
 });
 
+async function findAlphaRowOpen(): Promise<HTMLElement> {
+  const alphaRow = (await screen.findAllByTestId("folder-row")).find(
+    (row) => row.getAttribute("data-path") === "/repo/alpha",
+  );
+  if (alphaRow === undefined) throw new Error("alpha row not rendered");
+  return alphaRow;
+}
+
 async function findAlphaRow(): Promise<HTMLElement> {
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   const alphaRow = (await screen.findAllByTestId("folder-row")).find(
@@ -635,6 +647,7 @@ describe("an idle chat while a queued message is edited", () => {
   });
 
   beforeEach(() => {
+    openQueueEditStaging(EDIT_KEY);
     seedResolvedBindingMetadata();
     // The chat still owes a worktree for alpha, so Local is a change.
     inFlightWorktreeIntent = {
@@ -706,13 +719,56 @@ describe("an idle chat while a queued message is edited", () => {
 
     await user.hover(add.parentElement ?? add);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Finish the edit to add or remove folders",
+      QUEUE_EDIT_FOLDERS_FIXED_NOTE,
     );
     await user.unhover(add.parentElement ?? add);
     await user.hover(remove.parentElement ?? remove);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Finish the edit to add or remove folders",
+      QUEUE_EDIT_FOLDERS_FIXED_NOTE,
     );
+  });
+
+  it("disables a row's repository settings, with the reason, and enables them outside an edit", async () => {
+    const user = userEvent.setup();
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      readOnly: false,
+    };
+    const view = renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+    const trigger = within(alphaRow).getByTestId("folder-scripts-trigger");
+    expect(trigger instanceof HTMLButtonElement && trigger.disabled).toBe(true);
+
+    await user.hover(trigger.parentElement ?? trigger);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      QUEUE_EDIT_FOLDERS_FIXED_NOTE,
+    );
+
+    queueEdit = null;
+    view.rerenderSurface();
+    const enabled = within(await findAlphaRowOpen()).getByTestId(
+      "folder-scripts-trigger",
+    );
+    expect(enabled instanceof HTMLButtonElement && enabled.disabled).toBe(
+      false,
+    );
+  });
+
+  it("closes a repository settings dialog opened before the edit began", async () => {
+    const view = renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+    fireEvent.click(within(alphaRow).getByTestId("folder-scripts-trigger"));
+    expect(screen.getByTestId("scripts-dialog-open")).toBeTruthy();
+
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      readOnly: false,
+    };
+    view.rerenderSurface();
+
+    expect(screen.queryByTestId("scripts-dialog-open")).toBeNull();
   });
 
   it("offers no Locate on a folder that is absent from the host", async () => {

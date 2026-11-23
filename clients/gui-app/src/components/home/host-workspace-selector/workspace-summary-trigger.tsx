@@ -179,6 +179,7 @@ export function WorkspaceSummaryTrigger(
               updatePending={false}
               discardDisabled={false}
               onEditEnvironment={NOOP}
+              environmentDisabledReason={null}
               readOnly
               bindingResolved={bindingResolved}
               recentWorkspaces={null}

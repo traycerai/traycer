@@ -7,7 +7,11 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
+import {
+  QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
+  SEND_NOT_RECORDED_NOTICE_CODE,
+  SEND_RESTORED_NOTICE_CODE,
+} from "@/stores/chats/chat-queue-reconciler";
 import {
   QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
   noticeIsHeldUntilDelivered,
@@ -24,6 +28,7 @@ import {
 } from "@/stores/chats/queue-edit-custody";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
+  openQueueEditStaging,
   queueEditStagingKey,
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -2140,6 +2145,10 @@ function saveEdit(h: Harness, intent: "save" | "steer"): string {
 }
 
 describe("a queue edit carries the folders picked while editing", () => {
+  beforeEach(() => {
+    openQueueEditStaging(EDIT_SLOT);
+  });
+
   it("sends only the folder the edit changed, and takes the edit's slot", () => {
     harness = createHarness(true);
     harness.callbacks().onConnectionStatus("open", null, null, null);
@@ -2280,6 +2289,14 @@ describe("a queue edit carries the folders picked while editing", () => {
       return readStagedWorktreeIntent(OWNER_SLOT);
     }
 
+    function restoredNotice(h: Harness) {
+      return h.handle.store
+        .getState()
+        .errorNotices.find(
+          (notice) => notice.code === SEND_RESTORED_NOTICE_CODE,
+        );
+    }
+
     it("holds the folders on the restoration and leaves the chat's own slot alone until the composer takes the text", () => {
       refuseEditWithPicks();
 
@@ -2369,6 +2386,140 @@ describe("a queue edit carries the folders picked while editing", () => {
       open.handle.store.getState().ackFailedSendRestoration(editActionId);
 
       expect(ownerSlot()).toEqual(localIntent("/repo/a"));
+      expect(restoredNotice(open)?.message).toMatch(
+        / Its staged worktree the existing worktree \/wt\/gone in \/repo\/b no longer exists; the rest of its staging came back, so check the binding before resending\.$/,
+      );
     });
+
+    it("says nothing was restored when every folder was removed", () => {
+      const open = openWithQueuedRowOnLine(true);
+      harness = open;
+      useWorktreeIntentStagingStore.getState().setIntent(EDIT_SLOT, {
+        entries: [
+          {
+            kind: "import",
+            workspacePath: "/repo/b",
+            repoIdentifier: null,
+            isPrimary: false,
+            worktreePath: REMOVED_WORKTREE,
+          },
+        ],
+      });
+      const editActionId = saveEdit(open, "save");
+      ack(open, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+      });
+      useWorktreeIntentStagingStore
+        .getState()
+        .purgeRemovedWorktreeIntents(HOST_ID, {
+          worktreePaths: new Set([REMOVED_WORKTREE]),
+          branches: [],
+        });
+
+      open.handle.store.getState().ackFailedSendRestoration(editActionId);
+
+      expect(ownerSlot()).toBeNull();
+      expect(restoredNotice(open)?.message).toMatch(
+        / Its staged worktree the existing worktree \/wt\/gone no longer exists, so it was not restored\.$/,
+      );
+    });
+  });
+});
+
+describe("a folders-only queue edit that a reconnect leaves unconfirmed", () => {
+  beforeEach(() => {
+    openQueueEditStaging(EDIT_SLOT);
+  });
+
+  /** The edit changes the folders and nothing else; the settings ask for more. */
+  function submitFoldersOnlyEdit(h: Harness): string {
+    stageEditPicks("/repo/a");
+    const editActionId = h.handle.store.getState().submitQueueEdit({
+      queueItemId: QUEUE_ITEM_ID,
+      editSessionId: EDIT_SESSION_ID,
+      content: ORIGINAL,
+      restore: { content: ORIGINAL, browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "save",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-1",
+    });
+    if (editActionId === null) throw new Error("expected the edit to dispatch");
+    const followUp = h.sent.at(-1);
+    if (followUp?.kind !== "queueSettingsUpdate") {
+      throw new Error("expected a queueSettingsUpdate frame");
+    }
+    return followUp.clientActionId;
+  }
+
+  function workspaceNotice(h: Harness) {
+    return h.handle.store
+      .getState()
+      .errorNotices.find(
+        (notice) =>
+          notice.code === QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
+      );
+  }
+
+  it("tells the person what became of the settings frame when the host refused it", () => {
+    harness = openWithQueuedRowOnLine(true);
+    const followUpActionId = submitFoldersOnlyEdit(harness);
+    ackWithCode(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+      reason: "Settings are locked.",
+      code: "SETTINGS_LOCKED",
+    });
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+
+    expect(workspaceNotice(harness)?.message).toBe(
+      "The folder change for a queued message could not be confirmed. Its settings/steering were not applied (Settings are locked).",
+    );
+  });
+
+  it("says the settings frame was applied when the host took it", () => {
+    harness = openWithQueuedRowOnLine(true);
+    const followUpActionId = submitFoldersOnlyEdit(harness);
+    ack(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "accepted",
+    });
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+
+    expect(workspaceNotice(harness)?.message).toBe(
+      "The folder change for a queued message could not be confirmed. Its settings/steering were applied.",
+    );
+  });
+
+  it("says the settings frame was not confirmed when the host never answered it", () => {
+    harness = openWithQueuedRowOnLine(true);
+    submitFoldersOnlyEdit(harness);
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+
+    expect(workspaceNotice(harness)?.message).toBe(
+      "The folder change for a queued message could not be confirmed. Its settings/steering were not confirmed.",
+    );
+  });
+
+  it("keeps the chat from being evicted until the notice is delivered", () => {
+    harness = openWithQueuedRowOnLine(true);
+    submitFoldersOnlyEdit(harness);
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+
+    const notice = workspaceNotice(harness);
+    if (notice === undefined) throw new Error("expected the notice");
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(true);
+
+    harness.handle.store.getState().markNoticeDelivered(notice);
+
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
   });
 });

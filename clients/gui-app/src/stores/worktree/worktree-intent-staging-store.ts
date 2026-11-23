@@ -297,8 +297,8 @@ export function forkChatStagingKeysForEpic(
  *
  * One slot per editing SESSION, not per row: two panes editing the same row
  * each pick for their own edit, and one pane ending its edit leaves the other's
- * picks alone. Once {@link closeQueueEditStaging} has ended the session, the
- * slot takes no more writes.
+ * picks alone. The slot takes picks only while its session is open, between
+ * {@link openQueueEditStaging} and {@link closeQueueEditStaging}.
  */
 export function queueEditStagingKey(
   hostId: string | null,
@@ -315,17 +315,16 @@ export function queueEditStagingKey(
   };
 }
 
-// The queue-edit slots whose edit session has ended, by serialized key. A
-// session id is never reused, so an entry is never wrong; each is one short
-// string per edit made while the app is open. Session state, like the slots.
-const endedQueueEditSlotIds = new Set<string>();
+// The queue-edit slots whose edit session is open, by serialized key. An entry
+// lives exactly as long as its edit, so nothing is kept once the edit ends.
+const liveQueueEditSlotIds = new Set<string>();
 
 /**
- * Take writes for an edit session again. Only React's development re-run of an
- * effect ends a session and then resumes it; a real edit is opened once.
+ * Open one edit session's slot for picks. React's development re-run of an
+ * effect closes a session and opens it again; a real edit is opened once.
  */
 export function openQueueEditStaging(key: WorktreeStagingKey): void {
-  endedQueueEditSlotIds.delete(worktreeStagingKeyString(key));
+  liveQueueEditSlotIds.add(worktreeStagingKeyString(key));
 }
 
 /**
@@ -336,7 +335,7 @@ export function openQueueEditStaging(key: WorktreeStagingKey): void {
  */
 export function closeQueueEditStaging(key: WorktreeStagingKey): void {
   const id = worktreeStagingKeyString(key);
-  endedQueueEditSlotIds.add(id);
+  liveQueueEditSlotIds.delete(id);
   useWorktreeIntentStagingStore.setState((state) => ({
     intentByKey: withoutKey(state.intentByKey, id),
     suspendedWorkspacePathsByKey: withoutKey(
@@ -360,15 +359,16 @@ function withoutKey<T>(
 }
 
 /**
- * A pick for a queued message's edit session that has ended. Suspended paths
- * are not picks and stay writable: the picker records them for its key before
- * the session's own effect runs.
+ * A pick for a queued message's edit session that is not open: it has ended,
+ * or never began. Suspended paths are not picks and stay writable: the picker
+ * records them for its key before the session's own effect runs, and closing
+ * the session drops them.
  */
 function refusesQueueEditWrite(key: WorktreeStagingKey): boolean {
   return (
     key.surface === "owner" &&
     key.ownerId.startsWith(QUEUE_EDIT_OWNER_PREFIX) &&
-    endedQueueEditSlotIds.has(worktreeStagingKeyString(key))
+    !liveQueueEditSlotIds.has(worktreeStagingKeyString(key))
   );
 }
 
@@ -1516,7 +1516,7 @@ export const useWorktreeIntentStagingStore =
               : state;
           }),
         resetForTests: () => {
-          endedQueueEditSlotIds.clear();
+          liveQueueEditSlotIds.clear();
           set({
             intentByKey: {},
             suspendedWorkspacePathsByKey: {},

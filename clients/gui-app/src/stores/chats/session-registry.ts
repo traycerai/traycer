@@ -16,6 +16,7 @@ import {
 import {
   acceptedActionIsUnsettled,
   noticeCarriesOnlyCopy,
+  QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
 } from "@/stores/chats/chat-queue-reconciler";
 import { isSandboxHostId } from "@/lib/sandboxes/sandbox-host-directory";
 import { queueEditRecordsInCustody } from "@/stores/chats/queue-edit-custody";
@@ -542,6 +543,20 @@ function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
   //    frames - or the text is handed back - this store holds the only copy of
   //    the submission.
   if (queueEditRecordsInCustody(state.queueEditRecords).length > 0) {
+    return true;
+  }
+  // 6. A queued message's folder change that could not be confirmed, not yet
+  //    told. Its record retired when the notice was written and nothing was
+  //    handed back, so the notice is the only telling there is - and it is
+  //    shown when a pane focuses, which a closed tile never does.
+  if (
+    state.errorNotices.some(
+      (notice) =>
+        notice.code === QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE &&
+        notice.clientActionId !== null &&
+        !state.deliveredNoticeActionIds.has(notice.clientActionId),
+    )
+  ) {
     return true;
   }
   // 4. The prompt has become an UNDELIVERED last-copy notice. A restoration

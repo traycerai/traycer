@@ -230,14 +230,24 @@ export type QueueEditSettlement =
       readonly requestedChanges: ReadonlyArray<string>;
     }
   /**
-   * An edit that changed only a queued message's folders, unanswered, and the
-   * host does not show them on the row. Nothing can settle it: the text it
-   * would hand back is the row's own and would invite a duplicate send. The
-   * record is retired and the person is told once.
+   * An unanswered edit whose folders the host cannot be seen to hold: one that
+   * changed only the folders and the still-queued row does not show them, or
+   * one whose text is seen saved on a still-queued row that names a sent folder
+   * with another choice. Nothing can settle it: the text it would hand back is
+   * the row's own and would invite a duplicate send. The record is retired and
+   * the person is told once, with what became of the second frame.
    */
   | {
       readonly kind: "workspace_unconfirmed";
       readonly clientActionId: string;
+      readonly followUpApplied: boolean;
+      /** See {@link QueueEditRecord.followUpIsNoOp}: an applied no-op is not told. */
+      readonly followUpIsNoOp: boolean;
+      /** `true` when the host is KNOWN to have refused the second frame. */
+      readonly followUpRefused: boolean;
+      /** The host's refusal of the second frame. `null` unless refused. */
+      readonly hostReason: string | null;
+      readonly hostCode: string | null;
     };
 
 export interface QueueEditFold {
@@ -638,16 +648,42 @@ function holdsFolderChoice(
   held: WorktreeIntent | null,
   entry: WorktreeIntent["entries"][number],
 ): boolean {
-  const own = held?.entries.find(
-    (candidate) => candidate.workspacePath === entry.workspacePath,
+  const own = folderChoiceFor(held, entry.workspacePath);
+  return own !== undefined && sameFolderChoice(own, entry);
+}
+
+/**
+ * Whether `held` names `entry`'s folder with a different choice, compared as
+ * {@link holdsFolderChoice} compares. A folder `held` does not name is no
+ * contradiction.
+ */
+function contradictsFolderChoice(
+  held: WorktreeIntent | null,
+  entry: WorktreeIntent["entries"][number],
+): boolean {
+  const own = folderChoiceFor(held, entry.workspacePath);
+  return own !== undefined && !sameFolderChoice(own, entry);
+}
+
+function folderChoiceFor(
+  held: WorktreeIntent | null,
+  workspacePath: string,
+): WorktreeIntent["entries"][number] | undefined {
+  return held?.entries.find(
+    (candidate) => candidate.workspacePath === workspacePath,
   );
-  if (own === undefined) return false;
-  const ownOnWire = worktreeFolderIntentSchema.safeParse(own);
-  const entryOnWire = worktreeFolderIntentSchema.safeParse(entry);
+}
+
+function sameFolderChoice(
+  a: WorktreeIntent["entries"][number],
+  b: WorktreeIntent["entries"][number],
+): boolean {
+  const aOnWire = worktreeFolderIntentSchema.safeParse(a);
+  const bOnWire = worktreeFolderIntentSchema.safeParse(b);
   return (
-    ownOnWire.success &&
-    entryOnWire.success &&
-    canonicalJson(ownOnWire.data) === canonicalJson(entryOnWire.data)
+    aOnWire.success &&
+    bOnWire.success &&
+    canonicalJson(aOnWire.data) === canonicalJson(bOnWire.data)
   );
 }
 
@@ -669,17 +705,20 @@ export interface QueueEditEvidence {
 }
 
 /**
- * `unconfirmable`: a folders-only edit the host does not show on a still-queued
- * row - see the `workspace_unconfirmed` settlement.
+ * `unconfirmable`: an edit whose folders the host does not show on a
+ * still-queued row - see the `workspace_unconfirmed` settlement.
  */
 type QueueEditVerdict = "applied" | "not_applied" | "unknown" | "unconfirmable";
 
 /**
  * Whether the host saved the edit, as far as it can be SEEN.
  *
- * An edit that changed the text is settled by the text alone, folders and all:
- * the host commits both in one step. An edit that changed only the folders is
- * settled by {@link folderEditVerdict}.
+ * An edit that changed the text is settled by the text, folders and all: the
+ * host commits both in one step. The one exception is a text seen saved on a
+ * still-queued row that names a sent folder with another choice, which is
+ * `unconfirmable` - unless that text was already handed back, where the notice
+ * that the copy is a duplicate is the one that matters. An edit that changed
+ * only the folders is settled by {@link folderEditVerdict}.
  *
  * - The edited document on the row, or on the message the row became: applied.
  * - The message the row became, holding something else: not applied. The host
@@ -703,6 +742,20 @@ function queueEditVerdict(
   if (!record.changesText && record.worktreeIntent !== null) {
     return folderEditVerdict(record.worktreeIntent, row);
   }
+  const verdict = textEditVerdict(record, row, evidence);
+  return verdict === "applied" &&
+    !record.contentReturned &&
+    rowContradictsSentFolders(record.worktreeIntent, row)
+    ? "unconfirmable"
+    : verdict;
+}
+
+/** {@link queueEditVerdict} for an edit that changed the text, by the text. */
+function textEditVerdict(
+  record: QueueEditRecord,
+  row: OpenChatQueuedItem | null,
+  evidence: QueueEditEvidence,
+): QueueEditVerdict {
   if (row !== null) {
     return row.kind === "prompt" &&
       queueEditContentMatches(record.wireContent, row.message.content)
@@ -748,6 +801,19 @@ function folderEditVerdict(
     )
     ? "applied"
     : "unconfirmable";
+}
+
+/**
+ * Whether a still-queued row publishes a choice that names one of the sent
+ * folders differently. A row with no choice of its own contradicts nothing.
+ */
+function rowContradictsSentFolders(
+  sent: WorktreeIntent | null,
+  row: OpenChatQueuedItem | null,
+): boolean {
+  if (sent === null || row === null || row.kind !== "prompt") return false;
+  const held = row.worktreeIntent ?? null;
+  return sent.entries.some((entry) => contradictsFolderChoice(held, entry));
 }
 
 /**
@@ -804,10 +870,19 @@ function accountForUnconfirmedRecord(
     (record.followUp === "unconfirmed" &&
       followUpShownApplied(record, row, evidence));
   if (verdict === "unconfirmable") {
+    const followUpRefused = record.followUp === "rejected";
     return {
       record: null,
       settlements: [
-        { kind: "workspace_unconfirmed", clientActionId: record.editActionId },
+        {
+          kind: "workspace_unconfirmed",
+          clientActionId: record.editActionId,
+          followUpApplied,
+          followUpIsNoOp: record.followUpIsNoOp,
+          followUpRefused,
+          hostReason: followUpRefused ? record.followUpReason : null,
+          hostCode: followUpRefused ? record.followUpCode : null,
+        },
       ],
     };
   }

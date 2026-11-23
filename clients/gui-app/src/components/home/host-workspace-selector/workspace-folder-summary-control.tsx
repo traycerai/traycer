@@ -155,6 +155,8 @@ export function WorkspaceFolderSummaryControl(props: {
   /** True while a captured Update/teardown run is in flight. */
   readonly discardDisabled: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  /** Why repository settings are unavailable, or `null` while they are. */
+  readonly environmentDisabledReason: string | null;
   /**
    * Re-derives these folders from disk, or `null` on a surface with no host to
    * ask. The picker is the only place the Local branch label can be corrected:
@@ -354,6 +356,7 @@ export function WorkspaceFolderSummaryControl(props: {
         discardDisabled={props.discardDisabled}
         draftPending={props.draftPending === true}
         onEditEnvironment={props.onEditEnvironment}
+        environmentDisabledReason={props.environmentDisabledReason}
         readOnly={false}
         bindingResolved={props.bindingResolved}
         recentWorkspaces={props.recentWorkspaces}

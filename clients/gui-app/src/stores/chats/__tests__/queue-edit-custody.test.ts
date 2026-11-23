@@ -1561,7 +1561,7 @@ describe("a queue edit that carries folders", () => {
   describe("when the host never answered", () => {
     const folders = localIntent("/a");
 
-    it("counts a text-changing edit applied once the row shows the text, whatever folders it shows", () => {
+    it("counts a text-changing edit applied once the row shows the text with no folder choice of its own", () => {
       const fold = accountForQueueEdits({
         records: recordsOf(
           record({ worktreeIntent: folders, followUpIsNoOp: true }, "save"),
@@ -1576,6 +1576,74 @@ describe("a queue edit that carries folders", () => {
       expect(fold.records).toEqual({});
     });
 
+    describe("a text-changing edit seen saved on a row that names another choice", () => {
+      const textAndFolders = record(
+        { worktreeIntent: folders, followUpIsNoOp: true },
+        "save",
+      );
+      const conflicting = worktreeIntentFor("/a");
+
+      it("is retired with a workspace_unconfirmed settlement, and no text back", () => {
+        const fold = accountForQueueEdits({
+          records: recordsOf(textAndFolders),
+          sweptActionIds: BOTH_SWEPT,
+          evidence: evidence({
+            items: [rowHolding(EDITED, { worktreeIntent: conflicting })],
+            messages: [],
+          }),
+        });
+        expect(fold.settlements).toEqual([
+          {
+            kind: "workspace_unconfirmed",
+            clientActionId: EDIT_ACTION_ID,
+            followUpApplied: true,
+            followUpIsNoOp: true,
+            followUpRefused: false,
+            hostReason: null,
+            hostCode: null,
+          },
+        ]);
+        expect(fold.records).toEqual({});
+      });
+
+      it("is applied when the row names the same choice", () => {
+        const fold = accountForQueueEdits({
+          records: recordsOf(textAndFolders),
+          sweptActionIds: BOTH_SWEPT,
+          evidence: evidence({
+            items: [rowHolding(EDITED, { worktreeIntent: folders })],
+            messages: [],
+          }),
+        });
+        expect(fold.settlements).toEqual([]);
+        expect(fold.records).toEqual({});
+      });
+
+      it("still reads saved_after_return once the text was handed back", () => {
+        const first = accountForQueueEdits({
+          records: recordsOf(textAndFolders),
+          sweptActionIds: BOTH_SWEPT,
+          evidence: evidence({ items: [row({})], messages: [] }),
+        });
+        expect(first.settlements).toEqual([
+          expect.objectContaining({ kind: "content_returned" }),
+        ]);
+
+        const review = accountForQueueEdits({
+          records: first.records,
+          sweptActionIds: NONE_SWEPT,
+          evidence: evidence({
+            items: [rowHolding(EDITED, { worktreeIntent: conflicting })],
+            messages: [],
+          }),
+        });
+        expect(review.settlements).toEqual([
+          expect.objectContaining({ kind: "saved_after_return" }),
+        ]);
+        expect(review.records).toEqual({});
+      });
+    });
+
     describe("a folders-only edit", () => {
       const foldersOnly = record(
         {
@@ -1587,7 +1655,15 @@ describe("a queue edit that carries folders", () => {
         "save",
       );
       const unconfirmed = [
-        { kind: "workspace_unconfirmed", clientActionId: EDIT_ACTION_ID },
+        {
+          kind: "workspace_unconfirmed",
+          clientActionId: EDIT_ACTION_ID,
+          followUpApplied: true,
+          followUpIsNoOp: true,
+          followUpRefused: false,
+          hostReason: null,
+          hostCode: null,
+        },
       ];
 
       it("is retired with a workspace_unconfirmed settlement, and no text back, when the row is gone and its message holds the same text", () => {

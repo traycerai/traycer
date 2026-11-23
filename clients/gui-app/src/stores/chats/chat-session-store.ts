@@ -7363,21 +7363,30 @@ export function createChatSessionStoreWithNotificationDependencies(
      * The folders of a returned queue edit whose draft the composer has just
      * taken, staged on the chat's slot to go with it: merged per folder over
      * what the chat already had staged. A worktree removed since it was picked
-     * is dropped, as the send path's own hand-back drops one.
+     * is dropped, as the send path's own hand-back drops one, and the clause
+     * returned names it: the draft would otherwise run somewhere else with
+     * nothing said. Empty when nothing was dropped.
      */
-    const stageAdoptedQueueEditFolders = (clientActionId: string): void => {
+    const stageAdoptedQueueEditFolders = (clientActionId: string): string => {
       const restoration = get().failedSendRestoration;
       if (
         restoration?.clientActionId !== clientActionId ||
         restoration.worktreeIntent === null
       ) {
-        return;
+        return "";
       }
-      const { survivors } = partitionIntentAgainstSweptRefs(
+      const { survivors, swept } = partitionIntentAgainstSweptRefs(
         restoration.worktreeIntent,
         sessionSweptRefsForHost(options.hostId),
       );
-      if (survivors === null) return;
+      const dropped = deadSendAccountClauses(
+        {
+          ...EMPTY_DEAD_SEND_ACCOUNT,
+          worktree: { survivors, swept, superseded: false },
+        },
+        true,
+      );
+      if (survivors === null) return dropped;
       const merged = survivors.entries.reduce<WorktreeIntent>(
         (acc, entry) => mergeWorktreeIntentEntry(acc, entry),
         readStagedWorktreeIntent(ownerStagingKey) ?? { entries: [] },
@@ -7386,6 +7395,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       useWorktreeIntentStagingStore
         .getState()
         .restoreIntentForDispatch(ownerStagingKey, merged, clientActionId);
+      return dropped;
     };
 
     /**
@@ -12500,7 +12510,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       ackFailedSendRestoration: (clientActionId) => {
         // The composer TOOK the prompt, so its binding stays staged with it.
         stagingRevisionByRestoredAction.delete(clientActionId);
-        stageAdoptedQueueEditFolders(clientActionId);
+        const droppedFolders = stageAdoptedQueueEditFolders(clientActionId);
         set((state) => {
           const restoration = state.failedSendRestoration;
           if (restoration?.clientActionId !== clientActionId) return {};
@@ -12520,7 +12530,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           // stays quiet, and a stated-but-undelivered one is said here.
           if (
             restoration.stated &&
-            state.deliveredNoticeActionIds.has(clientActionId)
+            state.deliveredNoticeActionIds.has(clientActionId) &&
+            droppedFolders === ""
           ) {
             return { failedSendRestoration: null };
           }
@@ -12532,7 +12543,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // through here exactly once.
           const restored: ChatErrorNotice = {
             code: SEND_RESTORED_NOTICE_CODE,
-            message: restoration.reason,
+            message: `${restoration.reason}${droppedFolders}`,
             severity: "warning",
             clientActionId,
           };
@@ -13259,17 +13270,18 @@ function partialQueueEditLastCopy(
 }
 
 /**
- * What the saved-after-all notice says of the second frame: nothing when it
- * applied, the host's refusal and its reason when that is known, and "not
- * confirmed" only when nothing answered for it.
+ * What a notice that settles a queue edit says of its second frame: `applied`
+ * when it applied, the host's refusal and its reason when that is known, and
+ * "not confirmed" only when nothing answered for it.
  */
-function savedAfterReturnSecondFrameClause(
+function secondFrameClause(
   settlement: Extract<
     QueueEditSettlement,
-    { readonly kind: "saved_after_return" }
+    { readonly kind: "saved_after_return" | "workspace_unconfirmed" }
   >,
+  applied: string,
 ): string {
-  if (settlement.followUpApplied) return "";
+  if (settlement.followUpApplied) return applied;
   if (settlement.followUpRefused) {
     return ` Its settings/steering were not applied${hostReasonClause(settlement.hostReason, settlement.hostCode)}.`;
   }
@@ -13283,7 +13295,8 @@ function queueEditSavedAfterReturnNotice(
     { readonly kind: "saved_after_return" }
   >,
 ): ChatErrorNotice {
-  const secondFrame = savedAfterReturnSecondFrameClause(settlement);
+  // Nothing to add when it applied: "saved after all" covers the whole edit.
+  const secondFrame = secondFrameClause(settlement, "");
   return {
     code: QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
     message: `${hostRefusalLead(settlement.hostCode)}Your edit to a queued message was saved after all.${secondFrame} The copy handed back to you is a duplicate - do not send it again.`,
@@ -13315,17 +13328,24 @@ function queueEditFollowUpAloneNotice(
 }
 
 /**
- * Told once, when a folders-only edit of a queued message can be neither
- * confirmed nor handed back.
+ * Told once, when an edit's folder change can be neither confirmed nor handed
+ * back, with what became of the rest of the submission.
  */
 function queueEditWorkspaceUnconfirmedNotice(
-  clientActionId: string,
+  settlement: Extract<
+    QueueEditSettlement,
+    { readonly kind: "workspace_unconfirmed" }
+  >,
 ): ChatErrorNotice {
+  const secondFrame = secondFrameClause(
+    settlement,
+    settlement.followUpIsNoOp ? "" : " Its settings/steering were applied.",
+  );
   return {
     code: QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
-    message: QUEUE_EDIT_WORKSPACE_UNCONFIRMED_MESSAGE,
+    message: `${hostRefusalLead(settlement.hostCode)}${QUEUE_EDIT_WORKSPACE_UNCONFIRMED_MESSAGE}${secondFrame}`,
     severity: "warning",
-    clientActionId,
+    clientActionId: settlement.clientActionId,
   };
 }
 
@@ -13345,10 +13365,10 @@ function queueEditStatedNotice(
   if (settlement.kind === "follow_up_alone") {
     return queueEditFollowUpAloneNotice(settlement);
   }
-  if (settlement.kind === "workspace_unconfirmed") {
-    return queueEditWorkspaceUnconfirmedNotice(settlement.clientActionId);
-  }
-  const notice = queueEditSavedAfterReturnNotice(settlement);
+  const notice =
+    settlement.kind === "workspace_unconfirmed"
+      ? queueEditWorkspaceUnconfirmedNotice(settlement)
+      : queueEditSavedAfterReturnNotice(settlement);
   if (isRemovedProfileRefusalCode(settlement.hostCode)) {
     lineBreakNotices.add(notice);
   }

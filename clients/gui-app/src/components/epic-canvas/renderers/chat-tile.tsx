@@ -2843,6 +2843,7 @@ function useChatTileSessionViewModel(
     scope: handoffScope,
     profileUserId: profile?.userId ?? null,
     getDraftBlobBridgeSupported,
+    queueEditOpen: uiState.editingQueueItemId !== null,
   });
   useChatSetupFailureRestoreDriver({
     handle,

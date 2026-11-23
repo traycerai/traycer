@@ -25,6 +25,8 @@ import {
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
@@ -154,6 +156,13 @@ function markSnapshotLoadedAndActable(
   });
 }
 
+function textDoc(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
 function b64ImageContent(): JsonContent {
   return {
     type: "doc",
@@ -234,7 +243,10 @@ function registerWaitingChatHandoff(content: JsonContent): void {
   store.markWaitingChat(SCOPE);
 }
 
-function mountDriver(handle: ChatSessionStoreHandle): void {
+function mountDriver(
+  handle: ChatSessionStoreHandle,
+  queueEditOpen: boolean,
+): void {
   // Constructed ONCE per mount, outside the render callback, and that placement
   // is load-bearing rather than tidiness. `useSeededSendContent` lists this
   // getter in an effect dependency array and that effect calls `setResolved` on
@@ -260,6 +272,7 @@ function mountDriver(handle: ChatSessionStoreHandle): void {
       // Read from the store at the moment of the resend, never a boolean
       // captured at mount.
       getDraftBlobBridgeSupported,
+      queueEditOpen,
     }),
   );
 }
@@ -285,6 +298,7 @@ let handles: ChatSessionStoreHandle[] = [];
 beforeEach(() => {
   installFreshIndexedDb();
   useInitialChatHandoffStore.getState().resetForTests();
+  useComposerDraftStore.setState({ drafts: {} });
   handles = [];
   resetDraftBlobTransportForTests();
   // `currentDraftBlobOwnerId()` reads `contextMetadata.userId` - NOT
@@ -311,7 +325,7 @@ describe("initial-chat-handoff driver: legacy v3 (fully-inlined) resend", () => 
     handles.push(handle);
     markSnapshotLoadedAndActable(handle, false);
 
-    mountDriver(handle);
+    mountDriver(handle, false);
 
     // The driver's effect fires synchronously on mount (waitingChat +
     // snapshotLoaded + canAct) and the fast path needs no await: a fully-inlined
@@ -368,7 +382,7 @@ describe("initial-chat-handoff driver: hash-first resend", () => {
     handles.push(handle);
     markSnapshotLoadedAndActable(handle, true);
 
-    mountDriver(handle);
+    mountDriver(handle, false);
 
     const attrs = findImageAttrs(await dispatchedResendContent(handle));
     expect(attrs).not.toBeNull();
@@ -395,7 +409,7 @@ describe("initial-chat-handoff driver: hash-first resend", () => {
     handles.push(handle);
     markSnapshotLoadedAndActable(handle, false);
 
-    mountDriver(handle);
+    mountDriver(handle, false);
 
     const attrs = findImageAttrs(await dispatchedResendContent(handle));
     expect(attrs).not.toBeNull();
@@ -418,11 +432,64 @@ describe("initial-chat-handoff driver: hash-first resend", () => {
     handles.push(handle);
     markSnapshotLoadedAndActable(handle, true);
 
-    mountDriver(handle);
+    mountDriver(handle, false);
 
     const attrs = findImageAttrs(await dispatchedResendContent(handle));
     expect(attrs).not.toBeNull();
     expect(typeof attrs?.b64content).toBe("string");
     expect(attrs?.hash).toBeUndefined();
+  });
+});
+
+describe("initial-chat-handoff driver: a returned draft meets a queue edit", () => {
+  const RETURNED = textDoc("the returned queue edit");
+
+  function seedReturnedDraft(handle: ChatSessionStoreHandle): void {
+    markSnapshotLoadedAndActable(handle, false);
+    handle.store.setState({
+      failedSendRestoration: {
+        clientActionId: "returned-1",
+        messageId: null,
+        content: RETURNED,
+        browserAnnotations: [],
+        reason: "Your edit to a queued message was not saved.",
+        displacedReason: "Your edit to a queued message was not saved.",
+        reasonIsRemovedProfile: false,
+        stated: false,
+        worktreeIntent: null,
+      },
+    });
+  }
+
+  it("goes into an empty composer when no queue edit is open", () => {
+    const handle = buildHandle(false);
+    handles.push(handle);
+    seedReturnedDraft(handle);
+
+    mountDriver(handle, false);
+
+    expect(
+      JSON.stringify(useComposerDraftStore.getState().drafts[CHAT_ID]?.content),
+    ).toContain("the returned queue edit");
+    expect(handle.store.getState().failedSendRestoration).toBeNull();
+    expect(
+      handle.store.getState().lastCopyPrompts["returned-1"],
+    ).toBeUndefined();
+  });
+
+  it("is kept as a last copy, and the composer left alone, while a queue edit is open", () => {
+    const handle = buildHandle(false);
+    handles.push(handle);
+    seedReturnedDraft(handle);
+
+    mountDriver(handle, true);
+
+    const state = handle.store.getState();
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]).toBeUndefined();
+    expect(state.failedSendRestoration).toBeNull();
+    expect(state.lastCopyPrompts["returned-1"]?.content).toEqual(RETURNED);
+    expect(state.errorNotices.map((notice) => notice.code)).toEqual([
+      SEND_NOT_RECORDED_NOTICE_CODE,
+    ]);
   });
 });

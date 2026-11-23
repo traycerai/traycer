@@ -1420,6 +1420,7 @@ function HomeWorkspaceRows(props: {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={handleEditEnvironment}
+          environmentDisabledReason={null}
           readOnly={false}
           // Home folder list is a synchronous local draft, never an async binding
           // snapshot — an empty list is a genuine "no folders linked yet", so the
@@ -1500,6 +1501,7 @@ function HomeWorkspaceSummaryControl(props: {
             onDiscardStaged={null}
             discardDisabled={false}
             onEditEnvironment={props.onEditEnvironment}
+            environmentDisabledReason={null}
             refresh={props.refresh}
             popoverTestId="home-workspace-rows-popover"
             popoverSide="bottom"
@@ -3423,11 +3425,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     setScriptsTargetPath(path);
   }, []);
   const scriptsTarget = useMemo<WorktreeScriptsTarget | null>(() => {
-    if (scriptsTargetPath === null) return null;
+    // The editor writes the source checkout, which a queued edit cannot undo.
+    if (scriptsTargetPath === null || queueEditItemId !== null) return null;
     const summary = summariesByPath.get(scriptsTargetPath);
     if (summary === undefined) return null;
     return { workspacePath: scriptsTargetPath, summary };
-  }, [scriptsTargetPath, summariesByPath]);
+  }, [queueEditItemId, scriptsTargetPath, summariesByPath]);
   const regenerateBranchNameForWorkspace = useCallback(
     (
       path: string,
@@ -3554,6 +3557,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             onDiscardStaged={discardStagedFolders}
             discardDisabled={commitRunPending || teardownCommitPending}
             onEditEnvironment={handleEditEnvironment}
+            // Repository settings write the chat's checkout at once, which a
+            // cancelled edit could not take back.
+            environmentDisabledReason={
+              queueEditItemId === null ? null : QUEUE_EDIT_FOLDERS_FIXED_NOTE
+            }
             refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
             recentWorkspaces={recentWorkspacesSection}
