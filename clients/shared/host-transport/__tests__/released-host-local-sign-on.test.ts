@@ -2850,7 +2850,9 @@ describe("released personal host, local stream", () => {
       // The sign-in dial is planned for the first process and waits for its slot.
       await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
       hosts.observeInstance(HOST_ID, "200");
-      expect((await openFrame(sockets[1])).token).toBe(HOST_TOKEN);
+      await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+      expect(sockets[1].textSent).toEqual([]);
+      expect((await openFrame(sockets[2])).token).toBe(HOST_TOKEN);
     });
 
     it("raises no cover for a retryable named fatal that an invited stream's earlier-process socket delivers after the replacement was observed", async () => {
