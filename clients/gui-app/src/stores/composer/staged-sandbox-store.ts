@@ -68,8 +68,7 @@ export type StagedSandboxStep =
   | "applying"
   | "delivering";
 
-/** Why the first action stopped short, said on the line or above the draft. */
-export type StagedSandboxFailure =
+type StagedSandboxFailureDetail =
   | {
       readonly kind: "credits";
       readonly shortfallMc: number | null;
@@ -109,6 +108,18 @@ export type StagedSandboxFailure =
   | { readonly kind: "agent-setup-failed"; readonly detail: string }
   /** The sandbox is up; the send handed to it stopped short of its create. */
   | { readonly kind: "not-sent" };
+
+/** Why the first action stopped short, said on the line or above the draft. */
+export type StagedSandboxFailure =
+  | StagedSandboxFailureDetail
+  | (StagedSandboxFailureDetail & {
+      /**
+       * The create or its preflight stopped before the app learned a sandbox ID.
+       * Only a reply that proves it is safe to start a new create sets this true.
+       * Older persisted failures lack this field and keep their original key rule.
+       */
+      readonly freshCreateKey: boolean;
+    });
 
 export interface StagedSandbox {
   /** The original create bound and this driver's post-preflight clock; absent on legacy stages. */
@@ -168,16 +179,12 @@ export interface StagedSandbox {
 }
 
 /**
- * A refusal the server answered before anything was created. Any other
- * failure may follow an accepted, billed create (an answer that never came,
- * a sandbox that failed on its way up); so does any failure once a sandbox
- * was accepted, such as one frozen for credits while it settles.
+ * A new create verdict comes from the answer, since the same failure kind can
+ * also mean a retry never reached replay. Only legacy failures with no
+ * recorded verdict use the original rule based on the kind.
  */
-export function refusedBeforeCreate(
-  failure: StagedSandboxFailure,
-  createdSandboxId: string | null,
-): boolean {
-  if (createdSandboxId !== null) return false;
+function refusedBeforeCreate(failure: StagedSandboxFailure): boolean {
+  if ("freshCreateKey" in failure) return failure.freshCreateKey;
   switch (failure.kind) {
     case "credits":
     case "shape":
@@ -199,12 +206,10 @@ export function refusedBeforeCreate(
 }
 
 /**
- * Whether the stage's next action takes a new create key: it never started
- * one, the server refused that one before creating anything, or the sandbox
- * that key created failed (naming it again answers with the same failed row).
- * Every other stage may have an accepted, billed create behind it on its way,
- * which the next action names again so the server answers with the same row.
- * A wake failure keeps that sandbox, including one originally picked as New.
+ * The stage's next action takes a fresh key if it has none, has a create
+ * refusal that permits a fresh key, or must replace a failed new sandbox.
+ * Reusing the key lets an uncertain retry rejoin an earlier create. A wake
+ * failure keeps the sandbox, including one originally picked as New.
  */
 export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
   if (stage.clientRequestId === null) return true;
@@ -212,7 +217,7 @@ export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
   if (stage.failure.kind === "failed") {
     return stage.target.kind === "new" && stage.failure.code !== "wake";
   }
-  return refusedBeforeCreate(stage.failure, stage.createdSandboxId);
+  return stage.createdSandboxId === null && refusedBeforeCreate(stage.failure);
 }
 
 /**

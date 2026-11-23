@@ -1557,8 +1557,13 @@ describe("useStagedSandboxSend's refused resubmit", () => {
  * then sends again: the two creates' idempotency keys.
  */
 async function sendAgainAfter(
-  failure: StagedSandboxFailure["kind"],
+  answer: SandboxCreateFetchResult | "network-error",
 ): Promise<ReadonlyArray<string | null>> {
+  if (answer === "network-error") {
+    mocks.createSandbox.mockRejectedValue(new Error("offline"));
+  } else {
+    mocks.createSandbox.mockResolvedValue(answer);
+  }
   const actual = await vi.importActual<
     typeof import("@/lib/sandboxes/staged-sandbox-run")
   >("@/lib/sandboxes/staged-sandbox-run");
@@ -1584,7 +1589,7 @@ async function sendAgainAfter(
     latestSend?.intercept("first", null);
   });
   await waitFor(() => {
-    expect(readStagedSandbox(SURFACE)?.failure?.kind).toBe(failure);
+    expect(readStagedSandbox(SURFACE)?.failure).not.toBeNull();
   });
   let intercepted = false;
   act(() => {
@@ -1600,24 +1605,38 @@ async function sendAgainAfter(
 }
 
 describe("useStagedSandboxSend's send after a failed create", () => {
-  it("makes a new create after a refusal for credits, and offers Add credits and no Retry", async () => {
-    mocks.createSandbox.mockResolvedValue(
-      refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
-    );
+  it.each([
+    ["401", refusal(401, "unauthorized"), false],
+    ["untyped 403", refusal(403, "unknown_refusal"), false],
+    [
+      "503 environment_unavailable",
+      refusal(503, "environment_unavailable"),
+      false,
+    ],
+    ["503 BACKEND_PRESSURE", refusal(503, "BACKEND_PRESSURE"), false],
+    ["409 sandbox_transition_conflict", refusal(409, "sandbox_transition_conflict"), false],
+    ["500 INTERNAL_ERROR", refusal(500, "INTERNAL_ERROR"), false],
+    ["network error", "network-error", false],
+    [
+      "402 insufficient_credit with an unverified balance",
+      { ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT), reason: "unverified" },
+      true,
+    ],
+    ["402 insufficient_credit denied", refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT), true],
+    ["400 shape_not_offered", refusal(400, "shape_not_offered"), true],
+    ["503 provider_unavailable", refusal(503, "provider_unavailable"), true],
+    ["404 sandbox_not_found", refusal(404, "sandbox_not_found"), true],
+  ] as const)("uses the right next create key after %s", async (_name, answer, fresh) => {
+    const [first, second] = await sendAgainAfter(answer);
 
-    const [first, second] = await sendAgainAfter("credits");
-
-    expect(second).not.toBe(first);
-    expect(screen.getByTestId("sandbox-refusal-add-credits")).toBeDefined();
-    expect(screen.queryByTestId("sandbox-refusal-retry")).toBeNull();
+    expect(second === first).toBe(!fresh);
   });
 
-  it("repeats the same create after one whose answer never came, since it may have been accepted", async () => {
-    mocks.createSandbox.mockRejectedValue(new Error("bridge refused"));
+  it("offers Add credits and no Retry after a credit refusal", async () => {
+    await sendAgainAfter(refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT));
 
-    const [first, second] = await sendAgainAfter("unverified");
-
-    expect(second).toBe(first);
+    expect(screen.getByTestId("sandbox-refusal-add-credits")).toBeDefined();
+    expect(screen.queryByTestId("sandbox-refusal-retry")).toBeNull();
   });
 
   it("makes a new create after the sandbox the last one made failed", () => {

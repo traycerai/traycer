@@ -168,6 +168,11 @@ describe("staged sandbox store", () => {
       target: NEW_TARGET,
       keeps: true,
     },
+    {
+      failure: { kind: "refused", message: "Traycer refused that request." },
+      target: NEW_TARGET,
+      keeps: false,
+    },
     // The sandbox that key made failed: naming it again answers with that row.
     { failure: FAILED, target: NEW_TARGET, keeps: false },
     // A wake has no create key to bill twice; the next one wakes again.

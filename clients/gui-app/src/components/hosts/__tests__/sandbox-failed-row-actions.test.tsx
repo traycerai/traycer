@@ -62,12 +62,20 @@ interface RetryRefusalCase {
   readonly expected: string;
 }
 
-async function retryAndExpectToast(
-  configuration: SandboxPageConfiguration,
-  environmentRole: "admin" | "editor" | "viewer",
-  refusal: SandboxCreateFetchResult,
-  expected: string,
-): Promise<void> {
+async function retryAndExpectToast(options: {
+  readonly configuration: SandboxPageConfiguration;
+  readonly environmentRole: "admin" | "editor" | "viewer";
+  readonly refusal: SandboxCreateFetchResult;
+  readonly expected: string | null;
+  readonly retryAgain: boolean;
+}): Promise<ReadonlyArray<string | null>> {
+  const {
+    configuration,
+    environmentRole,
+    refusal,
+    expected,
+    retryAgain,
+  } = options;
   const binding = createFakeSandboxBinding();
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -143,8 +151,19 @@ async function retryAndExpectToast(
   }
   await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
-  await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith(expected));
+  await waitFor(() =>
+    expected === null
+      ? expect(mocks.toastError).toHaveBeenCalledTimes(1)
+      : expect(mocks.toastError).toHaveBeenCalledWith(expected),
+  );
   expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1);
+  if (retryAgain) {
+    await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(binding.auth.createSandbox).toHaveBeenCalledTimes(2));
+  }
+  return binding.auth.createSandbox.mock.calls.map(
+    ([request]) => request.clientRequestId,
+  );
 }
 
 afterEach(() => {
@@ -193,12 +212,28 @@ describe("SandboxFailedRowActions Retry", () => {
   it.each(RETRY_REFUSAL_CASES)(
     "shows the right create refusal to a $reader after Retry",
     async ({ configuration, environmentRole, refusal, expected }) => {
-      await retryAndExpectToast(
+      await retryAndExpectToast({
         configuration,
         environmentRole,
         refusal,
         expected,
-      );
+        retryAgain: false,
+      });
     },
   );
+
+  it.each([
+    ["401", { ...refusedCreate(), status: 401, code: "unauthorized" }, true],
+    ["402", refusedCreate(), false],
+  ] as const)("uses the correct request key after a %s", async (_status, answer, keepsKey) => {
+    const keys = await retryAndExpectToast({
+      configuration: PERSONAL_CONFIGURATION,
+      environmentRole: "editor",
+      refusal: answer,
+      expected: null,
+      retryAgain: true,
+    });
+
+    expect(keys[1] === keys[0]).toBe(keepsKey);
+  });
 });
