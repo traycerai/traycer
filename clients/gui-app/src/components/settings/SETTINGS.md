@@ -1395,7 +1395,8 @@ Agents (the guide alone), Model routing and Variables & shells. No other page
 is reached: search and the command palette list none, picking the row moves to
 Providers, and a link, a deep link, a remembered route or a window that opens
 on the row draws Providers where the other page was named, so the page never
-mounts (`SettingsPanelForSection`). A Personal pick is never touched. A host
+mounts (`SettingsPanelForSection`), and the rail highlights Providers then
+(`useDrawnSection`). A Personal pick is never touched. A host
 whose `environment.status` is 1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
 
 **Nothing in the host group is local-only any more.** Shell and Diagnostics

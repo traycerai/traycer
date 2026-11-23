@@ -45,7 +45,10 @@ import {
   environmentSectionShown,
   oldHostSectionShown,
 } from "@/lib/settings-environment-pages";
-import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
+import {
+  useDrawnSection,
+  useOldHostLocalPick,
+} from "@/components/settings/personal/use-old-host-local-pick";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 export type SettingsSidebarMode =
@@ -218,13 +221,19 @@ function SettingsSidebarEnvironmentPicker(props: {
 function RoutedEnvironmentPicker(props: {
   readonly scope: HostScope;
 }): ReactNode {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const activeSection =
-    visibleSettingsSections().find((section) =>
-      isSectionPathname(pathname, section.id),
-    )?.id ?? null;
+  const activeSection = useRoutedSectionId();
   return (
     <EnvironmentPicker scope={props.scope} activeSection={activeSection} />
+  );
+}
+
+/** The offered section the route names, or `null` off every one. */
+function useRoutedSectionId(): SettingsSectionId | null {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return (
+    visibleSettingsSections().find((section) =>
+      isSectionPathname(pathname, section.id),
+    )?.id ?? null
   );
 }
 
@@ -358,6 +367,9 @@ interface SettingsSidebarItemProps {
 function SettingsSidebarItem(props: SettingsSidebarItemProps) {
   const { section, index, mode, variant } = props;
   const badgeModifier = useSettingsLeaderModifierForIndex(index);
+  const drawnModalSection = useDrawnSection(
+    mode.kind === "modal" ? mode.activeSection : null,
+  );
   const Icon = section.icon;
   const digit = singleDigitLeaderDigitFor(index);
   const baseClass = cn(
@@ -389,7 +401,7 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
     <span className="min-w-0 flex-1 truncate">{section.label}</span>
   );
   if (mode.kind === "modal") {
-    const active = mode.activeSection === section.id;
+    const active = drawnModalSection === section.id;
     return (
       <button
         type="button"
@@ -439,8 +451,7 @@ function SettingsSidebarRouteItem(props: {
 }) {
   const { section, label, badge, baseClass, variant } = props;
   const Icon = section.icon;
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const active = isSectionPathname(pathname, section.id);
+  const active = useDrawnSection(useRoutedSectionId()) === section.id;
   // The rail replaces: its sections are peers on one screen, and back should
   // leave settings, not replay every section clicked. The mobile list pushes:
   // there a section is a full-screen drill-down BELOW the list, and a replace

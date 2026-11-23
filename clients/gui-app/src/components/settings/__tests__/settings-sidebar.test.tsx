@@ -133,46 +133,29 @@ vi.mock(
 );
 // Each probe counts its mounts: a page that was never drawn mounted zero times.
 const probeMounts = vi.hoisted((): Record<string, number> => ({}));
-vi.mock("@/components/settings/panels/providers-settings-panel", async () => {
-  const { useEffect } = await import("react");
-  const probe = (name: string) =>
-    function Probe() {
-      useEffect(() => {
-        probeMounts[name] = (probeMounts[name] ?? 0) + 1;
-      }, []);
-      return <div data-testid={`${name}-page-probe`} />;
-    };
-  return {
-    McpServersSettingsPanel: probe("mcp-servers"),
-    ProvidersSettingsPanel: probe("providers"),
-    SkillsSettingsPanel: probe("skills"),
-  };
-});
-vi.mock("@/components/settings/panels/secrets-settings-panel", async () => {
-  const { useEffect } = await import("react");
-  return {
-    SecretsSettingsPanel: function Probe() {
-      useEffect(() => {
-        probeMounts["secrets"] = (probeMounts["secrets"] ?? 0) + 1;
-      }, []);
-      return <div data-testid="secrets-page-probe" />;
+const probe = vi.hoisted(
+  () =>
+    async (name: string): Promise<() => React.ReactNode> => {
+      const { createElement, useEffect } = await import("react");
+      return function Probe() {
+        useEffect(() => {
+          probeMounts[name] = (probeMounts[name] ?? 0) + 1;
+        }, []);
+        return createElement("div", { "data-testid": `${name}-page-probe` });
+      };
     },
-  };
-});
+);
+vi.mock("@/components/settings/panels/providers-settings-panel", async () => ({
+  McpServersSettingsPanel: await probe("mcp-servers"),
+  ProvidersSettingsPanel: await probe("providers"),
+  SkillsSettingsPanel: await probe("skills"),
+}));
+vi.mock("@/components/settings/panels/secrets-settings-panel", async () => ({
+  SecretsSettingsPanel: await probe("secrets"),
+}));
 vi.mock(
   "@/components/settings/panels/agent-memories-settings-panel",
-  async () => {
-    const { useEffect } = await import("react");
-    return {
-      AgentMemoriesSettingsPanel: function Probe() {
-        useEffect(() => {
-          probeMounts["agent-memories"] =
-            (probeMounts["agent-memories"] ?? 0) + 1;
-        }, []);
-        return <div data-testid="agent-memories-page-probe" />;
-      },
-    };
-  },
+  async () => ({ AgentMemoriesSettingsPanel: await probe("agent-memories") }),
 );
 // The surface the search navigates through: an overlay that swaps the section
 // in place, which the test's own surface (below) implements. Nothing else
@@ -1630,6 +1613,31 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
     expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
   });
 
+  function highlightedRows(): string[] {
+    return screen
+      .getAllByTestId(/^settings-sidebar-item-/)
+      .filter((row) => row.classList.contains("bg-accent"))
+      .map((row) => row.dataset["testid"] ?? "");
+  }
+
+  it("highlights Providers on the rail when a hidden page's section reaches the modal", async () => {
+    arriveOnOldHostPick();
+
+    await renderSurface("skills");
+
+    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-providers"]);
+  });
+
+  it("highlights Providers on the rail when a deep link opens the routed tab on a hidden page", async () => {
+    arriveOnOldHostPick();
+
+    await renderRoutedTab("/settings/skills", null);
+
+    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-providers"]);
+  });
+
   it("still draws a hidden page under a Personal pick on the same host", async () => {
     recordNegotiatedHostMethods("host-old", ["host.status"]);
     useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
@@ -1638,5 +1646,6 @@ describe("<SettingsSidebar /> search under an old host's Local pick", () => {
 
     await screen.findByTestId("skills-page-probe");
     expect(screen.queryByTestId("providers-page-probe")).toBeNull();
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-skills"]);
   });
 });
