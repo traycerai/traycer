@@ -60,6 +60,7 @@ function bridgeFixture(): {
       outcome: { kind: "ok", token: HOST_TOKEN },
       era: mainEra,
       held: true,
+      recorded: true,
     }),
     renew: async () => ({ renewal: { kind: "already-current" }, era: mainEra }),
     adopt: async () => ({ era: mainEra, kept: true }),
@@ -95,6 +96,7 @@ describe("desktop host-token source eras", () => {
       outcome: HostTokenMintOutcome;
       era: number;
       held: boolean;
+      recorded: boolean;
     }>();
     let obtainCalls = 0;
     let mainEra = 0;
@@ -130,6 +132,7 @@ describe("desktop host-token source eras", () => {
       },
       era: 0,
       held: true,
+      recorded: true,
     });
 
     await expect(pending).resolves.toEqual({ kind: "superseded" });
@@ -147,6 +150,7 @@ describe("desktop host-token source eras", () => {
         outcome: { kind: "no-sign-in" },
         era: mainEra,
         held: false,
+        recorded: false,
       }),
       renew: () => answer.promise,
       adopt: async () => ({ era: mainEra, kept: true }),
@@ -172,6 +176,7 @@ describe("desktop host-token source eras", () => {
       outcome: HostTokenMintOutcome;
       era: number;
       held: boolean;
+      recorded: boolean;
     }>();
     const { bridge, emit, setEra } = bridgeFixture();
     setEra(1);
@@ -194,6 +199,7 @@ describe("desktop host-token source eras", () => {
       outcome: { kind: "unavailable", detail: "authn answered HTTP 503" },
       era: 1,
       held: false,
+      recorded: false,
     });
 
     await expect(pending).resolves.toEqual({ kind: "superseded" });
@@ -204,6 +210,7 @@ describe("desktop host-token source eras", () => {
       outcome: HostTokenMintOutcome;
       era: number;
       held: boolean;
+      recorded: boolean;
     }>();
     const { bridge, emit, setEra } = bridgeFixture();
     setEra(1);
@@ -229,6 +236,7 @@ describe("desktop host-token source eras", () => {
       },
       era: 1,
       held: true,
+      recorded: true,
     });
 
     await expect(pending).resolves.toEqual({ kind: "superseded" });
@@ -400,6 +408,7 @@ describe("desktop host-token source eras", () => {
           outcome: { kind: "ok", token: HOST_TOKEN },
           era: 0,
           held: true,
+          recorded: true,
         };
       });
       const tokens = createDesktopHostTokenSource(bridge);
@@ -423,6 +432,7 @@ describe("desktop host-token source eras", () => {
         outcome: { kind: "ok", token: HOST_TOKEN },
         era,
         held: true,
+        recorded: true,
       }));
       const tokens = createDesktopHostTokenSource(bridge);
 
@@ -629,15 +639,15 @@ describe("desktop host-token source across windows asking for different host pro
           typeof asked === "object" && asked !== null
             ? Reflect.get(asked, "observed")
             : undefined;
+        // Main's own owner object: its records are keyed by that identity.
+        const askOwner =
+          typeof observed === "string" ? { hostId, observed } : null;
         const outcome =
           main.era(userId) === expectedEra
             ? await main.obtain(userId, hostId, fresh, {
                 signal: null,
-                ...(typeof observed === "string"
-                  ? {
-                      owner: { hostId, observed },
-                      observedNow: () => observed,
-                    }
+                ...(askOwner !== null && typeof observed === "string"
+                  ? { owner: askOwner, observedNow: () => observed }
                   : { owner: null }),
               })
             : ({ kind: "superseded" } satisfies HostTokenMintOutcome);
@@ -645,6 +655,10 @@ describe("desktop host-token source across windows asking for different host pro
           outcome,
           era: main.era(userId),
           held: outcome.kind === "ok",
+          recorded:
+            askOwner !== null &&
+            (outcome.kind === "ok" ||
+              main.lastFailureOf(userId, askOwner) === outcome.kind),
         };
       },
       renew: async (userId, hostIds, expectedEra) => ({
@@ -742,6 +756,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
     outcome: HostTokenMintOutcome;
     era: number;
     held: boolean;
+    recorded: boolean;
   };
 
   /** A window already holding `REFUSED`, whose next ask to main is held. */
@@ -751,6 +766,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       outcome: { kind: "ok", token: REFUSED },
       era: 0,
       held: true,
+      recorded: true,
     }));
     const tokens = createDesktopHostTokenSource(rig.bridge);
     await tokens.obtain(USER_ID, HOST_ID, false, {
@@ -771,6 +787,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
     outcome: { kind: "ok", token: REPLACEMENT },
     era: 0,
     held: true,
+    recorded: true,
   };
 
   it("replaces the refused cached token with the one main's change event announces, issued a second earlier, then takes the reply", async () => {
@@ -830,6 +847,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       outcome: { kind: "ok", token: OLDER },
       era: 0,
       held: true,
+      recorded: true,
     });
     await asking;
 
@@ -843,6 +861,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       outcome: { kind: "ok", token: NEWER },
       era: 0,
       held: false,
+      recorded: true,
     }));
     const tokens = createDesktopHostTokenSource(bridge);
 
@@ -859,6 +878,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       outcome: { kind: "ok", token: NEWER },
       era: 0,
       held: true,
+      recorded: true,
     }));
     const tokens = createDesktopHostTokenSource(bridge);
     await tokens.obtain(USER_ID, HOST_ID, true, { signal: null, owner: null });
@@ -882,6 +902,7 @@ describe("desktop host-token source ordering by the second authn issued each tok
       outcome: { kind: "ok", token: NEWER },
       era: 0,
       held: true,
+      recorded: true,
     }));
     const tokens = createDesktopHostTokenSource(bridge);
     await tokens.obtain(USER_ID, HOST_ID, true, { signal: null, owner: null });

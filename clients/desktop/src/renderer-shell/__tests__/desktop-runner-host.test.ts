@@ -291,6 +291,7 @@ function buildFakeBridge(
         outcome: { kind: "no-sign-in" },
         era: 0,
         held: false,
+        recorded: false,
       }),
       renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
       adopt: async () => ({ era: 0, kept: false }),

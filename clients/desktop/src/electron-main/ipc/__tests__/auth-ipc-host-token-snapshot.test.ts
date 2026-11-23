@@ -331,6 +331,7 @@ describe("the hostTokensAdopt handler", () => {
         outcome: { kind: "no-sign-in" },
         era: 0,
         held: false,
+        recorded: false,
       }),
       renew: async () => ({ renewal: { kind: "no-sign-in" }, era: 0 }),
       adopt: async (userId, hostId, token, expectedEra, owner) => {
@@ -465,6 +466,7 @@ function windowOverMain(main: HostTokenSource): HostTokenSource {
       return {
         outcome: Reflect.get(Object(reply), "outcome"),
         held: Reflect.get(Object(reply), "held") === true,
+        recorded: Reflect.get(Object(reply), "recorded") === true,
         era: Reflect.get(Object(reply), "era"),
       };
     },
@@ -721,6 +723,7 @@ describe("main's broadcast of a kept host-token write", () => {
           return {
             outcome: Reflect.get(Object(reply), "outcome"),
             held: Reflect.get(Object(reply), "held") === true,
+            recorded: Reflect.get(Object(reply), "recorded") === true,
             era: Reflect.get(Object(reply), "era"),
           };
         },
@@ -830,6 +833,7 @@ describe("a window's one announce for a token main wrote and handed it back", ()
         return {
           outcome: Reflect.get(Object(reply), "outcome"),
           held: Reflect.get(Object(reply), "held") === true,
+          recorded: Reflect.get(Object(reply), "recorded") === true,
           era: Reflect.get(Object(reply), "era"),
         };
       },
