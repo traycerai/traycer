@@ -542,11 +542,19 @@ function createHostTokenRemoteSessionAuth(
       releasedSignOn,
       lifetime,
     );
+  /**
+   * The host instance the latest open was dialed to, read with it: its
+   * admission ends that instance's sequence and credits that instance alone.
+   */
+  let dialOwner: HostInstance = processReleasedHosts.currentInstance(hostId);
   const tracking = trackAttaches(
     grantProvider,
     {
       current: () => processReleasedHosts.currentInstance(hostId),
-      credit: () => door?.admitted() ?? NOTHING_ADMITTED,
+      credit: (owner) =>
+        processReleasedHosts.isCurrent(owner)
+          ? (door?.admitted() ?? NOTHING_ADMITTED)
+          : NOTHING_ADMITTED,
     },
     lifetime,
     () => Promise.resolve(),
@@ -555,7 +563,10 @@ function createHostTokenRemoteSessionAuth(
     grantProvider: tracking.grantProvider,
     auth: {
       missingOpenAuthCause: "missing-host-token",
-      readOpenAuth: () => hostTokenOpenAuth(readHostToken),
+      readOpenAuth: () => {
+        dialOwner = processReleasedHosts.currentInstance(hostId);
+        return hostTokenOpenAuth(readHostToken);
+      },
       readCredentialUpdateBearer: readHostToken,
       currentFingerprint: readHostToken,
       // A wrapper over nothing would turn "no revalidator" into an endless retry.
@@ -568,8 +579,7 @@ function createHostTokenRemoteSessionAuth(
         refused: (details: FatalErrorDetails) => {
           door?.refused(details);
         },
-        admitted: () =>
-          tracking.admitted(processReleasedHosts.currentInstance(hostId)),
+        admitted: () => tracking.admitted(dialOwner),
       },
     },
   };
