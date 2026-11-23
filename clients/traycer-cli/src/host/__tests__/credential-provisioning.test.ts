@@ -158,6 +158,7 @@ const mocks = vi.hoisted(() => {
     (_options: {
       readonly signal: AbortSignal | null;
       readonly onUnauthorized: (() => void) | null;
+      readonly bearer: () => string | null;
     }) => mintFlowMock,
   );
 
@@ -180,7 +181,10 @@ const mocks = vi.hoisted(() => {
   // Same rationale as `createMintFlowMock` above: typed just wide enough to
   // expose `signal` from `.mock.calls`.
   const createStoreBackedRevalidatorMock = vi.fn(
-    (_args: { readonly signal: AbortSignal | null }) => ({
+    (_args: {
+      readonly signal: AbortSignal | null;
+      readonly lease: { readonly rotate: (token: string) => void };
+    }) => ({
       revalidateCurrentContext: revalidateCurrentContextMock,
       rotateSignIn: revalidateCurrentContextMock,
     }),
@@ -333,12 +337,22 @@ function capturedClientOptions(): CapturedStreamClientOptions {
 function capturedMintFlowOptions(): {
   readonly signal: AbortSignal | null;
   readonly onUnauthorized: (() => void) | null;
+  readonly bearer: () => string | null;
 } {
   const call = mocks.createMintFlowMock.mock.calls[0];
   if (call === undefined) {
     throw new Error("createCliHostCredentialMintFlow was never called");
   }
   return call[0];
+}
+
+/** The probe's own lease, which the credentials store rotates in place. */
+function capturedProbeLease(): { readonly rotate: (token: string) => void } {
+  const call = mocks.createStoreBackedRevalidatorMock.mock.calls[0];
+  if (call === undefined) {
+    throw new Error("the credentials revalidator was never created");
+  }
+  return call[0].lease;
 }
 
 function makeOptions(
@@ -1954,6 +1968,54 @@ describe("provisionInstalledHostCredential", () => {
     expect(mocks.revalidateCurrentContextMock).toHaveBeenCalledTimes(1);
     expectCleanTeardown();
   }, 15_000);
+
+  it("spends no refresh confirming a mint 401 when the lease rotated to another sign-in after the mint was sent", async () => {
+    // A refusal refreshes only the sign-in it was refused for. The mint was
+    // sent on the sign-in the probe held; a sibling rotated the lease before
+    // authn answered 401, so authn never refused the sign-in held now.
+    const hostId = "host-1";
+    const sentWith: Array<string | null> = [];
+    const held = createDeferred<undefined>();
+    mocks.mintFlowMock.mockImplementation(async () => {
+      sentWith.push(capturedMintFlowOptions().bearer());
+      // Only the first mint is held and refused; a later lap's is merely unavailable.
+      if (sentWith.length > 1) return { kind: "unavailable" };
+      await held.promise;
+      // Mirrors the real flow: authn's 401 fires the hook before the mint settles.
+      capturedMintFlowOptions().onUnauthorized?.();
+      return { kind: "unavailable" };
+    });
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          const minting = options
+            .hostCredentialMint({ hostId, reason: "missing" })
+            .then(
+              () => undefined,
+              () => undefined,
+            );
+          await vi.waitFor(() => expect(sentWith.length).toBeGreaterThan(0));
+          // The mint is held on the first sign-in; the lease rotates to another.
+          capturedProbeLease().rotate("sibling-rotated-sign-in");
+          held.resolve(undefined);
+          await minting;
+          options.onHostCredentialState(hostId, "missing");
+        })();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 3_000, progress: vi.fn() }),
+    );
+
+    expect(sentWith[0]).toBe("test-bearer-token");
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "mint-unavailable",
+    });
+    expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
+    expectCleanTeardown();
+  }, 10_000);
 
   it("reports an authorization confirmation error when the host fatally closes before any mint", async () => {
     // A fatal `closed` frame proves the host answered, but it does not tell
