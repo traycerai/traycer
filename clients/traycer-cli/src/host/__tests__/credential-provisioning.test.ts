@@ -165,7 +165,9 @@ const mocks = vi.hoisted(() => {
   const readHostPidMetadataMock = vi.fn(
     async (): Promise<HostPidMetadata | null> => null,
   );
-  const isValidLocalHostWebsocketUrlMock = vi.fn((): boolean => true);
+  const isValidLocalHostWebsocketUrlMock = vi.fn(
+    (_url: string): boolean => true,
+  );
 
   // The credentials store is mocked wholesale: the real one resolves paths
   // under the operator's actual `~/.traycer` and its `rotate` spends a
