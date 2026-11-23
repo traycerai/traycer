@@ -131,9 +131,10 @@ import {
   SESSION_SILENCE_TIMEOUT_MS,
   UNARY_RESPONSE_TIMEOUT_MS,
 } from "../config";
-import type {
-  StreamCloseReason,
-  StreamFrameEnvelope,
+import {
+  signalsBackoff,
+  type StreamCloseReason,
+  type StreamFrameEnvelope,
 } from "../../i-stream-session";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -4188,6 +4189,13 @@ describe("RemoteSession wake", () => {
         ? { kind: "fatal", details: retryableDropDetails() }
         : { kind: "ack" };
     const session = buildSession(relay, lease, null);
+    const stream = session.subscribe("cursor.subscribe", { cursor: null });
+    if (!signalsBackoff(stream)) throw new Error("a stream tells of backoff");
+    let backoffs = 0;
+    stream.onBackoffEntered(() => {
+      backoffs += 1;
+    });
+    stream.onStatusChange((st) => { process.stderr.write(`DBG status ${st}\n`); });
     try {
       session.start();
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
@@ -4640,6 +4648,50 @@ describe("RemoteSession forceReconnect", () => {
       session.close();
     }
   }, 10_000);
+
+  it("tells no stream of a backoff for the immediate redial of a ready session still on a positive rung", async () => {
+    const relay = new FakeRelayHost();
+    relay.streamManifest = buildStreamManifest(
+      cursorStreamRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const lease = new MutableBearerLease("token", "user-1");
+    // The first two opens fail and escalate the rung; the third is admitted,
+    // and the session is lost again before its stable dwell resets the rung.
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      streamRegistry: cursorStreamRegistry,
+    });
+    const stream = session.subscribe("cursor.subscribe", { cursor: null });
+    if (!signalsBackoff(stream)) throw new Error("a stream tells of backoff");
+    let backoffs = 0;
+    stream.onBackoffEntered(() => {
+      backoffs += 1;
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      const backoffsBeforeForce = backoffs;
+
+      session.forceReconnect("user-retry");
+
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
+        timeout: 800,
+        interval: 25,
+      });
+      expect(backoffs).toBe(backoffsBeforeForce);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
 
   it("pulls a pending escalated backoff to NOW - faster than a wake's jittered collapse can", async () => {
     const relay = new FakeRelayHost();
