@@ -63,6 +63,12 @@ import type {
   HostScopeSandbox,
 } from "@/components/settings/host-scope/host-scope-model";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  autoSizingAlternateRegion,
+  autoSizingCatalogue,
+  autoSizingCatalogueWithRegions,
+  autoSizingScalarNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
   teamSubscription,
@@ -820,6 +826,72 @@ describe("useSandboxStaging New rows", () => {
     expect(composer.newRows[0].subLine).toContain("2 vCPU");
   });
 
+  it("shows growing sizes and the offered price range on a funded picker row and staged chip", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]?.subLine).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour while awake · uses your credits",
+    );
+    expect(composer.newRows[1]?.subLine).toContain(
+      "$0.14–$1.44 an hour while awake · uses acme's credits",
+    );
+    act(() => {
+      composer.onPickNew("personal");
+    });
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+  });
+
+  it("uses the first region's varied rates on a growing New row and staged chip", () => {
+    const [provider] = autoSizingCatalogue().providers;
+    const [east] = provider.regions;
+    mocks.catalogue = autoSizingCatalogueWithRegions([
+      autoSizingAlternateRegion(),
+      east,
+    ]);
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]?.subLine).toContain(
+      "$0.15–$1.61 an hour while awake · uses your credits",
+    );
+    act(() => {
+      composer.onPickNew("personal");
+    });
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.15–$1.61/h",
+    );
+  });
+
+  it("shows the range without `from` on a needs-credits picker row", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    mocks.user = userWith(
+      userSubscription({
+        totalPlanCredits: 0,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [teamSubscription(0)],
+    );
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]?.subLine).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour · uses your credits",
+    );
+  });
+
+  it("shows a scalar exact quote without unit rates or an offer on the New row", () => {
+    mocks.catalogue = autoSizingScalarNoRatesCatalogue();
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]?.subLine).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14 an hour while awake · uses your credits",
+    );
+  });
+
   describe("sub-line, from a catalogue pricing its 2 vCPU · 4 GB shape at $0.21", () => {
     const PRICED_CATALOGUE: SandboxCatalogue = {
       providers: [
@@ -916,6 +988,7 @@ describe("useSandboxStaging New rows", () => {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 2,
       exact: false,
+      offer: null,
     });
     const stage = readStagedSandbox(SURFACE);
     expect(stage).toMatchObject({
@@ -934,6 +1007,59 @@ describe("useSandboxStaging New rows", () => {
       ],
     ).toBe("personal");
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
+  });
+
+  it("keeps a staged label safe before catalogue facts load and after its size is withdrawn", () => {
+    mocks.catalogue = null;
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4_096,
+          diskMb: 51_200,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        },
+        name: "sandbox-test",
+        wakeString: null,
+      });
+    });
+    const view = render(<Harness surfaceKey={SURFACE} hosts={[LAPTOP]} />);
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB",
+    );
+
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    const shapes = provider.shapes;
+    if (shapes === null) {
+      throw new Error("Expected listed growing Linux sizes");
+    }
+    mocks.catalogue = base;
+    view.rerender(<Harness surfaceKey={SURFACE} hosts={[LAPTOP]} />);
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+
+    mocks.catalogue = {
+      ...base,
+      providers: [
+        {
+          ...provider,
+          shapes: shapes
+            .filter((rung) => rung.cpus !== 2)
+            .map((rung, index) => ({ ...rung, default: index === 0 })),
+        },
+      ],
+    };
+    view.rerender(<Harness surfaceKey={SURFACE} hosts={[LAPTOP]} />);
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB",
+    );
   });
 
   it("omits the price on a staged chip when the catalogue prices no rate for the shape", () => {
@@ -1049,6 +1175,38 @@ describe("useSandboxStaging New rows", () => {
     });
   });
 
+  it("stages a legacy 2/4 default at the growing rung's 50 GB disk", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    mocks.defaults = {
+      personal: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 20_480,
+        idleMinutes: 30,
+        restingMinutes: null,
+      },
+    };
+    const { composer } = mount([LAPTOP]);
+
+    act(() => {
+      composer.onPickNew("personal");
+    });
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 51_200,
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+    });
+  });
+
   it("stages the configuration's defaults, not the person's remembered pick", () => {
     mocks.defaults = { "team-1": TEAM_DEFAULTS };
     useSandboxShapeMemoryStore.getState().remember(MEMORY_HOST, "team-1", {
@@ -1117,6 +1275,23 @@ describe("useSandboxStaging New rows", () => {
       composer.onPickNew("personal");
     });
     expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
+  it("renders the no-size New row when Linux has no creatable region", () => {
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    mocks.catalogue = {
+      ...base,
+      providers: [{ ...provider, regions: [] }],
+    };
+    mountStagingPicker([LAPTOP]);
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    expect(
+      within(
+        screen.getByTestId("host-switcher-new-sandbox-personal"),
+      ).getByText(SANDBOXES_CANT_BE_CREATED),
+    ).toBeDefined();
   });
 
   it("drops the chip's spinner when the staged create is refused", () => {
@@ -1293,7 +1468,7 @@ describe("useSandboxStaging New rows", () => {
     expect(staging().consequences).toMatchObject({
       configuration: { kind: "team", teamId: "team-1", teamName: "acme" },
       audience: "shared",
-      price: { awakeMcPerHour: 120, exact: false },
+      price: { awakeMcPerHour: 120, exact: false, offer: null },
     });
   });
 
@@ -1960,10 +2135,33 @@ describe("useSandboxStaging In this task, agent sandboxes the task's hosts omit"
 describe("useSandboxStaging a staged resting sandbox's block", () => {
   const PRICED = { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 };
 
+  /** A 2/4 start at 50 GB, last awake at 4/8. */
+  const GROWN: Parameters<typeof sandboxSummaryFixture>[0] = {
+    cpus: 2,
+    memoryMb: 4_096,
+    diskMb: 51_200,
+    grows: { cpus: 16, memoryMb: 65_536 },
+    priceMcPerHour: {
+      awakeMc: 263,
+      suspendedMc: 7,
+      stoppedMc: 7,
+      offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+    },
+  };
+
   function pricedHost(
     hostId: string,
     state: "suspended" | "stopped",
     item: HostListItem | null,
+  ): HostScopeOption {
+    return sizedHost(hostId, state, item, { priceMcPerHour: PRICED });
+  }
+
+  function sizedHost(
+    hostId: string,
+    state: "suspended" | "stopped",
+    item: HostListItem | null,
+    size: Parameters<typeof sandboxSummaryFixture>[0],
   ): HostScopeOption {
     return sandboxHost(
       hostId,
@@ -1973,7 +2171,7 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
           id: `sbx-${hostId}`,
           hostId,
           state,
-          priceMcPerHour: PRICED,
+          ...size,
         }),
       },
       item,
@@ -1981,7 +2179,14 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
   }
 
   function stagedPrice(host: HostScopeOption): string {
-    const { composer } = mount([LAPTOP, host]);
+    const distractor = sizedHost("box-distractor", "stopped", null, {
+      priceMcPerHour: {
+        awakeMc: 999,
+        suspendedMc: 99,
+        stoppedMc: 99,
+      },
+    });
+    const { composer } = mount([LAPTOP, distractor, host]);
     act(() => composer.onPickHost(host));
     const { consequences } = staging();
     if (consequences === null) throw new Error("nothing was staged");
@@ -1996,11 +2201,17 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
     return screen.getByTestId("consequences-price").textContent;
   }
 
-  it("prices a suspended Personal sandbox from its own row", () => {
-    expect(stagedPrice(pricedHost("box-suspended", "suspended", null))).toBe(
-      "$0.21 an hour while awake · uses your credits",
-    );
-  });
+  it.each([
+    { size: "fixed", host: { priceMcPerHour: PRICED }, line: "$0.21" },
+    { size: "grown", host: GROWN, line: "$0.14–$1.44" },
+  ])(
+    "prices a suspended Personal sandbox of a $size size from its own row",
+    ({ host, line }) => {
+      expect(
+        stagedPrice(sizedHost("box-suspended", "suspended", null, host)),
+      ).toBe(`${line} an hour while awake · uses your credits`);
+    },
+  );
 
   it("prices a stopped Personal sandbox from its own row", () => {
     expect(stagedPrice(pricedHost("box-stopped", "stopped", null))).toBe(
