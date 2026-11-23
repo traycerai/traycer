@@ -41,12 +41,26 @@ export const useSettingsEnvironmentPickStore =
       set({ defaultPick, defaultHostId }),
   }));
 
+function defaultFor(
+  state: SettingsEnvironmentPickState,
+  hostId: string | null,
+): EnvironmentPick {
+  return state.defaultHostId === hostId ? state.defaultPick : UNRESOLVED_PICK;
+}
+
 /** The configuration the Environment group shows in this window. */
 export function useEnvironmentPick(): EnvironmentPick {
   const hostId = useEffectiveHostId();
   return useSettingsEnvironmentPickStore(
-    (state) =>
-      state.pick ??
-      (state.defaultHostId === hostId ? state.defaultPick : UNRESOLVED_PICK),
+    (state) => state.pick ?? defaultFor(state, hostId),
   );
+}
+
+/**
+ * The configuration `setPick(null)` lands on: this window's default, whatever
+ * the person has picked since.
+ */
+export function useDefaultEnvironmentPick(): EnvironmentPick {
+  const hostId = useEffectiveHostId();
+  return useSettingsEnvironmentPickStore((state) => defaultFor(state, hostId));
 }

@@ -9,7 +9,10 @@ import {
   pickOffersSection,
 } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
-import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import {
+  useDefaultEnvironmentPick,
+  useEnvironmentPick,
+} from "@/stores/settings/settings-environment-pick-store";
 
 /**
  * Whether the pick is a Local row on a host that serves no `environment.status`,
@@ -47,6 +50,16 @@ function useIsOldHostPick(pick: EnvironmentPick): boolean {
  */
 export function useSectionOffered(section: SettingsSectionId): boolean {
   const pick = useEnvironmentPick();
+  return pickOffersSection(pick, useIsOldHostPick(pick), section);
+}
+
+/**
+ * Whether the pick `setPick(null)` lands on, this window's default, offers
+ * `section`: the answer for an entry whose handler resets the pick before it
+ * navigates, so the pick in effect when it is shown does not decide it.
+ */
+export function useDefaultOffersSection(section: SettingsSectionId): boolean {
+  const pick = useDefaultEnvironmentPick();
   return pickOffersSection(pick, useIsOldHostPick(pick), section);
 }
 

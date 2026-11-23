@@ -22,7 +22,9 @@ import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
+import { recordOldHost } from "@/components/settings/__tests__/old-host-pick-fixture";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { UNRESOLVED_PICK } from "@/lib/settings-environment-pages";
 
 const secretRoute = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -320,12 +322,17 @@ describe("GettingStartedSettingsPanel", () => {
     navigateMock.mockReset();
     activateTabIntentMock.mockClear();
     setSectionMock.mockReset();
-    useSettingsEnvironmentPickStore.setState({ pick: null });
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: UNRESOLVED_PICK,
+      defaultHostId: null,
+    });
   });
 
   afterEach(() => {
     cleanup();
     resetNegotiatedManifests();
+    useSelectionAuthorityStore.setState({ effectiveHostId: null });
     useMoveSheetStore.setState({ target: null });
   });
 
@@ -492,18 +499,29 @@ describe("GettingStartedSettingsPanel", () => {
     },
   );
 
-  it("offers no Secrets card under an old host's Local pick, and keeps it under Personal", () => {
-    pickOldHostLocal();
+  it("offers no Secrets card in an old host's window, whatever the pick, since the card lands on the default", () => {
+    recordOldHost();
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
     render(<GettingStartedSettingsPanel />);
 
     expect(screen.queryByTestId("getting-started-card-secret")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe("0 of 3 complete");
+  });
 
-    cleanup();
-    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+  it("lands on Secrets from the card in a window whose default offers it, under a pick that does not", () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-new" });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-team" },
+      defaultPick: { kind: "personal" },
+      defaultHostId: "host-new",
+    });
     render(<GettingStartedSettingsPanel />);
 
-    expect(screen.getByTestId("getting-started-card-secret")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("getting-started-card-secret"));
+
+    expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+    expect(setSectionMock).toHaveBeenCalledWith("secrets");
   });
 
   it("marks credits complete once the balance is above zero", () => {

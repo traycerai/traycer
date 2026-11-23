@@ -1401,12 +1401,15 @@ mounts (`SettingsPanelForSection`), and the rail highlights Providers then
 (`useDrawnSection`). Every other Environment section, Machine setup and the
 retired ones included, is drawn as Providers too (`oldHostSectionShown`). The
 phone crumb and the palette's current-page check read the page drawn. In-app
-entries to a page the pick lacks are not offered: Providers' “Open Secrets”,
-Getting started's Secrets card (it leaves the checklist and its count) and the
-secret-grant card's Secrets button (`useSectionOffered`, over
+entries to a page the pick lacks are not offered: Providers' “Open Secrets”
+and the secret-grant card's Secrets button (`useSectionOffered`, over
 `pickOffersSection`, the one predicate the rail and `moveEnvironmentPick` use
-as well). The pick is never switched on the person's behalf. A Personal pick is
-never touched. The picker is given the section a link named, not the one drawn,
+as well). Getting started's Secrets card resets the pick to the window's
+default before it opens Secrets, so it asks about that default
+(`useDefaultOffersSection`), not the pick in effect: in an old host's window it
+is absent whatever the pick is, and leaves the checklist and its count. The
+pick is never switched on the person's behalf. A Personal pick is never
+touched. The picker is given the section a link named, not the one drawn,
 so picking Personal after a link to Secrets opens Secrets. While the window
 host's handshake has not arrived, the rail still lists every row, as it did
 before; they drop once it lands. A host

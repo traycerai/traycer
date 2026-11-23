@@ -23,7 +23,7 @@ import { providerSetUp } from "@/components/onboarding/set-up-personal";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useThisComputer } from "@/components/settings/move/this-computer";
-import { useSectionOffered } from "@/components/settings/personal/use-old-host-local-pick";
+import { useDefaultOffersSection } from "@/components/settings/personal/use-old-host-local-pick";
 import {
   useThisComputersMove,
   type ThisComputersMove,
@@ -78,7 +78,7 @@ export interface GettingStartedFacts {
   readonly hasSecondPersonalComputer: boolean;
   readonly sandboxStaged: boolean;
   readonly creditsAboveZero: boolean;
-  /** Whether the pick in effect has a Secrets page to open. */
+  /** Whether the pick the card lands on, the window default, has a Secrets page. */
   readonly secretsOffered: boolean;
   /** Where this computer's own settings stand against Personal. */
   readonly thisComputersMove: ThisComputersMove;
@@ -119,10 +119,10 @@ function stepIsDone(
 /**
  * Whether a card is shown at all. Some depend on a fact about whether the step
  * EXISTS for this person rather than whether it is done: Secrets needs a
- * Secrets page under the pick in effect (an old host's Local pick has none),
- * credits needs a sandbox staged in this window, and the move needs this
- * computer to be able to say where its settings stand - a card nobody can
- * finish would hold the checklist open for ever. A computer that runs a team's
+ * Secrets page under the default pick its handler resets to (an old host's
+ * Local pick has none), credits needs a sandbox staged in this window, and the
+ * move needs this computer to be able to say where its settings stand - a card
+ * nobody can finish would hold the checklist open for ever. A computer that runs a team's
  * settings (`team`) has no move to offer, so it shows no move card.
  */
 function cardApplies(
@@ -212,7 +212,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   // the one the sheet the card opens is for.
   const computer = useThisComputer();
   const thisComputersMove = useThisComputersMove(computer, true);
-  const secretsOffered = useSectionOffered("secrets");
+  const secretsOffered = useDefaultOffersSection("secrets");
   return {
     providerSetUp:
       providers.data !== undefined && providerSetUp(providers.data.providers),

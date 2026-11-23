@@ -2,11 +2,16 @@ import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transp
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 /**
- * The person has picked a Local row on a computer whose host serves no
- * `environment.status`: a released host from before the Environment group.
+ * `host-old` serves no `environment.status`: a released host from before the
+ * Environment group.
  */
-export function pickOldHostLocal(): void {
+export function recordOldHost(): void {
   recordNegotiatedHostMethods("host-old", ["host.status"]);
+}
+
+/** The person has picked a Local row on that computer. */
+export function pickOldHostLocal(): void {
+  recordOldHost();
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
   });
