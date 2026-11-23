@@ -71,6 +71,7 @@ export function olderHostCliError(): CliError {
 export type HostDoorRefusalKind =
   | "sign-in-rejected"
   | "older-host"
+  | "not-provisioned"
   | "unworded";
 
 export function hostDoorRefusalKind(
@@ -78,7 +79,9 @@ export function hostDoorRefusalKind(
   signInRejected: boolean,
 ): HostDoorRefusalKind | null {
   if (signInRejected && isCredentialRefusal(refusal)) return "sign-in-rejected";
-  if (readDoorReason(refusal.doorReason) !== "absent") return "unworded";
+  const reason = readDoorReason(refusal.doorReason);
+  if (reason === "not_provisioned") return "not-provisioned";
+  if (reason !== "absent") return "unworded";
   return hostDoorStateOfRefusal(refusal) === "older-host" ? "older-host" : null;
 }
 
@@ -93,6 +96,14 @@ export function hostDoorRefusalCliError<Generic extends Error>(
       return storedCredentialRejectedCliError();
     case "older-host":
       return olderHostCliError();
+    // The host's own sentence, as a released command line printed it.
+    case "not-provisioned":
+      return cliError({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: refusal.reason,
+        details: null,
+        exitCode: 1,
+      });
     case "unworded":
       return generic();
     case null:
@@ -135,6 +146,7 @@ export function hostTokenFailureCliError(
         details: null,
         exitCode: 1,
       });
+    case "process-replaced":
     case "unavailable":
       return cliError({
         code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,

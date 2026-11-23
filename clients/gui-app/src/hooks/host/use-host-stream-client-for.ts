@@ -39,14 +39,21 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
-  hostTokenSessionAuth,
+  hostTokenStreamAuth,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
   appHostDoorObserver,
+  appStreamDoorObserver,
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
+import {
+  opensReleasedWay,
+  releasedSignOnForLocalRow,
+  processReleasedHosts,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -60,7 +67,8 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { useHostBinding } from "@/lib/host/runtime";
+import { getHostBindingSnapshot, useHostBinding } from "@/lib/host/runtime";
+import { confirmRowWhenHidden } from "@/lib/host/hidden-window-row-confirm";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
@@ -231,6 +239,31 @@ export function hostStreamTransportKeyFor(
 }
 
 /**
+ * `opensReleasedWay` of `hostId`'s row in the app's in-memory directory, read
+ * on every call: a stream session redials on its own, long before a render
+ * could rebuild it from a changed row. No row, no sign-in.
+ */
+function liveOpensReleasedWay(hostId: string, userId: string): () => boolean {
+  return () => {
+    const row = getHostBindingSnapshot()?.directory.findById(hostId) ?? null;
+    return row !== null && opensReleasedWay(row, userId);
+  };
+}
+
+/**
+ * This machine's host's row in the app's in-memory directory, read on every
+ * ask; the row the client was built from while the app holds no directory.
+ */
+function liveLocalRow(
+  target: HostDirectoryEntry,
+): () => HostDirectoryEntry | null {
+  return () => {
+    const directory = getHostBindingSnapshot()?.directory;
+    return directory === undefined ? target : directory.findById(target.hostId);
+  };
+}
+
+/**
  * Constructs a per-host stream client with the standard dial/heartbeat
  * timings - the single place those timings live, shared by the app-wide
  * `HostStreamProvider`, the transient per-tab binding hook below, and the
@@ -352,6 +385,15 @@ export function buildHostStreamClient(params: {
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       hostTokens: params.hostTokens,
+      opensReleasedWay: liveOpensReleasedWay(
+        params.target.hostId,
+        params.userId,
+      ),
+      // The same confirmation the runtime messenger passes: whichever consumer
+      // builds this `(hostId, userId)` session first sets it for all.
+      confirmRowBeforeSignIn: confirmRowWhenHidden(
+        () => getHostBindingSnapshot()?.directory ?? null,
+      ),
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -383,7 +425,13 @@ export function buildHostStreamClient(params: {
   }
 
   const hostId = params.target.hostId;
-  const localTokens = localDoorHostTokens(params.hostTokens);
+  const localTokens = trackHostTokenMints(
+    localDoorHostTokens(params.hostTokens),
+    processReleasedHosts,
+  );
+  // A mint reports only while a session that asked for it is open (the client
+  // passes each session as the caller): a longer-lived surface's own next dial
+  // asks again.
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
@@ -408,21 +456,31 @@ export function buildHostStreamClient(params: {
       hostId,
       noteHostTokenRefusal,
     ),
+    releasedSignOn: releasedSignOnForLocalRow(
+      liveLocalRow(params.target),
+      hostId,
+      params.userId,
+      params.bearer,
+      params.auth,
+      localTokens,
+      processReleasedHosts,
+    ),
     // The user every owner builds this client for: the tile cache key, the
     // app-wide stream's effect dependency, the transport key at open.
     userId: params.userId,
     // A refused open ran nothing, so a one-shot recovers too; `params.auth === null`
     // keeps it from starting the sign-in's recovery.
-    ...hostTokenSessionAuth(
+    ...hostTokenStreamAuth(
       {
         tokens: localTokens,
+        hosts: processReleasedHosts,
         currentUserId: () => params.bearer()?.identity.userId ?? null,
         hostId,
         signInRecovery: params.auth,
         onState: noteHostTokenRefusal,
         now: Date.now,
       },
-      appHostDoorObserver(hostId),
+      appStreamDoorObserver,
     ),
     // App-wide for the same reason the mint flow below is: the wall clock is a
     // property of the machine, so every stream in the renderer parks and

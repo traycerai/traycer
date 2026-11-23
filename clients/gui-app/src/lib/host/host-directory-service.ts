@@ -8,6 +8,7 @@ import {
   type PoolHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import { hostDirectoryEntryEquals } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
   fetchRemoteHosts,
@@ -334,16 +335,58 @@ export class HostDirectoryService implements IHostDirectoryService {
   private lastCommitIdentity: string | null = null;
   /**
    * Resume while riding the shell's registry push: no poll clock to rearm, so
-   * a show acts only on a push that arrived while hidden.
+   * a show acts only on a push skipped while hidden, applying it once. The
+   * hide was a mark ({@link noteVisibility}), and so was each skipped push.
    */
   private readonly handleVisibilityChangeWhileRidingPushes = (): void => {
-    if (!isDocumentVisible() || !this.pushMissedWhileHidden) {
+    this.noteVisibility();
+    if (!isDocumentVisible()) return;
+    if (
+      this.pushSkippedThrough === null ||
+      this.catchUpAppliedThrough === this.pushSkippedThrough
+    ) {
       return;
     }
-    this.pushMissedWhileHidden = false;
+    this.catchUpAppliedThrough = this.pushSkippedThrough;
     this.applyRegistryPush();
   };
-  private pushMissedWhileHidden = false;
+  /** The latest mark that was a skipped push: what a show catches up on. */
+  private pushSkippedThrough: number | null = null;
+  /** The skipped push a show has already applied its one catch-up push for. */
+  private catchUpAppliedThrough: number | null = null;
+  /**
+   * Poll mode's poll stops while the window is hidden, and nothing tells the
+   * window what changed meanwhile: a hidden span is a mark at both of its
+   * edges ({@link noteVisibility}). No elapsed time decides it.
+   */
+  private readonly handleVisibilityChangeWhilePolling = (): void => {
+    this.noteVisibility();
+  };
+  private stopPollVisibility: (() => void) | null = null;
+  /** Whether the directory last observed the document hidden. */
+  private observedHidden = false;
+  /**
+   * One ordered clock for {@link catchUpAfterHidden}. Each mark, each read's
+   * start and each confirmation begun while hidden takes the next number.
+   */
+  private order = 0;
+  /**
+   * The latest mark. Each observed visibility transition to hidden is a mark;
+   * in poll mode each observed transition back to shown is one too. Each push
+   * skipped while hidden marks itself, and so does every era change (a
+   * rotation or an identity change).
+   */
+  private latestMark = 0;
+  /** The era the latest era mark was taken for; see {@link noteEra}. */
+  private markedEra: AuthEra;
+  /**
+   * The latest start among reads that settled, committed or failed, while
+   * still the current read of the current era. A read a rotation abandoned or
+   * an identity change superseded never counts.
+   */
+  private settledOwnedStart = 0;
+  /** Woken by every read that settles and by every retirement of one. */
+  private readEventWaiters: Array<() => void> = [];
 
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
@@ -365,6 +408,10 @@ export class HostDirectoryService implements IHostDirectoryService {
       options.credentialGeneration === null
         ? () => 0
         : options.credentialGeneration;
+    this.markedEra = {
+      identity: this.authContextId(),
+      credentialGeneration: this.credentialGeneration(),
+    };
   }
 
   /**
@@ -452,7 +499,17 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (!this.isStarted()) {
       return;
     }
+    // Each local host's process instance, as its pid. The same id under
+    // another pid is a restarted host, which may answer differently. Nothing
+    // the earlier process answered applies to it, including answers still in
+    // flight on its sockets. An absent host is not an instance. The snapshot
+    // carries no start time, so a pid that the same host id reuses goes unseen.
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
+      if (snapshot !== null)
+        processReleasedHosts.observeInstance(
+          snapshot.hostId,
+          String(snapshot.pid),
+        );
       // A shell with no local host has no local ENTRY either, whatever a
       // snapshot says: the directory answers for this launch's capability.
       this.localEntry = this.hasLocalHost ? toLocalEntry(snapshot) : null;
@@ -588,6 +645,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * previously four reads that could disagree.
    */
   refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]> {
+    this.noteEra();
     const inFlight = this.refreshInFlight;
     // Keyed by the WHOLE era, not just the identity: a request issued before a
     // same-user rotation is answering for a credential this caller no longer
@@ -599,13 +657,23 @@ export class HostDirectoryService implements IHostDirectoryService {
     ) {
       return inFlight.request;
     }
+    this.order += 1;
+    const startedAt = this.order;
     const request = this.performRefresh(era).finally(() => {
+      // Drops a retired read's answer: one a rotation abandoned, or an
+      // identity change superseded, records nothing. Whether a recorded read
+      // satisfies a confirmation is decided by the clock alone.
+      const owned =
+        this.refreshInFlight?.request === request && this.isCurrentEra(era);
       // Only clear OUR slot: a request superseded by an identity change must
       // not clear the newer one when it finally settles.
       if (this.refreshInFlight?.request === request) {
         this.refreshInFlight = null;
       }
+      if (owned && startedAt > this.settledOwnedStart)
+        this.settledOwnedStart = startedAt;
       this.emitRefreshState();
+      this.wakeReadEventWaiters();
     });
     this.refreshInFlight = { era, request };
     // After the assignment, so `isRefreshing()` already answers true for a
@@ -629,8 +697,106 @@ export class HostDirectoryService implements IHostDirectoryService {
    * happens to settle.
    */
   invalidateInFlightRefresh(): void {
+    this.noteEra();
     this.refreshInFlight = null;
     this.emitRefreshState();
+    // A waiter on the retired read moves to the current one.
+    this.wakeReadEventWaiters();
+  }
+
+  /**
+   * Waits until a read has settled, as the current read of the current era,
+   * that STARTED at or after the later of the latest mark and, when the
+   * window is hidden as this is asked, this call's own start. So a hidden
+   * window reads for every call, and calls that overlap share a read that
+   * started after each began. It waits on that condition, never on one
+   * read's promise: a retired read holds no waiter. When no read of the
+   * current era is running it starts one; it never starts one beside a
+   * running read. It stops starting reads once `stillWaiting` says no one
+   * waits, or the directory stops. Resolves at once in a shown window with no
+   * mark outstanding. Never rejects.
+   */
+  async catchUpAfterHidden(stillWaiting: () => boolean): Promise<void> {
+    let ownStart = 0;
+    if (!isDocumentVisible()) {
+      this.order += 1;
+      ownStart = this.order;
+    }
+    const satisfied = (): boolean => {
+      this.noteEra();
+      return this.settledOwnedStart >= Math.max(this.latestMark, ownStart);
+    };
+    while (!satisfied() && stillWaiting() && this.started) {
+      const event = new Promise<void>((resolve) => {
+        this.readEventWaiters.push(resolve);
+      });
+      const running = this.refreshInFlight;
+      if (running === null || !this.isCurrentEra(running.era))
+        void this.refresh().then(
+          () => undefined,
+          () => undefined,
+        );
+      await event;
+    }
+  }
+
+  private wakeReadEventWaiters(): void {
+    const waiters = this.readEventWaiters;
+    this.readEventWaiters = [];
+    for (const wake of waiters) wake();
+  }
+
+  private markMissedWhileHidden(): void {
+    this.order += 1;
+    this.latestMark = this.order;
+  }
+
+  /**
+   * An era change is a mark, taken before the directory does anything else in
+   * the new era: every entry that reads the era (a read's start, its settle,
+   * a retirement, a confirmation's check) notes it first. So no read started
+   * before a rotation or an identity change satisfies a check made after it,
+   * whatever order a settle, a retirement and a wake run in.
+   */
+  private noteEra(): void {
+    this.noteVisibility();
+    const identity = this.authContextId();
+    const credentialGeneration = this.credentialGeneration();
+    if (
+      identity === this.markedEra.identity &&
+      credentialGeneration === this.markedEra.credentialGeneration
+    ) {
+      return;
+    }
+    this.markedEra = { identity, credentialGeneration };
+    this.order += 1;
+    this.latestMark = this.order;
+  }
+
+  /**
+   * A hidden span is a mark, whoever observes it first: a visibility listener,
+   * or a read's start, its settle, a retirement or a check sampling the
+   * document ({@link noteEra} runs this first). Its start is a mark in both
+   * modes. In poll mode its end is one too: the window learnt nothing of what
+   * changed during the span, so a read that overlapped it satisfies no check
+   * in the shown window after it. In push mode each skipped push marks itself.
+   * A check while hidden is still met by a read started after the
+   * confirmation began.
+   */
+  private noteVisibility(): void {
+    const hidden = !isDocumentVisible();
+    if (hidden === this.observedHidden) return;
+    this.observedHidden = hidden;
+    if (hidden || this.registrySubscription === null)
+      this.markMissedWhileHidden();
+  }
+
+  private isCurrentEra(era: AuthEra): boolean {
+    this.noteEra();
+    return (
+      era.identity === this.authContextId() &&
+      era.credentialGeneration === this.credentialGeneration()
+    );
   }
 
   /**
@@ -858,6 +1024,10 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.armPollInterval();
+    this.stopPollVisibility = subscribeDocumentVisibility(
+      this.handleVisibilityChangeWhilePolling,
+    );
+    this.handleVisibilityChangeWhilePolling();
   }
 
   /**
@@ -898,7 +1068,8 @@ export class HostDirectoryService implements IHostDirectoryService {
       // the removed per-window timer used to skip. The push is remembered and
       // acted on when the window next becomes visible.
       if (!isDocumentVisible()) {
-        this.pushMissedWhileHidden = true;
+        this.markMissedWhileHidden();
+        this.pushSkippedThrough = this.latestMark;
         return;
       }
       this.applyRegistryPush();
@@ -910,6 +1081,8 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.stopPushVisibility = subscribeDocumentVisibility(
       this.handleVisibilityChangeWhileRidingPushes,
     );
+    // Started hidden: the hidden span is already running.
+    this.noteVisibility();
     return true;
   }
 
@@ -973,7 +1146,13 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.stopVisiblePoll = null;
     this.stopPushVisibility?.();
     this.stopPushVisibility = null;
-    this.pushMissedWhileHidden = false;
+    this.stopPollVisibility?.();
+    this.stopPollVisibility = null;
+    // No mark is outstanding once nothing skips changes any more.
+    if (this.latestMark > this.settledOwnedStart)
+      this.settledOwnedStart = this.latestMark;
+    this.pushSkippedThrough = null;
+    this.wakeReadEventWaiters();
   }
 
   /**

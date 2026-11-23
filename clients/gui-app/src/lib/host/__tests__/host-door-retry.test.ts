@@ -94,7 +94,10 @@ describe("retryHostDoor", () => {
 
     const retry = retryHostDoor(HOST_ID, hostTokens);
 
-    expect(obtain).toHaveBeenCalledWith(USER_ID, HOST_ID, true, null);
+    expect(obtain).toHaveBeenCalledWith(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: null,
+    });
     expect(lane.reopenCount()).toBe(0);
     if (pendingObtain.resolve === null)
       throw new Error("token obtain did not start");

@@ -1,7 +1,9 @@
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
+  cliReleasedSignOn,
   createCliHostTokens,
+  observeHostInstance,
   type CliHostTokenFailure,
 } from "../internal/cli-host-tokens";
 import {
@@ -9,6 +11,11 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  processReleasedHosts,
+  type HostInstance,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   MutableBearerLease,
   readLeaseBearer,
@@ -34,6 +41,7 @@ import type { CredentialsMutationStore } from "@traycer/protocol/config/credenti
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
+  type SignInRotation,
 } from "../store/credentials-store";
 import { errorFromUnknown, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
@@ -180,6 +188,7 @@ const SILENT_OPEN_CONFIRMATIONS = 3;
 
 type ProbeRevalidator = {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
+  rotateSignIn(): Promise<SignInRotation>;
 };
 
 type AckObservation =
@@ -232,6 +241,7 @@ export async function provisionInstalledHostCredential(
     pollInFlight = true;
     try {
       const metadata = await readHostPidMetadata(options.environment);
+      if (metadata !== null) observeHostInstance(metadata);
       if (
         metadata !== null &&
         isValidLocalHostWebsocketUrl(metadata.websocketUrl)
@@ -298,8 +308,8 @@ export async function provisionInstalledHostCredential(
   // occasional ack losing the race with the grace timer cannot accumulate
   // into a false "this host has no credential capability" verdict.
   let consecutiveSilentOpens = 0;
-  // A mint of the host-only token authn refused for good, and the wake-up of
-  // the lap waiting on an ack that can now never come.
+  // A mint refusal that ends the command (`CliHostTokens.onRefusalEndingCommand`),
+  // and the wake-up of the lap waiting on an ack that can now never come.
   let mintRefusal: CliHostTokenFailure | null = null;
   let wakeOnMintRefusal: (() => void) | null = null;
   let stopMintRefusals: () => void = () => undefined;
@@ -360,16 +370,21 @@ export async function provisionInstalledHostCredential(
       lease,
       signal: probeAbort.signal,
     });
-    // The stored sign-in is spent at authn alone; the host sees this CLI's host-only token.
+    // The stored sign-in is spent at authn; the host sees this CLI's host-only
+    // token, or the sign-in only as `cliReleasedSignOn` allows.
     const tokens = createCliHostTokens({
       lease,
-      refresh: () => revalidator.revalidateCurrentContext(),
+      refresh: () => revalidator.rotateSignIn(),
       signal: probeAbort.signal,
     });
-    // A mint authn refuses for good (a computer with no row answers a bare
-    // 404) can never become a token, so the probe ends at once rather than
-    // waiting out its budget.
-    stopMintRefusals = tokens.onMintRefused((hostId, failure) => {
+    const releasedSignOn = cliReleasedSignOn(lease, tokens);
+    // The tokens on disk, so the first dial presents the held one.
+    await tokens.whenLoaded();
+    // A refusal no token or sign-in can follow ends the probe at once rather
+    // than waiting out its budget. A `not-admitted` (a computer with no row
+    // answers a bare 404) a sign-in may still follow is left to the stream,
+    // and explains the end only if that does not provision the host.
+    stopMintRefusals = tokens.onRefusalEndingCommand((hostId, failure) => {
       if (endpoint?.hostId !== hostId) return;
       options.logger.warn("Host credential provisioning token mint refused", {
         environment: options.environment,
@@ -378,15 +393,41 @@ export async function provisionInstalledHostCredential(
       mintRefusal = failure;
       if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
     });
+    const deferredNotAdmitted = (): CliHostTokenFailure | null =>
+      endpoint === null ? null : tokens.deferredNotAdmitted(endpoint.hostId);
     // Recovery of a refused token, as on every other CLI open: one fresh
-    // token and one more open, and a second refusal is final.
+    // token and one more open, and a second refusal is final. A refusal is
+    // read by the recovery of the host process the door named for that very
+    // refusal, never an earlier attempt's. Once that process is replaced, or
+    // the endpoint has moved to another host, its rejection is not the
+    // replacement's: the stream reconnects on its backoff and asks the one
+    // there now. A `rotated` still counts and is paced by the stream as any
+    // other, and a signed-out person ends the run wherever it is. A token
+    // found expired before its dial belongs to the host that dial selected,
+    // the current endpoint while it runs.
+    const refusedBy = new WeakMap<FatalErrorDetails, HostInstance>();
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () =>
-        recoverHostToken((recovery) => recovery.revalidateForReconnect()),
-      revalidateRefused: (refusal) =>
-        recoverHostToken((recovery) => recovery.revalidateRefused(refusal)),
+        recoverHostToken(endpoint?.hostId ?? null, (recovery) =>
+          recovery.revalidateForReconnect(),
+        ),
+      revalidateRefused: async (refusal) => {
+        const owner = refusedBy.get(refusal);
+        const outcome = await recoverHostToken(
+          owner?.hostId ?? null,
+          (recovery) => recovery.revalidateRefused(refusal),
+        );
+        const left =
+          owner !== undefined &&
+          (!processReleasedHosts.isCurrent(owner) ||
+            endpoint?.hostId !== owner.hostId);
+        return left && outcome === "rejected" && !tokens.signInRejected()
+          ? "network-error"
+          : outcome;
+      },
     };
     const recoverHostToken = (
+      hostId: string | null,
       recover: (
         recovery: HostTokenSessionRevalidator,
       ) => Promise<RevalidateOutcome>,
@@ -401,10 +442,10 @@ export async function provisionInstalledHostCredential(
       // `runner/exit.ts`), so the process waits for the event loop to
       // drain: a mint or refresh begun as the budget ran out would keep
       // `host install` alive past its advertised bound.
-      if (remaining() <= 0 || endpoint === null) {
+      if (remaining() <= 0 || hostId === null) {
         return Promise.resolve<RevalidateOutcome>("rejected");
       }
-      const settled = recover(tokens.streamRecovery(endpoint.hostId));
+      const settled = recover(tokens.streamRecovery(hostId));
       inFlightRevalidation = settled;
       return settled;
     };
@@ -419,20 +460,23 @@ export async function provisionInstalledHostCredential(
       // has no earlier handshake in this process to seed from anyway.
       hostId: null,
       endpoint: () => endpoint,
-      // `null` (the transport's wait) until a host-only token is held for
-      // the host the endpoint names.
-      bearer: () =>
-        endpoint === null ? null : tokens.streamBearer(endpoint.hostId)(),
+      // `null` while no host-only token can be presented for the host the
+      // socket was selected for: the stream then probes while authn has not
+      // answered. Never the token of whatever `endpoint` names by then.
+      bearer: (hostId) => tokens.streamBearer(hostId)(),
       userId: lease.identity.userId,
+      releasedSignOn,
       auth: streamAuth,
       // Each admitted open resets the host's recovery, so the one fresh token
-      // is earned again after a good open.
+      // is earned again after a good open, and fences off a `not-admitted` of
+      // a mint begun before it.
       door: {
-        refused: () => undefined,
-        admitted: () => {
+        refused: (details, instance) => {
+          refusedBy.set(details, instance);
+        },
+        admitted: (instance) => {
           doorRetried = false;
-          if (endpoint !== null)
-            tokens.streamRecovery(endpoint.hostId).admitted();
+          return tokens.admitted(instance.hostId);
         },
       },
       // No tracker wired yet on the CLI side: this is a short-lived
@@ -504,7 +548,8 @@ export async function provisionInstalledHostCredential(
       if (credentialRejected || tokens.signInRejected()) {
         return { kind: "unauthorized" };
       }
-      if (mintRefusal !== null) return mintRefusalOutcome(mintRefusal);
+      const refusal = mintRefusal ?? deferredNotAdmitted();
+      if (refusal !== null) return mintRefusalOutcome(refusal);
       if (mintUnavailable) {
         return { kind: "mint-unavailable" };
       }
@@ -565,6 +610,7 @@ export async function provisionInstalledHostCredential(
       !credentialRejected &&
       !tokens.signInRejected() &&
       mintRefusal === null &&
+      deferredNotAdmitted() === null &&
       !mintUnavailable &&
       !mintProvisioned &&
       !mintInvoked &&

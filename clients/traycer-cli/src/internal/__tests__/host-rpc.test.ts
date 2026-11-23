@@ -41,6 +41,8 @@ import {
   hostTokensPath,
 } from "@traycer-clients/shared/auth/host-token-file";
 import type { HostRequestOptions } from "../../../../shared/host-transport/host-messenger";
+import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { createOutput } from "../../runner/output";
 import type { CommandContext } from "../../runner/runner";
 import { resolveRuntimeContext } from "../../runner/runtime";
@@ -105,7 +107,7 @@ const {
   releaseIdleMock,
   testHome,
   fetchMock,
-  openCliHostSessionMock,
+  requireCliHostSessionMock,
   agentEnvironment,
 } = vi.hoisted(() => ({
   requestMock: vi.fn(),
@@ -113,7 +115,7 @@ const {
   releaseIdleMock: vi.fn(),
   testHome: { path: null as string | null },
   fetchMock: vi.fn(),
-  openCliHostSessionMock: vi.fn(),
+  requireCliHostSessionMock: vi.fn(),
   agentEnvironment: {
     capability: undefined as string | undefined,
     agentId: undefined as string | undefined,
@@ -140,11 +142,11 @@ vi.mock("../cli-host-tokens", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cli-host-tokens")>();
   return {
     ...actual,
-    openCliHostSession: (
-      ...args: Parameters<typeof actual.openCliHostSession>
+    requireCliHostSession: (
+      ...args: Parameters<typeof actual.requireCliHostSession>
     ) => {
-      openCliHostSessionMock(...args);
-      return actual.openCliHostSession(...args);
+      requireCliHostSessionMock(...args);
+      return actual.requireCliHostSession(...args);
     },
   };
 });
@@ -170,6 +172,8 @@ vi.mock("../../logger", () => ({
   noopLogger: loggerMock,
 }));
 
+type ClientOptions = WsRpcClientOptions<HostRpcRegistry>;
+
 vi.mock(
   "../../../../shared/host-transport/ws-rpc-client",
   async (importOriginal) => {
@@ -177,32 +181,43 @@ vi.mock(
       await importOriginal<
         typeof import("../../../../shared/host-transport/ws-rpc-client")
       >();
+    const { resolveStubbedCallBearer } = await import("./stub-rpc-bearer");
     return {
       // Only `WsRpcClient` is replaced; the real
       // `HOST_POST_OPEN_ATTESTATION_WINDOW_MS` stays, so the constructor
       // assertion below reads the value the CLI actually ships.
       ...actual,
       WsRpcClient: class {
-        constructor(options: unknown) {
-          rpcClientConstructorMock(options);
+        constructor(private readonly clientOptions: ClientOptions) {
+          rpcClientConstructorMock(clientOptions);
         }
 
-        request = (
+        request = async (
           method: string,
           params: unknown,
           options: HostRequestOptions,
         ) => {
-          presentedHostTokens.push(options.authority.bearer.getBearerToken());
-          return requestMock(method, params, options);
+          const sent = await resolveStubbedCallBearer(
+            this.clientOptions,
+            method,
+            options,
+          );
+          presentedHostTokens.push(sent.authority.bearer.getBearerToken());
+          return requestMock(method, params, sent);
         };
-        requestWithResponseTimeout = (
+        requestWithResponseTimeout = async (
           method: string,
           params: unknown,
           _responseTimeoutMs: number,
           options: HostRequestOptions,
         ) => {
-          presentedHostTokens.push(options.authority.bearer.getBearerToken());
-          return requestMock(method, params, options);
+          const sent = await resolveStubbedCallBearer(
+            this.clientOptions,
+            method,
+            options,
+          );
+          presentedHostTokens.push(sent.authority.bearer.getBearerToken());
+          return requestMock(method, params, sent);
         };
         releaseIdleLocalSessions = releaseIdleMock;
       },
@@ -320,7 +335,7 @@ beforeEach(async () => {
   agentEnvironment.capability = undefined;
   agentEnvironment.agentId = undefined;
   agentEnvironment.names.length = 0;
-  openCliHostSessionMock.mockReset();
+  requireCliHostSessionMock.mockReset();
   testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-host-rpc-"));
   fetchMock.mockImplementation(
     async () =>
@@ -377,7 +392,7 @@ describe("agent command capability", () => {
       "TRAYCER_AGENT_SESSION_CAPABILITY",
     ]);
     expect(resolveAuthMock).not.toHaveBeenCalled();
-    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requireCliHostSessionMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     const loggerCalls = [
       ...loggerMock.debug.mock.calls,
@@ -414,7 +429,7 @@ describe("agent command capability", () => {
       "TRAYCER_AGENT_SESSION_CAPABILITY",
     ]);
     expect(resolveAuthMock).not.toHaveBeenCalled();
-    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requireCliHostSessionMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -435,7 +450,7 @@ describe("agent command capability", () => {
     expect(pidMock).not.toHaveBeenCalled();
     expect(rpcClientConstructorMock).not.toHaveBeenCalled();
     expect(requestMock).not.toHaveBeenCalled();
-    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requireCliHostSessionMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -463,7 +478,7 @@ describe("agent command capability", () => {
       "TRAYCER_AGENT_SESSION_CAPABILITY",
     ]);
     expect(resolveAuthMock).not.toHaveBeenCalled();
-    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requireCliHostSessionMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(rotateMock).not.toHaveBeenCalled();
   });
@@ -480,7 +495,7 @@ describe("agent command capability", () => {
     ]);
     expect(resolveAuthMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(openCliHostSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCliHostSessionMock).toHaveBeenCalledTimes(1);
     expect(presentedHostTokens).toEqual(["host-token-1"]);
   });
 });

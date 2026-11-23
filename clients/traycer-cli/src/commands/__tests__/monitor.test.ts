@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  processReleasedHosts,
+  type HostInstance,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -38,7 +43,14 @@ type FakeSession = {
 
 type CapturedStreamClientOptions = {
   readonly endpoint: () => unknown;
-  readonly bearer: () => OpenFrameBearerSource | null;
+  readonly bearer: (hostId: string) => OpenFrameBearerSource | null;
+  readonly door: {
+    readonly admitted: (instance: HostInstance) => () => void;
+    readonly refused: (
+      details: FatalErrorDetails,
+      instance: HostInstance,
+    ) => void;
+  };
   readonly hostCredentialMint: unknown;
 };
 
@@ -160,6 +172,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: vi.fn(() => ({ dispose: disposeMock })),
     createStoreBackedRevalidator: vi.fn(() => ({
       revalidateCurrentContext: revalidateMock,
+      rotateSignIn: revalidateMock,
     })),
   };
 });
@@ -238,6 +251,30 @@ function unauthorizedFatal() {
       doorReason: "token_expired",
     },
   };
+}
+
+/** The host the monitor's endpoint resolves to. */
+const HOST_ID = "d1";
+
+/**
+ * A host's refusal of an open, as the real stream delivers it: reported to
+ * the door, then the session closes with it.
+ */
+function refuseOpen(
+  index: number,
+  fatal: {
+    readonly kind: "fatalError";
+    readonly details: FatalErrorDetails;
+  },
+): void {
+  const options = streamClientOptions[0];
+  if (options === undefined)
+    throw new Error("stream options were not captured");
+  options.door.refused(
+    fatal.details,
+    processReleasedHosts.currentInstance(HOST_ID),
+  );
+  sessions[index]?.statusChange?.("closed", fatal, null);
 }
 
 function incompatibleFatal() {
@@ -370,13 +407,15 @@ describe("runMonitor recovery", () => {
     expect(options).toBeDefined();
     if (options === undefined)
       throw new Error("stream options were not captured");
-    expect(options.bearer()).toBeNull();
+    expect(options.bearer(HOST_ID)).toBeNull();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), {
       timeout: 10_000,
     });
     await vi.waitFor(
       () =>
-        expect(options.bearer()?.getBearerToken()).toBe("monitor-host-token-1"),
+        expect(options.bearer(HOST_ID)?.getBearerToken()).toBe(
+          "monitor-host-token-1",
+        ),
       { timeout: 10_000 },
     );
     const fetchAt = firstHostTokenFetchAt;
@@ -435,7 +474,7 @@ describe("runMonitor recovery", () => {
       const options = streamClientOptions[0];
       if (options === undefined)
         throw new Error("stream options were not captured");
-      expect(options.bearer()?.getBearerToken()).toBe(openedCapability);
+      expect(options.bearer(HOST_ID)?.getBearerToken()).toBe(openedCapability);
       expect(options.hostCredentialMint).toBeNull();
       expect(resolveAuthMock).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
@@ -571,7 +610,7 @@ describe("runMonitor recovery", () => {
     const options = streamClientOptions[0];
     if (options === undefined)
       throw new Error("stream options were not captured");
-    expect(options.bearer()).toBeNull();
+    expect(options.bearer(HOST_ID)).toBeNull();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     const error = await result;
@@ -593,7 +632,7 @@ describe("runMonitor recovery", () => {
     const options = streamClientOptions[0];
     if (options === undefined)
       throw new Error("stream options were not captured");
-    options.bearer();
+    options.bearer(HOST_ID);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     sessions[0]?.statusChange?.("closed", incompatibleFatal(), null);
 
@@ -610,7 +649,7 @@ describe("runMonitor recovery", () => {
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await waitForSessions(1);
 
-    sessions[0].statusChange?.("closed", unauthorizedFatal(), null);
+    refuseOpen(0, unauthorizedFatal());
 
     expect((await result).message).toBe(
       "The stored credential was rejected. Run `traycer login` to re-authenticate.",
@@ -625,20 +664,16 @@ describe("runMonitor recovery", () => {
         (e) => e,
       );
       await waitForSessions(1);
-      sessions[0].statusChange?.(
-        "closed",
-        {
-          kind: "fatalError",
-          details: {
-            code,
-            reason: "legacy host refusal",
-            incompatibleMethods: null,
-            upgradeGuidance: null,
-            retryable: false,
-          },
+      refuseOpen(0, {
+        kind: "fatalError",
+        details: {
+          code,
+          reason: "legacy host refusal",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: false,
         },
-        null,
-      );
+      });
       expect((await result).message).toBe(
         "The host is out of date. Reinstall the latest host with 'traycer host update'.",
       );
@@ -687,7 +722,7 @@ describe("runMonitor recovery", () => {
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
     await waitForSessions(1);
 
-    sessions[0].statusChange?.("closed", unauthorizedFatal(), null);
+    refuseOpen(0, unauthorizedFatal());
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     // No immediate re-subscribe and not terminated - a retry is scheduled.
     expect(subscribeMock).toHaveBeenCalledTimes(1);
@@ -704,17 +739,19 @@ describe("runMonitor recovery", () => {
     const options = streamClientOptions[0];
     if (options === undefined)
       throw new Error("stream options were not captured");
-    expect(options.bearer()).toBeNull();
+    expect(options.bearer(HOST_ID)).toBeNull();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await vi.waitFor(() =>
-      expect(options.bearer()?.getBearerToken()).toBe("monitor-host-token-1"),
+      expect(options.bearer(HOST_ID)?.getBearerToken()).toBe(
+        "monitor-host-token-1",
+      ),
     );
 
-    sessions[0]?.statusChange?.("closed", unauthorizedFatal(), null);
+    refuseOpen(0, unauthorizedFatal());
     await waitForSessions(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sessions[0]?.closed).toBe(true);
-    sessions[1]?.statusChange?.("closed", unauthorizedFatal(), null);
+    refuseOpen(1, unauthorizedFatal());
 
     expect((await result).message).toBe(
       "traycer monitor: host closed the stream: invalid or expired token",

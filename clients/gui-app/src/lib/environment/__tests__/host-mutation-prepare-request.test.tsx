@@ -79,6 +79,7 @@ describe("useHostMutation prepareRequest", () => {
           mapVariables: (variables) => ({
             key: variables.key,
             value: variables.value,
+            executableWriteGrant: null,
           }),
           prepareRequest: (request, dispatchClient) => {
             seen.push({ request, client: dispatchClient });
@@ -99,6 +100,7 @@ describe("useHostMutation prepareRequest", () => {
     expect(dispatched[0]).toEqual({
       key: "API_URL",
       value: "https://prepared.invalid",
+      executableWriteGrant: null,
     });
     // It saw the mapped value before preparation and the client the
     // write goes out on.
@@ -118,6 +120,7 @@ describe("useHostMutation prepareRequest", () => {
           mapVariables: (variables) => ({
             key: variables.key,
             value: variables.value,
+            executableWriteGrant: null,
           }),
           prepareRequest: undefined,
         }),
@@ -132,6 +135,7 @@ describe("useHostMutation prepareRequest", () => {
     expect(dispatched[0]).toEqual({
       key: "API_URL",
       value: null,
+      executableWriteGrant: null,
     });
   });
 
@@ -146,6 +150,7 @@ describe("useHostMutation prepareRequest", () => {
           mapVariables: (variables) => ({
             key: variables.key,
             value: variables.value,
+            executableWriteGrant: null,
           }),
           prepareRequest: () => Promise.reject(new Error("preparation failed")),
         }),

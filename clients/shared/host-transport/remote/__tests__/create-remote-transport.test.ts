@@ -39,14 +39,19 @@ import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
   type HostTokenMintOutcome,
+  type HostTokenSource,
 } from "../../../auth/host-token-source";
-import { createRemoteHostTransport } from "../create-remote-transport";
+import {
+  createRemoteHostTransport,
+  type RemoteHostTransport,
+} from "../create-remote-transport";
 import { remoteOpenAuthFor } from "../open-auth";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { hostListItemToDirectoryEntry } from "../../../host-client/remote-fetcher";
 import { retireAllRemoteSessions } from "../active-remote-sessions";
 import { subscribeTeamMemberRemovedClose } from "../../team-member-removed-close";
 import { TEAM_MEMBER_REMOVED_FATAL_CODE } from "../../../host-client/host-connection-reconnect-engine";
+import { RECONNECT_MAX_BACKOFF_MS } from "@traycer/protocol/host-transport/remote/config";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import type {
   IStreamWebSocketFactory,
@@ -98,6 +103,8 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     VersionedStreamRpcRegistry
   >({
     clientIdentity: TEST_CLIENT_IDENTITY,
+    opensReleasedWay: () => false,
+    confirmRowBeforeSignIn: null,
     hostId: "host-null-bearer-test",
     userId: "user-null-bearer-test",
     relayAttachUrl: "wss://relay.invalid/attach",
@@ -265,6 +272,8 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         VersionedStreamRpcRegistry
       >({
         clientIdentity: TEST_CLIENT_IDENTITY,
+        opensReleasedWay: () => false,
+        confirmRowBeforeSignIn: null,
         hostId: "host-gate-b-test",
         userId: "user-gate-b-test",
         relayAttachUrl: "wss://relay.invalid/attach",
@@ -380,6 +389,8 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         VersionedStreamRpcRegistry
       >({
         clientIdentity: TEST_CLIENT_IDENTITY,
+        opensReleasedWay: () => false,
+        confirmRowBeforeSignIn: null,
         hostId: "host-gate-c-test",
         userId: "user-gate-c-test",
         relayAttachUrl: "wss://relay.invalid/attach",
@@ -714,6 +725,8 @@ describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close"
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId,
       userId: bearerSource.identity.userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -851,10 +864,18 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
     vi.restoreAllMocks();
   });
 
-  async function assertLateGrantAnswerIsDropped(
-    hostId: string,
-    response: Response,
-  ): Promise<void> {
+  /** A relay transport whose first grant mint is held at authn until the test answers it. */
+  async function startPendingRelayMint(hostId: string): Promise<{
+    readonly built: RemoteHostTransport<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >;
+    readonly tokens: HostTokenSource;
+    readonly userId: string;
+    readonly states: string[];
+    readonly warnings: string[];
+    readonly answer: (response: Response) => void;
+  }> {
     const answer = deferred<Response>();
     const started = deferred<void>();
     const warnings: string[] = [];
@@ -880,12 +901,13 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       signIn: null,
       now: () => Date.now(),
     });
-    const adopt = vi.spyOn(tokens, "adopt");
     const built = createRemoteHostTransport<
       VersionedRpcRegistry,
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -906,12 +928,28 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       evidence: NO_TRANSPORT_EVIDENCE,
     });
     if (built === null) throw new Error("expected a built remote transport");
+    built.session.start();
+    await started.promise;
+    return {
+      built,
+      tokens,
+      userId,
+      states,
+      warnings,
+      answer: answer.resolve,
+    };
+  }
 
+  async function assertLateGrantAnswerIsDropped(
+    hostId: string,
+    response: Response,
+  ): Promise<void> {
+    const pending = await startPendingRelayMint(hostId);
+    const { built, tokens, userId, states, warnings } = pending;
+    const adopt = vi.spyOn(tokens, "adopt");
     try {
-      built.session.start();
-      await started.promise;
       await tokens.forgetUser(userId);
-      answer.resolve(response);
+      pending.answer(response);
 
       await vi.waitFor(() => {
         expect(
@@ -929,6 +967,83 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       closeAndRetire(built.session);
     }
   }
+
+  it("reports a not-admitted relay-pass answer to the door while its session is open (guard)", async () => {
+    const pending = await startPendingRelayMint("late-answer-open");
+    try {
+      pending.answer(new Response("", { status: 404 }));
+      await vi.waitFor(() => {
+        expect(pending.states).toEqual(["not-admitted"]);
+      }, WAIT);
+    } finally {
+      closeAndRetire(pending.built.session);
+    }
+  });
+
+  it("reports nothing when a not-admitted relay-pass answer arrives after its session closed", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = await startPendingRelayMint("late-answer-closed");
+      const eraReads = vi.spyOn(pending.tokens, "era");
+      closeAndRetire(pending.built.session);
+      const readsBeforeAnswer = eraReads.mock.calls.length;
+      pending.answer(new Response("", { status: 404 }));
+      // The mint re-reads the era once authn answers: the answer has been taken.
+      await vi.waitFor(() => {
+        expect(eraReads.mock.calls.length).toBeGreaterThan(readsBeforeAnswer);
+      }, WAIT);
+      // Past the longest redial backoff: no later report either.
+      await vi.advanceTimersByTimeAsync(RECONNECT_MAX_BACKOFF_MS);
+      expect(pending.states).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the held host-only token when a successful relay-pass answer arrives after its session closed and the sessions were retired", async () => {
+    vi.useFakeTimers();
+    try {
+      const hostId = "late-ok-after-close";
+      const pending = await startPendingRelayMint(hostId);
+      const { tokens, userId } = pending;
+      await tokens.adopt(
+        userId,
+        hostId,
+        { token: "held-host-token", expiresAtMs: Date.now() + 3_600_000 },
+        tokens.era(userId),
+        () => true,
+      );
+      const adopt = vi.spyOn(tokens, "adopt");
+      const eraReads = vi.spyOn(tokens, "era");
+      closeAndRetire(pending.built.session);
+      const readsBeforeAnswer = eraReads.mock.calls.length;
+
+      pending.answer(
+        new Response(
+          JSON.stringify({
+            grant: "late-relay-pass",
+            role: "client",
+            expires_in: 300,
+            session_grant: "late-host-token",
+            session_grant_expires_in: 3_600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      // The mint re-reads the era once authn answers: the answer has been taken.
+      await vi.waitFor(() => {
+        expect(eraReads.mock.calls.length).toBeGreaterThan(readsBeforeAnswer);
+      }, WAIT);
+      // Past the longest redial backoff: no later write or report either.
+      await vi.advanceTimersByTimeAsync(RECONNECT_MAX_BACKOFF_MS);
+
+      expect(adopt).not.toHaveBeenCalled();
+      expect(tokens.current(userId, hostId)?.token).toBe("held-host-token");
+      expect(pending.states).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("drops a successful relay-pass answer that arrives after forgetUser", async () => {
     await assertLateGrantAnswerIsDropped(
@@ -986,6 +1101,8 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -1064,6 +1181,8 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",
