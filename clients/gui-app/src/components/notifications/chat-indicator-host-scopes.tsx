@@ -271,17 +271,13 @@ function ChatIndicatorHostLayer(props: {
     servingHostId,
   ]);
   const attested = hostFresh
-    ? {
-        ...mergeIndicatorStateResponses(inheritedAttested, host.data),
-        byOriginHostId: {
-          ...inheritedAttested.byOriginHostId,
-          [props.hostId]: mergeIndicatorStateResponses(
-            inheritedAttested.byOriginHostId?.[props.hostId] ??
-              EMPTY_INDICATOR_STATE_RESPONSE,
-            host.data,
-          ),
-        },
-      }
+    ? attestedWithHostAnswer(
+        inheritedAttested,
+        host.data,
+        props.hostId,
+        props.isCloud &&
+          cloudFeedLiveElsewhere(cloudFresh, servingHostId, props.hostId),
+      )
     : inheritedAttested;
   return (
     <ChatIndicatorFreshHostsContext.Provider
@@ -294,4 +290,34 @@ function ChatIndicatorHostLayer(props: {
       </ChatIndicatorAttestedContext.Provider>
     </ChatIndicatorFreshHostsContext.Provider>
   );
+}
+
+/**
+ * The attested positives with one fresh host answer added. The same authority
+ * as the displayed fold: an answer taken while the cloud feed is live through
+ * another host attests `pendingFork` alone.
+ */
+function attestedWithHostAnswer(
+  inherited: SurfaceNotificationIndicators,
+  hostAnswer: NotificationIndicatorRecords,
+  hostId: string,
+  forkOnly: boolean,
+): SurfaceNotificationIndicators {
+  if (forkOnly) {
+    return mergeHostPendingForkIntoCloudIndicators(
+      inherited,
+      hostAnswer,
+      hostId,
+    );
+  }
+  return {
+    ...mergeIndicatorStateResponses(inherited, hostAnswer),
+    byOriginHostId: {
+      ...inherited.byOriginHostId,
+      [hostId]: mergeIndicatorStateResponses(
+        inherited.byOriginHostId?.[hostId] ?? EMPTY_INDICATOR_STATE_RESPONSE,
+        hostAnswer,
+      ),
+    },
+  };
 }

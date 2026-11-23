@@ -151,11 +151,9 @@ function useNotificationIndicatorsBase(
       byOriginHostId: projection.byOriginHostId,
     };
   }, [isMixed, args.enabled, cloudRows, args.epicIds, args.chatIds]);
-  const mixedIndicators = cloudFeedLiveElsewhere(
-    cloudFresh,
-    servingHostId,
-    readHostId,
-  )
+  const hostForkOnly =
+    isMixed && cloudFeedLiveElsewhere(cloudFresh, servingHostId, readHostId);
+  const mixedIndicators = hostForkOnly
     ? mergeHostPendingForkIntoCloudIndicators(
         cloudIndicators,
         hostIndicators.data,
@@ -187,6 +185,7 @@ function useNotificationIndicatorsBase(
       hostFresh: positiveFresh,
       host: hostIndicators.data,
       hostId: readHostId,
+      hostForkOnly,
     }),
     fresh,
     positiveFresh,
@@ -201,12 +200,15 @@ function attestedPositivePartitions({
   hostFresh,
   host,
   hostId,
+  hostForkOnly,
 }: {
   cloudFresh: boolean;
   cloud: SurfaceNotificationIndicators;
   hostFresh: boolean;
   host: SurfaceNotificationIndicators;
   hostId: string | null;
+  /** The answer attests `pendingFork` alone (`cloudFeedLiveElsewhere`). */
+  hostForkOnly: boolean;
 }): {
   cloudPositiveIndicators: SurfaceNotificationIndicators;
   hostPositiveIndicators: SurfaceNotificationIndicators;
@@ -215,10 +217,30 @@ function attestedPositivePartitions({
     cloudPositiveIndicators: cloudFresh
       ? cloud
       : EMPTY_INDICATOR_STATE_RESPONSE,
-    hostPositiveIndicators: hostFresh
-      ? scopeIndicatorsToOrigin(host, hostId)
-      : EMPTY_INDICATOR_STATE_RESPONSE,
+    hostPositiveIndicators: hostPositivePartition(
+      hostFresh,
+      host,
+      hostId,
+      hostForkOnly,
+    ),
   };
+}
+
+function hostPositivePartition(
+  hostFresh: boolean,
+  host: SurfaceNotificationIndicators,
+  hostId: string | null,
+  forkOnly: boolean,
+): SurfaceNotificationIndicators {
+  if (!hostFresh) return EMPTY_INDICATOR_STATE_RESPONSE;
+  if (forkOnly) {
+    return mergeHostPendingForkIntoCloudIndicators(
+      { ...EMPTY_INDICATOR_STATE_RESPONSE, byOriginHostId: {} },
+      host,
+      hostId,
+    );
+  }
+  return scopeIndicatorsToOrigin(host, hostId);
 }
 
 function scopeIndicatorsToOrigin(

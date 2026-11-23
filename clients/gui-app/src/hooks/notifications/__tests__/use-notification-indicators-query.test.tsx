@@ -3,7 +3,10 @@ import { useContext, type ReactNode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
@@ -11,6 +14,7 @@ import { HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP } from "@traycer/protocol/host/n
 import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsEntityRef,
+  HostNotificationsIndicatorState,
   HostNotificationsIndicatorStateRequestV11,
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -203,7 +207,9 @@ function createHarnessAnswering(
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      [mockLocalHostEntry, mockRemoteHostEntry].find(
+        (entry) => entry.hostId === hostId,
+      ) ?? null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -359,6 +365,37 @@ function IndicatorSurface(props: {
     <NotificationIndicatorsProvider indicators={indicators}>
       {props.children}
     </NotificationIndicatorsProvider>
+  );
+}
+
+/** What one named host's read carries for the chat: the displayed indicators
+ * and the positives it attests, each from that host's bucket. */
+function NamedHostProbe(props: { readonly hostId: string }): ReactNode {
+  const args = {
+    hostId: props.hostId,
+    epicIds: [],
+    chatIds: [CHAT_ID],
+    enabled: true,
+  };
+  const indicators = useNotificationIndicators(args);
+  const read = useNotificationIndicatorsWithFreshness(args);
+  const describe = (state: HostNotificationsIndicatorState | undefined) =>
+    [state?.pendingFork ? "fork" : "", state?.unreadDone ? "done" : ""]
+      .filter((flag) => flag.length > 0)
+      .join(",");
+  return (
+    <>
+      <span data-testid="displayed">
+        {describe(indicators.byOriginHostId?.[props.hostId]?.chats[CHAT_ID])}
+      </span>
+      <span data-testid="attested">
+        {describe(
+          read.hostPositiveIndicators.byOriginHostId?.[props.hostId]?.chats[
+            CHAT_ID
+          ],
+        )}
+      </span>
+    </>
   );
 }
 
@@ -1182,6 +1219,46 @@ const settleReads = (): Promise<void> =>
   act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
+
+describe("a named host's notification indicators", () => {
+  it("takes only pendingFork from another host's whole-origin answer while the cloud feed is live through the local host", async () => {
+    const harness = createHarness({
+      epics: {},
+      chats: {
+        [CHAT_ID]: {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: true,
+          unreadFailure: false,
+          unreadDone: true,
+          unreadCount: 1,
+        },
+      },
+      complete: true,
+    });
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-b",
+          originHostId: mockRemoteHostEntry.hostId,
+          readAt: 1_200,
+        }),
+      ],
+      1,
+    );
+
+    render(
+      <QueryClientProvider client={harness.queryClient}>
+        <NamedHostProbe hostId={mockRemoteHostEntry.hostId} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(indicatorText("attested")).toBe("fork");
+    });
+    expect(indicatorText("displayed")).toBe("fork");
+  });
+});
 
 describe("ordinary and Activity notification indicator observers over one key", () => {
   beforeEach(() => {

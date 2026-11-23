@@ -16,6 +16,7 @@ import type {
   HostNotificationsIndicatorStateRequest,
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
+import { ChatIndicatorAttestedContext } from "@/components/notifications/chat-indicator-fresh-hosts-context";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import {
@@ -213,6 +214,28 @@ function UnreadProbe(props: {
         state.pendingFork ? "fork" : "",
         state.unreadDone || state.unreadFailure ? "unread" : "read",
       ]
+        .filter((flag) => flag.length > 0)
+        .join(",")}
+    </span>
+  );
+}
+
+/** The positives the scope attests for one chat, from the aggregate
+ * (`originHostId` null) or from a host's bucket. */
+function AttestedProbe(props: {
+  readonly testId: string;
+  readonly originHostId: string | null;
+  readonly chatId: string;
+}): ReactNode {
+  const attested = useContext(ChatIndicatorAttestedContext);
+  const records =
+    props.originHostId === null
+      ? attested
+      : attested.byOriginHostId?.[props.originHostId];
+  const state = records?.chats[props.chatId];
+  return (
+    <span data-testid={props.testId}>
+      {[state?.pendingFork ? "fork" : "", state?.unreadDone ? "done" : ""]
         .filter((flag) => flag.length > 0)
         .join(",")}
     </span>
@@ -606,6 +629,16 @@ describe("ChatIndicatorHostScopes against a stale host answer", () => {
         >
           <UnreadProbe testId="aggregate" originHostId={null} chatId="chat-b" />
           <UnreadProbe testId="bucket" originHostId={HOST_B} chatId="chat-b" />
+          <AttestedProbe
+            testId="attested-aggregate"
+            originHostId={null}
+            chatId="chat-b"
+          />
+          <AttestedProbe
+            testId="attested-bucket"
+            originHostId={HOST_B}
+            chatId="chat-b"
+          />
         </ChatIndicatorHostScopes>,
       ),
     );
@@ -618,6 +651,8 @@ describe("ChatIndicatorHostScopes against a stale host answer", () => {
     await waitFor(() => {
       expect(screen.getByTestId("aggregate").textContent).toBe("fork,read");
       expect(screen.getByTestId("bucket").textContent).toBe("fork,read");
+      expect(screen.getByTestId("attested-aggregate").textContent).toBe("fork");
+      expect(screen.getByTestId("attested-bucket").textContent).toBe("fork");
     });
   });
 
@@ -627,6 +662,12 @@ describe("ChatIndicatorHostScopes against a stale host answer", () => {
     await waitFor(() => {
       expect(screen.getByTestId("aggregate").textContent).toBe("fork,unread");
       expect(screen.getByTestId("bucket").textContent).toBe("fork,unread");
+      expect(screen.getByTestId("attested-aggregate").textContent).toBe(
+        "fork,done",
+      );
+      expect(screen.getByTestId("attested-bucket").textContent).toBe(
+        "fork,done",
+      );
     });
   });
 });
