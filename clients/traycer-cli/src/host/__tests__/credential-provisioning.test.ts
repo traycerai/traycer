@@ -2450,7 +2450,8 @@ describe("provisionInstalledHostCredential", () => {
 
     expect(
       warned.filter(
-        (message) => message === "Host credential provisioning token mint refused",
+        (message) =>
+          message === "Host credential provisioning token mint refused",
       ),
     ).toHaveLength(1);
     expect(mocks.providedLease.current?.getBearerToken()).toBe(SIBLING);

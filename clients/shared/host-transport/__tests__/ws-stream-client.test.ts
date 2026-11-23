@@ -4009,7 +4009,11 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       expect(sockets).toHaveLength(1);
       expect(transitions.at(-1)).toEqual({
         status: "closed",
-        reason: { kind: "fatalError", signInVerdict: null, details: lifecycleRefusal(code) },
+        reason: {
+          kind: "fatalError",
+          signInVerdict: null,
+          details: lifecycleRefusal(code),
+        },
         retryCause: null,
       });
       session.close();

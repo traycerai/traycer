@@ -190,7 +190,8 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
       const real = actual.createStoreBackedRevalidator(args);
       return {
         ...real,
-        rotateSignIn: () => counted(rotateThenResume(() => real.rotateSignIn())),
+        rotateSignIn: () =>
+          counted(rotateThenResume(() => real.rotateSignIn())),
         adoptStoredSignIn: () =>
           counted(adoptAfterGate(() => real.adoptStoredSignIn())),
       };

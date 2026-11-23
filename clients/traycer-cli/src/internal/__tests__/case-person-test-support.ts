@@ -14,5 +14,8 @@ let casesSeen = 0;
 
 export function nextCasePerson(): CasePerson {
   casesSeen += 1;
-  return { userId: `case-user-${casesSeen}`, signIn: `case-sign-in-${casesSeen}` };
+  return {
+    userId: `case-user-${casesSeen}`,
+    signIn: `case-sign-in-${casesSeen}`,
+  };
 }

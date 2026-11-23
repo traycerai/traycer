@@ -319,7 +319,8 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       // a sign-in verdict only when the close says so.
       (details, verdict) => {
         const owner = refusedBy.get(details);
-        if (owner !== undefined) return credential.recover(owner.hostId, details);
+        if (owner !== undefined)
+          return credential.recover(owner.hostId, details);
         return Promise.resolve<HostTokenRecoveryOutcome>(
           verdict === null ? "rejected" : "sign-in-rejected",
         );
@@ -344,12 +345,10 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       (listener) =>
         credential.onRefusalEndingCommand((evidence) => {
           if (endpoint?.hostId !== evidence.hostId) return;
-          void credential
-            .refusalEndingNow(evidence.hostId)
-            .then((ending) => {
-              if (ending !== null && endpoint?.hostId === evidence.hostId)
-                listener(ending, tookReleasedWay(evidence.hostId));
-            });
+          void credential.refusalEndingNow(evidence.hostId).then((ending) => {
+            if (ending !== null && endpoint?.hostId === evidence.hostId)
+              listener(ending, tookReleasedWay(evidence.hostId));
+          });
         }),
       credential.presented,
       agentCredential,
@@ -939,8 +938,7 @@ function runInboxSubscription(
         return;
       }
       fail(
-        hostDoorRefusalCliError(details, rejection, hostClosed) ??
-          hostClosed(),
+        hostDoorRefusalCliError(details, rejection, hostClosed) ?? hostClosed(),
       );
     };
 
@@ -955,7 +953,9 @@ function runInboxSubscription(
       logger.warn("Monitor host-only token mint refused", {
         environment: config.environment,
         failure:
-          ending.kind === "sign-in-rejected" ? ending.kind : ending.failure.kind,
+          ending.kind === "sign-in-rejected"
+            ? ending.kind
+            : ending.failure.kind,
         agentId: target.agentId,
         epicId: target.epicId,
       });

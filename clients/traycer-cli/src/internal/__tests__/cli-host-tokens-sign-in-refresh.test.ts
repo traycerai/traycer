@@ -494,27 +494,27 @@ describe("a refusal of a sign-in that is no longer the stored one judges nothing
       releaseRefreshOfC.release = resolve;
     });
     injected.rotate = async (lease) => {
-        refreshesStarted.push(refreshesStarted.length + 1);
-        if (refreshesStarted.length === 1) {
-          // Our rotation installs B; a sibling's write installs C before the
-          // continuation of the rotation runs.
-          rotateLease(lease, ROTATED_SIGN_IN);
-          rotateLease(lease, SIBLING_SIGN_IN);
-          return {
-            outcome: "rotated",
-            installed: ROTATED_SIGN_IN,
-            refused: null,
-            accepted: ROTATED_SIGN_IN,
-          };
-        }
-        await refreshOfCHeld;
-        rotateLease(lease, REFRESHED_SIGN_IN);
+      refreshesStarted.push(refreshesStarted.length + 1);
+      if (refreshesStarted.length === 1) {
+        // Our rotation installs B; a sibling's write installs C before the
+        // continuation of the rotation runs.
+        rotateLease(lease, ROTATED_SIGN_IN);
+        rotateLease(lease, SIBLING_SIGN_IN);
         return {
           outcome: "rotated",
-          installed: REFRESHED_SIGN_IN,
+          installed: ROTATED_SIGN_IN,
           refused: null,
-          accepted: REFRESHED_SIGN_IN,
+          accepted: ROTATED_SIGN_IN,
         };
+      }
+      await refreshOfCHeld;
+      rotateLease(lease, REFRESHED_SIGN_IN);
+      return {
+        outcome: "rotated",
+        installed: REFRESHED_SIGN_IN,
+        refused: null,
+        accepted: REFRESHED_SIGN_IN,
+      };
     };
     const { tokens } = await acquire(null);
     const reports: string[] = [];

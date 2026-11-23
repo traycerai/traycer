@@ -91,7 +91,10 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
     ) => {
       authn.identityReads.push(token);
       return isRotated(token)
-        ? { kind: "valid" as const, user: createAuthenticatedUserFixture(undefined) }
+        ? {
+            kind: "valid" as const,
+            user: createAuthenticatedUserFixture(undefined),
+          }
         : { kind: "rejected" as const };
     },
   };

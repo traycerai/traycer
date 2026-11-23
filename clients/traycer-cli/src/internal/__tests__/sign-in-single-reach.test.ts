@@ -87,10 +87,7 @@ describe("the store-backed rotation has one reach (P7)", () => {
     ).flatMap((file) =>
       linesMatching(file, ROTATION_CALL).filter(
         (line) =>
-          !(
-            file === TOKENS_FILE &&
-            writer.has(Number(line.split(":")[1]))
-          ),
+          !(file === TOKENS_FILE && writer.has(Number(line.split(":")[1]))),
       ),
     );
 

@@ -826,7 +826,11 @@ describe("useGitListChangedFilesSubscription", () => {
         if (!session) throw new Error("Session should exist");
 
         act(() => {
-          session.emitStatus("closed", { kind: "fatalError", signInVerdict: null, details: fatal });
+          session.emitStatus("closed", {
+            kind: "fatalError",
+            signInVerdict: null,
+            details: fatal,
+          });
         });
 
         await waitFor(() => {

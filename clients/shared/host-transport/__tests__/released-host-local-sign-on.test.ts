@@ -1751,7 +1751,11 @@ describe("released personal host, local stream", () => {
       ): Promise<string[]> {
         const tokens: string[] = [];
         const opened = new Set<StubStreamWebSocket>();
-        for (let round = 0; round < 400 && tokens.length < refusals; round += 1) {
+        for (
+          let round = 0;
+          round < 400 && tokens.length < refusals;
+          round += 1
+        ) {
           await vi.advanceTimersByTimeAsync(50);
           for (const socket of sockets) {
             if (opened.has(socket)) continue;

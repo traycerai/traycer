@@ -2682,7 +2682,8 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
           return;
         }
         this.grantMintAbort = null;
-        if (readiness.kind === "refused") this.goTerminal(readiness.fatal, null);
+        if (readiness.kind === "refused")
+          this.goTerminal(readiness.fatal, null);
         else
           this.dropAndReconnect(
             readiness.retryCause ?? teamMembershipUnavailable(),
@@ -3430,11 +3431,8 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       const judging = Promise.resolve()
         .then(() =>
           stillWanted() && refusedBy !== null
-            ? this.judgeSpentRefusal(
-                sequence,
-                refused,
-                stillWanted,
-                () => judge(refusal),
+            ? this.judgeSpentRefusal(sequence, refused, stillWanted, () =>
+                judge(refusal),
               )
             : ("network-error" as const),
         )
@@ -3489,7 +3487,9 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     if (!stillWanted()) return "network-error";
     if (rejected) {
       const signIn = hostSignInKey(refused);
-      return signIn === null ? "rejected" : { kind: "sign-in-rejected", signIn };
+      return signIn === null
+        ? "rejected"
+        : { kind: "sign-in-rejected", signIn };
     }
     if (this.heldSignInMovedFrom(refused)) return "adopted";
     if (this.dialSequence === sequence) this.dialSequence = null;
@@ -4050,9 +4050,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     console.debug(
       `[stream] UNAUTHORIZED revalidate outcome=${
         typeof outcome === "object" ? outcome.kind : outcome
-      } method=${String(
-        this.config.method,
-      )}`,
+      } method=${String(this.config.method)}`,
     );
     // The streak counts one host's refusals. If the endpoint now names another,
     // that host has not been dialed yet: redial without counting.

@@ -857,7 +857,9 @@ describe("callHostRpc", () => {
       const users = new Map(table);
       users.set(
         person.userId,
-        new Map([["d1", { token: "ran-out", expiresAtMs: Date.now() - 1_000 }]]),
+        new Map([
+          ["d1", { token: "ran-out", expiresAtMs: Date.now() - 1_000 }],
+        ]),
       );
       return users;
     });

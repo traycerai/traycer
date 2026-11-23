@@ -570,65 +570,65 @@ export async function provisionInstalledHostCredential(
     const settledOutcome = async (
       closedFatally: boolean,
     ): Promise<HostCredentialProvisionOutcome> => {
-        const ended = await endingOutcomeNow();
-        if (ended !== null) return ended;
-        const deferred = deferredNotAdmitted();
-        if (deferred !== null) return mintRefusalOutcome(deferred);
-        if (
-          closedFatally &&
-          !mintUnavailable &&
-          !mintProvisioned &&
-          !mintInvoked &&
-          !mintWithheld &&
-          !sawSilentOpen
-        ) {
-          return {
-            kind: "error",
-            message:
-              "the host closed the connection before authorization was confirmed",
-          };
-        }
-        if (mintUnavailable) {
-          return { kind: "mint-unavailable" };
-        }
-        // `not-adopted` claims a credential existed and was pushed (or held for
-        // delivery), so it needs the mint to have definitively PROVISIONED. A
-        // mint still pending at the deadline proved neither - "the handoff did
-        // not complete" is all that is known, which is `mint-unavailable`'s
-        // line, not an adoption failure the host can be blamed for.
-        if (mintProvisioned) {
-          return { kind: "not-adopted" };
-        }
-        if (mintInvoked) {
-          return { kind: "mint-unavailable" };
-        }
-        // Both mean the host WAS reached and cannot be credentialed by this
-        // client: it opened without ever reporting a state, or it reported a
-        // non-active state whose mint the client withheld (version mismatch or
-        // a non-UUID host id).
-        if (mintWithheld || sawSilentOpen) {
-          return { kind: "unsupported" };
-        }
-        // The door refused with its reason (a claimed host that has not read
-        // its owner yet) and has admitted no open since: the host answered and
-        // did not take the credential in time.
-        if (doorRetried) {
-          return { kind: "not-adopted" };
-        }
-        // The host spoke to us but never got as far as reporting a credential
-        // state - the shape of an expired stored bearer whose refresh could
-        // not complete (authn unreachable), where the host answers
-        // UNAUTHORIZED, the revalidation returns a transient failure, and the
-        // stream just reconnects until the budget runs out. `unreachable`
-        // would say "the host did not respond in time" about a host that
-        // answered every single dial; what actually failed is the handoff, and
-        // that is `mint-unavailable`'s line - a later client with a live token
-        // mints for it normally.
-        if (hostAnswered) {
-          return { kind: "mint-unavailable" };
-        }
-        return { kind: "unreachable" };
-      };
+      const ended = await endingOutcomeNow();
+      if (ended !== null) return ended;
+      const deferred = deferredNotAdmitted();
+      if (deferred !== null) return mintRefusalOutcome(deferred);
+      if (
+        closedFatally &&
+        !mintUnavailable &&
+        !mintProvisioned &&
+        !mintInvoked &&
+        !mintWithheld &&
+        !sawSilentOpen
+      ) {
+        return {
+          kind: "error",
+          message:
+            "the host closed the connection before authorization was confirmed",
+        };
+      }
+      if (mintUnavailable) {
+        return { kind: "mint-unavailable" };
+      }
+      // `not-adopted` claims a credential existed and was pushed (or held for
+      // delivery), so it needs the mint to have definitively PROVISIONED. A
+      // mint still pending at the deadline proved neither - "the handoff did
+      // not complete" is all that is known, which is `mint-unavailable`'s
+      // line, not an adoption failure the host can be blamed for.
+      if (mintProvisioned) {
+        return { kind: "not-adopted" };
+      }
+      if (mintInvoked) {
+        return { kind: "mint-unavailable" };
+      }
+      // Both mean the host WAS reached and cannot be credentialed by this
+      // client: it opened without ever reporting a state, or it reported a
+      // non-active state whose mint the client withheld (version mismatch or
+      // a non-UUID host id).
+      if (mintWithheld || sawSilentOpen) {
+        return { kind: "unsupported" };
+      }
+      // The door refused with its reason (a claimed host that has not read
+      // its owner yet) and has admitted no open since: the host answered and
+      // did not take the credential in time.
+      if (doorRetried) {
+        return { kind: "not-adopted" };
+      }
+      // The host spoke to us but never got as far as reporting a credential
+      // state - the shape of an expired stored bearer whose refresh could
+      // not complete (authn unreachable), where the host answers
+      // UNAUTHORIZED, the revalidation returns a transient failure, and the
+      // stream just reconnects until the budget runs out. `unreachable`
+      // would say "the host did not respond in time" about a host that
+      // answered every single dial; what actually failed is the handoff, and
+      // that is `mint-unavailable`'s line - a later client with a live token
+      // mints for it normally.
+      if (hostAnswered) {
+        return { kind: "mint-unavailable" };
+      }
+      return { kind: "unreachable" };
+    };
     // Read once an in-flight recovery has answered or the bound passed, so a sign-in
     // refused inside the bound reads as refused. One after the bound is not seen.
     const settleAfterRecovery =

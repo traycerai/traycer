@@ -543,7 +543,11 @@ describe("task create --idempotency-key", () => {
   });
 
   it("exits non-zero naming the ids and the record for an intent with no done, without a send", async () => {
-    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
+    const path = taskCreateKeyRecordPath(
+      keysDir.current,
+      person.userId,
+      "slot-1",
+    );
     await writeTaskCreateKey(path, {
       state: "intent",
       taskId: "task-crashed",
@@ -560,7 +564,11 @@ describe("task create --idempotency-key", () => {
   });
 
   it("creates past a record older than 24 hours", async () => {
-    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
+    const path = taskCreateKeyRecordPath(
+      keysDir.current,
+      person.userId,
+      "slot-1",
+    );
     await writeTaskCreateKey(path, {
       state: "intent",
       taskId: "task-old",
@@ -722,7 +730,11 @@ describe("task create --idempotency-key", () => {
     expect(error.message).not.toMatch(/delete/i);
     expect(error.details).toMatchObject({ taskId: sent.epic.id });
 
-    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
+    const path = taskCreateKeyRecordPath(
+      keysDir.current,
+      person.userId,
+      "slot-1",
+    );
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
     };
@@ -796,7 +808,11 @@ describe("task create: a refusal answered after an earlier send", () => {
 
     await rejection(run({ idempotencyKey: "slot-1" }));
 
-    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
+    const path = taskCreateKeyRecordPath(
+      keysDir.current,
+      person.userId,
+      "slot-1",
+    );
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
     };
@@ -867,7 +883,11 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(socketRequest).toHaveBeenCalledTimes(2);
     expect(storeRotate).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
+    const path = taskCreateKeyRecordPath(
+      keysDir.current,
+      person.userId,
+      "slot-1",
+    );
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
     };
@@ -898,7 +918,11 @@ describe("task create: a refusal answered after an earlier send", () => {
 
     const error = await rejection(run({ idempotencyKey: "slot-1" }));
 
-    const path = taskCreateKeyRecordPath(keysDir.current, person.userId, "slot-1");
+    const path = taskCreateKeyRecordPath(
+      keysDir.current,
+      person.userId,
+      "slot-1",
+    );
     expect(error.message).toContain(path);
     expect(socketRequest).toHaveBeenCalledTimes(1);
     // No mint by construction: only the dial asks for a host-only token, and the socket client is the test's stub that never dials.
