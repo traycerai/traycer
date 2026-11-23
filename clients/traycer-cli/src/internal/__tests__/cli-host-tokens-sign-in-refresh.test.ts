@@ -11,6 +11,7 @@ import type {
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { Environment } from "../../runner/environment";
 import {
   createCliCredentialsStore,
@@ -668,6 +669,68 @@ describe("a refusal of a sign-in a sibling process has since replaced on disk", 
     expect(recordedWhenSyncing.every((failure) => failure === null)).toBe(true);
     expect(lease.getBearerToken()).toBe(signInB);
     expect(harness.mints.map((mint) => mint.signIn)).toEqual([signInA, signInB]);
+    expect(tokens.signInRejected()).toBe(false);
+    expect(reports).toEqual([]);
+    tokens.dispose();
+    store.dispose();
+    otherProcess.dispose();
+  });
+
+  it("goes on with the sign-in on disk, rejecting nothing, when the stream recovery's retry after our rotation is refused after another process saved a newer one", async () => {
+    // The mints on A and the retry on B are held; the one on C is answered.
+    harness.hold = 2;
+    const store = createCliCredentialsStore();
+    const otherProcess = createCliCredentialsStore();
+    await store.signIn(credentialsOf(SIGN_IN_A), false, null);
+    credentialsFile.refreshed.push(ROTATED_SIGN_IN);
+    const lease = new MutableBearerLease(SIGN_IN_A, USER_ID);
+    const revalidator = createStoreBackedRevalidator({
+      store,
+      lease,
+      signal: null,
+    });
+    const tokens = createCliHostTokens({
+      lease,
+      refresh: () => revalidator.rotateSignIn(),
+      adoptStored: () => revalidator.adoptStoredSignIn(),
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    const reports: string[] = [];
+    tokens.onRefusalEndingCommand((reportedHostId) => {
+      reports.push(reportedHostId);
+    });
+    // The host refused the held token as expired: the stream's recovery, bounded by its own sequence, mints a fresh one.
+    const refusal: FatalErrorDetails = {
+      code: "UNAUTHORIZED",
+      reason: "host token expired",
+      doorReason: "token_expired",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    const recovering = tokens.streamRecovery(hostId).revalidateRefused(refusal);
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
+    expect(harness.mints[0]?.signIn).toBe(SIGN_IN_A);
+
+    // A is refused; the recovery rotates to B under the lock and retries on B, held.
+    harness.mints[0]?.answer({ kind: "sign-in-rejected" });
+    await vi.waitFor(() => expect(harness.mints).toHaveLength(2));
+    expect(harness.mints[1]?.signIn).toBe(ROTATED_SIGN_IN);
+
+    // Another process saves C while the retry is out; B's 401 arrives.
+    await otherProcess.signIn(credentialsOf(SIBLING_SIGN_IN), false, null);
+    harness.mints[1]?.answer({ kind: "sign-in-rejected" });
+
+    // The recovery is not answered "rejected" for a sign-in that is no longer the stored one: it mints on C.
+    await expect(recovering).resolves.toBe("rotated");
+    expect(lease.getBearerToken()).toBe(SIBLING_SIGN_IN);
+    expect(harness.mints.map((mint) => mint.signIn)).toEqual([
+      SIGN_IN_A,
+      ROTATED_SIGN_IN,
+      SIBLING_SIGN_IN,
+    ]);
+    expect(credentialsFile.refreshed).toEqual([]);
     expect(tokens.signInRejected()).toBe(false);
     expect(reports).toEqual([]);
     tokens.dispose();
