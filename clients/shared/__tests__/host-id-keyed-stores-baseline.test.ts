@@ -231,10 +231,10 @@ const BASELINE: Readonly<Record<string, BaselineEntry>> = {
     class: "RULING",
     ruling: "G4",
   },
-  "shared/auth/host-token-source.ts::latestFlight": {
+  "shared/auth/host-token-source.ts::runningFlights": {
     class: "NULL-OWNER-FLIGHT",
     reason:
-      "The latest mint per person, host, refresh and era, which an ask naming no observed process joins; owned asks start in observedFlights",
+      "Every mint still running per person, host, sign-in and era, in start order; only an ask naming no observed process joins the newest, and it writes and is answered under its own rule with no purchase",
   },
   "shared/auth/host-token-source.ts::renewFlights": {
     class: "NULL-OWNER-FLIGHT",
@@ -246,9 +246,10 @@ const BASELINE: Readonly<Record<string, BaselineEntry>> = {
     reason:
       "The mints of asks whose host process is not observed yet; they name no observed process",
   },
-  "shared/auth/host-token-source.ts::storedIn": {
-    class: "RULING",
-    ruling: "G3",
+  "shared/auth/host-token-source.ts::mintedToken": {
+    class: "NOT-AN-ANSWER",
+    reason:
+      "The sign-in the token held for a person and host was minted with, matched by the token itself; it labels that token for every asker and no purchase is read from it",
   },
   "shared/auth/host-token-source.ts::tokens": { class: "RULING", ruling: "G3" },
   "shared/auth/host-token-store.ts::table": { class: "RULING", ruling: "G3" },
@@ -504,6 +505,21 @@ const BASELINE: Readonly<Record<string, BaselineEntry>> = {
   "traycer-cli/src/internal/cli-host-tokens.ts::streamBearers": {
     class: "NOT-AN-ANSWER",
     reason: "An object cache of bearer sources",
+  },
+  "traycer-cli/src/internal/cli-host-tokens.ts::refused": {
+    class: "NOT-AN-ANSWER",
+    reason:
+      "Sign-ins whose mint refusal counted, keyed by the sign-in's digest: a fact about a sign-in, the same for every host and process",
+  },
+  "traycer-cli/src/internal/cli-host-tokens.ts::refreshRefused": {
+    class: "NOT-AN-ANSWER",
+    reason:
+      "Sign-ins whose refresh authn refused, keyed by the sign-in's digest: a fact about a sign-in, the same for every host and process",
+  },
+  "shared/host-client/host-runtime.ts::latestRenewal": {
+    class: "NOT-AN-ANSWER",
+    reason:
+      "The latest renewal started per person and host id; a renewal is for a person and host id, and only the latest started publishes the host's access-check state, so an earlier renewal never outlives a later one",
   },
 };
 
