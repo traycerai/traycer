@@ -392,6 +392,10 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     (id) => (id === userId ? readLeaseBearer(signIn.lease) : null),
     callEnded.signal,
   );
+  // The source syncs with the credentials file before it compares and records
+  // a refused mint, so a refusal of a sign-in replaced on disk is dropped
+  // there and never recorded against the stored one.
+  stored.bindSignInSync(() => signIn.adoptStored());
   // The one judge of a rejected sign-in, for every mint this process makes:
   // a refresh authn refused, or a 401 on the first mint after a refresh it
   // accepted for this process, sent with the very sign-in that refresh
@@ -466,35 +470,42 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
               detail: "host-only token not saved",
             }));
         let owner = mintOwner ?? hosts.currentInstance(hostId);
-        const startedAt = nextEvent();
-        let outcome = await askFor(owner);
         // The process was replaced before the mint could start: once more, for the
         // process observed now.
-        if (outcome.kind === "process-replaced") {
+        const ask = async (): Promise<HostTokenMintOutcome> => {
+          const asked = await askFor(owner);
+          if (asked.kind !== "process-replaced") return asked;
           owner = hosts.currentInstance(hostId);
-          outcome = await askFor(owner);
-          if (outcome.kind === "process-replaced")
-            outcome = {
-              kind: "unavailable",
-              detail: "the host process was replaced",
-            };
+          const again = await askFor(owner);
+          return again.kind === "process-replaced"
+            ? { kind: "unavailable", detail: "the host process was replaced" }
+            : again;
+        };
+        let startedAt = nextEvent();
+        let outcome = await ask();
+        for (;;) {
+          // The stored sign-in is the credentials file's: a refusal whose
+          // sign-in is known reads it first, adopting one a sibling or the
+          // desktop saved, before anything below compares, judges or reports.
+          if (outcome.kind === "sign-in-rejected" && mintSentWith.has(outcome))
+            await signIn.adoptStored();
+          if (outlived(owner, startedAt)) return outcome;
+          if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
+          // The comparison comes first. A refusal of a sign-in already replaced
+          // when its answer arrived is not a refusal for anyone: it judges,
+          // spends and reports nothing, and is never handed upward. The mint is
+          // asked again on the stored sign-in, and that answer is the one every
+          // reader above sees. Each further pass needs the stored sign-in to
+          // have been replaced again while the mint was out.
+          if (
+            outcome.kind !== "sign-in-rejected" ||
+            !refusedSignInReplaced(outcome)
+          )
+            break;
+          startedAt = nextEvent();
+          outcome = await ask();
         }
-        // The stored sign-in is the credentials file's: a refusal whose sign-in
-        // is known reads it first, adopting one a sibling or the desktop saved,
-        // before anything below compares, judges or reports.
-        if (outcome.kind === "sign-in-rejected" && mintSentWith.has(outcome))
-          await signIn.adoptStored();
-        if (outlived(owner, startedAt)) return outcome;
         if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
-        if (outcome.kind === "sign-in-rejected") lastRefused = outcome;
-        // The comparison comes first: a refusal of a sign-in already replaced
-        // when its answer arrived is not the stored one's. It judges, spends
-        // and reports nothing; its asker retries on the stored sign-in.
-        if (
-          outcome.kind === "sign-in-rejected" &&
-          refusedSignInReplaced(outcome)
-        )
-          return outcome;
         if (
           outcome.kind === "sign-in-rejected" &&
           refreshedSinceLastMint &&

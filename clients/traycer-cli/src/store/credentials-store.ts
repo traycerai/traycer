@@ -113,7 +113,9 @@ export function createStoreBackedRevalidator(args: {
      * Adopts into the lease the sign-in the credentials file holds now, read
      * through the store's own read, when it is this person's and newer than
      * the lease's: "the stored sign-in" is the file's, not this process's
-     * memory. Spends nothing, and never throws.
+     * memory. It installs only over the sign-in the lease held when the read
+     * began, so it never overwrites a newer one. Spends nothing, and never
+     * throws.
      */
     adoptStoredSignIn(): Promise<void>;
   } {
@@ -196,13 +198,20 @@ export function createStoreBackedRevalidator(args: {
   };
   const adoptStoredSignIn = async (): Promise<void> => {
     try {
+      // Adoption never moves the lease backwards: the read installs the
+      // file's sign-in only over the very sign-in the lease held when the
+      // read began, checked and installed in one synchronous step. A lease
+      // that changed meanwhile (a rotation of ours, another adoption) is
+      // newer than the snapshot, which is dropped.
+      const before = lease.getBearerToken();
       const stored = await store.read();
       // No file, another person's, or the lease's own: the lease stands, so a
       // signed-out file never sends a retry on a sign-in nobody holds.
       if (
         stored !== null &&
         stored.user.id === lease.identity.userId &&
-        stored.token !== lease.getBearerToken()
+        stored.token !== before &&
+        lease.getBearerToken() === before
       )
         lease.rotate(stored.token);
     } catch {
