@@ -14,6 +14,7 @@ import {
 } from "../../../../shared/host-transport/__testing__/stub-stream-socket";
 import { WsStreamClient } from "../../../../shared/host-transport/ws-stream-client";
 import type { Environment } from "../../runner/environment";
+import { completeCredentialsReserve } from "./credentials-reserve-test-support";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import {
   callHostRpcAtResolvedEndpoint,
@@ -175,7 +176,6 @@ let hostId = "";
 let workDir = "";
 
 beforeEach(async () => {
-  vi.useFakeTimers();
   harness.sockets.splice(0);
   harness.state.readHold = null;
   harness.state.readsTaken = 0;
@@ -184,17 +184,13 @@ beforeEach(async () => {
   hostCount += 1;
   // A named reason is remembered per computer for the whole process.
   hostId = `44444444-4444-4444-8444-${String(hostCount).padStart(12, "0")}`;
-  harness.state.table = new Map([
-    [
-      USER_ID,
-      new Map([
-        [hostId, { token: HELD_TOKEN, expiresAtMs: Date.now() + 3_600_000 }],
-      ]),
-    ],
-  ]);
   processReleasedHosts.forgetAll();
   workDir = await mkdtemp(join(tmpdir(), "traycer-still-wanted-"));
   harness.state.credentialsPath = join(workDir, "credentials");
+  // The file is prepared under real timers: a store waiting for its lock polls
+  // on `setTimeout`, which the fake clock would never advance, and a store's
+  // background fill of the space reserve holds that lock until the reserve is full.
+  await completeCredentialsReserve(harness.state.credentialsPath);
   const credentials: StoredCredentials = {
     token: SIGN_IN,
     refreshToken: `rt-${SIGN_IN}`,
@@ -204,6 +200,15 @@ beforeEach(async () => {
   const store = createCliCredentialsStore();
   await store.signIn(credentials, false, null);
   store.dispose();
+  vi.useFakeTimers();
+  harness.state.table = new Map([
+    [
+      USER_ID,
+      new Map([
+        [hostId, { token: HELD_TOKEN, expiresAtMs: Date.now() + 3_600_000 }],
+      ]),
+    ],
+  ]);
 });
 
 afterEach(async () => {

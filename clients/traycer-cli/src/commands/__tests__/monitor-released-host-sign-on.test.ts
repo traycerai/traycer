@@ -2,7 +2,6 @@ import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as realDelay } from "node:timers/promises";
 import type { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
@@ -10,6 +9,7 @@ import { processReleasedHosts } from "@traycer-clients/shared/host-transport/rel
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import { buildProgramWithAgentRoles } from "../../index";
+import { completeCredentialsReserve } from "../../internal/__tests__/credentials-reserve-test-support";
 import type { AuthTokenRefreshResult } from "../../../../shared/auth/auth-validation";
 import type { Environment } from "../../runner/environment";
 import { createCliCredentialsStore } from "../../store/credentials-store";
@@ -1872,6 +1872,10 @@ describe("traycer monitor local released-host sign-in", () => {
       workDir = await mkdtemp(join(tmpdir(), "traycer-monitor-sibling-"));
       monitorHarness.state.credentialsPath = join(workDir, "credentials");
       monitorHarness.state.realRevalidator = true;
+      // The reserve is filled under real timers: a store waiting for the file's lock polls on a clock the fake one would never advance.
+      vi.useRealTimers();
+      await completeCredentialsReserve(monitorHarness.state.credentialsPath);
+      vi.useFakeTimers();
     });
 
     afterEach(async () => {
@@ -1889,6 +1893,16 @@ describe("traycer monitor local released-host sign-in", () => {
       savedAt: "2026-01-01T00:00:00.000Z",
       user: { id: USER_ID, email: "user@example.test", name: "User" },
     });
+
+    /** The file as it stood before the command started, saved by a handle that is then disposed. */
+    async function seedCredentials(token: string): Promise<void> {
+      const seeding = createCliCredentialsStore();
+      try {
+        await seeding.signIn(credentialsOf(token), false, null);
+      } finally {
+        seeding.dispose();
+      }
+    }
 
     /** The command's own handle on the file holds what it last saved; this one is another process's. */
     async function saveFromAnotherProcess(token: string): Promise<void> {
@@ -1908,31 +1922,22 @@ describe("traycer monitor local released-host sign-in", () => {
 
     it("goes on with the sign-in on disk when the proactive upkeep's mint is refused after another process saved a newer one", async () => {
       // The upkeep refreshes the sign-in and buys a token with the refreshed one.
-      const oldSignIn = expiredJwt(
-        Date.now() + 10 * 60 * 1000 + UPKEEP_FIRES_AT_MS,
-      );
+      const oldSignIn = expiredJwt(Date.now() + 60 * 60 * 1000);
       const refreshed = expiredJwt(Date.now() + 8 * 60 * 60 * 1000);
       monitorHarness.state.signIn = oldSignIn;
       monitorHarness.state.refreshed.push(refreshed);
-      await createCliCredentialsStore().signIn(
-        credentialsOf(oldSignIn),
-        false,
-        null,
-      );
+      await seedCredentials(oldSignIn);
       const mints = holdMints();
       startMonitor();
       await socketAt(0);
-      // The refresh runs under the file lock, whose I/O is real: each step lets it progress.
-      for (
-        let step = 0;
-        step < 400 && !monitorHarness.grantSignIns.includes(refreshed);
-        step += 1
-      ) {
-        await vi.advanceTimersByTimeAsync(250);
-        await realDelay(5);
-      }
+      const upkeep = monitorHarness.state.upkeep;
+      if (upkeep === null) throw new Error("the command started no upkeep");
+      const upkeepRun = upkeep();
+      await vi.waitFor(
+        () => expect(monitorHarness.grantSignIns).toContain(refreshed),
+        WAIT,
+      );
       const upkeepMint = monitorHarness.grantSignIns.indexOf(refreshed);
-      expect(upkeepMint).toBeGreaterThan(-1);
 
       // Another process saves a newer sign-in while the upkeep's mint is out; this lease still holds the refreshed one.
       await saveFromAnotherProcess(SIBLING_SIGN_IN);
@@ -1951,16 +1956,13 @@ describe("traycer monitor local released-host sign-in", () => {
         monitorHarness.grantSignIns.length - 1,
         grantedToken("fresh-on-sibling"),
       );
+      await upkeepRun;
       expect(await outcomeOf()).toBe("running");
-    }, 20_000);
+    });
 
     it("goes on with the sign-in on disk when the retry after a rotation is refused after another process saved a newer one", async () => {
       monitorHarness.state.refreshed.push(REFRESHED_SIGN_IN);
-      await createCliCredentialsStore().signIn(
-        credentialsOf(SIGN_IN),
-        false,
-        null,
-      );
+      await seedCredentials(SIGN_IN);
       const mints = holdMints();
       startMonitor();
       await socketAt(0);
@@ -1998,17 +2000,13 @@ describe("traycer monitor local released-host sign-in", () => {
       expect(monitorHarness.state.refreshed).toEqual([]);
       mints.answer(2, grantedToken("fresh-on-sibling"));
       expect(await outcomeOf()).toBe("running");
-    }, 20_000);
+    });
 
     it("goes on with the sign-in on disk when the stream recovery's retry after a rotation is refused after another process saved a newer one", async () => {
       // The host refuses the held token as expired: the stream's bounded recovery mints a fresh one.
       holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
       monitorHarness.state.refreshed.push(REFRESHED_SIGN_IN);
-      await createCliCredentialsStore().signIn(
-        credentialsOf(SIGN_IN),
-        false,
-        null,
-      );
+      await seedCredentials(SIGN_IN);
       const mints = holdMints();
       startMonitor();
       const socket = await socketAt(0);
@@ -2048,7 +2046,7 @@ describe("traycer monitor local released-host sign-in", () => {
       expect(monitorHarness.state.refreshed).toEqual([]);
       mints.answer(2, grantedToken("fresh-on-sibling"));
       expect(await outcomeOf()).toBe("running");
-    }, 20_000);
+    });
 
     it("goes on with the host token the upkeep bought when the recovery's retry on the rotated sign-in is refused after the upkeep moved the sign-in on", async () => {
       const signInA = expiredJwt(Date.now() + 60 * 60 * 1000);
@@ -2057,11 +2055,7 @@ describe("traycer monitor local released-host sign-in", () => {
       monitorHarness.state.signIn = signInA;
       monitorHarness.state.refreshed.push(signInB, signInC);
       holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
-      await createCliCredentialsStore().signIn(
-        credentialsOf(signInA),
-        false,
-        null,
-      );
+      await seedCredentials(signInA);
       const mints = holdMints();
       startMonitor();
       const socket = await socketAt(0);
@@ -2105,7 +2099,7 @@ describe("traycer monitor local released-host sign-in", () => {
           ?.get(monitorHarness.state.hostId)?.token,
       ).toBe("host-token-c");
       expect(monitorHarness.state.refreshed).toEqual([]);
-    }, 20_000);
+    });
   });
 });
 
