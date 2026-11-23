@@ -1480,6 +1480,66 @@ describe("a sign-in is written only where its row and its host still allow it", 
 
       expect(adopting.asked).toEqual([SIGN_IN]);
     });
+
+    describe("a call aborted as the host's refusal reaches it", () => {
+      async function refusedThenAborted(input: {
+        readonly plan: (driven: DrivenCall) => Promise<void>;
+        readonly tokens: TrackedHostTokens;
+        readonly refusal: () => Parameters<UnarySocket["fireMessage"]>[0];
+      }): Promise<{
+        readonly calls: () => number;
+        readonly driven: DrivenCall;
+      }> {
+        let calls = 0;
+        const abort = new AbortController();
+        const driven = driveCallOnRow({
+          tokens: input.tokens,
+          readRow: () => PERSONAL_ROW,
+          recovery: {
+            revalidateForReconnect: () => {
+              calls += 1;
+              return Promise.resolve("rotated");
+            },
+          },
+          hosts: null,
+          abortSignal: abort.signal,
+        });
+        clients.push(driven.client);
+        await input.plan(driven);
+        const signInSocket = driven.sockets[1];
+        if (signInSocket === undefined) throw new Error("sign-in dial missing");
+        expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+
+        // The call's owner ends in the same turn the refusal is delivered, before
+        // the call's own handling of the refusal runs.
+        signInSocket.fireMessage(input.refusal());
+        abort.abort();
+        await driven.settled;
+        return { calls: () => calls, driven };
+      }
+
+      it("starts no rotation for the host's released refusal of its sign-in", async () => {
+        const { calls, driven } = await refusedThenAborted({
+          plan: planReleasedSignIn,
+          tokens: await heldExpiredReleasedHost(),
+          refusal: releasedRefusal,
+        });
+
+        expect(calls()).toBe(0);
+        expect(await driven.settled).toMatchObject({ kind: "rejected" });
+      });
+
+      it("starts no rotation for the host's owner-sign-in refusal", async () => {
+        const { calls, driven } = await refusedThenAborted({
+          plan: planOwnerSignIn,
+          tokens: blackHoledTokens().tokens,
+          refusal: () => namedRefusal("token_expired"),
+        });
+
+        expect(calls()).toBe(0);
+        expect(await driven.settled).toMatchObject({ kind: "rejected" });
+      });
+    });
   });
 
   it("writes no sign-in on any socket when the row moves to a team between the released plan and the OPEN", async () => {
