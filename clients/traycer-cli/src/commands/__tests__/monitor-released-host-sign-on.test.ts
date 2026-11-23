@@ -1820,8 +1820,7 @@ describe("traycer monitor local released-host sign-in", () => {
 
       // The command asks again on the stored sign-in, and nothing is judged.
       await vi.waitFor(
-        () =>
-          expect(monitorHarness.grantSignIns.at(-1)).toBe(SIBLING_SIGN_IN),
+        () => expect(monitorHarness.grantSignIns.at(-1)).toBe(SIBLING_SIGN_IN),
         WAIT,
       );
       expect(await outcomeOf()).toBe("running");
