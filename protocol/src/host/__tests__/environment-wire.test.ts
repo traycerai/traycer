@@ -1844,6 +1844,18 @@ describe("environment.review@1.2 names what a held executable runs", () => {
   });
 });
 
+it("preserves the local-only MCP marker on the current review wire", () => {
+  const line = hostRpcRegistry["environment.review"][1];
+  const schema = line.versions[line.latestMinor].contract.responseSchema;
+  const entry = { ...REVIEW_ENTRY, kind: "mcp_server" };
+  expect(
+    schema.parse({ entries: [{ ...entry, localOnly: true }] }).entries,
+  ).toMatchObject([{ localOnly: true }]);
+  expect(schema.parse({ entries: [entry] }).entries[0]).not.toHaveProperty(
+    "localOnly",
+  );
+});
+
 describe("environment.review.heldApply and environment.review.record", () => {
   const heldApply =
     hostRpcRegistry["environment.review.heldApply"][1].versions[0].contract;
