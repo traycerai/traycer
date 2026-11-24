@@ -80,6 +80,7 @@ import {
 import { settingsSaveMemoryKey } from "@/lib/persist";
 import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
+  SETTINGS_SAVE_MEMORY_TTL_MS,
   useSettingsSaveMemoryStore,
   type SettingsSaveMemoryRecord,
 } from "@/stores/settings/settings-save-memory-store";
@@ -334,6 +335,7 @@ interface SaveHarness {
   readonly state: MutableAuthnState;
   readonly authnRequests: EnvironmentTransportRequest[];
   readonly hostRequests: string[];
+  readonly statusRequested: Promise<void>;
   readonly hostEvents: string[];
   readonly saveRequests: string[];
   readonly savePayloads: SavePayload[];
@@ -454,6 +456,7 @@ function makeSaveHarness(overrides: {
   };
   const authnRequests: EnvironmentTransportRequest[] = [];
   const hostRequests: string[] = [];
+  const statusRequested = deferred<void>();
   const hostEvents: string[] = [];
   const saveRequests: string[] = [];
   const savePayloads: SavePayload[] = [];
@@ -526,6 +529,7 @@ function makeSaveHarness(overrides: {
     handlers: {
       "environment.status": () => {
         hostRequests.push("environment.status");
+        statusRequested.resolve(undefined);
         return environmentStatusFixture({
           principal: state.ownSettings ? null : { kind: "personal" },
         });
@@ -726,6 +730,7 @@ function makeSaveHarness(overrides: {
     state,
     authnRequests,
     hostRequests,
+    statusRequested: statusRequested.promise,
     hostEvents,
     saveRequests,
     savePayloads,
@@ -1291,7 +1296,7 @@ describe("settings-save callers", () => {
     expect(records()).toEqual([]);
   });
 
-  it("applies only this window's promoted local save using the live revision read with its hold", async () => {
+  it("applies a promoted local save beyond the bound-save expiry using the live revision read with its hold", async () => {
     const harness = makeSaveHarness({ ownSettings: true, proposalMinor: 1 });
     const { result } = renderHook(
       () => ({
@@ -1300,9 +1305,7 @@ describe("settings-save callers", () => {
       }),
       { wrapper: harness.wrapper },
     );
-    await waitFor(() =>
-      expect(harness.hostRequests).toContain("environment.status"),
-    );
+    await act(async () => harness.statusRequested);
 
     await act(async () => {
       await result.current.editor.mutateAsync(setTarget("computer-value"));
@@ -1318,6 +1321,12 @@ describe("settings-save callers", () => {
     harness.state.proposals = localSaveIdsResponse([localSave.editId]);
     await act(async () => coordinator.reconcile(HOST_ID));
     expect(records()).toHaveLength(1);
+
+    vi.spyOn(Date, "now").mockReturnValue(
+      localSave.writtenAt + SETTINGS_SAVE_MEMORY_TTL_MS + 1,
+    );
+    await act(async () => coordinator.reconcile(HOST_ID));
+    expect(records()).toEqual([localSave]);
 
     harness.state.ownSettings = false;
     harness.state.proposals = promotedLocalProposal(localSave.editId, 21);
@@ -1344,9 +1353,7 @@ describe("settings-save callers", () => {
       }),
       { wrapper: harness.wrapper },
     );
-    await waitFor(() =>
-      expect(harness.hostRequests).toContain("environment.status"),
-    );
+    await act(async () => harness.statusRequested);
     await act(async () => {
       await result.current.editor.mutateAsync(setTarget("computer-value"));
     });
@@ -1376,9 +1383,7 @@ describe("settings-save callers", () => {
       }),
       { wrapper: harness.wrapper },
     );
-    await waitFor(() =>
-      expect(harness.hostRequests).toContain("environment.status"),
-    );
+    await act(async () => harness.statusRequested);
     await act(async () => {
       await result.current.editor.mutateAsync(setTarget("computer-value"));
     });
@@ -1434,9 +1439,7 @@ describe("settings-save callers", () => {
       }),
       { wrapper: harness.wrapper },
     );
-    await waitFor(() =>
-      expect(harness.hostRequests).toContain("environment.status"),
-    );
+    await act(async () => harness.statusRequested);
     await act(async () => {
       await result.current.editor.mutateAsync(setTarget("computer-value"));
     });

@@ -1,6 +1,6 @@
 // No host commits a setting: a host saves at once and proposes the item to authn
 // on its own token, where it is held, and the app that made the edit applies the
-// hold. No receipt carries a hold id or a value.
+// hold. Proposal receipts carry neither its hold id nor its value.
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -135,9 +135,24 @@ const environmentProposalSchemaV11 = lazySchema(() =>
 export type EnvironmentProposal = z.infer<typeof environmentProposalSchemaV11>;
 
 export const environmentProposalsRequestSchema = lazySchema(() => z.object({}));
+const environmentProposalsRequestSchemaV11 = lazySchema(() =>
+  z.object({ profileNameSaveIds: z.array(z.uuid()).optional() }),
+);
 export type EnvironmentProposalsRequest = z.infer<
-  typeof environmentProposalsRequestSchema
+  typeof environmentProposalsRequestSchemaV11
 >;
+
+const pendingProfileNameSchema = lazySchema(() =>
+  z.object({
+    saveId: z.uuid(),
+    environmentId: z.string().min(1),
+    providerId: z.string().min(1),
+    profileId: z.string().min(1),
+    name: z.string().min(1).max(64),
+    baseName: z.string().min(1).max(64),
+  }),
+);
+export type PendingProfileName = z.infer<typeof pendingProfileNameSchema>;
 
 export const environmentProposalsResponseSchema = lazySchema(() =>
   z.object({ proposals: z.array(environmentProposalSchema) }),
@@ -147,6 +162,8 @@ const environmentProposalsResponseSchemaV11 = lazySchema(() =>
     proposals: z.array(environmentProposalSchemaV11),
     /** Client saves recorded locally and still awaiting promotion. */
     localSaveIds: z.array(z.uuid()).optional(),
+    /** Only the pending record names the caller asked for by exact save id. */
+    pendingProfileNames: z.array(pendingProfileNameSchema).optional(),
   }),
 );
 export type EnvironmentProposalsResponse = z.infer<
@@ -163,7 +180,7 @@ export const environmentProposalsV10 = defineRpcContract({
 export const environmentProposalsV11 = defineRpcContract({
   method: "environment.proposals",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: environmentProposalsRequestSchema,
+  requestSchema: environmentProposalsRequestSchemaV11,
   responseSchema: environmentProposalsResponseSchemaV11,
 });
 

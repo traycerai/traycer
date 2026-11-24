@@ -12,6 +12,7 @@ import {
 } from "@traycer-clients/shared/environment/environment-review";
 import type {
   EnvironmentProposalsResponse,
+  PendingProfileName,
   SettingsProposalReceipt,
 } from "@traycer/protocol/host/environment/settings-proposals";
 import type { SettingsSaveMapping } from "@traycer/protocol/host/environment/settings-save-mapping";
@@ -83,7 +84,12 @@ export interface SettingsSaveCoordinatorPorts {
   /** Never opens or dials a connection: a remote host only through a borrowed ready session. */
   readonly readProposals: (
     hostId: string,
+    profileNameSaveIds: readonly string[],
   ) => Promise<EnvironmentProposalsResponse | null>;
+  readonly profileNames?: {
+    readonly read: (receipt: PendingProfileName) => Promise<string | null>;
+    readonly write: (receipt: PendingProfileName) => Promise<boolean>;
+  };
   readonly now: () => number;
   /** Runs `run` once after `delayMs`; the returned function cancels it. */
   readonly schedule: (run: () => void, delayMs: number) => () => void;
@@ -239,6 +245,7 @@ export function createSettingsSaveCoordinator(
   };
 
   const expired = (record: SettingsSaveMemoryRecord): boolean =>
+    record.environmentId !== null &&
     ports.now() - record.writtenAt > SETTINGS_SAVE_MEMORY_TTL_MS;
 
   const forgetExpired = (): void => {
@@ -329,6 +336,34 @@ export function createSettingsSaveCoordinator(
       : null;
   };
 
+  const applyProfileNames = async (
+    receipts: readonly PendingProfileName[],
+    localIds: readonly string[],
+    mayAct: () => boolean,
+  ): Promise<void> => {
+    const names = ports.profileNames;
+    if (names === undefined || receipts.length === 0) return;
+    const requested = new Set(localIds);
+    for (const receipt of receipts) {
+      if (!mayAct()) return;
+      const { saveId, name, baseName } = receipt;
+      if (!requested.has(saveId) || !isCurrent(saveId)) continue;
+      try {
+        const currentName = await names.read(receipt);
+        if (!mayAct()) return;
+        if (currentName === null || !isCurrent(saveId)) continue;
+
+        // A lost reply or a newer independent rename may have settled this save.
+        const settled = currentName === name || currentName !== baseName;
+        if (!settled && !(await names.write(receipt))) continue;
+        if (!mayAct()) return;
+        forget(saveId);
+      } catch {
+        // A lost reply leaves the save for another authenticated read.
+      }
+    }
+  };
+
   const reconcileOnce = async (
     hostId: string,
     current: () => boolean,
@@ -351,10 +386,16 @@ export function createSettingsSaveCoordinator(
     );
     if (mine.length === 0) return;
 
+    const localIds = mine.flatMap(([id, save]) =>
+      save.environmentId === null ? [id] : [],
+    );
     const outAtRead = new Set(mine.map(([id]) => id).filter(inFlight));
     let proposals: EnvironmentProposalsResponse | null;
     try {
-      proposals = await ports.readProposals(hostId);
+      proposals = await ports.readProposals(
+        hostId,
+        ports.profileNames === undefined ? [] : localIds,
+      );
     } catch {
       proposals = null;
     }
@@ -368,13 +409,17 @@ export function createSettingsSaveCoordinator(
     for (const id of sorted.forget) {
       forget(id);
     }
-    if (sorted.proposed.size === 0 || cloud === null) return;
-
+    if (cloud === null) return;
     for (const [environmentId, saves] of sorted.proposed) {
       if (!(await applyProposed(cloud, environmentId, saves, mayAct))) {
         return;
       }
     }
+    await applyProfileNames(
+      proposals.pendingProfileNames ?? [],
+      localIds,
+      mayAct,
+    );
   };
 
   const applyProposed = async (

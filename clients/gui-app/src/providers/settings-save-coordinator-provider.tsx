@@ -1,5 +1,8 @@
 import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
-import type { EnvironmentProposalsResponse } from "@traycer/protocol/host/environment/settings-proposals";
+import type {
+  EnvironmentProposalsRequest,
+  EnvironmentProposalsResponse,
+} from "@traycer/protocol/host/environment/settings-proposals";
 import { tryAcquireReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -26,20 +29,25 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 async function readProposals(
   binding: HostRuntimeBinding<HostRpcRegistry> | null,
   hostId: string,
+  profileNameSaveIds: readonly string[],
 ): Promise<EnvironmentProposalsResponse | null> {
   if (binding === null) return null;
+  const request: EnvironmentProposalsRequest =
+    profileNameSaveIds.length === 0
+      ? {}
+      : { profileNameSaveIds: [...profileNameSaveIds] };
   const entry = binding.hostClient.resolveHostById(hostId);
   if (entry !== null && servesOverLocalSocket(entry)) {
     const local = resolveNamedHostClient(binding, hostId);
     if (local === null || !readHostReadiness(local).canExecute) return null;
-    return local.request("environment.proposals", {});
+    return local.request("environment.proposals", request);
   }
   const borrowed = tryAcquireReadyRemoteSession<HostRpcRegistry>(hostId);
   if (borrowed === null) return null;
   try {
     return await borrowed.sendUnary(
       "environment.proposals",
-      {},
+      request,
       null,
       undefined,
     );
@@ -71,7 +79,34 @@ function windowCoordinator(
   const coordinator = createSettingsSaveCoordinator({
     accountId: signedInAccount,
     cloud: () => (binding === null ? null : binding.auth.environmentCloud()),
-    readProposals: (hostId) => readProposals(binding, hostId),
+    readProposals: (hostId, ids) => readProposals(binding, hostId, ids),
+    profileNames: {
+      read: async ({ environmentId, providerId, profileId }) => {
+        if (binding === null) return null;
+        const result = await binding.auth.readProfileRecords(
+          environmentId,
+          null,
+        );
+        if (result.kind !== "ok") return null;
+        const provider = result.list.providers.find(
+          (row) => row.providerId === providerId,
+        );
+        return (
+          provider?.profiles.find((row) => row.profileId === profileId)
+            ?.label ?? null
+        );
+      },
+      write: async ({ environmentId, providerId, profileId, name }) => {
+        if (binding === null) return false;
+        const result = await binding.auth.nameProfileRecord(
+          environmentId,
+          providerId,
+          { profileId, name },
+          null,
+        );
+        return result.kind === "ok";
+      },
+    },
     now: nowMs,
     schedule: scheduleFollowUp,
   });

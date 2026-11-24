@@ -245,6 +245,72 @@ afterEach(() => {
 });
 
 describe("settings save edit fence", () => {
+  it.each([
+    ["the saved name", "Computer name"],
+    ["a newer independent name", "Newer name"],
+  ])(
+    "does not resend a name after a lost reply when the record has %s",
+    async (_outcome, currentAfterLoss) => {
+      let currentName = "Original name";
+      const sent: string[] = [];
+      const readNames: string[] = [];
+      let saveId = "";
+      const receipt = () => ({
+        saveId,
+        environmentId: ENVIRONMENT_ID,
+        providerId: "claude-code",
+        profileId: "profile-a",
+        name: "Computer name",
+        baseName: "Original name",
+      });
+      const ports = {
+        accountId: () => ACCOUNT_ID,
+        cloud: () =>
+          makeCloud(() => Promise.resolve({ status: 200, text: "" })),
+        readProposals: () =>
+          Promise.resolve({
+            proposals: [],
+            localSaveIds: [saveId],
+            pendingProfileNames: [receipt()],
+          }),
+        profileNames: {
+          read: () => {
+            readNames.push(currentName);
+            return Promise.resolve(currentName);
+          },
+          write: ({ name }: { readonly name: string }) => {
+            sent.push(name);
+            currentName = name;
+            return Promise.reject(new Error("reply lost"));
+          },
+        },
+        now: () => 100,
+        schedule: noFollowUp,
+      };
+      const first = createSettingsSaveCoordinator(ports);
+      const beginning = first.beginLocal(ACCOUNT_ID, HOST_ID);
+      if (beginning.kind !== "remembered") throw new Error(beginning.kind);
+      saveId = beginning.ticket.id;
+      await first.settle(beginning.ticket, true);
+      expect(readNames).toEqual(["Original name"]);
+      expect(sent).toEqual(["Computer name"]);
+      expect(
+        useSettingsSaveMemoryStore.getState().records[saveId],
+      ).toBeDefined();
+
+      first.stop();
+      currentName = currentAfterLoss;
+      const second = createSettingsSaveCoordinator(ports);
+      await second.reconcile(HOST_ID);
+      await second.reconcile(HOST_ID);
+
+      expect(readNames).toEqual(["Original name", currentAfterLoss]);
+      expect(sent).toEqual(["Computer name"]);
+      expect(currentName).toBe(currentAfterLoss);
+      expect(useSettingsSaveMemoryStore.getState().records).toEqual({});
+    },
+  );
+
   it("recovers a promoted save from the same account after its window closes", async () => {
     const first = createSettingsSaveCoordinator({
       accountId: () => ACCOUNT_ID,

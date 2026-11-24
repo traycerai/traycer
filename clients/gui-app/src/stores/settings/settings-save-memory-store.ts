@@ -3,10 +3,10 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, settingsSaveMemoryKey } from "@/lib/persist";
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 
-/** How long a remembered save waits for its hold before it is forgotten. */
+/** How long a bound save waits for its hold before it is forgotten. */
 export const SETTINGS_SAVE_MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** How many saves are remembered at most; the oldest go first. */
+/** How many bound saves are remembered; local saves await the host's receipt. */
 const SETTINGS_SAVE_MEMORY_CAP = 200;
 
 interface RememberedSettingsSave {
@@ -81,11 +81,14 @@ function newestWithin(
 ): Record<string, SettingsSaveMemoryRecord> {
   const entries = Object.entries(records);
   if (entries.length <= SETTINGS_SAVE_MEMORY_CAP) return { ...records };
-  return Object.fromEntries(
-    entries
+  const bound = entries.filter(([, record]) => record.environmentId !== null);
+  if (bound.length <= SETTINGS_SAVE_MEMORY_CAP) return { ...records };
+  return Object.fromEntries([
+    ...entries.filter(([, record]) => record.environmentId === null),
+    ...bound
       .toSorted(([, a], [, b]) => b.writtenAt - a.writtenAt)
       .slice(0, SETTINGS_SAVE_MEMORY_CAP),
-  );
+  ]);
 }
 
 export function settingsSaveMemoryRecord(
