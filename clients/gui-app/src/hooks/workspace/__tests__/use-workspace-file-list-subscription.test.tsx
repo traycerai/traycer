@@ -398,6 +398,7 @@ describe("useWorkspaceFileListSubscription", () => {
     act(() => {
       client.onlySession.emitStatus("closed", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INCOMPATIBLE",
           reason: "unknown method",

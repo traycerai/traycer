@@ -641,7 +641,12 @@ describe("install auth helpers", () => {
       user: defaultSignInUser(),
     });
     mocks.createStoreBackedRevalidatorMock.mockImplementation(
-      (args: { readonly lease: { rotate(token: string): void } }) => {
+      (args: {
+        readonly lease: {
+          getBearerToken(): string;
+          rotate(token: string): void;
+        };
+      }) => {
         mocks.revalidateCurrentContextMock.mockImplementation(async () => {
           if (mocks.refreshOutcome === "rotated") {
             args.lease.rotate(mocks.refreshedToken);
@@ -650,6 +655,23 @@ describe("install auth helpers", () => {
         });
         return {
           revalidateCurrentContext: mocks.revalidateCurrentContextMock,
+          // The file holds no other sign-in than the one the command read.
+          adoptStoredSignIn: async () => undefined,
+          // The token session's refresh: the scripted outcome, as the rotation's result.
+          rotateSignIn: async () => {
+            const refused = args.lease.getBearerToken();
+            const outcome = await mocks.revalidateCurrentContextMock();
+            if (outcome === "rotated")
+              return {
+                outcome,
+                installed: mocks.refreshedToken,
+                refused: null,
+                accepted: mocks.refreshedToken,
+              };
+            if (outcome === "rejected")
+              return { outcome, installed: null, refused, accepted: null };
+            return { outcome, installed: null, refused: null, accepted: null };
+          },
         };
       },
     );

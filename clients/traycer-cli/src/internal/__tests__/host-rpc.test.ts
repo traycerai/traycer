@@ -23,6 +23,7 @@ import {
   stubStdin,
 } from "../../commands/__tests__/hook-test-helpers";
 import { resolveHostAuth } from "../host-auth";
+import { nextCasePerson, type CasePerson } from "./case-person-test-support";
 import { hostTokenFailureCliError } from "../host-door-words";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import {
@@ -33,7 +34,11 @@ import {
 } from "../../../../shared/host-transport/host-messenger";
 import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
-import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
+import type {
+  CredentialsMutationStore,
+  MutationResult,
+} from "@traycer/protocol/config/credentials-mutation";
+import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
 import { config } from "../../config";
 import {
@@ -41,6 +46,8 @@ import {
   hostTokensPath,
 } from "@traycer-clients/shared/auth/host-token-file";
 import type { HostRequestOptions } from "../../../../shared/host-transport/host-messenger";
+import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { createOutput } from "../../runner/output";
 import type { CommandContext } from "../../runner/runner";
 import { resolveRuntimeContext } from "../../runner/runtime";
@@ -105,7 +112,7 @@ const {
   releaseIdleMock,
   testHome,
   fetchMock,
-  openCliHostSessionMock,
+  requireCliHostSessionMock,
   agentEnvironment,
 } = vi.hoisted(() => ({
   requestMock: vi.fn(),
@@ -113,7 +120,7 @@ const {
   releaseIdleMock: vi.fn(),
   testHome: { path: null as string | null },
   fetchMock: vi.fn(),
-  openCliHostSessionMock: vi.fn(),
+  requireCliHostSessionMock: vi.fn(),
   agentEnvironment: {
     capability: undefined as string | undefined,
     agentId: undefined as string | undefined,
@@ -121,6 +128,15 @@ const {
   },
 }));
 const presentedHostTokens = vi.hoisted(() => [] as string[]);
+/** The listener seam of each host session a call opened, so a case can see when a refusal ended the command. */
+interface OpenedHostSession {
+  readonly tokens: {
+    readonly onRefusalEndingCommand: (listener: () => void) => () => void;
+  };
+}
+const openedHostSessions = vi.hoisted(() => [] as OpenedHostSession[]);
+/** Set once a call asks the gate for the judgement of a refusal that may end it. */
+const gateEntry = vi.hoisted(() => ({ entered: false }));
 
 vi.mock("../agent-session-capability", async (importOriginal) => {
   const actual =
@@ -140,11 +156,23 @@ vi.mock("../cli-host-tokens", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cli-host-tokens")>();
   return {
     ...actual,
-    openCliHostSession: (
-      ...args: Parameters<typeof actual.openCliHostSession>
+    requireCliHostSession: async (
+      ...args: Parameters<typeof actual.requireCliHostSession>
     ) => {
-      openCliHostSessionMock(...args);
-      return actual.openCliHostSession(...args);
+      requireCliHostSessionMock(...args);
+      const opened = await actual.requireCliHostSession(...args);
+      const session = {
+        ...opened,
+        tokens: {
+          ...opened.tokens,
+          refusalEndingCommandNow: (hostId: string) => {
+            gateEntry.entered = true;
+            return opened.tokens.refusalEndingCommandNow(hostId);
+          },
+        },
+      };
+      openedHostSessions.push(session);
+      return session;
     },
   };
 });
@@ -170,6 +198,8 @@ vi.mock("../../logger", () => ({
   noopLogger: loggerMock,
 }));
 
+type ClientOptions = WsRpcClientOptions<HostRpcRegistry>;
+
 vi.mock(
   "../../../../shared/host-transport/ws-rpc-client",
   async (importOriginal) => {
@@ -177,32 +207,43 @@ vi.mock(
       await importOriginal<
         typeof import("../../../../shared/host-transport/ws-rpc-client")
       >();
+    const { resolveStubbedCallBearer } = await import("./stub-rpc-bearer");
     return {
       // Only `WsRpcClient` is replaced; the real
       // `HOST_POST_OPEN_ATTESTATION_WINDOW_MS` stays, so the constructor
       // assertion below reads the value the CLI actually ships.
       ...actual,
       WsRpcClient: class {
-        constructor(options: unknown) {
-          rpcClientConstructorMock(options);
+        constructor(private readonly clientOptions: ClientOptions) {
+          rpcClientConstructorMock(clientOptions);
         }
 
-        request = (
+        request = async (
           method: string,
           params: unknown,
           options: HostRequestOptions,
         ) => {
-          presentedHostTokens.push(options.authority.bearer.getBearerToken());
-          return requestMock(method, params, options);
+          const sent = await resolveStubbedCallBearer(
+            this.clientOptions,
+            method,
+            options,
+          );
+          presentedHostTokens.push(sent.authority.bearer.getBearerToken());
+          return requestMock(method, params, sent);
         };
-        requestWithResponseTimeout = (
+        requestWithResponseTimeout = async (
           method: string,
           params: unknown,
           _responseTimeoutMs: number,
           options: HostRequestOptions,
         ) => {
-          presentedHostTokens.push(options.authority.bearer.getBearerToken());
-          return requestMock(method, params, options);
+          const sent = await resolveStubbedCallBearer(
+            this.clientOptions,
+            method,
+            options,
+          );
+          presentedHostTokens.push(sent.authority.bearer.getBearerToken());
+          return requestMock(method, params, sent);
         };
         releaseIdleLocalSessions = releaseIdleMock;
       },
@@ -239,9 +280,42 @@ const createStoreMock = vi.mocked(createCliCredentialsStore);
 // The on-401 revalidator drives `store.rotate`; the rest of the store surface is
 // unused by host-rpc, so stub it and steer `rotate` per-test.
 const rotateMock = vi.fn();
+// The store's `read` serves what its `rotate` landed once it has answered, and
+// before that the signed-in credentials the file's setup gives: the adopting
+// read after a landed save installs them in the lease.
+let landed: StoredCredentials | null = null;
+// The person this case signs in as; a new one per case (see `nextCasePerson`).
+let person: CasePerson = nextCasePerson();
+function signedIn(): StoredCredentials {
+  return {
+    token: person.signIn,
+    refreshToken: `${person.signIn}-refresh`,
+    savedAt: "2026-01-01T00:00:00.000Z",
+    user: { id: person.userId, email: "a@b.c", name: "A" },
+  };
+}
+// When set, the first store read after the call asked the gate is held until `release` settles.
+const readHold: {
+  current: {
+    readonly reached: () => void;
+    readonly release: Promise<void>;
+  } | null;
+} = { current: null };
 const fakeStore: CredentialsMutationStore = {
-  read: vi.fn(),
-  rotate: rotateMock,
+  read: vi.fn(async () => {
+    const hold = readHold.current;
+    if (hold !== null && gateEntry.entered) {
+      readHold.current = null;
+      hold.reached();
+      await hold.release;
+    }
+    return landed ?? signedIn();
+  }),
+  rotate: vi.fn(async (...args: unknown[]): Promise<MutationResult> => {
+    const result: MutationResult = await rotateMock(...args);
+    landed = result.credentials;
+    return result;
+  }),
   signIn: vi.fn(),
   signOut: vi.fn(),
   signOutIfToken: vi.fn(),
@@ -254,6 +328,25 @@ const fakeStore: CredentialsMutationStore = {
 };
 
 const METHOD = "agent.list";
+
+/**
+ * A host token already run out is held: a call is sent with it at once while
+ * the mint for a new one runs beside it.
+ */
+async function holdRanOutHostToken(): Promise<void> {
+  await createHostTokenFilePersistence({
+    environment: config.environment,
+    lockWaitMs: 1_000,
+    lockPollIntervalMs: 10,
+  }).update((table) => {
+    const users = new Map(table);
+    users.set(
+      person.userId,
+      new Map([["d1", { token: "ran-out", expiresAtMs: Date.now() - 1_000 }]]),
+    );
+    return users;
+  });
+}
 
 function agentSendCommand(): Promise<unknown> {
   const runtime = resolveRuntimeContext(
@@ -316,11 +409,16 @@ beforeEach(async () => {
   requestMock.mockReset();
   fetchMock.mockReset();
   rotateMock.mockReset();
+  landed = null;
+  readHold.current = null;
+  gateEntry.entered = false;
+  person = nextCasePerson();
   presentedHostTokens.length = 0;
+  openedHostSessions.length = 0;
   agentEnvironment.capability = undefined;
   agentEnvironment.agentId = undefined;
   agentEnvironment.names.length = 0;
-  openCliHostSessionMock.mockReset();
+  requireCliHostSessionMock.mockReset();
   testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-host-rpc-"));
   fetchMock.mockImplementation(
     async () =>
@@ -334,9 +432,9 @@ beforeEach(async () => {
   );
   vi.stubGlobal("fetch", fetchMock);
   resolveAuthMock.mockResolvedValue({
-    token: "tok-1",
+    token: person.signIn,
     authnBaseUrl: "https://authn.test",
-    userId: "u1",
+    userId: person.userId,
   });
   pidMock.mockResolvedValue({
     pid: 1,
@@ -377,7 +475,7 @@ describe("agent command capability", () => {
       "TRAYCER_AGENT_SESSION_CAPABILITY",
     ]);
     expect(resolveAuthMock).not.toHaveBeenCalled();
-    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requireCliHostSessionMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     const loggerCalls = [
       ...loggerMock.debug.mock.calls,
@@ -414,7 +512,7 @@ describe("agent command capability", () => {
       "TRAYCER_AGENT_SESSION_CAPABILITY",
     ]);
     expect(resolveAuthMock).not.toHaveBeenCalled();
-    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requireCliHostSessionMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -435,7 +533,7 @@ describe("agent command capability", () => {
     expect(pidMock).not.toHaveBeenCalled();
     expect(rpcClientConstructorMock).not.toHaveBeenCalled();
     expect(requestMock).not.toHaveBeenCalled();
-    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requireCliHostSessionMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -463,7 +561,7 @@ describe("agent command capability", () => {
       "TRAYCER_AGENT_SESSION_CAPABILITY",
     ]);
     expect(resolveAuthMock).not.toHaveBeenCalled();
-    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requireCliHostSessionMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(rotateMock).not.toHaveBeenCalled();
   });
@@ -480,7 +578,7 @@ describe("agent command capability", () => {
     ]);
     expect(resolveAuthMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(openCliHostSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCliHostSessionMock).toHaveBeenCalledTimes(1);
     expect(presentedHostTokens).toEqual(["host-token-1"]);
   });
 });
@@ -521,7 +619,7 @@ describe("callHostRpc", () => {
             websocketUrl: "ws://127.0.0.1:9/rpc",
           },
           bearer: expect.objectContaining({
-            identity: { userId: "u1" },
+            identity: { userId: person.userId },
           }),
           abortSignal: expect.any(AbortSignal),
         }),
@@ -543,7 +641,7 @@ describe("callHostRpc", () => {
     await persistence.update((table) => {
       const users = new Map(table);
       users.set(
-        "u1",
+        person.userId,
         new Map([
           [
             "d1",
@@ -581,9 +679,9 @@ describe("callHostRpc", () => {
     const saved = await readFile(path, "utf8");
     expect(JSON.parse(saved)).toMatchObject({
       version: 1,
-      users: { u1: { d1: { token: "host-token-1" } } },
+      users: { [person.userId]: { d1: { token: "host-token-1" } } },
     });
-    expect(saved).not.toContain("tok-1");
+    expect(saved).not.toContain(person.signIn);
   });
 
   it("dials with an attestation window that outlasts the host's post-openAck deadline", async () => {
@@ -744,7 +842,7 @@ describe("callHostRpc", () => {
         token: "tok-2",
         refreshToken: "tok-2-refresh",
         savedAt: "2026-01-01T00:00:00.000Z",
-        user: { id: "u1", email: "a@b.c", name: "A" },
+        user: { id: person.userId, email: "a@b.c", name: "A" },
       },
       rejection: null,
       diskPressure: "clear",
@@ -760,7 +858,10 @@ describe("callHostRpc", () => {
     expect(result).toEqual({ agents: [] });
     expect(rotateMock).toHaveBeenCalledTimes(1);
     expect(rotateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedUserId: "u1", expectedToken: "tok-1" }),
+      expect.objectContaining({
+        expectedUserId: person.userId,
+        expectedToken: person.signIn,
+      }),
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(presentedHostTokens).toEqual(["host-token-after-refresh"]);
@@ -793,6 +894,153 @@ describe("callHostRpc", () => {
     expect(requestMock).not.toHaveBeenCalled();
   });
 
+  it("fails with the call's own wire error, not a rejected credential, when a sibling saves a sign-in after the refusal of the stored one was reported", async () => {
+    await holdRanOutHostToken();
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
+    rotateMock.mockResolvedValue({
+      outcome: "refresh-rejected-credential",
+      credentials: null,
+      rejection: null,
+      diskPressure: null,
+    });
+    // The call is on the wire while the mint is refused and its refresh is
+    // refused; once that is reported a sibling saves its own sign-in, and only
+    // then does the call fail, with an error unrelated to any credential.
+    requestMock.mockImplementation(async () => {
+      const session = openedHostSessions[0];
+      if (session === undefined) throw new Error("no host session was opened");
+      await new Promise<void>((resolve) => {
+        session.tokens.onRefusalEndingCommand(resolve);
+      });
+      landed = {
+        token: "sibling-sign-in",
+        refreshToken: "sibling-sign-in-refresh",
+        savedAt: "2026-01-01T00:00:01.000Z",
+        user: { id: person.userId, email: "a@b.c", name: "A" },
+      };
+      throw new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket frame timed out after 15000ms",
+        requestId: "r1",
+        method: METHOD,
+        fatalDetails: null,
+      });
+    });
+
+    await expect(
+      toAgentCliError(
+        callHostRpcAtEndpoint(
+          METHOD,
+          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+    });
+  });
+
+  describe("a door refusal after a refused mint and a refused sign-in refresh", () => {
+    /**
+     * The call is on the wire on a host token that has run out; the mint
+     * beside it is refused on the stored sign-in A and so is its refresh, and
+     * that is reported to the call. The request then fails with the door's
+     * refusal. With `duringGateRead`, a sibling's sign-in B is saved while
+     * the gate's adopting read, the first store read once the call asks the gate, is held.
+     */
+    async function failedByDoorRefusal(duringGateRead: boolean): Promise<{
+      readonly error: unknown;
+      readonly storedWhenReleased: string | undefined;
+    }> {
+      await holdRanOutHostToken();
+      // authn refuses every mint on A: the messenger's retry of the door refusal mints again.
+      fetchMock.mockImplementation(
+        async () => new Response("", { status: 401 }),
+      );
+      rotateMock.mockResolvedValue({
+        outcome: "refresh-rejected-credential",
+        credentials: null,
+        rejection: null,
+        diskPressure: null,
+      });
+      let readReached = (): void => undefined;
+      const gateRead = new Promise<void>((resolve) => {
+        readReached = resolve;
+      });
+      let release = (): void => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reported = false;
+      requestMock.mockImplementation(async () => {
+        // The messenger retries a door refusal once: only the first request waits for the report.
+        if (!reported) {
+          reported = true;
+          const session = openedHostSessions[0];
+          if (session === undefined)
+            throw new Error("no host session was opened");
+          await new Promise<void>((resolve) => {
+            session.tokens.onRefusalEndingCommand(resolve);
+          });
+          if (duringGateRead)
+            readHold.current = { reached: readReached, release: released };
+        }
+        throw fatalDoorError({
+          code: "UNAUTHORIZED",
+          doorReason: "token_expired",
+          message: "host refused the token",
+          method: METHOD,
+        });
+      });
+      const settled = toAgentCliError(
+        callHostRpcAtEndpoint(
+          METHOD,
+          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        ),
+      ).then(
+        () => {
+          throw new Error("the call was expected to fail");
+        },
+        (error: unknown) => error,
+      );
+      let storedWhenReleased: string | undefined;
+      if (duringGateRead) {
+        await gateRead;
+        // The sibling's save lands in the held read.
+        landed = {
+          token: "sibling-sign-in",
+          refreshToken: "sibling-sign-in-refresh",
+          savedAt: "2026-01-01T00:00:01.000Z",
+          user: { id: person.userId, email: "a@b.c", name: "A" },
+        };
+        storedWhenReleased = (await fakeStore.read())?.token;
+        release();
+      }
+      return { error: await settled, storedWhenReleased };
+    }
+
+    it("maps the refusal the call failed with, not a rejected sign-in, when a sibling saves a sign-in during the gate's read", async () => {
+      const { error, storedWhenReleased } = await failedByDoorRefusal(true);
+
+      expect(storedWhenReleased).toBe("sibling-sign-in");
+      expect(error).toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: "host refused the token",
+      });
+    });
+
+    it("ends with the stored-credential line when no sibling saved a sign-in and the one stored is still refused", async () => {
+      const { error } = await failedByDoorRefusal(false);
+
+      expect(error).toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message:
+          "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+      });
+    });
+  });
+
   it("reports a rejected stored credential when an expired host token's mint and sign-in refresh are refused", async () => {
     const persistence = createHostTokenFilePersistence({
       environment: config.environment,
@@ -802,7 +1050,7 @@ describe("callHostRpc", () => {
     await persistence.update((table) => {
       const users = new Map(table);
       users.set(
-        "u1",
+        person.userId,
         new Map([
           [
             "d1",

@@ -25,6 +25,19 @@ export function readAccessTokenExpiryMs(token: string): number | null {
 }
 
 /**
+ * Epoch seconds at which authn issued `token` (its `iat` claim, read without
+ * verifying it), or `null` when it is not a decodable JWT with a finite
+ * numeric `iat`. Used only to order two tokens of one person for one host.
+ */
+export function readTokenIssuedAtSeconds(token: string): number | null {
+  const segments = token.split(".");
+  if (segments.length < 2) {
+    return null;
+  }
+  return readNumericClaim(decodeJwtSegment(segments[1]), "iat");
+}
+
+/**
  * Decodes one base64url JWT segment into its parsed JSON value, or `null` if
  * the segment is not valid base64url-encoded JSON.
  */
@@ -50,9 +63,13 @@ function decodeJwtSegment(segment: string): unknown {
  * the claim off `unknown` without an unsafe assertion.
  */
 function readExpSeconds(value: unknown): number | null {
-  if (typeof value !== "object" || value === null || !("exp" in value)) {
+  return readNumericClaim(value, "exp");
+}
+
+function readNumericClaim(value: unknown, claim: "exp" | "iat"): number | null {
+  if (typeof value !== "object" || value === null || !(claim in value)) {
     return null;
   }
-  const exp = value.exp;
-  return typeof exp === "number" && Number.isFinite(exp) ? exp : null;
+  const read: unknown = Reflect.get(value, claim);
+  return typeof read === "number" && Number.isFinite(read) ? read : null;
 }

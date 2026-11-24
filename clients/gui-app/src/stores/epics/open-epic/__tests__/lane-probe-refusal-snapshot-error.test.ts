@@ -57,6 +57,7 @@ import { absentLaneUnaries } from "../test-support/absent-lane-unaries";
 // handshake dies on the host-missing-method arm with host-side guidance.
 const INCOMPATIBLE_STATUS_CLOSE: StreamCloseReason = {
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code: "INCOMPATIBLE",
     reason: "Incompatible methods: epic.status.subscribe",

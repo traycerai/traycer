@@ -72,6 +72,7 @@ describe("buildHostStreamClient for a local host", () => {
         expiresAtMs: Date.now() + 60 * 60 * 1000,
       },
       source.era(USER_A),
+      () => true,
     );
     return source;
   }

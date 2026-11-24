@@ -307,8 +307,12 @@ describe("buildWorktreeDeleteCommand input validation", () => {
     expect(session.params).toMatchObject({
       targets: [{ worktreePath: "/wt/feature ", scripts: null }],
     });
-    expect(hoisted.state.bearer?.()?.getBearerToken()).toBe(
-      "delete-host-only-token",
+    // The first ask has no token to present and starts the mint beside it.
+    expect(hoisted.state.bearer?.()).toBeNull();
+    await vi.waitFor(() =>
+      expect(hoisted.state.bearer?.()?.getBearerToken()).toBe(
+        "delete-host-only-token",
+      ),
     );
     session.frameHandler?.({
       kind: "target.complete",
@@ -750,6 +754,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "UNAUTHORIZED",
         reason: "bearer rejected",
@@ -773,6 +778,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "protocol version skew",
@@ -798,6 +804,7 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     // BEFORE the subscribe frame, so the host was never asked to delete.
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "host does not offer worktree.deleteBatchByPath",
@@ -829,6 +836,7 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INTERNAL",
         reason: "host blew up",
@@ -861,6 +869,7 @@ async function startLegacyFallback(): Promise<{
   await waitForSessions(1);
   commandSession().statusHandler?.("closed", {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "INCOMPATIBLE",
       reason: "host does not offer worktree.deleteBatchByPath",
@@ -871,6 +880,36 @@ async function startLegacyFallback(): Promise<{
   await waitForSessions(2);
   return { pending, legacy: hoisted.state.sessions[1]! };
 }
+
+describe("buildWorktreeDeleteCommand older-host fallback credential wait", () => {
+  it("waits out a reconnect before the released stream's first open, then deletes", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    // The stream is still finding its credential: nothing was sent yet.
+    legacy.statusHandler?.("reconnecting", null);
+    legacy.statusHandler?.("open", null);
+    legacy.frameHandler?.({
+      kind: "complete",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      data: { worktreePath: "/wt/x", deleted: true },
+    });
+  });
+
+  it("fails at once on a reconnect after the released stream opened", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.statusHandler?.("open", null);
+    legacy.statusHandler?.("reconnecting", null);
+
+    await expect(pending).rejects.toMatchObject({
+      message: expect.stringContaining("may or may not have been removed"),
+    });
+  });
+});
 
 describe("buildWorktreeDeleteCommand legacy stream v1.1 holders", () => {
   // The v1.0 -> v1.1 diff on `worktree.deleteByPath` is an OPTIONAL `holders`

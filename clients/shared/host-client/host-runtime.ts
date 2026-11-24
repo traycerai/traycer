@@ -303,6 +303,14 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.disposables.push({ dispose: stopForgetting });
   }
 
+  // Each renewal's place in this process's order, and the latest started for
+  // each person and host id: a renewal publishes a host's verdict only if no
+  // later one for that host has started, so a late older answer never
+  // replaces a newer renewal's verdict. A renewal is for a person and host id,
+  // not for a host process, so no process is compared.
+  private renewalsStarted = 0;
+  private readonly latestRenewal = new Map<string, number>();
+
   // Only this computer's host and hosts with a live connection; any other host's
   // token is minted when it is next opened.
   private renewHostTokens(): void {
@@ -313,13 +321,19 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     if (hostIds.length === 0) return;
     const tokens = this.runnerHost.hostTokens;
     const era = tokens.era(userId);
+    this.renewalsStarted += 1;
+    const started = this.renewalsStarted;
+    const keyOf = (hostId: string): string => `${userId}\u0000${hostId}`;
+    for (const hostId of hostIds)
+      this.latestRenewal.set(keyOf(hostId), started);
     void tokens.renew(userId, hostIds).then(
       (renewal) => {
         // A renewal answered after this person left raises nothing for the
         // next one.
         if (renewal.kind !== "renewed" || tokens.era(userId) !== era) return;
         for (const hostId of new Set(hostIds))
-          this.onHostTokenRenewal(hostId, renewal.delayed.includes(hostId));
+          if (this.latestRenewal.get(keyOf(hostId)) === started)
+            this.onHostTokenRenewal(hostId, renewal.delayed.includes(hostId));
       },
       () => undefined,
     );

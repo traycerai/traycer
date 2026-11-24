@@ -6,6 +6,7 @@ describe("classifyCloudStreamClose", () => {
     expect(
       classifyCloudStreamClose("unknown", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INCOMPATIBLE",
           reason: "method is not compatible",
@@ -20,6 +21,7 @@ describe("classifyCloudStreamClose", () => {
     expect(
       classifyCloudStreamClose("unknown", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "UNAUTHORIZED",
           reason: "authorization failed",

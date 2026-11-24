@@ -336,6 +336,7 @@ describe("managed-command output store", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: OUTPUT_FAILED,
       },
       null,

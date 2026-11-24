@@ -17,15 +17,17 @@ import {
   HOST_STATUS_LIVENESS_PROBE,
   RemoteSession,
   type IRemoteSession,
+  type SignInBudgetedGrantProvider,
+  type DialSequence,
 } from "./remote-session";
 import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
 import {
   mintRelayPassWithHostTokenViaHttp,
-  type AttachGrantProvider,
   type RelayPassMintOutcome,
 } from "./grant-client";
-import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
+import type { HostDoorObserver } from "../host-door-state";
+import type { RowConfirmationAttach } from "../row-confirmation";
 import {
   isIssuedHostTokenEra,
   type HostTokenSource,
@@ -35,6 +37,7 @@ import {
   type HostTokenStateSink,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import { decodeHostPublicKey } from "./noise-channel";
+import { processReleasedHosts } from "../released-sign-on";
 import {
   acquireRemoteSession,
   type RemoteSessionIdentity,
@@ -79,10 +82,23 @@ export interface CreateRemoteTransportOptions<
   /**
    * The person's host-only tokens. `OPEN` presents this host's, in `authz` v2
    * with an empty bearer, for every host kind; a renewed one goes out as a
-   * `CREDENTIAL_UPDATE`. The sign-in token only buys them at authn.
+   * `CREDENTIAL_UPDATE`. The sign-in token buys them at authn, and reaches a
+   * host only as {@link opensReleasedWay} allows.
    */
   readonly hostTokens: HostTokenSource;
-  readonly door: SessionDoorObserver | null;
+  /**
+   * `opensReleasedWay` of this host's row for `userId` in the in-memory
+   * directory, read live: whether a released host's typed refusal of the
+   * host-only token may be answered with the sign-in (see
+   * `released-sign-on.ts`). Read by the session on every open and credential
+   * push (`RemoteReleasedSignOn.opensReleasedWay`). It never reads the cloud.
+   */
+  readonly opensReleasedWay: () => boolean;
+  /** See `RemoteReleasedSignOn.confirmRow`: `null` where {@link opensReleasedWay} reads a row kept current. */
+  readonly confirmRowBeforeSignIn:
+    | ((attach: RowConfirmationAttach) => Promise<unknown>)
+    | null;
+  readonly door: HostDoorObserver | null;
   readonly onState: HostTokenStateSink;
   /**
    * Whether this client currently holds a CLOUD capability - a session the
@@ -269,7 +285,10 @@ export function createRemoteHostTransport<
     // Same reasoning applied to WHICH auth context wired those closures, not
     // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
     authEpoch: authEpochFor(bearerSource),
-    openAuth: "session-grant",
+    // Every host session can present the sign-in: whether a dial does is its
+    // live read of the row, so a row that changes after the build changes the
+    // next open, never which session serves it.
+    openAuth: "session-grant-or-sign-in",
   };
   const session = acquireRemoteSession(
     identity,
@@ -282,33 +301,54 @@ export function createRemoteHostTransport<
       // at build time.
       const signInNow = (): string | null =>
         cloudAuthorized() ? deriveBearerToken(bearer) : null;
+      // A closed session's mints report nothing: its grant mint and its
+      // fresh-mint recovery can answer after the last consumer has left.
+      let sessionClosed = false;
+      const onState: HostTokenStateSink = (stateHostId, kind) => {
+        if (!sessionClosed) options.onState(stateHostId, kind);
+      };
       // `null` when the person signed out or was replaced while authn answered.
       const mintInEra = async (
         signInToken: string,
         era: number,
       ): Promise<RelayPassMintOutcome | null> => {
-        const minted = await mintRelayPassWithHostTokenViaHttp(
+        const outcome = await mintRelayPassWithHostTokenViaHttp(
           options.authnBaseUrl,
           options.hostId,
           signInToken,
         );
-        return options.hostTokens.era(options.userId) === era ? minted : null;
+        return options.hostTokens.era(options.userId) === era ? outcome : null;
       };
-      // authn refused the sign-in: refresh once and mint again. Any other outcome keeps
-      // the first provision: the relay's backoff, with no state.
+      // authn refused the sign-in: refresh, unless the dial sequence this
+      // attach belongs to has spent its one or the attach is past, and mint
+      // again. Any other outcome keeps the first provision: the relay's
+      // backoff, with no state.
       const mintAfterSignInRefresh = async (
         refused: RelayPassMintOutcome,
         era: number,
+        sequence: DialSequence,
+        stillAsked: () => boolean,
       ): Promise<RelayPassMintOutcome | null> => {
-        if (
-          options.auth === null ||
-          (await options.auth.revalidateForReconnect()) !== "rotated"
-        )
-          return refused;
-        const refreshed = signInNow();
-        return refreshed === null ? null : mintInEra(refreshed, era);
+        const recovery = options.auth;
+        if (recovery === null || !stillAsked()) return refused;
+        const refreshed = await sequence.spend(
+          () => recovery.revalidateForReconnect(),
+          stillAsked,
+        );
+        if (refreshed !== "rotated" && refreshed !== "adopted") return refused;
+        if (!stillAsked()) return refused;
+        const signIn = signInNow();
+        return signIn === null ? null : mintInEra(signIn, era);
       };
-      const grantProvider: AttachGrantProvider = async () => {
+      const grantProvider: SignInBudgetedGrantProvider = async (
+        sequence,
+        attempt,
+      ) => {
+        // Asked after every await and before every effect (spend, mint,
+        // adopt, state): an answer for an attach the session has moved past,
+        // or for a closed session, spends, mints, stores and reports nothing.
+        // The attempt is false once its sequence's owner is no longer current.
+        const stillAsked = (): boolean => !sessionClosed && attempt.current();
         const signInToken = signInNow();
         if (signInToken === null)
           return {
@@ -325,10 +365,16 @@ export function createRemoteHostTransport<
             detail: "no host-token era for this person",
             context: "",
           };
+        if (!stillAsked())
+          return {
+            kind: "unavailable",
+            detail: "the attach was retired before the relay pass was minted",
+            context: "",
+          };
         const first = await mintInEra(signInToken, era);
         const minted =
-          first?.kind === "sign-in-rejected"
-            ? await mintAfterSignInRefresh(first, era)
+          first?.kind === "sign-in-rejected" && stillAsked()
+            ? await mintAfterSignInRefresh(first, era, sequence, stillAsked)
             : first;
         if (minted === null)
           return {
@@ -336,19 +382,25 @@ export function createRemoteHostTransport<
             detail: "signed out while the relay pass was minted",
             context: "",
           };
+        // The session discards this answer: nothing is stored or reported.
+        if (!stillAsked())
+          return minted.kind === "ok"
+            ? { kind: "ok", grant: minted.grant }
+            : minted.provision;
         if (minted.kind === "ok") {
           await options.hostTokens.adopt(
             options.userId,
             options.hostId,
             minted.hostToken,
             era,
+            stillAsked,
           );
           return { kind: "ok", grant: minted.grant };
         }
         if (minted.kind === "not-admitted" || minted.kind === "not-a-member")
-          options.onState(options.hostId, minted.kind);
+          onState(options.hostId, minted.kind);
         else if (minted.kind === "unreachable")
-          options.onState(options.hostId, "token-unavailable");
+          onState(options.hostId, "token-unavailable");
         return minted.provision;
       };
       const created = new RemoteSession<RpcRegistry, StreamRegistry>({
@@ -359,6 +411,18 @@ export function createRemoteHostTransport<
         hostToken: () =>
           options.hostTokens.current(options.userId, options.hostId)?.token ??
           null,
+        releasedSignOn: {
+          signIn: bearer,
+          mayPresentSignIn: options.opensReleasedWay,
+          recovery: options.auth,
+          hostTokenUnobtainable: () => false,
+          ownerSignInEligible: () => false,
+          heldTokenRefused: () => false,
+          forgetHeldRefusal: () => undefined,
+          hosts: processReleasedHosts,
+          opensReleasedWay: options.opensReleasedWay,
+          confirmRow: options.confirmRowBeforeSignIn,
+        },
         // The SAME read the grant provider above uses, now also reported to the
         // host at the far end. The mint gate decides whether this client may
         // reach the relay; this tells the host what the session it reaches may
@@ -368,10 +432,11 @@ export function createRemoteHostTransport<
         ...hostTokenSessionAuth(
           {
             tokens: options.hostTokens,
+            hosts: processReleasedHosts,
             currentUserId: () => bearer()?.identity.userId ?? null,
             hostId: options.hostId,
             signInRecovery: options.auth,
-            onState: options.onState,
+            onState,
             now: Date.now,
           },
           options.door,
@@ -400,6 +465,7 @@ export function createRemoteHostTransport<
       // the team's tiles. Once per session: the session is shared by every
       // consumer of this host, and closes once.
       created.onClosed(() => {
+        sessionClosed = true;
         stopRenewals();
         if (created.terminalFatal()?.code === TEAM_MEMBER_REMOVED_FATAL_CODE) {
           reportTeamMemberRemovedClose(options.hostId);

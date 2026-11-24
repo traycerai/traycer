@@ -6,13 +6,26 @@ import {
   type AgentCommandCredential,
 } from "./agent-session-capability";
 import { localTeamAdmissionCliError } from "./local-open-auth";
-import { openCliHostSession } from "./cli-host-tokens";
+import {
+  requireCliHostSession,
+  type CliRefusalEvidence,
+  type SignInRejection,
+} from "./cli-host-tokens";
+import {
+  isReleasedSignInRefusal,
+  processReleasedHosts,
+  type ReleasedSignOn,
+  type ReleasedUnaryCause,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   hostDoorRefusalCliError,
-  hostTokenFailureCliError,
+  refusalEndingCliError,
   signedOutCliError,
 } from "./host-door-words";
-import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
+import {
+  hostRefusalOf,
+  type DoorAdmissionRelease,
+} from "@traycer-clients/shared/host-transport/host-door-state";
 import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
@@ -24,10 +37,7 @@ import {
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import type { OpenFrameBearerSource } from "../../../shared/auth/bearer-source";
 import type { RefusalAwareAuthRevalidator } from "../../../shared/auth/bearer-revalidator";
-import {
-  isRefusalAfterRejectedSignIn,
-  markRefusalAfterRejectedSignIn,
-} from "./sign-in-rejection";
+import { markRefusalAfterRejectedSignIn } from "./sign-in-rejection";
 import {
   createAuthAwareMessenger,
   type AuthRecoveryScope,
@@ -326,11 +336,11 @@ export async function callHostRpcWithAgentCredential<
       endpoint,
       capability.bearer,
       capability.recovery,
+      null,
       dispatch.failFast
         ? NO_RETRY_TRANSPORT_POLICY
         : DEFAULT_TRANSPORT_RETRY_POLICY,
       dispatch,
-      () => false,
     );
   } catch (err) {
     const refusal = finalRefusalOf(err);
@@ -418,6 +428,22 @@ export async function callHostRpcAtEndpoint<
     );
     throw signedOutCliError();
   }
+  // The same check as `resolveEndpoint`: no token or sign-in goes to a URL
+  // that is not this machine's host, nor to none.
+  if (
+    endpoint.websocketUrl === null ||
+    !isValidLocalHostWebsocketUrl(endpoint.websocketUrl)
+  ) {
+    logger.warn(
+      "Host RPC explicit-endpoint call blocked; websocket URL invalid",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+      },
+    );
+    throw hostNotRunningCliError();
+  }
   return requestAtEndpoint(
     method,
     params,
@@ -436,25 +462,18 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-  const opened = await openCliHostSession(
+  const session = await requireCliHostSession(
     auth,
     endpoint.hostId,
-    false,
     dispatch.signal,
   );
-  if (opened.kind === "failed") {
-    createCliLogger(config.environment).warn(
-      "Host RPC blocked: no host-only token",
-      {
-        environment: config.environment,
-        method,
-        hostId: endpoint.hostId,
-        mintOutcome: opened.failure.kind,
-      },
-    );
-    throw hostTokenFailureCliError(opened.failure);
-  }
-  const session = opened.session;
+  // The call dials at once and the mint runs beside it. A refusal that may
+  // end the command is kept as evidence only: unless the call was answered
+  // anyway, the gate decides what ends it.
+  const ended: { refusal: CliRefusalEvidence | null } = { refusal: null };
+  const stopRefusals = session.tokens.onRefusalEndingCommand((evidence) => {
+    if (evidence.hostId === endpoint.hostId) ended.refusal ??= evidence;
+  });
   try {
     return await requestWithHostToken(
       method,
@@ -462,13 +481,73 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       endpoint,
       session.bearer,
       session.tokens.unaryRecovery(endpoint.hostId),
+      {
+        releasedSignOn: session.releasedSignOn,
+        hostBearerFor: (waitForMint) =>
+          session.tokens.hostBearerFor(endpoint.hostId, waitForMint),
+        // The unary door names no process: the one current as the fence lets
+        // the admission through.
+        admitted: () =>
+          session.tokens.admitted(
+            processReleasedHosts.currentInstance(endpoint.hostId),
+          ),
+      },
       retryPolicy,
       dispatch,
-      () => session.tokens.signInRejected(),
     );
+  } catch (err) {
+    // The one judgement for this exit, and the exit in the same turn as it.
+    // With no refusal reported, the gate's verdict on the stored sign-in rides
+    // on the refusal thrown now, to its synchronous mapping.
+    if (ended.refusal === null) {
+      const refusal = finalRefusalOf(err);
+      if (refusal instanceof HostRpcError) {
+        const rejection = await session.tokens.signInRejectionNow(null);
+        if (rejection !== null) {
+          markRefusalAfterRejectedSignIn(refusal);
+          rejectionOfRefusal.set(refusal, rejection);
+        }
+      }
+      throw err;
+    }
+    const ending = await session.tokens.refusalEndingCommandNow(
+      endpoint.hostId,
+    );
+    if (ending === null) throw err;
+    createCliLogger(config.environment).warn(
+      "Host RPC blocked: no host-only token",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+        mintOutcome:
+          ending.kind === "sign-in-rejected"
+            ? ending.kind
+            : ending.failure.kind,
+      },
+    );
+    throw refusalEndingCliError(ending);
   } finally {
+    stopRefusals();
     session.dispose();
   }
+}
+
+/**
+ * The gate's judgement for a refusal the call threw in the same turn: only a
+ * refusal judged so is worded as a rejected sign-in.
+ */
+const rejectionOfRefusal = new WeakMap<HostRpcError, SignInRejection>();
+
+/** This machine's host, reached with this CLI's host-only token. */
+interface LocalHostDoor {
+  readonly releasedSignOn: ReleasedSignOn;
+  /** `CliHostTokens.hostBearerFor` of the host. */
+  readonly hostBearerFor: (
+    waitForMint: boolean,
+  ) => Promise<OpenFrameBearerSource | null>;
+  /** The host admitted a call; the release is called when that connection leaves. */
+  readonly admitted: () => DoorAdmissionRelease;
 }
 
 async function requestWithHostToken<
@@ -479,12 +558,53 @@ async function requestWithHostToken<
   endpoint: HostTransportEndpoint,
   bearer: OpenFrameBearerSource,
   recovery: RefusalAwareAuthRevalidator,
+  localDoor: LocalHostDoor | null,
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
-  signInRejected: () => boolean,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const client = new WsRpcClient<HostRpcRegistry>({
+    ...(localDoor === null
+      ? {}
+      : {
+          // Never waits for a mint authn has not answered, unless a current
+          // host named its reason for the probe.
+          hostBearerFor: (
+            _hostId: string,
+            _signIn: OpenFrameBearerSource,
+            waitForMint: boolean,
+          ) => localDoor.hostBearerFor(waitForMint),
+          doorFor: () => ({
+            refused: () => undefined,
+            admitted: localDoor.admitted,
+          }),
+          // The CLI holds no row. Eligibility is this process's mint record and
+          // held token, read synchronously as they stand at the ask.
+          releasedSignOnFor: (
+            authority: HostRequestAuthority,
+            cause: ReleasedUnaryCause,
+          ) => {
+            const releasedSignOn = localDoor.releasedSignOn;
+            const hostId = authority.endpoint.hostId;
+            const signIn = releasedSignOn.signIn();
+            const eligible =
+              cause === "refused" ||
+              (cause === "owner-sign-in"
+                ? releasedSignOn.ownerSignInEligible(hostId)
+                : releasedSignOn.hostTokenUnobtainable(hostId));
+            return signIn !== null && eligible
+              ? { bearer: signIn, recovery: releasedSignOn.recovery }
+              : null;
+          },
+          heldTokenRefusedFor: (_authority, presented, instance) =>
+            localDoor.releasedSignOn.heldTokenRefused(instance, presented),
+          forgetHeldRefusalFor: (authority) =>
+            localDoor.releasedSignOn.forgetHeldRefusal(
+              authority.endpoint.hostId,
+            ),
+          releasedHosts: localDoor.releasedSignOn.hosts,
+          surfacesNotProvisioned: true,
+        }),
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),
     webSocketFactory: createWhatwgWebSocketFactory(),
@@ -544,10 +664,6 @@ async function requestWithHostToken<
     });
     return response;
   } catch (err) {
-    const refusal = finalRefusalOf(err);
-    if (signInRejected() && refusal instanceof HostRpcError) {
-      markRefusalAfterRejectedSignIn(refusal);
-    }
     const error = errorFromUnknown(err);
     logger.debug("Host RPC failed; propagating to command boundary", {
       environment: config.environment,
@@ -585,12 +701,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     logger.warn("Host RPC endpoint resolution failed; metadata missing", {
       environment: config.environment,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   if (publishedHostProcessGone(metadata)) {
     logger.warn(
@@ -601,24 +712,14 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
         pid: metadata.pid,
       },
     );
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
     logger.warn("Host RPC endpoint resolution failed; websocket URL invalid", {
       environment: config.environment,
       hostId: metadata.hostId,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   logger.debug("Host RPC endpoint resolved", {
     environment: config.environment,
@@ -626,6 +727,15 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     pid: metadata.pid,
   });
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+}
+
+function hostNotRunningCliError(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    message: "The host is not running. Run `traycer host ensure`.",
+    details: null,
+    exitCode: 1,
+  });
 }
 
 /**
@@ -851,7 +961,22 @@ export function hostRpcToCliError(err: unknown): unknown {
 }
 
 /**
+ * A released host's refusal of this person's sign-in, in its own words, as
+ * the released CLI printed every host refusal.
+ */
+export function releasedSignInRefusalCliError(reason: string): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.AUTH_REJECTED,
+    message: reason,
+    details: null,
+    exitCode: 1,
+  });
+}
+
+/**
  * Maps a host wire error code to a stable CLI error code:
+ *   - a released host's refusal of this person's sign-in → `AUTH_REJECTED`
+ *     with the host's own sentence, unless the sign-in itself was rejected.
  *   - a refusal by the host's door, after the call's one fresh token → the
  *     door's own line (`hostDoorRefusalCliError`), decided by its reason
  *     ahead of every code below: sign-in advice only for a machine signed out
@@ -897,6 +1022,11 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  const rejection = rejectionOfRefusal.get(err) ?? null;
+  // A released host refused this person's sign-in: its own sentence, as the
+  // released CLI printed it. Only a dead sign-in says more.
+  if (rejection === null && isReleasedSignInRefusal(err))
+    return releasedSignInRefusalCliError(err.message);
   // A capability cannot be repaired by the stored sign-in or a host-token mint.
   const doorRefusal = isRefusalOfAgentSessionCapability(err)
     ? null
@@ -904,10 +1034,8 @@ function mapHostRpcError(err: HostRpcError): CliError {
   const doorError =
     doorRefusal === null
       ? null
-      : hostDoorRefusalCliError(
-          doorRefusal,
-          isRefusalAfterRejectedSignIn(err),
-          () => unexpectedHostCliError(err),
+      : hostDoorRefusalCliError(doorRefusal, rejection, () =>
+          unexpectedHostCliError(err),
         );
   if (doorError !== null) return doorError;
   const admissionError =
