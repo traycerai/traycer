@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Toaster, toast } from "sonner";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
@@ -28,6 +29,8 @@ import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/h
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { ENVIRONMENT_CLOUD_QUERY_SCOPE } from "@/hooks/environment/use-environment-cloud";
 import {
   mountTeamPage,
   personalPoolSource,
@@ -55,6 +58,7 @@ vi.mock("@/lib/settings-navigation", () => ({
 
 afterEach(() => {
   cleanup();
+  toast.dismiss();
   resetTeamPageHarness();
   resetNegotiatedManifests();
   useMoveSheetStore.setState({ target: null });
@@ -140,6 +144,7 @@ interface SessionHarness {
   readonly rerender: (open: boolean) => void;
   readonly requests: readonly CapturedReviewRequest[];
   readonly keepCalls: readonly EnvironmentReviewHeldKeepRequest[];
+  readonly reviewAfter: (previousReads: number) => Promise<void>;
   /** The base authn's requests are sent to, as the binding's sign-in has it. */
   readonly authnBaseUrl: string;
   readonly resolveApply: (answer: EnvironmentTransportAnswer) => void;
@@ -181,6 +186,7 @@ function renderSessionWith(
     readonly deferApply?: boolean;
     readonly readFailures?: number;
     readonly heldKeepSupported?: boolean;
+    readonly keepOutcome?: "gone";
     readonly proposalHeldIds?: readonly string[];
   },
 ): SessionHarness {
@@ -208,7 +214,7 @@ function renderSessionWith(
     },
     "environment.review.heldKeep": (request) => {
       keepCalls.push(request);
-      return { outcome: "kept" };
+      return { outcome: session.keepOutcome ?? "kept" };
     },
   };
   const harness = mountTeamPage(personalPoolSource(), handlers);
@@ -299,10 +305,45 @@ function renderSessionWith(
     </harness.Wrapper>
   );
   const view = render(ui(true));
+  const reviewAfter = async (previousReads: number): Promise<void> => {
+    const cache = harness.queryClient.getQueryCache();
+    const reviewHasLoaded = () => {
+      const cloudRead = cache.find({
+        queryKey: hostQueryKeys.methodScope(
+          ENVIRONMENT_CLOUD_QUERY_SCOPE,
+          "environment.review",
+        ),
+        exact: false,
+      });
+      const hostRead = cache.find({
+        queryKey: hostQueryKeys.methodScope(
+          mockLocalHostEntry.hostId,
+          "environment.review",
+        ),
+        exact: false,
+      });
+      return (
+        reviewReads(requests).length > previousReads &&
+        cloudRead?.state.status === "success" &&
+        cloudRead.state.fetchStatus === "idle" &&
+        hostRead?.state.fetchStatus !== "fetching"
+      );
+    };
+    if (reviewHasLoaded()) return;
+    await new Promise<void>((resolve) => {
+      const unsubscribe = cache.subscribe(() => {
+        if (reviewHasLoaded()) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+  };
   return {
     rerender: (open) => view.rerender(ui(open)),
     requests,
     keepCalls,
+    reviewAfter,
     authnBaseUrl: cloud.authnBaseUrl,
     resolveApply: (answer) => {
       if (applyResolver === null) throw new Error("Apply did not start");
@@ -666,6 +707,44 @@ describe("<RetrospectiveSession /> keeping a current host proposal", () => {
       ]);
     });
     expect(applyRequests(view.requests)).toHaveLength(0);
+  });
+
+  it("shows a failed Keep and leaves the same held row open after rereading", async () => {
+    const entry = entryOf({
+      entryId: "hold-variable",
+      kind: "variable",
+      key: "LOG_LEVEL",
+      value: "debug",
+      hostId: ORIGIN_HOST_ID,
+      heldRevision: 23,
+    });
+    const onOpenChange = vi.fn();
+    const view = renderSessionWith(SHARED, [entry], [], {
+      onOpenChange,
+      heldKeepSupported: true,
+      keepOutcome: "gone",
+      proposalHeldIds: [entry.entryId],
+    });
+    render(<Toaster />);
+    await act(() => view.reviewAfter(0));
+    view.rerender(true);
+
+    const row = screen.getByTestId("retrospective-held-hold-variable");
+    const previousReads = reviewReads(view.requests).length;
+    await act(async () => {
+      fireEvent.click(
+        within(row).getByRole("button", { name: "Keep on Old laptop only" }),
+      );
+      await view.reviewAfter(previousReads);
+    });
+
+    expect(view.keepCalls).toEqual([{ heldId: entry.entryId, revision: 23 }]);
+    expect(applyRequests(view.requests)).toEqual([]);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId("retrospective-held-hold-variable")).toBe(row);
+    expect(
+      await screen.findByText("Couldn't keep the value on this host."),
+    ).toBeDefined();
   });
 
   it.each([

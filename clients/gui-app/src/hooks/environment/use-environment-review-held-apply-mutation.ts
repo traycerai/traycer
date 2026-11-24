@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   applyReviewChoice,
   type ReviewHeldEntry,
@@ -22,6 +23,7 @@ import { environmentMutationKeys } from "@/lib/query-keys";
 
 // The app's own call to authn; no host method of this name.
 const METHOD = "environment.review.applyChoice";
+const KEEP_FAILED = "Couldn't keep the value on this host.";
 
 /** The review owns the row's presence after any choice. */
 export function useEnvironmentReviewHeldApplyMutation(
@@ -85,8 +87,16 @@ export function useEnvironmentReviewHeldApplyMutation(
             : ["environment.review"],
         );
       },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't apply that choice.");
+      onSuccess: (answer, { choice }) => {
+        if (choice === "keep" && answer.outcome !== "kept") {
+          toast.error(KEEP_FAILED);
+        }
+      },
+      onError: (error, { choice }) => {
+        toastFromHostError(
+          error,
+          choice === "keep" ? KEEP_FAILED : "Couldn't apply that choice.",
+        );
       },
     },
   );
