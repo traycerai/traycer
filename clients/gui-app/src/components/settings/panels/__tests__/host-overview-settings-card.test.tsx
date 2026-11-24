@@ -1458,6 +1458,11 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
     const confirm = screen.getByTestId("stop-sharing-confirm");
     expect(confirm instanceof HTMLButtonElement && confirm.disabled).toBe(true);
 
+    const keepLogLevel = screen.getByTestId(
+      "stop-sharing-choice-variable-LOG_LEVEL-keep_locally",
+    );
+    expect(keepLogLevel.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(keepLogLevel);
     fireEvent.click(
       screen.getByTestId(
         "stop-sharing-choice-variable-EDITOR-remove_from_this_computer",

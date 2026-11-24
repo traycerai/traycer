@@ -125,7 +125,9 @@ function matchingProfile(
   row: EnvironmentMovePersonalProfile,
 ): EnvironmentMovePersonalProfile | null {
   const current = profiles?.get(personalLeaveAddress(row));
-  return current?.signIn === row.signIn && current.shared === row.shared
+  return current?.signIn === row.signIn &&
+    current.shared === row.shared &&
+    current.label === row.label
     ? current
     : null;
 }
