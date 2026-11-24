@@ -1,4 +1,9 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  defaultScheduler,
+  notifyManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -14,7 +19,15 @@ import {
   type ProfilerOnRenderCallback,
   type ReactNode,
 } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { Toaster, toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -647,6 +660,27 @@ async function renderSession(
   mountSession(client, harness.queryClient, options, onRender);
 }
 
+async function renderSessionWhenReady(
+  client: HostClient<HostRpcRegistry>,
+  options: {
+    readonly showListAfterStop: boolean;
+    readonly showToaster: boolean;
+  },
+): Promise<void> {
+  const harness = harnesses.find((candidate) => candidate.client === client);
+  if (harness === undefined) throw new Error("expected a test query client");
+  let unsubscribe = (): void => undefined;
+  const ready = new Promise<void>((resolve) => {
+    unsubscribe = harness.session.subscribeAvailabilityRecovered(() => {
+      unsubscribe();
+      resolve();
+    });
+  });
+  harness.session.start();
+  await ready;
+  mountSession(client, harness.queryClient, options, null);
+}
+
 interface LeaveSheetCommit {
   readonly mutationStatus: string | null;
   readonly confirmDisabled: boolean;
@@ -774,6 +808,8 @@ async function expectFloorRefusalAfterReconnect(
 
 describe("StopSharingSession over the real remote session", () => {
   it("query refresh clears item choices when the shown digest changes", async () => {
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
     const shownDigest = "e".repeat(64);
     const refreshedDigest = "f".repeat(64);
     let resolveStopRequest: ((params: unknown) => void) | null = null;
@@ -804,12 +840,13 @@ describe("StopSharingSession over the real remote session", () => {
       previewKey,
       (data) => data.sheetDigest === shownDigest,
     );
-    await renderSession(
-      harness.client,
-      { showListAfterStop: false, showToaster: false },
-      null,
-    );
-    await shownPreview;
+    await renderSessionWhenReady(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
+    await act(async () => {
+      await shownPreview;
+    });
 
     const keepChoice = screen.getByTestId(
       "stop-sharing-choice-variable-API_TOKEN-keep_locally",
@@ -835,29 +872,35 @@ describe("StopSharingSession over the real remote session", () => {
     });
 
     expect(screen.getByText("Updated credential detail")).toBeTruthy();
-    expect(keepChoice.getAttribute("aria-pressed")).toBe("false");
+    const refreshedChoice = screen.getByTestId(
+      "stop-sharing-choice-variable-API_TOKEN-keep_locally",
+    );
+    expect(refreshedChoice.getAttribute("aria-pressed")).toBe("false");
     const confirm = screen.getByTestId("stop-sharing-confirm");
     expect(confirm.hasAttribute("disabled")).toBe(true);
 
-    fireEvent.click(keepChoice);
+    fireEvent.click(refreshedChoice);
     expect(confirm.hasAttribute("disabled")).toBe(false);
-    const sentStop = stopRequest;
-    fireEvent.click(confirm);
-    expect(await sentStop).toEqual({
-      choices: [
-        {
-          kind: "variable",
-          key: "API_TOKEN",
-          choice: "keep_locally",
-        },
-      ],
-      profileMode: null,
-      profileSignIns: [],
-      sheetDigest: refreshedDigest,
+    await act(async () => {
+      fireEvent.click(confirm);
+      expect(await stopRequest).toEqual({
+        choices: [
+          {
+            kind: "variable",
+            key: "API_TOKEN",
+            choice: "keep_locally",
+          },
+        ],
+        profileMode: null,
+        profileSignIns: [],
+        sheetDigest: refreshedDigest,
+      });
     });
   });
 
   it("query refresh resets changed profile decisions and preserves matching ones", async () => {
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
     const shownDigest = "1".repeat(64);
     const refreshedDigest = "2".repeat(64);
     let resolveStopRequest: ((params: unknown) => void) | null = null;
@@ -894,12 +937,13 @@ describe("StopSharingSession over the real remote session", () => {
       previewKey,
       (data) => data.sheetDigest === shownDigest,
     );
-    await renderSession(
-      harness.client,
-      { showListAfterStop: false, showToaster: false },
-      null,
-    );
-    await shownPreview;
+    await renderSessionWhenReady(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
+    await act(async () => {
+      await shownPreview;
+    });
 
     fireEvent.click(
       within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
@@ -937,23 +981,24 @@ describe("StopSharingSession over the real remote session", () => {
       .soft(within(matchingRow).getByRole("button", { name: "Undo" }))
       .toBeTruthy();
 
-    const sentStop = stopRequest;
-    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-    expect(await sentStop).toMatchObject({
-      profileMode: "keep-personal",
-      profileSignIns: [
-        {
-          providerId: "codex",
-          profileId: "folder-one",
-          signIn: { kind: "untouched" },
-        },
-        {
-          providerId: "codex",
-          profileId: "folder-two",
-          signIn: { kind: "skip" },
-        },
-      ],
-      sheetDigest: refreshedDigest,
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+      expect(await stopRequest).toMatchObject({
+        profileMode: "keep-personal",
+        profileSignIns: [
+          {
+            providerId: "codex",
+            profileId: "folder-one",
+            signIn: { kind: "untouched" },
+          },
+          {
+            providerId: "codex",
+            profileId: "folder-two",
+            signIn: { kind: "skip" },
+          },
+        ],
+        sheetDigest: refreshedDigest,
+      });
     });
   });
 
