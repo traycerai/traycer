@@ -107,6 +107,11 @@ beforeAll(() => {
   repo = join(sandbox, "repo");
   mkdirSync(repo, { recursive: true });
   git("init", "-q", "-b", "main");
+  // A commit starts git's automatic maintenance detached, and it can still
+  // write in the repository while `afterAll` removes it. This repository
+  // never needs maintenance.
+  git("config", "maintenance.auto", "false");
+  git("config", "gc.auto", "0");
   for (const path of BASE_TREE) write(path, "base\n");
   git("add", "-A");
   git("commit", "-q", "-m", "base");
