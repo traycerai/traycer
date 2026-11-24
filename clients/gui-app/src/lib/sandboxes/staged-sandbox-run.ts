@@ -60,7 +60,10 @@ import {
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { saveReturnedLandingCreateRequest } from "@/stores/home/landing-draft-store";
+import { saveReturnedTaskCreateRequest } from "@/stores/epics/new-conversation-modal-store";
 import {
+  cancelSandboxWakeReads,
   knownSandboxRowCurrent,
   knownSandboxRowQueryOptions,
   sandboxListObservationId,
@@ -304,12 +307,7 @@ async function prepareRun(
   const attempt = readStagedSandbox(run.surfaceKey)?.createAttempt ?? null;
   const prepared =
     made === null
-      ? await prepareCreate(
-          stage.target,
-          deps,
-          attempt?.budgetMs ?? null,
-          run.retryCreate,
-        )
+      ? await prepareCreate(stage.target, deps, attempt?.budgetMs ?? null, run)
       : {
           environmentId: null,
           budgetMs: attempt?.budgetMs ?? STAGED_CREATE_BUDGET_MS,
@@ -328,13 +326,15 @@ async function prepareCreate(
   target: Extract<StagedSandboxTarget, { kind: "new" }>,
   deps: StagedSandboxRunDeps,
   retainedBudgetMs: number | null,
-  retryCreate: SandboxCreateRequest | undefined,
+  run: Omit<StagedRun, "environmentId">,
 ): Promise<PreparedCreate | null> {
+  const { retryCreate } = run;
   const environmentId =
     retryCreate === undefined
       ? await environmentIdFor(target, deps)
       : retryCreate.environmentId;
   if (environmentId === undefined) return null;
+  if (!stillCurrent(run)) return null;
   if (retainedBudgetMs !== null)
     return { environmentId, budgetMs: retainedBudgetMs };
   if (retryCreate?.region === null)
@@ -453,16 +453,12 @@ async function wakeCurrentStage(
     uuidv4(),
   );
   if (!stillCurrent(run)) return false;
-  await Promise.all([
-    deps.queryClient.cancelQueries({
-      queryKey: knownRow.queryKey,
-      exact: true,
-    }),
-    deps.queryClient.cancelQueries({
-      queryKey: sandboxQueryKeys.list(deps.auth, deps.userId),
-      exact: true,
-    }),
-  ]);
+  await cancelSandboxWakeReads(
+    deps.queryClient,
+    deps.auth,
+    deps.userId,
+    knownRow.queryKey,
+  );
   return completed !== null && stillCurrent(run);
 }
 
@@ -732,12 +728,26 @@ function createSandbox(
     {
       mutationKey: sandboxMutationKeys.create(run.userId),
       // TanStack can suspend on onMutate. Commit the body at the fenced POST.
-      mutationFn: () =>
-        stillCurrent(run) &&
-        saveStagedCreateRequest(run.surfaceKey, request) &&
-        stillCurrent(run)
+      mutationFn: async () => {
+        if (!stillCurrent(run)) return null;
+        const draft = readStagedSandbox(run.surfaceKey)?.returnedDraft;
+        if (draft?.stageId === run.clientRequestId) {
+          const saved =
+            draft.kind === "landing"
+              ? await saveReturnedLandingCreateRequest(
+                  run.surfaceKey,
+                  draft,
+                  request,
+                )
+              : saveReturnedTaskCreateRequest(run.surfaceKey, draft, request);
+          if (!saved) return null;
+        }
+        return stillCurrent(run) &&
+          saveStagedCreateRequest(run.surfaceKey, request) &&
+          stillCurrent(run)
           ? auth.createSandbox(request)
-          : Promise.resolve(null),
+          : null;
+      },
       onSettled: (result) => {
         if (result === null || !settledForStartingAccount(context)) return;
         void directory.refresh();

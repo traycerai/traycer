@@ -3379,17 +3379,63 @@ describe("guard: only evidence tied to its own request settles a held send", () 
   );
 
   it.each([
-    [{ ...held, observationRequestedAt: 200 }, 200, "awake"],
-    [{ ...held, observationRequestedAt: 200 }, 199, "unknown"],
-    [{ ...held, observationRequestedAt: 200 }, null, "unknown"],
-    [held, 200, "unknown"],
-    [{ ...stopped, observationRequestedAt: 200 }, 200, "unknown"],
-    [null, 200, "unknown"],
+    {
+      request: {
+        ...held,
+        observationRequestedAt: 200,
+        observationRetryId: "wake-a",
+      },
+      requestedAt: 200,
+      observationId: "wake-a",
+      expected: "awake",
+    },
+    {
+      request: {
+        ...held,
+        observationRequestedAt: 200,
+        observationRetryId: "wake-a",
+      },
+      requestedAt: 199,
+      observationId: "wake-a",
+      expected: "unknown",
+    },
+    {
+      request: {
+        ...held,
+        observationRequestedAt: 200,
+        observationRetryId: "wake-a",
+      },
+      requestedAt: null,
+      observationId: "wake-a",
+      expected: "unknown",
+    },
+    {
+      request: held,
+      requestedAt: 200,
+      observationId: "wake-a",
+      expected: "unknown",
+    },
+    {
+      request: { ...stopped, observationRequestedAt: 200 },
+      requestedAt: 200,
+      observationId: "wake-a",
+      expected: "unknown",
+    },
+    {
+      request: null,
+      requestedAt: 200,
+      observationId: "wake-a",
+      expected: "unknown",
+    },
   ] as const)(
-    "a wake result of request %j captured at %s settles to %s",
-    (request, requestedAt, expected) => {
+    "a wake result of request $request captured at $requestedAt with id $observationId settles to $expected",
+    ({ request, requestedAt, observationId, expected }) => {
       expect(
-        decode(request, { kind: "wake-result", requestedAt }, "awake"),
+        decode(
+          request,
+          { kind: "wake-result", requestedAt, observationId },
+          "awake",
+        ),
       ).toBe(expected);
     },
   );
@@ -3495,7 +3541,11 @@ describe("guard: a stale operation result is ignored; a matching failure stays c
     },
   );
 
-  const held = { createdAt: 100, observationRequestedAt: 200 };
+  const held = {
+    createdAt: 100,
+    observationRequestedAt: 200,
+    observationRetryId: "wake-a",
+  };
   const stopped = { createdAt: 100, stopRequested: true, stopRequestedAt: 300 };
   const dispatching = {
     createdAt: 100,
@@ -3506,10 +3556,31 @@ describe("guard: a stale operation result is ignored; a matching failure stays c
     [stopped, { kind: "stop-result", requestedAt: 299 }, false],
     [stopped, { kind: "stop-result", requestedAt: null }, false],
     [held, { kind: "stop-result", requestedAt: 200 }, false],
-    [held, { kind: "wake-result", requestedAt: 200 }, true],
-    [held, { kind: "wake-result", requestedAt: 199 }, false],
-    [stopped, { kind: "wake-result", requestedAt: 300 }, false],
-    [null, { kind: "wake-result", requestedAt: 200 }, false],
+    [
+      held,
+      { kind: "wake-result", requestedAt: 200, observationId: "wake-a" },
+      true,
+    ],
+    [
+      held,
+      { kind: "wake-result", requestedAt: 199, observationId: "wake-a" },
+      false,
+    ],
+    [
+      held,
+      { kind: "wake-result", requestedAt: 200, observationId: "wake-old" },
+      false,
+    ],
+    [
+      stopped,
+      { kind: "wake-result", requestedAt: 300, observationId: "wake-a" },
+      false,
+    ],
+    [
+      null,
+      { kind: "wake-result", requestedAt: 200, observationId: "wake-a" },
+      false,
+    ],
     [
       dispatching,
       { kind: "dispatch-result", chatId: "chat-1", hostId: "host-1" },
@@ -3553,6 +3624,7 @@ describe("guard: a stale operation result is ignored; a matching failure stays c
       decodePendingSandboxObservation(held, "unknown", {
         kind: "wake-result",
         requestedAt: 200,
+        observationId: "wake-a",
       }),
     ).toBe("unknown");
   });

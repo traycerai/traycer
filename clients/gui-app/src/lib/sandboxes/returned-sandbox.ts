@@ -4,6 +4,8 @@ import type {
 } from "@/lib/sandboxes/sandbox-stage-model";
 import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import { z } from "zod";
+import { v5 as uuidv5 } from "uuid";
+import { sandboxCreateKey } from "@/lib/sandboxes/sandbox-create-key";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
@@ -36,6 +38,18 @@ export interface StoredReturnedSandbox extends ReturnedSandbox {
   readonly userId: string | null;
 }
 
+export type ReturnedSandboxDraft = (
+  | { readonly kind: "landing"; readonly draftId: string }
+  | {
+      readonly kind: "task";
+      readonly draftId: string | null;
+      readonly epicId: string;
+    }
+) & {
+  readonly userId: string;
+  readonly stageId: string;
+};
+
 /**
  * Stamps a returned sandbox with the signed-in account. One already stored
  * keeps its own: an undo puts it back as it was.
@@ -67,6 +81,72 @@ export function returnedSandboxFor(
   return stored !== null && userId !== null && stored.userId === userId
     ? stored
     : null;
+}
+
+/** A legacy return derives a stage identity from its durable draft occurrence. */
+export function returnedSandboxForDraft(
+  stored: StoredReturnedSandbox | null,
+  userId: string | null,
+  kind: "task" | "landing",
+  draftId: string | null,
+): StoredReturnedSandbox | null {
+  const returned = returnedSandboxFor(stored, userId);
+  if (
+    returned === null ||
+    returned.target.kind === "existing" ||
+    returned.clientRequestId !== null
+  )
+    return returned;
+  if (draftId === null)
+    return returned.lastCreateKey === undefined
+      ? null
+      : { ...returned, clientRequestId: returned.lastCreateKey };
+  return {
+    ...returned,
+    clientRequestId: sandboxCreateKey(
+      "stage",
+      uuidv5(`returned-sandbox:${kind}:${draftId}`, uuidv5.URL),
+    ),
+  };
+}
+
+export function returnedSandboxWithCreate(
+  stored: StoredReturnedSandbox | null,
+  origin: ReturnedSandboxDraft,
+  request: SandboxCreateRequest,
+): StoredReturnedSandbox | null {
+  const key = request.clientRequestId;
+  if (key === null) return null;
+  const current = returnedSandboxForDraft(
+    stored,
+    origin.userId,
+    origin.kind,
+    origin.draftId,
+  );
+  if (
+    current?.clientRequestId !== origin.stageId ||
+    current.target.kind !== "new"
+  )
+    return null;
+  if (
+    current.lastRetryCreate?.clientRequestId === key &&
+    JSON.stringify(current.lastRetryCreate) !== JSON.stringify(request)
+  )
+    return null;
+  return { ...current, lastCreateKey: key, lastRetryCreate: request };
+}
+
+export function returnedSandboxCreateMatches(
+  saved: StoredReturnedSandbox | null | undefined,
+  origin: ReturnedSandboxDraft,
+  request: SandboxCreateRequest,
+): boolean {
+  return (
+    saved?.userId === origin.userId &&
+    saved.clientRequestId === origin.stageId &&
+    saved.lastCreateKey === request.clientRequestId &&
+    JSON.stringify(saved.lastRetryCreate) === JSON.stringify(request)
+  );
 }
 
 const supersedeBySurface = new Map<string, () => void>();
@@ -105,6 +185,16 @@ export function markReturnedSandboxRestored(
   returned: ReturnedSandbox,
 ): void {
   restoredBySurface.set(surfaceKey, returned);
+}
+
+/** A payload update is part of the same restore, including its cleanup mark. */
+export function updateReturnedSandboxRestore(
+  surfaceKey: string,
+  next: StoredReturnedSandbox,
+): void {
+  const restored = restoredBySurface.get(surfaceKey);
+  if (restored?.clientRequestId === next.clientRequestId)
+    restoredBySurface.set(surfaceKey, next);
 }
 
 /** Whether the stage on `surfaceKey` was restored, not picked. */

@@ -567,6 +567,72 @@ export function pendingSandboxDispatchCurrent(
   );
 }
 
+export function pendingDispatchWakeCurrent(
+  id: string,
+  dispatch: PendingSandboxSendDispatch,
+  observation: Extract<PendingSandboxObservation, { kind: "wake-result" }>,
+): boolean {
+  if (!pendingSandboxDispatchCurrent(id, dispatch)) return false;
+  const facts = pendingSandboxSendFacts(id, {
+    ...UNKNOWN_PENDING_SEND_FACTS,
+    observation,
+  });
+  return (
+    facts.current &&
+    facts.owns &&
+    facts.accountActive &&
+    !facts.terminalDisposition
+  );
+}
+
+export function completePendingDispatchWake(
+  id: string,
+  dispatch: PendingSandboxSendDispatch,
+  observation: Extract<PendingSandboxObservation, { kind: "wake-result" }>,
+  nextObservationId: string,
+): number | null {
+  if (!pendingDispatchWakeCurrent(id, dispatch, observation)) return null;
+  return persistObservationBoundary(
+    usePendingSandboxSendStore.getState().sends,
+    id,
+    nextObservationId,
+  );
+}
+
+function persistObservationBoundary(
+  sends: Readonly<Record<string, PendingSandboxSend>>,
+  id: string,
+  observationId: string | undefined,
+): number | null {
+  const boundary = Date.now();
+  try {
+    usePendingSandboxSendStore.setState({
+      sends: {
+        ...sends,
+        [id]: {
+          ...sends[id],
+          observationRequestedAt: boundary,
+          observationRetryId: observationId,
+        },
+      },
+    });
+  } catch {
+    /* Readback decides whether the observation may settle this send. */
+  }
+  const saved = storedSend(id);
+  if (
+    saved?.observationRequestedAt === boundary &&
+    saved.observationRetryId === observationId
+  )
+    return boundary;
+  try {
+    usePendingSandboxSendStore.setState({ sends });
+  } catch {
+    /* Keep the prior accountable request. */
+  }
+  return null;
+}
+
 /** The durable record, rather than this window's possibly stale snapshot, decides. */
 export function pendingSandboxSendWithdrawalState(
   id: string,
@@ -717,33 +783,7 @@ export const usePendingSandboxSendStore =
             typeof prior.observationRequestedAt === "number"
           )
             return prior.observationRequestedAt;
-          const boundary = Date.now();
-          try {
-            set({
-              sends: {
-                ...sends,
-                [id]: {
-                  ...sends[id],
-                  observationRequestedAt: boundary,
-                  observationRetryId: retryId,
-                },
-              },
-            });
-          } catch {
-            /* Readback decides whether the request may leave this window. */
-          }
-          const saved = storedSend(id);
-          if (
-            saved?.observationRequestedAt === boundary &&
-            saved.observationRetryId === retryId
-          )
-            return boundary;
-          try {
-            set({ sends });
-          } catch {
-            /* Keep the prior accountable request. */
-          }
-          return null;
+          return persistObservationBoundary(sends, id, retryId);
         },
         recordCreatedSandbox: (id, sandboxId) => {
           const prior = storedSandboxPresence(storedSend(id));
@@ -1096,6 +1136,7 @@ export const usePendingSandboxSendStore =
             (ack === undefined || ack === send.retryHandledId)
           )
             return plan;
+          const retry = plan.effects.includes("retry");
           try {
             set({
               sends: {
@@ -1104,9 +1145,12 @@ export const usePendingSandboxSendStore =
                   ...send,
                   dispatch,
                   retryHandledId: ack ?? send.retryHandledId,
-                  observationRequestedAt: plan.effects.includes("retry")
-                    ? Date.now()
-                    : send.observationRequestedAt,
+                  ...(retry
+                    ? {
+                        observationRequestedAt: Date.now(),
+                        observationRetryId: undefined,
+                      }
+                    : {}),
                 },
               },
             });

@@ -25,8 +25,13 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
+import {
+  cancelSandboxWakeReads,
   knownSandboxRowCurrent,
   knownSandboxRowQueryOptions,
   sandboxListObservationId,
@@ -34,7 +39,7 @@ import {
 } from "@/lib/sandboxes/sandbox-row-read";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
-import { v5 as uuidv5 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -239,6 +244,8 @@ import {
   type PendingSandboxSendRequest,
   pendingSandboxSendFacts,
   pendingSandboxDispatchCurrent,
+  pendingDispatchWakeCurrent,
+  completePendingDispatchWake,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 
 import {
@@ -1203,24 +1210,29 @@ interface PendingSandboxByIdInput {
   readonly omission: number | undefined;
 }
 
+function pendingSandboxByIdOptions(input: PendingSandboxByIdInput) {
+  const { auth, sandboxId, hostId, userId, send, stage, omission } = input;
+  return knownSandboxRowQueryOptions({
+    auth,
+    userId,
+    sandboxId,
+    hostId,
+    sendId: send?.id,
+    stageId: stage?.clientRequestId,
+    attemptId: stage?.attemptId,
+    observationRequestedAt: send?.observationRequestedAt,
+    observationRetryId: send?.observationRetryId,
+    stopRequestedAt: send?.stopRequestedAt,
+    omission,
+  });
+}
+
 function usePendingSandboxById(
   input: PendingSandboxByIdInput,
 ): SandboxRowRead | null {
-  const { auth, sandboxId, hostId, userId, send, stage, omission } = input;
+  const { hostId, omission } = input;
   const { data, isFetching, refetch } = useQuery(
-    knownSandboxRowQueryOptions({
-      auth,
-      userId,
-      sandboxId,
-      hostId,
-      sendId: send?.id,
-      stageId: stage?.clientRequestId,
-      attemptId: stage?.attemptId,
-      observationRequestedAt: send?.observationRequestedAt,
-      observationRetryId: send?.observationRetryId,
-      stopRequestedAt: send?.stopRequestedAt,
-      omission,
-    }),
+    pendingSandboxByIdOptions(input),
   );
   const current =
     data !== undefined && knownSandboxRowCurrent(data, omission, hostId);
@@ -2262,6 +2274,73 @@ interface PendingDispatchPolicy {
   readonly environment: PendingSendFacts;
 }
 
+type WakeObservation = Extract<
+  PendingSandboxObservation,
+  { kind: "wake-result" }
+>;
+
+interface PendingDispatchWake {
+  readonly observation: WakeObservation;
+  readonly priorRow: PendingSandboxObservation | null;
+}
+
+function pendingDispatchWakeAwaitingRow(
+  wake: PendingDispatchWake,
+  row: PendingSandboxRowFacts,
+  environment: PendingSendFacts,
+): boolean {
+  return (
+    wake.priorRow === null ||
+    wake.priorRow === row.observation ||
+    !row.known ||
+    (environment.host === "awake" && !environment.clientReady)
+  );
+}
+
+function observeCompletedDispatchWake(input: {
+  readonly send: PendingSandboxSend;
+  readonly dispatch: PendingSandboxSendDispatch;
+  readonly observation: WakeObservation;
+  readonly priorRow: PendingSandboxObservation;
+  readonly auth: AuthService;
+  readonly queryClient: QueryClient;
+  readonly refetch: () => Promise<unknown>;
+}): PendingDispatchWake | null {
+  const { send, dispatch, observation, auth, queryClient, refetch } = input;
+  const oldRow = pendingSandboxByIdOptions({
+    auth,
+    userId: send.userId,
+    sandboxId: dispatch.delivery.sandboxId,
+    hostId: dispatch.input.hostId,
+    send: usePendingSandboxSendStore.getState().sends[send.id] ?? null,
+    stage: readStagedSandbox(pendingSendSurfaceKey(send.id)),
+    omission: undefined,
+  });
+  const observationId = uuidv4();
+  const requestedAt = completePendingDispatchWake(
+    send.id,
+    dispatch,
+    observation,
+    observationId,
+  );
+  if (requestedAt === null) return null;
+  const completed: WakeObservation = {
+    kind: "wake-result",
+    requestedAt,
+    observationId,
+  };
+  void cancelSandboxWakeReads(
+    queryClient,
+    auth,
+    send.userId,
+    oldRow.queryKey,
+  ).then(() => {
+    if (pendingDispatchWakeCurrent(send.id, dispatch, completed))
+      void refetch();
+  });
+  return { observation: completed, priorRow: input.priorRow };
+}
+
 /** The same kernel controls replay, wake, terminal recovery, and blocked views. */
 function usePendingDispatchLifecycle(
   send: PendingSandboxSend,
@@ -2276,7 +2355,8 @@ function usePendingDispatchLifecycle(
   );
   const binding = useHostBinding();
   const queryClient = useQueryClient();
-  const wakeRequested = useRef(false);
+  const wakeRequested = useRef<PendingDispatchWake | null>(null);
+  const lastRowObservation = useRef<PendingSandboxObservation>(row.observation);
   const [owned, setOwned] = useState(() => ownsPendingSandboxSend(send.id));
   const settings = useSandboxSettingsStatus(row.row);
   useEffect(() => {
@@ -2319,6 +2399,14 @@ function usePendingDispatchLifecycle(
   }, [polling, refetch]);
   useEffect(() => {
     if (!owned) return;
+    lastRowObservation.current = row.observation;
+    const wake = wakeRequested.current;
+    if (
+      wake !== null &&
+      (!pendingDispatchWakeCurrent(send.id, dispatch, wake.observation) ||
+        !pendingDispatchWakeAwaitingRow(wake, row, environment))
+    )
+      wakeRequested.current = null;
     const decision = usePendingSandboxSendStore
       .getState()
       .dispatchEvent(
@@ -2331,7 +2419,7 @@ function usePendingDispatchLifecycle(
           ...environment,
           retryAction: "send-again",
           retryObservation: event,
-          wakeInFlight: wakeRequested.current,
+          wakeInFlight: wakeRequested.current !== null,
         },
       );
     if (decision === null) return;
@@ -2350,31 +2438,46 @@ function usePendingDispatchLifecycle(
       decision.effects.includes("remove")
     )
       returnPendingSandboxSend(send.id);
-    if (decision.state.blocker === "wake" || environment.host !== "resting")
-      wakeRequested.current = false;
-    if (!decision.effects.includes("wake") || wakeRequested.current) return;
+    if (!decision.effects.includes("wake") || wakeRequested.current !== null)
+      return;
+    const observationId = uuidv4();
     const wakeBoundary = usePendingSandboxSendStore
       .getState()
-      .holdObservation(send.id, decision, undefined);
+      .holdObservation(send.id, decision, observationId);
     if (wakeBoundary === null) return;
-    wakeRequested.current = true;
+    const observation: WakeObservation = {
+      kind: "wake-result",
+      requestedAt: wakeBoundary,
+      observationId,
+    };
+    wakeRequested.current = { observation, priorRow: null };
     void startSandboxWake(
       queryClient,
       binding,
       dispatch.input.hostId,
       "send",
     ).then((outcome) => {
+      if (!pendingDispatchWakeCurrent(send.id, dispatch, observation)) return;
+      if (outcome?.kind === "awake" && binding !== null) {
+        wakeRequested.current = observeCompletedDispatchWake({
+          send,
+          dispatch,
+          observation,
+          priorRow: lastRowObservation.current,
+          auth: binding.auth,
+          queryClient,
+          refetch,
+        });
+        return;
+      }
+      wakeRequested.current = null;
       const settled = usePendingSandboxSendStore
         .getState()
-        .dispatchEvent(
-          send.id,
-          outcome?.kind === "awake" ? "observe" : "wake-failed",
-          {
-            ...environment,
-            wakeInFlight: true,
-            observation: { kind: "wake-result", requestedAt: wakeBoundary },
-          },
-        );
+        .dispatchEvent(send.id, "wake-failed", {
+          ...environment,
+          wakeInFlight: true,
+          observation,
+        });
       if (settled?.effects.includes("poll")) void refetch();
     });
   }, [
@@ -2385,9 +2488,8 @@ function usePendingDispatchLifecycle(
     owned,
     queryClient,
     refetch,
-    send.id,
-    send.retryRequest,
-    send.retryHandledId,
+    row,
+    send,
   ]);
   return {
     dispatchAllowed: owned && plan.effects.includes("dispatch"),

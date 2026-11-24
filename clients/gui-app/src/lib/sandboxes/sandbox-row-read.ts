@@ -1,4 +1,8 @@
-import { queryOptions } from "@tanstack/react-query";
+import {
+  queryOptions,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import type { SandboxGetFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
@@ -79,6 +83,21 @@ export function knownSandboxRowQueryOptions(
     }),
     enabled: auth !== null && sandboxId !== null && omission !== undefined,
   });
+}
+
+export async function cancelSandboxWakeReads(
+  client: QueryClient,
+  auth: AuthService,
+  userId: string | null,
+  knownRowKey: QueryKey,
+): Promise<void> {
+  await Promise.all([
+    client.cancelQueries({ queryKey: knownRowKey, exact: true }),
+    client.cancelQueries({
+      queryKey: sandboxQueryKeys.list(auth, userId),
+      exact: true,
+    }),
+  ]);
 }
 
 export function sandboxRowNotFound(result: SandboxGetFetchResult): boolean {

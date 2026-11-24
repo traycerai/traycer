@@ -1,6 +1,7 @@
 import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { DraftDocument } from "@traycer/protocol/host";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
@@ -11,6 +12,7 @@ import {
 } from "@/components/home/data/landing-options";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
@@ -32,9 +34,13 @@ import {
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import {
   parseReturnedSandbox,
+  returnedSandboxCreateMatches,
+  returnedSandboxWithCreate,
   sameStoredReturnedSandbox,
   storeReturnedSandbox,
+  updateReturnedSandboxRestore,
   type ReturnedSandbox,
+  type ReturnedSandboxDraft,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
@@ -539,6 +545,63 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
     },
   ),
 );
+
+function persistedTaskReturn(
+  epicId: string,
+  draftId: string | null,
+): StoredReturnedSandbox | null {
+  const raw = window.localStorage.getItem(
+    persistKey(STORE_KEYS.newConversationDraft),
+  );
+  if (raw === null) return null;
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || !isRecord(parsed.state)) return null;
+  const patches = parsed.state.draftPatchesByEpicId;
+  if (!isRecord(patches) || !Object.hasOwn(patches, epicId)) return null;
+  const patch = patches[epicId];
+  return isRecord(patch) && parseNullableId(patch.draftId) === draftId
+    ? parseReturnedSandbox(patch.returnedSandbox)
+    : null;
+}
+
+/** Keep an explicit task Start or Retry with the draft that supplied its stage. */
+export function saveReturnedTaskCreateRequest(
+  surfaceKey: string,
+  origin: Extract<ReturnedSandboxDraft, { kind: "task" }>,
+  request: SandboxCreateRequest,
+): boolean {
+  const { epicId, draftId, userId } = origin;
+  if (signedInUserId() !== userId) return false;
+  const state = useNewConversationModalStore.getState();
+  const patch = state.draftPatchesByEpicId[epicId];
+  if (patch === undefined || patch.draftId !== draftId) return false;
+  const stored = patch.returnedSandbox ?? null;
+  const next = returnedSandboxWithCreate(stored, origin, request);
+  if (next === null) return false;
+  try {
+    updateReturnedSandboxRestore(surfaceKey, next);
+    if (!sameStoredReturnedSandbox(stored, next)) {
+      state.setReturnedSandbox(epicId, next);
+    } else if (
+      !returnedSandboxCreateMatches(
+        persistedTaskReturn(epicId, draftId),
+        origin,
+        request,
+      )
+    ) {
+      useNewConversationModalStore.setState({
+        draftPatchesByEpicId: state.draftPatchesByEpicId,
+      });
+    }
+    return returnedSandboxCreateMatches(
+      persistedTaskReturn(epicId, draftId),
+      origin,
+      request,
+    );
+  } catch {
+    return false;
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

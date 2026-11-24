@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
-import { v5 as uuidv5 } from "uuid";
-import { sandboxCreateKey } from "@/lib/sandboxes/sandbox-create-key";
 import {
   markReturnedSandboxRestored,
   onReturnedSandboxSuperseded,
-  returnedSandboxFor,
+  returnedSandboxForDraft,
   sameReturnedSandbox,
   sameStoredReturnedSandbox,
   stageIsReturnedSandbox,
@@ -27,33 +25,6 @@ function signedInUserId(): string | null {
   return useAuthStore.getState().contextMetadata?.userId ?? null;
 }
 
-/** A legacy return did not allocate a create key. The draft records the occurrence. */
-function returnedSandboxForDraft(
-  stored: StoredReturnedSandbox | null,
-  userId: string | null,
-  kind: "task" | "landing",
-  draftId: string | null,
-): StoredReturnedSandbox | null {
-  const returned = returnedSandboxFor(stored, userId);
-  if (
-    returned === null ||
-    returned.target.kind === "existing" ||
-    returned.clientRequestId !== null
-  )
-    return returned;
-  if (draftId === null)
-    return returned.lastCreateKey === undefined
-      ? null
-      : { ...returned, clientRequestId: returned.lastCreateKey };
-  return {
-    ...returned,
-    clientRequestId: sandboxCreateKey(
-      "stage",
-      uuidv5(`returned-sandbox:${kind}:${draftId}`, uuidv5.URL),
-    ),
-  };
-}
-
 /**
  * The task's new-agent composer, unnamed: stages its draft's returned
  * sandbox. A modal that names its host (`hostId`) stages nothing.
@@ -64,6 +35,9 @@ export function useNewConversationReturnedSandbox(
 ): void {
   const surfaceKey = hostId === null ? newConversationSurfaceKey(epicId) : null;
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const draftId = useNewConversationModalStore(
+    (state) => state.draftPatchesByEpicId[epicId]?.draftId ?? null,
+  );
   const returned = useStoreWithEqualityFn(
     useNewConversationModalStore,
     (state) => {
@@ -80,19 +54,24 @@ export function useNewConversationReturnedSandbox(
   const read = useCallback(() => {
     const draft =
       useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+    if ((draft?.draftId ?? null) !== draftId) return null;
     return returnedSandboxForDraft(
       draft?.returnedSandbox ?? null,
       signedInUserId(),
       "task",
       draft?.draftId ?? null,
     );
-  }, [epicId]);
-  const forget = useCallback(
-    () =>
-      useNewConversationModalStore.getState().setReturnedSandbox(epicId, null),
-    [epicId],
-  );
-  useReturnedSandboxStage(surfaceKey, returned, read, forget);
+  }, [draftId, epicId]);
+  const forget = useCallback(() => {
+    if (read() !== null)
+      useNewConversationModalStore.getState().setReturnedSandbox(epicId, null);
+  }, [epicId, read]);
+  useReturnedSandboxStage(surfaceKey, returned, {
+    read,
+    forget,
+    draftId,
+    epicId,
+  });
 }
 
 function landingReturnedSandbox(
@@ -137,10 +116,15 @@ export function useLandingReturnedSandbox(
     [draftId],
   );
   const forget = useCallback(() => {
-    if (draftId !== null)
+    if (draftId !== null && read() !== null)
       useLandingDraftStore.getState().setDraftReturnedSandbox(draftId, null);
-  }, [draftId]);
-  useReturnedSandboxStage(active ? surfaceKey : null, returned, read, forget);
+  }, [draftId, read]);
+  useReturnedSandboxStage(active ? surfaceKey : null, returned, {
+    read,
+    forget,
+    draftId,
+    epicId: null,
+  });
 }
 
 /**
@@ -159,9 +143,14 @@ export function useLandingReturnedSandbox(
 function useReturnedSandboxStage(
   surfaceKey: string | null,
   returned: StoredReturnedSandbox | null,
-  read: () => StoredReturnedSandbox | null,
-  forget: () => void,
+  source: {
+    readonly read: () => StoredReturnedSandbox | null;
+    readonly forget: () => void;
+    readonly draftId: string | null;
+    readonly epicId: string | null;
+  },
 ): void {
+  const { read, forget, draftId, epicId } = source;
   useEffect(() => {
     if (surfaceKey === null) return;
     return onReturnedSandboxSuperseded(surfaceKey, forget);
@@ -199,9 +188,19 @@ function useReturnedSandboxStage(
       !sameReturnedSandbox(read(), returned)
     )
       return;
-    useStagedSandboxStore.getState().restore(surfaceKey, returned);
+    const { clientRequestId: stageId, userId } = returned;
+    const landing =
+      draftId === null ? null : { kind: "landing" as const, draftId };
+    const draft =
+      epicId === null ? landing : { kind: "task" as const, epicId, draftId };
+    useStagedSandboxStore.getState().restore(surfaceKey, {
+      ...returned,
+      ...(draft !== null && stageId !== null && userId !== null
+        ? { returnedDraft: { ...draft, userId, stageId } }
+        : {}),
+    });
     markReturnedSandboxRestored(surfaceKey, returned);
-  }, [read, returned, surfaceKey, teardowns]);
+  }, [read, returned, surfaceKey, teardowns, draftId, epicId]);
 
   const stage = useStagedSandbox(surfaceKey ?? "");
   const previousRef = useRef<{

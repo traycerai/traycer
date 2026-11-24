@@ -154,6 +154,11 @@ import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fix
 import { teamSubscription } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import {
+  pendingSendState,
+  transitionPendingSend,
+  UNKNOWN_PENDING_SEND_FACTS,
+} from "@/lib/sandboxes/pending-sandbox-send-transition";
+import {
   readStagedSandbox,
   stagedRetryKey,
   useStagedSandboxStore,
@@ -173,6 +178,7 @@ import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget"
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
   pendingSendSurfaceKey,
+  pendingSandboxSendFacts,
   usePendingSandboxSendStore,
   type PendingSandboxSend,
   type PendingSandboxSendDispatch,
@@ -192,6 +198,8 @@ import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines
 
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
+import { sandboxQueryKeys } from "@/lib/query-keys/sandbox-query-keys";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { recordMapStorageKey } from "@/lib/persist/keys";
 import { persistedStageStorage } from "@/lib/sandboxes/__tests__/staged-sandbox-storage-fixture";
 
@@ -7154,29 +7162,194 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   );
 
   /** Retry on an uncertain claim whose sandbox rests: the owner starts one wake we hold open. */
-  async function startClaimedWake(kind: Kind): Promise<{
-    readonly input: PendingSandboxSendDispatch["input"];
-    readonly wake: Deferred<{ readonly kind: "awake" } | null>;
-  }> {
+  async function startClaimedWake(kind: Kind, client: QueryClient | undefined) {
     const input = await seedClaim(kind, "uncertain", SANDBOX_ID);
     answerSandboxRows([rowIn("suspended")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     const wake = deferred<{ readonly kind: "awake" } | null>();
     mocks.wake.mockReturnValue(wake.promise);
-    mount();
+    const view = client === undefined ? mount() : mountWithQueryClient(client);
     fireEvent.click(
       await screen.findByTestId("pending-sandbox-dispatch-retry"),
     );
     await waitFor(() => {
       expect(mocks.wake).toHaveBeenCalledTimes(1);
     });
-    return { input, wake };
+    return { input, wake, view };
   }
+
+  it("does not let an older wake result replace a newer hold written in the same millisecond", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { wake } = await startClaimedWake("chat", queryClient);
+    const firstHold = usePendingSandboxSendStore.getState().sends[SEND_ID];
+    const firstObservationId = firstHold.observationRetryId;
+    if (firstObservationId === undefined)
+      throw new Error("expected the actual wake to persist its observation id");
+    const sameTimestamp = firstHold.observationRequestedAt;
+    if (sameTimestamp === undefined)
+      throw new Error("expected the actual wake timestamp");
+    const now = vi.spyOn(Date, "now").mockReturnValue(sameTimestamp);
+    onTestFinished(() => now.mockRestore());
+
+    const facts = pendingSandboxSendFacts(SEND_ID, {
+      ...UNKNOWN_PENDING_SEND_FACTS,
+      host: "resting",
+      observation: {
+        kind: "list",
+        sentAt: sameTimestamp + 1,
+        mountedAt: 0,
+      },
+      clientReady: true,
+      settingsReady: true,
+      agentReady: true,
+      modelReady: true,
+    });
+    const plan = transitionPendingSend(
+      pendingSendState(firstHold, "none"),
+      "retry",
+      facts,
+    );
+    expect(plan.effects).toContain("wake");
+    const secondObservationId = "same-time-newer-wake";
+    const secondHold = usePendingSandboxSendStore
+      .getState()
+      .holdObservation(SEND_ID, plan, secondObservationId);
+    expect(secondHold).toBe(sameTimestamp);
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toMatchObject({
+      observationRequestedAt: sameTimestamp,
+      observationRetryId: secondObservationId,
+    });
+
+    mocks.refetchSandboxes.mockClear();
+    await act(async () => {
+      wake.resolve({ kind: "awake" });
+      await wake.promise;
+    });
+
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toMatchObject({
+      observationRequestedAt: sameTimestamp,
+      observationRetryId: secondObservationId,
+    });
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+    ).not.toMatchObject({ blocker: "wake" });
+    expect(mocks.refetchSandboxes).not.toHaveBeenCalled();
+    expect(createChatCalls()).toEqual([]);
+  });
+
+  it("cancels the held pre-wake row lookup before a fresh awake list permits one dispatch", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          gcTime: 0,
+          queryKeyHashFn: hashAppQueryKey,
+        },
+      },
+    });
+    const staleRowRead = deferred<SandboxGetFetchResult>();
+    const createChat = deferred<CreateChatResponseV12>();
+    const suspended = rowIn("suspended");
+    const awake = rowIn("awake");
+    const { input, wake, view } = await startClaimedWake("chat", queryClient);
+    mocks.createChatDeferred = createChat.promise;
+    mocks.getSandbox.mockReturnValue(staleRowRead.promise);
+    const cancelQueries = vi.spyOn(queryClient, "cancelQueries");
+    try {
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+
+      answerSandboxRows([], FRESH + 1);
+      await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(1));
+      const oldRowQuery = queryClient
+        .getQueryCache()
+        .findAll({
+          predicate: (query) => query.queryKey[1] === "sandbox-known-row",
+        })
+        .find((query) => query.state.fetchStatus === "fetching");
+      if (oldRowQuery === undefined)
+        throw new Error("expected the by-ID read from the new omission");
+      const auth = oldRowQuery.queryKey[2];
+      const userId = oldRowQuery.queryKey[3];
+      if (
+        typeof auth !== "object" ||
+        auth === null ||
+        typeof userId !== "string"
+      )
+        throw new Error("expected the query's account scope");
+      const oldListKey = sandboxQueryKeys.list(auth, userId);
+      const oldObservationId =
+        usePendingSandboxSendStore.getState().sends[SEND_ID]
+          ?.observationRetryId;
+      const oldRowKey = oldRowQuery.queryKey;
+      mocks.refetchSandboxes.mockImplementation(() => {
+        answerSandboxRows([awake], FRESH + 2);
+        return Promise.resolve(undefined);
+      });
+
+      await act(async () => {
+        wake.resolve({ kind: "awake" });
+        await wake.promise;
+      });
+      await waitFor(() => {
+        expect(mocks.refetchSandboxes).toHaveBeenCalledTimes(1);
+        expect(createChatCalls()).toHaveLength(1);
+      });
+      const currentSend = usePendingSandboxSendStore.getState().sends[SEND_ID];
+      expect(currentSend.observationRetryId).not.toBe(oldObservationId);
+      expect(cancelQueries).toHaveBeenCalledWith({
+        queryKey: oldRowKey,
+        exact: true,
+      });
+      expect(cancelQueries).toHaveBeenCalledWith({
+        queryKey: oldListKey,
+        exact: true,
+      });
+
+      await act(async () => {
+        staleRowRead.resolve({ kind: "ok", sandbox: suspended });
+        await staleRowRead.promise;
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).not.toMatchObject({ status: "uncertain", blocker: "wake" });
+      expect(createChatCalls()).toHaveLength(1);
+      expect(createChatCalls()[0]?.input).toMatchObject({
+        chatId: input.chatId,
+        hostId: SANDBOX_HOST,
+      });
+
+      await act(async () => {
+        createChat.resolve({
+          chatId: input.chatId,
+          initialTurnStarted: true,
+        });
+        await createChat.promise;
+      });
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID],
+        ).toMatchObject({
+          delivery: {
+            chatId: input.chatId,
+            hostId: SANDBOX_HOST,
+            sandboxId: SANDBOX_ID,
+          },
+          dispatch: null,
+        });
+      });
+      expect(createChatCalls()).toHaveLength(1);
+    } finally {
+      view.unmount();
+      queryClient.clear();
+    }
+  });
 
   it.each(KINDS)(
     "latches the wake remedy when the %s claim's own wake fails",
     async (kind) => {
-      const { wake } = await startClaimedWake(kind);
+      const { wake } = await startClaimedWake(kind, undefined);
 
       await act(async () => {
         wake.resolve(null);
@@ -7194,7 +7367,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(KINDS)(
     "ignores a %s claim's wake failure whose boundary a later request superseded: no wake remedy, and fresh work continues",
     async (kind) => {
-      const { input, wake } = await startClaimedWake(kind);
+      const { input, wake } = await startClaimedWake(kind, undefined);
       // A later accepted request moves the observation boundary on.
       const superseding = Date.now() + 60_000;
       usePendingSandboxSendStore.setState((state) => ({
@@ -7228,7 +7401,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(KINDS)(
     "issues the newer request's own wake on Retry when a superseded %s wake fails and a fresh read still shows the sandbox resting",
     async (kind) => {
-      const { input, wake } = await startClaimedWake(kind);
+      const { input, wake } = await startClaimedWake(kind, undefined);
       const superseding = Date.now() + 60_000;
       usePendingSandboxSendStore.setState((state) => ({
         sends: {

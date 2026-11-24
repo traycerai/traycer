@@ -15,6 +15,7 @@ import {
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
@@ -45,6 +46,8 @@ import type {
   DesktopPerWindowSnapshot,
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
+import { getDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   completeLandingDraftDelete,
@@ -70,9 +73,13 @@ import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
   parseReturnedSandbox,
+  returnedSandboxCreateMatches,
   returnedSandboxToJson,
+  returnedSandboxWithCreate,
   sameStoredReturnedSandbox,
   storeReturnedSandbox,
+  updateReturnedSandboxRestore,
+  type ReturnedSandboxDraft,
   type ReturnedSandbox,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
@@ -1380,6 +1387,77 @@ function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
     landingDrafts: state.drafts.map(projectLandingDraftForDesktop),
     activeLandingDraftId: state.activeDraftId,
   });
+}
+
+function persistedLandingReturn(draftId: string): StoredReturnedSandbox | null {
+  const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+  if (raw === null) return null;
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || !isRecord(parsed.state)) return null;
+  const { drafts } = parsed.state;
+  if (!Array.isArray(drafts)) return null;
+  const draft: unknown = drafts.find(
+    (item: unknown) => isRecord(item) && item.id === draftId,
+  );
+  return isRecord(draft) ? parseReturnedSandbox(draft.returnedSandbox) : null;
+}
+
+/** A restored Landing stage can send only after its original draft holds the body. */
+export async function saveReturnedLandingCreateRequest(
+  surfaceKey: string,
+  origin: Extract<ReturnedSandboxDraft, { kind: "landing" }>,
+  request: SandboxCreateRequest,
+): Promise<boolean> {
+  const { draftId, userId } = origin;
+  if (signedInUserId() !== userId) return false;
+  const state = useLandingDraftStore.getState();
+  const draft = state.drafts.find((item) => item.id === draftId);
+  const stored = draft?.returnedSandbox ?? null;
+  const next = returnedSandboxWithCreate(stored, origin, request);
+  if (next === null) return false;
+  try {
+    updateReturnedSandboxRestore(surfaceKey, next);
+    if (!sameStoredReturnedSandbox(stored, next)) {
+      state.setDraftReturnedSandbox(draftId, next);
+    } else if (
+      desktopProjectionBridge === null &&
+      !returnedSandboxCreateMatches(
+        persistedLandingReturn(draftId),
+        origin,
+        request,
+      )
+    ) {
+      // A failed local write may have updated the draft in memory.
+      useLandingDraftStore.setState({ drafts: state.drafts });
+    }
+    const saved = await readDurableLandingReturn(draftId);
+    const live = useLandingDraftStore
+      .getState()
+      .drafts.find((item) => item.id === draftId);
+    return (
+      signedInUserId() === userId &&
+      returnedSandboxCreateMatches(saved, origin, request) &&
+      returnedSandboxCreateMatches(live?.returnedSandbox, origin, request)
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function readDurableLandingReturn(
+  draftId: string,
+): Promise<StoredReturnedSandbox | null> {
+  const projection = desktopProjectionBridge;
+  if (projection === null) return persistedLandingReturn(draftId);
+  const perWindowState = getDesktopEpicOwnershipBridge()?.perWindowState;
+  if (perWindowState === undefined) return null;
+  // The outbound subscription is debounced. A create must wait for its disk write.
+  projectLandingDraftsToDesktop(useLandingDraftStore.getState());
+  await projection.flush();
+  const snapshot = await perWindowState.get();
+  if (projection !== desktopProjectionBridge) return null;
+  const draft = snapshot.landingDrafts.find((item) => item.id === draftId);
+  return parseReturnedSandbox(draft?.returnedSandbox);
 }
 
 useLandingDraftStore.subscribe((state) => {

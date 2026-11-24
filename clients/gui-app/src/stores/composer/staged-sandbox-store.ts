@@ -23,7 +23,10 @@ import {
   sandboxCreateKey,
   sandboxCreateKeyForPress,
 } from "@/lib/sandboxes/sandbox-create-key";
-import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
+import type {
+  ReturnedSandboxDraft,
+  ReturnedSandbox,
+} from "@/lib/sandboxes/returned-sandbox";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createPendingStageStorage,
@@ -158,6 +161,7 @@ export interface StagedSandbox {
   readonly attemptRetryId?: string;
   /** The exact create request selected for that key, including the first POST. */
   readonly lastRetryCreate?: SandboxCreateRequest;
+  readonly returnedDraft?: ReturnedSandboxDraft;
   /**
    * The draft whose send started the action, where a surface holds several
    * (the landing composer's drafts share one window pin): only its composer
@@ -218,6 +222,19 @@ export function stagedCreateRetryPayload(
   return last?.clientRequestId === key ? last : undefined;
 }
 
+function stagedAttemptPayload(
+  stage: StagedSandbox,
+  key: string,
+  pressed: SandboxCreateRequest | undefined,
+): SandboxCreateRequest | undefined {
+  const saved = stage.lastRetryCreate;
+  if (key === stagedCreateAttemptKey(stage) && saved?.clientRequestId === key)
+    return saved;
+  return pressed?.clientRequestId === key
+    ? pressed
+    : stagedCreateRetryPayload(stage, key);
+}
+
 export function newStagedSandboxKey(): string {
   return sandboxCreateKey("stage", uuidv4());
 }
@@ -260,6 +277,10 @@ export function stagedSandboxRested(
   );
 }
 
+interface RestoredSandboxPick extends ReturnedSandbox {
+  readonly returnedDraft?: ReturnedSandboxDraft;
+}
+
 interface StagedSandboxStoreState {
   /** Keyed by the composer surface's host-pin key. */
   readonly bySurface: Readonly<Partial<Record<string, StagedSandbox>>>;
@@ -271,7 +292,7 @@ interface StagedSandboxStoreState {
   /** Stages a pick, replacing whatever the surface had staged. */
   readonly stage: (surfaceKey: string, target: StagedSandboxTarget) => void;
   /** Restages a returned draft's pick under its existing create key. */
-  readonly restore: (surfaceKey: string, returned: ReturnedSandbox) => void;
+  readonly restore: (surfaceKey: string, returned: RestoredSandboxPick) => void;
   /** Drops the stage: another pick, or the handoff completed. */
   readonly clear: (surfaceKey: string) => void;
   /**
@@ -410,7 +431,8 @@ function stagedPick({
   clientRequestId,
   lastCreateKey,
   lastRetryCreate,
-}: ReturnedSandbox): StagedSandbox {
+  returnedDraft,
+}: RestoredSandboxPick): StagedSandbox {
   return {
     target,
     createAttempt: null,
@@ -421,6 +443,7 @@ function stagedPick({
     lastRetryCreate.clientRequestId === lastCreateKey
       ? { lastRetryCreate }
       : {}),
+    ...(returnedDraft === undefined ? {} : { returnedDraft }),
     ownerId: null,
     createdSandboxId: null,
     createdHostId: null,
@@ -472,7 +495,8 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
         set((state) => {
           const stage = state.bySurface[fromSurfaceKey];
           if (stage === undefined) return state;
-          const next = { ...state.bySurface, [toSurfaceKey]: stage };
+          const { returnedDraft: _returned, ...pendingStage } = stage;
+          const next = { ...state.bySurface, [toSurfaceKey]: pendingStage };
           delete next[fromSurfaceKey];
           return { bySurface: next };
         }),
@@ -497,10 +521,11 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           );
         const previousKey = stage.lastCreateKey ?? clientRequestId;
         const lastCreateKey = createKey ?? previousKey;
-        const lastRetryCreate =
-          retryCreate?.clientRequestId === lastCreateKey
-            ? retryCreate
-            : stagedCreateRetryPayload(stage, lastCreateKey);
+        const lastRetryCreate = stagedAttemptPayload(
+          stage,
+          lastCreateKey,
+          retryCreate,
+        );
         const replacing =
           lastCreateKey !== previousKey && stage.target.kind === "new";
         const resumed = resume && !replacing && stage.startedAt !== null;

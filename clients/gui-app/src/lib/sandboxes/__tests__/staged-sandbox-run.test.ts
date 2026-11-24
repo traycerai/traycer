@@ -29,6 +29,7 @@ import type {
   SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
@@ -67,6 +68,7 @@ import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import {
   holdPendingSandboxSendOwnership,
   ownsPendingSandboxSend,
+  reservePendingSandboxSendOwnership,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   pendingSendSurfaceKey,
@@ -342,6 +344,137 @@ describe("runStagedSandbox creating", () => {
     });
   });
 
+  it("does no catalogue read or create when the account changes during team environment preflight", async () => {
+    await ownPendingStage("preflight-account-switch");
+    useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+    const { auth, deps } = harness({}, true);
+    const entered = deferred<void>();
+    const environment = deferred<TeamEnvironmentFetchResult>();
+    const environmentRead = vi
+      .spyOn(auth, "getTeamEnvironment")
+      .mockImplementation(() => {
+        entered.resolve(undefined);
+        return environment.promise;
+      });
+    const catalogue = vi.spyOn(auth, "getSandboxCatalogue");
+
+    const runPromise = run(null, deps);
+    await entered.promise;
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-2", userName: "Other", email: "other@example.test" },
+        { userId: "user-2", username: "Other" },
+        [],
+      );
+    environment.resolve({ kind: "ok", environmentId: "env-acme" });
+    await runPromise;
+
+    expect(catalogue).not.toHaveBeenCalled();
+    expect(auth.requests).toEqual([]);
+    expect(environmentRead).toHaveBeenCalledWith("team-acme");
+  });
+
+  it("uses the saved create body when a same-key Retry mailbox proposes another body", async () => {
+    await ownPendingStage("same-key-mailbox-retry");
+    useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+    const stageIdentity = stageOf().clientRequestId;
+    if (stageIdentity === null) throw new Error("expected a stage identity");
+    const createKey = "retry:sbx_saved_attempt";
+    const savedRequest: SandboxCreateRequest = {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: null,
+      region: "us-west",
+      displayName: "saved-attempt",
+      idleMinutes: 30,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: "env-saved-team",
+      destroyAfterRestingMinutes: 1440,
+      createdByTaskId: null,
+      clientRequestId: createKey,
+    };
+    const proposedRequest: SandboxCreateRequest = {
+      ...savedRequest,
+      cpus: 8,
+      memoryMb: 16_384,
+      displayName: "new-picker-value",
+    };
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      phase: "creating",
+      lastCreateKey: createKey,
+      lastRetryCreate: savedRequest,
+      failure: {
+        kind: "failed",
+        code: "provider_failed",
+        step: "creating",
+        sandboxId: "sbx_saved_attempt",
+        retryCreate: savedRequest,
+      },
+    });
+    const observedAttemptId = stageOf().attemptId ?? null;
+    const retryRequestId = await useStagedSandboxStore
+      .getState()
+      .requestRetry(surfaceKey, "user-1", "retry-creation", {
+        createKey,
+        retryCreate: proposedRequest,
+        observedCreateKey: createKey,
+        observedAttemptId,
+      });
+    if (retryRequestId === null)
+      throw new Error("expected the retry to be durably published");
+    expect(stageOf().retryRequest).toMatchObject({
+      id: retryRequestId,
+      retryCreate: proposedRequest,
+      observedCreateKey: createKey,
+    });
+
+    const { auth, deps } = harness(
+      {
+        createSandbox: () =>
+          refusal(503, SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE),
+      },
+      true,
+    );
+    await runStagedSandbox(
+      surfaceKey,
+      {
+        taskId: null,
+        resume: true,
+        createKey,
+        retryCreate: proposedRequest,
+        observedCreateKey: createKey,
+        observedAttemptId,
+        retryRequestId,
+      },
+      deps,
+    );
+
+    const stageKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.stagedSandboxSend),
+      surfaceKey,
+    );
+    const rawStage = localStorage.getItem(stageKey);
+    if (rawStage === null) throw new Error("expected the durable stage");
+    const durableStage = JSON.parse(rawStage) as StagedSandbox;
+    expect(auth.requests).toEqual([savedRequest]);
+    expect(stageOf()).toMatchObject({
+      clientRequestId: stageIdentity,
+      lastCreateKey: createKey,
+      lastRetryCreate: savedRequest,
+      retryHandledId: retryRequestId,
+    });
+    expect(durableStage).toMatchObject({
+      clientRequestId: stageIdentity,
+      lastCreateKey: createKey,
+      lastRetryCreate: savedRequest,
+      retryHandledId: retryRequestId,
+    });
+  });
+
   it("replays the exact first pending create after a held response and runner replacement", async () => {
     const sendId = "pre-response-restart-send";
     surfaceKey = pendingSendSurfaceKey(sendId);
@@ -355,7 +488,7 @@ describe("runStagedSandbox creating", () => {
     usePendingSandboxSendStore
       .getState()
       .add(pendingSend({ id: sendId, userId: "user-1" }));
-    const ownership = holdPendingSandboxSendOwnership(sendId);
+    const ownership = reservePendingSandboxSendOwnership(sendId);
     let releaseOwnership: (() => void) | undefined = ownership.release;
     const releaseOldOwnership = () => {
       releaseOwnership?.();
@@ -387,12 +520,20 @@ describe("runStagedSandbox creating", () => {
     const { auth, deps } = harness({ lists: [omittedList()] }, true);
     const firstResponse = deferred<SandboxCreateFetchResult>();
     const resumedResponse = deferred<SandboxCreateFetchResult>();
+    const firstCreateEntered = deferred<void>();
+    const secondCreateEntered = deferred<void>();
     const requests: SandboxCreateRequest[] = [];
     vi.spyOn(auth, "createSandbox").mockImplementation((request) => {
       requests.push(request);
-      return requests.length === 1
-        ? firstResponse.promise
-        : resumedResponse.promise;
+      if (requests.length === 1) {
+        firstCreateEntered.resolve(undefined);
+        return firstResponse.promise;
+      }
+      if (requests.length === 2) {
+        secondCreateEntered.resolve(undefined);
+        return resumedResponse.promise;
+      }
+      return Promise.reject(new Error("unexpected extra create request"));
     });
 
     let originalRun: Promise<void> | undefined;
@@ -419,7 +560,7 @@ describe("runStagedSandbox creating", () => {
         { taskId: "original-task", resume: false, createKey: null },
         deps,
       );
-      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      await firstCreateEntered.promise;
 
       const originalRequest = requests[0];
       expect(originalRequest.clientRequestId).toMatch(/^stage:/);
@@ -448,9 +589,7 @@ describe("runStagedSandbox creating", () => {
       expect(readStagedSandbox(surfaceKey)?.createdSandboxId).toBeNull();
       expect(readStagedSandbox(surfaceKey)?.failure).toBeNull();
       releaseOldOwnership();
-      await vi.waitFor(() =>
-        expect(ownsPendingSandboxSend(sendId)).toBe(false),
-      );
+      expect(ownsPendingSandboxSend(sendId)).toBe(false);
 
       vi.resetModules();
       replacementStageStore =
@@ -499,7 +638,7 @@ describe("runStagedSandbox creating", () => {
         { taskId: "changed-task", resume: true, createKey: null },
         deps,
       );
-      await vi.waitFor(() => expect(requests).toHaveLength(2));
+      await secondCreateEntered.promise;
       expect(requests[1]).toEqual(originalRequest);
       expect(auth.environmentReads).toEqual(["team-acme"]);
       expect(auth.environmentReads).not.toContain("team-changed");
@@ -2341,22 +2480,22 @@ describe("runStagedSandbox guards", () => {
       const gate = new Promise<void>((resolve) => {
         releaseGate = resolve;
       });
-      const enteredOnMutate = vi.fn();
+      const enteredOnMutate = deferred<void>();
+      const onMutate = vi.fn(() => {
+        enteredOnMutate.resolve(undefined);
+        return gate;
+      });
       deps.queryClient.setMutationDefaults(
         sandboxMutationKeys.create("user-1"),
         {
-          onMutate: () => {
-            enteredOnMutate();
-            return gate;
-          },
+          onMutate,
         },
       );
 
       const runPromise = run(null, deps);
       try {
-        await vi.waitFor(() =>
-          expect(enteredOnMutate).toHaveBeenCalledTimes(1),
-        );
+        await enteredOnMutate.promise;
+        expect(onMutate).toHaveBeenCalledTimes(1);
         expect(auth.requests).toEqual([]);
 
         if (boundary === "account switch") {
@@ -2413,13 +2552,16 @@ describe("runStagedSandbox guards", () => {
     const heldResult = new Promise<SandboxCreateFetchResult>((resolve) => {
       resolveCreate = resolve;
     });
+    const createEntered = deferred<void>();
     vi.spyOn(auth, "createSandbox").mockImplementationOnce((request) => {
       auth.requests.push(request);
+      createEntered.resolve(undefined);
       return heldResult;
     });
 
     const oldRun = run(null, deps);
-    await vi.waitFor(() => expect(auth.requests).toHaveLength(1));
+    await createEntered.promise;
+    expect(auth.requests).toHaveLength(1);
     const oldRequest = auth.requests.at(0);
     const stageIdentity = stageOf().clientRequestId;
     if (

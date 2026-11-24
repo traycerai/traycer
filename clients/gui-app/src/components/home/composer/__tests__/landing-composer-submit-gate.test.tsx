@@ -60,13 +60,17 @@ import {
 import { useSandboxStaging } from "@/components/composer/use-sandbox-staging";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  useLandingDraftStore,
+  type LandingDraftTab,
+} from "@/stores/home/landing-draft-store";
 import { TerminalAccountFirstMention } from "@/components/home/pickers/terminal-account-first-mention";
 import { useTerminalAccountMentionStore } from "@/stores/onboarding/terminal-account-mention-store";
 import { SIGNED_OUT_SEND_HINT } from "@/components/chat/composer/use-provider-reauth-gate";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
+  type StagedSandbox,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
@@ -76,11 +80,40 @@ import {
   usePendingSandboxSendStore,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
+import { LANDING_DRAFT_PERSIST_KEY } from "@/stores/home/landing-draft-store";
+import type { StoredReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 
 const DIRTY_CONTENT: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "dirty" }] }],
 };
+
+function mockLandingDraftTab(draft: {
+  readonly id: string;
+  readonly closed: boolean;
+}): LandingDraftTab {
+  return {
+    ...draft,
+    content: DIRTY_CONTENT,
+    selection: null,
+    lastTouchedAt: 0,
+    settings: null,
+    composerMode: "chat",
+    workspace: { folders: [], folderInfoByPath: {}, primaryPath: null },
+    adoption: { state: "unadopted" },
+    hostRevision: 0,
+    generation: 0,
+    syncedGeneration: 0,
+    ownerHostId: null,
+    origin: null,
+    supersedes: null,
+    publication: null,
+    confirmedHostBlobHashes: [],
+    returnedSandbox: null,
+    accountFollowsDefault: false,
+    namedHostId: null,
+  };
+}
 
 /** The composer's own host client, as its placement names it. */
 const PLACEMENT_CLIENT = vi.hoisted(() => ({ hostId: "host-test" }));
@@ -203,6 +236,7 @@ const testState = vi.hoisted(() => ({
     | undefined,
   providerListeners: new Set<() => void>(),
   toolbarStore: null as { readonly setState: (patch: object) => void } | null,
+  actualLandingDrafts: false,
 }));
 
 /** The new host's Claude Code row: no profiles, no binary but its pack. */
@@ -261,9 +295,12 @@ vi.mock("@/components/home/composer/composer-body", async () => {
 
 vi.mock("@/stores/settings/settings-store", () => {
   const state = { composerMode: "chat", setComposerMode: vi.fn() };
+  const useSettingsStore = Object.assign(
+    (selector: (value: typeof state) => unknown) => selector(state),
+    { getState: () => state },
+  );
   return {
-    useSettingsStore: (selector: (value: typeof state) => unknown) =>
-      selector(state),
+    useSettingsStore,
   };
 });
 
@@ -272,28 +309,57 @@ const landingDrafts = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
 }));
 
-vi.mock("@/stores/home/landing-draft-store", () => {
-  const state = {
+vi.mock("@/stores/home/landing-draft-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/home/landing-draft-store")>();
+  type LandingDraftStoreState = Parameters<
+    Parameters<typeof actual.useLandingDraftStore>[0]
+  >[0];
+  const state: LandingDraftStoreState = {
+    ...actual.useLandingDraftStore.getState(),
     get drafts() {
-      return landingDrafts.drafts;
+      return testState.actualLandingDrafts
+        ? actual.useLandingDraftStore.getState().drafts
+        : landingDrafts.drafts.map(mockLandingDraftTab);
     },
-    setDraftComposerMode: vi.fn(),
-    setDraftSettings: vi.fn(),
-    setDraftAccountFollowsDefault: vi.fn(),
-    seedUnseededDraft: vi.fn(() => false),
-    createDraft: vi.fn(() => "draft-for-test"),
+    setDraftComposerMode:
+      vi.fn<LandingDraftStoreState["setDraftComposerMode"]>(),
+    setDraftSettings: vi.fn<LandingDraftStoreState["setDraftSettings"]>(),
+    setDraftAccountFollowsDefault:
+      vi.fn<LandingDraftStoreState["setDraftAccountFollowsDefault"]>(),
+    seedUnseededDraft: vi.fn<LandingDraftStoreState["seedUnseededDraft"]>(
+      () => false,
+    ),
+    createDraft: vi.fn<LandingDraftStoreState["createDraft"]>(
+      () => "draft-for-test",
+    ),
     // handleSnapshot's unbound-create branch now calls createDraftWithId
     // (reusing a pre-minted pendingCreateId when present) rather than
     // createDraft directly.
-    createDraftWithId: vi.fn(() => "draft-for-test"),
-    restoreDraftWorkspaceForHost: vi.fn(),
-    setDraftContent: vi.fn(),
+    createDraftWithId: vi.fn<LandingDraftStoreState["createDraftWithId"]>(
+      () => "draft-for-test",
+    ),
+    restoreDraftWorkspaceForHost:
+      vi.fn<LandingDraftStoreState["restoreDraftWorkspaceForHost"]>(),
+    setDraftContent: vi.fn<LandingDraftStoreState["setDraftContent"]>(),
   };
   const useLandingDraftStore = Object.assign(
-    (selector: (value: typeof state) => unknown) => selector(state),
+    <T,>(selector: (value: LandingDraftStoreState) => T): T =>
+      testState.actualLandingDrafts
+        ? actual.useLandingDraftStore(selector)
+        : selector(state),
     {
-      getState: () => state,
+      getState: () =>
+        testState.actualLandingDrafts
+          ? actual.useLandingDraftStore.getState()
+          : state,
+      setState: (
+        ...args: Parameters<typeof actual.useLandingDraftStore.setState>
+      ) => actual.useLandingDraftStore.setState(...args),
+      persist: actual.useLandingDraftStore.persist,
       subscribe: (listener: () => void) => {
+        if (testState.actualLandingDrafts)
+          return actual.useLandingDraftStore.subscribe(listener);
         landingDrafts.listeners.add(listener);
         return () => {
           landingDrafts.listeners.delete(listener);
@@ -302,10 +368,19 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     },
   );
   return {
+    ...actual,
     useLandingDraftStore,
-    isOpenLandingDraft: (draft: { readonly closed: boolean }) => !draft.closed,
+    isOpenLandingDraft: (
+      draft: Parameters<typeof actual.isOpenLandingDraft>[0],
+    ) =>
+      testState.actualLandingDrafts
+        ? actual.isOpenLandingDraft(draft)
+        : !draft.closed,
     // Every draft in this suite is an ordinary one: none was opened for a host.
-    useLandingDraftNamedHostId: () => null,
+    useLandingDraftNamedHostId: (draftId: string | null) =>
+      testState.actualLandingDrafts
+        ? actual.useLandingDraftNamedHostId(draftId)
+        : null,
   };
 });
 
@@ -495,6 +570,7 @@ vi.mock(
         return {
           data: providers === undefined ? undefined : { providers },
           isError: false,
+          refetch: () => Promise.resolve(),
         };
       },
     };
@@ -777,7 +853,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/sandboxes/use-sandbox-list-query")
   >()),
-  useSandboxList: () => ({ data: undefined }),
+  useSandboxList: () => ({ data: undefined, refetch: () => Promise.resolve() }),
 }));
 
 vi.mock(
@@ -880,6 +956,7 @@ afterEach(() => {
   testState.openModelPicker.mockClear();
   testState.clearEditor.mockClear();
   testState.catalogueReadiness = [];
+  testState.actualLandingDrafts = false;
   vi.mocked(useLandingDraftStore.getState().setDraftContent).mockClear();
 });
 
@@ -965,10 +1042,10 @@ function StagedHostChip(): ReactElement {
   );
 }
 
-function landingComposer(): ReactElement {
+function landingComposer(draftId: string | null): ReactElement {
   return (
     <LandingComposer
-      draftId={null}
+      draftId={draftId}
       pendingCreateId="pending-test"
       initialSettings={null}
       workspaceControls={() => <StagedHostChip />}
@@ -1008,6 +1085,7 @@ const BILLING_ANSWER: SandboxBillingEnvironmentAnswer = {
 
 function landingComposerWithPendingOwner(
   queryClient: QueryClient,
+  draftId: string | null,
 ): ReactElement {
   return (
     <SandboxBillingRuntime
@@ -1019,12 +1097,14 @@ function landingComposerWithPendingOwner(
       onBinding={configureRunnerBinding}
     >
       <PendingSandboxSendsDriver />
-      {landingComposer()}
+      {landingComposer(draftId)}
     </SandboxBillingRuntime>
   );
 }
 
-async function mountComposerWithPendingOwner(): Promise<void> {
+async function mountComposerWithPendingOwner(
+  draftId: string | null,
+): Promise<RenderResult> {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, queryKeyHashFn: hashAppQueryKey },
@@ -1032,7 +1112,7 @@ async function mountComposerWithPendingOwner(): Promise<void> {
     },
   });
   onTestFinished(() => queryClient.clear());
-  render(landingComposerWithPendingOwner(queryClient));
+  const view = render(landingComposerWithPendingOwner(queryClient, draftId));
   await waitFor(() => expect(testState.installEditor).not.toBeNull());
   const installEditor = testState.installEditor;
   if (installEditor === null) throw new Error("expected ComposerBody seam");
@@ -1040,6 +1120,7 @@ async function mountComposerWithPendingOwner(): Promise<void> {
   const snapshot = testState.snapshot;
   if (snapshot === null) throw new Error("expected snapshot seam");
   act(() => snapshot());
+  return view;
 }
 
 function deferred<T>() {
@@ -1055,16 +1136,16 @@ async function sendFromComposer(): Promise<{
   view: RenderResult;
   rerender: () => void;
 }> {
-  const view = render(landingComposer());
+  const view = render(landingComposer(null));
   const installEditor = testState.installEditor;
   if (installEditor === null) throw new Error("expected ComposerBody seam");
   installEditor();
   const snapshot = testState.snapshot;
   if (snapshot === null) throw new Error("expected snapshot seam");
   snapshot();
-  view.rerender(landingComposer());
+  view.rerender(landingComposer(null));
   await userEvent.click(screen.getByRole("button", { name: "Submit landing" }));
-  return { view, rerender: () => view.rerender(landingComposer()) };
+  return { view, rerender: () => view.rerender(landingComposer(null)) };
 }
 
 function onlyPendingSend() {
@@ -1082,7 +1163,222 @@ function onlyPendingStage() {
   return stages[0][1];
 }
 
+function persistedLandingReturn(draftId: string): StoredReturnedSandbox {
+  const raw = localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+  if (raw === null) throw new Error("expected a persisted landing draft");
+  const persisted = JSON.parse(raw) as {
+    readonly state?: {
+      readonly drafts?: ReadonlyArray<{
+        readonly id: string;
+        readonly returnedSandbox?: StoredReturnedSandbox | null;
+      }>;
+    };
+  };
+  const returned = persisted.state?.drafts?.find(
+    (draft) => draft.id === draftId,
+  )?.returnedSandbox;
+  if (returned === null || returned === undefined)
+    throw new Error("expected the persisted returned sandbox");
+  return returned;
+}
+
+function clearLandingDraftsForReload(): void {
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+}
+
 describe("LandingComposer direct submit gate", () => {
+  it("gives back a pre-POST pick, then restores its exact create through Open terminal and owner Send", async () => {
+    localStorage.clear();
+    testState.actualLandingDrafts = true;
+    testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+    const signedInId = "landing-return-owner";
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: signedInId,
+        userName: "Test User",
+        email: "test@example.test",
+      },
+      { userId: signedInId, username: "Test User" },
+      [],
+    );
+    clearLandingDraftsForReload();
+    useStagedSandboxStore.setState({ bySurface: {} });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    useStagedSandboxStore.getState().stage("landing:window-test", {
+      ...NEW_STAGE,
+      name: "returned-before-post",
+    });
+    const beforeGiveBackRequests: SandboxCreateRequest[] = [];
+    testState.createSandbox = (request) => {
+      beforeGiveBackRequests.push(request);
+      return Promise.resolve({ kind: "network-error", detail: "offline" });
+    };
+    const pickedStage = readStagedSandbox("landing:window-test");
+    if (pickedStage === null)
+      throw new Error("expected the initial sandbox pick");
+
+    const returnedDraftId: { current: string | null } = { current: null };
+    testState.startTask.mockImplementationOnce((args) => {
+      const handoff = args.hand("epic-setup-failed");
+      if (handoff === null)
+        throw new Error("expected the rendered Send handoff");
+      const returned = handoff.giveBack();
+      if (returned?.kind !== "opened")
+        throw new Error("expected setup failure to reopen a landing draft");
+      returnedDraftId.current = returned.draftId;
+      return null;
+    });
+    const setupView = await mountComposerWithPendingOwner(null);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit landing" }),
+    );
+    expect(testState.startTask).toHaveBeenCalledOnce();
+    expect(beforeGiveBackRequests).toEqual([]);
+    const draftId = returnedDraftId.current;
+    if (draftId === null)
+      throw new Error("expected the returned landing draft");
+    const userId = useAuthStore.getState().profile?.userId;
+    if (userId === undefined)
+      throw new Error("expected the signed-in draft owner");
+    const returnedBeforeCreate = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === draftId)?.returnedSandbox;
+    expect(returnedBeforeCreate).toMatchObject({
+      target: { kind: "new", name: "returned-before-post" },
+      clientRequestId: pickedStage.clientRequestId,
+      userId,
+    });
+    expect(returnedBeforeCreate).not.toHaveProperty("lastRetryCreate");
+    expect(persistedLandingReturn(draftId)).toEqual(returnedBeforeCreate);
+    const prePostStorage = localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+    if (prePostStorage === null)
+      throw new Error("expected a durable give-back before the first POST");
+
+    setupView.unmount();
+    useStagedSandboxStore.setState({ bySurface: {} });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    clearLandingDraftsForReload();
+    localStorage.setItem(LANDING_DRAFT_PERSIST_KEY, prePostStorage);
+    await useLandingDraftStore.persist.rehydrate();
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === draftId)?.returnedSandbox,
+    ).toEqual(returnedBeforeCreate);
+
+    testState.catalogue = { providers: [], offeredAgents: ["traycer"] };
+    const firstPost = deferred<SandboxCreateFetchResult>();
+    const secondPost = deferred<SandboxCreateFetchResult>();
+    const firstPostEntered = deferred<void>();
+    const secondPostEntered = deferred<void>();
+    const requests: SandboxCreateRequest[] = [];
+    const durableAtPost: Array<StoredReturnedSandbox> = [];
+    let ownerStageAtPost: StagedSandbox | null = null;
+    testState.createSandbox = (request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        durableAtPost.push(persistedLandingReturn(draftId));
+      } else {
+        ownerStageAtPost = onlyPendingStage() ?? null;
+      }
+      if (requests.length === 1) {
+        firstPostEntered.resolve(undefined);
+        return firstPost.promise;
+      }
+      secondPostEntered.resolve(undefined);
+      return secondPost.promise;
+    };
+
+    const openTerminalView = await mountComposerWithPendingOwner(draftId);
+    await waitFor(() => {
+      expect(readStagedSandbox("landing:window-test")).toMatchObject({
+        target: { kind: "new", name: "returned-before-post" },
+        clientRequestId: pickedStage.clientRequestId,
+      });
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit landing" }),
+    );
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Codex doesn't run on sandboxes.",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal instead" }),
+    );
+    await firstPostEntered.promise;
+    const firstRequest = requests[0];
+    expect(firstRequest).toMatchObject({
+      clientRequestId: pickedStage.clientRequestId,
+      createdByTaskId: null,
+      createdByHostId: null,
+      createdByAgentId: null,
+      os: SHAPE.os,
+      cpus: SHAPE.cpus,
+      memoryMb: SHAPE.memoryMb,
+      diskMb: SHAPE.diskMb,
+      region: SHAPE.region,
+      displayName: "returned-before-post",
+      idleMinutes: SHAPE.idleMinutes,
+      burst: false,
+      environmentId: null,
+      destroyAfterRestingMinutes: 0,
+    });
+    expect(durableAtPost[0]).toMatchObject({
+      clientRequestId: pickedStage.clientRequestId,
+      lastCreateKey: pickedStage.clientRequestId,
+      lastRetryCreate: firstRequest,
+    });
+
+    const afterPostStorage = localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+    if (afterPostStorage === null)
+      throw new Error("expected the attempted request to persist before POST");
+    openTerminalView.unmount();
+    useStagedSandboxStore.setState({ bySurface: {} });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    clearLandingDraftsForReload();
+    localStorage.setItem(LANDING_DRAFT_PERSIST_KEY, afterPostStorage);
+    await useLandingDraftStore.persist.rehydrate();
+
+    testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+    testState.startTask.mockClear();
+    testState.startTask.mockImplementationOnce((args) => {
+      const handoff = args.hand("epic-owner-after-reopen");
+      if (handoff === null)
+        throw new Error("expected the restored owner handoff");
+      handoff.confirm();
+      return null;
+    });
+    const ownerView = await mountComposerWithPendingOwner(draftId);
+    await waitFor(() => {
+      expect(readStagedSandbox("landing:window-test")).toMatchObject({
+        clientRequestId: pickedStage.clientRequestId,
+        lastCreateKey: pickedStage.clientRequestId,
+        lastRetryCreate: firstRequest,
+      });
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit landing" }),
+    );
+    expect(testState.startTask).toHaveBeenCalledOnce();
+    await secondPostEntered.promise;
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(firstRequest);
+    expect(ownerStageAtPost).toMatchObject({
+      clientRequestId: pickedStage.clientRequestId,
+      lastCreateKey: firstRequest.clientRequestId,
+      lastRetryCreate: firstRequest,
+    });
+    secondPost.resolve({
+      kind: "network-error",
+      detail: "offline",
+    });
+    firstPost.resolve({
+      kind: "network-error",
+      detail: "offline",
+    });
+    ownerView.unmount();
+  });
+
   it.each([
     [
       "rowless 503",
@@ -1153,7 +1449,7 @@ describe("LandingComposer direct submit gate", () => {
         return null;
       });
 
-      await mountComposerWithPendingOwner();
+      await mountComposerWithPendingOwner(null);
       await userEvent.click(
         await screen.findByRole("button", { name: "Submit landing" }),
       );

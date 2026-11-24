@@ -35,10 +35,14 @@ import type {
 } from "@/components/composer/use-staged-sandbox-send";
 import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import { budgetCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { TaskEnvironmentAttachmentResult } from "@traycer-clients/shared/host-client/task-environment-attachment";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import * as environmentArms from "@/hooks/environment/use-environment-arms";
@@ -79,6 +83,7 @@ import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversatio
 import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
+import type { StoredReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 
 const UNAVAILABLE_COPY = "Not available on team sandboxes.";
 
@@ -219,6 +224,8 @@ const testState = vi.hoisted(() => ({
   beforeStagedSend: vi.fn<() => Promise<ComposerHostNoticeState | null>>(),
   /** Whether a sandbox is staged: the staged send then takes the Start. */
   staged: false,
+  /** One persistence regression uses the real staged send and runner hooks. */
+  actualStagedSend: false,
   /** How many sends or Starts reached the staged send's intercept. */
   intercepts: 0,
   /** Whether the current host's workspace can start a send. */
@@ -647,6 +654,8 @@ vi.mock(
       // Phase 1 stands in for the run: the send is taken and the boot begins.
       useStagedSandboxSend: (input: StagedSendInput) => {
         testState.stagedSendInput = input;
+        if (testState.actualStagedSend)
+          return actual.useStagedSandboxSend(input);
         return {
           intercept: (
             _messageText: string,
@@ -706,15 +715,22 @@ vi.mock("@/hooks/use-epic-store", () => ({
     tuiAgents: { byId: {}, allIds: [] },
   }),
 }));
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({
-    fileDrops: {
-      resolveDroppedFilePaths: () => Promise.resolve([]),
-      copyDroppedFilePaths: (paths: readonly string[]) =>
-        Promise.resolve(paths),
-    },
-  }),
-}));
+vi.mock("@/providers/use-runner-host", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/providers/use-runner-host")>();
+  return {
+    ...actual,
+    useRunnerHostOrNull: actual.useRunnerHostOrNull,
+    useRunnerHost: () =>
+      actual.useRunnerHostOrNull() ?? {
+        fileDrops: {
+          resolveDroppedFilePaths: () => Promise.resolve([]),
+          copyDroppedFilePaths: (paths: readonly string[]) =>
+            Promise.resolve(paths),
+        },
+      },
+  };
+});
 vi.mock("@/hooks/composer/use-composer-paste", async () => {
   const actual = await vi.importActual<
     typeof import("@/hooks/composer/use-composer-paste")
@@ -1065,6 +1081,7 @@ beforeEach(() => {
   testState.beforeStagedSend.mockImplementation(() =>
     Promise.resolve(testState.stagedNotice),
   );
+  testState.actualStagedSend = false;
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode("epic-1", "chat");
@@ -1087,6 +1104,7 @@ afterEach(() => {
   testState.bodySubmit = null;
   testState.bodyStartTerminal = null;
   testState.staged = false;
+  testState.actualStagedSend = false;
   testState.intercepts = 0;
   testState.workspaceReady = true;
   testState.stagedSendInput = null;
@@ -1901,6 +1919,175 @@ describe("new-conversation modal's send on a staged sandbox", () => {
 });
 
 describe("new-conversation modal's terminal Start on a staged sandbox", () => {
+  it("reopens a task-returned sandbox after Start, and reuses the durable retry:F request", async () => {
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode("epic-1", "terminal");
+    const fixture = await createAttachmentAuthBinding(null);
+    await signInAs(fixture, "modal-user", "modal-token-a");
+    const surfaceKey = newConversationSurfaceKey("epic-1");
+    useStagedSandboxStore.getState().stage(surfaceKey, NEW_SANDBOX);
+    const stageIdentity = readStagedSandbox(surfaceKey)?.clientRequestId;
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.draftId;
+    if (
+      stageIdentity === undefined ||
+      stageIdentity === null ||
+      draftId === null ||
+      draftId === undefined
+    )
+      throw new Error("expected a task draft and staged sandbox identity");
+    useNewConversationModalStore.getState().setReturnedSandbox("epic-1", {
+      target: NEW_SANDBOX,
+      clientRequestId: stageIdentity,
+      userId: "modal-user",
+    });
+    useStagedSandboxStore.getState().clear(surfaceKey);
+
+    const firstCreate = {
+      ...refusal(502, "provider_failed"),
+      sandboxId: "sbx_task_failed_f",
+    } satisfies SandboxCreateFetchResult;
+    const heldRetry = deferred<SandboxCreateFetchResult>();
+    const secondCreateEntered = deferred<void>();
+    const requests: Parameters<AuthService["createSandbox"]>[0][] = [];
+    const durableAtPost: Array<StoredReturnedSandbox | undefined> = [];
+    const durableReturnedSandbox = (): StoredReturnedSandbox | undefined => {
+      const raw = localStorage.getItem(
+        persistKey(STORE_KEYS.newConversationDraft),
+      );
+      if (raw === null) throw new Error("expected a persisted task draft");
+      const persisted = JSON.parse(raw) as {
+        readonly state?: {
+          readonly draftPatchesByEpicId?: Readonly<
+            Record<string, { readonly returnedSandbox?: StoredReturnedSandbox }>
+          >;
+        };
+      };
+      return persisted.state?.draftPatchesByEpicId?.["epic-1"]?.returnedSandbox;
+    };
+    vi.spyOn(fixture.auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: budgetCatalogue(600_000),
+    });
+    vi.spyOn(fixture.auth, "listSandboxes").mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    const create = vi
+      .spyOn(fixture.auth, "createSandbox")
+      .mockImplementation((request) => {
+        requests.push(request);
+        durableAtPost.push(durableReturnedSandbox());
+        if (requests.length === 1) return Promise.resolve(firstCreate);
+        if (requests.length === 2) {
+          secondCreateEntered.resolve(undefined);
+          return heldRetry.promise;
+        }
+        return Promise.resolve(refusal(503, "provider_unavailable"));
+      });
+
+    testState.actualStagedSend = true;
+    testState.workspaceReady = true;
+    const view = renderModal(fixture.binding);
+    await waitFor(() => {
+      expect(readStagedSandbox(surfaceKey)?.returnedDraft).toMatchObject({
+        kind: "task",
+        epicId: "epic-1",
+        draftId,
+        stageId: stageIdentity,
+      });
+    });
+    act(() => {
+      testState.bodyStartTerminal?.(terminalLaunch("claude"), "host-a");
+    });
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    const firstRequest = requests[0];
+    expect(firstRequest).toMatchObject({
+      clientRequestId: stageIdentity,
+      createdByTaskId: "epic-1",
+      createdByHostId: null,
+      createdByAgentId: null,
+      os: NEW_SANDBOX.shape.os,
+      cpus: NEW_SANDBOX.shape.cpus,
+      memoryMb: NEW_SANDBOX.shape.memoryMb,
+      diskMb: NEW_SANDBOX.shape.diskMb,
+      region: NEW_SANDBOX.shape.region,
+      burst: false,
+    });
+    expect(durableAtPost[0]).toMatchObject({
+      clientRequestId: stageIdentity,
+      lastCreateKey: stageIdentity,
+      lastRetryCreate: firstRequest,
+    });
+    await waitFor(() => {
+      expect(readStagedSandbox(surfaceKey)).toMatchObject({
+        failure: { kind: "refused", sandboxId: "sbx_task_failed_f" },
+      });
+    });
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-retry-creation"));
+    await secondCreateEntered.promise;
+    const retryRequest = requests[1];
+    expect(retryRequest).toEqual({
+      ...firstRequest,
+      clientRequestId: "retry:sbx_task_failed_f",
+    });
+    expect(durableAtPost[1]).toMatchObject({
+      clientRequestId: stageIdentity,
+      lastCreateKey: "retry:sbx_task_failed_f",
+      lastRetryCreate: retryRequest,
+    });
+
+    heldRetry.resolve(refusal(503, "provider_unavailable"));
+    await waitFor(() => {
+      expect(readStagedSandbox(surfaceKey)?.failure).toMatchObject({
+        kind: "unavailable",
+      });
+    });
+    view.unmount();
+    useStagedSandboxStore.getState().clear(surfaceKey);
+    const taskDraftStorageKey = persistKey(STORE_KEYS.newConversationDraft);
+    const savedTaskDraft = localStorage.getItem(taskDraftStorageKey);
+    if (savedTaskDraft === null)
+      throw new Error("expected the durable task draft before reopening");
+    useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
+    localStorage.setItem(taskDraftStorageKey, savedTaskDraft);
+    await useNewConversationModalStore.persist.rehydrate();
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.returnedSandbox,
+    ).toMatchObject({
+      clientRequestId: stageIdentity,
+      lastCreateKey: "retry:sbx_task_failed_f",
+      lastRetryCreate: retryRequest,
+    });
+    const reopened = renderModal(fixture.binding);
+    await waitFor(() => {
+      expect(readStagedSandbox(surfaceKey)).toMatchObject({
+        clientRequestId: stageIdentity,
+        lastCreateKey: "retry:sbx_task_failed_f",
+        lastRetryCreate: retryRequest,
+        returnedDraft: { kind: "task", epicId: "epic-1", draftId },
+      });
+    });
+    act(() => {
+      testState.bodyStartTerminal?.(terminalLaunch("claude"), "host-a");
+    });
+    await waitFor(() => expect(requests).toHaveLength(3));
+    expect(requests[2]).toEqual(retryRequest);
+    expect(durableAtPost[2]).toMatchObject({
+      lastCreateKey: retryRequest.clientRequestId,
+      lastRetryCreate: retryRequest,
+    });
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(testState.createTerminalAgent).not.toHaveBeenCalled();
+    reopened.unmount();
+    fixture.dispose();
+  });
+
   it("creates no terminal agent here, then launches it on the new host as the person put it together, across a close and reopen", () => {
     useNewConversationModalStore
       .getState()

@@ -18,7 +18,7 @@ export type PendingSandboxObservation =
   | {
       readonly kind: "wake-result";
       readonly requestedAt: number | null;
-      readonly observationId?: string;
+      readonly observationId: string;
     }
   | {
       readonly kind: "dispatch-result";
@@ -82,8 +82,7 @@ function confirmedObservationMatches(
         request.stopRequested !== true &&
         observation.requestedAt !== null &&
         observation.requestedAt === request.observationRequestedAt &&
-        (observation.observationId === undefined ||
-          observation.observationId === request.observationRetryId)
+        observation.observationId === request.observationRetryId
       );
     case "dispatch-result": {
       const identity = request.dispatch?.input ?? request.delivery;

@@ -716,6 +716,12 @@ function reachableHost(
   state: PendingSendState,
   facts: PendingSendFacts,
 ): PendingSendTransition {
+  if (
+    claimed(state) &&
+    facts.wakeInFlight &&
+    (facts.host !== "awake" || !facts.clientReady)
+  )
+    return result(state, ["poll"], facts);
   if (facts.host === "resting") {
     const blocker = state.blocker === "none" ? "host" : state.blocker;
     return result({ ...state, blocker }, ["poll"], facts);
