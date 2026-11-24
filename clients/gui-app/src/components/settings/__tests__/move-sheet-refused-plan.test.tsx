@@ -22,16 +22,25 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import { hostResponseErrorSchema } from "@traycer/protocol/framework/ws-protocol";
+import {
+  environmentSetupRetryResponseSchema,
+  environmentStatusResponseSchemaV13,
+  type EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
-import type {
-  EnvironmentMovePlanResponseV20,
-  EnvironmentMoveStageResponse,
-  EnvironmentMoveStartRequest,
+import {
+  environmentMoveOutcomeAnswerSchema,
+  environmentMovePersonalSchema,
+  environmentMovePlanResponseSchemaV20,
+  environmentMoveStageResponseSchema,
+  type EnvironmentMovePlanResponseV20,
+  type EnvironmentMoveStartRequest,
 } from "@traycer/protocol/host/environment/move-contracts";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { environmentQueryKeys } from "@/lib/query-keys";
 import { fakeEnvironmentCloud } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import type { HostsRunningConfiguration } from "@/components/settings/environment/hosts-running-configuration-model";
 import { MoveProgressDialog } from "@/components/settings/move/move-progress-dialog";
@@ -52,7 +61,7 @@ import { useMoveProgressDialogStore } from "@/stores/settings/move-progress-dial
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
 const HOST_ID = "8f0c2a4e-5b1d-4c3e-9a7f-1e2d3c4b5a60";
-const ENVIRONMENT_ID = "env-personal";
+const ENVIRONMENT_ID = "env_01JA000000000000000000000A";
 const ATTEMPT_ID = "a7b8c9d0-e1f2-4a3b-8c5d-6e7f8091a2b3";
 const ACCEPTANCE_ID = "c3d4e5f6-0718-4a29-8b3c-4d5e6f708192";
 const MANIFEST_HASH = "c".repeat(64);
@@ -129,8 +138,8 @@ function planOf(
   };
 }
 
-const STALE_PLAN = planOf("hash-stale", ["STALE_ONE", "STALE_TWO"]);
-const FRESH_PLAN = planOf("hash-fresh", [
+const STALE_PLAN = planOf("a".repeat(64), ["STALE_ONE", "STALE_TWO"]);
+const FRESH_PLAN = planOf("b".repeat(64), [
   "FRESH_ONE",
   "FRESH_TWO",
   "FRESH_THREE",
@@ -240,9 +249,16 @@ interface Harness {
   readonly holdNextPlanRead: () => () => void;
   readonly starts: EnvironmentMoveStartRequest[];
   readonly client: HostClient<HostRpcRegistry>;
+  readonly refuseStage: (failure: HostRpcError) => void;
+  readonly acceptancePosts: () => number;
 }
 
-function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
+function mountComputer(
+  computer: Computer,
+  queryClient: QueryClient,
+  refusalOnly: boolean | undefined,
+): Harness {
+  let stageFailure: HostRpcError | null = null;
   const starts: EnvironmentMoveStartRequest[] = [];
   let retries = 0;
   let heldStatusRead: Promise<void> | null = null;
@@ -251,8 +267,8 @@ function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
   let answered: EnvironmentMovePlanResponseV20 | null = null;
   const answerPlan = (): EnvironmentMovePlanResponseV20 => {
     if (computer.planFailure !== null) throw computer.planFailure;
-    answered = computer.plan;
-    return computer.plan;
+    answered = environmentMovePlanResponseSchemaV20.parse(computer.plan);
+    return answered;
   };
   const { client, messenger } = buildEnvironmentClient({
     hostId: HOST_ID,
@@ -267,19 +283,20 @@ function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
           statusReadFails = false;
           throw new Error("The status read was refused.");
         }
-        const asked = computer.status;
+        const asked = environmentStatusResponseSchemaV13.parse(computer.status);
         const held = heldStatusRead;
         heldStatusRead = null;
         return held === null ? asked : held.then(() => asked);
       },
       "environment.setup.retry": () => {
         retries += 1;
-        return { attemptId: "retry-attempt" };
+        return environmentSetupRetryResponseSchema.parse({ attemptId: "retry-attempt" });
       },
       "environment.move.stage": (request) => {
+        if (stageFailure !== null) throw stageFailure;
         if (answered === null)
           throw new Error("The plan must be read before staging.");
-        return {
+        return environmentMoveStageResponseSchema.parse({
           evidence: {
             attemptId: ATTEMPT_ID,
             planHash: answered.planHash,
@@ -294,24 +311,53 @@ function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
             disclosureVersion: answered.disclosureVersion,
           },
           authorization: { manifestHash: MANIFEST_HASH },
-        } satisfies EnvironmentMoveStageResponse;
+        });
       },
       "environment.move.start": (request) => {
         starts.push(request);
-        return {
+        return environmentMoveOutcomeAnswerSchema.parse({
           state: "running",
           attemptId: ATTEMPT_ID,
           acceptanceId: ACCEPTANCE_ID,
-        };
+        });
       },
     },
   });
   const authn = fakeEnvironmentCloud((request) => {
     const path = new URL(request.url).pathname;
-    if (path.endsWith(`/environments/${ENVIRONMENT_ID}/hosts`))
-      return { status: 200, body: { hosts: [{ purgePending: false }] } };
-    if (path.endsWith("/move-acceptances"))
-      return { status: 201, body: { acceptanceId: ACCEPTANCE_ID } };
+    if (refusalOnly !== true && request.method === "GET" &&
+        path.endsWith(`/environments/${ENVIRONMENT_ID}/hosts`)) {
+      return {
+        status: 200,
+        body: {
+          hosts: [{
+            hostId: HOST_ID,
+            hostName: "Old laptop",
+            hostKind: "personal",
+            hostVersion: "1.5.0",
+            bindingGeneration: 1,
+            desiredRevision: 0,
+            receivedRevision: 0,
+            appliedRevision: 0,
+            reportedAt: null,
+            online: true,
+            lastSeenAt: null,
+            remoteAccess: { enabled: false, epoch: 0 },
+            setupStage: null,
+            purgePending: false,
+            minimumHostVersion: null,
+            localOverrides: [],
+            items: [],
+            setupAttempts: [],
+          }],
+        },
+      };
+    }
+    if (refusalOnly !== true && request.method === "POST" && path.endsWith("/move-acceptances"))
+      return {
+        status: 201,
+        body: { acceptanceId: ACCEPTANCE_ID, expiresAt: "2026-01-01T00:10:00.000Z" },
+      };
     throw new Error(
       `Unexpected environment request: ${request.method} ${path}`,
     );
@@ -342,6 +388,15 @@ function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
     computer,
     client,
     queryClient,
+    refuseStage: (failure) => {
+      stageFailure = failure;
+    },
+    acceptancePosts: () =>
+      authn.requests.filter(
+        (request) =>
+          request.method === "POST" &&
+          new URL(request.url).pathname.endsWith("/move-acceptances"),
+      ).length,
     planReads: () =>
       messenger.calls.filter((call) => call.method === "environment.move.plan")
         .length,
@@ -380,11 +435,15 @@ function shortLivedQueryClient(): QueryClient {
 }
 
 function mountSheet(computer: Computer): Harness {
-  return mountSheetOn(computer, shortLivedQueryClient());
+  return mountSheetOn(computer, shortLivedQueryClient(), undefined);
 }
 
-function mountSheetOn(computer: Computer, queryClient: QueryClient): Harness {
-  const harness = mountComputer(computer, queryClient);
+function mountSheetOn(
+  computer: Computer,
+  queryClient: QueryClient,
+  refusalOnly: boolean | undefined,
+): Harness {
+  const harness = mountComputer(computer, queryClient, refusalOnly);
   render(
     <QueryClientProvider client={harness.queryClient}>
       <MoveSheet />
@@ -422,7 +481,7 @@ const TEAM: EnvironmentDescriptorV11 = {
 };
 
 function mountGiveDialog(computer: Computer): Harness {
-  const harness = mountComputer(computer, shortLivedQueryClient());
+  const harness = mountComputer(computer, shortLivedQueryClient(), undefined);
   renderGiveDialog(harness);
   return harness;
 }
@@ -499,6 +558,171 @@ afterEach(() => {
   fixtureMock.client = null;
   fixtureMock.binding = null;
   useAuthStore.getState().setSignedOut();
+});
+
+const LOCAL_SOURCE_REFUSAL = "Couldn't read this computer's settings. Try again.";
+
+function sourceRefusal(method: "plan" | "stage", code: string): HostRpcError {
+  return HostRpcError.fromWireEnvelope(
+    hostResponseErrorSchema.parse({ code, message: LOCAL_SOURCE_REFUSAL }),
+    `refused-${method}`,
+    `environment.move.${method}`,
+  );
+}
+
+function mountLocalSourceSheet(
+  planFailure: HostRpcError | null,
+  queryClient: QueryClient,
+): Harness {
+  queryClient.setQueryData(
+    environmentQueryKeys.personalForMove("user-me"),
+    environmentMovePersonalSchema.parse({ items: [], holdsSecrets: false }),
+  );
+  return mountSheetOn(
+    {
+      plan: STALE_PLAN,
+      planFailure,
+      status: awaitingConsentStatus(),
+      servesRetry: false,
+    },
+    queryClient,
+    true,
+  );
+}
+
+async function pressMove(harness: Harness): Promise<void> {
+  const finished = Promise.withResolvers<void>();
+  const unsubscribe = harness.queryClient.getMutationCache().subscribe((event) => {
+    if (
+      event.type === "updated" &&
+      (event.action.type === "success" || event.action.type === "error")
+    ) {
+      finished.resolve();
+    }
+  });
+  try {
+    await act(async () => {
+      fireEvent.click(acceptButton());
+      await finished.promise;
+    });
+  } finally {
+    unsubscribe();
+  }
+  await settle();
+}
+
+async function retryLocalPlan(
+  harness: Harness,
+  terminal: "error" | "success",
+): Promise<void> {
+  const finished = Promise.withResolvers<void>();
+  const unsubscribe = harness.queryClient.getQueryCache().subscribe((event) => {
+    if (
+      event.type === "updated" &&
+      event.action.type === terminal &&
+      event.query.queryKey.includes("environment.move.plan")
+    ) {
+      finished.resolve();
+    }
+  });
+  try {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await finished.promise;
+    });
+  } finally {
+    unsubscribe();
+  }
+  await settle();
+}
+
+describe("<MoveSheet /> with unread computer settings", () => {
+  it("shows the opening refusal without automatically retrying the plan", async () => {
+    const harness = mountLocalSourceSheet(
+      sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
+      createAppQueryClient(),
+    );
+    await settle();
+
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(acceptIsDisabled()).toBe(true);
+
+    harness.computer.planFailure = null;
+    await advanceLegendListTime(1_000);
+    expect(harness.planReads()).toBe(1);
+    expect(acceptIsDisabled()).toBe(true);
+  });
+
+  it("keeps the opening refusal after a background plan refresh until Retry", async () => {
+    const harness = mountLocalSourceSheet(
+      sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
+      shortLivedQueryClient(),
+    );
+    await settle();
+    expect(acceptIsDisabled()).toBe(true);
+
+    harness.computer.planFailure = null;
+    harness.computer.plan = FRESH_PLAN;
+    const reads = harness.planReads();
+    await rereadPlan(harness);
+
+    expect(harness.planReads()).toBe(reads + 1);
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    await retryLocalPlan(harness, "success");
+    expect(summaryText()).toBe("3 variables");
+    expect(acceptIsDisabled()).toBe(false);
+  });
+
+  it("keeps the generic stage failure when the same message comes without the source refusal code", async () => {
+    const harness = mountLocalSourceSheet(null, shortLivedQueryClient());
+    await settle();
+    expect(acceptIsDisabled()).toBe(false);
+
+    harness.refuseStage(sourceRefusal("stage", "RPC_ERROR"));
+    await pressMove(harness);
+
+    expect(harness.acceptancePosts()).toBe(0);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(acceptIsDisabled()).toBe(false);
+  });
+
+  it("refuses the press before any acceptance POST and enables Move only after Retry reads the plan", async () => {
+    const harness = mountLocalSourceSheet(null, shortLivedQueryClient());
+    await settle();
+    expect(acceptIsDisabled()).toBe(false);
+
+    harness.refuseStage(sourceRefusal("stage", "E_MOVE_LOCAL_SOURCE_UNREAD"));
+    await pressMove(harness);
+
+    expect(harness.stages()).toBe(1);
+    expect(harness.acceptancePosts()).toBe(0);
+    expect(
+      within(screen.getByTestId("move-sheet")).queryByText(LOCAL_SOURCE_REFUSAL),
+    ).not.toBeNull();
+    expect(planIsDrawn()).toBe(false);
+    expect(acceptIsDisabled()).toBe(true);
+
+    harness.computer.planFailure = sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD");
+    await retryLocalPlan(harness, "error");
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    const answerPlan = harness.holdNextPlanRead();
+    harness.computer.plan = FRESH_PLAN;
+    harness.computer.planFailure = null;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(acceptIsDisabled()).toBe(true);
+
+    answerPlan();
+    await settle();
+    expect(summaryText()).toBe("3 variables");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(acceptIsDisabled()).toBe(false);
+  });
 });
 
 describe("<MoveSheet /> after a refused plan read", () => {
@@ -939,6 +1163,7 @@ describe("<TeamGiveDialog /> reopened over an earlier opening's answer", () => {
         servesRetry: true,
       },
       createAppQueryClient(),
+      undefined,
     );
     renderGiveDialog(harness);
     await settle();
@@ -972,7 +1197,7 @@ describe("<MoveSheet /> reopened over an earlier opening's answer", () => {
       ...queryClient.getDefaultOptions(),
       queries: { ...queryClient.getDefaultOptions().queries, retry: false },
     });
-    return mountSheetOn(computer, queryClient);
+    return mountSheetOn(computer, queryClient, undefined);
   }
 
   const awaitingComputer = (): Computer => ({
