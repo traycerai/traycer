@@ -1,4 +1,12 @@
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { ChevronRight } from "lucide-react";
 import {
   GUIDE_DIFFERS_NOTE,
@@ -54,7 +62,10 @@ import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-enviro
 import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environment-move-start-mutation";
 import { usePersonalForMoveQuery } from "@/hooks/environment/use-personal-for-move-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostQuery,
+  useHostQueryEntryHash,
+} from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
@@ -126,7 +137,7 @@ function MoveSheetBody(props: {
   const personalRead = usePersonalForMoveQuery(supported === true);
   const personalItems = personalRead.data ?? null;
   const rerun = useMoveRerun(client, target.hostId);
-  const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
+  const planRead = {
     cacheKeyIdentity: rerun.planKey,
     client,
     method: "environment.move.plan",
@@ -134,6 +145,9 @@ function MoveSheetBody(props: {
       target: { kind: "personal", environmentId: personal.environmentId ?? "" },
       personal: personalItems,
     },
+  } as const;
+  const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
+    ...planRead,
     options: {
       enabled:
         supported === true &&
@@ -151,6 +165,31 @@ function MoveSheetBody(props: {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [planChanged, setPlanChanged] = useState(false);
   const [notAwaiting, setNotAwaiting] = useState(false);
+  const [sourceRefusal, setSourceRefusal] = useState<{
+    readonly message: string;
+  } | null>(null);
+  const queryClient = useQueryClient();
+  const planQueryHash = useHostQueryEntryHash<
+    HostRpcRegistry,
+    "environment.move.plan"
+  >(planRead);
+  // Observe the refusal as the query settles, before a background refresh can
+  // replace the cache's error. The listener belongs to this opening's query.
+  useLayoutEffect(
+    () =>
+      queryClient.getQueryCache().subscribe((event) => {
+        if (
+          event.type === "updated" &&
+          event.query.queryHash === planQueryHash &&
+          event.action.type === "error" &&
+          event.action.error instanceof HostRpcError &&
+          event.action.error.code === "E_MOVE_LOCAL_SOURCE_UNREAD"
+        ) {
+          setSourceRefusal(event.action.error);
+        }
+      }),
+    [queryClient, planQueryHash],
+  );
   const accept = useEnvironmentMoveStartMutation(
     client,
     "Couldn't start the move.",
@@ -194,6 +233,10 @@ function MoveSheetBody(props: {
             setChoices(new Map());
             return;
           }
+          if (result.kind === "local_source_unread") {
+            setSourceRefusal(result);
+            return;
+          }
           if (result.kind === "not_awaiting") {
             setNotAwaiting(true);
             return;
@@ -211,13 +254,29 @@ function MoveSheetBody(props: {
   // Only this opening's answered read counts: the cache still holds the last
   // opening's plan or refusal while this one's read is out.
   const planAnswered = answeredThisOpening(plan);
-  const refusal = planRefusal(plan, planAnswered, rerun.stoppedAgain);
+  // Only Retry can make the plan usable again after a source refusal.
+  const refusal =
+    sourceRefusal?.message ??
+    planRefusal(plan, planAnswered, rerun.stoppedAgain);
   const retryPlan = (): void => {
     if (rerun.stopped && refusal !== null) {
       rerun.rerun(refusal, () => {
         setChoices(new Map());
         setNotAwaiting(false);
+        setSourceRefusal(null);
       });
+      return;
+    }
+    if (sourceRefusal !== null) {
+      void plan
+        .refetch()
+        .then((answer) => {
+          if (answer.isSuccess)
+            setSourceRefusal((current) =>
+              current === sourceRefusal ? null : current,
+            );
+        })
+        .catch(ignoreError);
       return;
     }
     if (personalRead.data !== null) {
@@ -269,7 +328,7 @@ function MoveSheetBody(props: {
         ) : null}
         <PlanRefusedLine
           refusal={refusal}
-          pending={rerun.pending}
+          pending={rerun.pending || (sourceRefusal !== null && plan.isFetching)}
           onRetry={retryPlan}
         />
         <HostListReadFailed running={runningPersonal} />
