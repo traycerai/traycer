@@ -60,6 +60,7 @@ export const personalHostScopeModule = {
   WINDOW_HOST_SELECTION: {
     scopedHostId: null,
     setScopedHostId: () => undefined,
+    defaultsToFirstHost: false,
   },
 };
 

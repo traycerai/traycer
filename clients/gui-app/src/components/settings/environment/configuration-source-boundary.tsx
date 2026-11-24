@@ -102,6 +102,23 @@ function ConfigurationLoading(props: {
   );
 }
 
+/** An answer in place of the page, under its section's heading where it has one. */
+function ConfigurationAnswer(props: {
+  readonly section: SettingsSectionId | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  return props.section === null ? (
+    <div className="p-5">{props.children}</div>
+  ) : (
+    <SectionStandIn
+      section={props.section}
+      testId="configuration-source-answer"
+    >
+      {props.children}
+    </SectionStandIn>
+  );
+}
+
 /** The configuration a cloud-read page shows: a team's, or Personal. */
 export type CloudConfigurationTarget =
   | { readonly kind: "team"; readonly environmentId: string }
@@ -179,30 +196,30 @@ export function ConfigurationSourceBoundary(props: {
     }
     if (list.isError) {
       return (
-        <div className="p-5">
+        <ConfigurationAnswer section={props.section}>
           <TeamReadFailed
             message="Couldn't read these settings."
             onRetry={() => void list.refetch()}
           />
-        </div>
+        </ConfigurationAnswer>
       );
     }
     if (gone.invitation !== null) {
       return (
-        <div className="p-5">
+        <ConfigurationAnswer section={props.section}>
           <InvitedInstead invitation={gone.invitation} />
-        </div>
+        </ConfigurationAnswer>
       );
     }
     // The named removal is said as a toast, because the selection moves and
     // this page redraws under it; what is left to say is that this page cannot
     // be read, for the frame it still owns.
     return (
-      <div className="p-5">
+      <ConfigurationAnswer section={props.section}>
         <p role="status" className="text-ui-sm text-muted-foreground">
           {CONFIGURATION_UNAVAILABLE}
         </p>
-      </div>
+      </ConfigurationAnswer>
     );
   }
   return (

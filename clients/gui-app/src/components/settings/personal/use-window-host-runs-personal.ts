@@ -20,7 +20,11 @@ export function useWindowHostRunsPersonal(scope: HostScope): boolean | null {
     "environment.status",
   );
   if (scope.hostId === null) {
-    return scope.isLoading || scope.listsFailed ? null : false;
+    // `connecting` with no host is lists that have not answered, whether or
+    // not a read is in flight; only lists that settled cleanly say none.
+    return scope.isLoading || scope.status === "connecting" || scope.listsFailed
+      ? null
+      : false;
   }
   if (
     scope.status === "unreachable" ||

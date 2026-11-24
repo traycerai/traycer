@@ -412,6 +412,41 @@ describe("HomeGettingStartedSection", () => {
       });
     });
 
+    describe("while the host lists failed in a window with no host", () => {
+      // Personal is that window's default, and reads the cloud once the lists
+      // say it has no host.
+      beforeEach(() => {
+        useSelectionAuthorityStore.setState({ effectiveHostId: null });
+        useSettingsEnvironmentPickStore.setState({ defaultHostId: null });
+        personalHostScopeOverrides.current = { host: null, listsFailed: true };
+        windowHostRunsPersonal.current = null;
+      });
+
+      it("is decided by the retry that answers, for the same window host", async () => {
+        const home = renderHomeSection();
+        expect(secretCard()).toBeNull();
+
+        personalHostScopeOverrides.current = { host: null };
+        windowHostRunsPersonal.current = false;
+        home.refresh();
+
+        await waitFor(() => {
+          expect(secretCard()).not.toBeNull();
+        });
+      });
+
+      it("keeps the Guide open with every shown step done until Secrets is known", () => {
+        mocks.providers = [storedKeyProvider()];
+        mocks.tasks = [{ id: "task-1" }];
+        mocks.hosts = [personalHost("a"), personalHost("b")];
+
+        renderHomeSection();
+
+        expect(secretCard()).toBeNull();
+        expect(screen.getByText("3 of 3 complete")).toBeTruthy();
+      });
+    });
+
     it("stays absent after the host goes away and the cloud road serves Secrets", () => {
       windowHostRunsPersonal.current = true;
       mocks.hostServesSecrets = false;

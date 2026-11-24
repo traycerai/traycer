@@ -86,7 +86,8 @@ interface SectionFacts {
   readonly section: SettingsSectionId;
   /** The host the pick reads through, or `null` where the list names none. */
   readonly host: { readonly hostId: string; readonly name: string } | null;
-  readonly hostsLoading: boolean;
+  /** A host list has not answered, so a host it does not name may still come. */
+  readonly listsPending: boolean;
   /** A host list failed, so a host it does not name is not known to be gone. */
   readonly listsFailed: boolean;
   /** `useWindowHostRunsPersonal`, for a Personal pick. */
@@ -161,7 +162,7 @@ function localSectionAnswer(
 ): SectionAnswer {
   const { host, section } = facts;
   if (host === null) {
-    return facts.hostsLoading || facts.listsFailed
+    return facts.listsPending || facts.listsFailed
       ? pendingOrFailed(facts, pickedName)
       : { kind: "unlisted", hostName: pickedName };
   }
@@ -213,7 +214,10 @@ export function useSectionAnswer(
       scope.host === null
         ? null
         : { hostId: scope.host.hostId, name: scope.host.name },
-    hostsLoading: scope.isLoading,
+    // A scope with no host is `connecting` while a list has not answered,
+    // whether or not a read is in flight.
+    listsPending:
+      scope.isLoading || (scope.host === null && scope.status === "connecting"),
     listsFailed: scope.listsFailed,
     windowHostRuns,
     environmentStatus,
@@ -227,7 +231,9 @@ export type SectionServed = "served" | "not-served" | "pending";
 /**
  * `useSectionAnswer` in three states, for an entry that is shown only where
  * its page is: shown on `served`, absent while `pending`, so it never shows
- * and then goes.
+ * and then goes. `pending` is every answer a later read can change: one still
+ * coming, and host lists that failed, which their retry can answer either
+ * way. Only `served` and `not-served` are settled.
  */
 export function useSectionServed(
   pick: EnvironmentPick,
@@ -235,7 +241,11 @@ export function useSectionServed(
 ): SectionServed {
   const answer = useSectionAnswer(pick, section);
   if (answer.kind === "served") return "served";
-  if (answer.kind === "pending" || answer.kind === "unresolved") {
+  if (
+    answer.kind === "pending" ||
+    answer.kind === "unresolved" ||
+    answer.kind === "lists-failed"
+  ) {
     return "pending";
   }
   return "not-served";

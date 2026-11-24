@@ -321,6 +321,35 @@ describe("ConfigurationSourceBoundary", () => {
     expect(screen.queryByTestId("probe")).toBeNull();
   });
 
+  it.each([
+    {
+      answer: "the list fails",
+      list: () => Promise.reject(new Error("down")),
+      says: "Couldn't read these settings.",
+    },
+    {
+      answer: "the team is not listed",
+      list: () => Promise.resolve({ environments: [personal] }),
+      says: "These settings are no longer available.",
+    },
+  ])(
+    "keeps the section's heading over its answer when $answer",
+    async ({ list, says }) => {
+      const { Wrapper } = mountClient(list);
+      render(
+        <ConfigurationSourceBoundary
+          section="skills"
+          target={{ kind: "team", environmentId: "env-a" }}
+        >
+          <Probe />
+        </ConfigurationSourceBoundary>,
+        { wrapper: Wrapper },
+      );
+      expect(await screen.findByText(says)).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Skills" })).toBeTruthy();
+    },
+  );
+
   it.each(["admin", "editor"] as const)(
     "gives the child the pool context for a resolved team (role %s)",
     async (role) => {

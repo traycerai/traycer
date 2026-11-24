@@ -171,7 +171,6 @@ export function HostUnreachableGate(props: {
   );
 }
 
-/** Local-row pages retain their drafts while their host needs an update. */
 /**
  * The host lists failed before naming the host: nothing is known about it, so
  * the notice claims nothing and offers the lists' retry.
@@ -201,6 +200,7 @@ export function HostListsFailedNotice(props: {
   );
 }
 
+/** Local-row pages retain their drafts while their host needs an update. */
 export function HostMinimumVersionGate(props: {
   readonly host: HostScopeOption | null;
   readonly children: ReactNode;

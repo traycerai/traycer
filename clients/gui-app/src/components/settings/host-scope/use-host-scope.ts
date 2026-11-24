@@ -140,6 +140,12 @@ export interface HostScopeSelection {
   readonly scopedHostId: string | null;
   /** `null` returns to following the active host. */
   readonly setScopedHostId: (hostId: string | null) => void;
+  /**
+   * Following, and the active host not listed once the lists settle: the
+   * first computer, for a surface whose own host picker can change it, or no
+   * host (`resolveScopedHost`).
+   */
+  readonly defaultsToFirstHost: boolean;
 }
 
 /** The picked environment's host selection, shared by the rail and host panels. */
@@ -190,6 +196,7 @@ export function useHostScope(): HostScope {
     {
       scopedHostId: (selection ?? hosts.at(0))?.hostId ?? null,
       setScopedHostId,
+      defaultsToFirstHost: true,
     },
     {
       ...options,
@@ -220,7 +227,8 @@ export function useHostScope(): HostScope {
  * can re-point it - the setter is a no-op.
  *
  * Account pages follow the person, so they read through the window's own
- * host, `useHostScopeFor`'s answer to a `null` selection. Environment pages
+ * host: the active host, and no host while the lists have not listed it,
+ * never another computer in its place. Environment pages
  * read through the host the Environment dropdown names: a Local row's
  * computer, and the window's own host for Personal when that host runs it.
  * A team, and Personal on a window whose host does not run it, read the
@@ -229,6 +237,7 @@ export function useHostScope(): HostScope {
 export const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
   setScopedHostId: noScopedHostWrite,
+  defaultsToFirstHost: false,
 };
 
 function noScopedHostWrite(): void {
@@ -250,6 +259,7 @@ export function useHostScopeForHostId(hostId: string | null): HostScope {
     (): HostScopeSelection => ({
       scopedHostId: hostId,
       setScopedHostId: noScopedHostWrite,
+      defaultsToFirstHost: false,
     }),
     [hostId],
   );
@@ -282,7 +292,7 @@ function useHostScopeWithOptions(
   const runnerHost = useRunnerHost();
   const { hosts, activeHostId, listsResolved, listsFailed, nowMs } = options;
 
-  const { scopedHostId, setScopedHostId } = selection;
+  const { scopedHostId, setScopedHostId, defaultsToFirstHost } = selection;
   const { makeActive, isActivating } = useMakeActiveHost(hosts);
 
   // Still loading is not the same as gone, and a list that FAILED cannot prove
@@ -297,8 +307,16 @@ function useHostScopeWithOptions(
         activeHostId,
         listsResolved,
         listsFailed,
+        defaultsToFirstHost,
       }),
-    [hosts, scopedHostId, activeHostId, listsResolved, listsFailed],
+    [
+      hosts,
+      scopedHostId,
+      activeHostId,
+      listsResolved,
+      listsFailed,
+      defaultsToFirstHost,
+    ],
   );
 
   const host = resolved.host;

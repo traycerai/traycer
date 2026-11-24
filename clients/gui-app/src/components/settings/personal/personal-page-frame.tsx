@@ -138,7 +138,7 @@ export function PersonalPageFrame(props: {
     (section) => section.id === props.section && section.group === "personal",
   );
   if (pick.kind === "unresolved" && environmentPage) {
-    return <UnresolvedEnvironmentPage />;
+    return <UnresolvedEnvironmentPage section={props.section} />;
   }
   if (pick.kind === "team" && environmentPage) {
     return (

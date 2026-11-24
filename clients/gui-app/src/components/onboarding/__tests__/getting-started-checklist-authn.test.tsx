@@ -29,10 +29,7 @@ import { OwnEnvironmentAuthProvider } from "@/hooks/environment/__tests__/own-en
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import {
-  PERSONAL_PICK,
-  UNRESOLVED_PICK,
-} from "@/lib/settings-environment-pages";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { resetEnvironmentSectionReads } from "@/components/settings/__tests__/environment-section-reads-fixture";
 import {
   recordNegotiatedHostMethods,
@@ -104,6 +101,15 @@ vi.mock(
     (
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
     ).windowHostRunsPersonalModule,
+);
+// The default is the one each case seeds for this window's null host: the
+// dropdown's upkeep would resolve it again from the fixture scope's own host.
+vi.mock(
+  "@/components/settings/environment/use-environment-picker-model",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).seededPickerModelModule,
 );
 
 const authnHostRecord = authnHostRowFixture({
@@ -249,7 +255,7 @@ beforeEach(async () => {
   await signInOwnEnvironment(runtime);
   useAuthStore.setState({ shareableTeams: [] });
   useSettingsEnvironmentPickStore.setState({
-    pick: null,
+    ...useSettingsEnvironmentPickStore.getInitialState(),
     defaultPick: PERSONAL_PICK,
     defaultHostId: null,
   });
@@ -263,11 +269,9 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out" });
   resetNegotiatedManifests();
   resetEnvironmentSectionReads();
-  useSettingsEnvironmentPickStore.setState({
-    pick: null,
-    defaultPick: UNRESOLVED_PICK,
-    defaultHostId: null,
-  });
+  useSettingsEnvironmentPickStore.setState(
+    useSettingsEnvironmentPickStore.getInitialState(),
+  );
 });
 
 describe("the Guide's secret card through authn", () => {

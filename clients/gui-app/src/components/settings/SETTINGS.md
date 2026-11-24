@@ -952,8 +952,10 @@ Account; the rest is the app itself.
   Browser tab of Permissions (a region below the policy on a team, whose page
   has no tabs). `agent-definitions`,
   `browser-agent-access` and `machine-setup` are retired
-  (`RETIRED_SETTINGS_SECTION_IDS`): the first two redirect to Agents and
-  Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
+  (`RETIRED_SETTINGS_SECTION_IDS`): the first redirects to Agents
+  (`RETIRED_SECTION_REPLACEMENTS`, and its route), the second opens in place
+  from a link or a remembered section (`OPENED_IN_PLACE_SECTION_IDS`), and
+  `machine-setup` keeps its own route. These pages
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
   - **Memories** is one switch, "Let agents use and update common memory":
@@ -1441,9 +1443,11 @@ resets the pick to the window's default before it opens Secrets, so it asks
 whether that default serves Secrets, not the pick in effect. The checklist
 resolves the default itself with the dropdown's own upkeep
 (`useEnvironmentPickerModel`), so Home decides it in a window where Settings
-never opened. The card is absent while the answer is unknown. Its first answer
-for the window's host is kept (`decideSecretsCard`) across an outage and the
-host's return, so it never shows and then goes, and never appears late. The pick is never
+never opened. The card is absent while the answer is unknown, and host lists
+that failed leave it unknown until their retry answers; the Guide is not done
+meanwhile unless a secret already is. Its first settled answer for the window's
+host is kept (`decideSecretsCard`) across an outage and the host's return, so
+it never shows and then goes, and never appears late. The pick is never
 switched on the person's behalf. A Personal pick is never touched. A host
 whose `environment.status` is 1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
 

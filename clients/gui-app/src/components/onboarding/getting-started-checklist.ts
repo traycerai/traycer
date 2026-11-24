@@ -89,8 +89,11 @@ export interface GettingStartedFacts {
   readonly hasSecondPersonalComputer: boolean;
   readonly sandboxStaged: boolean;
   readonly creditsAboveZero: boolean;
-  /** Whether the pick the card lands on, the window default, has a Secrets page. */
-  readonly secretsOffered: boolean;
+  /**
+   * Whether the pick the card lands on, the window default, has a Secrets
+   * page; `null` until a settled answer decides it.
+   */
+  readonly secretsOffered: boolean | null;
   /** Where this computer's own settings stand against Personal. */
   readonly thisComputersMove: ThisComputersMove;
 }
@@ -141,7 +144,7 @@ function cardApplies(
   facts: GettingStartedFacts,
 ): boolean {
   if (card.id === "credits") return facts.sandboxStaged;
-  if (card.id === "secret") return facts.secretsOffered;
+  if (card.id === "secret") return facts.secretsOffered === true;
   if (card.id === "move") {
     const move = facts.thisComputersMove;
     return move === "not_moved" || move === "moved";
@@ -159,10 +162,15 @@ export function gettingStartedVisibleCards(
  * True when every step the Guide group currently shows is done. E4 hides
  * the group from this. Credits is in the count only while a sandbox is
  * staged in this window, and the move only while this computer can answer it.
+ * An undecided Secrets card is not shown but may yet be, so the Guide is not
+ * done until it is decided or its step is.
  */
 export function gettingStartedGuideIsComplete(
   facts: GettingStartedFacts,
 ): boolean {
+  if (facts.secretsOffered === null && !stepIsDone("secret", facts)) {
+    return false;
+  }
   return gettingStartedVisibleCards(facts).every((card) =>
     stepIsDone(card.id, facts),
   );
@@ -239,15 +247,16 @@ export function useGettingStartedFacts(): GettingStartedFacts {
 }
 
 /**
- * Whether the Secrets card shows. Its handler resets the pick before it opens
- * Secrets, so the page is judged under the default it lands on, resolved here
- * by the dropdown's own upkeep: Home shows the card in a window where Settings
- * never opened. A pending answer keeps the card absent, and the first answer
- * for the window's host is kept (`decideSecretsCard`), so an outage and the
- * host's return, which change the page's source, never take the card away or
- * add it after it was left out.
+ * Whether the Secrets card shows, `null` while undecided. Its handler resets
+ * the pick before it opens Secrets, so the page is judged under the default it
+ * lands on, resolved here by the dropdown's own upkeep: Home shows the card in
+ * a window where Settings never opened. Only a settled answer decides it, never
+ * one a retry can change (`useSectionServed`), and the first for the window's
+ * host is kept (`decideSecretsCard`), so an outage and the host's return,
+ * which change the page's source, never take the card away or add it after it
+ * was left out.
  */
-function useSecretsCardOffered(): boolean {
+function useSecretsCardOffered(): boolean | null {
   useEnvironmentPickerModel(useHostScopeFor(WINDOW_HOST_SELECTION));
   const served = useSectionServed(useDefaultEnvironmentPick(), "secrets");
   const answered = served === "pending" ? null : served === "served";
@@ -258,7 +267,7 @@ function useSecretsCardOffered(): boolean {
   useLayoutEffect(() => {
     if (answered !== null) decideSecretsCard(hostId, answered);
   }, [answered, hostId, decideSecretsCard]);
-  return decided ?? answered ?? false;
+  return decided ?? answered;
 }
 
 /** Whether the Guide group has nothing left to show (E4). */

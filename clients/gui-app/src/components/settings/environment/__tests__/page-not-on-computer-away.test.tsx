@@ -316,6 +316,66 @@ describe("An Environment page under a Personal pick whose window host has not an
   });
 });
 
+describe("Personal's Secrets while the window host's row is missing and another computer is listed", () => {
+  beforeEach(() => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    harness.activeHostId = "host-win";
+    // Not connectable, so a scope reading it would put Personal on the cloud.
+    harness.hosts = [
+      hostScopeOptionFixture({
+        hostId: "host-other",
+        name: "Other laptop",
+        isLocalMachine: false,
+        isActive: false,
+        connectable: false,
+      }),
+    ];
+  });
+
+  it.each([
+    { lists: "loading", isLoading: true },
+    { lists: "neither answered nor loading", isLoading: false },
+  ])(
+    "waits under its heading while the lists are $lists, rather than read the other computer",
+    ({ isLoading }) => {
+      harness.listsResolved = false;
+      harness.isLoading = isLoading;
+
+      renderSecrets();
+
+      expect(screen.getByRole("heading", { name: "Secrets" })).toBeTruthy();
+      expect(screen.getByTestId("host-scope-connecting")).toBeTruthy();
+      expect(screen.queryByText(/Other laptop/)).toBeNull();
+      expect(screen.queryByTestId("draft")).toBeNull();
+    },
+  );
+
+  it("offers the lists' retry when they failed, rather than read the other computer", () => {
+    harness.listsFailed = true;
+
+    renderSecrets();
+
+    expect(screen.getByTestId("host-scope-lists-failed")).toBeTruthy();
+    expect(screen.queryByTestId("draft")).toBeNull();
+  });
+});
+
+describe("A Local pick whose computer's row is missing while a host list has neither answered nor started loading", () => {
+  it("waits with Connecting, never that the computer is unlisted", () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
+    });
+    harness.listsResolved = false;
+
+    renderSecrets();
+
+    expect(screen.queryByTestId("page-not-on-computer-unlisted")).toBeNull();
+    expect(screen.getByTestId("host-scope-connecting").textContent).toContain(
+      "Connecting to Old laptop",
+    );
+  });
+});
+
 describe("A page under a pick while the host lists failed before supplying a row", () => {
   beforeEach(() => {
     harness.listsResolved = false;

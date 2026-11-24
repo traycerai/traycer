@@ -18,7 +18,8 @@ interface GonePick {
 
 /**
  * Getting Started's Secrets card, decided once for a window host: whether the
- * default pick of `hostId` had a Secrets page when its answer first came. It
+ * default pick of `hostId` had a Secrets page when a settled answer first
+ * came, never one a retry could change. It
  * stays for that host across an outage and its return (brief 3 §4, R2), so
  * the card never shows and then goes; another window host decides again.
  */
@@ -58,7 +59,10 @@ interface SettingsEnvironmentPickState {
   ) => void;
   /** Marks the current pick gone, to read as `readsAs` (`null`: the default). */
   readonly markPickGone: (readsAs: EnvironmentPick | null) => void;
-  /** Records the card's decision for `hostId`, unless it has one already. */
+  /**
+   * Records the card's settled decision for `hostId`, unless it has one
+   * already.
+   */
   readonly decideSecretsCard: (hostId: string | null, offered: boolean) => void;
 }
 

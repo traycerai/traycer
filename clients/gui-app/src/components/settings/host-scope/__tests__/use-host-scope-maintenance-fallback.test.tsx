@@ -158,6 +158,7 @@ function renderScope(scopedHostId: string | null) {
     useHostScopeFor({
       scopedHostId,
       setScopedHostId: () => undefined,
+      defaultsToFirstHost: true,
     }),
   );
 }

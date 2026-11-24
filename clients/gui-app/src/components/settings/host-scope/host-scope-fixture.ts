@@ -182,6 +182,7 @@ export function noHostsScopeModule() {
     WINDOW_HOST_SELECTION: {
       scopedHostId: null,
       setScopedHostId: () => undefined,
+      defaultsToFirstHost: false,
     },
   };
 }
