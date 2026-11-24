@@ -13,8 +13,14 @@ async function main(): Promise<void> {
   }
   // Four writers contend for one lock on a busy runner; the default 15s wait
   // is sized for a person's settings click, not for this burst.
+  const waitMs = Number(process.env.TRAYCER_CONFIG_TEST_WAIT_MS ?? 60_000);
+  if (!Number.isSafeInteger(waitMs) || waitMs < 0) {
+    throw new Error(
+      "TRAYCER_CONFIG_TEST_WAIT_MS must be a non-negative integer",
+    );
+  }
   setCliConfigLockTimingForTests({
-    waitMs: 60_000,
+    waitMs,
     pollMs: 10,
     staleAgeMs: 30_000,
   });
