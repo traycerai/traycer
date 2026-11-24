@@ -403,7 +403,10 @@ export function useRpcShellConfigController(props: {
         afterEnvRead(callbacks),
       ),
     setEnvAsync: async (entry) => {
-      await envSetMutation.mutateAsync({ ...entry, executableWriteGrant: null });
+      await envSetMutation.mutateAsync({
+        ...entry,
+        executableWriteGrant: null,
+      });
     },
     deleteEnv: (key, callbacks) =>
       envDeleteMutation.mutate({ key }, afterEnvRead(callbacks)),

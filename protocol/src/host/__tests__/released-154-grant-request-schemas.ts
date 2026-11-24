@@ -7,303 +7,277 @@
  */
 export const RELEASED_154_GRANT_REQUESTS = {
   "config.shell.set": {
-    "version": {
-      "major": 1,
-      "minor": 1
+    version: {
+      major: 1,
+      minor: 1,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      anyOf: [
         {
-          "properties": {
-            "args": {
-              "anyOf": [
+          properties: {
+            args: {
+              anyOf: [
                 {
-                  "items": {
-                    "type": "string"
+                  items: {
+                    type: "string",
                   },
-                  "type": "array"
+                  type: "array",
                 },
                 {
-                  "type": "null"
-                }
-              ]
+                  type: "null",
+                },
+              ],
             },
-            "executableWriteGrant": {
-              "anyOf": [
+            executableWriteGrant: {
+              anyOf: [
                 {
-                  "maxLength": 8192,
-                  "minLength": 1,
-                  "type": "string"
+                  maxLength: 8192,
+                  minLength: 1,
+                  type: "string",
                 },
                 {
-                  "type": "null"
-                }
-              ]
+                  type: "null",
+                },
+              ],
             },
-            "path": {
-              "minLength": 1,
-              "type": "string"
-            }
+            path: {
+              minLength: 1,
+              type: "string",
+            },
           },
-          "required": [
-            "path",
-            "args",
-            "executableWriteGrant"
-          ],
-          "type": "object"
+          required: ["path", "args", "executableWriteGrant"],
+          type: "object",
         },
         {
-          "properties": {
-            "args": {
-              "items": {
-                "type": "string"
+          properties: {
+            args: {
+              items: {
+                type: "string",
               },
-              "type": "array"
+              type: "array",
             },
-            "executableWriteGrant": {
-              "anyOf": [
+            executableWriteGrant: {
+              anyOf: [
                 {
-                  "maxLength": 8192,
-                  "minLength": 1,
-                  "type": "string"
+                  maxLength: 8192,
+                  minLength: 1,
+                  type: "string",
                 },
                 {
-                  "type": "null"
-                }
-              ]
+                  type: "null",
+                },
+              ],
             },
-            "path": {
-              "type": "null"
-            }
+            path: {
+              type: "null",
+            },
           },
-          "required": [
-            "path",
-            "args",
-            "executableWriteGrant"
-          ],
-          "type": "object"
-        }
-      ]
-    }
+          required: ["path", "args", "executableWriteGrant"],
+          type: "object",
+        },
+      ],
+    },
   },
   "config.shell.reset": {
-    "version": {
-      "major": 1,
-      "minor": 1
+    version: {
+      major: 1,
+      minor: 1,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
-        }
+              type: "null",
+            },
+          ],
+        },
       },
-      "required": [
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["executableWriteGrant"],
+      type: "object",
+    },
   },
   "config.shell.add": {
-    "version": {
-      "major": 1,
-      "minor": 1
+    version: {
+      major: 1,
+      minor: 1,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "path": {
-          "minLength": 1,
-          "type": "string"
-        }
+        path: {
+          minLength: 1,
+          type: "string",
+        },
       },
-      "required": [
-        "path",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["path", "executableWriteGrant"],
+      type: "object",
+    },
   },
   "config.shell.remove": {
-    "version": {
-      "major": 1,
-      "minor": 1
+    version: {
+      major: 1,
+      minor: 1,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "path": {
-          "minLength": 1,
-          "type": "string"
-        }
+        path: {
+          minLength: 1,
+          type: "string",
+        },
       },
-      "required": [
-        "path",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["path", "executableWriteGrant"],
+      type: "object",
+    },
   },
   "config.shell.revertArgs": {
-    "version": {
-      "major": 1,
-      "minor": 1
+    version: {
+      major: 1,
+      minor: 1,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "path": {
-          "minLength": 1,
-          "type": "string"
-        }
+        path: {
+          minLength: 1,
+          type: "string",
+        },
       },
-      "required": [
-        "path",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["path", "executableWriteGrant"],
+      type: "object",
+    },
   },
   "config.env.set": {
-    "version": {
-      "major": 1,
-      "minor": 1
+    version: {
+      major: 1,
+      minor: 1,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "key": {
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-          "type": "string"
+        key: {
+          pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+          type: "string",
         },
-        "value": {
-          "anyOf": [
+        value: {
+          anyOf: [
             {
-              "type": "string"
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
-        }
+              type: "null",
+            },
+          ],
+        },
       },
-      "required": [
-        "key",
-        "value",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["key", "value", "executableWriteGrant"],
+      type: "object",
+    },
   },
   "config.env.localOverride.set": {
-    "version": {
-      "major": 1,
-      "minor": 0
+    version: {
+      major: 1,
+      minor: 0,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "target": {
-          "oneOf": [
+        target: {
+          oneOf: [
             {
-              "properties": {
-                "key": {
-                  "minLength": 1,
-                  "type": "string"
+              properties: {
+                key: {
+                  minLength: 1,
+                  type: "string",
                 },
-                "kind": {
-                  "const": "variable",
-                  "type": "string"
-                }
+                kind: {
+                  const: "variable",
+                  type: "string",
+                },
               },
-              "required": [
-                "kind",
-                "key"
-              ],
-              "type": "object"
+              required: ["kind", "key"],
+              type: "object",
             },
             {
-              "properties": {
-                "key": {
-                  "minLength": 1,
-                  "type": "string"
+              properties: {
+                key: {
+                  minLength: 1,
+                  type: "string",
                 },
-                "kind": {
-                  "const": "env_override",
-                  "type": "string"
+                kind: {
+                  const: "env_override",
+                  type: "string",
                 },
-                "providerId": {
-                  "enum": [
+                providerId: {
+                  enum: [
                     "claude-code",
                     "codex",
                     "opencode",
@@ -325,346 +299,297 @@ export const RELEASED_154_GRANT_REQUESTS = {
                     "huggingface",
                     "reasonix",
                     "antigravity",
-                    "commandcode"
+                    "commandcode",
                   ],
-                  "type": "string"
-                }
+                  type: "string",
+                },
               },
-              "required": [
-                "kind",
-                "providerId",
-                "key"
-              ],
-              "type": "object"
-            }
-          ]
+              required: ["kind", "providerId", "key"],
+              type: "object",
+            },
+          ],
         },
-        "value": {
-          "type": "string"
-        }
+        value: {
+          type: "string",
+        },
       },
-      "required": [
-        "target",
-        "value",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["target", "value", "executableWriteGrant"],
+      type: "object",
+    },
   },
   "environment.agentDefinitions.put": {
-    "version": {
-      "major": 1,
-      "minor": 0
+    version: {
+      major: 1,
+      minor: 0,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "expectedRevision": {
-          "anyOf": [
+        expectedRevision: {
+          anyOf: [
             {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
+              maximum: 9007199254740991,
+              minimum: -9007199254740991,
+              type: "integer",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "name": {
-          "minLength": 1,
-          "type": "string"
+        name: {
+          minLength: 1,
+          type: "string",
         },
-        "text": {
-          "type": "string"
-        }
+        text: {
+          type: "string",
+        },
       },
-      "required": [
-        "name",
-        "text",
-        "expectedRevision",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["name", "text", "expectedRevision", "executableWriteGrant"],
+      type: "object",
+    },
   },
   "environment.setup.put": {
-    "version": {
-      "major": 1,
-      "minor": 0
+    version: {
+      major: 1,
+      minor: 0,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
-        },
-        "expectedRevision": {
-          "anyOf": [
-            {
-              "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
-              "type": "integer"
+              type: "null",
             },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "os": {
-          "enum": [
-            "any",
-            "linux",
-            "macos",
-            "windows"
           ],
-          "type": "string"
         },
-        "text": {
-          "type": "string"
-        }
+        expectedRevision: {
+          anyOf: [
+            {
+              maximum: 9007199254740991,
+              minimum: -9007199254740991,
+              type: "integer",
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+        os: {
+          enum: ["any", "linux", "macos", "windows"],
+          type: "string",
+        },
+        text: {
+          type: "string",
+        },
       },
-      "required": [
-        "os",
-        "text",
-        "expectedRevision",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["os", "text", "expectedRevision", "executableWriteGrant"],
+      type: "object",
+    },
   },
   "environment.undo": {
-    "version": {
-      "major": 1,
-      "minor": 0
+    version: {
+      major: 1,
+      minor: 0,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "noticeId": {
-          "minLength": 1,
-          "type": "string"
-        }
+        noticeId: {
+          minLength: 1,
+          type: "string",
+        },
       },
-      "required": [
-        "noticeId",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
+      required: ["noticeId", "executableWriteGrant"],
+      type: "object",
+    },
   },
   "host.notificationHooks.save": {
-    "version": {
-      "major": 3,
-      "minor": 0
+    version: {
+      major: 3,
+      minor: 0,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "properties": {
-        "configurationRevision": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      additionalProperties: false,
+      properties: {
+        configurationRevision: {
+          anyOf: [
             {
-              "minLength": 1,
-              "type": "string"
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "executableWriteGrant": {
-          "anyOf": [
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "hooks": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "action": {
-                "oneOf": [
+        hooks: {
+          items: {
+            additionalProperties: false,
+            properties: {
+              action: {
+                oneOf: [
                   {
-                    "additionalProperties": false,
-                    "properties": {
-                      "headers": {
-                        "additionalProperties": {
-                          "type": "string"
+                    additionalProperties: false,
+                    properties: {
+                      headers: {
+                        additionalProperties: {
+                          type: "string",
                         },
-                        "propertyNames": {
-                          "minLength": 1,
-                          "type": "string"
+                        propertyNames: {
+                          minLength: 1,
+                          type: "string",
                         },
-                        "type": "object"
+                        type: "object",
                       },
-                      "type": {
-                        "const": "http",
-                        "type": "string"
+                      type: {
+                        const: "http",
+                        type: "string",
                       },
-                      "url": {
-                        "minLength": 1,
-                        "type": "string"
-                      }
+                      url: {
+                        minLength: 1,
+                        type: "string",
+                      },
                     },
-                    "required": [
-                      "type",
-                      "url",
-                      "headers"
-                    ],
-                    "type": "object"
+                    required: ["type", "url", "headers"],
+                    type: "object",
                   },
                   {
-                    "additionalProperties": false,
-                    "properties": {
-                      "args": {
-                        "items": {
-                          "type": "string"
+                    additionalProperties: false,
+                    properties: {
+                      args: {
+                        items: {
+                          type: "string",
                         },
-                        "type": "array"
+                        type: "array",
                       },
-                      "command": {
-                        "minLength": 1,
-                        "type": "string"
+                      command: {
+                        minLength: 1,
+                        type: "string",
                       },
-                      "type": {
-                        "const": "command",
-                        "type": "string"
-                      }
+                      type: {
+                        const: "command",
+                        type: "string",
+                      },
                     },
-                    "required": [
-                      "type",
-                      "command",
-                      "args"
-                    ],
-                    "type": "object"
-                  }
-                ]
+                    required: ["type", "command", "args"],
+                    type: "object",
+                  },
+                ],
               },
-              "enabled": {
-                "type": "boolean"
+              enabled: {
+                type: "boolean",
               },
-              "id": {
-                "minLength": 1,
-                "type": "string"
+              id: {
+                minLength: 1,
+                type: "string",
               },
-              "name": {
-                "anyOf": [
+              name: {
+                anyOf: [
                   {
-                    "minLength": 1,
-                    "type": "string"
+                    minLength: 1,
+                    type: "string",
                   },
                   {
-                    "type": "null"
-                  }
-                ]
+                    type: "null",
+                  },
+                ],
               },
-              "severities": {
-                "anyOf": [
+              severities: {
+                anyOf: [
                   {
-                    "items": {
-                      "enum": [
-                        "info",
-                        "needs_action",
-                        "failure",
-                        "done"
-                      ],
-                      "type": "string"
+                    items: {
+                      enum: ["info", "needs_action", "failure", "done"],
+                      type: "string",
                     },
-                    "minItems": 1,
-                    "type": "array"
+                    minItems: 1,
+                    type: "array",
                   },
                   {
-                    "type": "null"
-                  }
-                ]
-              }
+                    type: "null",
+                  },
+                ],
+              },
             },
-            "required": [
-              "id",
-              "name",
-              "enabled",
-              "severities",
-              "action"
-            ],
-            "type": "object"
+            required: ["id", "name", "enabled", "severities", "action"],
+            type: "object",
           },
-          "type": "array"
-        }
+          type: "array",
+        },
       },
-      "required": [
-        "hooks",
-        "executableWriteGrant",
-        "configurationRevision"
-      ],
-      "type": "object"
-    }
+      required: ["hooks", "executableWriteGrant", "configurationRevision"],
+      type: "object",
+    },
   },
   "providers.setEnvOverride": {
-    "version": {
-      "major": 2,
-      "minor": 2
+    version: {
+      major: 2,
+      minor: 2,
     },
-    "request": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {
-        "executableWriteGrant": {
-          "anyOf": [
+    request: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      properties: {
+        executableWriteGrant: {
+          anyOf: [
             {
-              "maxLength": 8192,
-              "minLength": 1,
-              "type": "string"
+              maxLength: 8192,
+              minLength: 1,
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
+              type: "null",
+            },
+          ],
         },
-        "key": {
-          "minLength": 1,
-          "type": "string"
+        key: {
+          minLength: 1,
+          type: "string",
         },
-        "providerId": {
-          "enum": [
+        providerId: {
+          enum: [
             "claude-code",
             "codex",
             "opencode",
@@ -686,28 +611,23 @@ export const RELEASED_154_GRANT_REQUESTS = {
             "huggingface",
             "reasonix",
             "antigravity",
-            "commandcode"
+            "commandcode",
           ],
-          "type": "string"
+          type: "string",
         },
-        "value": {
-          "anyOf": [
+        value: {
+          anyOf: [
             {
-              "type": "string"
+              type: "string",
             },
             {
-              "type": "null"
-            }
-          ]
-        }
+              type: "null",
+            },
+          ],
+        },
       },
-      "required": [
-        "providerId",
-        "key",
-        "value",
-        "executableWriteGrant"
-      ],
-      "type": "object"
-    }
-  }
+      required: ["providerId", "key", "value", "executableWriteGrant"],
+      type: "object",
+    },
+  },
 } as const;

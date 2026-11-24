@@ -239,7 +239,10 @@ function stringMismatch(
   if (typeof schema.maxLength === "number" && value.length > schema.maxLength) {
     return "maxLength";
   }
-  if (typeof schema.pattern === "string" && !new RegExp(schema.pattern).test(value)) {
+  if (
+    typeof schema.pattern === "string" &&
+    !new RegExp(schema.pattern).test(value)
+  ) {
     return "pattern";
   }
   return null;
@@ -292,7 +295,8 @@ function objectMismatch(
   const properties = isRecord(schema.properties) ? schema.properties : {};
   const required = Array.isArray(schema.required) ? schema.required : [];
   for (const key of required) {
-    if (typeof key !== "string") return `${path} required entry is not a string`;
+    if (typeof key !== "string")
+      return `${path} required entry is not a string`;
     if (!(key in value)) return `${path} missing ${key}`;
   }
   for (const [key, propertyValue] of Object.entries(value)) {
@@ -320,7 +324,11 @@ function objectMismatch(
   return null;
 }
 
-function mismatchAt(schema: unknown, value: unknown, path: string): string | null {
+function mismatchAt(
+  schema: unknown,
+  value: unknown,
+  path: string,
+): string | null {
   if (!isRecord(schema)) return `${path} schema is not an object`;
   const unknownKeyword = unhandledKeyword(schema);
   if (unknownKeyword !== null) return `${path} ${unknownKeyword}`;
@@ -414,9 +422,10 @@ describe("released 1.5.4 requests that carry executableWriteGrant", () => {
         released.version.minor,
       );
 
-      const parsed = requestSchemaAt(grantCase.method, currentVersion).safeParse(
-        grantCase.currentRequest,
-      );
+      const parsed = requestSchemaAt(
+        grantCase.method,
+        currentVersion,
+      ).safeParse(grantCase.currentRequest);
       expect(parsed.success).toBe(true);
       if (!parsed.success) return;
       const currentParams: unknown = parsed.data;
@@ -432,7 +441,9 @@ describe("released 1.5.4 requests that carry executableWriteGrant", () => {
       expect(prepared.onWireVersion).toEqual(released.version);
       expect(prepared.onWirePayload).toEqual(grantCase.releasedRequest);
       const publishedSchema: unknown = released.request;
-      expect(schemaMismatch(publishedSchema, prepared.onWirePayload)).toBeNull();
+      expect(
+        schemaMismatch(publishedSchema, prepared.onWirePayload),
+      ).toBeNull();
     },
   );
 });
