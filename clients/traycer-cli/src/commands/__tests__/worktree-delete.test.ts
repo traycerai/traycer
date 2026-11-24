@@ -89,12 +89,13 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
   ) {
     hoisted.state.bearer = options.bearer;
     hoisted.state.releasedSignIn = options.releasedSignOn?.signIn ?? null;
+    const door = options.door;
     hoisted.state.doorAdmission =
-      options.door === undefined
+      door === undefined
         ? null
         : (instance) => {
             hoisted.state.admissionCalls += 1;
-            return options.door.admitted(instance);
+            return door.admitted(instance);
           };
     return {
       subscribe: hoisted.subscribeMock,
