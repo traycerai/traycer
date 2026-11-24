@@ -1209,6 +1209,7 @@ function TokenReauthForm({
         {
           providerId,
           key: activeVar,
+          executableWriteGrant: null,
         },
         { onSuccess: afterWrite },
       );

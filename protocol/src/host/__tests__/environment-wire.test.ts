@@ -596,21 +596,18 @@ describe("released request bridges", () => {
       it("registers the upgrade path and parses the previous request on the destination", () => {
         expect(entry.registeredUpgrade).toBe(entry.upgradePath);
         const upgraded = entry.upgrade(entry.legacyRequest);
-        const expected =
-          entry.method === "providers.nativeMutate" ||
-          entry.method === "host.notificationHooks.save"
-            ? { ...entry.legacyRequest, executableWriteGrant: null }
-            : entry.legacyRequest;
-        expect(upgraded).toEqual(expected);
+        expect(upgraded).toEqual({
+          ...entry.legacyRequest,
+          executableWriteGrant: null,
+        });
         expect(accepts(entry.latestRequestSchema, upgraded)).toBe(true);
       });
 
       it("sends a newer client's request to every older host line WITHOUT the grant, in a shape that line accepts", () => {
-        const params =
-          entry.method === "providers.nativeMutate" ||
-          entry.method === "host.notificationHooks.save"
-            ? { ...entry.legacyRequest, executableWriteGrant: JWT_SHAPED_GRANT }
-            : entry.legacyRequest;
+        const params = {
+          ...entry.legacyRequest,
+          executableWriteGrant: JWT_SHAPED_GRANT,
+        };
         for (const line of entry.hostLines) {
           const prepared = prepareRequestPayload(
             entry.registry,
@@ -683,6 +680,7 @@ describe("released request bridges", () => {
       to: { major: 1, minor: 1 },
       upgradeRequest: (request) => ({
         ...request,
+        executableWriteGrant: null,
         configurationRevision: null,
       }),
       upgradeResponse: (response) => response,
