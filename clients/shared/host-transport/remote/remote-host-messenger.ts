@@ -56,6 +56,7 @@ export class RemoteHostMessenger<
       undefined,
       options.replayMustBeKeyed,
       options.requiredHostMethodVersion,
+      options.requestId,
     );
   }
 
@@ -87,6 +88,7 @@ export class RemoteHostMessenger<
       responseTimeoutMs,
       options.replayMustBeKeyed,
       options.requiredHostMethodVersion,
+      options.requestId,
     );
   }
 }

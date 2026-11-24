@@ -1,6 +1,10 @@
 import { defineRpcContract, defineUpgradePath } from "../framework/index";
 import * as schemas from "./environment-schemas";
-import { environmentProposalsV10 } from "./environment/settings-proposals";
+import {
+  environmentProposalsUpgradeV10ToV11,
+  environmentProposalsV10,
+  environmentProposalsV11,
+} from "./environment/settings-proposals";
 import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
 
 /**
@@ -588,11 +592,15 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.proposals": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentProposalsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentProposalsV11,
+          upgradeFromPreviousVersion: environmentProposalsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

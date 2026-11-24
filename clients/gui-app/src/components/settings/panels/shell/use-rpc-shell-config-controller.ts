@@ -38,6 +38,7 @@ import {
 import {
   everyAnswerProposes,
   sendFollowedSave,
+  requestFollowedSettingsSave,
   type PendingSettingsSave,
 } from "@/lib/environment/settings-save-follow";
 
@@ -271,14 +272,26 @@ export function useRpcShellConfigController(props: {
         };
         await sendFollowedSave(
           await prepare({ method: "config.env.set", request: set }),
-          () => pressedClient.request("config.env.set", set),
+          (requestId) =>
+            requestFollowedSettingsSave(
+              pressedClient,
+              "config.env.set",
+              set,
+              requestId,
+            ),
           everyAnswerProposes,
         );
         if (rename.oldKey.length === 0) return;
         const remove = { key: rename.oldKey };
         await sendFollowedSave(
           await prepare({ method: "config.env.delete", request: remove }),
-          () => pressedClient.request("config.env.delete", remove),
+          (requestId) =>
+            requestFollowedSettingsSave(
+              pressedClient,
+              "config.env.delete",
+              remove,
+              requestId,
+            ),
           everyAnswerProposes,
         );
       },
