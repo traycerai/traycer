@@ -729,6 +729,10 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
     const note = await screen.findByTestId("env-row-own-value");
     expect(note.textContent).toBe(`dev-box uses: ${OWN_URL} · Use everywhere`);
+    expect(
+      screen.getByLabelText<HTMLInputElement>("Value for ANTHROPIC_BASE_URL")
+        .value,
+    ).toBe(OWN_URL);
   });
 
   it("saves the host's value for everyone, then stops the host keeping its own", async () => {

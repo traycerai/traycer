@@ -2,6 +2,16 @@
 // selected host's own config), so it reads `useHostScope`. Mock at that
 // boundary: these suites render the panel bare, without the host runtime and
 // query providers the real hook needs.
+const toastErrorMock = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: toastErrorMock,
+    info: vi.fn(),
+    message: vi.fn(),
+  },
+}));
+
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
@@ -57,6 +67,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import {
   ABANDONED_SAVE_MESSAGE,
   abandonedSaveError,
@@ -70,7 +81,10 @@ import type {
   IRunnerHost,
   TraycerShellConfigSetInput,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { LocalOverride } from "@traycer/protocol/host/environment-schemas";
+import type {
+  ConfigEnvLocalOverrideSetRequest,
+  LocalOverride,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -109,6 +123,7 @@ afterEach(() => {
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   sandboxCredentialRefusal.current = null;
+  toastErrorMock.mockReset();
 });
 
 // A non-login program: its family default is no flags, so switching to it must
@@ -128,6 +143,23 @@ async function openEnvAdd(): Promise<void> {
   fireEvent.click(add);
 }
 
+function waitForMutationError(queryClient: QueryClient): Promise<void> {
+  const mutationCache = queryClient.getMutationCache();
+  const hasError = (): boolean =>
+    mutationCache
+      .getAll()
+      .some((mutation) => mutation.state.status === "error");
+  if (hasError()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const unsubscribe = mutationCache.subscribe(() => {
+      if (hasError()) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
+
 const SAVED_FLASH_MS = 1600;
 
 /**
@@ -137,6 +169,12 @@ const SAVED_FLASH_MS = 1600;
  * client, so writes exercise the real `useHostQuery`/`useHostMutation` wiring
  * rather than a bridge stub.
  */
+type RenderedShellPanelOverRpc = ConfigHostFixture & {
+  readonly queryClient: QueryClient;
+  readonly rerenderPanel: () => void;
+  readonly unmountPanel: () => void;
+};
+
 function renderShellPanelOverRpc(options: {
   readonly configure?: (cli: MockTraycerCli) => void;
   /** Supply the CLI when a handler override needs to close over it. */
@@ -156,11 +194,7 @@ function renderShellPanelOverRpc(options: {
    */
   readonly methods?: readonly string[] | null;
   readonly hostKind?: HostScopeOption["kind"];
-}): ConfigHostFixture & {
-  readonly queryClient: QueryClient;
-  readonly rerenderPanel: () => void;
-  readonly unmountPanel: () => void;
-} {
+}): RenderedShellPanelOverRpc {
   const hostId = options.hostId ?? "host-a";
   const isLocalMachine = options.isLocalMachine ?? true;
   const cli = options.cli ?? new MockTraycerCli();
@@ -250,6 +284,55 @@ function renderShellPanelOverRpc(options: {
     rerenderPanel: () => rendered.rerender(panel()),
     unmountPanel: () => rendered.unmount(),
   };
+}
+
+async function waitForEnvListRead(
+  panel: Pick<RenderedShellPanelOverRpc, "queryClient" | "rerenderPanel">,
+  hostId: string,
+  expectedEntries: readonly {
+    readonly key: string;
+    readonly value: string | null;
+  }[],
+): Promise<void> {
+  const listKey = queryKeys.hostMethod(hostId, "config.env.list", {});
+  const cacheEntries = ():
+    | readonly {
+        readonly key: string;
+        readonly value: string | null;
+      }[]
+    | undefined =>
+    panel.queryClient.getQueryData<{
+      readonly entries: readonly {
+        readonly key: string;
+        readonly value: string | null;
+      }[];
+    }>(listKey)?.entries;
+  const hasExpectedEntries = (): boolean => {
+    const entries = cacheEntries();
+    return (
+      entries !== undefined &&
+      entries.length === expectedEntries.length &&
+      entries.every((entry, index) => {
+        const expected = expectedEntries[index];
+        return entry.key === expected.key && entry.value === expected.value;
+      })
+    );
+  };
+  const awaitExpectedEntries = (): Promise<void> => {
+    if (hasExpectedEntries()) return Promise.resolve();
+    return new Promise((resolve) => {
+      let unsubscribe = (): void => undefined;
+      unsubscribe = panel.queryClient.getQueryCache().subscribe(() => {
+        if (!hasExpectedEntries()) return;
+        unsubscribe();
+        resolve();
+      });
+    });
+  };
+  await act(async () => {
+    await awaitExpectedEntries();
+    panel.rerenderPanel();
+  });
 }
 
 /**
@@ -1416,6 +1499,7 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
 
 describe("<ShellSettingsPanel /> host environment names that look like credentials", () => {
   const PASSWORD_URL = "https://user:pw@example.com/x";
+  const KEY_SHAPED_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
 
   function envCli(): MockTraycerCli {
     const cli = new MockTraycerCli();
@@ -1449,6 +1533,21 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
       setAt: 1,
     };
   }
+
+  it("edits the computer's own value when it differs from Personal", async () => {
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "personal-a" }];
+    const panel = renderShellPanelOverRpc({
+      cli,
+      hostId: "dev-box",
+      localOverrides: [localVariableOverride("LOG_LEVEL", "computer-b")],
+    });
+    await waitForEnvListRead(panel, "dev-box", cli.envOverrides);
+
+    expect(
+      screen.getByLabelText<HTMLInputElement>("Value for LOG_LEVEL").value,
+    ).toBe("computer-b");
+  });
 
   async function addVariable(name: string, value: string): Promise<void> {
     await openEnvAdd();
@@ -1519,6 +1618,155 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
       value: "vim",
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+  });
+
+  it("keeps the edited row when Only on cannot save its value", async () => {
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+    const set = vi.fn(
+      async (request: { key: string; value: string | null }) => {
+        await cli.envOverrideSet(request);
+        return { key: request.key, value: request.value };
+      },
+    );
+    const localSetStarted =
+      Promise.withResolvers<ConfigEnvLocalOverrideSetRequest>();
+    const localSetReply = Promise.withResolvers<never>();
+    const localSet = vi.fn((request: ConfigEnvLocalOverrideSetRequest) => {
+      localSetStarted.resolve(request);
+      return localSetReply.promise;
+    });
+    const panel = renderShellPanelOverRpc({
+      cli,
+      hostId: "dev-box",
+      methods: [
+        ...CONFIG_SHELL_METHODS,
+        "config.env.localOverride.set",
+        "config.env.localOverride.saveToPersonal",
+      ],
+      localOverrides: [],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.set": localSet,
+      },
+    });
+    await waitForEnvListRead(panel, "dev-box", cli.envOverrides);
+
+    const value = screen.getByLabelText<HTMLInputElement>(
+      "Value for LOG_LEVEL",
+    );
+    fireEvent.change(value, { target: { value: "debug" } });
+    const onlyOn = screen.getByRole("button", { name: "Only on dev-box" });
+    const mutationFailed = waitForMutationError(panel.queryClient);
+    fireEvent.click(onlyOn);
+
+    expect(await localSetStarted.promise).toEqual({
+      target: { kind: "variable", key: "LOG_LEVEL" },
+      value: "debug",
+    });
+    await act(async () => {
+      localSetReply.reject(new Error("host did not answer"));
+      await mutationFailed;
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't keep the value on dev-box.",
+    );
+    expect(
+      screen.getByLabelText<HTMLInputElement>("Value for LOG_LEVEL").value,
+    ).toBe("debug");
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("keeps and shares a key-shaped value only after the person chooses everywhere", async () => {
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+    const { set } = envHandlers(cli);
+    const localSetStarted =
+      Promise.withResolvers<ConfigEnvLocalOverrideSetRequest>();
+    const localSet = vi.fn((request: ConfigEnvLocalOverrideSetRequest) => {
+      localSetStarted.resolve(request);
+      return Promise.resolve({
+        outcome: "saved" as const,
+        overrides: [
+          {
+            target: request.target,
+            os: "any" as const,
+            value: request.value,
+            setAt: 2,
+          },
+        ],
+      });
+    });
+    const panel = renderShellPanelOverRpc({
+      cli,
+      hostId: "dev-box",
+      methods: [
+        ...CONFIG_SHELL_METHODS,
+        "config.env.localOverride.set",
+        "config.env.localOverride.saveToPersonal",
+        "config.env.localOverride.clear",
+      ],
+      localOverrides: [],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.set": localSet,
+      },
+    });
+    await waitForEnvListRead(panel, "dev-box", cli.envOverrides);
+
+    fireEvent.change(screen.getByLabelText("Value for LOG_LEVEL"), {
+      target: { value: KEY_SHAPED_VALUE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Only on dev-box" }));
+    await act(async () => {
+      expect(await localSetStarted.promise).toEqual({
+        target: { kind: "variable", key: "LOG_LEVEL" },
+        value: KEY_SHAPED_VALUE,
+      });
+    });
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("keeps a launch-sensitive value immediately on this host without confirmation", async () => {
+    const cli = envCli();
+    cli.envOverrides = [{ key: "NODE_OPTIONS", value: "--require=old.cjs" }];
+    const { set } = envHandlers(cli);
+    const localSetStarted =
+      Promise.withResolvers<ConfigEnvLocalOverrideSetRequest>();
+    const localSet = vi.fn((request: ConfigEnvLocalOverrideSetRequest) => {
+      localSetStarted.resolve(request);
+      return Promise.resolve({ outcome: "saved" as const, overrides: [] });
+    });
+    const panel = renderShellPanelOverRpc({
+      cli,
+      hostId: "dev-box",
+      methods: [
+        ...CONFIG_SHELL_METHODS,
+        "config.env.localOverride.set",
+        "config.env.localOverride.saveToPersonal",
+        "config.env.localOverride.clear",
+      ],
+      localOverrides: [],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.set": localSet,
+      },
+    });
+    await waitForEnvListRead(panel, "dev-box", cli.envOverrides);
+
+    fireEvent.change(screen.getByLabelText("Value for NODE_OPTIONS"), {
+      target: { value: "--require=new.cjs" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Only on dev-box" }));
+    await act(async () => {
+      expect(await localSetStarted.promise).toEqual({
+        target: { kind: "variable", key: "NODE_OPTIONS" },
+        value: "--require=new.cjs",
+      });
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(set).not.toHaveBeenCalled();
   });
 
   it("offers Use everywhere for a password URL shown as dots and saves that URL", async () => {

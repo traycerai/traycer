@@ -151,8 +151,18 @@ const PERSONAL_ENVIRONMENT: EnvironmentDescriptorV11 = {
   providerHandle: null,
 };
 
-function serveNoticesFromAuthn(host: AccessHost): { notices: number } {
-  const log = { notices: 0 };
+interface ReviewHostFixture {
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly migratedAt: number;
+  readonly uploadedSettings?: boolean;
+}
+
+function serveNoticesFromAuthn(
+  host: AccessHost,
+  reviewHosts: readonly ReviewHostFixture[],
+): { notices: number; reviews: number } {
+  const log = { notices: 0, reviews: 0 };
   hostMock.binding = {
     directory: null,
     auth: createFakeEnvironmentCloudAuth({
@@ -165,6 +175,15 @@ function serveNoticesFromAuthn(host: AccessHost): { notices: number } {
         environments: () => [PERSONAL_ENVIRONMENT],
         onRequest: (request) => {
           const path = new URL(request.url).pathname;
+          if (
+            request.method === "GET" &&
+            request.url.includes("/review?include=operation")
+          ) {
+            log.reviews += 1;
+            return jsonEnvironmentAnswer({
+              review: { hosts: reviewHosts, needsYou: [] },
+            });
+          }
           if (request.method !== "GET" || !path.endsWith("/notices")) {
             return null;
           }
@@ -857,15 +876,26 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
 describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
   const SETUP_DONE = { stage: "done", state: "done" } as const;
 
-  it("shows once setup is done and a change came from this host's move", async () => {
-    const host = hostWith(
-      { setup: SETUP_DONE },
-      { notices: [noticeFixture({ source: "migration" })] },
-    );
-    serveNoticesFromAuthn(host);
+  it("shows for this host's uploaded settings, even with a same-named host", async () => {
+    const host = hostWith({ setup: SETUP_DONE }, { notices: [] });
+    const log = serveNoticesFromAuthn(host, [
+      {
+        hostId: ACCESS_HOST_ID,
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 1,
+        uploadedSettings: true,
+      },
+      {
+        hostId: "same-name-host",
+        hostName: ACCESS_HOST_NAME,
+        migratedAt: 2,
+        uploadedSettings: true,
+      },
+    ]);
     renderTab(host, READY);
 
     const notice = await screen.findByTestId("moved-to-personal-notice");
+    expect(log.reviews).toBeGreaterThan(0);
     expect(
       within(notice).getByText(
         "Your settings moved to Personal. Review what changed.",
@@ -881,7 +911,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: { stage: "moving_settings", state: "running" } },
       { notices: [noticeFixture({ source: "migration" })] },
     );
-    const log = serveNoticesFromAuthn(host);
+    const log = serveNoticesFromAuthn(host, []);
     renderTab(host, READY);
 
     await screen.findByTestId("host-setup-section");
@@ -895,7 +925,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "offline" })] },
     );
-    const log = serveNoticesFromAuthn(host);
+    const log = serveNoticesFromAuthn(host, []);
     renderTab(host, READY);
 
     await waitFor(() => {
@@ -910,7 +940,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE, principal: { kind: "team", teamName: "Acme" } },
       { notices: [noticeFixture({ source: "migration" })] },
     );
-    const log = serveNoticesFromAuthn(host);
+    const log = serveNoticesFromAuthn(host, []);
     renderTab(host, READY);
 
     await screen.findByTestId("team-owned-line");
@@ -924,7 +954,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
-    serveNoticesFromAuthn(host);
+    serveNoticesFromAuthn(host, []);
     renderTab(host, READY);
     await screen.findByTestId("moved-to-personal-notice");
 
@@ -947,7 +977,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
-    const log = serveNoticesFromAuthn(host);
+    const log = serveNoticesFromAuthn(host, []);
     renderTab(host, READY);
 
     await waitFor(() => {
@@ -962,7 +992,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
     );
-    serveNoticesFromAuthn(host);
+    serveNoticesFromAuthn(host, []);
     renderTab(host, READY);
     const notice = await screen.findByTestId("moved-to-personal-notice");
 

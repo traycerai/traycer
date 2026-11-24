@@ -109,7 +109,10 @@ function heldValue(entry: ReviewHeldEntry): unknown {
   }
 }
 
-function authnHeldEntry(entry: ReviewHeldEntry): Record<string, unknown> {
+function authnHeldEntry(
+  entry: ReviewHeldEntry,
+  sharingGeneration: number | null,
+): Record<string, unknown> {
   return {
     type: "held",
     heldId: entry.entryId,
@@ -118,7 +121,7 @@ function authnHeldEntry(entry: ReviewHeldEntry): Record<string, unknown> {
     key: entry.key,
     os: entry.os === "any" ? null : entry.os,
     hostId: entry.hostId ?? mockLocalHostEntry.hostId,
-    sharingGeneration: null,
+    sharingGeneration,
     hostName: "Old laptop",
     heldAt: entry.heldAt,
     op: entry.op,
@@ -173,6 +176,9 @@ function renderSessionWith(
     readonly applyAnswer?: EnvironmentTransportAnswer;
     readonly deferApply?: boolean;
     readonly readFailures?: number;
+    readonly heldKeepSupported?: boolean;
+    readonly proposalHeldIds?: readonly string[];
+    readonly onInventoryShown?: () => void;
   },
 ): SessionHarness {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
@@ -194,6 +200,7 @@ function renderSessionWith(
     }),
     "environment.review.record": (request) => {
       recorded.push(request.event);
+      session.onInventoryShown?.();
       return { outcome: "recorded" };
     },
   };
@@ -225,7 +232,17 @@ function renderSessionWith(
         return {
           status: 200,
           text: JSON.stringify({
-            review: { hosts: [], needsYou: currentEntries.map(authnHeldEntry) },
+            review: {
+              hosts: [],
+              needsYou: currentEntries.map((entry) =>
+                authnHeldEntry(
+                  entry,
+                  session.proposalHeldIds?.includes(entry.entryId) === true
+                    ? 7
+                    : null,
+                ),
+              ),
+            },
           }),
         };
       }
@@ -252,6 +269,9 @@ function renderSessionWith(
     "environment.review": { major: 1, minor: 2 },
     "environment.review.record": { major: 1, minor: 0 },
     "environment.list": { major: 1, minor: 1 },
+    ...(session.heldKeepSupported === true
+      ? { "environment.review.heldKeep": { major: 1, minor: 0 } }
+      : {}),
   });
   harness.queryClient.setDefaultOptions({
     queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
@@ -301,6 +321,46 @@ function heldChoiceEntries(): readonly ReviewHeldEntry[] {
     }),
   ];
 }
+
+describe("<RetrospectiveSession /> a held variable's computer-only choice", () => {
+  it("offers Keep on the originating computer for a held variable put", async () => {
+    const inventoryShown = Promise.withResolvers<void>();
+    renderSessionWith(
+      environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "local",
+          room: "local",
+        },
+      }),
+      [
+        entryOf({
+          entryId: "variable-put",
+          kind: "variable",
+          key: "LOG_LEVEL",
+          hostId: mockLocalHostEntry.hostId,
+        }),
+      ],
+      [],
+      {
+        onOpenChange: vi.fn(),
+        heldKeepSupported: true,
+        proposalHeldIds: ["variable-put"],
+        onInventoryShown: () => inventoryShown.resolve(),
+      },
+    );
+
+    await act(async () => {
+      await inventoryShown.promise;
+    });
+    const row = screen.getByTestId("retrospective-held-variable-put");
+    expect(
+      within(row).getByRole("button", {
+        name: "Keep on Old laptop only",
+      }),
+    ).toBeTruthy();
+  });
+});
 
 describe("<RetrospectiveSession /> Stop using Personal", () => {
   it("keeps the local settings list but hides Move to Personal for a team-owned computer", async () => {
