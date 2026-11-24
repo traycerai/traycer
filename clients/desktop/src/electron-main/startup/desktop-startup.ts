@@ -25,7 +25,10 @@ import {
   findJumplistCommandInArgv,
   registerJumplistCommandHandling,
 } from "../app/jumplist-commands";
-import { registerDeepLinkHandling } from "../auth/deep-link";
+import {
+  registerDeepLinkHandling,
+  type OpenChatDeepLinkTarget,
+} from "../auth/deep-link";
 import { createMainWindow, loadMainWindow } from "../windows/window-factory";
 import {
   DesktopTrayController,
@@ -355,6 +358,10 @@ interface BootState {
   // drained once the window phase exposes a renderer. Coalesced - the signal is
   // a payload-free nudge, so repeated cold-start arrivals collapse.
   pendingAuthReturnSignal: boolean;
+  // Last `traycer://open/epic/.../chat/...` link that arrived before the
+  // bridge existed (cold start from the link). Last-wins: only the most
+  // recent "show me this chat" is meaningful.
+  pendingOpenChat: OpenChatDeepLinkTarget | null;
   bridge: RunnerIpcBridge | null;
 }
 
@@ -390,6 +397,17 @@ function deliverAuthReturnSignal(state: BootState): void {
     state.bridge.deliverAuthReturnSignal();
   } else {
     state.pendingAuthReturnSignal = true;
+  }
+}
+
+function deliverOpenChatDeepLink(
+  state: BootState,
+  target: OpenChatDeepLinkTarget,
+): void {
+  if (state.bridge !== null) {
+    state.bridge.deliverOpenChatDeepLink(target);
+  } else {
+    state.pendingOpenChat = target;
   }
 }
 
@@ -439,6 +457,7 @@ async function runTestStartupPhases(
     ),
     config: testHooks.config,
     pendingAuthReturnSignal: false,
+    pendingOpenChat: null,
     bridge: null,
   };
   testHooks.runPreReady();
@@ -462,6 +481,7 @@ async function runProductionStartupPhases(): Promise<DeferredStartupPlan> {
     ),
     config,
     pendingAuthReturnSignal: false,
+    pendingOpenChat: null,
     bridge: null,
   };
 
@@ -621,7 +641,10 @@ export function runPreReady(state: BootState): void {
   registerAppScheme();
   installProcessGoneListeners();
 
-  registerDeepLinkHandling(() => deliverAuthReturnSignal(state));
+  registerDeepLinkHandling(
+    () => deliverAuthReturnSignal(state),
+    (target) => deliverOpenChatDeepLink(state, target),
+  );
 }
 
 // Post-ready configuration. These steps are independent of one another, so
@@ -1130,6 +1153,17 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     const deepLinkTarget = windowRegistry.records()[0];
     deepLinkTarget?.window.webContents.once("did-finish-load", () => {
       bridge.deliverAuthReturnSignal();
+    });
+  }
+  // Same drain for a cold-start open-chat link. The renderer's tab
+  // navigation queues the activation until hydration, so delivering on the
+  // first `did-finish-load` is enough.
+  if (state.pendingOpenChat !== null) {
+    const pendingOpenChat = state.pendingOpenChat;
+    state.pendingOpenChat = null;
+    const deepLinkTarget = windowRegistry.records()[0];
+    deepLinkTarget?.window.webContents.once("did-finish-load", () => {
+      bridge.deliverOpenChatDeepLink(pendingOpenChat);
     });
   }
 

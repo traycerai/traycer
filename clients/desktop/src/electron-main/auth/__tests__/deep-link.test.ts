@@ -41,14 +41,17 @@ describe("registerDeepLinkHandling (demoted return-signal handler)", () => {
   it("registers the traycer:// protocol scheme", async () => {
     const electron = await import("electron");
     const mod = await import("../deep-link");
-    mod.registerDeepLinkHandling(() => undefined);
+    mod.registerDeepLinkHandling(
+      () => undefined,
+      () => undefined,
+    );
     expect(electron.app.setAsDefaultProtocolClient).toHaveBeenCalled();
   });
 
   it("fires the payload-free return signal on an auth/callback deep link", async () => {
     const mod = await import("../deep-link");
     const handler = vi.fn();
-    mod.registerDeepLinkHandling(handler);
+    mod.registerDeepLinkHandling(handler, () => undefined);
 
     fireOpenUrl("traycer-dev://auth/callback");
 
@@ -60,7 +63,7 @@ describe("registerDeepLinkHandling (demoted return-signal handler)", () => {
   it("tolerates a stray legacy ?code= by ignoring it (still a payload-free signal)", async () => {
     const mod = await import("../deep-link");
     const handler = vi.fn();
-    mod.registerDeepLinkHandling(handler);
+    mod.registerDeepLinkHandling(handler, () => undefined);
 
     fireOpenUrl("traycer-dev://auth/callback?code=legacy-code&error=ignored");
 
@@ -71,7 +74,7 @@ describe("registerDeepLinkHandling (demoted return-signal handler)", () => {
   it("tolerates a trailing slash in the callback path", async () => {
     const mod = await import("../deep-link");
     const handler = vi.fn();
-    mod.registerDeepLinkHandling(handler);
+    mod.registerDeepLinkHandling(handler, () => undefined);
 
     fireOpenUrl("traycer-dev://auth/callback/");
 
@@ -81,7 +84,7 @@ describe("registerDeepLinkHandling (demoted return-signal handler)", () => {
   it("ignores non-auth traycer deep links", async () => {
     const mod = await import("../deep-link");
     const handler = vi.fn();
-    mod.registerDeepLinkHandling(handler);
+    mod.registerDeepLinkHandling(handler, () => undefined);
 
     fireOpenUrl("traycer-dev://session/xyz");
 
@@ -91,7 +94,7 @@ describe("registerDeepLinkHandling (demoted return-signal handler)", () => {
   it("ignores non-traycer URIs", async () => {
     const mod = await import("../deep-link");
     const handler = vi.fn();
-    mod.registerDeepLinkHandling(handler);
+    mod.registerDeepLinkHandling(handler, () => undefined);
 
     fireOpenUrl("https://example.com/auth/callback?code=abc");
 
@@ -117,7 +120,7 @@ describe("registerDeepLinkHandling under a dev-desktop slot", () => {
     const electron = await import("electron");
     const mod = await import("../deep-link");
     const handler = vi.fn();
-    mod.registerDeepLinkHandling(handler);
+    mod.registerDeepLinkHandling(handler, () => undefined);
 
     expect(electron.app.setAsDefaultProtocolClient).toHaveBeenCalledWith(
       "traycer-dev-my-worktree",
@@ -129,5 +132,60 @@ describe("registerDeepLinkHandling under a dev-desktop slot", () => {
     // A sibling run's (or the bare dev) callback is not ours.
     fireOpenUrl("traycer-dev://auth/callback");
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("traycer://open/epic/<epicId>/chat/<chatId> deep links", () => {
+  const EPIC = "6b1c3f0e-2d4a-4e8b-9c7d-1a2b3c4d5e6f";
+  const CHAT = "0f1e2d3c-4b5a-4968-8776-655443322110";
+
+  beforeEach(() => {
+    appListeners.clear();
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("parses epic and chat ids and ignores an optional focus hint", async () => {
+    const mod = await import("../deep-link");
+    expect(
+      mod.parseOpenChatUri(`traycer-dev://open/epic/${EPIC}/chat/${CHAT}`),
+    ).toEqual({ epicId: EPIC, chatId: CHAT });
+    expect(
+      mod.parseOpenChatUri(
+        `traycer-dev://open/epic/${EPIC}/chat/${CHAT}/?focus=composer`,
+      ),
+    ).toEqual({ epicId: EPIC, chatId: CHAT });
+  });
+
+  it("rejects other schemes, other paths and ids outside the opaque alphabet", async () => {
+    const mod = await import("../deep-link");
+    for (const uri of [
+      `https://open/epic/${EPIC}/chat/${CHAT}`,
+      `traycer-dev://open/epic/${EPIC}`,
+      `traycer-dev://open/epic/${EPIC}/chat/${CHAT}/extra`,
+      `traycer-dev://open/epic/..%2F..%2Fetc/chat/${CHAT}`,
+      `traycer-dev://open/epic/${EPIC}/chat/a.b`,
+      `traycer-dev://open/epic/${"x".repeat(129)}/chat/${CHAT}`,
+      "traycer-dev://auth/callback",
+    ]) {
+      expect(mod.parseOpenChatUri(uri)).toBeNull();
+    }
+  });
+
+  it("routes an open-chat link only to the open-chat handler and an auth callback only to the auth handler", async () => {
+    const mod = await import("../deep-link");
+    const auth = vi.fn();
+    const openChat = vi.fn();
+    mod.registerDeepLinkHandling(auth, openChat);
+
+    fireOpenUrl(`traycer-dev://open/epic/${EPIC}/chat/${CHAT}`);
+    expect(openChat).toHaveBeenCalledTimes(1);
+    expect(openChat).toHaveBeenCalledWith({ epicId: EPIC, chatId: CHAT });
+    expect(auth).not.toHaveBeenCalled();
+
+    fireOpenUrl("traycer-dev://auth/callback");
+    expect(auth).toHaveBeenCalledTimes(1);
+    expect(openChat).toHaveBeenCalledTimes(1);
   });
 });

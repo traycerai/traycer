@@ -99,6 +99,7 @@ import {
   parseNotificationClickTarget,
   type NotificationClickTarget,
 } from "./notification-target";
+import type { OpenChatDeepLinkTarget } from "../auth/deep-link";
 import { registerAuthIpc } from "./auth-ipc";
 import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
@@ -613,8 +614,7 @@ export interface RunnerIpcRegistryOptions {
 }
 
 export type RunnerIpcBridgeOptions =
-  | RunnerIpcOptions
-  | RunnerIpcRegistryOptions;
+  RunnerIpcOptions | RunnerIpcRegistryOptions;
 
 interface FreshSnapshotWaiter {
   readonly windowId: string;
@@ -937,6 +937,24 @@ export class RunnerIpcBridge {
       RunnerHostEvent.notificationClick,
       payload,
     );
+  }
+
+  /**
+   * Routes a `traycer://open/epic/<epicId>/chat/<chatId>` deep link by
+   * replaying it as a legacy raw `chat` notification click. That reuses the
+   * whole existing click path - exact-window targeting here, then
+   * `NotificationFocusBridge` -> `routeEpicChatNotification` in the renderer,
+   * which focuses the open chat or terminal-agent tile (or restores /
+   * auto-opens it via `focusArtifactId`), so a terminal agent's id works too. A legacy `chat` route is routable without an origin
+   * host and carries no feed identity, so nothing is acknowledged or marked
+   * read, and no prompt is ever sent.
+   */
+  deliverOpenChatDeepLink(target: OpenChatDeepLinkTarget): void {
+    this.deliverNotificationClick({
+      kind: "chat",
+      epicId: target.epicId,
+      chatId: target.chatId,
+    });
   }
 
   /**
