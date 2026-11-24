@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 
 // The setup file scripts/test-poll-lasts-its-test.ts, through its real
@@ -36,12 +37,6 @@ const KINDS: readonly PollKind[] = [
 const INTERVAL_MS = 50;
 const NO_ARRIVAL_TEST_MS = 2_500;
 const LATE_START_MS = 1_500;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 interface PollEnd {
   readonly message: string;
