@@ -46,16 +46,19 @@ export type MoveProgress =
  * nothing twice.
  */
 export function MoveProgressLine(
-  props: OverviewCardLineProps & { readonly progress: MoveProgress },
+  props: OverviewCardLineProps & {
+    readonly progress: MoveProgress;
+    readonly details?: ReactNode;
+  },
 ): ReactNode {
-  const { progress, ...lineProps } = props;
+  const { progress, details, ...lineProps } = props;
   if (progress.kind === "moving") {
     return (
       <div className="flex flex-wrap items-center gap-1">
         <p data-testid="host-settings-card-progress">
           {moveProgressText(progress.applied, progress.total)}
         </p>
-        <OverviewCardDetailsLine {...lineProps} />
+        {details ?? <OverviewCardDetailsLine {...lineProps} />}
       </div>
     );
   }
@@ -131,7 +134,7 @@ export function MoveRetryButton(props: {
 export function MoveExportDiagnosticsButton(
   props: OverviewCardLineProps,
 ): ReactNode {
-  const subject = useHostSettingsDetailsSubject(props);
+  const subject = useHostSettingsDetailsSubject(props, false);
   const [exportOpen, setExportOpen] = useState(false);
   if (subject === null) {
     // A pool build reads every computer's binding: no subject there is a read

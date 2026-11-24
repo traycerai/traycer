@@ -54,6 +54,7 @@ export function StopSharingSheet(props: {
   readonly changedRows: readonly StopNeedsChoiceRow[] | null;
   readonly previewStatus: StopPreviewStatus;
   readonly confirmPending: boolean;
+  readonly confirmBlocked: boolean;
   readonly personalAccounts: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
   readonly onStop: (choices: readonly StopChoiceEntry[]) => void;
@@ -68,6 +69,7 @@ export function StopSharingSheet(props: {
           changedRows={props.changedRows}
           previewStatus={props.previewStatus}
           confirmPending={props.confirmPending}
+          confirmBlocked={props.confirmBlocked}
           personalAccounts={props.personalAccounts}
           onOpenChange={props.onOpenChange}
           onStop={props.onStop}
@@ -84,6 +86,7 @@ function StopSharingBody(props: {
   readonly changedRows: readonly StopNeedsChoiceRow[] | null;
   readonly previewStatus: StopPreviewStatus;
   readonly confirmPending: boolean;
+  readonly confirmBlocked: boolean;
   readonly personalAccounts: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
   readonly onStop: (choices: readonly StopChoiceEntry[]) => void;
@@ -245,7 +248,9 @@ function StopSharingBody(props: {
         <Button
           type="button"
           size="sm"
-          disabled={!confirmEnabled || props.confirmPending}
+          disabled={
+            !confirmEnabled || props.confirmPending || props.confirmBlocked
+          }
           data-testid="stop-sharing-confirm"
           onClick={() =>
             props.onStop(stopChoiceEntries(props.needsChoice, choices))

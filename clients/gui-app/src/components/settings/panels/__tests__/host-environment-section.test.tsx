@@ -240,7 +240,7 @@ function registryItem(owner: HostOwnerPrincipal | undefined): HostListItem {
 
 interface MountedSection {
   readonly queryClient: QueryClient;
-  /** The computer goes away (the card unmounts) or comes back. */
+  /** The computer goes away or comes back. */
   readonly setHostUsable: (usable: boolean) => void;
 }
 
@@ -1088,8 +1088,8 @@ async function giveUntilLineShows(): Promise<MountedSection> {
 }
 
 /**
- * A give whose start answered "started" and whose status never says done, then
- * the host drops: the dialog goes with the card before it can confirm anything.
+ * A give whose start answered "started" and whose status never says done
+ * before the computer drops.
  */
 async function startGiveThenLoseHost(
   ownerAfterReturn: HostOwnerPrincipal,
@@ -1113,13 +1113,10 @@ async function startGiveThenLoseHost(
   );
   // The dialog polls the status only once it has the start's answer.
   await waitFor(() => expect(statusReadsAfterStart).toBeGreaterThan(0));
+  const dialog = screen.getByRole("dialog");
   act(() => section.setHostUsable(false));
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("dialog")).toBe(dialog);
   expect(mocks.auth.readHostOwnership).toHaveBeenCalledTimes(1);
-  // The computer is away for a moment before it is back.
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
   return section;
 }
 
@@ -1179,6 +1176,49 @@ function signInAs(userId: string): void {
     });
   });
 }
+
+describe("keeping an open transfer dialog when the Overview loses its route", () => {
+  it("keeps the Give dialog open until the route returns", async () => {
+    const section = await openGive(giveHostHandlers(giveCalls(), []));
+    const dialog = screen.getByRole("dialog");
+
+    act(() => section.setHostUsable(false));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+
+    act(() => section.setHostUsable(true));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the Claim dialog open until the route returns", async () => {
+    mocks.state.binding = teamBinding(true);
+    mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
+    const section = mountSection("personal", {
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+      handlers: {
+        "environment.previewLocalFacts": () => ({
+          activeTurns: 2,
+          terminals: 0,
+        }),
+      },
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Claim this computer" }),
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(
+      await within(dialog).findByText("2 chats are running and will stop."),
+    ).toBeTruthy();
+
+    act(() => section.setHostUsable(false));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+
+    act(() => section.setHostUsable(true));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
 
 describe("HostEnvironmentSection's give and claim receipt across the computer's restart", () => {
   it("keeps a give's line when the computer goes away after the dialog confirmed and comes back", async () => {

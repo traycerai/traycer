@@ -47,6 +47,7 @@ export function TeamGiveDialog(props: {
   readonly currentEnvironmentId: string | null;
   readonly team: EnvironmentDescriptorV11;
   readonly onClose: () => void;
+  readonly confirmBlocked?: boolean;
   readonly onStarted: (team: EnvironmentDescriptorV11) => void;
   readonly onGiven: (team: EnvironmentDescriptorV11) => void;
 }): ReactNode {
@@ -195,7 +196,11 @@ export function TeamGiveDialog(props: {
           {versionDiffers ? null : (
             <Button
               type="button"
-              disabled={giving || shownPlan === undefined}
+              disabled={
+                giving ||
+                shownPlan === undefined ||
+                props.confirmBlocked === true
+              }
               onClick={() => {
                 if (shownPlan !== undefined) confirm(shownPlan.planHash);
               }}

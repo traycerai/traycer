@@ -49,6 +49,7 @@ interface StopSharingSessionProps {
   readonly hostId: string | null;
   readonly hostName: string;
   readonly open: boolean;
+  readonly confirmBlocked?: boolean | undefined;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -154,6 +155,7 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
         changedRows={changedRows}
         previewStatus={previewStatus}
         confirmPending={stop.isPending}
+        confirmBlocked={props.confirmBlocked === true}
         personalAccounts={personalAccountsSection({
           rows: personalProfiles,
           providers,
@@ -255,8 +257,9 @@ function stopPreviewStatus(
     readonly data: unknown;
   },
 ): StopPreviewStatus {
-  if (supported === false || preview.isError) return "failed";
+  if (supported === false) return "failed";
   if (preview.data !== undefined) return "ready";
+  if (preview.isError) return "failed";
   return "loading";
 }
 

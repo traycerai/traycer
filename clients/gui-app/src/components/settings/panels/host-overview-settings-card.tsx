@@ -5,7 +5,6 @@ import {
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
 import { TeamGiveDialog } from "@/components/settings/panels/team-give-dialog";
-import { useMayChangeTeamConfiguration } from "@/hooks/environment/use-may-change-team-configuration";
 import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
@@ -24,7 +23,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
-import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
+import { OverviewCardDetailsDialog } from "@/components/settings/details/overview-card-details-line";
+import type { OverviewCardLineProps } from "@/components/settings/environment/overview-card-line-props";
 import {
   isStaleLocalPick,
   localPickerRow,
@@ -47,17 +47,17 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
+import {
+  useEnvironmentHostReadQuery,
+  type EnvironmentHostRead,
+} from "@/hooks/bots/use-environment-host-read-query";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import {
   useHostNegotiatedMethodVersions,
   type NegotiatedMethodVersion,
 } from "@/hooks/host/use-host-negotiated-method-version";
-import {
-  useHostMethodSupport,
-  useHostMethodSchemaVersion,
-} from "@/hooks/host/use-host-supports-method";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   environmentPickValue,
@@ -83,9 +83,18 @@ export interface OwnershipReceipt {
   readonly giveStarted: (give: StartedGive) => void;
 }
 
-/** The named host's settings place, above the Overview's tabs. */
-export function HostOverviewSettingsCard(props: {
-  readonly client: HostClient<HostRpcRegistry>;
+type OpenSettingsAction =
+  | { readonly kind: "stop"; readonly client: HostClient<HostRpcRegistry> }
+  | {
+      readonly kind: "give";
+      readonly client: HostClient<HostRpcRegistry>;
+      readonly currentEnvironmentId: string | null;
+      readonly team: EnvironmentDescriptorV11;
+    }
+  | { readonly kind: "claim"; readonly environmentId: string };
+
+interface HostOverviewSettingsCardProps {
+  readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string;
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11 | null;
@@ -93,33 +102,44 @@ export function HostOverviewSettingsCard(props: {
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
   readonly receipt: OwnershipReceipt;
-}): ReactNode {
+  readonly hidden?: boolean;
+  readonly statusUnsupported?: boolean;
+}
+
+/** The named host's settings place, above the Overview's tabs. */
+export function HostOverviewSettingsCard(
+  props: HostOverviewSettingsCardProps,
+): ReactNode {
+  const { client, hidden, hostId, hostName, receipt, status } = props;
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  const [stopOpen, setStopOpen] = useState(false);
-  const hostIds = useMemo(() => [props.hostId], [props.hostId]);
-  const statusVersion =
-    useHostNegotiatedMethodVersions(hostIds, "environment.status").get(
-      props.hostId,
-    ) ?? null;
-  const model = hostSettingsRowModel(
-    props.status,
-    props.binding,
-    props.hostName,
-  );
-  const railPick =
-    model.kind === "loading" || props.status === null
-      ? null
-      : settingsRailPick({
-          model,
-          hostId: props.hostId,
-          hostName: props.hostName,
-          status: props.status,
-          version: statusVersion,
-        });
-  useMatchEnvironmentRail(railPick);
-  if (model.kind === "loading" || props.status === null) {
-    return (
-      <>
+  const [action, setAction] = useState<OpenSettingsAction | null>(null);
+  const [details, setDetails] = useState<OverviewCardLineProps | null>(null);
+  const hostIds = useMemo(() => [hostId], [hostId]);
+  const row = useOverviewSettingsRow(props, hostIds);
+  const offers = useOverviewTeamOffers(props, hostIds, row, action);
+  const { model, current, teamOwner, environmentId, claimEnvironmentId } = row;
+  const { editableTeams, mayOfferGive, mayClaim, teamListError, retryTeams } =
+    offers;
+
+  if (shouldCloseOverviewAction(action, props, row, offers)) setAction(null);
+
+  const closeAction = (): void => setAction(null);
+  const detailsTrigger =
+    current === null ? null : (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() =>
+          setDetails({ ...current, client: dialogClient(current.client) })
+        }
+      >
+        Details
+      </Button>
+    );
+  const renderRow = (): ReactNode => {
+    if (model.kind === "loading" || current === null) {
+      return (
         <SettingsRow
           row={HOST_OVERVIEW.definitions.settingsRow}
           control={
@@ -130,119 +150,340 @@ export function HostOverviewSettingsCard(props: {
             />
           }
         />
-        <TransferReceipt value={props.receipt.line} />
-      </>
-    );
-  }
-  const lineProps = {
-    client: props.client,
-    hostId: props.hostId,
-    hostName: props.hostName,
-    status: props.status,
-  };
-  const teamOwner = props.owner?.kind === "team" ? props.owner : null;
-  if (model.kind === "team" || teamOwner !== null) {
-    return (
-      <>
+      );
+    }
+    if (model.kind === "team" || teamOwner !== null) {
+      return (
         <TeamOwnedHostSettingsRow
-          {...lineProps}
           owner={teamOwner}
-          binding={props.binding}
           fallback={model.kind === "team" ? model : null}
-          isLocalMachine={props.isLocalMachine}
-          onClaimed={props.receipt.show}
+          details={detailsTrigger}
+          claim={
+            claimEnvironmentId !== null && mayClaim ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setAction({
+                    kind: "claim",
+                    environmentId: claimEnvironmentId,
+                  })
+                }
+              >
+                Claim this computer
+              </Button>
+            ) : null
+          }
         />
-        <TransferReceipt value={props.receipt.line} />
-      </>
-    );
-  }
-  if (model.kind === "progress") {
-    return (
-      <>
+      );
+    }
+    if (model.kind === "progress") {
+      return (
         <SettingsRow
           row={HOST_OVERVIEW.definitions.settingsRow}
           status={
             <div className="flex flex-wrap items-center gap-1">
-              <MoveProgressLine {...lineProps} progress={model.progress} />
-              {model.progress.kind === "move_stopped" ? (
-                <OverviewCardDetailsLine {...lineProps} />
-              ) : null}
+              <MoveProgressLine
+                {...current}
+                progress={model.progress}
+                details={detailsTrigger}
+              />
+              {model.progress.kind === "move_stopped" ? detailsTrigger : null}
             </div>
           }
           control={
             <FixedSettingsSource
-              value={
-                model.progress.kind === "moving" ? "Personal" : props.hostName
-              }
+              value={model.progress.kind === "moving" ? "Personal" : hostName}
             />
           }
         />
-        <TransferReceipt value={props.receipt.line} />
-      </>
-    );
-  }
-  return (
-    <>
+      );
+    }
+    return (
       <div className="shrink-0" data-testid="host-settings-source">
         <SettingsRow
           row={HOST_OVERVIEW.definitions.settingsRow}
           status={
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span>{model.description}</span>
-              <OverviewCardDetailsLine {...lineProps} />
+              {detailsTrigger}
             </div>
           }
           control={
-            <EnvironmentSourceControl
-              client={props.client}
-              hostId={props.hostId}
-              hostName={props.hostName}
-              owner={props.owner}
-              currentEnvironmentId={
-                props.binding?.environment.environmentId ?? null
-              }
-              receipt={props.receipt}
-              value={model.value}
-              options={model.options}
-              onChoose={(option) => {
-                if (option.action === "move") {
-                  openMoveSheet({
-                    hostId: props.hostId,
-                    hostName: props.hostName,
-                  });
-                } else if (option.action === "stop_sharing") {
-                  setStopOpen(true);
+            <>
+              {mayOfferGive && teamListError ? (
+                <TeamReadFailed
+                  message="Couldn't load teams."
+                  onRetry={retryTeams}
+                />
+              ) : null}
+              <EnvironmentSourceSelect
+                value={model.value}
+                options={model.options}
+                teams={mayOfferGive ? editableTeams : []}
+                onChooseTeam={(team) =>
+                  setAction({
+                    kind: "give",
+                    client: dialogClient(current.client),
+                    currentEnvironmentId: environmentId,
+                    team,
+                  })
                 }
-              }}
-            />
+                onChoose={(option) => {
+                  if (option.action === "move") {
+                    openMoveSheet({ hostId, hostName });
+                  } else if (option.action === "stop_sharing") {
+                    setAction({
+                      kind: "stop",
+                      client: dialogClient(current.client),
+                    });
+                  }
+                }}
+              />
+            </>
           }
         />
       </div>
-      <StopSharingSession
-        client={props.client}
-        hostId={props.hostId}
-        hostName={props.hostName}
-        open={stopOpen}
-        onOpenChange={setStopOpen}
-      />
-      <TransferReceipt value={props.receipt.line} />
+    );
+  };
+
+  return (
+    <>
+      {hidden === true ? null : renderRow()}
+      {hidden === true ? null : <TransferReceipt value={receipt.line} />}
+      {details === null ? null : (
+        <OverviewCardDetailsDialog
+          {...details}
+          status={status ?? details.status}
+          confirmBlocked={client === null}
+          onClose={() => setDetails(null)}
+        />
+      )}
+      {action?.kind === "stop" ? (
+        <StopSharingSession
+          client={action.client}
+          hostId={hostId}
+          hostName={hostName}
+          open
+          confirmBlocked={client === null}
+          onOpenChange={(open) => {
+            if (!open) closeAction();
+          }}
+        />
+      ) : null}
+      {action?.kind === "give" ? (
+        <TeamGiveDialog
+          key={action.team.environmentId}
+          client={action.client}
+          hostId={hostId}
+          hostName={hostName}
+          currentEnvironmentId={action.currentEnvironmentId}
+          team={action.team}
+          confirmBlocked={client === null}
+          onClose={closeAction}
+          onStarted={(team) => {
+            receipt.giveStarted({
+              teamId: team.ownerId,
+              line: givenLine(hostName, team),
+            });
+          }}
+          onGiven={(team) => {
+            receipt.show(givenLine(hostName, team));
+            closeAction();
+          }}
+        />
+      ) : null}
+      {action?.kind === "claim" ? (
+        <ClaimLocalTeamComputer
+          environmentId={action.environmentId}
+          hostId={hostId}
+          hostName={hostName}
+          confirmBlocked={client === null}
+          onClose={closeAction}
+          onClaimed={receipt.show}
+        />
+      ) : null}
     </>
   );
 }
 
+interface OverviewSettingsRow {
+  readonly model: HostSettingsRowModel;
+  readonly current: OverviewCardLineProps | null;
+  readonly teamOwner: Extract<
+    HostOwnerPrincipal,
+    { readonly kind: "team" }
+  > | null;
+  readonly teamRow: boolean;
+  readonly environmentId: string | null;
+  readonly claimEnvironmentId: string | null;
+  readonly answered: boolean;
+}
+
+function useOverviewSettingsRow(
+  props: HostOverviewSettingsCardProps,
+  hostIds: readonly string[],
+): OverviewSettingsRow {
+  const { binding, client, hidden, hostId, hostName, owner, status } = props;
+  const statusVersion =
+    useHostNegotiatedMethodVersions(hostIds, "environment.status").get(
+      hostId,
+    ) ?? null;
+  const model = hostSettingsRowModel(status, binding, hostName);
+  useMatchEnvironmentRail(overviewRailPick(props, model, statusVersion));
+
+  const current =
+    hidden === true || client === null || status === null
+      ? null
+      : { client, hostId, hostName, status };
+  const teamOwner = owner?.kind === "team" ? owner : null;
+  const environmentId = binding?.environment.environmentId ?? null;
+  return {
+    model,
+    current,
+    teamOwner,
+    teamRow: model.kind === "team" || teamOwner !== null,
+    environmentId,
+    claimEnvironmentId:
+      props.isLocalMachine && teamOwner !== null ? environmentId : null,
+    answered: current !== null && model.kind !== "loading",
+  };
+}
+
+function overviewRailPick(
+  props: HostOverviewSettingsCardProps,
+  model: HostSettingsRowModel,
+  version: NegotiatedMethodVersion,
+): EnvironmentPick | null {
+  const { hidden, hostId, hostName, status } = props;
+  if (hidden === true || model.kind === "loading" || status === null)
+    return null;
+  return settingsRailPick({ model, hostId, hostName, status, version });
+}
+
+interface OverviewTeamOffers {
+  readonly editableTeams: readonly EnvironmentDescriptorV11[];
+  readonly mayOfferGive: boolean;
+  readonly mayClaim: boolean;
+  readonly giveWithdrawn: boolean;
+  readonly teamWithdrawn: boolean;
+  readonly teamListError: boolean;
+  readonly retryTeams: () => void;
+}
+
+function useOverviewTeamOffers(
+  props: HostOverviewSettingsCardProps,
+  hostIds: readonly string[],
+  row: OverviewSettingsRow,
+  action: OpenSettingsAction | null,
+): OverviewTeamOffers {
+  const versions = useHostNegotiatedMethodVersions(
+    hostIds,
+    "environment.move.plan",
+  );
+  const giveSupport = overviewGiveSupport(versions.get(props.hostId) ?? null);
+  const mayOfferGive = props.owner?.kind === "user" && giveSupport === true;
+  const rowNeedsTeams = row.teamRow
+    ? row.claimEnvironmentId !== null
+    : row.model.kind === "select" && mayOfferGive;
+  const actionEnvironmentId = teamActionEnvironmentId(action);
+  const environments = useEnvironmentListQuery(
+    actionEnvironmentId !== null || (row.answered && rowNeedsTeams),
+  );
+  const editableTeams = (environments.data?.environments ?? []).filter(
+    isEditableTeam,
+  );
+  const teamListAnswered =
+    environments.data !== undefined && !environments.isError;
+  const hasEditableTeam = (id: string | null): boolean =>
+    editableTeams.some((team) => team.environmentId === id);
+  return {
+    editableTeams,
+    mayOfferGive,
+    mayClaim: !environments.isError && hasEditableTeam(row.claimEnvironmentId),
+    giveWithdrawn: giveSupport === false,
+    teamWithdrawn:
+      actionEnvironmentId !== null &&
+      teamListAnswered &&
+      !hasEditableTeam(actionEnvironmentId),
+    teamListError: environments.isError,
+    retryTeams: () => void environments.refetch(),
+  };
+}
+
+function overviewGiveSupport(version: NegotiatedMethodVersion): boolean | null {
+  if (version === null) return null;
+  return version !== false && version.major === 2;
+}
+
+function isEditableTeam(team: EnvironmentDescriptorV11): boolean {
+  return (
+    team.ownerKind === "organization" &&
+    mayChangeConfiguration(configurationRoleOf(team))
+  );
+}
+
+function teamActionEnvironmentId(
+  action: OpenSettingsAction | null,
+): string | null {
+  if (action?.kind === "give") return action.team.environmentId;
+  if (action?.kind === "claim") return action.environmentId;
+  return null;
+}
+
+function shouldCloseOverviewAction(
+  action: OpenSettingsAction | null,
+  props: HostOverviewSettingsCardProps,
+  row: OverviewSettingsRow,
+  offers: OverviewTeamOffers,
+): boolean {
+  if (action === null) return false;
+  if (props.statusUnsupported === true || offers.teamWithdrawn) return true;
+  if (action.kind === "give" && offers.giveWithdrawn) return true;
+  if (!row.answered) return false;
+
+  // A failed read can hide the row without withdrawing an open action.
+  switch (action.kind) {
+    case "stop":
+      return row.teamRow || !offersStop(row.model);
+    case "give":
+      return row.teamRow || row.model.kind === "progress";
+    case "claim":
+      return (
+        props.owner?.kind === "user" ||
+        (row.claimEnvironmentId !== null &&
+          row.claimEnvironmentId !== action.environmentId)
+      );
+  }
+}
+
+function offersStop(model: HostSettingsRowModel): boolean {
+  return (
+    model.kind === "select" &&
+    model.options.some(
+      (option) =>
+        option.action === "stop_sharing" && option.value !== model.value,
+    )
+  );
+}
+
+/** Keep the cache keyed to the opening host while its directory route is away. */
+function dialogClient(
+  client: HostClient<HostRpcRegistry>,
+): HostClient<HostRpcRegistry> {
+  const entry = client.getActiveHost();
+  return entry === null ? client : client.createRequester(entry);
+}
+
 function TeamOwnedHostSettingsRow(props: {
-  readonly client: HostClient<HostRpcRegistry>;
-  readonly hostId: string;
-  readonly hostName: string;
-  readonly status: EnvironmentStatusResponseV11;
   readonly owner: Extract<HostOwnerPrincipal, { readonly kind: "team" }> | null;
-  readonly binding: EnvironmentHostBinding | null;
   readonly fallback: Extract<
     HostSettingsRowModel,
     { readonly kind: "team" }
   > | null;
-  readonly isLocalMachine: boolean;
-  readonly onClaimed: (receipt: string) => void;
+  readonly details: ReactNode;
+  readonly claim: ReactNode;
 }): ReactNode {
   return (
     <SettingsRow
@@ -254,12 +495,7 @@ function TeamOwnedHostSettingsRow(props: {
               ? props.fallback?.description
               : `This computer belongs to ${props.owner.name}.`}
           </span>
-          <OverviewCardDetailsLine
-            client={props.client}
-            hostId={props.hostId}
-            hostName={props.hostName}
-            status={props.status}
-          />
+          {props.details}
         </div>
       }
       control={
@@ -267,16 +503,7 @@ function TeamOwnedHostSettingsRow(props: {
           <FixedSettingsSource
             value={props.owner?.name ?? props.fallback?.label ?? "Team"}
           />
-          {props.isLocalMachine &&
-          props.owner !== null &&
-          props.binding !== null ? (
-            <ClaimLocalTeamComputer
-              environmentId={props.binding.environment.environmentId}
-              hostId={props.hostId}
-              hostName={props.hostName}
-              onClaimed={props.onClaimed}
-            />
-          ) : null}
+          {props.claim}
         </div>
       }
     />
@@ -288,78 +515,64 @@ function ClaimLocalTeamComputer(props: {
   readonly hostId: string;
   readonly hostName: string;
   readonly onClaimed: (receipt: string) => void;
+  readonly onClose: () => void;
+  readonly confirmBlocked: boolean;
 }): ReactNode {
-  const mayClaim = useMayChangeTeamConfiguration(props.environmentId);
-  const [open, setOpen] = useState(false);
   const mutation = useTeamComputerClaim(props.environmentId, () => {
     props.onClaimed(
       "This computer is now yours. The team can no longer run work on it.",
     );
-    setOpen(false);
+    props.onClose();
   });
-  if (!mayClaim) return null;
   return (
-    <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          mutation.reset();
-          setOpen(true);
-        }}
-      >
-        Claim this computer
-      </Button>
-      <Dialog
-        open={open}
-        onOpenChange={(next) => {
-          if (!mutation.isPending) setOpen(next);
-        }}
-      >
-        <DialogContent className="w-full sm:max-w-prose">
-          <DialogHeader>
-            <DialogTitle>Claim {props.hostName}?</DialogTitle>
-            <DialogDescription>
-              This computer will become yours. The team will lose access to it.
-            </DialogDescription>
-          </DialogHeader>
-          <ClaimRunningWork
-            hostId={props.hostId}
-            environmentId={props.environmentId}
-          />
-          {mutation.isError ? (
-            <p role="alert" className="text-ui-sm text-destructive">
-              {mutation.error.message}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={mutation.isPending}
-              onClick={() => setOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={mutation.isPending}
-              onClick={() => mutation.mutate(props.hostId)}
-            >
-              {mutation.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="team-computer-claim-progress"
-                  variant={undefined}
-                />
-              ) : null}
-              Claim this computer
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next && !mutation.isPending) props.onClose();
+      }}
+    >
+      <DialogContent className="w-full sm:max-w-prose">
+        <DialogHeader>
+          <DialogTitle>Claim {props.hostName}?</DialogTitle>
+          <DialogDescription>
+            This computer will become yours. The team will lose access to it.
+          </DialogDescription>
+        </DialogHeader>
+        <ClaimRunningWork
+          hostId={props.hostId}
+          environmentId={props.environmentId}
+        />
+        {mutation.isError ? (
+          <p role="alert" className="text-ui-sm text-destructive">
+            {mutation.error.message}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={mutation.isPending}
+            onClick={props.onClose}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={mutation.isPending || props.confirmBlocked}
+            onClick={() => mutation.mutate(props.hostId)}
+          >
+            {mutation.isPending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId="team-computer-claim-progress"
+                variant={undefined}
+              />
+            ) : null}
+            Claim this computer
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -396,88 +609,6 @@ interface EnvironmentSourceSelectProps {
   readonly value: HostSettingsRowOption["value"];
   readonly options: readonly HostSettingsRowOption[];
   readonly onChoose: (option: HostSettingsRowOption) => void;
-}
-
-function EnvironmentSourceControl(
-  props: EnvironmentSourceSelectProps & {
-    readonly client: HostClient<HostRpcRegistry>;
-    readonly hostId: string;
-    readonly hostName: string;
-    readonly owner: HostOwnerPrincipal | null;
-    readonly currentEnvironmentId: string | null;
-    readonly receipt: OwnershipReceipt;
-  },
-): ReactNode {
-  const planVersion = useHostMethodSchemaVersion(
-    props.hostId,
-    "environment.move.plan",
-  );
-  const mayTransfer = props.owner?.kind === "user" && planVersion?.major === 2;
-  return mayTransfer ? (
-    <TeamEnvironmentSourceControl {...props} />
-  ) : (
-    <EnvironmentSourceSelect
-      {...props}
-      teams={[]}
-      onChooseTeam={() => undefined}
-    />
-  );
-}
-
-function TeamEnvironmentSourceControl(
-  props: EnvironmentSourceSelectProps & {
-    readonly client: HostClient<HostRpcRegistry>;
-    readonly hostId: string;
-    readonly hostName: string;
-    readonly currentEnvironmentId: string | null;
-    readonly receipt: OwnershipReceipt;
-  },
-): ReactNode {
-  const environments = useEnvironmentListQuery(true);
-  const teams = (environments.data?.environments ?? []).filter(
-    (environment) =>
-      environment.ownerKind === "organization" &&
-      mayChangeConfiguration(configurationRoleOf(environment)),
-  );
-  const [selected, setSelected] = useState<EnvironmentDescriptorV11 | null>(
-    null,
-  );
-  return (
-    <>
-      {environments.isError ? (
-        <TeamReadFailed
-          message="Couldn't load teams."
-          onRetry={() => void environments.refetch()}
-        />
-      ) : null}
-      <EnvironmentSourceSelect
-        {...props}
-        teams={teams}
-        onChooseTeam={setSelected}
-      />
-      {selected === null ? null : (
-        <TeamGiveDialog
-          key={selected.environmentId}
-          client={props.client}
-          hostId={props.hostId}
-          hostName={props.hostName}
-          currentEnvironmentId={props.currentEnvironmentId}
-          team={selected}
-          onClose={() => setSelected(null)}
-          onStarted={(team) => {
-            props.receipt.giveStarted({
-              teamId: team.ownerId,
-              line: givenLine(props.hostName, team),
-            });
-          }}
-          onGiven={(team) => {
-            props.receipt.show(givenLine(props.hostName, team));
-            setSelected(null);
-          }}
-        />
-      )}
-    </>
-  );
 }
 
 function givenLine(hostName: string, team: EnvironmentDescriptorV11): string {
@@ -678,28 +809,40 @@ export function HostOverviewSettingsCardSlot(props: {
     props.hostId === null ||
     status.supported === false ||
     status.isError ||
-    (bindingSupport === false && binding.kind !== "own_settings") ||
-    binding.kind === "failed" ||
-    (binding.kind === "binding" && binding.query.isError);
+    bindingReadHidesOverviewRow(bindingSupport, binding);
   const wasHidden = useRef(hidden);
   const { onReturn } = props;
   useEffect(() => {
     if (wasHidden.current && !hidden) onReturn();
     wasHidden.current = hidden;
   }, [hidden, onReturn]);
-  if (hidden) return null;
+  if (props.hostId === null) return null;
+  const statusUnsupported = props.usable && status.supported === false;
   return (
     <HostOverviewSettingsCard
       key={JSON.stringify([props.hostId, userId])}
-      client={props.client}
+      client={props.usable ? props.client : null}
       hostId={props.hostId}
       hostName={props.hostName}
+      hidden={hidden}
+      statusUnsupported={statusUnsupported}
       status={status.data}
       binding={binding.kind === "binding" ? (binding.query.data ?? null) : null}
       owner={props.owner}
       isLocalMachine={props.isLocalMachine}
       receipt={props.receipt}
     />
+  );
+}
+
+function bindingReadHidesOverviewRow(
+  supported: boolean | null,
+  binding: EnvironmentHostRead,
+): boolean {
+  return (
+    (supported === false && binding.kind !== "own_settings") ||
+    binding.kind === "failed" ||
+    (binding.kind === "binding" && binding.query.isError)
   );
 }
 

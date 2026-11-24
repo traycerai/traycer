@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -47,7 +48,10 @@ import {
   hostSettingsCardState,
   hostSettingsRowModel,
 } from "@/components/settings/panels/host-overview-settings-card-model";
-import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
+import {
+  HostOverviewSettingsCard,
+  HostOverviewSettingsCardSlot,
+} from "@/components/settings/panels/host-overview-settings-card";
 import { WithReceipt } from "@/components/settings/panels/__tests__/ownership-receipt-test-support";
 import { moveDiagnosticsExport } from "@/components/settings/move/move-diagnostics-export";
 import {
@@ -356,6 +360,7 @@ interface CardRenderOptions {
   readonly isLocalMachine: boolean;
   readonly hostId?: string;
   readonly previewLocalFactsSupported?: boolean;
+  readonly readThroughSlot?: boolean;
 }
 
 function setEnvironmentDirectory(
@@ -417,6 +422,9 @@ function renderCardWithBinding(
     "environment.move.stopPreview": { major: 1, minor: 0 },
     "environment.move.stop": { major: 1, minor: 0 },
     "environment.host.bind": { major: 1, minor: 1 },
+    ...(options.readThroughSlot === true
+      ? { "environment.host.read": { major: 1, minor: 1 } }
+      : {}),
     "environment.move.plan": { major: 2, minor: 0 },
     "environment.move.stage": { major: 1, minor: 0 },
     "environment.move.start": { major: 1, minor: 0 },
@@ -435,22 +443,35 @@ function renderCardWithBinding(
   render(
     <QueryClientProvider client={queryClient}>
       <WithReceipt>
-        {(receipt) => (
-          <HostOverviewSettingsCard
-            client={client}
-            hostId={hostId}
-            hostName="Old laptop"
-            status={status}
-            binding={
-              options.binding.hostId === hostId
-                ? options.binding
-                : { ...options.binding, hostId }
-            }
-            owner={options.owner}
-            isLocalMachine={options.isLocalMachine}
-            receipt={receipt}
-          />
-        )}
+        {(receipt) =>
+          options.readThroughSlot === true ? (
+            <HostOverviewSettingsCardSlot
+              client={client}
+              hostId={hostId}
+              hostName="Old laptop"
+              usable
+              owner={options.owner}
+              isLocalMachine={options.isLocalMachine}
+              receipt={receipt}
+              onReturn={() => undefined}
+            />
+          ) : (
+            <HostOverviewSettingsCard
+              client={client}
+              hostId={hostId}
+              hostName="Old laptop"
+              status={status}
+              binding={
+                options.binding.hostId === hostId
+                  ? options.binding
+                  : { ...options.binding, hostId }
+              }
+              owner={options.owner}
+              isLocalMachine={options.isLocalMachine}
+              receipt={receipt}
+            />
+          )
+        }
       </WithReceipt>
     </QueryClientProvider>,
   );
@@ -1320,6 +1341,186 @@ describe("<HostOverviewSettingsCard />", () => {
     expect(
       screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("keeps the Stop sheet from the Environment selector after a failed Overview reread", async () => {
+    const status = environmentStatusFixture({});
+    const reread = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    const requested = Promise.withResolvers<void>();
+    let rejectStatus = false;
+    const queryClient = renderCardWithBinding(
+      status,
+      {
+        "environment.status": () => {
+          if (!rejectStatus) return status;
+          requested.resolve();
+          return reread.promise;
+        },
+        "environment.host.read": () => ({
+          ...PERSONAL_BINDING,
+          sharingGeneration: null,
+        }),
+        "environment.move.stopPreview": () => ({
+          managed: [],
+          sheetDigest: null,
+          needsChoice: [
+            {
+              row: {
+                kind: "variable",
+                key: "LOG_LEVEL",
+                os: "any",
+                label: "LOG_LEVEL",
+                detail: null,
+              },
+              reason: "edited_here",
+              origin: "changed_here",
+              usedBy: [],
+            },
+          ],
+        }),
+      },
+      {
+        binding: PERSONAL_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+        readThroughSlot: true,
+      },
+    );
+    await screen.findByTestId("host-settings-source");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Environment" }), {
+      key: "ArrowDown",
+    });
+    fireEvent.click(await screen.findByRole("option", { name: /^Old laptop/ }));
+
+    const choiceId = "stop-sharing-choice-variable-LOG_LEVEL-keep_locally";
+    fireEvent.click(await screen.findByTestId(choiceId));
+    rejectStatus = true;
+    const refresh = queryClient.refetchQueries({
+      queryKey: hostQueryKeys.methodScope("old", "environment.status"),
+    });
+    await act(async () => requested.promise);
+    expect(screen.getByTestId(choiceId).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    await act(async () => {
+      reread.reject(new Error("The Overview status reread failed."));
+      await refresh;
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("host-settings-source")).toBeNull(),
+    );
+    expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
+    expect(screen.getByTestId(choiceId).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+  });
+
+  it("keeps the Details Stop child until an answered reread withdraws its offer", async () => {
+    const status = environmentStatusFixture({});
+    let readStatus = (): EnvironmentStatusResponseV13 => status;
+    const queryClient = renderCardWithBinding(
+      status,
+      {
+        "environment.status": () => readStatus(),
+        "environment.host.read": () => ({
+          ...PERSONAL_BINDING,
+          sharingGeneration: null,
+        }),
+        "environment.move.stopPreview": () => ({
+          managed: [],
+          sheetDigest: null,
+          needsChoice: [],
+        }),
+      },
+      {
+        binding: PERSONAL_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+        readThroughSlot: true,
+      },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(screen.getByTestId("overview-stop-sharing"));
+    await screen.findByTestId("stop-sharing-managed-empty");
+    const sheet = screen.getByTestId("stop-sharing-sheet");
+    const statusScope = hostQueryKeys.methodScope("old", "environment.status");
+
+    readStatus = () => {
+      throw new Error("The Overview status reread failed.");
+    };
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: statusScope });
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId("host-settings-source")).toBeNull(),
+    );
+    expect(screen.getByTestId("stop-sharing-sheet")).toBe(sheet);
+
+    readStatus = () =>
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "stopped", broker: "stopped", room: "stopped" },
+      });
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: statusScope });
+    });
+
+    await screen.findByTestId("host-settings-source");
+    expect(screen.getByTestId("details-dialog")).toBeTruthy();
+    expect(screen.queryByTestId("overview-card-dated-lines")).toBeNull();
+    expect(screen.queryByTestId("stop-sharing-sheet")).toBeNull();
+  });
+
+  it("closes the withdrawn Details Stop child and keeps the history visible", async () => {
+    let status = environmentStatusFixture({
+      consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+    });
+    const queryClient = renderCardWithBinding(
+      status,
+      {
+        "environment.status": () => status,
+        "environment.host.read": () => ({
+          ...PERSONAL_BINDING,
+          sharingGeneration: null,
+        }),
+        "environment.move.stopPreview": () => ({
+          managed: [],
+          sheetDigest: null,
+          needsChoice: [],
+        }),
+      },
+      {
+        binding: PERSONAL_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+        readThroughSlot: true,
+      },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(screen.getByTestId("overview-stop-sharing"));
+    await screen.findByTestId("stop-sharing-managed-empty");
+
+    status = {
+      ...status,
+      principal: null,
+      planes: { records: "stopped", broker: "stopped", room: "stopped" },
+      stoppedAt: STOPPED_AT,
+    };
+    await act(async () => {
+      await queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope("old", "environment.status"),
+      });
+    });
+
+    await within(screen.getByTestId("details-dialog")).findByText(
+      "This computer stopped using Personal on 21 Oct",
+    );
+    expect(screen.queryByTestId("overview-stop-sharing")).toBeNull();
+    expect(screen.queryByTestId("stop-sharing-sheet")).toBeNull();
   });
 
   it("shows the host name and its detail after every plane stopped using Personal", () => {

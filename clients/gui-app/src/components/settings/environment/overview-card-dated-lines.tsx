@@ -37,27 +37,26 @@ import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-shee
  * (`EnvironmentSheetsHost`), which also shows it once by itself.
  */
 export function OverviewCardDatedLines(
-  props: OverviewCardLineProps,
+  props: OverviewCardLineProps & { readonly confirmBlocked?: boolean },
 ): ReactNode {
   const version = useHostNegotiatedMethodVersion(
     props.client,
     "environment.status",
   );
   const [stopOpen, setStopOpen] = useState(false);
-  const openRetrospective = useRetrospectiveSheetStore(
-    (state) => state.openSheet,
-  );
-  if (!statusPlanesSupported(version)) return null;
-  const planes = planesFromStatus(props.status);
-  const sharedUnrecorded =
-    planes !== null && planesHaveSharedUnrecorded(planes);
+  const unsupported = version !== null && !statusPlanesSupported(version);
+  if (unsupported || (version === null && !stopOpen)) {
+    if (stopOpen) setStopOpen(false);
+    return null;
+  }
+  const { sharedUnrecorded, offerStop } = overviewStopFacts(props.status);
   const lines = overviewDatedCopy({
     returnedFromTeamAt: returnedFromTeamAt(props.status),
     sharedUnrecorded,
     stoppedAt: stoppedSharingAt(props.status),
   });
-  const cleanup = stopCleanup(props.status);
-  const offerStop = planes !== null && planesOfferStopSharing(planes);
+  if (stopOpen && !offerStop) setStopOpen(false);
+  const showStopSheet = stopOpen && offerStop;
   const acceptedAt = props.status.consent?.acceptedAt ?? null;
   if (acceptedAt === null && lines.length === 0 && !offerStop) return null;
   return (
@@ -65,6 +64,62 @@ export function OverviewCardDatedLines(
       className="flex flex-col gap-2"
       data-testid="overview-card-dated-lines"
     >
+      <OverviewDatedHistory {...props} acceptedAt={acceptedAt} lines={lines} />
+      {offerStop ? (
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            data-testid="overview-stop-sharing"
+            onClick={() => setStopOpen(true)}
+          >
+            {STOP_SHARING_TITLE}
+          </Button>
+          <p
+            className="max-w-[72ch] text-ui-xs text-muted-foreground"
+            data-testid="overview-stop-sharing-help"
+          >
+            {stopSharingDescription(props.hostName)}
+          </p>
+        </>
+      ) : null}
+      <StopSharingSession
+        client={props.client}
+        hostId={props.hostId}
+        hostName={props.hostName}
+        open={showStopSheet}
+        confirmBlocked={props.confirmBlocked}
+        onOpenChange={setStopOpen}
+      />
+    </div>
+  );
+}
+
+function overviewStopFacts(status: OverviewCardLineProps["status"]): {
+  readonly sharedUnrecorded: boolean;
+  readonly offerStop: boolean;
+} {
+  const planes = planesFromStatus(status);
+  return {
+    sharedUnrecorded: planes !== null && planesHaveSharedUnrecorded(planes),
+    offerStop: planes !== null && planesOfferStopSharing(planes),
+  };
+}
+
+function OverviewDatedHistory(
+  props: OverviewCardLineProps & {
+    readonly acceptedAt: number | null;
+    readonly lines: readonly string[];
+  },
+): ReactNode {
+  const openRetrospective = useRetrospectiveSheetStore(
+    (state) => state.openSheet,
+  );
+  const { acceptedAt, lines } = props;
+  const cleanup = stopCleanup(props.status);
+  return (
+    <>
       {acceptedAt === null ? null : (
         <p className="text-ui-sm text-foreground">
           Moved to Personal {onSettingsDate(acceptedAt)}
@@ -101,33 +156,7 @@ export function OverviewCardDatedLines(
         ),
       )}
       {cleanup === null ? null : <StopCleanupLines cleanup={cleanup} />}
-      {offerStop ? (
-        <>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            data-testid="overview-stop-sharing"
-            onClick={() => setStopOpen(true)}
-          >
-            {STOP_SHARING_TITLE}
-          </Button>
-          <p
-            className="max-w-[72ch] text-ui-xs text-muted-foreground"
-            data-testid="overview-stop-sharing-help"
-          >
-            {stopSharingDescription(props.hostName)}
-          </p>
-        </>
-      ) : null}
-      <StopSharingSession
-        client={props.client}
-        hostId={props.hostId}
-        hostName={props.hostName}
-        open={stopOpen}
-        onOpenChange={setStopOpen}
-      />
-    </div>
+    </>
   );
 }
 

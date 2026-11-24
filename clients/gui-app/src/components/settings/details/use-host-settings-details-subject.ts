@@ -12,6 +12,7 @@ import type { DetailsSubject } from "@/lib/settings-details-entry";
  */
 export function useHostSettingsDetailsSubject(
   props: OverviewCardLineProps,
+  keepLastAnswer: boolean,
 ): DetailsSubject | null {
   const viewerUserId = useCloudChatViewerId();
   const binding = useHostQuery<HostRpcRegistry, "environment.binding.read">({
@@ -23,7 +24,8 @@ export function useHostSettingsDetailsSubject(
       enabled: readsHostBindingsFromPool() && viewerUserId.length > 0,
     },
   });
-  if (binding.isError || binding.data === undefined) return null;
+  if (binding.data === undefined || (binding.isError && !keepLastAnswer))
+    return null;
   return {
     environmentId: binding.data.environment.environmentId,
     kind: "host_settings",

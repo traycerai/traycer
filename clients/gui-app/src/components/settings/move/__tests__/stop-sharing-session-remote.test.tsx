@@ -1147,6 +1147,62 @@ describe("StopSharingSession over the real remote session", () => {
     });
   });
 
+  it("keeps the nested sign-in and Stop choices until a preview answers that the sign-in was withdrawn", async () => {
+    const profile = FOLDER("folder-one", "Work", "offered");
+    const shown = {
+      ...previewWithChoice(null, "Credential detail"),
+      personalProfiles: [profile],
+    };
+    let previewAnswer = successful(shown);
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview") return previewAnswer;
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    cacheProvidersList(harness, []);
+    await renderSession(
+      harness.client,
+      { showListAfterStop: false, showToaster: false },
+      null,
+    );
+
+    const choiceId = "stop-sharing-choice-variable-API_TOKEN-keep_locally";
+    fireEvent.click(screen.getByTestId(choiceId));
+    fireEvent.click(
+      within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
+        "button",
+        { name: "Sign in" },
+      ),
+    );
+    const signIn = screen.getByRole("heading", { name: "Add a profile" });
+    const previewKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "environment.move.stopPreview"
+    >(HOST_ID, "environment.move.stopPreview", {
+      profileMode: "keep-personal",
+    });
+
+    previewAnswer = failed("E_UNEXPECTED", "The preview could not be read.");
+    await act(async () => {
+      await harness.queryClient.refetchQueries({ queryKey: previewKey });
+    });
+    expect(harness.queryClient.getQueryState(previewKey)?.status).toBe("error");
+    expect(screen.getByRole("heading", { name: "Add a profile" })).toBe(signIn);
+    expect(screen.getByTestId(choiceId).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(
+      screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+    ).toBe(false);
+
+    previewAnswer = successful({ ...shown, personalProfiles: [] });
+    await act(async () => {
+      await harness.queryClient.refetchQueries({ queryKey: previewKey });
+    });
+    expect(screen.queryByRole("heading", { name: "Add a profile" })).toBeNull();
+    expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
+  });
+
   it("query refresh resets changed profile decisions and preserves matching ones", async () => {
     notifyManager.setScheduler((notify) => notify());
     onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
