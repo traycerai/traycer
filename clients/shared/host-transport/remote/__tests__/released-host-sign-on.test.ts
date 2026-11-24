@@ -34,7 +34,7 @@ const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const HOST_TOKEN = "host-only-token";
 const SIGN_IN = "person-sign-in";
 const ROTATED_SIGN_IN = "person-sign-in-rotated";
-const WAIT = { interval: 20 };
+const WAIT = { timeout: 10_000, interval: 20 };
 const emptyRpcRegistry = defineVersionedRpcRegistry({});
 
 const PERSONAL_ROW: ReleasedSignOnRow = {

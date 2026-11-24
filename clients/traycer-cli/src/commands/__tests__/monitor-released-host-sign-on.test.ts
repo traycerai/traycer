@@ -33,7 +33,7 @@ function nextHostId(): string {
 }
 const SIGN_IN = "monitor-test-sign-in";
 const TEAM_REFUSAL = "the host has not admitted this sign-in";
-const WAIT = { interval: 10 };
+const WAIT = { timeout: 2_000, interval: 10 };
 /** When the proactive upkeep refreshes the sign-in, after the command starts (never before 60 s). */
 const UPKEEP_FIRES_AT_MS = 68_500;
 

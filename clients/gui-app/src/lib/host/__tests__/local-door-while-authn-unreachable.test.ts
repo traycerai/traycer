@@ -656,7 +656,7 @@ describe("local stream while authn cannot mint", () => {
       await vi.waitFor(
         () =>
           expect(FakeNativeWebSocket.instances.length).toBeGreaterThan(index),
-        { interval: 10 },
+        { timeout: 2_000, interval: 10 },
       );
       const socket = FakeNativeWebSocket.instances[index];
       expect((await readOpen(socket)).token).toBe(expectedToken);

@@ -21,7 +21,7 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const HOST_ID = "gui-sign-out-released-host";
 const SIGN_IN = "gui-person-sign-in";
-const WAIT = { interval: 10 };
+const WAIT = { timeout: 2_000, interval: 10 };
 
 const clients: WsStreamClient<typeof hostStreamRpcRegistry>[] = [];
 

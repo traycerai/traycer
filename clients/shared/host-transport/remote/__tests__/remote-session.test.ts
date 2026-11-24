@@ -4642,7 +4642,10 @@ describe("RemoteSession forceReconnect", () => {
     }
   }, 10_000);
 
-  it("tells no stream of a backoff for the immediate redial of a ready session still on a positive rung", async () => {
+  it("tells no stream of a backoff for the immediate redial of a ready session still on a positive rung", async ({
+    signal,
+    onTestFinished,
+  }) => {
     const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     relay.streamManifest = buildStreamManifest(
@@ -4666,24 +4669,27 @@ describe("RemoteSession forceReconnect", () => {
     stream.onBackoffEntered(() => {
       backoffs += 1;
     });
-    try {
-      session.start();
-      await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
-      expect(relay.openBearers).toHaveLength(3);
-      const backoffsBeforeForce = backoffs;
-
-      session.forceReconnect("user-retry");
-
-      // The fake clock stays where it is, so a redial that waited out any
-      // backoff rung never opens and the test ends at its timeout.
-      while (relay.openBearers.length < 4) {
-        await advanceNoiseClock(0);
-      }
-      expect(backoffs).toBe(backoffsBeforeForce);
-    } finally {
+    // Runs before the next test starts, however this one ends.
+    onTestFinished(async () => {
       session.close();
       await finishNoise();
+    });
+    session.start();
+    await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
+    expect(relay.openBearers).toHaveLength(3);
+    const backoffsBeforeForce = backoffs;
+
+    session.forceReconnect("user-retry");
+
+    // The fake clock stays where it is, so a redial that waited out any
+    // backoff rung never opens and the test ends at its timeout, whose abort
+    // ends this loop.
+    while (relay.openBearers.length < 4) {
+      signal.throwIfAborted();
+      await advanceNoiseClock(0);
     }
+    expect(relay.openBearers).toHaveLength(4);
+    expect(backoffs).toBe(backoffsBeforeForce);
   }, 15_000);
 
   it("tells no stream of a backoff for the immediate redial a failed wake probe earns a ready session still on a positive rung", async () => {

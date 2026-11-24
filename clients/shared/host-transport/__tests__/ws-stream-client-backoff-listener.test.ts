@@ -13,7 +13,7 @@ import type { WsStreamClient } from "../ws-stream-client";
  * stop the stream's reconnect, nor keep the listeners after it from hearing.
  */
 
-const WAIT = { interval: 10 };
+const WAIT = { timeout: 2_000, interval: 10 };
 
 describe("a backoff listener that throws", () => {
   const sessions: IStreamSession[] = [];

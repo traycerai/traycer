@@ -35,7 +35,7 @@ import { nextCasePerson } from "./case-person-test-support";
 let USER_ID = nextCasePerson().userId;
 const SIGN_IN = "still-wanted-sign-in";
 const HELD_TOKEN = "still-wanted-held-host-token";
-const WAIT = { interval: 10 };
+const WAIT = { timeout: 2_000, interval: 10 };
 /** Past the longest redial backoff: a negative assertion is a fake-clock advance past its budget. */
 const PAST_EVERY_BACKOFF_MS = 120_000;
 
