@@ -83,12 +83,20 @@ function mostChecksWithin(budgetMs: number): number {
 const SETUP_AGAIN = `${resolve(import.meta.dirname, "../../../scripts/test-poll-lasts-its-test.ts")}?again`;
 
 it("wraps each poll once, however many files in the worker run it", async () => {
-  const installed = [vi.waitFor, vi.waitUntil, expect.poll];
-  await import(/* @vite-ignore */ SETUP_AGAIN);
-  expect([vi.waitFor, vi.waitUntil, expect.poll]).toEqual(installed);
-  expect(vi.waitFor).toBe(installed[0]);
-  expect(vi.waitUntil).toBe(installed[1]);
-  expect(expect.poll).toBe(installed[2]);
+  const waitFor = vi.waitFor;
+  const waitUntil = vi.waitUntil;
+  const poll = expect.poll;
+  try {
+    await import(/* @vite-ignore */ SETUP_AGAIN);
+    expect(vi.waitFor).toBe(waitFor);
+    expect(vi.waitUntil).toBe(waitUntil);
+    expect(expect.poll).toBe(poll);
+  } finally {
+    // Whatever the run installed, the next case gets what this one found.
+    vi.waitFor = waitFor;
+    vi.waitUntil = waitUntil;
+    expect.poll = poll;
+  }
 });
 
 describe.each(KINDS)("$name", (kind) => {
