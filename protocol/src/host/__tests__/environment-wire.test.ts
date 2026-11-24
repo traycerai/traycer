@@ -1854,6 +1854,11 @@ it("preserves the local-only MCP marker on the current review wire", () => {
   expect(schema.parse({ entries: [entry] }).entries[0]).not.toHaveProperty(
     "localOnly",
   );
+  expect(
+    environmentReviewV12.responseSchema.parse({
+      entries: [{ ...entry, localOnly: true }],
+    }).entries[0],
+  ).not.toHaveProperty("localOnly");
 });
 
 describe("environment.review.heldApply and environment.review.record", () => {

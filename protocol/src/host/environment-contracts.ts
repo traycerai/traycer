@@ -360,6 +360,23 @@ export const environmentReviewUpgradeV11ToV12 = defineUpgradePath<
   }),
 });
 
+export const environmentReviewV13 = defineRpcContract({
+  method: "environment.review",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: schemas.environmentReviewRequestSchema,
+  responseSchema: schemas.environmentReviewResponseSchemaV13,
+});
+
+const environmentReviewUpgradeV12ToV13 = defineUpgradePath<
+  typeof environmentReviewV12,
+  typeof environmentReviewV13
+>({
+  from: environmentReviewV12.schemaVersion,
+  to: environmentReviewV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const environmentReviewHeldKeepV10 = defineRpcContract({
   method: "environment.review.heldKeep",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -970,7 +987,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.review": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: environmentReviewV10,
@@ -983,6 +1000,10 @@ export const ENVIRONMENT_RPC_METHODS = {
         2: {
           contract: environmentReviewV12,
           upgradeFromPreviousVersion: environmentReviewUpgradeV11ToV12,
+        },
+        3: {
+          contract: environmentReviewV13,
+          upgradeFromPreviousVersion: environmentReviewUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},

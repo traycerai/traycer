@@ -542,6 +542,22 @@ export type EnvironmentReviewResponseV12 = z.infer<
   typeof environmentReviewResponseSchemaV12
 >;
 
+/** A local-only hold can be kept or discarded. Its definition stays on its computer. */
+const environmentReviewEntrySchemaV13 = lazySchema(() =>
+  environmentReviewEntrySchemaV12.extend({
+    localOnly: z.literal(true).optional(),
+  }),
+);
+export type EnvironmentReviewEntryV13 = z.infer<
+  typeof environmentReviewEntrySchemaV13
+>;
+
+export const environmentReviewResponseSchemaV13 = lazySchema(() =>
+  environmentReviewResponseSchemaV12.extend({
+    entries: z.array(environmentReviewEntrySchemaV13),
+  }),
+);
+
 /**
  * `environment.review.heldApply@1.0`: the retrospective sheet's choice for one
  * held entry (`EnvironmentReviewEntry.entryId`). `approve` applies the held
