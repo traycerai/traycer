@@ -650,12 +650,33 @@ const environmentOwnSlotAddressSchema = lazySchema(() =>
   }),
 );
 
-/** The list exposes slot identity and presence. */
-const environmentOwnSlotSchema = lazySchema(() =>
+const environmentOwnSlotPresenceSchema = lazySchema(() =>
   environmentOwnSlotAddressSchema.extend({
     state: z.enum(["value", "absent"]),
     publishable: z.boolean(),
   }),
+);
+
+/** A selector identifies an exact native copy without disclosing its contents. */
+const environmentOwnMcpCopySchema = lazySchema(() =>
+  z.strictObject({
+    providerId: providerIdSchema,
+    sourceSelector: z.uuid(),
+    publishable: z.boolean(),
+  }),
+);
+
+const environmentOwnSlotSchema = lazySchema(() =>
+  z.union([
+    environmentOwnSlotPresenceSchema,
+    environmentOwnSlotPresenceSchema.extend({
+      kind: z.literal("mcp_server"),
+      os: z.literal("any"),
+      state: z.literal("value"),
+      publishable: z.literal(false),
+      copies: z.array(environmentOwnMcpCopySchema).min(2),
+    }),
+  ]),
 );
 export type EnvironmentOwnSlot = z.infer<typeof environmentOwnSlotSchema>;
 
@@ -668,6 +689,15 @@ export type EnvironmentOwnSlotsResponse = z.infer<
   typeof environmentOwnSlotsResponseSchema
 >;
 
+const environmentOwnMcpPublishSchema = lazySchema(() =>
+  environmentOwnSlotAddressSchema.extend({
+    action: z.literal("publish"),
+    kind: z.literal("mcp_server"),
+    os: z.literal("any"),
+    intentOperationId: z.uuid(),
+  }),
+);
+
 export const environmentOwnSlotChangeRequestSchema = lazySchema(() =>
   z.union([
     environmentOwnSlotAddressSchema.extend({
@@ -677,12 +707,8 @@ export const environmentOwnSlotChangeRequestSchema = lazySchema(() =>
       action: z.literal("publish"),
       kind: z.enum(OWN_SLOT_KINDS_WITHOUT_MCP),
     }),
-    environmentOwnSlotAddressSchema.extend({
-      action: z.literal("publish"),
-      kind: z.literal("mcp_server"),
-      os: z.literal("any"),
-      intentOperationId: z.uuid(),
-    }),
+    environmentOwnMcpPublishSchema,
+    environmentOwnMcpPublishSchema.extend({ sourceSelector: z.uuid() }),
   ]),
 );
 export type EnvironmentOwnSlotChangeRequest = z.infer<
