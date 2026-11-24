@@ -3,9 +3,10 @@ import { expect, TestRunner, vi } from "vitest";
 // Vitest's polls give up after one second unless told otherwise, even inside a
 // test allowed far longer, so a slow machine could fail an arrival the test
 // itself would still have seen. A poll that names no timeout and starts under
-// real timers inside a test is given the rest of that test's time, and never
-// less than Vitest's own default, so it fails with its own error at or before
-// the test's deadline. Everything else keeps Vitest's own behaviour exactly: a
+// real timers inside a test is given the rest of that test's time, so it fails
+// with its own error by the test's deadline; one that starts in the test's
+// last second gets Vitest's own default, as without this file, and can end as
+// the test's timeout instead. Everything else keeps Vitest's own behaviour exactly: a
 // poll that names a timeout, one that starts outside a test, and one that
 // starts under fake timers, whose clock is the fake one and which Vitest's
 // poll advances on every check.
