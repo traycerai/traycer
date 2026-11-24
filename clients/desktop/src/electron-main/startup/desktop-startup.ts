@@ -25,11 +25,9 @@ import {
   findJumplistCommandInArgv,
   registerJumplistCommandHandling,
 } from "../app/jumplist-commands";
-import {
-  registerDeepLinkHandling,
-  type OpenChatDeepLinkTarget,
-} from "../auth/deep-link";
+import { registerDeepLinkHandling } from "../auth/deep-link";
 import { createMainWindow, loadMainWindow } from "../windows/window-factory";
+import { OpenChatDelivery } from "./open-chat-delivery";
 import {
   DesktopTrayController,
   resolveTrayIconPath,
@@ -358,10 +356,9 @@ interface BootState {
   // drained once the window phase exposes a renderer. Coalesced - the signal is
   // a payload-free nudge, so repeated cold-start arrivals collapse.
   pendingAuthReturnSignal: boolean;
-  // Last `traycer://open/epic/.../chat/...` link that arrived before the
-  // bridge existed (cold start from the link). Last-wins: only the most
-  // recent "show me this chat" is meaningful.
-  pendingOpenChat: OpenChatDeepLinkTarget | null;
+  // Every `traycer://open/epic/.../chat/...` link, from cold start on: holds
+  // the newest undelivered one until a loaded renderer can take it.
+  openChat: OpenChatDelivery;
   bridge: RunnerIpcBridge | null;
 }
 
@@ -397,17 +394,6 @@ function deliverAuthReturnSignal(state: BootState): void {
     state.bridge.deliverAuthReturnSignal();
   } else {
     state.pendingAuthReturnSignal = true;
-  }
-}
-
-function deliverOpenChatDeepLink(
-  state: BootState,
-  target: OpenChatDeepLinkTarget,
-): void {
-  if (state.bridge !== null) {
-    state.bridge.deliverOpenChatDeepLink(target);
-  } else {
-    state.pendingOpenChat = target;
   }
 }
 
@@ -457,7 +443,7 @@ async function runTestStartupPhases(
     ),
     config: testHooks.config,
     pendingAuthReturnSignal: false,
-    pendingOpenChat: null,
+    openChat: new OpenChatDelivery(),
     bridge: null,
   };
   testHooks.runPreReady();
@@ -481,7 +467,7 @@ async function runProductionStartupPhases(): Promise<DeferredStartupPlan> {
     ),
     config,
     pendingAuthReturnSignal: false,
-    pendingOpenChat: null,
+    openChat: new OpenChatDelivery(),
     bridge: null,
   };
 
@@ -643,7 +629,7 @@ export function runPreReady(state: BootState): void {
 
   registerDeepLinkHandling(
     () => deliverAuthReturnSignal(state),
-    (target) => deliverOpenChatDeepLink(state, target),
+    (target) => state.openChat.offer(target),
   );
 }
 
@@ -1155,17 +1141,6 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
       bridge.deliverAuthReturnSignal();
     });
   }
-  // Same drain for a cold-start open-chat link. The renderer's tab
-  // navigation queues the activation until hydration, so delivering on the
-  // first `did-finish-load` is enough.
-  if (state.pendingOpenChat !== null) {
-    const pendingOpenChat = state.pendingOpenChat;
-    state.pendingOpenChat = null;
-    const deepLinkTarget = windowRegistry.records()[0];
-    deepLinkTarget?.window.webContents.once("did-finish-load", () => {
-      bridge.deliverOpenChatDeepLink(pendingOpenChat);
-    });
-  }
 
   for (const record of windowRegistry.records()) {
     void windowRegistry.loadById(record.windowId).catch((err) => {
@@ -1658,6 +1633,34 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
       return;
     }
     openWindowWithoutLiveWindow(services);
+  });
+
+  // The renderer's tab navigation queues an activation until hydration, so a
+  // window counts as ready for an open-chat link once its page has loaded.
+  state.openChat.attach({
+    targetWindow: () => {
+      const record = services.windowRegistry.getMruRecord();
+      if (record === null) {
+        return null;
+      }
+      const contents = record.window.webContents;
+      return {
+        windowId: record.windowId,
+        loaded: !contents.isLoading() && contents.getURL() !== "",
+        onceLoaded: (listener) => {
+          contents.once("did-finish-load", listener);
+        },
+      };
+    },
+    openWindow: () => {
+      openWindowWithoutLiveWindow(services);
+    },
+    deliver: (target) => {
+      services.bridge.deliverOpenChatDeepLink(target);
+    },
+  });
+  services.windowRegistry.on("change", () => {
+    state.openChat.flush();
   });
 
   // Flag flipped once the quit is authorized. Subsequent `before-quit` fires
