@@ -868,6 +868,7 @@ function callWithKey(
     undefined,
     false,
     null,
+    undefined,
   );
 }
 
@@ -887,6 +888,7 @@ function callPadded(session: Session, bytes: number): Promise<unknown> {
     undefined,
     false,
     null,
+    undefined,
   );
 }
 
@@ -1463,6 +1465,7 @@ describe("RemoteSession host-leg resume", () => {
           budgetMs,
           false,
           null,
+          undefined,
         ),
       );
       await step(budgetMs);

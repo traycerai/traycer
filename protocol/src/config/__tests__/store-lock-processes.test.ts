@@ -266,6 +266,44 @@ describe("config lock across processes", () => {
       expect(await readFile(lockPath())).toEqual(lockBefore);
     });
 
+    it("returns the live-lock timeout without writing, then recovers on the next write", async () => {
+      setCliConfigLockTimingForTests({
+        waitMs: 400,
+        pollMs: 10,
+        staleAgeMs: 0,
+      });
+      await seed({ envOverrides: { SEED_KEY: "s" } });
+      const pid = await liveChildPid();
+      const holder = spawned.at(-1);
+      if (holder === undefined) throw new Error("live holder was not recorded");
+      await writeLock(
+        lockRecord(pid, await queryPidStartFingerprintAsync(pid)),
+        ONE_HOUR_MS,
+      );
+      const configBefore = await readFile(cliConfigPath());
+      const lockBefore = await readFile(lockPath());
+
+      await expect(setEnvOverride("REFUSED_KEY", "v")).rejects.toThrow(
+        /Timed out after 400ms waiting for the settings lock/,
+      );
+
+      expect(await readFile(cliConfigPath())).toEqual(configBefore);
+      expect(await readFile(lockPath())).toEqual(lockBefore);
+      const holderExit = new Promise<void>((resolve) => {
+        holder.once("exit", () => resolve());
+      });
+      holder.kill();
+      await holderExit;
+
+      await setEnvOverride("RECOVERED_KEY", "v");
+
+      expect((await readCliConfig()).envOverrides).toEqual({
+        SEED_KEY: "s",
+        RECOVERED_KEY: "v",
+      });
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
     it("writes nothing, not even a new config.json, when it times out", async () => {
       const pid = await liveChildPid();
       await writeLock(

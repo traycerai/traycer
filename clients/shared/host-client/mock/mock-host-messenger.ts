@@ -166,7 +166,7 @@ export class MockHostMessenger<
     options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const { idempotencyKey, authority, requiredHostMethodVersion } = options;
-    const requestId = this.requestIdProvider();
+    const requestId = options.requestId ?? this.requestIdProvider();
     this.calls.push({
       method,
       params,

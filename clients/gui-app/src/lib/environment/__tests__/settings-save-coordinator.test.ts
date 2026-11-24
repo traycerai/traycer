@@ -19,7 +19,10 @@ import {
 import { settingsSaveMemoryKey } from "@/lib/persist";
 import { SettingsSaveMemoryPersistLifecycleBridge } from "@/providers/settings-save-memory-persist-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSettingsSaveMemoryStore } from "@/stores/settings/settings-save-memory-store";
+import {
+  useSettingsSaveMemoryStore,
+  type SettingsSaveMemoryRecord,
+} from "@/stores/settings/settings-save-memory-store";
 
 const ACCOUNT_ID = "account-a";
 const ENVIRONMENT_ID = "environment-a";
@@ -27,6 +30,20 @@ const HOST_ID = "host-a";
 const SHARING_GENERATION = 3;
 const KEY = "memory";
 const KIND = "agent_memory";
+type BoundSave = Extract<SettingsSaveMemoryRecord, { environmentId: string }>;
+type PromotedProposalRow = EnvironmentProposalsResponse["proposals"][number] & {
+  readonly promotion: {
+    readonly saveId: string;
+    readonly heldRevision: number | null;
+  };
+};
+type PromotedProposalsResponse = Omit<
+  EnvironmentProposalsResponse,
+  "proposals"
+> & {
+  readonly localSaveIds?: readonly string[];
+  proposals: PromotedProposalRow[];
+};
 
 type Value = { readonly enabled: boolean };
 
@@ -90,6 +107,30 @@ function proposals() {
   } satisfies EnvironmentProposalsResponse;
 }
 
+function promotedProposals(saveId: string): PromotedProposalsResponse {
+  return {
+    localSaveIds: [],
+    proposals: [
+      {
+        proposal: {
+          proposalId: saveId,
+          environmentId: ENVIRONMENT_ID,
+          hostId: HOST_ID,
+          sharingGeneration: SHARING_GENERATION,
+          kind: KIND,
+          key: KEY,
+          os: null,
+          operation: "put",
+          state: "proposed",
+        },
+        localOverride: true,
+        deliveredRevision: null,
+        promotion: { saveId, heldRevision: 9 },
+      },
+    ],
+  };
+}
+
 function review(value: Value): EnvironmentTransportAnswer {
   return {
     status: 200,
@@ -131,10 +172,15 @@ function makeCloud(
   };
 }
 
-function currentRecord() {
+function isBoundSave(record: SettingsSaveMemoryRecord): record is BoundSave {
+  return typeof record.environmentId === "string";
+}
+
+function currentRecord(): BoundSave | null {
   return (
     Object.values(useSettingsSaveMemoryStore.getState().records).find(
-      (record) =>
+      (record): record is BoundSave =>
+        isBoundSave(record) &&
         record.environmentId === ENVIRONMENT_ID &&
         record.hostId === HOST_ID &&
         record.sharingGeneration === SHARING_GENERATION &&
@@ -199,6 +245,85 @@ afterEach(() => {
 });
 
 describe("settings save edit fence", () => {
+  it("recovers a promoted save from the same account after its window closes", async () => {
+    const first = createSettingsSaveCoordinator({
+      accountId: () => ACCOUNT_ID,
+      cloud: () => null,
+      readProposals: () => Promise.resolve(null),
+      now: () => 100,
+      schedule: noFollowUp,
+    });
+    const record: BoundSave = {
+      editId: "promoted-save",
+      hostId: HOST_ID,
+      writtenAt: 100,
+      unanswered: null,
+      environmentId: ENVIRONMENT_ID,
+      sharingGeneration: SHARING_GENERATION,
+      kind: KIND,
+      key: KEY,
+      os: null,
+      operation: "put",
+      valueDigest: await settingValueDigest({ enabled: true }),
+      expectedLiveRevision: 7,
+    };
+    Object.assign(record, { environmentId: null });
+    const saveId = useSettingsSaveMemoryStore.getState().remember(record);
+    first.stop();
+
+    const sent: EnvironmentTransportRequest[] = [];
+    const reviewAnswer: EnvironmentTransportAnswer = {
+      status: 200,
+      text: JSON.stringify({
+        review: {
+          hosts: [],
+          needsYou: [
+            {
+              type: "held",
+              heldId: "held-promoted-save",
+              revision: 9,
+              kind: KIND,
+              key: KEY,
+              os: null,
+              hostId: HOST_ID,
+              sharingGeneration: SHARING_GENERATION,
+              hostName: "Host",
+              heldAt: 100,
+              live: { revision: 8, value: { enabled: false } },
+              op: "put",
+              value: { enabled: true },
+            },
+          ],
+        },
+      }),
+    };
+    const second = createSettingsSaveCoordinator({
+      accountId: () => ACCOUNT_ID,
+      cloud: () =>
+        makeCloud((request) => {
+          sent.push(request);
+          return Promise.resolve(
+            request.method === "GET" ? reviewAnswer : { status: 200, text: "" },
+          );
+        }),
+      readProposals: () => Promise.resolve(promotedProposals(saveId)),
+      now: () => 100,
+      schedule: noFollowUp,
+    });
+
+    await second.reconcile(HOST_ID);
+
+    const applied = sent.filter((request) => request.method === "POST");
+    expect(applied).toHaveLength(1);
+    const request = applied[0];
+    expect(request.url).toContain("/held/held-promoted-save/apply");
+    expect(request.body).toEqual({
+      revision: 9,
+      expectedLiveRevision: 8,
+    });
+    expect(useSettingsSaveMemoryStore.getState().records).toEqual({});
+  });
+
   it("does not apply A's proposal after B replaces A during the proposals read", async () => {
     const reading = deferred<void>();
     const proposalsAnswer = deferred<EnvironmentProposalsResponse>();
@@ -395,7 +520,7 @@ describe("settings save edit fence", () => {
     expect(currentRecord()?.unanswered).toBeNull();
     expect(
       Object.values(useSettingsSaveMemoryStore.getState().records).some(
-        (record) => record.key === otherKey,
+        (record) => record.environmentId !== null && record.key === otherKey,
       ),
     ).toBe(false);
   });
