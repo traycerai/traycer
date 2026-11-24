@@ -16,6 +16,9 @@ vi.mock(
 const harness = vi.hoisted(() => ({
   hosts: [] as HostScopeOption[],
   activeHostId: null as string | null,
+  client: null as HostClient<HostRpcRegistry> | null,
+  directoryResolved: true,
+  directoryFailed: false,
   /** The host lists' own state: still loading, or failed before any row. */
   listsResolved: true,
   listsFailed: false,
@@ -34,6 +37,8 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
       hostOptionsFixture({
         hosts: harness.hosts,
         activeHostId: harness.activeHostId,
+        directoryResolved: harness.directoryResolved,
+        directoryFailed: harness.directoryFailed,
         listsResolved: harness.listsResolved,
         listsFailed: harness.listsFailed,
         isLoading: harness.isLoading,
@@ -84,7 +89,7 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => null,
+  useHostClient: () => harness.client,
 }));
 vi.mock("@/lib/analytics", () => ({
   Analytics: { getInstance: () => ({ track: () => undefined }) },
@@ -93,6 +98,7 @@ vi.mock("@/lib/analytics", () => ({
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -100,12 +106,21 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import {
+  localEntry,
+  remoteEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import { PageOrNotOnComputer } from "@/components/settings/environment/page-not-on-computer";
-import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  hostLeaseFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -115,6 +130,10 @@ import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { ReactNode } from "react";
+import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /** A computer whose app is older than the minimum the Settings pages need. */
 function belowMinimumEntry(hostId: string): RemoteHostDirectoryEntry {
@@ -163,9 +182,14 @@ function renderSecrets(): void {
 
 afterEach(() => {
   cleanup();
+  queryClient.clear();
   resetNegotiatedManifests();
+  useSelectionAuthorityStore.getState().reset();
   harness.hosts = [];
   harness.activeHostId = null;
+  harness.client = null;
+  harness.directoryResolved = true;
+  harness.directoryFailed = false;
   harness.listsResolved = true;
   harness.listsFailed = false;
   harness.isLoading = false;
@@ -357,6 +381,252 @@ describe("Personal's Secrets while the window host's row is missing and another 
 
     expect(screen.getByTestId("host-scope-lists-failed")).toBeTruthy();
     expect(screen.queryByTestId("draft")).toBeNull();
+  });
+});
+
+describe("Personal's Providers while the window's host is resolving", () => {
+  const REMOTE_WINDOW_HOST = { ...WINDOW_HOST, isLocalMachine: false };
+  const REMOTE_ENTRY = remoteEntry(WINDOW_HOST.hostId, null);
+
+  function connectWindowHost(
+    readStatus: () =>
+      | EnvironmentStatusResponseV13
+      | Promise<EnvironmentStatusResponseV13>,
+    host: HostScopeOption,
+  ): void {
+    const entry = host.isLocalMachine
+      ? { ...localEntry, hostId: host.hostId, version: "2.0.0" }
+      : {
+          ...REMOTE_ENTRY,
+          version: "2.0.0",
+          remoteStatus: { ...REMOTE_ENTRY.remoteStatus, appVersion: "2.0.0" },
+        };
+    harness.hosts = [{ ...host, connectable: true, entry }];
+    harness.client = buildOverviewHostFixture({
+      hostId: host.hostId,
+      isLocalMachine: host.isLocalMachine,
+      hostVersion: "2.0.0",
+      overrideHandlers: { "environment.status": readStatus },
+    }).client;
+  }
+
+  function recordWindowStatusSupport(): void {
+    recordNegotiatedHostManifest(WINDOW_HOST.hostId, {
+      "environment.status": { major: 1, minor: 3 },
+    });
+  }
+
+  const REGISTRY_OFFLINE: HostScopeOption["health"] = {
+    state: "offline",
+    label: "Offline",
+    detail: null,
+    tone: "idle",
+    live: false,
+  };
+
+  function listWindowHostWithoutRoute(health: HostScopeOption["health"]): void {
+    pickPersonalOnUnansweredWindowHost();
+    harness.hosts = [
+      { ...WINDOW_HOST, isLocalMachine: false, connectable: false, health },
+    ];
+  }
+
+  function markDirectoryPending(): void {
+    harness.directoryResolved = false;
+    harness.listsResolved = false;
+    harness.isLoading = true;
+  }
+
+  function recordLease(lease: HostLeaseSnapshot): void {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: WINDOW_HOST.hostId,
+      targetHostId: WINDOW_HOST.hostId,
+      effectiveHostId: WINDOW_HOST.hostId,
+      leases: [lease],
+      selectionRevision: 1,
+    });
+  }
+
+  it.each([WINDOW_HOST.health, REGISTRY_OFFLINE])(
+    "waits for the directory with a registry-only $state host, even if another host has a dead lease",
+    async (health) => {
+      listWindowHostWithoutRoute(health);
+      markDirectoryPending();
+      recordLease(hostLeaseFixture("host-other", { reason: "offline" }));
+      const view = render(pageElement("providers"));
+
+      expect
+        .soft(screen.queryByText("Connecting to Window laptop…"))
+        .toBeTruthy();
+      expect.soft(screen.queryByTestId("draft")).toBeNull();
+
+      harness.directoryResolved = true;
+      harness.directoryFailed = true;
+      harness.listsResolved = true;
+      harness.listsFailed = true;
+      harness.isLoading = false;
+      view.rerender(pageElement("providers"));
+
+      expect.soft(screen.queryByTestId("draft")).toBeNull();
+      expect(screen.getByRole("heading", { name: "Providers" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(harness.retryLists).toHaveBeenCalledTimes(1);
+
+      harness.directoryFailed = false;
+      harness.listsFailed = false;
+      const readStatus = vi.fn(() => environmentStatusFixture({}));
+      connectWindowHost(readStatus, REMOTE_WINDOW_HOST);
+      recordWindowStatusSupport();
+      view.rerender(pageElement("providers"));
+
+      expect(await screen.findByTestId("draft")).toBeTruthy();
+      expect(readStatus).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("uses Personal when the settled directory has no route to the active computer", () => {
+    listWindowHostWithoutRoute(WINDOW_HOST.health);
+
+    render(pageElement("providers"));
+
+    expect(screen.getByTestId("draft")).toBeTruthy();
+  });
+
+  it("uses Personal while the directory is pending if the client has confirmed the active computer is offline", () => {
+    listWindowHostWithoutRoute(REGISTRY_OFFLINE);
+    markDirectoryPending();
+    recordLease(hostLeaseFixture(WINDOW_HOST.hostId, { reason: "offline" }));
+
+    render(pageElement("providers"));
+
+    expect(screen.getByTestId("draft")).toBeTruthy();
+  });
+
+  it("waits through the handshake and first status when a dialable host still has registry Offline", async () => {
+    pickPersonalOnUnansweredWindowHost();
+    recordLease({
+      hostId: WINDOW_HOST.hostId,
+      status: "connecting",
+      dead: null,
+    });
+    const statusStarted = Promise.withResolvers<void>();
+    const statusReply = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    connectWindowHost(
+      () => {
+        statusStarted.resolve();
+        return statusReply.promise;
+      },
+      { ...REMOTE_WINDOW_HOST, health: REGISTRY_OFFLINE },
+    );
+
+    render(pageElement("providers"));
+
+    expect(screen.queryByTestId("draft")).toBeNull();
+    expect(screen.getByTestId("host-scope-connecting")).toBeTruthy();
+    act(recordWindowStatusSupport);
+    await statusStarted.promise;
+    expect(screen.queryByTestId("draft")).toBeNull();
+    statusReply.resolve(environmentStatusFixture({}));
+
+    expect(await screen.findByTestId("draft")).toBeTruthy();
+  });
+
+  it("uses cloud Personal when the authority has confirmed a dialable host is offline", () => {
+    pickPersonalOnUnansweredWindowHost();
+    recordLease(hostLeaseFixture(WINDOW_HOST.hostId, { reason: "offline" }));
+    connectWindowHost(() => environmentStatusFixture({}), {
+      ...REMOTE_WINDOW_HOST,
+      health: REGISTRY_OFFLINE,
+    });
+
+    render(pageElement("providers"));
+
+    expect(screen.getByTestId("draft")).toBeTruthy();
+  });
+
+  it.each([
+    {
+      state: "a synthetic local boot entry",
+      host: {
+        ...WINDOW_HOST,
+        entry: {
+          ...localEntry,
+          hostId: WINDOW_HOST.hostId,
+          websocketUrl: null,
+          version: "2.0.0",
+          transportDialability: "not-dialable",
+        },
+      },
+      lease: "connecting",
+    },
+    {
+      state: "an expected remote restart",
+      host: {
+        ...REMOTE_WINDOW_HOST,
+        entry: {
+          ...REMOTE_ENTRY,
+          remoteStatus: {
+            ...REMOTE_ENTRY.remoteStatus,
+            connectivity: "offline",
+            appVersion: "2.0.0",
+          },
+          version: "2.0.0",
+          transportDialability: "not-dialable",
+        },
+        health: REGISTRY_OFFLINE,
+      },
+      lease: "restarting-expected",
+    },
+  ] as const)(
+    "keeps the requested section pending through $state",
+    async ({ host, lease }) => {
+      pickPersonalOnUnansweredWindowHost();
+      harness.hosts = [{ ...host, connectable: false }];
+      recordLease({ hostId: host.hostId, status: lease, dead: null });
+      const view = render(pageElement("providers"));
+
+      expect(screen.queryByTestId("draft")).toBeNull();
+      expect(screen.getByTestId("host-scope-connecting")).toBeTruthy();
+      const readStatus = vi.fn(() => environmentStatusFixture({}));
+      connectWindowHost(readStatus, host);
+      act(() => {
+        recordLease(hostLeaseFixture(host.hostId, null));
+        recordWindowStatusSupport();
+      });
+      view.rerender(pageElement("providers"));
+
+      expect(await screen.findByTestId("draft")).toBeTruthy();
+      expect(readStatus).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("retries a failed initial status on the same computer before mounting Providers", async () => {
+    pickPersonalOnUnansweredWindowHost();
+    const retryReply = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    const readStatus = vi
+      .fn(() => retryReply.promise)
+      .mockImplementationOnce(() => {
+        throw new Error("environment status did not answer");
+      });
+    connectWindowHost(readStatus, REMOTE_WINDOW_HOST);
+    recordWindowStatusSupport();
+
+    render(pageElement("providers"));
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByText("Couldn't read these settings.")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Providers" })).toBeTruthy();
+    expect(screen.queryByTestId("draft")).toBeNull();
+    expect(readStatus).toHaveBeenCalledTimes(1);
+    fireEvent.click(retry);
+
+    expect(await screen.findByTestId("host-scope-connecting")).toBeTruthy();
+    expect(screen.queryByTestId("draft")).toBeNull();
+    retryReply.resolve(environmentStatusFixture({}));
+
+    expect(await screen.findByTestId("draft")).toBeTruthy();
+    expect(readStatus).toHaveBeenCalledTimes(2);
   });
 });
 

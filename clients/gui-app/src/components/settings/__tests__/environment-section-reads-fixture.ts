@@ -1,3 +1,4 @@
+import type { WindowHostPersonalAnswer } from "@/components/settings/personal/use-window-host-runs-personal";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -42,8 +43,10 @@ export const pickerStatuses: {
 } = { current: new Map() };
 
 export const windowHostRunsPersonalModule = {
-  useWindowHostRunsPersonal: (): boolean | null =>
-    windowHostRunsPersonal.current,
+  useWindowHostRunsPersonal: (): WindowHostPersonalAnswer => {
+    const runs = windowHostRunsPersonal.current;
+    return runs === null ? { runs, retryStatus: null } : { runs };
+  },
 };
 
 export const personalHostScopeModule = {

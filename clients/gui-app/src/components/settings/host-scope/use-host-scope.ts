@@ -115,6 +115,8 @@ export interface HostScope {
    * one is recoverable by retrying, the other by installing a host.
    */
   readonly listsFailed: boolean;
+  /** A listed host has no route yet because the directory has no answer. */
+  readonly unresolvedDirectoryRoute: "pending" | "failed" | null;
   /** Re-request both host lists after a failure. */
   readonly retryLists: () => void;
   /** Retry a failed status read while a Settings host entry stays pending. */
@@ -284,6 +286,15 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
   return useHostScopeWithOptions(selection, useHostOptions());
 }
 
+function unresolvedDirectoryRouteFor(
+  host: HostScopeOption | null,
+  options: Pick<HostOptions, "directoryResolved" | "directoryFailed">,
+): HostScope["unresolvedDirectoryRoute"] {
+  if (host === null || host.entry !== null || host.connectable) return null;
+  if (options.directoryFailed) return "failed";
+  return options.directoryResolved ? null : "pending";
+}
+
 function useHostScopeWithOptions(
   selection: HostScopeSelection,
   options: HostOptions,
@@ -408,6 +419,7 @@ function useHostScopeWithOptions(
     isActivating,
     isLoading: options.isLoading,
     listsFailed,
+    unresolvedDirectoryRoute: unresolvedDirectoryRouteFor(host, options),
     retryLists: options.retryLists,
     retryEntryStatus: null,
     nowMs,

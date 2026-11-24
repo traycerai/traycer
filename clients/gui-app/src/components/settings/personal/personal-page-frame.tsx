@@ -195,7 +195,7 @@ function PersonalSourceFrame(props: {
   readonly pick: EnvironmentPick;
   readonly children: ReactNode;
 }): ReactNode {
-  const runs = useWindowHostRunsPersonal(usePersonalHostScope());
+  const { runs } = useWindowHostRunsPersonal(usePersonalHostScope());
   if (runs === null) return null;
   if (runs) {
     return (

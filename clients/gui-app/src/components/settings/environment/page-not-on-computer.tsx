@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { MEMBERS } from "@/components/settings/environment/members-page.definitions";
 import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
 import { STORAGE } from "@/components/settings/environment/storage-page.definitions";
+import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import {
   HostListsFailedNotice,
   HostScopeConnecting,
@@ -221,6 +222,13 @@ function PageNotOnComputerCard(props: {
       return <HostScopeConnecting hostName={answer.hostName} />;
     case "lists-failed":
       return <HostListsFailedNotice scope={props.scope} />;
+    case "status-failed":
+      return (
+        <TeamReadFailed
+          message="Couldn't read these settings."
+          onRetry={answer.retry}
+        />
+      );
     case "missing":
       return answer.updateGives ? (
         <PageNotOnComputerUpdate

@@ -1,7 +1,10 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { subscribeNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { usePickHostScope } from "@/components/settings/host-scope/use-host-scope";
-import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
+import {
+  useWindowHostRunsPersonal,
+  type WindowHostPersonalAnswer,
+} from "@/components/settings/personal/use-window-host-runs-personal";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
@@ -55,8 +58,8 @@ function useIsOldHostPick(pick: EnvironmentPick): boolean {
  * - `served`: the page itself.
  * - `unresolved`: no pick yet, the page's own unresolved state.
  * - `pending`: the picked computer has not answered yet; "Connecting".
- * - `lists-failed`: the host lists failed before naming the computer, so
- *   nothing is known about it; the lists' retry.
+ * - `lists-failed`: a list failed before naming the computer or its route.
+ * - `status-failed`: the computer's first settings status read needs a retry.
  * - `missing`: the computer lacks the page. `updateGives` is whether an
  *   update would give it: an old host's pages other than Secrets, which is
  *   pool-only and no host update serves.
@@ -71,6 +74,7 @@ export type SectionAnswer =
   | { readonly kind: "unresolved" }
   | { readonly kind: "pending"; readonly hostName: string }
   | { readonly kind: "lists-failed" }
+  | { readonly kind: "status-failed"; readonly retry: () => void }
   | {
       readonly kind: "missing";
       readonly hostId: string;
@@ -90,8 +94,9 @@ interface SectionFacts {
   readonly listsPending: boolean;
   /** A host list failed, so a host it does not name is not known to be gone. */
   readonly listsFailed: boolean;
+  readonly directoryRouteFailed: boolean;
   /** `useWindowHostRunsPersonal`, for a Personal pick. */
-  readonly windowHostRuns: boolean | null;
+  readonly windowHost: WindowHostPersonalAnswer;
   /** That host's own `environment.status`, from its handshake. */
   readonly environmentStatus: NegotiatedMethodVersion;
   /**
@@ -134,12 +139,17 @@ function sectionAnswer(facts: SectionFacts): SectionAnswer {
   if (pick.kind === "personal") {
     // Every Personal page waits for whether the window's host runs it: that
     // decides the page's source, so drawing one first would swap it.
-    if (facts.windowHostRuns === null) {
+    const { windowHost } = facts;
+    if (windowHost.runs === null) {
+      if (facts.directoryRouteFailed) return { kind: "lists-failed" };
+      if (windowHost.retryStatus !== null) {
+        return { kind: "status-failed", retry: windowHost.retryStatus };
+      }
       return pendingOrFailed(facts, host?.name ?? UNNAMED_HOST_LABEL);
     }
     // Personal reads the cloud unless the window's host runs it: only then is
     // a page the host's own, and only Secrets needs a method of it.
-    if (section !== "secrets" || !facts.windowHostRuns || host === null) {
+    if (section !== "secrets" || !windowHost.runs || host === null) {
       return { kind: "served" };
     }
     return servedOr(facts.secretsList, host, false);
@@ -183,7 +193,7 @@ export function useSectionAnswer(
   section: SettingsSectionId,
 ): SectionAnswer {
   const scope = usePickHostScope(pick);
-  const windowHostRuns = useWindowHostRunsPersonal(scope);
+  const windowHost = useWindowHostRunsPersonal(scope);
   const hostId = scope.host?.hostId ?? null;
   const environmentStatus = useSyncExternalStore(
     subscribeNegotiatedManifests,
@@ -219,7 +229,8 @@ export function useSectionAnswer(
     listsPending:
       scope.isLoading || (scope.host === null && scope.status === "connecting"),
     listsFailed: scope.listsFailed,
-    windowHostRuns,
+    directoryRouteFailed: scope.unresolvedDirectoryRoute === "failed",
+    windowHost,
     environmentStatus,
     secretsList: pick.kind === "local" ? ownSecretsList : supportSecretsList,
   });
@@ -232,8 +243,8 @@ export type SectionServed = "served" | "not-served" | "pending";
  * `useSectionAnswer` in three states, for an entry that is shown only where
  * its page is: shown on `served`, absent while `pending`, so it never shows
  * and then goes. `pending` is every answer a later read can change: one still
- * coming, and host lists that failed, which their retry can answer either
- * way. Only `served` and `not-served` are settled.
+ * coming, or a failed list or status read that can still answer on retry.
+ * Only `served` and `not-served` are settled.
  */
 export function useSectionServed(
   pick: EnvironmentPick,
@@ -244,7 +255,8 @@ export function useSectionServed(
   if (
     answer.kind === "pending" ||
     answer.kind === "unresolved" ||
-    answer.kind === "lists-failed"
+    answer.kind === "lists-failed" ||
+    answer.kind === "status-failed"
   ) {
     return "pending";
   }

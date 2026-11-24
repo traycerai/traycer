@@ -34,7 +34,7 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 // The window's host does not run Personal, so Personal reads the cloud and
 // lists Secrets; a Local pick lists it where its listed computer serves it.
 vi.mock("@/components/settings/personal/use-window-host-runs-personal", () => ({
-  useWindowHostRunsPersonal: () => false,
+  useWindowHostRunsPersonal: () => ({ runs: false }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,

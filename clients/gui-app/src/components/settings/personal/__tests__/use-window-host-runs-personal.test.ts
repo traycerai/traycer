@@ -13,12 +13,14 @@ const reads = vi.hoisted(() => ({
   data: null as EnvironmentStatusResponseV13 | null,
   isError: false,
   version: null as NegotiatedMethodVersion,
+  retry: vi.fn(),
 }));
 
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
   useEnvironmentStatusRead: () => ({
     data: reads.data,
     isError: reads.isError,
+    retry: reads.retry,
   }),
 }));
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
@@ -39,7 +41,7 @@ describe("useWindowHostRunsPersonal", () => {
       useWindowHostRunsPersonal(hostScopeFixture({ host: null })),
     );
 
-    expect(result.current).toBe(false);
+    expect(result.current.runs).toBe(false);
   });
 
   it.each(["unreachable", "vanished"] as const)(
@@ -49,7 +51,7 @@ describe("useWindowHostRunsPersonal", () => {
         useWindowHostRunsPersonal(hostScopeFixture({ host: HOST, status })),
       );
 
-      expect(result.current).toBe(false);
+      expect(result.current.runs).toBe(false);
     },
   );
 
@@ -60,10 +62,10 @@ describe("useWindowHostRunsPersonal", () => {
       useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
     );
 
-    expect(result.current).toBeNull();
+    expect(result.current.runs).toBeNull();
   });
 
-  it("is the cloud road when the status read errored", () => {
+  it("is unknown when the first status read fails", () => {
     reads.version = { major: 1, minor: 3 };
     reads.isError = true;
 
@@ -71,7 +73,19 @@ describe("useWindowHostRunsPersonal", () => {
       useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
     );
 
-    expect(result.current).toBe(false);
+    expect(result.current).toEqual({ runs: null, retryStatus: reads.retry });
+  });
+
+  it("keeps the last Personal answer when a later status read fails", () => {
+    reads.version = { major: 1, minor: 3 };
+    reads.data = environmentStatusFixture({});
+    reads.isError = true;
+
+    const { result } = renderHook(() =>
+      useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
+    );
+
+    expect(result.current.runs).toBe(true);
   });
 
   it("leaves the cloud road for a host whose status names Personal as its principal", () => {
@@ -82,7 +96,7 @@ describe("useWindowHostRunsPersonal", () => {
       useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
     );
 
-    expect(result.current).toBe(true);
+    expect(result.current.runs).toBe(true);
   });
 
   it("is the cloud road for a host that does not serve the status", () => {
@@ -92,6 +106,6 @@ describe("useWindowHostRunsPersonal", () => {
       useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
     );
 
-    expect(result.current).toBe(false);
+    expect(result.current.runs).toBe(false);
   });
 });

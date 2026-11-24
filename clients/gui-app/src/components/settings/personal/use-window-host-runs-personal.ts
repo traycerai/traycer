@@ -1,44 +1,72 @@
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { hostRunsPersonal } from "@/components/settings/environment/environment-picker-model";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
+
+export type WindowHostPersonalAnswer =
+  | { readonly runs: boolean }
+  | { readonly runs: null; readonly retryStatus: (() => void) | null };
+
+const UNKNOWN = { runs: null, retryStatus: null } as const;
+const CLOUD = { runs: false } as const;
+
+function hostRoutePending(
+  scope: HostScope,
+  lease: HostLeaseSnapshot | null,
+): boolean {
+  return (
+    lease?.status === "restarting-expected" ||
+    isLocalHostBootingEntry(scope.host?.entry ?? null) ||
+    scope.unresolvedDirectoryRoute === "pending" ||
+    scope.unresolvedDirectoryRoute === "failed"
+  );
+}
 
 /**
- * Whether the window's host runs Personal, read through `scope`, the window's
- * own host scope; `null` while it is unknown: the host lists have not named
- * the window's host yet, or failed to, no handshake yet, or a host that
- * serves `environment.status` and has not answered. A window the settled
- * lists give no host runs nothing, and neither does one whose host cannot be reached or is
- * offline now, whatever it answered before it stopped: its pages read the
- * cloud rather than ask a host that is not there. A host still connecting or
- * restarting is not offline, so it stays unknown and its row does not flicker.
+ * The window's host decides whether it runs Personal. Wait for its route and
+ * first status answer before opening an editor. A host known to be away, or
+ * whose handshake lacks the method, uses Personal in the cloud.
  */
-export function useWindowHostRunsPersonal(scope: HostScope): boolean | null {
+export function useWindowHostRunsPersonal(
+  scope: HostScope,
+): WindowHostPersonalAnswer {
   const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
   const version = useHostNegotiatedMethodVersion(
     scope.client,
     "environment.status",
   );
+  const lease = useHostLease(scope.hostId);
   if (scope.hostId === null) {
-    // `connecting` with no host is lists that have not answered, whether or
-    // not a read is in flight; only lists that settled cleanly say none.
+    // A list that has not answered can still supply the window's host.
     return scope.isLoading || scope.status === "connecting" || scope.listsFailed
-      ? null
-      : false;
+      ? UNKNOWN
+      : CLOUD;
   }
+  // The registry's Offline label can outlast the return of a dialable route.
+  // Only the selection authority can confirm that a dialable host is away.
+  if (lease?.status === "dead" && lease.dead.reason === "offline") {
+    return CLOUD;
+  }
+  if (hostRoutePending(scope, lease)) return UNKNOWN;
   if (
     scope.status === "unreachable" ||
     scope.status === "vanished" ||
-    scope.host?.health.state === "offline"
-  )
-    return false;
-  if (version === null) return null;
-  if (version !== false && status.data === null && !status.isError) {
-    return null;
+    version === false
+  ) {
+    return CLOUD;
   }
-  return hostRunsPersonal(
-    { hostId: scope.hostId, name: scope.hostLabel },
-    status.data,
-    version,
-  );
+  if (version === null) return UNKNOWN;
+  if (status.data === null) {
+    return status.isError ? { runs: null, retryStatus: status.retry } : UNKNOWN;
+  }
+  return {
+    runs: hostRunsPersonal(
+      { hostId: scope.hostId, name: scope.hostLabel },
+      status.data,
+      version,
+    ),
+  };
 }

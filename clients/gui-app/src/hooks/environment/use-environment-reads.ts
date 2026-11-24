@@ -66,7 +66,9 @@ export function useEnvironmentStatusRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): EnvironmentRead<EnvironmentStatusResponseV12> {
+): EnvironmentRead<EnvironmentStatusResponseV12> & {
+  readonly retry: () => void;
+} {
   const supported = useHostMethodSupport(hostId, "environment.status");
   const query = useHostQuery<HostRpcRegistry, "environment.status">({
     cacheKeyIdentity: undefined,
@@ -79,7 +81,14 @@ export function useEnvironmentStatusRead(
     enabled && query.data?.principal?.kind === "personal",
   );
   useRereadOnRevision(hostId, query.data ?? null, personal.environmentId);
-  return { supported, data: query.data ?? null, isError: query.isError };
+  return {
+    supported,
+    data: query.data ?? null,
+    isError: query.isError,
+    retry: () => {
+      void query.refetch();
+    },
+  };
 }
 
 function aboutThisHost(
