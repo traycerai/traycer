@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The setup file scripts/test-poll-lasts-its-test.ts, through its real
 // consumers: vi.waitFor, vi.waitUntil and expect.poll as every test calls them.
@@ -37,36 +37,44 @@ const KINDS: readonly PollKind[] = [
 const INTERVAL_MS = 50;
 const NO_ARRIVAL_TEST_MS = 2_500;
 const LATE_START_MS = 1_500;
+// The poll's own margin before its test's timeout.
+const BEFORE_TEST_TIMEOUT_MS = 100;
+// A hook has its own timeout, so the poll it runs can end at the test's
+// budget without racing the test's deadline.
+const HOOK_MS = 10_000;
 
 interface PollEnd {
   readonly message: string;
-  readonly beforeTestTimeout: boolean;
   readonly afterMs: number;
+  readonly calls: number;
+}
+
+// Runs a poll that never sees its condition, from the test's own beforeEach:
+// the poll's budget is its test's, and the test reads how it ended.
+async function pollToItsEnd(kind: PollKind): Promise<PollEnd> {
+  let calls = 0;
+  const started = Date.now();
+  try {
+    await kind.until(() => {
+      calls += 1;
+      return false;
+    }, undefined);
+  } catch (error) {
+    return {
+      message: error instanceof Error ? error.message : String(error),
+      afterMs: Date.now() - started,
+      calls,
+    };
+  }
+  throw new Error("a poll whose condition never holds settled");
+}
+
+// A poll checks once at its start and at most once per interval after it.
+function mostChecksWithin(budgetMs: number): number {
+  return 1 + Math.floor(budgetMs / INTERVAL_MS);
 }
 
 describe.each(KINDS)("$name", (kind) => {
-  let noArrival: PollEnd | null = null;
-  let lateStart: PollEnd | null = null;
-
-  // The poll's timer is due before the test's, so the poll's rejection is
-  // read while the test's signal is still unaborted, however late both run.
-  async function recordEnd(
-    signal: AbortSignal,
-    record: (end: PollEnd) => void,
-  ): Promise<void> {
-    const started = Date.now();
-    try {
-      await kind.until(() => false, undefined);
-    } catch (error) {
-      record({
-        message: error instanceof Error ? error.message : String(error),
-        beforeTestTimeout: !signal.aborted,
-        afterMs: Date.now() - started,
-      });
-      throw error;
-    }
-  }
-
   it("waits out an arrival later than Vitest's one second", async () => {
     let arrived = false;
     setTimeout(() => {
@@ -87,49 +95,48 @@ describe.each(KINDS)("$name", (kind) => {
         { timeout: 200 },
       ),
     ).rejects.toThrow();
-    // A 200 ms poll checks at most once at the start and once per interval;
-    // one stretched to its test would check about fifty times.
-    expect(calls).toBeLessThanOrEqual(1 + 200 / INTERVAL_MS);
+    // One stretched to its test would check about fifty times.
+    expect(calls).toBeLessThanOrEqual(mostChecksWithin(200));
   });
 
-  it.fails(
-    "fails when nothing arrives",
-    async ({ signal }) => {
-      noArrival = null;
-      await recordEnd(signal, (end) => {
-        noArrival = end;
-      });
-    },
-    NO_ARRIVAL_TEST_MS,
-  );
+  describe("with nothing arriving", () => {
+    let end: PollEnd | null = null;
+    beforeEach(async () => {
+      end = await pollToItsEnd(kind);
+    }, HOOK_MS);
 
-  it("failed that poll with its own error at its test's timeout", () => {
-    expect(noArrival).toMatchObject({
-      message: expect.stringContaining(kind.ownError),
-      beforeTestTimeout: true,
-    });
-    expect(noArrival?.afterMs).toBeGreaterThanOrEqual(NO_ARRIVAL_TEST_MS - 500);
+    it(
+      "fails with its own error at its test's timeout, past Vitest's one second",
+      () => {
+        expect(end?.message).toContain(kind.ownError);
+        expect(end?.afterMs).toBeGreaterThanOrEqual(
+          NO_ARRIVAL_TEST_MS - BEFORE_TEST_TIMEOUT_MS - 400,
+        );
+      },
+      NO_ARRIVAL_TEST_MS,
+    );
   });
 
-  it.fails(
-    "fails a poll started late in its test",
-    async ({ signal }) => {
-      lateStart = null;
+  describe("started late in its test", () => {
+    let end: PollEnd | null = null;
+    beforeEach(async () => {
       await sleep(LATE_START_MS);
-      await recordEnd(signal, (end) => {
-        lateStart = end;
-      });
-    },
-    NO_ARRIVAL_TEST_MS,
-  );
+      end = await pollToItsEnd(kind);
+    }, HOOK_MS);
 
-  it("gave the late poll only what was left of its test", () => {
-    // Given the test's whole timeout, the late poll would still be running
-    // when the test timed out, and would end after the test's signal aborted.
-    expect(lateStart).toMatchObject({
-      message: expect.stringContaining(kind.ownError),
-      beforeTestTimeout: true,
-    });
+    it(
+      "is given only what is left of its test",
+      () => {
+        expect(end?.message).toContain(kind.ownError);
+        // Given its test's whole timeout instead, it would check about fifty times.
+        expect(end?.calls).toBeLessThanOrEqual(
+          mostChecksWithin(
+            NO_ARRIVAL_TEST_MS - BEFORE_TEST_TIMEOUT_MS - LATE_START_MS,
+          ),
+        );
+      },
+      NO_ARRIVAL_TEST_MS,
+    );
   });
 
   it("leaves a fake clock as Vitest's own poll does, so a timer due past its second does not fire", async () => {
