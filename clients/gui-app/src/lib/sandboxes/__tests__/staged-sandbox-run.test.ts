@@ -382,41 +382,32 @@ describe("runStagedSandbox creating", () => {
     const stageIdentity = stageOf().clientRequestId;
     if (stageIdentity === null) throw new Error("expected a stage identity");
     const createKey = "retry:sbx_saved_attempt";
-    const savedRequest: SandboxCreateRequest = {
-      os: "linux",
-      cpus: 4,
-      memoryMb: 8192,
-      diskMb: null,
-      region: "us-west",
-      displayName: "saved-attempt",
-      idleMinutes: 30,
-      burst: false,
-      createdByHostId: null,
-      createdByAgentId: null,
-      environmentId: "env-saved-team",
-      destroyAfterRestingMinutes: 1440,
-      createdByTaskId: null,
-      clientRequestId: createKey,
-    };
+    const { auth, deps } = harness(
+      {
+        createSandbox: () =>
+          refusal(503, SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE),
+      },
+      true,
+    );
+    await run(createKey, deps);
+    const savedRequest = auth.requests.at(0);
+    if (savedRequest === undefined)
+      throw new Error("expected a real preceding create attempt");
+    expect(savedRequest.clientRequestId).toBe(createKey);
+    expect(stageOf()).toMatchObject({
+      clientRequestId: stageIdentity,
+      lastCreateKey: createKey,
+      lastRetryCreate: savedRequest,
+      failure: { kind: "unavailable" },
+    });
     const proposedRequest: SandboxCreateRequest = {
       ...savedRequest,
       cpus: 8,
       memoryMb: 16_384,
       displayName: "new-picker-value",
     };
-    useStagedSandboxStore.getState().report(surfaceKey, {
-      phase: "creating",
-      lastCreateKey: createKey,
-      lastRetryCreate: savedRequest,
-      failure: {
-        kind: "failed",
-        code: "provider_failed",
-        step: "creating",
-        sandboxId: "sbx_saved_attempt",
-        retryCreate: savedRequest,
-      },
-    });
     const observedAttemptId = stageOf().attemptId ?? null;
+    const priorAttemptId = stageOf().attemptId;
     const retryRequestId = await useStagedSandboxStore
       .getState()
       .requestRetry(surfaceKey, "user-1", "retry-creation", {
@@ -432,19 +423,11 @@ describe("runStagedSandbox creating", () => {
       retryCreate: proposedRequest,
       observedCreateKey: createKey,
     });
-
-    const { auth, deps } = harness(
-      {
-        createSandbox: () =>
-          refusal(503, SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE),
-      },
-      true,
-    );
     await runStagedSandbox(
       surfaceKey,
       {
         taskId: null,
-        resume: true,
+        resume: false,
         createKey,
         retryCreate: proposedRequest,
         observedCreateKey: createKey,
@@ -461,13 +444,15 @@ describe("runStagedSandbox creating", () => {
     const rawStage = localStorage.getItem(stageKey);
     if (rawStage === null) throw new Error("expected the durable stage");
     const durableStage = JSON.parse(rawStage) as StagedSandbox;
-    expect(auth.requests).toEqual([savedRequest]);
+    expect(auth.requests).toEqual([savedRequest, savedRequest]);
+    expect(auth.environmentReads).toEqual(["team-acme"]);
     expect(stageOf()).toMatchObject({
       clientRequestId: stageIdentity,
       lastCreateKey: createKey,
       lastRetryCreate: savedRequest,
       retryHandledId: retryRequestId,
     });
+    expect(stageOf().attemptId).not.toBe(priorAttemptId);
     expect(durableStage).toMatchObject({
       clientRequestId: stageIdentity,
       lastCreateKey: createKey,

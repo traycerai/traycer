@@ -24,6 +24,10 @@ interface RecordMapOptions {
     current: string,
     proposed: string,
   ) => string | undefined;
+  /** An explicit new occurrence may replace a tombstone. */
+  readonly canRestoreTombstone?: (id: string, proposed: string) => boolean;
+  /** Track deletions only for records the store can actually restore. */
+  readonly tracksHydratedRecord?: (record: string) => boolean;
 }
 
 function parseSnapshot(value: string | null, field: string): RecordMapSnapshot {
@@ -48,6 +52,14 @@ function parseSnapshot(value: string | null, field: string): RecordMapSnapshot {
   };
 }
 
+function decodeRecord(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Persist a map by record, writing only this window's changes. Replacing a
  * whole map from a stale window must not erase another window's new records.
@@ -60,9 +72,14 @@ export function createRecordMapStorage(
   const separatePrefix =
     typeof options === "string" ? undefined : options.separatePrefix;
   const reconcile = typeof options === "string" ? undefined : options.reconcile;
+  const canRestoreTombstone =
+    typeof options === "string" ? undefined : options.canRestoreTombstone;
+  const tracksHydratedRecord =
+    typeof options === "string" ? undefined : options.tracksHydratedRecord;
   let observed = new Map<string, string>();
   const tracksRecord = (id: string, record: string): boolean =>
     (record !== "null" || reconcile !== undefined) &&
+    (record === "null" || tracksHydratedRecord?.(record) !== false) &&
     (separatePrefix === undefined || !id.startsWith(separatePrefix));
   const reconcileChange = (
     before: string | undefined,
@@ -75,10 +92,17 @@ export function createRecordMapStorage(
   const writableRecord = (
     before: string | undefined,
     current: string | null,
-  ): boolean =>
-    current === "null"
-      ? reconcile !== undefined && before === "null"
-      : current !== null || before === undefined;
+    id: string,
+    proposed: string,
+  ): boolean => {
+    if (current !== "null") return current !== null || before === undefined;
+    if (canRestoreTombstone === undefined)
+      return reconcile !== undefined && before === "null";
+    return (
+      (before === undefined || before === "null") &&
+      canRestoreTombstone(id, proposed)
+    );
+  };
   return {
     getItem: (name) => {
       const raw = localStorage.getItem(name);
@@ -92,7 +116,8 @@ export function createRecordMapStorage(
       ) {
         for (const [id, record] of Object.entries(snapshot.records)) {
           const key = recordMapStorageKey(name, id);
-          if (localStorage.getItem(key) === null) {
+          const existing = localStorage.getItem(key);
+          if (existing === null || decodeRecord(existing) === undefined) {
             localStorage.setItem(key, JSON.stringify(record));
           }
         }
@@ -113,8 +138,10 @@ export function createRecordMapStorage(
         if (key === null || !key.startsWith(prefix)) continue;
         const record = localStorage.getItem(key);
         if (record === null) continue;
+        const decoded = decodeRecord(record);
+        if (decoded === undefined) continue;
         const id = decodeURIComponent(key.slice(prefix.length));
-        if (record !== "null") records[id] = JSON.parse(record);
+        if (record !== "null") records[id] = decoded;
         if (tracksRecord(id, record)) observed.set(id, record);
       }
       return JSON.stringify({
@@ -136,8 +163,11 @@ export function createRecordMapStorage(
         const key = recordMapStorageKey(name, id);
         const current = localStorage.getItem(key);
         // A cancellation in another window wins over an old in-flight write.
-        if (!writableRecord(before, current)) continue;
-        const write = reconcileChange(before, current, record);
+        if (!writableRecord(before, current, id, record)) continue;
+        const write =
+          current === "null"
+            ? record
+            : reconcileChange(before, current, record);
         if (write !== undefined) localStorage.setItem(key, write);
       }
       for (const [id, before] of observed) {

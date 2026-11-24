@@ -17,7 +17,10 @@ import {
   SandboxSetupLine,
   type SandboxSetupLineFacts,
 } from "@/components/composer/sandbox-setup-line";
-import { openStagedShapeSheet } from "@/components/composer/use-sandbox-staging";
+import {
+  openStagedShapeSheet,
+  stagedShapeChangeAction,
+} from "@/components/composer/use-sandbox-staging";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
@@ -432,12 +435,12 @@ export function useStagedSandboxSend(input: {
             onRetryCreation: () => runFromLine(stagedRetryKey(stage)),
             onRetry: () => runFromLine(stagedRetryKey(stage)),
             onSendAgain,
-            onChangeShape: () => {
+            onChangeShape: stagedShapeChangeAction(surfaceKey, stage, () => {
               useStagedSandboxStore
                 .getState()
                 .cancel(surfaceKey, stagedFailedSandboxId(stage) !== null);
-              openStagedShapeSheet(surfaceKey);
-            },
+              openStagedShapeSheet(surfaceKey, stage.failure?.kind === "shape");
+            }),
             onRetryApplying: newHost.onRetryApplying,
             onRepairSetup: newHost.onRepairSetup,
             repairSetupPending: newHost.repairSetupPending,

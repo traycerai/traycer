@@ -722,6 +722,7 @@ function createRefusedBeforeReservation(
     failure.kind === "refused" &&
     failure.sandboxId === undefined &&
     failure.sandbox === undefined &&
+    failure.uncertainCreateRow !== true &&
     ((failure.status === 400 &&
       failure.code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) ||
       (failure.status === 503 &&
@@ -934,7 +935,9 @@ async function settleRow(
       fail(surfaceKey, {
         ...failure,
         sandboxId: started.sandboxId,
-        ...(row === null ? {} : { retryCreate: sandboxRetryCreate(row) }),
+        ...(row === null
+          ? { acceptedRowNotFound: true }
+          : { retryCreate: sandboxRetryCreate(row) }),
       });
     } else {
       fail(surfaceKey, failure);

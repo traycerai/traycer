@@ -1051,6 +1051,7 @@ export function LandingComposer(props: LandingComposerProps) {
             stagedSend.intercept(text, null);
             return false;
           }
+          const handoffState = { skipped: false };
           const refusal = actions.startTaskOnStagedSandbox({
             draftId: draftId ?? createdUnboundDraftIdRef.current,
             owner: resolvedOwner,
@@ -1059,16 +1060,20 @@ export function LandingComposer(props: LandingComposerProps) {
                 ? staged.target.configuration.teamId
                 : null,
             text,
-            hand: (epicId) =>
-              handLandingSandboxSend({
+            hand: (epicId) => {
+              const handoff = handLandingSandboxSend({
                 fromSurfaceKey: composerSurfaceKey,
                 epicId,
                 content,
                 text,
                 settings,
                 now: Date.now(),
-              }),
+              });
+              handoffState.skipped = handoff === null;
+              return handoff;
+            },
           });
+          if (handoffState.skipped) return false;
           raiseHostNotice(
             refusal === null
               ? null

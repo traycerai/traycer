@@ -61,10 +61,12 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   isNewConversationDraftOccupied,
+  returnedTaskStageCurrent,
   useNewConversationModalStore,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
+  returnedLandingStageCurrent,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
@@ -219,19 +221,31 @@ function takesUpRowlessCreate(stage: StagedSandbox): boolean {
   }
 }
 
+function stageCanBeHandedOff(stage: StagedSandbox): boolean {
+  const origin = stage.returnedDraft;
+  if (origin?.kind === "task") return returnedTaskStageCurrent(origin, stage);
+  if (origin?.kind === "landing")
+    return returnedLandingStageCurrent(origin, stage);
+  return true;
+}
+
 /**
  * Hands a surface's staged send to its task: the stage moves, its create key
  * with it, under a pending send's key, and the message and its settings are
  * recorded beside it. The surface stages nothing after; the pending send's
  * driver runs the create, joining one already on its way under that key.
- * Returns the send's id, or `null` when the surface has no stage or its stage
- * is already in its handoff.
+ * Returns the send's id, or `null` when the source can no longer hand it off.
  */
 export function handPendingSandboxSend(
   input: PendingSandboxSendInput,
 ): string | null {
   const stage = readStagedSandbox(input.fromSurfaceKey);
-  if (stage === null || stage.phase === "handoff") return null;
+  if (
+    stage === null ||
+    stage.phase === "handoff" ||
+    !stageCanBeHandedOff(stage)
+  )
+    return null;
   const id = uuidv4();
   const surfaceKey = pendingSendSurfaceKey(id);
   reservePendingSandboxSendOwnership(id);

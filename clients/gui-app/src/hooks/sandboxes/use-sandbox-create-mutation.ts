@@ -96,6 +96,7 @@ type SandboxCreateContinuation =
       readonly kind: "retry";
       readonly request: SandboxCreateRequest;
       readonly error: SandboxCreateError;
+      readonly retainUntilSettled?: true;
     }
   | {
       readonly kind: "retry-row";
@@ -109,9 +110,33 @@ const useSandboxCreateContinuations = create<{
     Partial<Record<string, SandboxCreateContinuation>>
   >;
 }>(() => ({ byScope: {} }));
+const latestCreateByScope = new Map<string, symbol>();
+
+interface ScopedCreateAttempt {
+  readonly key: string;
+  readonly userId: string | null;
+  readonly current: () => boolean;
+  readonly finish: () => void;
+}
 
 function scopeKey(scope: SandboxCreateScope): string {
   return JSON.stringify([scope.userId, scope.source, scope.id]);
+}
+
+function beginScopedCreate(scope: SandboxCreateScope): ScopedCreateAttempt {
+  const key = scopeKey(scope);
+  const { userId } = scope;
+  const id = Symbol();
+  latestCreateByScope.set(key, id);
+  return {
+    key,
+    userId,
+    current: () =>
+      signedInUserId() === userId && latestCreateByScope.get(key) === id,
+    finish: () => {
+      if (latestCreateByScope.get(key) === id) latestCreateByScope.delete(key);
+    },
+  };
 }
 
 export function useSandboxCreateContinuation(
@@ -288,27 +313,31 @@ async function reconcileSandboxCreate(
 /** Keep the known row through a remount, including when the foreground read expires. */
 async function finishJoinedCreate(
   auth: AuthService,
-  scope: SandboxCreateScope,
   sandboxId: string,
   attempted: SandboxCreateRequest,
+  attempt: ScopedCreateAttempt,
 ): Promise<SandboxCreateAccepted> {
-  const key = scopeKey(scope);
+  const { key, current } = attempt;
   const reading = { kind: "read", request: attempted, sandboxId } as const;
-  replaceContinuation(key, reading);
+  if (current()) replaceContinuation(key, reading);
   try {
     const accepted = await reconcileSandboxCreate(
       auth,
       sandboxId,
       attempted,
-      scope.userId,
+      attempt.userId,
     );
-    if (useSandboxCreateContinuations.getState().byScope[key] === reading)
+    if (
+      current() &&
+      useSandboxCreateContinuations.getState().byScope[key] === reading
+    )
       replaceContinuation(key, undefined);
     return accepted;
   } catch (error) {
     if (
       error instanceof SandboxCreateError &&
       !(error instanceof SandboxUnresolvedCreateError) &&
+      current() &&
       useSandboxCreateContinuations.getState().byScope[key] === reading
     ) {
       replaceContinuation(
@@ -339,6 +368,7 @@ function nextCreateRequest(
   if (refusal.code !== SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) return request;
   // An unreserved team setup can use the current defaults under its base key.
   return refusal.status === 400 &&
+    refusal.uncertainCreateRow !== true &&
     attempted === request &&
     request.clientRequestId?.startsWith("team-setup:") === true
     ? null
@@ -377,18 +407,18 @@ async function walkSandboxCreate(
 
 function acceptedWalkCreate(
   auth: AuthService,
-  scope: SandboxCreateScope,
   request: SandboxCreateRequest,
   walk: {
     readonly result: Extract<SandboxCreateFetchResult, { kind: "ok" }>;
     readonly attempted: SandboxCreateRequest;
   },
+  attempt: ScopedCreateAttempt,
 ): Promise<SandboxCreateAccepted> {
   const { result, attempted } = walk;
   const { accepted } = result;
   const { sandbox } = accepted;
   if (result.joined === true && sandbox.state === "creating")
-    return finishJoinedCreate(auth, scope, sandbox.id, attempted);
+    return finishJoinedCreate(auth, sandbox.id, attempted, attempt);
   if (result.joined === true && sandbox.state === "destroying") {
     const code = SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT;
     throw new SandboxCreateError(
@@ -434,26 +464,160 @@ export function sandboxCreateRefusal(
 
 async function resolveCreateRetry(
   auth: AuthService,
-  scope: SandboxCreateScope,
   retry: NonNullable<SandboxCreateSubmit["retryRow"]>,
+  attempt: ScopedCreateAttempt,
 ): Promise<SandboxCreateRequest> {
-  const key = scopeKey(scope);
+  const { key, current } = attempt;
   const saved = useSandboxCreateContinuations.getState().byScope[key];
   if (saved?.kind !== "retry-row" || saved.error !== retry.error)
     throw retry.error;
   const request = await readSandboxRetryCreate(
     auth,
     retry.sandboxId,
-    scope.userId,
+    attempt.userId,
   );
   if (
     request === null ||
-    signedInUserId() !== scope.userId ||
+    !current() ||
     useSandboxCreateContinuations.getState().byScope[key] !== saved
   )
     throw retry.error;
-  replaceContinuation(key, undefined);
   return request;
+}
+
+type RetainedCreateRetry = Extract<
+  SandboxCreateContinuation,
+  { kind: "retry" }
+>;
+
+function retainedCreateRetry(
+  request: SandboxCreateRequest,
+  error: SandboxCreateError,
+): RetainedCreateRetry {
+  return { kind: "retry", request, error, retainUntilSettled: true };
+}
+
+function settleRetainedCreate(
+  { key, current }: ScopedCreateAttempt,
+  retained: RetainedCreateRetry,
+  error: SandboxCreateError | null,
+): void {
+  if (
+    !current() ||
+    useSandboxCreateContinuations.getState().byScope[key] !== retained
+  )
+    return;
+  replaceContinuation(
+    key,
+    error === null || error.nextRequest === null
+      ? undefined
+      : retainedCreateRetry(error.nextRequest, error),
+  );
+}
+
+function pressedCreateRefusal(input: {
+  readonly result: SandboxControlFailure;
+  readonly startingRequest: SandboxCreateRequest;
+  readonly attempted: SandboxCreateRequest;
+  readonly submit: SandboxCreateSubmit;
+  readonly buysTeamCredits: boolean;
+  readonly retained: RetainedCreateRetry | undefined;
+  readonly attempt: ScopedCreateAttempt;
+}): SandboxCreateError {
+  const {
+    result,
+    startingRequest,
+    attempted,
+    buysTeamCredits,
+    retained,
+    attempt,
+  } = input;
+  const { teamName } = input.submit;
+  const code = result.kind === "refused" ? result.code : null;
+  const payload = sandboxRetryAfterRefusal(result);
+  const unresolved =
+    result.kind === "refused" && payload === null
+      ? result.sandboxId
+      : undefined;
+  // A refusal for the team's credits tells only a buyer how much to add.
+  const error = new SandboxCreateError(
+    sandboxFailureMessageFor(
+      result,
+      sandboxCreateFailureMessage(result, teamName),
+      { buysTeamCredits, teamName },
+    ),
+    code,
+    unresolved === undefined
+      ? (payload ?? nextCreateRequest(result, startingRequest, attempted))
+      : null,
+  );
+  if (attempt.current()) {
+    if (unresolved !== undefined)
+      replaceContinuation(attempt.key, {
+        kind: "retry-row",
+        request: attempted,
+        sandboxId: unresolved,
+        error,
+      });
+    else if (retained !== undefined)
+      settleRetainedCreate(attempt, retained, error);
+  }
+  return error;
+}
+
+async function sendCreateFromPress(
+  auth: AuthService,
+  submit: SandboxCreateSubmit,
+  buysTeamCredits: boolean,
+  attempt: ScopedCreateAttempt,
+): Promise<SandboxCreateAccepted> {
+  const { request, retryRow } = submit;
+  const { key, current } = attempt;
+  const saved = useSandboxCreateContinuations.getState().byScope[key];
+  let retained =
+    saved?.kind === "retry" && saved.retainUntilSettled === true
+      ? saved
+      : undefined;
+  if (saved?.kind === "retry" && retained === undefined)
+    replaceContinuation(key, undefined);
+  const startingRequest =
+    retryRow === undefined
+      ? request
+      : await resolveCreateRetry(auth, retryRow, attempt);
+  if (retryRow !== undefined) {
+    if (!current()) throw retryRow.error;
+    retained = retainedCreateRetry(startingRequest, retryRow.error);
+    replaceContinuation(key, retained);
+  }
+  const { result, attempted } = await walkSandboxCreate(
+    auth,
+    startingRequest,
+    attempt.userId,
+  );
+  if (result.kind !== "ok")
+    throw pressedCreateRefusal({
+      result,
+      startingRequest,
+      attempted,
+      submit,
+      buysTeamCredits,
+      retained,
+      attempt,
+    });
+  try {
+    const accepted = await acceptedWalkCreate(
+      auth,
+      startingRequest,
+      { result, attempted },
+      attempt,
+    );
+    if (retained !== undefined) settleRetainedCreate(attempt, retained, null);
+    return accepted;
+  } catch (error) {
+    if (retained !== undefined && error instanceof SandboxCreateError)
+      settleRetainedCreate(attempt, retained, error);
+    throw error;
+  }
 }
 
 interface SandboxCreateContext {
@@ -496,13 +660,10 @@ export function useSandboxCreate(
       directory: binding === null ? null : binding.directory,
       userId: ownerUserId,
     }),
-    mutationFn: async ({
-      request,
-      teamName,
-      reconcileSandboxId,
-      ownerUserId,
-      retryRow,
-    }): Promise<SandboxCreateAccepted> => {
+    mutationFn: async (
+      input: SandboxCreateSubmit,
+    ): Promise<SandboxCreateAccepted> => {
+      const { request, reconcileSandboxId, ownerUserId } = input;
       if (
         binding === null ||
         signedInUserId() !== ownerUserId ||
@@ -514,58 +675,24 @@ export function useSandboxCreate(
           request,
         );
       }
-      if (reconcileSandboxId !== undefined)
-        return finishJoinedCreate(
+      const attempt = beginScopedCreate(scope);
+      try {
+        if (reconcileSandboxId !== undefined)
+          return await finishJoinedCreate(
+            binding.auth,
+            reconcileSandboxId,
+            request,
+            attempt,
+          );
+        return await sendCreateFromPress(
           binding.auth,
-          scope,
-          reconcileSandboxId,
-          request,
+          input,
+          buysTeamCredits,
+          attempt,
         );
-      const key = scopeKey(scope);
-      if (
-        useSandboxCreateContinuations.getState().byScope[key]?.kind === "retry"
-      )
-        replaceContinuation(key, undefined);
-      const startingRequest =
-        retryRow === undefined
-          ? request
-          : await resolveCreateRetry(binding.auth, scope, retryRow);
-      const { result, attempted } = await walkSandboxCreate(
-        binding.auth,
-        startingRequest,
-        userId,
-      );
-      if (result.kind === "ok")
-        return acceptedWalkCreate(binding.auth, scope, startingRequest, {
-          result,
-          attempted,
-        });
-      const code = result.kind === "refused" ? result.code : null;
-      const payload = sandboxRetryAfterRefusal(result);
-      const unresolved =
-        result.kind === "refused" && payload === null
-          ? result.sandboxId
-          : undefined;
-      // A refusal for the team's credits tells only a buyer how much to add.
-      const error = new SandboxCreateError(
-        sandboxFailureMessageFor(
-          result,
-          sandboxCreateFailureMessage(result, teamName),
-          { buysTeamCredits, teamName },
-        ),
-        code,
-        unresolved === undefined
-          ? (payload ?? nextCreateRequest(result, startingRequest, attempted))
-          : null,
-      );
-      if (unresolved !== undefined && signedInUserId() === scope.userId)
-        replaceContinuation(key, {
-          kind: "retry-row",
-          request: attempted,
-          sandboxId: unresolved,
-          error,
-        });
-      throw error;
+      } finally {
+        attempt.finish();
+      }
     },
     onSuccess: (accepted, { request, retryRow }, context) => {
       if (!settledForStartingAccount(context)) return;

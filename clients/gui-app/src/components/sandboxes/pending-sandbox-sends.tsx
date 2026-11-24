@@ -76,6 +76,7 @@ import {
 import {
   openStagedShapeSheet,
   restingVerb,
+  stagedShapeChangeAction,
 } from "@/components/composer/use-sandbox-staging";
 import {
   stagedSandboxFallbackName,
@@ -778,6 +779,11 @@ function mailboxStagePress(
   retry: PendingStageRetryRequest,
 ): PendingStagePress | null {
   if (!mailboxAttemptMatches(stage, retry)) return null;
+  if (
+    retry.action === "retry-creation" &&
+    stage.failure?.acceptedRowNotFound === true
+  )
+    return null;
   let createKey = retry.createKey ?? null;
   if (
     retry.observedCreateKey === undefined &&
@@ -1389,17 +1395,45 @@ function stageRestedAt(
   );
 }
 
-function watchedCreditRefusal(
+function watchesNewSandboxCreate(
   send: PendingSandboxSend | null,
   stage: StagedSandbox | null,
-  row: SandboxSummary | null,
-): StagedSandboxFailure | null {
-  return stage?.target.kind === "new" &&
+): boolean {
+  return (
+    stage?.target.kind === "new" &&
     stage.phase === "creating" &&
     send?.stopRequested !== true &&
     send?.ended !== true
-    ? stagedCreditRefusal(row)
-    : null;
+  );
+}
+
+function watchedStageEnvironment(input: {
+  readonly row: PendingSandboxRowFacts;
+  readonly stage: StagedSandbox | null;
+  readonly surfaceKey: string;
+  readonly settingsReady: boolean;
+  readonly watchingCreate: boolean;
+  readonly creditRefused: StagedSandboxFailure | null;
+}): PendingSendFacts {
+  const { row, stage, surfaceKey, watchingCreate, creditRefused } = input;
+  // The create runner presents exact absence in the setup line. Withdrawing
+  // here would remove the queued message before the person can Cancel.
+  const missingAcceptedCreate =
+    watchingCreate && row.terminal && row.row === null;
+  return sandboxEnvironment(
+    creditRefused !== null || missingAcceptedCreate
+      ? { ...row, terminal: false }
+      : row,
+    {
+      ...UNKNOWN_PENDING_SEND_FACTS,
+      settingsReady: input.settingsReady,
+      clientReady: true,
+      stageStatus: stage?.phase ?? "missing",
+      stageCurrent: stage?.phase === "handoff",
+      wakeInFlight: stagedRunActive(surfaceKey),
+      stageRested: stageRestedAt(stage, row.row?.state ?? null),
+    },
+  );
 }
 
 function projectWatchedCreditRefusal(
@@ -1436,19 +1470,16 @@ function useWatchedSandboxRow(
   );
   const settings = useSandboxSettingsStatus(row.row);
   const rowState = row.row?.state ?? null;
-  const creditRefused = watchedCreditRefusal(send, stage, row.row);
-  const environment = sandboxEnvironment(
-    creditRefused === null ? row : { ...row, terminal: false },
-    {
-      ...UNKNOWN_PENDING_SEND_FACTS,
-      settingsReady: settings.ready,
-      clientReady: true,
-      stageStatus: stage?.phase ?? "missing",
-      stageCurrent: stage?.phase === "handoff",
-      wakeInFlight: stagedRunActive(surfaceKey),
-      stageRested: stageRestedAt(stage, rowState),
-    },
-  );
+  const watchingCreate = watchesNewSandboxCreate(send, stage);
+  const creditRefused = watchingCreate ? stagedCreditRefusal(row.row) : null;
+  const environment = watchedStageEnvironment({
+    row,
+    stage,
+    surfaceKey,
+    settingsReady: settings.ready,
+    watchingCreate,
+    creditRefused,
+  });
   const decision =
     send === null
       ? null
@@ -3147,6 +3178,8 @@ function usePendingStagedSendRetry(
         shownStage === null ||
         current === null ||
         current.clientRequestId !== shownStage.clientRequestId ||
+        (action === "retry-creation" &&
+          current.failure?.acceptedRowNotFound === true) ||
         !Object.hasOwn(sends, send.id)
       )
         return;
@@ -3698,7 +3731,9 @@ function PendingStagedSendItem(props: {
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
             onSendAgain: () => retrySend("send-again"),
-            onChangeShape: () => backToComposer(true, null),
+            onChangeShape: stagedShapeChangeAction(surfaceKey, stage, () => {
+              backToComposer(true, null);
+            }),
             onRetryApplying: newHost.onRetryApplying,
             onRepairSetup: newHost.onRepairSetup,
             repairSetupPending: newHost.repairSetupPending,
@@ -3908,7 +3943,7 @@ function endSendBackToComposer(input: {
   if (input.restage) {
     const key = newConversationSurfaceKey(send.epicId);
     useStagedSandboxStore.getState().stage(key, input.stage.target);
-    openStagedShapeSheet(key);
+    openStagedShapeSheet(key, input.stage.failure?.kind === "shape");
   }
   useNewConversationModalOpenStore.getState().open({
     epicId: send.epicId,

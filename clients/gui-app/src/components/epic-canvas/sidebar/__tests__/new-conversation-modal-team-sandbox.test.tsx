@@ -21,20 +21,32 @@ import {
   waitFor,
   type RenderResult,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument } from "@traycer/protocol/host";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerHostNoticeState } from "@/components/home/composer/composer-host-notice";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type {
   StagedResubmit,
   useStagedSandboxHandoff,
   useStagedSandboxSend,
 } from "@/components/composer/use-staged-sandbox-send";
-import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
+import {
+  useSandboxStaging,
+  type SandboxStagingSurface,
+} from "@/components/composer/use-sandbox-staging";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { budgetCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
@@ -80,6 +92,10 @@ import {
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import {
+  PendingSandboxSendStrip,
+  PendingSandboxSendsDriver,
+} from "@/components/sandboxes/pending-sandbox-sends";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { createAppQueryClient } from "@/lib/query-client";
 import {
@@ -97,6 +113,12 @@ const UNAVAILABLE_COPY = "Not available on team sandboxes.";
 const DIRTY_CONTENT: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "dirty" }] }],
+};
+const NEWER_TASK_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "newer task body" }] },
+  ],
 };
 
 function taskDraftDocument(draftId: string): DraftDocument {
@@ -262,6 +284,10 @@ const testState = vi.hoisted(() => ({
   staged: false,
   /** One persistence regression uses the real staged send and runner hooks. */
   actualStagedSend: false,
+  renderTaskHandoffActions: false,
+  mountPendingSandboxOwner: false,
+  mountPendingSandboxStrip: false,
+  renderSandboxShapeSheet: false,
   /** How many sends or Starts reached the staged send's intercept. */
   intercepts: 0,
   /** Whether the current host's workspace can start a send. */
@@ -359,6 +385,31 @@ vi.mock("@/components/home/composer/composer-body", async () => {
         { "data-testid": "composer-body-mock" },
         props.topBanner,
         props.workspaceControls,
+        testState.renderTaskHandoffActions
+          ? React.createElement(
+              React.Fragment,
+              null,
+              React.createElement(
+                "button",
+                {
+                  type: "button",
+                  "data-testid": "task-modal-send-action",
+                  onClick: props.onSubmit,
+                },
+                "Send",
+              ),
+              React.createElement(
+                "button",
+                {
+                  type: "button",
+                  "data-testid": "task-modal-open-terminal-instead",
+                  onClick: () =>
+                    testState.sandboxStaging?.openTerminalInstead?.(),
+                },
+                "Open terminal instead",
+              ),
+            )
+          : null,
         React.createElement(
           Popover,
           { open: testState.toolbarPopoverOpen },
@@ -687,6 +738,7 @@ vi.mock(
     const { useStagedSandboxStore } =
       await import("@/stores/composer/staged-sandbox-store");
     return {
+      ...actual,
       // Phase 1 stands in for the run: the send is taken and the boot begins.
       useStagedSandboxSend: (input: StagedSendInput) => {
         testState.stagedSendInput = input;
@@ -745,11 +797,16 @@ vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
 vi.mock("@/hooks/worktree/use-owner-workspace-inheritance-seed", () => ({
   useOwnerWorkspaceInheritanceSeed: () => ({ seed: null }),
 }));
-vi.mock("@/hooks/use-epic-store", () => ({
+vi.mock("@/hooks/use-epic-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/use-epic-store")>()),
   useEpicStore: () => ({
     chats: { byId: {}, allIds: [] },
     tuiAgents: { byId: {}, allIds: [] },
   }),
+  useMaybeEpicStore: <T extends string | number | boolean | null>(
+    _selector: (state: OpenEpicState) => T,
+    fallback: T,
+  ) => fallback,
 }));
 vi.mock("@/providers/use-runner-host", async (importOriginal) => {
   const actual =
@@ -823,7 +880,10 @@ vi.mock(
       readonly sandboxStaging: SandboxStagingSurface | null;
     }) => {
       testState.sandboxStaging = props.sandboxStaging;
-      return null;
+      return testState.renderSandboxShapeSheet &&
+        props.sandboxStaging !== null ? (
+        <SandboxShapeSheetProbe surface={props.sandboxStaging} />
+      ) : null;
     },
   }),
 );
@@ -868,11 +928,29 @@ function Harness() {
               dismissPickerRef={dismissPickerRef}
               onSubmitted={testState.onSubmitted}
             />
+            {testState.mountPendingSandboxOwner ? (
+              <PendingSandboxSendsDriver />
+            ) : null}
+            {testState.mountPendingSandboxStrip ? (
+              <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
+            ) : null}
           </NewConversationTransientContext.Provider>
         </DialogContent>
       </Dialog>
     </SurfacePresentationBoundary>
   );
+}
+
+function SandboxShapeSheetProbe(props: {
+  readonly surface: SandboxStagingSurface;
+}): ReactNode {
+  const staging = useSandboxStaging({
+    surface: props.surface,
+    memoryHostId: "host-a",
+    hosts: [],
+    forkOnNew: null,
+  });
+  return staging?.sheet ?? null;
 }
 
 function QueryWrapper({ children }: { readonly children: ReactNode }) {
@@ -1068,6 +1146,23 @@ async function signInAs(
 function renderModal(
   binding: HostRuntimeBinding<HostRpcRegistry> | null,
 ): RenderResult {
+  if (testState.mountPendingSandboxStrip) {
+    const locks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          acquired: () => Promise<void>,
+        ) => acquired(),
+      },
+    });
+    onTestFinished(() => {
+      if (locks === undefined) Reflect.deleteProperty(navigator, "locks");
+      else Object.defineProperty(navigator, "locks", locks);
+    });
+  }
   const body =
     binding === null ? (
       <Harness />
@@ -1112,12 +1207,17 @@ function expectUnavailableNotice(): void {
   expect(notice.textContent).toBe(UNAVAILABLE_COPY);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await useNewConversationModalStore.persist.rehydrate();
   testState.beforeStagedSend.mockReset();
   testState.beforeStagedSend.mockImplementation(() =>
     Promise.resolve(testState.stagedNotice),
   );
   testState.actualStagedSend = false;
+  testState.renderTaskHandoffActions = false;
+  testState.mountPendingSandboxOwner = false;
+  testState.mountPendingSandboxStrip = false;
+  testState.renderSandboxShapeSheet = false;
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode("epic-1", "chat");
@@ -1260,6 +1360,26 @@ const TEAM_SANDBOX: StagedSandboxTarget = {
   ...NEW_SANDBOX,
   configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
 };
+
+function saveTaskReturn(surfaceKey: string): {
+  readonly stageId: string;
+  readonly draftId: string;
+} {
+  const staged = useStagedSandboxStore.getState();
+  const drafts = useNewConversationModalStore.getState();
+  staged.stage(surfaceKey, NEW_SANDBOX);
+  const stageId = readStagedSandbox(surfaceKey)?.clientRequestId ?? null;
+  const draftId = drafts.draftPatchesByEpicId["epic-1"]?.draftId ?? null;
+  if (stageId === null || draftId === null)
+    throw new Error("expected the original task return and stage");
+  drafts.setReturnedSandbox("epic-1", {
+    target: NEW_SANDBOX,
+    clientRequestId: stageId,
+    userId: "modal-user",
+  });
+  staged.clear(surfaceKey);
+  return { stageId, draftId };
+}
 
 function onlyPendingSend() {
   const sends = Object.values(usePendingSandboxSendStore.getState().sends);
@@ -2327,6 +2447,478 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     );
     view.unmount();
     fixture.dispose();
+  });
+
+  it.each([
+    ["chat Send", "send", "new-occurrence"],
+    ["Open terminal instead", "terminal", "new-occurrence"],
+    ["chat Send with a newer saved body", "send", "same-occurrence"],
+  ] as const)(
+    "keeps a replaced task return when stale %s is rendered",
+    async (_label, action, replacementKind) => {
+      const fixture = await createAttachmentAuthBinding(null);
+      await signInAs(fixture, "modal-user", "modal-token-a");
+      testState.actualStagedSend = true;
+      testState.renderTaskHandoffActions = true;
+      testState.mountPendingSandboxOwner = true;
+
+      const surfaceKey = newConversationSurfaceKey("epic-1");
+      const { stageId, draftId } = saveTaskReturn(surfaceKey);
+      const taskDraftStorageKey = persistKey(STORE_KEYS.newConversationDraft);
+      const taskDraftRecordKey = recordMapStorageKey(
+        taskDraftStorageKey,
+        "epic-1",
+      );
+      const create = vi.spyOn(fixture.auth, "createSandbox");
+      const view = renderModal(fixture.binding);
+      try {
+        await waitFor(() => {
+          expect(readStagedSandbox(surfaceKey)).toMatchObject({
+            phase: "staged",
+            clientRequestId: stageId,
+            returnedDraft: {
+              kind: "task",
+              epicId: "epic-1",
+              draftId,
+              stageId,
+            },
+          });
+        });
+
+        vi.resetModules();
+        const secondWindow =
+          await import("@/stores/epics/new-conversation-modal-store");
+        await secondWindow.useNewConversationModalStore.persist.rehydrate();
+        expect(
+          secondWindow.useNewConversationModalStore.getState()
+            .draftPatchesByEpicId["epic-1"]?.draftId,
+        ).toBe(draftId);
+        const replacementDraftId =
+          action === "send"
+            ? "draft-task-newer-send"
+            : "draft-task-newer-terminal";
+        if (replacementKind === "new-occurrence") {
+          secondWindow.useNewConversationModalStore
+            .getState()
+            .clearDraft("epic-1");
+          secondWindow.useNewConversationModalStore
+            .getState()
+            .setContent("epic-1", NEWER_TASK_CONTENT);
+          secondWindow.applyNewChatHostDocument(
+            taskDraftDocument(replacementDraftId),
+          );
+        } else {
+          secondWindow.useNewConversationModalStore
+            .getState()
+            .setContent("epic-1", NEWER_TASK_CONTENT);
+        }
+        const replacementRequest: Parameters<AuthService["createSandbox"]>[0] =
+          {
+            os: "linux",
+            cpus: 8,
+            memoryMb: 16_384,
+            diskMb: 30_720,
+            region: "eu-west",
+            displayName: "newer task return",
+            idleMinutes: 45,
+            burst: false,
+            createdByHostId: null,
+            createdByAgentId: null,
+            environmentId: "env-task-newer",
+            destroyAfterRestingMinutes: 0,
+            createdByTaskId: "origin-task-newer",
+            clientRequestId: "retry:task-newer-return",
+          };
+        const replacement: StoredReturnedSandbox = {
+          target: NEW_SANDBOX,
+          clientRequestId:
+            replacementKind === "same-occurrence"
+              ? stageId
+              : "stage:newer-task-return",
+          lastCreateKey: replacementRequest.clientRequestId ?? undefined,
+          lastRetryCreate: replacementRequest,
+          userId: "modal-user",
+        };
+        secondWindow.useNewConversationModalStore
+          .getState()
+          .setReturnedSandbox("epic-1", replacement);
+        const newerDurable = localStorage.getItem(taskDraftRecordKey);
+        if (newerDurable === null)
+          throw new Error("expected the replacement task return to be durable");
+        const newerDraftId =
+          secondWindow.useNewConversationModalStore.getState()
+            .draftPatchesByEpicId["epic-1"]?.draftId;
+        expect(newerDraftId).toBe(
+          replacementKind === "same-occurrence" ? draftId : replacementDraftId,
+        );
+
+        const originalBody = screen.getByTestId("composer-body-mock");
+        const mountsBefore = testState.bodyMounts;
+        const unmountsBefore = testState.bodyUnmounts;
+        const stagedCheck = deferred<ComposerHostNoticeState | null>();
+        if (action === "send")
+          testState.beforeStagedSend.mockReturnValue(stagedCheck.promise);
+        fireEvent.click(
+          screen.getByTestId(
+            action === "send"
+              ? "task-modal-send-action"
+              : "task-modal-open-terminal-instead",
+          ),
+        );
+        if (action === "send") {
+          expect(testState.beforeStagedSend).toHaveBeenCalledOnce();
+          await act(async () => {
+            stagedCheck.resolve(null);
+            await stagedCheck.promise;
+          });
+        }
+
+        expect(create).not.toHaveBeenCalled();
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+        expect(testState.onSubmitted).not.toHaveBeenCalled();
+        expect(testState.createChat).not.toHaveBeenCalled();
+        expect(testState.createTerminalAgent).not.toHaveBeenCalled();
+        expect(screen.getByTestId("composer-body-mock")).toBe(originalBody);
+        expect(testState.bodyMounts).toBe(mountsBefore);
+        expect(testState.bodyUnmounts).toBe(unmountsBefore);
+        expect(draftSurvived()).toBe(true);
+        expect(localStorage.getItem(taskDraftRecordKey)).toBe(newerDurable);
+        expect(readStagedSandbox(surfaceKey)).toMatchObject({
+          phase: "staged",
+          clientRequestId: stageId,
+          returnedDraft: {
+            kind: "task",
+            epicId: "epic-1",
+            draftId,
+            stageId,
+          },
+        });
+      } finally {
+        view.unmount();
+        fixture.dispose();
+      }
+    },
+  );
+
+  it("hands the current returned task occurrence to the pending owner", async () => {
+    const fixture = await createAttachmentAuthBinding(null);
+    await signInAs(fixture, "modal-user", "modal-token-a");
+    testState.actualStagedSend = true;
+    testState.renderTaskHandoffActions = true;
+    testState.mountPendingSandboxOwner = true;
+    const surfaceKey = newConversationSurfaceKey("epic-1");
+    const { stageId } = saveTaskReturn(surfaceKey);
+
+    vi.spyOn(fixture.auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: budgetCatalogue(600_000),
+    });
+    vi.spyOn(fixture.auth, "listSandboxes").mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    const createResult = deferred<SandboxCreateFetchResult>();
+    const create = vi
+      .spyOn(fixture.auth, "createSandbox")
+      .mockImplementation(() => createResult.promise);
+
+    const view = renderModal(fixture.binding);
+    try {
+      await waitFor(() => {
+        expect(readStagedSandbox(surfaceKey)).toMatchObject({
+          phase: "staged",
+          returnedDraft: {
+            kind: "task",
+            epicId: "epic-1",
+            stageId,
+          },
+        });
+      });
+      fireEvent.click(screen.getByTestId("task-modal-send-action"));
+      await waitFor(() => {
+        expect(
+          Object.values(usePendingSandboxSendStore.getState().sends),
+        ).toHaveLength(1);
+        expect(testState.onSubmitted).toHaveBeenCalledOnce();
+      });
+      const send = onlyPendingSend();
+      const sendSurfaceKey = pendingSendSurfaceKey(send.id);
+      await waitFor(() => {
+        expect(create).toHaveBeenCalledOnce();
+        expect(readStagedSandbox(sendSurfaceKey)).toMatchObject({
+          phase: "creating",
+          clientRequestId: stageId,
+          lastCreateKey: stageId,
+        });
+      });
+      const request = create.mock.calls.at(0)?.[0];
+      if (request === undefined)
+        throw new Error("expected the owner's recorded create request");
+      expect(request).toMatchObject({
+        clientRequestId: stageId,
+        createdByTaskId: "epic-1",
+        burst: false,
+      });
+      expect(readStagedSandbox(sendSurfaceKey)?.lastRetryCreate).toEqual(
+        request,
+      );
+      expect(onlyPendingSend()).toMatchObject({
+        epicId: "epic-1",
+        request: { kind: "chat", parentId: null, placement: null },
+      });
+    } finally {
+      await act(async () => {
+        createResult.resolve(refusal(503, "provider_unavailable"));
+        await createResult.promise;
+      });
+      view.unmount();
+      fixture.dispose();
+    }
+  });
+
+  it("lets a queued rowless shape refusal change the staged shape before a fresh Send", async () => {
+    const fixture = await createAttachmentAuthBinding(null);
+    await signInAs(fixture, "modal-user", "modal-token-a");
+    testState.actualStagedSend = true;
+    testState.renderTaskHandoffActions = true;
+    testState.mountPendingSandboxOwner = true;
+    testState.mountPendingSandboxStrip = true;
+    testState.renderSandboxShapeSheet = true;
+    vi.spyOn(fixture.auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: budgetCatalogue(600_000),
+    });
+    vi.spyOn(fixture.auth, "listSandboxes").mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    const requests: Parameters<AuthService["createSandbox"]>[0][] = [];
+    const create = vi
+      .spyOn(fixture.auth, "createSandbox")
+      .mockImplementation((request) => {
+        requests.push(request);
+        return Promise.resolve(
+          requests.length === 1
+            ? refusal(400, "shape_not_offered")
+            : refusal(503, "provider_unavailable"),
+        );
+      });
+    const surfaceKey = newConversationSurfaceKey("epic-1");
+    useStagedSandboxStore.getState().stage(surfaceKey, NEW_SANDBOX);
+    const originalStageKey = readStagedSandbox(surfaceKey)?.clientRequestId;
+    if (originalStageKey === null || originalStageKey === undefined)
+      throw new Error("expected the first staged key");
+
+    const view = renderModal(fixture.binding);
+    try {
+      fireEvent.click(screen.getByTestId("task-modal-send-action"));
+      await waitFor(() => expect(create).toHaveBeenCalledOnce());
+      const firstRequest = requests.at(0);
+      if (firstRequest === undefined)
+        throw new Error("expected the first create request");
+      expect(firstRequest.clientRequestId).toBe(originalStageKey);
+      const refusalLine = await screen.findByTestId("sandbox-refusal-line");
+      fireEvent.click(
+        await within(refusalLine).findByRole("button", {
+          name: "Change shape or region",
+        }),
+      );
+
+      const shapeSheet = await screen.findByTestId("sandbox-shape-sheet");
+      expect(create).toHaveBeenCalledOnce();
+      const composerStage = readStagedSandbox(surfaceKey);
+      if (composerStage === null)
+        throw new Error("expected the returned stage in the composer");
+      expect(composerStage.clientRequestId).not.toBe(originalStageKey);
+
+      const cpus = within(shapeSheet).getByTestId("sandbox-shape-sheet-cpus");
+      fireEvent.change(cpus, { target: { value: "4" } });
+      fireEvent.blur(cpus);
+      const memory = within(shapeSheet).getByTestId(
+        "sandbox-shape-sheet-memory",
+      );
+      fireEvent.change(memory, { target: { value: "8" } });
+      fireEvent.blur(memory);
+      fireEvent.click(
+        within(shapeSheet).getByTestId("sandbox-shape-sheet-use"),
+      );
+      await waitFor(() => {
+        expect(readStagedSandbox(surfaceKey)?.target).toMatchObject({
+          kind: "new",
+          shape: { cpus: 4, memoryMb: 8192 },
+        });
+      });
+      const selectedStageKey = readStagedSandbox(surfaceKey)?.clientRequestId;
+      if (selectedStageKey === null || selectedStageKey === undefined)
+        throw new Error("expected the selected stage key");
+      expect(selectedStageKey).not.toBe(originalStageKey);
+      expect(create).toHaveBeenCalledOnce();
+
+      fireEvent.click(screen.getByTestId("task-modal-send-action"));
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+      expect(requests[1]).toEqual({
+        ...firstRequest,
+        cpus: 4,
+        memoryMb: 8192,
+        clientRequestId: selectedStageKey,
+      });
+      const retrySurfaceKey = pendingSendSurfaceKey(onlyPendingSend().id);
+      await waitFor(() => {
+        expect(readStagedSandbox(retrySurfaceKey)?.failure).toMatchObject({
+          kind: "unavailable",
+        });
+      });
+    } finally {
+      view.unmount();
+      fixture.dispose();
+    }
+  });
+
+  it.each([
+    [
+      "a 502 that names shape_not_offered",
+      {
+        ...refusal(502, "shape_not_offered"),
+      },
+    ],
+    [
+      "a 400 shape refusal that unexpectedly names a row",
+      {
+        ...refusal(400, "shape_not_offered"),
+        sandboxId: "sbx_unexpected_shape_row",
+        sandbox: sandboxSummaryFixture({
+          id: "sbx_unexpected_shape_row",
+          hostId: "host-modal",
+          state: "failed",
+          failureCode: "PROVIDER_CREATE_FAILED",
+          displayName: "unexpected row",
+        }),
+      },
+    ],
+  ] as const)(
+    "keeps the queued request and hides Change shape for %s",
+    async (_answerName, answer) => {
+      const fixture = await createAttachmentAuthBinding(null);
+      await signInAs(fixture, "modal-user", "modal-token-a");
+      testState.actualStagedSend = true;
+      testState.renderTaskHandoffActions = true;
+      testState.mountPendingSandboxOwner = true;
+      testState.mountPendingSandboxStrip = true;
+      vi.spyOn(fixture.auth, "getSandboxCatalogue").mockResolvedValue({
+        kind: "ok",
+        catalogue: budgetCatalogue(600_000),
+      });
+      vi.spyOn(fixture.auth, "listSandboxes").mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [] },
+      });
+      const create = vi
+        .spyOn(fixture.auth, "createSandbox")
+        .mockResolvedValue(answer);
+      const surfaceKey = newConversationSurfaceKey("epic-1");
+      useStagedSandboxStore.getState().stage(surfaceKey, NEW_SANDBOX);
+      const original = readStagedSandbox(surfaceKey);
+      if (original === null || original.clientRequestId === null)
+        throw new Error("expected the queued stage key");
+
+      const view = renderModal(fixture.binding);
+      try {
+        fireEvent.click(screen.getByTestId("task-modal-send-action"));
+        await waitFor(() => expect(create).toHaveBeenCalledOnce());
+        const sendSurfaceKey = pendingSendSurfaceKey(onlyPendingSend().id);
+        await waitFor(() => {
+          expect(readStagedSandbox(sendSurfaceKey)?.failure?.kind).toBe(
+            "shape",
+          );
+          expect(stagedRunActive(sendSurfaceKey)).toBe(false);
+        });
+        const line = screen.getByTestId("sandbox-refusal-line");
+        expect(
+          within(line).queryByRole("button", {
+            name: "Change shape or region",
+          }),
+        ).toBeNull();
+        expect(readStagedSandbox(sendSurfaceKey)).toMatchObject({
+          clientRequestId: original.clientRequestId,
+          lastCreateKey: original.clientRequestId,
+          lastRetryCreate: create.mock.calls[0]?.[0],
+          failure: { kind: "shape" },
+        });
+        expect(create.mock.calls).toMatchObject([
+          [
+            {
+              clientRequestId: original.clientRequestId,
+              createdByTaskId: "epic-1",
+              cpus: NEW_SANDBOX.shape.cpus,
+              memoryMb: NEW_SANDBOX.shape.memoryMb,
+            },
+          ],
+        ]);
+      } finally {
+        view.unmount();
+        fixture.dispose();
+      }
+    },
+  );
+
+  it("does not apply a queued shape-sheet selection after its stage changes", async () => {
+    const fixture = await createAttachmentAuthBinding(null);
+    await signInAs(fixture, "modal-user", "modal-token-a");
+    testState.actualStagedSend = true;
+    testState.renderTaskHandoffActions = true;
+    testState.mountPendingSandboxOwner = true;
+    testState.mountPendingSandboxStrip = true;
+    testState.renderSandboxShapeSheet = true;
+    vi.spyOn(fixture.auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: budgetCatalogue(600_000),
+    });
+    vi.spyOn(fixture.auth, "listSandboxes").mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    const create = vi
+      .spyOn(fixture.auth, "createSandbox")
+      .mockResolvedValue(refusal(400, "shape_not_offered"));
+    const surfaceKey = newConversationSurfaceKey("epic-1");
+    useStagedSandboxStore.getState().stage(surfaceKey, NEW_SANDBOX);
+
+    const view = renderModal(fixture.binding);
+    try {
+      fireEvent.click(screen.getByTestId("task-modal-send-action"));
+      await waitFor(() => expect(create).toHaveBeenCalledOnce());
+      const refusalLine = await screen.findByTestId("sandbox-refusal-line");
+      fireEvent.click(
+        await within(refusalLine).findByRole("button", {
+          name: "Change shape or region",
+        }),
+      );
+      const shapeSheet = await screen.findByTestId("sandbox-shape-sheet");
+      expect(create).toHaveBeenCalledOnce();
+
+      const replacementTarget: StagedSandboxTarget = {
+        ...NEW_SANDBOX,
+        name: "newer selection",
+        shape: { ...NEW_SANDBOX.shape, cpus: 6, memoryMb: 12_288 },
+      };
+      act(() => {
+        useStagedSandboxStore.getState().stage(surfaceKey, replacementTarget);
+      });
+      const replacementStage = readStagedSandbox(surfaceKey);
+      if (replacementStage === null)
+        throw new Error("expected the replacement staged selection");
+      fireEvent.click(
+        within(shapeSheet).getByTestId("sandbox-shape-sheet-use"),
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("sandbox-shape-sheet")).toBeNull();
+      });
+      expect(readStagedSandbox(surfaceKey)).toEqual(replacementStage);
+      expect(create).toHaveBeenCalledOnce();
+    } finally {
+      view.unmount();
+      fixture.dispose();
+    }
   });
 
   it("creates no terminal agent here, then launches it on the new host as the person put it together, across a close and reopen", () => {

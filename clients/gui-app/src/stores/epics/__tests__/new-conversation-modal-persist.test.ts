@@ -61,6 +61,57 @@ function hostDraftDocument(
   };
 }
 
+function retryRequest(clientRequestId: string): SandboxCreateRequest {
+  return {
+    os: "linux",
+    cpus: 8,
+    memoryMb: 16_384,
+    diskMb: 30_720,
+    region: "eu-west",
+    displayName: "origin/main hook",
+    idleMinutes: 45,
+    burst: false,
+    createdByHostId: null,
+    createdByAgentId: null,
+    environmentId: "env-task-retry",
+    destroyAfterRestingMinutes: 0,
+    createdByTaskId: EPIC_ID,
+    clientRequestId,
+  };
+}
+
+function newTaskReturn(
+  clientRequestId: string,
+  userId: string,
+  lastCreate: SandboxCreateRequest | undefined,
+) {
+  return {
+    target: {
+      kind: "new" as const,
+      configuration: { kind: "personal" as const },
+      shape: {
+        os: "linux" as const,
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "task sandbox",
+      wakeString: null,
+    },
+    clientRequestId,
+    ...(lastCreate === undefined
+      ? {}
+      : {
+          lastCreateKey: lastCreate.clientRequestId ?? undefined,
+          lastRetryCreate: lastCreate,
+        }),
+    userId,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -176,6 +227,272 @@ describe("new-conversation modal store: persistence", () => {
     expect(readPersistedPatch()).toMatchObject({
       content: typed("legacy draft"),
       draftId: "legacy-draft",
+    });
+  });
+
+  it("omits a null terminal record without a return, then keeps A's saved request across B's other-epic edit", async () => {
+    const userId = "task-user";
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId, username: userId },
+    });
+    useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, typed("terminal-only"));
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode(EPIC_ID, "terminal");
+    const beforeReturn = readPersistedPatch();
+    window.localStorage.setItem(
+      EPIC_RECORD_KEY,
+      JSON.stringify({
+        ...beforeReturn,
+        content: null,
+        composerMode: "terminal",
+      }),
+    );
+
+    vi.resetModules();
+    const secondWindow = await import("../new-conversation-modal-store");
+    await secondWindow.useNewConversationModalStore.persist.rehydrate();
+    expect(
+      secondWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        EPIC_ID
+      ],
+    ).toBeUndefined();
+
+    const stageId = "stage:terminal-return";
+    const returned = newTaskReturn(stageId, userId, undefined);
+    useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox(EPIC_ID, returned);
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.draftId;
+    if (draftId === undefined || draftId === null)
+      throw new Error("expected A's terminal-only task draft id");
+    const request = retryRequest("retry:sandbox-row-f");
+    const origin = {
+      kind: "task" as const,
+      epicId: EPIC_ID,
+      draftId,
+      userId,
+      stageId,
+    };
+    expect(saveReturnedTaskCreateRequest("task-surface", origin, request)).toBe(
+      "saved",
+    );
+
+    secondWindow.useNewConversationModalStore
+      .getState()
+      .setContent(OTHER_EPIC_ID, typed("unrelated task edit"));
+    expect(readPersistedPatch()).toMatchObject({
+      draftId: origin.draftId,
+      content: null,
+      composerMode: "terminal",
+      returnedSandbox: {
+        clientRequestId: stageId,
+        lastCreateKey: request.clientRequestId,
+        lastRetryCreate: request,
+        userId,
+      },
+    });
+
+    vi.resetModules();
+    const freshWindow = await import("../new-conversation-modal-store");
+    await freshWindow.useNewConversationModalStore.persist.rehydrate();
+    expect(
+      freshWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        EPIC_ID
+      ],
+    ).toMatchObject({
+      draftId: origin.draftId,
+      content: null,
+      composerMode: "terminal",
+      returnedSandbox: {
+        clientRequestId: stageId,
+        lastCreateKey: request.clientRequestId,
+        lastRetryCreate: request,
+        userId,
+      },
+    });
+    expect(
+      freshWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        OTHER_EPIC_ID
+      ]?.content,
+    ).toEqual(typed("unrelated task edit"));
+  });
+
+  it("does not let an initialized empty window revive A's deleted task over B's new draft", async () => {
+    useNewConversationModalStore.getState().setContent(EPIC_ID, typed("A old"));
+    const oldDraftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.draftId;
+    if (oldDraftId === undefined || oldDraftId === null)
+      throw new Error("expected A's original task draft id");
+
+    vi.resetModules();
+    const secondWindow = await import("../new-conversation-modal-store");
+    await secondWindow.useNewConversationModalStore.persist.rehydrate();
+    expect(
+      secondWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        EPIC_ID
+      ],
+    ).toBeUndefined();
+
+    useNewConversationModalStore.getState().clearDraft(EPIC_ID);
+    secondWindow.useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, typed("B first edit"));
+    secondWindow.useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, typed("B final edit"));
+    const bPatch =
+      secondWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        EPIC_ID
+      ];
+    if (bPatch?.draftId === undefined || bPatch.draftId === null)
+      throw new Error("expected B's replacement task draft id");
+    expect(bPatch.draftId).not.toBe(oldDraftId);
+
+    expect(
+      applyNewChatHostDocument(
+        hostDraftDocument(oldDraftId, typed("late A host echo")),
+      ),
+    ).toBe(false);
+    expect(readPersistedPatch()).toMatchObject({
+      draftId: bPatch.draftId,
+      content: typed("B final edit"),
+    });
+
+    vi.resetModules();
+    const freshWindow = await import("../new-conversation-modal-store");
+    await freshWindow.useNewConversationModalStore.persist.rehydrate();
+    expect(
+      freshWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        EPIC_ID
+      ],
+    ).toMatchObject({
+      draftId: bPatch.draftId,
+      content: typed("B final edit"),
+    });
+    expect(
+      freshWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        EPIC_ID
+      ]?.draftId,
+    ).not.toBe(oldDraftId);
+  });
+
+  it("preserves a newer same-occurrence edit when A checkpoints its returned request", async () => {
+    const userId = "task-user";
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId, username: userId },
+    });
+    useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, typed("A text"));
+    const original =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (original?.draftId === undefined || original.draftId === null)
+      throw new Error("expected the original task occurrence");
+    const stageId = "stage:checkpoint-merge";
+    useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox(EPIC_ID, newTaskReturn(stageId, userId, undefined));
+
+    vi.resetModules();
+    const secondWindow = await import("../new-conversation-modal-store");
+    await secondWindow.useNewConversationModalStore.persist.rehydrate();
+    secondWindow.useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, typed("B newer text"));
+    const bPatch =
+      secondWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        EPIC_ID
+      ];
+    if (bPatch?.draftId !== original.draftId)
+      throw new Error("expected B to edit the same task occurrence");
+
+    const request = retryRequest("retry:checkpoint-merge");
+    expect(
+      saveReturnedTaskCreateRequest(
+        "task-surface",
+        {
+          kind: "task",
+          epicId: EPIC_ID,
+          draftId: original.draftId,
+          userId,
+          stageId,
+        },
+        request,
+      ),
+    ).toBe("saved");
+    expect(readPersistedPatch()).toMatchObject({
+      draftId: original.draftId,
+      content: typed("B newer text"),
+      revision: bPatch.revision,
+      returnedSandbox: {
+        clientRequestId: stageId,
+        lastCreateKey: request.clientRequestId,
+        lastRetryCreate: request,
+      },
+    });
+  });
+
+  it("allows the current task delete and fences a stale delete after a newer return", async () => {
+    const userId = "task-user";
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId, username: userId },
+    });
+    useNewConversationModalStore.getState().setContent(EPIC_ID, typed("task"));
+    useNewConversationModalStore.getState().clearDraft(EPIC_ID);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID],
+    ).toBeUndefined();
+    expect(localStorage.getItem(EPIC_RECORD_KEY)).toBe("null");
+
+    useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, typed("returned"));
+    const patch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (patch?.draftId === undefined || patch.draftId === null)
+      throw new Error("expected the current returned task occurrence");
+    const stageId = "stage:delete-fence";
+    useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox(EPIC_ID, newTaskReturn(stageId, userId, undefined));
+
+    vi.resetModules();
+    const secondWindow = await import("../new-conversation-modal-store");
+    await secondWindow.useNewConversationModalStore.persist.rehydrate();
+    const request = retryRequest("retry:delete-fence-newer");
+    secondWindow.useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox(EPIC_ID, newTaskReturn(stageId, userId, request));
+    useNewConversationModalStore.getState().clearDraft(EPIC_ID);
+
+    expect(readPersistedPatch()).toMatchObject({
+      draftId: patch.draftId,
+      returnedSandbox: {
+        clientRequestId: stageId,
+        lastCreateKey: request.clientRequestId,
+        lastRetryCreate: request,
+      },
+    });
+    vi.resetModules();
+    const freshWindow = await import("../new-conversation-modal-store");
+    await freshWindow.useNewConversationModalStore.persist.rehydrate();
+    expect(
+      freshWindow.useNewConversationModalStore.getState().draftPatchesByEpicId[
+        EPIC_ID
+      ]?.returnedSandbox,
+    ).toMatchObject({
+      clientRequestId: stageId,
+      lastCreateKey: request.clientRequestId,
+      lastRetryCreate: request,
     });
   });
 

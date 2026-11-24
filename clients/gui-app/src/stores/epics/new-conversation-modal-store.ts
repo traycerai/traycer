@@ -37,6 +37,8 @@ import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-
 import {
   parseReturnedSandbox,
   returnedSandboxCreateMatches,
+  returnedStageMatchesDraft,
+  reconcileReturnedDraftFields,
   returnedSandboxWithCreate,
   sameStoredReturnedSandbox,
   storeReturnedSandbox,
@@ -46,6 +48,7 @@ import {
   type ReturnedCreateCommit,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
+import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
 export const createEmptyNewConversationContent = (): JsonContent => ({
@@ -54,6 +57,7 @@ export const createEmptyNewConversationContent = (): JsonContent => ({
 });
 
 const TASK_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.newConversationDraft);
+const localDraftStarts = new Map<string, string>();
 
 function taskDraftRecord(
   raw: string | null | undefined,
@@ -80,17 +84,9 @@ function reconcileTaskDraftRecord(
     parseNullableId(before.draftId) !== parseNullableId(durable.draftId)
   )
     return undefined;
-  if (
-    proposed === "null" ||
-    JSON.stringify(before.returnedSandbox) ===
-      JSON.stringify(durable.returnedSandbox)
-  )
-    return proposed;
   const next = taskDraftRecord(proposed);
-  if (next === null) return undefined;
-  // A stale editor can still edit this draft. Its older snapshot cannot
-  // replace the returned create a different window has already committed.
-  return JSON.stringify({ ...next, returnedSandbox: durable.returnedSandbox });
+  if (next === null && proposed !== "null") return undefined;
+  return JSON.stringify(reconcileReturnedDraftFields(before, durable, next));
 }
 
 function restorableTaskDraftContent(
@@ -103,6 +99,22 @@ function restorableTaskDraftContent(
     returned !== null
     ? null
     : undefined;
+}
+
+function canStartTaskDraftOverTombstone(epicId: string, raw: string): boolean {
+  const draftId = localDraftStarts.get(epicId);
+  return draftId !== undefined && taskDraftRecord(raw)?.draftId === draftId;
+}
+
+function tracksHydratedTaskDraft(raw: string): boolean {
+  const patch = taskDraftRecord(raw);
+  return (
+    patch !== null &&
+    restorableTaskDraftContent(
+      patch,
+      parseReturnedSandbox(patch.returnedSandbox),
+    ) !== undefined
+  );
 }
 
 export interface NewConversationModalSeed {
@@ -475,11 +487,14 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       },
       clearDraft: (epicId) => {
         const removed = get().draftPatchesByEpicId[epicId];
+        if (removed !== undefined && !taskDraftDeleteCurrent(epicId, removed))
+          return;
         // Notify BEFORE removing: the coordinator resolves this draft's host
         // through `findNewChatByDraftId`, which reads this store. Removing
         // first left a modal the user is not looking at with no route for its
         // `drafts.delete` at all, and the host went on listing the row.
         if (removed?.draftId !== undefined && removed.draftId !== null) {
+          localDraftStarts.delete(epicId);
           retireNewChatDraftId(removed.draftId);
           notifyDraftLocalDelete(removed.draftId);
         }
@@ -511,6 +526,7 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
         }),
       resetForTests: () => {
         retiredNewChatDraftIds.clear();
+        localDraftStarts.clear();
         set({ draftPatchesByEpicId: {} });
       },
     }),
@@ -520,6 +536,8 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
         createRecordMapStorage({
           field: "draftPatchesByEpicId",
           reconcile: reconcileTaskDraftRecord,
+          canRestoreTombstone: canStartTaskDraftOverTombstone,
+          tracksHydratedRecord: tracksHydratedTaskDraft,
         }),
       ),
       // Same serialization boundary as the landing store's: a paste's
@@ -620,6 +638,53 @@ function persistedTaskReturn(
   return restorableTaskDraftContent(patch, returned) === undefined
     ? null
     : returned;
+}
+
+/** A stale window must not route a delete for a newer returned draft. */
+function taskDraftDeleteCurrent(
+  epicId: string,
+  live: NewConversationModalDraftPatch,
+): boolean {
+  try {
+    const raw = localStorage.getItem(
+      recordMapStorageKey(TASK_DRAFT_PERSIST_KEY, epicId),
+    );
+    if (raw === null) return true;
+    const durable = taskDraftRecord(raw);
+    return (
+      durable !== null &&
+      parseNullableId(durable.draftId) === live.draftId &&
+      sameStoredReturnedSandbox(
+        parseReturnedSandbox(durable.returnedSandbox),
+        live.returnedSandbox ?? null,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function returnedTaskStageCurrent(
+  origin: Extract<ReturnedSandboxDraft, { kind: "task" }>,
+  stage: StagedSandbox,
+): boolean {
+  const { epicId, draftId, userId } = origin;
+  if (signedInUserId() !== userId) return false;
+  const live =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  if (live === undefined || live.draftId !== draftId) return false;
+  try {
+    return (
+      returnedStageMatchesDraft(live.returnedSandbox ?? null, origin, stage) &&
+      returnedStageMatchesDraft(
+        persistedTaskReturn(epicId, draftId),
+        origin,
+        stage,
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Keep an explicit task Start or Retry with the draft that supplied its stage. */
@@ -758,8 +823,17 @@ function applyNewChatLocalPatch(
       bumpRevision,
     );
     draftId = merged.draftId;
+    if ((state.draftPatchesByEpicId[epicId]?.draftId ?? null) === null)
+      localDraftStarts.set(epicId, draftId);
     return { draftPatchesByEpicId: merged.next };
   });
+  if (localDraftStarts.get(epicId) === draftId) {
+    const raw = localStorage.getItem(
+      recordMapStorageKey(TASK_DRAFT_PERSIST_KEY, epicId),
+    );
+    if (taskDraftRecord(raw)?.draftId === draftId)
+      localDraftStarts.delete(epicId);
+  }
   return draftId;
 }
 

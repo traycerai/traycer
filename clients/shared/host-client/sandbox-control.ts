@@ -3,6 +3,8 @@ import {
   SANDBOX_REFUSAL_CODE_FROZEN,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
+  SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
+  SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
   sandboxAutomationOpenResponseSchema,
   sandboxAutomationResponseSchema,
@@ -100,6 +102,8 @@ export type SandboxControlFailure =
       /** The row left by a failed or refused create, when the server names it. */
       readonly sandboxId?: string;
       readonly sandbox?: SandboxSummary;
+      /** A pre-reservation create refusal carried unexpected row fields. */
+      readonly uncertainCreateRow?: true;
     }
   | { readonly kind: "network-error"; readonly detail: string }
   /**
@@ -696,6 +700,11 @@ export async function createSandboxViaHttp(
   if (!isSuccess(raw.status)) {
     const failure = failureOf(raw.status, raw.body);
     if (
+      failure.kind === "refused" &&
+      preReservationRefusalNamesRow(failure, raw.body)
+    )
+      return { ...failure, uncertainCreateRow: true };
+    if (
       failure.kind !== "refused" ||
       (failure.code !== SANDBOX_REFUSAL_CODE_PROVIDER_FAILED &&
         !(
@@ -729,6 +738,22 @@ const createFailureRowSchema = z.object({
   sandboxId: z.string().min(1).max(36),
   sandbox: sandboxSummarySchema.optional().catch(undefined),
 });
+
+function preReservationRefusalNamesRow(
+  failure: Extract<SandboxControlFailure, { kind: "refused" }>,
+  body: unknown,
+): boolean {
+  const { code, status } = failure;
+  const preReservation =
+    (status === 400 && code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) ||
+    (status === 503 && code === SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE);
+  return (
+    preReservation &&
+    body !== null &&
+    typeof body === "object" &&
+    (Object.hasOwn(body, "sandboxId") || Object.hasOwn(body, "sandbox"))
+  );
+}
 
 /**
  * `DELETE /api/sandboxes/:id`: `200` destroyed, `202` still destroying (both

@@ -952,7 +952,11 @@ function FailedButtons(props: {
         <LineButton
           label={RETRY_CREATION}
           testId="sandbox-setup-retry-creation"
-          onClick={actions.onRetryCreation}
+          onClick={
+            props.stage.failure?.acceptedRowNotFound === true
+              ? null
+              : actions.onRetryCreation
+          }
         />
       )}
       <SandboxFailureExitActions

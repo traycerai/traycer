@@ -99,6 +99,7 @@ import {
 } from "@/stores/composer/sandbox-shape-memory-store";
 import {
   readStagedSandbox,
+  stagedCreateRefusedWithoutRow,
   useStagedSandbox,
   useStagedSandboxStore,
   type StagedSandbox,
@@ -141,31 +142,73 @@ export function useSandboxStagingTask(epicId: string): SandboxStagingTask {
   );
 }
 
-/** The shape sheet open per surface: the configuration it edits. */
+interface ShapeSheetRequest {
+  readonly configurationKey: string;
+  readonly sourceStage: StagedSandbox | null;
+}
+
+/** The shape sheet open per surface and the stage a refusal remedy may replace. */
 const useShapeSheetStore = create<{
-  readonly openFor: Readonly<Partial<Record<string, string>>>;
+  readonly openFor: Readonly<Partial<Record<string, ShapeSheetRequest>>>;
 }>(() => ({ openFor: {} }));
 
 function setShapeSheet(
   surfaceKey: string,
   configurationKey: string | null,
+  sourceStage: StagedSandbox | null,
 ): void {
   useShapeSheetStore.setState((state) => {
     const openFor = { ...state.openFor };
     if (configurationKey === null) delete openFor[surfaceKey];
-    else openFor[surfaceKey] = configurationKey;
+    else openFor[surfaceKey] = { configurationKey, sourceStage };
     return { openFor };
   });
+}
+
+function useStagedShapeSheet(surfaceKey: string) {
+  const sheetRequest = useShapeSheetStore((s) => s.openFor[surfaceKey] ?? null);
+  const sheetKey = sheetRequest?.configurationKey ?? null;
+  const setSheetKey = useCallback(
+    (configurationKey: string | null): void => {
+      setShapeSheet(surfaceKey, configurationKey, null);
+    },
+    [surfaceKey],
+  );
+  return { sheetRequest, sheetKey, setSheetKey };
 }
 
 /**
  * Opens the shape sheet on the staged configuration: the setup line's
  * `Change shape or region` and `Choose a smaller shape`.
  */
-export function openStagedShapeSheet(surfaceKey: string): void {
-  const stage = useStagedSandboxStore.getState().bySurface[surfaceKey];
-  if (stage === undefined || stage.target.kind !== "new") return;
-  setShapeSheet(surfaceKey, stageConfigurationKey(stage.target.configuration));
+export function openStagedShapeSheet(
+  surfaceKey: string,
+  guardStage: boolean,
+): void {
+  const stage = readStagedSandbox(surfaceKey);
+  if (stage === null || stage.target.kind !== "new") return;
+  setShapeSheet(
+    surfaceKey,
+    stageConfigurationKey(stage.target.configuration),
+    guardStage ? stage : null,
+  );
+}
+
+/** Preserves credit remedies and only offers a replacement for a proved shape refusal. */
+export function stagedShapeChangeAction(
+  surfaceKey: string,
+  shown: StagedSandbox,
+  change: () => void,
+): (() => void) | null {
+  if (shown.failure?.kind !== "shape") return change;
+  if (!stagedCreateRefusedWithoutRow(surfaceKey, shown)) return null;
+  return () => {
+    if (
+      readStagedSandbox(surfaceKey) === shown &&
+      stagedCreateRefusedWithoutRow(surfaceKey, shown)
+    )
+      change();
+  };
 }
 
 /** The surface a picker stages for: its pin key, and its task once one exists. */
@@ -287,13 +330,8 @@ export function useSandboxStaging(input: {
   );
   const stage = useStagedSandbox(surfaceKey);
   const { openSettings } = useSystemTabModalActions();
-  const sheetKey = useShapeSheetStore((s) => s.openFor[surfaceKey] ?? null);
-  const setSheetKey = useCallback(
-    (configurationKey: string | null): void => {
-      setShapeSheet(surfaceKey, configurationKey);
-    },
-    [surfaceKey],
-  );
+  const { sheetRequest, sheetKey, setSheetKey } =
+    useStagedShapeSheet(surfaceKey);
 
   const rows = useMemo(
     () =>
@@ -631,6 +669,17 @@ export function useSandboxStaging(input: {
           unmovedComputer: null,
         }}
         onUseShape={(shape, name, wake) => {
+          const source = sheetRequest?.sourceStage ?? null;
+          if (source !== null) {
+            if (
+              useShapeSheetStore.getState().openFor[surfaceKey] !== sheetRequest
+            )
+              return;
+            if (readStagedSandbox(surfaceKey) !== source) {
+              setSheetKey(null);
+              return;
+            }
+          }
           placeNew({
             kind: "new",
             configuration: sheetFacts.configuration,

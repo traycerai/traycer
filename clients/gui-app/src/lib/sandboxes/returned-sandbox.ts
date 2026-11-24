@@ -157,6 +157,32 @@ export function returnedSandboxCreateMatches(
   );
 }
 
+/** A handoff can drop draft provenance only while that draft still owns this intent. */
+export function returnedStageMatchesDraft(
+  stored: StoredReturnedSandbox | null,
+  origin: ReturnedSandboxDraft,
+  stage: StagedSandbox,
+): boolean {
+  const returned = returnedSandboxForDraft(
+    stored,
+    origin.userId,
+    origin.kind,
+    origin.draftId,
+  );
+  return (
+    returned?.clientRequestId === origin.stageId &&
+    stage.clientRequestId === origin.stageId &&
+    (returned.lastCreateKey ?? returned.clientRequestId) ===
+      (stage.lastCreateKey ?? stage.clientRequestId) &&
+    JSON.stringify(returned.lastRetryCreate) ===
+      JSON.stringify(stage.lastRetryCreate) &&
+    returned.createRetryRowId ===
+      (stage.lastRetryCreate === undefined
+        ? stage.createRetryRow?.sandboxId
+        : undefined)
+  );
+}
+
 const supersedeBySurface = new Map<string, () => void>();
 
 /**
@@ -267,6 +293,24 @@ export function sameStoredReturnedSandbox(
   b: StoredReturnedSandbox | null,
 ): boolean {
   return sameReturnedSandbox(a, b) && a?.userId === b?.userId;
+}
+
+/** Reconcile editor changes and a returned destination independently. */
+export function reconcileReturnedDraftFields(
+  observed: Record<string, unknown>,
+  durable: Record<string, unknown>,
+  proposed: Record<string, unknown> | null,
+): Record<string, unknown> | null | undefined {
+  const { returnedSandbox: priorReturn, ...priorEditor } = observed;
+  const returnCurrent =
+    JSON.stringify(priorReturn) === JSON.stringify(durable.returnedSandbox);
+  if (proposed === null) return returnCurrent ? null : undefined;
+  if (!returnCurrent)
+    return { ...proposed, returnedSandbox: durable.returnedSandbox };
+  const { returnedSandbox, ...editor } = proposed;
+  return JSON.stringify(editor) === JSON.stringify(priorEditor)
+    ? { ...durable, returnedSandbox }
+    : proposed;
 }
 
 /** The destination as plain JSON, for a store that takes no interfaces. */

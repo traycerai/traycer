@@ -133,6 +133,8 @@ export type StagedSandboxFailure = StagedSandboxFailureDetail & {
   readonly sandboxId?: string;
   readonly retryCreate?: SandboxCreateRequest;
   readonly retryRowVerified?: true;
+  /** A current exact by-ID read could not reach the accepted row. */
+  readonly acceptedRowNotFound?: true;
   readonly rowlessCreateRefusal?: {
     readonly createKey: string;
     readonly attemptId: string | undefined;
@@ -215,6 +217,7 @@ export interface StagedSandbox {
 export function stagedFailedSandboxId(stage: StagedSandbox): string | null {
   if (stage.target.kind !== "new") return null;
   const { failure } = stage;
+  if (failure?.acceptedRowNotFound === true) return null;
   if (failure?.sandboxId !== undefined) return failure.sandboxId;
   // Older builds marked "gone" from list omission alone.
   return failure?.kind === "failed" &&
@@ -289,7 +292,19 @@ export function stagedCancelStartsOver(
   surfaceKey: string,
   stage: StagedSandbox,
 ): boolean {
-  if (stagedFailedSandboxId(stage) !== null) return true;
+  return (
+    (stage.target.kind === "new" &&
+      stage.failure?.acceptedRowNotFound === true) ||
+    stagedFailedSandboxId(stage) !== null ||
+    stagedCreateRefusedWithoutRow(surfaceKey, stage)
+  );
+}
+
+/** Only a current, recorded pre-reservation refusal proves a new key is safe. */
+export function stagedCreateRefusedWithoutRow(
+  surfaceKey: string,
+  stage: StagedSandbox,
+): boolean {
   const proof = stage.failure?.rowlessCreateRefusal;
   if (
     proof === undefined ||
@@ -452,12 +467,66 @@ function observedAttemptMatches(
   stage: StagedSandbox,
   press: PendingStagePress,
 ): boolean {
+  const currentKey = stagedCreateAttemptKey(stage);
   return (
     (press.observedCreateKey === undefined ||
-      press.observedCreateKey === stagedCreateAttemptKey(stage)) &&
+      press.observedCreateKey === currentKey) &&
     (press.observedAttemptId === undefined ||
-      press.observedAttemptId === (stage.attemptId ?? null))
+      press.observedAttemptId === (stage.attemptId ?? null)) &&
+    (stage.failure?.acceptedRowNotFound !== true ||
+      (press.createKey ?? currentKey) === currentKey)
   );
+}
+
+/** Commit a pending attempt before publishing it to the driver. */
+function persistPendingStageBegin(
+  surfaceKey: string,
+  before: StagedSandbox,
+  bySurface: StagedSandboxStoreState["bySurface"],
+): boolean {
+  const next = bySurface[surfaceKey];
+  const current = useStagedSandboxStore.getState().bySurface;
+  const { storage, name, version } = useStagedSandboxStore.persist.getOptions();
+  const durable = readPendingStageAttempt(
+    surfaceKey,
+    before.clientRequestId,
+    stagedCreateAttemptKey(before),
+    before.attemptId,
+  );
+  if (
+    next === undefined ||
+    current[surfaceKey] !== before ||
+    durable === null ||
+    storage === undefined ||
+    name === undefined
+  )
+    return false;
+  try {
+    // The pending-stage adapter writes synchronously. A readback also covers
+    // a header write failing after the attempt record committed.
+    void storage.setItem(name, {
+      state: { bySurface: persistedStages(bySurface) },
+      version,
+    });
+  } catch {
+    // Leave the prior stage visible if its record could not advance.
+  }
+  const saved = readPendingStageRecord(surfaceKey);
+  const { retryRequest: _mailbox, ...expected } = next;
+  if (
+    JSON.stringify(saved) !== JSON.stringify(expected) ||
+    useStagedSandboxStore.getState().bySurface !== current
+  ) {
+    if (JSON.stringify(saved) !== JSON.stringify(durable))
+      void useStagedSandboxStore.persist.rehydrate();
+    return false;
+  }
+  try {
+    useStagedSandboxStore.setState({ bySurface });
+  } catch {
+    // The record was verified before publishing the attempt.
+  }
+  return useStagedSandboxStore.getState().bySurface[surfaceKey] === next;
 }
 
 /** A mailbox acknowledgement and the progress it starts share one record. */
@@ -632,9 +701,13 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             ? {}
             : { retryHandledId: retryRequestId }),
         }));
-        if (retryRequestId === undefined) set({ bySurface });
-        else if (!persistStageRetry(surfaceKey, retryRequestId, bySurface))
-          return null;
+        if (retryRequestId !== undefined) {
+          if (!persistStageRetry(surfaceKey, retryRequestId, bySurface))
+            return null;
+        } else if (surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) {
+          if (!persistPendingStageBegin(surfaceKey, stage, bySurface))
+            return null;
+        } else set({ bySurface });
         return clientRequestId;
       },
       acknowledgeRetry: (surfaceKey, requestId, clearFailure) =>
@@ -676,6 +749,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
               attemptRetryId: undefined,
               lastRetryCreate: undefined,
               createRetryRow: undefined,
+              returnedDraft: undefined,
               createdSandboxId: null,
               createdHostId: null,
               createAttempt: null,
