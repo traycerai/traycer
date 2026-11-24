@@ -48,17 +48,21 @@ export function sandboxRetryCreate(row: SandboxSummary): SandboxCreateRequest {
   };
 }
 
-/** A 402 may name its row without carrying the row's full view. */
+export function sandboxRetryFromRow(
+  sandboxId: string,
+  row: SandboxSummary | null | undefined,
+): SandboxCreateRequest | null {
+  return row?.id === sandboxId &&
+    (row.state === "failed" || row.state === "destroyed")
+    ? sandboxRetryCreate(row)
+    : null;
+}
+
+/** A named refusal can authorize a body only when it carries the row's full view. */
 export function sandboxRetryAfterRefusal(
   failure: SandboxControlFailure,
-  attempted: SandboxCreateRequest,
 ): SandboxCreateRequest | null {
-  if (failure.kind !== "refused" || failure.sandboxId === undefined)
-    return null;
-  return failure.sandbox === undefined
-    ? {
-        ...attempted,
-        clientRequestId: sandboxCreateKey("retry", failure.sandboxId),
-      }
-    : sandboxRetryCreate(failure.sandbox);
+  return failure.kind === "refused" && failure.sandboxId !== undefined
+    ? sandboxRetryFromRow(failure.sandboxId, failure.sandbox)
+    : null;
 }

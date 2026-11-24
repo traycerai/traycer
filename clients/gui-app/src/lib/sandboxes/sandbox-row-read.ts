@@ -6,11 +6,13 @@ import {
 import type { SandboxGetFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
+  type SandboxCreateRequest,
   type SandboxListResponse,
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
+import { sandboxRetryFromRow } from "@/lib/sandboxes/sandbox-create-key";
 import {
   sandboxQueryKeys,
   type SandboxKnownRowScope,
@@ -126,4 +128,13 @@ async function readKnownSandboxRow(
     // An unreadable row is still unknown.
   }
   return null;
+}
+
+export async function readSandboxRetryCreate(
+  auth: AuthService,
+  sandboxId: string,
+  userId: string | null,
+): Promise<SandboxCreateRequest | null> {
+  const read = await readKnownSandboxRow(auth, sandboxId, userId);
+  return sandboxRetryFromRow(sandboxId, read?.row);
 }

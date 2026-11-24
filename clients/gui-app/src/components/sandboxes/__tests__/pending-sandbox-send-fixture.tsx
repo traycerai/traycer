@@ -1724,10 +1724,9 @@ export const navigateNowhere: UseNavigateResult<string> = () =>
 /** Rehydrates the task's new-agent drafts the way a new window does. */
 export async function reloadTaskDrafts(): Promise<void> {
   const key = persistKey(STORE_KEYS.newConversationDraft);
-  const saved = localStorage.getItem(key);
+  const saved = snapshotRecordMapStorage(key);
   useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
-  if (saved === null) localStorage.removeItem(key);
-  else localStorage.setItem(key, saved);
+  restoreRecordMapStorage(key, saved);
   await useNewConversationModalStore.persist.rehydrate();
 }
 

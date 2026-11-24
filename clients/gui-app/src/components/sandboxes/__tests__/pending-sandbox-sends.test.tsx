@@ -201,7 +201,10 @@ import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 import { sandboxQueryKeys } from "@/lib/query-keys/sandbox-query-keys";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { recordMapStorageKey } from "@/lib/persist/keys";
-import { persistedStageStorage } from "@/lib/sandboxes/__tests__/staged-sandbox-storage-fixture";
+import {
+  persistedStageStorage,
+  restoreStageStorage,
+} from "@/lib/sandboxes/__tests__/staged-sandbox-storage-fixture";
 
 import {
   PendingSandboxSendsDriver,
@@ -1355,7 +1358,7 @@ describe("a send that survives a reload", () => {
     expect(request[0].clientRequestId).toBe("retry:last-attempted");
   });
 
-  it("replays a lost named 402 after reload, shows the joined row name, then lets Retry reserve once", async () => {
+  it("uses a joined named refusal row for the staged Retry after reload", async () => {
     const target = { ...NEW_TARGET, name: "ambient name" };
     seed({ ...SEEDED, target, phase: "creating", created: false });
     const startKey = readStagedSandbox(SURFACE)?.clientRequestId;
@@ -1371,6 +1374,9 @@ describe("a send that survives a reload", () => {
       failureCode: "credit-gate",
       createdByTaskId: "origin-task",
       displayName: "origin/main hook",
+      environmentId: "env-personal-canonical",
+      cpus: 8,
+      memoryMb: 8192,
     });
     const controlPlane = createSandboxRetryWalkFake(startKey, undefined);
     controlPlane.seedJoinedRow(startKey, refusedRow);
@@ -1418,7 +1424,249 @@ describe("a send that survives a reload", () => {
         displayName: "origin/main hook",
       },
     ]);
+    expect(controlPlane.requests[1]).toEqual({
+      os: "linux",
+      cpus: 8,
+      memoryMb: 8192,
+      diskMb: 20480,
+      region: "us-east",
+      displayName: "origin/main hook",
+      idleMinutes: null,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: "env-personal-canonical",
+      destroyAfterRestingMinutes: 0,
+      createdByTaskId: "origin-task",
+      clientRequestId: retryKey,
+    });
     resumedWindow.unmount();
+  });
+
+  it("replays a lost named 402 through a creating join, then offers one canonical Retry after the held row becomes credit-gated", async () => {
+    userSignedIn();
+    const creatingRow = sandboxSummaryFixture({
+      id: "sbx_lost_402_replay",
+      hostId: SANDBOX_HOST,
+      state: "creating",
+      displayName: "origin/main hook",
+      createdByTaskId: "origin-task",
+      environmentId: null,
+    });
+    const refusedRow = sandboxSummaryFixture({
+      ...creatingRow,
+      state: "destroyed",
+      failureCode: "credit-gate",
+      cpus: 8,
+      memoryMb: 8192,
+    });
+    const gate = deferred<void>();
+    const firstPostEntered = deferred<void>();
+    const originalResponse = deferred<SandboxCreateFetchResult>();
+    const byIdEntered = deferred<void>();
+    const replayEntered = deferred<void>();
+    const requests: SandboxCreateRequest[] = [];
+    let durableBeforeOriginalAnswer: ReadonlyArray<readonly [string, string]> =
+      [];
+    let gateCalls = 0;
+    let initialKey: string | null = null;
+    const raw402: SandboxCreateFetchResult = {
+      kind: "refused",
+      status: 402,
+      code: "insufficient_credit",
+      reason: "denied",
+      shortfallMc: 120,
+      creditSource: "team",
+      newRateMcPerHour: 120,
+      currentAwakeBurnMcPerHour: 0,
+      message: null,
+      sandboxId: creatingRow.id,
+    };
+    mocks.createSandbox.mockImplementation((request) => {
+      requests.push(request);
+      if (initialKey === null) initialKey = request.clientRequestId;
+      if (request.clientRequestId === initialKey) {
+        if (requests.length === 1) {
+          gateCalls += 1;
+          firstPostEntered.resolve(undefined);
+          return originalResponse.promise;
+        }
+        if (requests.length === 2) {
+          replayEntered.resolve(undefined);
+          return Promise.resolve({
+            kind: "ok",
+            joined: true,
+            accepted: {
+              sandboxId: creatingRow.id,
+              hostId: creatingRow.hostId,
+              sandbox: creatingRow,
+            },
+          });
+        }
+        throw new Error("the original key was replayed more than once");
+      }
+      if (request.clientRequestId === `retry:${refusedRow.id}`) gateCalls += 1;
+      return Promise.resolve(CREDITS_REFUSED);
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+    mocks.getSandbox.mockImplementation((sandboxId) => {
+      expect(sandboxId).toBe(creatingRow.id);
+      byIdEntered.resolve(undefined);
+      return gate.promise.then(() => ({
+        kind: "ok",
+        sandbox: refusedRow,
+      }));
+    });
+
+    seed({ ...SEEDED, phase: "creating", created: false });
+    const firstLocks = installImmediateExclusiveLocks();
+    const firstWindow = mount();
+    try {
+      await firstPostEntered.promise;
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        failure: null,
+        lastCreateKey: requests[0].clientRequestId,
+        lastRetryCreate: requests[0],
+      });
+      durableBeforeOriginalAnswer = persistedStageStorage();
+      const firstRequest = requests[0];
+      if (firstRequest.clientRequestId === null)
+        throw new Error("expected the first persisted create request");
+      const storedStage = localStorage.getItem(
+        recordMapStorageKey(persistKey(STORE_KEYS.stagedSandboxSend), SURFACE),
+      );
+      if (storedStage === null)
+        throw new Error("expected the attempt descriptor in durable storage");
+      const persistedAttempt = JSON.parse(storedStage) as StagedSandbox;
+      if (
+        typeof persistedAttempt.attemptId !== "string" ||
+        persistedAttempt.attemptId.length === 0
+      )
+        throw new Error("expected the persisted create attempt id");
+      expect(persistedAttempt.failure).toBeNull();
+      expect(persistedAttempt.lastCreateKey).toBe(firstRequest.clientRequestId);
+      expect(persistedAttempt.lastRetryCreate).toEqual(firstRequest);
+      initialKey = firstRequest.clientRequestId;
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        lastCreateKey: firstRequest.clientRequestId,
+        lastRetryCreate: firstRequest,
+      });
+    } finally {
+      firstWindow.unmount();
+      firstLocks();
+    }
+
+    // The old owner has left before the held named 402 is released. Restoring
+    // the captured bytes models a process that lost that result before saving it.
+    await act(async () => {
+      originalResponse.resolve(raw402);
+      await originalResponse.promise;
+    });
+    await waitFor(() => expect(stagedRunActive(SURFACE)).toBe(false));
+    restoreStageStorage(durableBeforeOriginalAnswer);
+    expect(raw402).toMatchObject({ sandboxId: creatingRow.id, status: 402 });
+    expect(raw402).not.toHaveProperty("sandbox");
+
+    const stageStorageKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.stagedSandboxSend),
+      SURFACE,
+    );
+    const durableStageText = localStorage.getItem(stageStorageKey);
+    if (durableStageText === null)
+      throw new Error("expected the saved request before reopening");
+    const durableStage = JSON.parse(durableStageText) as StagedSandbox;
+    if (durableStage.target.kind !== "new")
+      throw new Error("expected the saved new-sandbox target");
+    localStorage.setItem(
+      stageStorageKey,
+      JSON.stringify({
+        ...durableStage,
+        target: {
+          ...durableStage.target,
+          name: "changed ambient name",
+          shape: { ...durableStage.target.shape, cpus: 12 },
+        },
+      }),
+    );
+
+    await reload();
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "creating",
+      createdSandboxId: null,
+      failure: null,
+      lastCreateKey: initialKey,
+      lastRetryCreate: requests[0],
+    });
+    const replayLocks = installImmediateExclusiveLocks();
+    const replayWindow = mount();
+    try {
+      await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(true));
+      await replayEntered.promise;
+      await byIdEntered.promise;
+      const replayRequest = requests[1];
+      expect(replayRequest).toEqual(requests[0]);
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        createdSandboxId: creatingRow.id,
+        createdHostId: creatingRow.hostId,
+        lastCreateKey: replayRequest.clientRequestId,
+        lastRetryCreate: replayRequest,
+      });
+      expect(readStagedSandbox(SURFACE)?.failure).toBeNull();
+      expect(requests).toHaveLength(2);
+      expect(gateCalls).toBe(1);
+      expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("sandbox-setup-retry-creation")).toBeNull();
+
+      gate.resolve(undefined);
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+          kind: "failed",
+          code: "credit-gate",
+          retryCreate: {
+            clientRequestId: `retry:${refusedRow.id}`,
+            displayName: refusedRow.displayName,
+            createdByTaskId: refusedRow.createdByTaskId,
+          },
+        });
+        expect(stagedRunActive(SURFACE)).toBe(false);
+      });
+      expect(screen.getByText("Couldn't start origin/main hook")).toBeDefined();
+      expect(requests).toHaveLength(2);
+      expect(gateCalls).toBe(1);
+      expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(
+        await screen.findByTestId("sandbox-setup-retry-creation"),
+      );
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+          kind: "credits",
+        });
+        expect(stagedRunActive(SURFACE)).toBe(false);
+      });
+      const retryRequest = requests[2];
+      expect(retryRequest).toEqual({
+        os: refusedRow.os,
+        cpus: refusedRow.cpus,
+        memoryMb: refusedRow.memoryMb,
+        diskMb: refusedRow.diskMb,
+        region: refusedRow.region,
+        displayName: refusedRow.displayName,
+        idleMinutes: refusedRow.idleMinutes,
+        burst: false,
+        createdByHostId: null,
+        createdByAgentId: null,
+        environmentId: refusedRow.environmentId,
+        destroyAfterRestingMinutes: refusedRow.destroyAfterRestingMinutes ?? 0,
+        createdByTaskId: refusedRow.createdByTaskId,
+        clientRequestId: `retry:${refusedRow.id}`,
+      });
+      expect(requests).toHaveLength(3);
+      expect(gateCalls).toBe(2);
+    } finally {
+      replayWindow.unmount();
+      replayLocks();
+    }
   });
 
   it("resumes a team's requested agent after rehydrating the provider refusal, without creating another sandbox or chat", async () => {
@@ -4482,6 +4730,144 @@ describe("a pending chat create", () => {
 });
 
 describe("cancelling a refused pending message", () => {
+  it.each([
+    [
+      "shape refusal",
+      {
+        kind: "refused",
+        status: 400,
+        code: "shape_not_offered",
+        reason: null,
+        shortfallMc: null,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+        message: null,
+      },
+      "shape",
+      true,
+    ],
+    [
+      "provider unavailable refusal",
+      {
+        kind: "refused",
+        status: 503,
+        code: "provider_unavailable",
+        reason: null,
+        shortfallMc: null,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+        message: null,
+      },
+      "unavailable",
+      true,
+    ],
+    [
+      "unproven shape refusal",
+      {
+        kind: "refused",
+        status: 502,
+        code: "shape_not_offered",
+        reason: null,
+        shortfallMc: null,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+        message: null,
+      },
+      "shape",
+      false,
+    ],
+    [
+      "unconfirmed transport answer",
+      { kind: "network-error", detail: "the response was lost" },
+      "unverified",
+      false,
+    ],
+  ] as const)(
+    "returns the draft after a %s without posting until Send, and preserves only the eligible request",
+    async (_answerName, answer, expectedFailure, startsOver) => {
+      const restoreLocks = installImmediateExclusiveLocks();
+      try {
+        seed({ ...SEEDED, phase: "creating", created: false });
+        const initialStage = readStagedSandbox(SURFACE);
+        if (initialStage === null)
+          throw new Error("expected the first staged stage");
+        const firstKey = initialStage.clientRequestId;
+        if (firstKey === null) throw new Error("expected the first staged key");
+        mocks.createSandbox.mockResolvedValueOnce(answer).mockResolvedValue({
+          kind: "network-error",
+          detail: "the follow-up response was lost",
+        });
+        const firstView = mount();
+
+        await waitFor(() => {
+          expect(readStagedSandbox(SURFACE)).toMatchObject({
+            failure: { kind: expectedFailure },
+            lastCreateKey: firstKey,
+            lastRetryCreate: { clientRequestId: firstKey },
+          });
+          expect(stagedRunActive(SURFACE)).toBe(false);
+        });
+        const firstRequest = mocks.createSandbox.mock.calls[0][0];
+
+        const line = screen.getByTestId("sandbox-refusal-line");
+        fireEvent.click(
+          within(line).getByRole("button", { name: "Cancel the message" }),
+        );
+        await waitFor(() =>
+          expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+        );
+        expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+        firstView.unmount();
+
+        const returned =
+          useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+            ?.returnedSandbox;
+        if (returned === undefined)
+          throw new Error("expected the Send to return to its draft");
+        if (startsOver) {
+          expect(returned.clientRequestId).not.toBe(firstKey);
+          expect(returned.lastCreateKey).toBeUndefined();
+          expect(returned.lastRetryCreate).toBeUndefined();
+        } else {
+          expect(returned.clientRequestId).toBe(initialStage.clientRequestId);
+          expect(returned.lastCreateKey).toBe(firstKey);
+          expect(returned.lastRetryCreate).toEqual(firstRequest);
+        }
+
+        const taskSurface = newConversationSurfaceKey("epic-1");
+        renderHook(() => useNewConversationReturnedSandbox("epic-1", null));
+        const nextSendId = sendFromTaskComposer(taskSurface);
+        const nextSurface = pendingSendSurfaceKey(nextSendId);
+        const nextStage = readStagedSandbox(nextSurface);
+        if (nextStage === null) throw new Error("expected the restored stage");
+        mount();
+
+        await waitFor(() => {
+          expect(readStagedSandbox(nextSurface)?.failure).toEqual({
+            kind: "unverified",
+          });
+          expect(stagedRunActive(nextSurface)).toBe(false);
+        });
+        const requests = mocks.createSandbox.mock.calls.map(
+          ([request]) => request,
+        );
+        expect(requests).toHaveLength(2);
+        if (startsOver) {
+          expect(nextStage.clientRequestId).toBe(returned.clientRequestId);
+          expect(requests[1]).toEqual({
+            ...firstRequest,
+            clientRequestId: returned.clientRequestId,
+          });
+        } else {
+          expect(nextStage.clientRequestId).toBe(initialStage.clientRequestId);
+          expect(requests[1]).toEqual(firstRequest);
+        }
+      } finally {
+        restoreLocks();
+      }
+    },
+  );
+
   it("returns a named 502 row to the draft, then a real Send starts with a fresh stage key", async () => {
     const restoreLocks = installImmediateExclusiveLocks();
     try {
@@ -7260,7 +7646,9 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     try {
       expect(mocks.wake).toHaveBeenCalledTimes(1);
 
-      answerSandboxRows([], FRESH + 1);
+      act(() => {
+        answerSandboxRows([], FRESH + 1);
+      });
       await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(1));
       const oldRowQuery = queryClient
         .getQueryCache()
@@ -7341,6 +7729,156 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       });
       expect(createChatCalls()).toHaveLength(1);
     } finally {
+      view.unmount();
+      queryClient.clear();
+    }
+  });
+
+  it("cancels an old row read when the wake completion record cannot be saved, then retries from a fresh row", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          gcTime: 0,
+          queryKeyHashFn: hashAppQueryKey,
+        },
+      },
+    });
+    const staleRowRead = deferred<SandboxGetFetchResult>();
+    const createChat = deferred<CreateChatResponseV12>();
+    const getEntered = deferred<void>();
+    const suspended = rowIn("suspended");
+    const awake = rowIn("awake");
+    const { input, wake, view } = await startClaimedWake("chat", queryClient);
+    mocks.createChatDeferred = createChat.promise;
+    let restoreFailedCompletionWrite: () => void = () => undefined;
+    mocks.getSandbox.mockImplementation(() => {
+      getEntered.resolve(undefined);
+      return staleRowRead.promise;
+    });
+    const cancelQueries = vi.spyOn(queryClient, "cancelQueries");
+
+    try {
+      act(() => {
+        answerSandboxRows([], FRESH + 1);
+      });
+      await getEntered.promise;
+      const oldRowQuery = queryClient
+        .getQueryCache()
+        .findAll({
+          predicate: (query) => query.queryKey[1] === "sandbox-known-row",
+        })
+        .find((query) => query.state.fetchStatus === "fetching");
+      if (oldRowQuery === undefined)
+        throw new Error("expected the held by-ID read from the wake omission");
+      const oldSend = usePendingSandboxSendStore.getState().sends[SEND_ID];
+      const oldObservationId = oldSend.observationRetryId;
+      if (oldObservationId === undefined)
+        throw new Error("expected the durable wake observation");
+      const sendRecordKey = recordMapStorageKey(
+        persistKey(STORE_KEYS.pendingSandboxSend),
+        SEND_ID,
+      );
+      const savedSend = JSON.parse(
+        localStorage.getItem(sendRecordKey) ?? "null",
+      ) as { readonly observationRetryId?: string } | null;
+      expect(savedSend?.observationRetryId).toBe(oldObservationId);
+
+      const failedCompletionWrites: string[] = [];
+      const originalSetItem = Storage.prototype.setItem.bind(localStorage);
+      const failedCompletionWrite = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation(function (this: Storage, key, value) {
+          if (key === sendRecordKey) {
+            const attempted = JSON.parse(value) as {
+              readonly observationRetryId?: string;
+            };
+            if (attempted.observationRetryId !== oldObservationId) {
+              failedCompletionWrites.push(attempted.observationRetryId ?? "");
+              throw new Error("wake completion write failed");
+            }
+          }
+          originalSetItem.call(this, key, value);
+        });
+      restoreFailedCompletionWrite = () => failedCompletionWrite.mockRestore();
+
+      await act(async () => {
+        wake.resolve({ kind: "awake" });
+        await wake.promise;
+      });
+      restoreFailedCompletionWrite();
+
+      expect(failedCompletionWrites.length).toBeGreaterThan(0);
+      expect(oldRowQuery.state.fetchStatus).toBe("idle");
+      expect(cancelQueries).toHaveBeenCalledWith({
+        queryKey: oldRowQuery.queryKey,
+        exact: true,
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toMatchObject({
+        observationRetryId: oldObservationId,
+        dispatch: { blocker: "wake" },
+      });
+      expect(createChatCalls()).toEqual([]);
+
+      await act(async () => {
+        staleRowRead.resolve({ kind: "ok", sandbox: suspended });
+        await staleRowRead.promise;
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toMatchObject({
+        dispatch: { blocker: "wake" },
+      });
+      act(() => {
+        answerSandboxRows([suspended], FRESH + 2);
+      });
+
+      const retryWake = deferred<{ readonly kind: "awake" } | null>();
+      const retryWakeEntered = deferred<void>();
+      const freshWakeRefetch = deferred<void>();
+      mocks.wake.mockImplementationOnce(() => {
+        retryWakeEntered.resolve(undefined);
+        return retryWake.promise;
+      });
+      mocks.refetchSandboxes.mockImplementation(() => {
+        expect(oldRowQuery.state.fetchStatus).toBe("idle");
+        act(() => {
+          answerSandboxRows([awake], FRESH + 3);
+        });
+        freshWakeRefetch.resolve(undefined);
+        return Promise.resolve(undefined);
+      });
+      fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+      await retryWakeEntered.promise;
+      await act(async () => {
+        retryWake.resolve({ kind: "awake" });
+        await retryWake.promise;
+      });
+      await freshWakeRefetch.promise;
+      await waitForCreateChats(1);
+      expect(createChatCalls()[0]?.input).toEqual(input);
+
+      await act(async () => {
+        createChat.resolve({
+          chatId: input.chatId,
+          initialTurnStarted: true,
+        });
+        await createChat.promise;
+      });
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+        ).toMatchObject({
+          chatId: input.chatId,
+          hostId: SANDBOX_HOST,
+          sandboxId: SANDBOX_ID,
+        });
+      });
+      expect(createChatCalls()).toHaveLength(1);
+    } finally {
+      restoreFailedCompletionWrite();
       view.unmount();
       queryClient.clear();
     }
@@ -8613,10 +9151,7 @@ describe("a retry-family button chosen in a window that does not own the send", 
           undefined,
         );
         userSignedIn();
-        seed({ ...SEEDED, phase: "creating", created: true });
-        useStagedSandboxStore.getState().report(SURFACE, {
-          failure: { kind: "failed", code: "create", step: "creating" },
-        });
+        seed({ ...SEEDED, phase: "creating", created: false });
         mocks.createSandbox
           .mockResolvedValueOnce({
             kind: "refused",
@@ -8633,27 +9168,27 @@ describe("a retry-family button chosen in a window that does not own the send", 
           .mockImplementation(walk.create);
         let stageView = mount();
         await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(true));
-        fireEvent.click(
-          await screen.findByTestId("sandbox-setup-retry-creation"),
-        );
         await waitFor(() =>
           expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
             kind: "refused",
             sandboxId: row.id,
           }),
         );
-        const attemptedRequest = mocks.createSandbox.mock.calls.at(-1)?.[0];
-        if (attemptedRequest === undefined)
-          throw new Error("expected the failed create request");
+        expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+        const initialRequest = firstCreateRequest();
         expect(readStagedSandbox(SURFACE)).toMatchObject({
-          lastCreateKey: attemptedRequest.clientRequestId,
+          lastCreateKey: initialRequest.clientRequestId,
+          lastRetryCreate: initialRequest,
         });
+        expect(initialRequest.clientRequestId).toMatch(/^stage:/);
         await reloadPendingSandboxStores();
         answerSandboxRows([], Date.now() + 60_000);
         stageView = mount();
         await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(true));
         expect(readStagedSandbox(SURFACE)).toMatchObject({
-          lastCreateKey: attemptedRequest.clientRequestId,
+          failure: { kind: "refused", sandboxId: row.id },
+          lastCreateKey: initialRequest.clientRequestId,
+          lastRetryCreate: initialRequest,
         });
 
         const rowClient = new QueryClient({
@@ -9623,6 +10158,109 @@ describe("a retry-family button chosen in a window that does not own the send", 
     }
   });
 
+  it("keeps a foreign Keep waiting receipt pending when the owner sees an unknown row after its failure clears", async () => {
+    userSignedIn();
+    const freshReadAt = Date.now() + 60_000;
+    mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+    mocks.settingsStatus = {
+      principal: { kind: "personal" },
+      items: [{ kind: "variable", status: "applying" }],
+    };
+    seed({
+      ...SEEDED,
+      send: { epicConfirmed: true },
+      phase: "creating",
+      created: true,
+      elapsedSeconds: 3600,
+    });
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: { kind: "timed-out", step: "applying" },
+    });
+    const createKey = readStagedSandbox(SURFACE)?.lastCreateKey;
+    if (createKey === undefined)
+      throw new Error("expected the saved create key");
+
+    const releaseForeignHolder = queueBehindForeignHolder();
+    const queuedView = mount();
+    let receiptId: string | undefined;
+    try {
+      fireEvent.click(await screen.findByTestId("sandbox-setup-keep-waiting"));
+      await waitFor(() => {
+        const request = readStagedSandbox(SURFACE)?.retryRequest;
+        expect(request).toMatchObject({
+          action: "keep-waiting",
+          createKey,
+          observedCreateKey: createKey,
+        });
+        receiptId = request?.id;
+      });
+      useStagedSandboxStore.getState().report(SURFACE, { failure: null });
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        phase: "creating",
+        createdSandboxId: SANDBOX_ID,
+        createdHostId: SANDBOX_HOST,
+        failure: null,
+      });
+    } finally {
+      queuedView.unmount();
+      releaseForeignHolder();
+    }
+
+    await reloadPendingSandboxStores();
+    const locks = installImmediateExclusiveLocks();
+    const byIdRead = deferred<SandboxGetFetchResult>();
+    const byIdReadEntered = deferred<void>();
+    mocks.getSandbox.mockImplementation(() => {
+      byIdReadEntered.resolve(undefined);
+      return byIdRead.promise;
+    });
+    answerSandboxRows([], freshReadAt);
+    const ownerView = mount();
+    try {
+      await byIdReadEntered.promise;
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(ownsPendingSandboxSend(SEND_ID)).toBe(true);
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        phase: "creating",
+        retryRequest: {
+          id: receiptId,
+          action: "keep-waiting",
+          createKey,
+          observedCreateKey: createKey,
+        },
+      });
+      expect(readStagedSandbox(SURFACE)?.retryHandledId).not.toBe(receiptId);
+      expect(stagedRunActive(SURFACE)).toBe(false);
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+      expect(mocks.wake).not.toHaveBeenCalled();
+
+      await act(async () => {
+        byIdRead.resolve({
+          kind: "network-error",
+          detail: "row not available",
+        });
+        await byIdRead.promise;
+      });
+      expect(readStagedSandbox(SURFACE)?.retryRequest?.id).toBe(receiptId);
+      expect(readStagedSandbox(SURFACE)?.retryHandledId).not.toBe(receiptId);
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+      expect(mocks.wake).not.toHaveBeenCalled();
+      expect(
+        persistedStageStorage()
+          .filter(([key]) =>
+            decodeURIComponent(key).includes("retry-request:stage:"),
+          )
+          .map(([, value]) => JSON.parse(value) as { id?: string })
+          .map(({ id }) => id),
+      ).toContain(receiptId);
+    } finally {
+      ownerView.unmount();
+      locks();
+    }
+  });
+
   it("does not run a named Retry when its stage mailbox write fails", async () => {
     userSignedIn();
     const failedRow = failedCreateRow(
@@ -10236,12 +10874,21 @@ describe("an owner that takes up each kind of retry request", () => {
   });
 
   it("runs Retry creation with the key for its failed row and acknowledges it", async () => {
+    const failedRow = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "failed",
+      failureCode: "PROVIDER_CREATE_FAILED",
+      createdByTaskId: "origin-task",
+      displayName: "origin/main hook",
+    });
     seed({
       ...SEEDED,
       send: { epicConfirmed: true },
       phase: "creating",
       created: true,
     });
+    mocks.getSandbox.mockResolvedValue({ kind: "ok", sandbox: failedRow });
     mocks.createSandbox.mockResolvedValue(CREDITS_REFUSED);
     useStagedSandboxStore.getState().report(SURFACE, {
       failure: { kind: "failed", code: "create", step: "creating" },
@@ -10255,9 +10902,23 @@ describe("an owner that takes up each kind of retry request", () => {
     });
     expect(createKey).toBe(`retry:${SANDBOX_ID}`);
     expect(readStagedSandbox(SURFACE)?.clientRequestId).toBe(before);
-    expect(mocks.createSandbox.mock.calls[0][0].clientRequestId).toBe(
-      createKey,
-    );
+    expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID);
+    expect(mocks.createSandbox.mock.calls[0]?.[0]).toEqual({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: 20480,
+      region: "us-east",
+      displayName: "origin/main hook",
+      idleMinutes: null,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: null,
+      destroyAfterRestingMinutes: 0,
+      createdByTaskId: "origin-task",
+      clientRequestId: createKey,
+    });
     expect(mocks.wake).not.toHaveBeenCalled();
   });
 
@@ -10324,6 +10985,77 @@ describe("an owner that takes up each kind of retry request", () => {
       expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     });
     expect(atCreate[0]).toBeGreaterThan(before);
+  });
+
+  it("shows the existing Retry after the current create request write fails, then posts the saved request", async () => {
+    userSignedIn();
+    seed({
+      ...SEEDED,
+      send: { epicConfirmed: true },
+      phase: "creating",
+      created: false,
+    });
+    const initialStage = readStagedSandbox(SURFACE);
+    if (initialStage === null || initialStage.clientRequestId === null)
+      throw new Error("expected the current staged create");
+
+    const stageRecordKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.stagedSandboxSend),
+      SURFACE,
+    );
+    const attemptedRequests: SandboxCreateRequest[] = [];
+    const requests: SandboxCreateRequest[] = [];
+    const originalSetItem = Storage.prototype.setItem.bind(localStorage);
+    const failedCurrentRequestWrite = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key === stageRecordKey) {
+          const attempted = JSON.parse(value) as StagedSandbox;
+          if (
+            attempted.failure === null &&
+            attempted.lastRetryCreate !== undefined
+          ) {
+            attemptedRequests.push(attempted.lastRetryCreate);
+            throw new Error("stage create request write failed");
+          }
+        }
+        originalSetItem.call(this, key, value);
+      });
+    mocks.createSandbox.mockImplementation((request) => {
+      requests.push(request);
+      return Promise.resolve(CREDITS_REFUSED);
+    });
+    const view = mount();
+    try {
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+          kind: "unavailable",
+        });
+        expect(stagedRunActive(SURFACE)).toBe(false);
+      });
+      expect(attemptedRequests).toHaveLength(1);
+      expect(attemptedRequests[0]).toMatchObject({
+        clientRequestId: initialStage.clientRequestId,
+        createdByTaskId: "epic-1",
+        burst: false,
+      });
+      expect(requests).toEqual([]);
+      expect(
+        screen.getByText("Sandboxes are unavailable right now."),
+      ).toBeTruthy();
+      const retry = screen.getByTestId("sandbox-refusal-retry");
+
+      failedCurrentRequestWrite.mockRestore();
+      fireEvent.click(retry);
+
+      await waitFor(() => expect(requests).toHaveLength(1));
+      expect(requests[0]).toEqual(attemptedRequests[0]);
+      expect(requests[0]?.clientRequestId).toBe(initialStage.clientRequestId);
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+    } finally {
+      failedCurrentRequestWrite.mockRestore();
+      view.unmount();
+    }
   });
 
   it("persists the observation boundary before the owner's direct Keep waiting reaches the control plane", async () => {

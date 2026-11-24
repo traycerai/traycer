@@ -66,6 +66,7 @@ import {
   handoffOwnerLive,
   holdHandoffOwner,
   readStagedSandbox,
+  stagedFailedSandboxId,
   stagedRetryKey,
   stagedSandboxRested,
   useStagedSandbox,
@@ -432,7 +433,9 @@ export function useStagedSandboxSend(input: {
             onRetry: () => runFromLine(stagedRetryKey(stage)),
             onSendAgain,
             onChangeShape: () => {
-              useStagedSandboxStore.getState().cancel(surfaceKey, true);
+              useStagedSandboxStore
+                .getState()
+                .cancel(surfaceKey, stagedFailedSandboxId(stage) !== null);
               openStagedShapeSheet(surfaceKey);
             },
             onRetryApplying: newHost.onRetryApplying,

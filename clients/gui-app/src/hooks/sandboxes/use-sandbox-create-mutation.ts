@@ -39,7 +39,10 @@ import {
   settledForStartingAccount,
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
-import { sandboxRowNotFound } from "@/lib/sandboxes/sandbox-row-read";
+import {
+  readSandboxRetryCreate,
+  sandboxRowNotFound,
+} from "@/lib/sandboxes/sandbox-row-read";
 import { couldntStartLine } from "@/lib/sandboxes/sandbox-strings";
 import {
   sandboxRetryAfterRefusal,
@@ -57,6 +60,10 @@ export interface SandboxCreateSubmit {
   /** Keeps the originating failed-row button pending while the press walks. */
   readonly sourceSandboxId?: string;
   readonly reconcileSandboxId?: string;
+  readonly retryRow?: {
+    readonly sandboxId: string;
+    readonly error: SandboxCreateError;
+  };
 }
 
 /**
@@ -88,6 +95,12 @@ type SandboxCreateContinuation =
   | {
       readonly kind: "retry";
       readonly request: SandboxCreateRequest;
+      readonly error: SandboxCreateError;
+    }
+  | {
+      readonly kind: "retry-row";
+      readonly request: SandboxCreateRequest;
+      readonly sandboxId: string;
       readonly error: SandboxCreateError;
     };
 
@@ -140,7 +153,7 @@ export function sandboxCreatePress(
   scope: SandboxCreateScope,
 ): Pick<
   SandboxCreateSubmit,
-  "request" | "reconcileSandboxId" | "ownerUserId"
+  "request" | "reconcileSandboxId" | "ownerUserId" | "retryRow"
 > | null {
   const ownerUserId = scope.userId;
   if (signedInUserId() !== ownerUserId) return null;
@@ -153,6 +166,12 @@ export function sandboxCreatePress(
       ownerUserId,
     };
   if (saved?.kind === "retry") return { request: saved.request, ownerUserId };
+  if (saved?.kind === "retry-row")
+    return {
+      request: saved.request,
+      ownerUserId,
+      retryRow: { sandboxId: saved.sandboxId, error: saved.error },
+    };
 
   const variables = previous.variables;
   let request = initial;
@@ -308,8 +327,6 @@ function nextCreateRequest(
   request: SandboxCreateRequest,
   attempted: SandboxCreateRequest,
 ): SandboxCreateRequest | null {
-  const retryCreate = sandboxRetryAfterRefusal(refusal, attempted);
-  if (retryCreate !== null) return retryCreate;
   if (refusal.kind !== "refused") return request;
   if (refusal.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT)
     return attempted;
@@ -407,7 +424,36 @@ export function sandboxCreateRefusal(
 ): Error | null {
   const scoped =
     previous.variables?.ownerUserId === scope.userId ? previous.error : null;
-  return scoped ?? (saved?.kind === "retry" ? saved.error : null);
+  return (
+    scoped ??
+    (saved?.kind === "retry" || saved?.kind === "retry-row"
+      ? saved.error
+      : null)
+  );
+}
+
+async function resolveCreateRetry(
+  auth: AuthService,
+  scope: SandboxCreateScope,
+  retry: NonNullable<SandboxCreateSubmit["retryRow"]>,
+): Promise<SandboxCreateRequest> {
+  const key = scopeKey(scope);
+  const saved = useSandboxCreateContinuations.getState().byScope[key];
+  if (saved?.kind !== "retry-row" || saved.error !== retry.error)
+    throw retry.error;
+  const request = await readSandboxRetryCreate(
+    auth,
+    retry.sandboxId,
+    scope.userId,
+  );
+  if (
+    request === null ||
+    signedInUserId() !== scope.userId ||
+    useSandboxCreateContinuations.getState().byScope[key] !== saved
+  )
+    throw retry.error;
+  replaceContinuation(key, undefined);
+  return request;
 }
 
 interface SandboxCreateContext {
@@ -455,6 +501,7 @@ export function useSandboxCreate(
       teamName,
       reconcileSandboxId,
       ownerUserId,
+      retryRow,
     }): Promise<SandboxCreateAccepted> => {
       if (
         binding === null ||
@@ -479,31 +526,52 @@ export function useSandboxCreate(
         useSandboxCreateContinuations.getState().byScope[key]?.kind === "retry"
       )
         replaceContinuation(key, undefined);
+      const startingRequest =
+        retryRow === undefined
+          ? request
+          : await resolveCreateRetry(binding.auth, scope, retryRow);
       const { result, attempted } = await walkSandboxCreate(
         binding.auth,
-        request,
+        startingRequest,
         userId,
       );
       if (result.kind === "ok")
-        return acceptedWalkCreate(binding.auth, scope, request, {
+        return acceptedWalkCreate(binding.auth, scope, startingRequest, {
           result,
           attempted,
         });
       const code = result.kind === "refused" ? result.code : null;
+      const payload = sandboxRetryAfterRefusal(result);
+      const unresolved =
+        result.kind === "refused" && payload === null
+          ? result.sandboxId
+          : undefined;
       // A refusal for the team's credits tells only a buyer how much to add.
-      throw new SandboxCreateError(
+      const error = new SandboxCreateError(
         sandboxFailureMessageFor(
           result,
           sandboxCreateFailureMessage(result, teamName),
           { buysTeamCredits, teamName },
         ),
         code,
-        nextCreateRequest(result, request, attempted),
+        unresolved === undefined
+          ? (payload ?? nextCreateRequest(result, startingRequest, attempted))
+          : null,
       );
+      if (unresolved !== undefined && signedInUserId() === scope.userId)
+        replaceContinuation(key, {
+          kind: "retry-row",
+          request: attempted,
+          sandboxId: unresolved,
+          error,
+        });
+      throw error;
     },
-    onSuccess: (_accepted, { request }, context) => {
+    onSuccess: (accepted, { request, retryRow }, context) => {
       if (!settledForStartingAccount(context)) return;
-      toast.success(`Created ${request.displayName}`);
+      toast.success(
+        `Created ${retryRow === undefined ? request.displayName : accepted.sandbox.displayName}`,
+      );
     },
     // Settled, not only success: a `502 provider_failed` leaves a `failed`
     // row behind, which the lists must show so it can be destroyed.

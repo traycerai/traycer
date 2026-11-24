@@ -66,6 +66,7 @@ import {
   cancelSandboxWakeReads,
   knownSandboxRowCurrent,
   knownSandboxRowQueryOptions,
+  readSandboxRetryCreate,
   sandboxListObservationId,
   sandboxRowDestroySettled,
 } from "@/lib/sandboxes/sandbox-row-read";
@@ -217,11 +218,26 @@ export async function runStagedSandbox(
   };
   running.set(surfaceKey, attempt);
   try {
+    let retryCreate = active.lastRetryCreate;
+    const retryRow = active.createRetryRow;
+    if (retryRow !== undefined && retryCreate === undefined) {
+      const resolved = await readSandboxRetryCreate(
+        deps.auth,
+        retryRow.sandboxId,
+        attempt.userId,
+      );
+      if (!stillCurrent(attempt)) return;
+      if (resolved === null) {
+        fail(surfaceKey, retryRow.failure);
+        return;
+      }
+      retryCreate = resolved;
+    }
     await drivePreparedRun(
       {
         ...request,
         ...attempt,
-        retryCreate: active.lastRetryCreate,
+        retryCreate,
       },
       stage,
       sandboxAlreadyMade(active, request.resume),
@@ -459,7 +475,22 @@ async function wakeCurrentStage(
     deps.userId,
     knownRow.queryKey,
   );
-  return completed !== null && stillCurrent(run);
+  if (!stillCurrent(run)) return false;
+  if (completed !== null) return true;
+  if (
+    pendingSandboxStageObservation(surfaceKey, "awake", {
+      kind: "wake-result",
+      requestedAt: boundary,
+      observationId,
+    }) !== "unknown"
+  ) {
+    try {
+      fail(surfaceKey, { kind: "failed", code: "wake", step: "booting" });
+    } catch {
+      // The current stage can offer Retry while storage is unavailable.
+    }
+  }
+  return false;
 }
 
 function stagedWakeFailure(
@@ -618,7 +649,7 @@ async function startCreateTarget(
     return null;
   const result = await createSandbox(run, request, deps);
   if (result === null || !stillCurrent(run)) return null;
-  return recordStageCreateAnswer(surfaceKey, request, result, {
+  return recordStageCreateAnswer(run, result, {
     teamName:
       target.configuration.kind === "team"
         ? target.configuration.teamName
@@ -628,17 +659,30 @@ async function startCreateTarget(
 }
 
 function recordStageCreateAnswer(
-  surfaceKey: string,
-  request: SandboxCreateRequest,
+  run: StagedRunIdentity,
   result: SandboxCreateFetchResult,
   context: { readonly teamName: string | null; readonly now: number },
 ): StartedSandbox | null {
+  const { surfaceKey } = run;
   if (result.kind !== "ok") {
-    const retryCreate = sandboxRetryAfterRefusal(result, request);
+    const retryCreate = sandboxRetryAfterRefusal(result);
     const failure = createFailure(result, context.teamName);
     const beforeReservation = createRefusedBeforeReservation(result);
     useStagedSandboxStore.getState().report(surfaceKey, {
-      failure: retryCreate === null ? failure : { ...failure, retryCreate },
+      failure: {
+        ...failure,
+        ...(retryCreate === null
+          ? {}
+          : { retryCreate, retryRowVerified: true }),
+        ...(beforeReservation
+          ? {
+              rowlessCreateRefusal: {
+                createKey: run.createKey,
+                attemptId: run.attemptId,
+              },
+            }
+          : {}),
+      },
       ...(beforeReservation ? { createAttempt: null } : {}),
     });
     return null;
@@ -670,13 +714,14 @@ function recordStageCreateAnswer(
   return { sandboxId, hostId };
 }
 
-/** Only a refusal before reservation releases the previous create's wait budget. */
+/** These exact refusals settle without reserving a row under the attempted key. */
 function createRefusedBeforeReservation(
   failure: SandboxControlFailure,
 ): boolean {
   return (
     failure.kind === "refused" &&
     failure.sandboxId === undefined &&
+    failure.sandbox === undefined &&
     ((failure.status === 400 &&
       failure.code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) ||
       (failure.status === 503 &&
@@ -730,6 +775,10 @@ function createSandbox(
       // TanStack can suspend on onMutate. Commit the body at the fenced POST.
       mutationFn: async () => {
         if (!stillCurrent(run)) return null;
+        if (!saveStagedCreateRequest(run.surfaceKey, request)) {
+          reportCreateSaveFailure(run);
+          return null;
+        }
         const draft = readStagedSandbox(run.surfaceKey)?.returnedDraft;
         if (draft?.stageId === run.clientRequestId) {
           const saved =
@@ -740,13 +789,12 @@ function createSandbox(
                   request,
                 )
               : saveReturnedTaskCreateRequest(run.surfaceKey, draft, request);
-          if (!saved) return null;
+          if (saved !== "saved") {
+            if (saved === "failed") reportCreateSaveFailure(run);
+            return null;
+          }
         }
-        return stillCurrent(run) &&
-          saveStagedCreateRequest(run.surfaceKey, request) &&
-          stillCurrent(run)
-          ? auth.createSandbox(request)
-          : null;
+        return stillCurrent(run) ? auth.createSandbox(request) : null;
       },
       onSettled: (result) => {
         if (result === null || !settledForStartingAccount(context)) return;
@@ -776,6 +824,15 @@ function createSandbox(
       detail: error instanceof Error ? error.message : String(error),
     }))
     .finally(unsubscribe);
+}
+
+function reportCreateSaveFailure(run: StagedRunIdentity): void {
+  if (!stillCurrent(run)) return;
+  try {
+    fail(run.surfaceKey, { kind: "unavailable" });
+  } catch {
+    // The stage still shows the retry in memory even if storage is unavailable.
+  }
 }
 
 /** A create failure as shown on the stage's line. */

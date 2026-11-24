@@ -132,7 +132,17 @@ type StagedSandboxFailureDetail =
 export type StagedSandboxFailure = StagedSandboxFailureDetail & {
   readonly sandboxId?: string;
   readonly retryCreate?: SandboxCreateRequest;
+  readonly retryRowVerified?: true;
+  readonly rowlessCreateRefusal?: {
+    readonly createKey: string;
+    readonly attemptId: string | undefined;
+  };
 };
+
+interface StagedCreateRetryRow {
+  readonly sandboxId: string;
+  readonly failure: StagedSandboxFailure;
+}
 
 export interface StagedSandbox {
   /** The original create bound and this driver's post-preflight clock; absent on legacy stages. */
@@ -161,6 +171,8 @@ export interface StagedSandbox {
   readonly attemptRetryId?: string;
   /** The exact create request selected for that key, including the first POST. */
   readonly lastRetryCreate?: SandboxCreateRequest;
+  /** A named refusal selected for Retry whose row still needs to be read. */
+  readonly createRetryRow?: StagedCreateRetryRow;
   readonly returnedDraft?: ReturnedSandboxDraft;
   /**
    * The draft whose send started the action, where a surface holds several
@@ -222,6 +234,35 @@ export function stagedCreateRetryPayload(
   return last?.clientRequestId === key ? last : undefined;
 }
 
+export function stagedCreateRetryRow(
+  stage: StagedSandbox,
+  key: string | null,
+): StagedCreateRetryRow | undefined {
+  if (key === null || stage.lastRetryCreate?.clientRequestId === key)
+    return undefined;
+  const pending = stage.createRetryRow;
+  if (
+    pending !== undefined &&
+    sandboxCreateKey("retry", pending.sandboxId) === key
+  )
+    return pending;
+  const { failure } = stage;
+  const sandboxId = stagedFailedSandboxId(stage);
+  if (
+    failure === null ||
+    sandboxId === null ||
+    sandboxCreateKey("retry", sandboxId) !== key
+  )
+    return undefined;
+  // Older direct refusals could carry the attempted body under the row's retry key.
+  if (
+    failure.retryCreate !== undefined &&
+    (failure.kind === "failed" || failure.retryRowVerified === true)
+  )
+    return undefined;
+  return { sandboxId, failure };
+}
+
 function stagedAttemptPayload(
   stage: StagedSandbox,
   key: string,
@@ -241,6 +282,36 @@ export function newStagedSandboxKey(): string {
 
 export function stagedCreateAttemptKey(stage: StagedSandbox): string | null {
   return stage.lastCreateKey ?? stage.clientRequestId;
+}
+
+/** Cancel can start over when the exact create is known to have ended. */
+export function stagedCancelStartsOver(
+  surfaceKey: string,
+  stage: StagedSandbox,
+): boolean {
+  if (stagedFailedSandboxId(stage) !== null) return true;
+  const proof = stage.failure?.rowlessCreateRefusal;
+  if (
+    proof === undefined ||
+    stage.target.kind !== "new" ||
+    stage.createdSandboxId !== null ||
+    stage.createdHostId !== null ||
+    stagedCreateAttemptKey(stage) !== proof.createKey ||
+    stage.attemptId !== proof.attemptId
+  )
+    return false;
+  if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return true;
+  const durable = readPendingStageAttempt(
+    surfaceKey,
+    stage.clientRequestId,
+    proof.createKey,
+    proof.attemptId,
+  );
+  return (
+    durable?.createdSandboxId === null &&
+    durable.createdHostId === null &&
+    JSON.stringify(durable.failure) === JSON.stringify(stage.failure)
+  );
 }
 
 /** The key for the failure shown in the window where Retry was pressed. */
@@ -334,6 +405,7 @@ interface StagedSandboxStoreState {
         | "clientRequestId"
         | "lastCreateKey"
         | "lastRetryCreate"
+        | "createRetryRow"
         | "ownerId"
         | "createdSandboxId"
         | "createdHostId"
@@ -431,6 +503,7 @@ function stagedPick({
   clientRequestId,
   lastCreateKey,
   lastRetryCreate,
+  createRetryRowId,
   returnedDraft,
 }: RestoredSandboxPick): StagedSandbox {
   return {
@@ -443,6 +516,14 @@ function stagedPick({
     lastRetryCreate.clientRequestId === lastCreateKey
       ? { lastRetryCreate }
       : {}),
+    ...(createRetryRowId === undefined
+      ? {}
+      : {
+          createRetryRow: {
+            sandboxId: createRetryRowId,
+            failure: { kind: "unavailable" },
+          },
+        }),
     ...(returnedDraft === undefined ? {} : { returnedDraft }),
     ownerId: null,
     createdSandboxId: null,
@@ -521,11 +602,11 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           );
         const previousKey = stage.lastCreateKey ?? clientRequestId;
         const lastCreateKey = createKey ?? previousKey;
-        const lastRetryCreate = stagedAttemptPayload(
-          stage,
-          lastCreateKey,
-          retryCreate,
-        );
+        const createRetryRow = stagedCreateRetryRow(stage, lastCreateKey);
+        const lastRetryCreate =
+          createRetryRow === undefined
+            ? stagedAttemptPayload(stage, lastCreateKey, retryCreate)
+            : undefined;
         const replacing =
           lastCreateKey !== previousKey && stage.target.kind === "new";
         const resumed = resume && !replacing && stage.startedAt !== null;
@@ -538,6 +619,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           attemptRetryId:
             retryRequestId ?? (resumed ? stage.attemptRetryId : undefined),
           lastRetryCreate,
+          createRetryRow,
           createdSandboxId: replacing ? null : stage.createdSandboxId,
           createdHostId: replacing ? null : stage.createdHostId,
           createAttempt: replacing ? null : stage.createAttempt,
@@ -582,7 +664,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
       cancel: (surfaceKey, restageFailed) =>
         set((state) => ({
           bySurface: withStage(state.bySurface, surfaceKey, (stage) => {
-            if (!restageFailed || stagedFailedSandboxId(stage) === null) {
+            if (!restageFailed || !stagedCancelStartsOver(surfaceKey, stage)) {
               return { ...stage, phase: "staged", failure: null };
             }
             return {
@@ -593,6 +675,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
               attemptId: undefined,
               attemptRetryId: undefined,
               lastRetryCreate: undefined,
+              createRetryRow: undefined,
               createdSandboxId: null,
               createdHostId: null,
               createAttempt: null,

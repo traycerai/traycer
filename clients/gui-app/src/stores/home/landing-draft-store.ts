@@ -80,6 +80,7 @@ import {
   storeReturnedSandbox,
   updateReturnedSandboxRestore,
   type ReturnedSandboxDraft,
+  type ReturnedCreateCommit,
   type ReturnedSandbox,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
@@ -1407,14 +1408,14 @@ export async function saveReturnedLandingCreateRequest(
   surfaceKey: string,
   origin: Extract<ReturnedSandboxDraft, { kind: "landing" }>,
   request: SandboxCreateRequest,
-): Promise<boolean> {
+): Promise<ReturnedCreateCommit> {
   const { draftId, userId } = origin;
-  if (signedInUserId() !== userId) return false;
+  if (signedInUserId() !== userId) return "stale";
   const state = useLandingDraftStore.getState();
   const draft = state.drafts.find((item) => item.id === draftId);
   const stored = draft?.returnedSandbox ?? null;
   const next = returnedSandboxWithCreate(stored, origin, request);
-  if (next === null) return false;
+  if (next === null) return "stale";
   try {
     updateReturnedSandboxRestore(surfaceKey, next);
     if (!sameStoredReturnedSandbox(stored, next)) {
@@ -1434,13 +1435,16 @@ export async function saveReturnedLandingCreateRequest(
     const live = useLandingDraftStore
       .getState()
       .drafts.find((item) => item.id === draftId);
-    return (
-      signedInUserId() === userId &&
-      returnedSandboxCreateMatches(saved, origin, request) &&
-      returnedSandboxCreateMatches(live?.returnedSandbox, origin, request)
-    );
+    if (
+      signedInUserId() !== userId ||
+      !returnedSandboxCreateMatches(live?.returnedSandbox, origin, request)
+    )
+      return "stale";
+    return returnedSandboxCreateMatches(saved, origin, request)
+      ? "saved"
+      : "failed";
   } catch {
-    return false;
+    return "failed";
   }
 }
 

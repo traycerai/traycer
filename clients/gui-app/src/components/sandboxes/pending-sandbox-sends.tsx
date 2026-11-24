@@ -217,6 +217,7 @@ import {
   holdHandoffOwner,
   readStagedSandbox,
   newStagedSandboxKey,
+  stagedCancelStartsOver,
   stagedCreateAttemptKey,
   stagedCreateRetryPayload,
   stagedFailedSandboxId,
@@ -2323,18 +2324,32 @@ function observeCompletedDispatchWake(input: {
     observation,
     observationId,
   );
-  if (requestedAt === null) return null;
+  if (
+    requestedAt === null &&
+    !pendingDispatchWakeCurrent(send.id, dispatch, observation)
+  )
+    return null;
+  const cancelled = cancelSandboxWakeReads(
+    queryClient,
+    auth,
+    send.userId,
+    oldRow.queryKey,
+  );
+  if (requestedAt === null) {
+    usePendingSandboxSendStore
+      .getState()
+      .dispatchEvent(send.id, "wake-failed", {
+        ...UNKNOWN_PENDING_SEND_FACTS,
+        observation,
+      });
+    return null;
+  }
   const completed: WakeObservation = {
     kind: "wake-result",
     requestedAt,
     observationId,
   };
-  void cancelSandboxWakeReads(
-    queryClient,
-    auth,
-    send.userId,
-    oldRow.queryKey,
-  ).then(() => {
+  void cancelled.then(() => {
     if (pendingDispatchWakeCurrent(send.id, dispatch, completed))
       void refetch();
   });
@@ -3652,15 +3667,23 @@ function PendingStagedSendItem(props: {
                 );
                 return;
               }
+              const current = readStagedSandbox(surfaceKey);
+              if (current === null) return;
               const returned = backToComposer(
                 false,
-                stagedFailedSandboxId(stage) === null
-                  ? returnedSandboxPick(send, stage, rowState)
-                  : {
+                stagedCancelStartsOver(surfaceKey, current)
+                  ? {
                       kind: "stage",
-                      target: stage.target,
+                      target: current.target,
                       clientRequestId: newStagedSandboxKey(),
-                    },
+                    }
+                  : returnedSandboxPick(
+                      send,
+                      current,
+                      current.createdSandboxId === stage.createdSandboxId
+                        ? rowState
+                        : null,
+                    ),
               );
               if (
                 !Object.hasOwn(

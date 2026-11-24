@@ -26,6 +26,8 @@ export interface ReturnedSandbox {
   readonly lastCreateKey?: string;
   /** The exact request that went out under that key. */
   readonly lastRetryCreate?: SandboxCreateRequest;
+  /** The named row that owns an already selected retry key without a body. */
+  readonly createRetryRowId?: string;
 }
 
 /**
@@ -50,6 +52,8 @@ export type ReturnedSandboxDraft = (
   readonly stageId: string;
 };
 
+export type ReturnedCreateCommit = "saved" | "stale" | "failed";
+
 /**
  * Stamps a returned sandbox with the signed-in account. One already stored
  * keeps its own: an undo puts it back as it was.
@@ -66,6 +70,9 @@ export function storeReturnedSandbox(
     ...(returned.lastRetryCreate === undefined
       ? {}
       : { lastRetryCreate: returned.lastRetryCreate }),
+    ...(returned.createRetryRowId === undefined
+      ? {}
+      : { createRetryRowId: returned.createRetryRowId }),
     userId:
       "userId" in returned
         ? returned.userId
@@ -133,7 +140,8 @@ export function returnedSandboxWithCreate(
     JSON.stringify(current.lastRetryCreate) !== JSON.stringify(request)
   )
     return null;
-  return { ...current, lastCreateKey: key, lastRetryCreate: request };
+  const { createRetryRowId: _resolved, ...rest } = current;
+  return { ...rest, lastCreateKey: key, lastRetryCreate: request };
 }
 
 export function returnedSandboxCreateMatches(
@@ -247,6 +255,7 @@ export function sameReturnedSandbox(
   return (
     a.clientRequestId === b.clientRequestId &&
     a.lastCreateKey === b.lastCreateKey &&
+    a.createRetryRowId === b.createRetryRowId &&
     JSON.stringify(a.lastRetryCreate) === JSON.stringify(b.lastRetryCreate) &&
     JSON.stringify(a.target) === JSON.stringify(b.target)
   );
@@ -298,6 +307,9 @@ export function returnedSandboxToJson(
     ...(returned.lastRetryCreate === undefined
       ? {}
       : { lastRetryCreate: { ...returned.lastRetryCreate } }),
+    ...(returned.createRetryRowId === undefined
+      ? {}
+      : { createRetryRowId: returned.createRetryRowId }),
     userId: returned.userId,
   };
 }
@@ -334,6 +346,17 @@ export function parseReturnedSandbox(
   const lastRetryCreate = lastRetryCreateSchema.safeParse(
     value.lastRetryCreate,
   );
+  const unresolved =
+    typeof value.createRetryRowId === "string" &&
+    /^[A-Za-z0-9_-]{1,128}$/.test(value.createRetryRowId)
+      ? value.createRetryRowId
+      : null;
+  const pending =
+    unresolved !== null &&
+    lastCreateKey.success &&
+    sandboxCreateKey("retry", unresolved) === lastCreateKey.data
+      ? { createRetryRowId: unresolved }
+      : {};
   return {
     target,
     clientRequestId:
@@ -344,7 +367,7 @@ export function parseReturnedSandbox(
           ...(lastRetryCreate.success &&
           lastRetryCreate.data.clientRequestId === lastCreateKey.data
             ? { lastRetryCreate: lastRetryCreate.data }
-            : {}),
+            : pending),
         }
       : {}),
     userId: typeof value.userId === "string" ? value.userId : null,

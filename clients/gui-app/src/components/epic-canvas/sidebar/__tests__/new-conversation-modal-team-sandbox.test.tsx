@@ -23,6 +23,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { DraftDocument } from "@traycer/protocol/host";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerHostNoticeState } from "@/components/home/composer/composer-host-notice";
@@ -37,7 +38,12 @@ import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-st
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { budgetCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  persistKey,
+  recordMapStorageKey,
+  STORE_KEYS,
+} from "@/lib/persist/keys";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -62,6 +68,7 @@ import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { stagedRunActive } from "@/lib/sandboxes/staged-sandbox-run";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -91,6 +98,35 @@ const DIRTY_CONTENT: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "dirty" }] }],
 };
+
+function taskDraftDocument(draftId: string): DraftDocument {
+  return {
+    draftId,
+    kind: "new-chat",
+    target: { epicId: "epic-1", chatId: null, blockId: null },
+    revision: 1,
+    lastTouchedAt: 1,
+    workspace: null,
+    ownerHostId: "task-owner-host",
+    origin: "own",
+    adoption: { state: "adopted", hostId: "task-owner-host" },
+    publication: {
+      status: "unpublished",
+      lastPublishedAt: null,
+      publishedRevision: null,
+      halted: null,
+    },
+    supersedes: null,
+    portable: {
+      content: DIRTY_CONTENT,
+      selection: null,
+      runSettings: null,
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+    },
+  };
+}
 
 const gateState = vi.hoisted(() => ({
   blockedIds: new Set<string>(),
@@ -1931,6 +1967,11 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     const draftId =
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
         ?.draftId;
+    const taskDraftStorageKey = persistKey(STORE_KEYS.newConversationDraft);
+    const taskDraftRecordKey = recordMapStorageKey(
+      taskDraftStorageKey,
+      "epic-1",
+    );
     if (
       stageIdentity === undefined ||
       stageIdentity === null ||
@@ -1948,24 +1989,33 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     const firstCreate = {
       ...refusal(502, "provider_failed"),
       sandboxId: "sbx_task_failed_f",
+      sandbox: sandboxSummaryFixture({
+        id: "sbx_task_failed_f",
+        hostId: "host-task-failed",
+        state: "failed",
+        displayName: "origin/main hook",
+        createdByTaskId: "origin-task",
+        os: "linux",
+        cpus: 8,
+        memoryMb: 8192,
+        diskMb: 12800,
+        region: "eu-west",
+        idleMinutes: 25,
+        environmentId: "env-task-failed",
+        destroyAfterRestingMinutes: 1_440,
+      }),
     } satisfies SandboxCreateFetchResult;
     const heldRetry = deferred<SandboxCreateFetchResult>();
     const secondCreateEntered = deferred<void>();
     const requests: Parameters<AuthService["createSandbox"]>[0][] = [];
     const durableAtPost: Array<StoredReturnedSandbox | undefined> = [];
     const durableReturnedSandbox = (): StoredReturnedSandbox | undefined => {
-      const raw = localStorage.getItem(
-        persistKey(STORE_KEYS.newConversationDraft),
-      );
+      const raw = localStorage.getItem(taskDraftRecordKey);
       if (raw === null) throw new Error("expected a persisted task draft");
       const persisted = JSON.parse(raw) as {
-        readonly state?: {
-          readonly draftPatchesByEpicId?: Readonly<
-            Record<string, { readonly returnedSandbox?: StoredReturnedSandbox }>
-          >;
-        };
+        readonly returnedSandbox?: StoredReturnedSandbox;
       };
-      return persisted.state?.draftPatchesByEpicId?.["epic-1"]?.returnedSandbox;
+      return persisted.returnedSandbox;
     };
     vi.spyOn(fixture.auth, "getSandboxCatalogue").mockResolvedValue({
       kind: "ok",
@@ -2028,11 +2078,50 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
       });
     });
 
+    vi.resetModules();
+    const unrelatedWindow =
+      await import("@/stores/epics/new-conversation-modal-store");
+    await unrelatedWindow.useNewConversationModalStore.persist.rehydrate();
     fireEvent.click(screen.getByTestId("sandbox-setup-retry-creation"));
     await secondCreateEntered.promise;
     const retryRequest = requests[1];
+    expect(
+      unrelatedWindow.useNewConversationModalStore.getState()
+        .draftPatchesByEpicId["epic-1"]?.returnedSandbox,
+    ).toMatchObject({
+      lastCreateKey: stageIdentity,
+      lastRetryCreate: firstRequest,
+    });
+    unrelatedWindow.useNewConversationModalStore
+      .getState()
+      .setContent("epic-unrelated-window", DIRTY_CONTENT);
+    const recordAfterOtherWindowEdit = localStorage.getItem(taskDraftRecordKey);
+    if (recordAfterOtherWindowEdit === null)
+      throw new Error("expected the Retry descriptor after the other edit");
+    expect(
+      (
+        JSON.parse(recordAfterOtherWindowEdit) as {
+          readonly returnedSandbox?: StoredReturnedSandbox;
+        }
+      ).returnedSandbox,
+    ).toMatchObject({
+      lastCreateKey: "retry:sbx_task_failed_f",
+      lastRetryCreate: retryRequest,
+    });
     expect(retryRequest).toEqual({
-      ...firstRequest,
+      os: "linux",
+      cpus: 8,
+      memoryMb: 8192,
+      diskMb: 12800,
+      region: "eu-west",
+      displayName: "origin/main hook",
+      idleMinutes: 25,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: "env-task-failed",
+      destroyAfterRestingMinutes: 1_440,
+      createdByTaskId: "origin-task",
       clientRequestId: "retry:sbx_task_failed_f",
     });
     expect(durableAtPost[1]).toMatchObject({
@@ -2049,12 +2138,13 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     });
     view.unmount();
     useStagedSandboxStore.getState().clear(surfaceKey);
-    const taskDraftStorageKey = persistKey(STORE_KEYS.newConversationDraft);
-    const savedTaskDraft = localStorage.getItem(taskDraftStorageKey);
-    if (savedTaskDraft === null)
+    const savedTaskDraftHeader = localStorage.getItem(taskDraftStorageKey);
+    const savedTaskDraftRecord = localStorage.getItem(taskDraftRecordKey);
+    if (savedTaskDraftHeader === null || savedTaskDraftRecord === null)
       throw new Error("expected the durable task draft before reopening");
     useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
-    localStorage.setItem(taskDraftStorageKey, savedTaskDraft);
+    localStorage.setItem(taskDraftStorageKey, savedTaskDraftHeader);
+    localStorage.setItem(taskDraftRecordKey, savedTaskDraftRecord);
     await useNewConversationModalStore.persist.rehydrate();
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
@@ -2078,6 +2168,11 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     });
     await waitFor(() => expect(requests).toHaveLength(3));
     expect(requests[2]).toEqual(retryRequest);
+    await waitFor(() => {
+      expect(readStagedSandbox(surfaceKey)?.failure).toMatchObject({
+        kind: "unavailable",
+      });
+    });
     expect(durableAtPost[2]).toMatchObject({
       lastCreateKey: retryRequest.clientRequestId,
       lastRetryCreate: retryRequest,
@@ -2085,6 +2180,152 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     expect(create).toHaveBeenCalledTimes(3);
     expect(testState.createTerminalAgent).not.toHaveBeenCalled();
     reopened.unmount();
+    fixture.dispose();
+  });
+
+  it("does not post a rendered task Retry after a newer same-epic draft replaces its return", async () => {
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode("epic-1", "terminal");
+    const fixture = await createAttachmentAuthBinding(null);
+    await signInAs(fixture, "modal-user", "modal-token-a");
+    const surfaceKey = newConversationSurfaceKey("epic-1");
+    useStagedSandboxStore.getState().stage(surfaceKey, NEW_SANDBOX);
+    const stageIdentity = readStagedSandbox(surfaceKey)?.clientRequestId;
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.draftId;
+    const taskDraftStorageKey = persistKey(STORE_KEYS.newConversationDraft);
+    const taskDraftRecordKey = recordMapStorageKey(
+      taskDraftStorageKey,
+      "epic-1",
+    );
+    if (
+      stageIdentity === undefined ||
+      stageIdentity === null ||
+      draftId === null ||
+      draftId === undefined
+    )
+      throw new Error("expected the original task draft and stage");
+    useNewConversationModalStore.getState().setReturnedSandbox("epic-1", {
+      target: NEW_SANDBOX,
+      clientRequestId: stageIdentity,
+      userId: "modal-user",
+    });
+    useStagedSandboxStore.getState().clear(surfaceKey);
+
+    const refusedRow = sandboxSummaryFixture({
+      id: "sbx_task_occurrence_f",
+      hostId: "host-task-occurrence",
+      state: "failed",
+      displayName: "origin/main hook",
+      createdByTaskId: "origin-task",
+      os: "linux",
+      cpus: 8,
+      memoryMb: 8192,
+      diskMb: 12800,
+      region: "eu-west",
+      idleMinutes: 25,
+      environmentId: "env-task-occurrence",
+      destroyAfterRestingMinutes: 1_440,
+    });
+    const firstCreate = {
+      ...refusal(502, "provider_failed"),
+      sandboxId: refusedRow.id,
+      sandbox: refusedRow,
+    } satisfies SandboxCreateFetchResult;
+    const requests: Parameters<AuthService["createSandbox"]>[0][] = [];
+    vi.spyOn(fixture.auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: budgetCatalogue(600_000),
+    });
+    vi.spyOn(fixture.auth, "listSandboxes").mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    const create = vi
+      .spyOn(fixture.auth, "createSandbox")
+      .mockImplementation((request) => {
+        requests.push(request);
+        return Promise.resolve(firstCreate);
+      });
+
+    testState.actualStagedSend = true;
+    testState.workspaceReady = true;
+    const view = renderModal(fixture.binding);
+    await waitFor(() => {
+      expect(readStagedSandbox(surfaceKey)?.returnedDraft).toMatchObject({
+        kind: "task",
+        epicId: "epic-1",
+        draftId,
+        stageId: stageIdentity,
+      });
+    });
+    act(() => {
+      testState.bodyStartTerminal?.(terminalLaunch("claude"), "host-a");
+    });
+    await waitFor(() => {
+      expect(requests).toHaveLength(1);
+      expect(readStagedSandbox(surfaceKey)?.failure).toMatchObject({
+        kind: "refused",
+        sandboxId: refusedRow.id,
+      });
+    });
+    await waitFor(() => expect(stagedRunActive(surfaceKey)).toBe(false));
+
+    vi.resetModules();
+    const otherWindow =
+      await import("@/stores/epics/new-conversation-modal-store");
+    await otherWindow.useNewConversationModalStore.persist.rehydrate();
+    otherWindow.useNewConversationModalStore.getState().clearDraft("epic-1");
+    otherWindow.useNewConversationModalStore
+      .getState()
+      .setContent("epic-1", DIRTY_CONTENT);
+    otherWindow.applyNewChatHostDocument(taskDraftDocument("draft-task-newer"));
+    const newerRetry: Parameters<AuthService["createSandbox"]>[0] = {
+      ...requests[0],
+      displayName: "newer occurrence request",
+      clientRequestId: "retry:newer-occurrence",
+    };
+    const newerReturn: StoredReturnedSandbox = {
+      target: NEW_SANDBOX,
+      clientRequestId: "stage:newer-occurrence",
+      lastCreateKey: newerRetry.clientRequestId ?? undefined,
+      lastRetryCreate: newerRetry,
+      userId: "modal-user",
+    };
+    otherWindow.useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox("epic-1", newerReturn);
+    const newerDurableText = localStorage.getItem(taskDraftRecordKey);
+    if (newerDurableText === null)
+      throw new Error("expected the newer task occurrence to persist");
+    const newerDurable = JSON.parse(newerDurableText) as {
+      readonly draftId?: string | null;
+      readonly returnedSandbox?: StoredReturnedSandbox;
+    };
+    expect(newerDurable).toMatchObject({
+      draftId: "draft-task-newer",
+      returnedSandbox: newerReturn,
+    });
+
+    const previousAttemptId = readStagedSandbox(surfaceKey)?.attemptId;
+    fireEvent.click(await screen.findByTestId("sandbox-setup-retry-creation"));
+    await waitFor(() => {
+      expect(readStagedSandbox(surfaceKey)?.attemptId).not.toBe(
+        previousAttemptId,
+      );
+      expect(stagedRunActive(surfaceKey)).toBe(false);
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(1);
+    const durableAfterRetry = localStorage.getItem(taskDraftRecordKey);
+    if (durableAfterRetry === null)
+      throw new Error("expected the newer task occurrence to remain durable");
+    expect(JSON.parse(durableAfterRetry) as typeof newerDurable).toEqual(
+      newerDurable,
+    );
+    view.unmount();
     fixture.dispose();
   });
 

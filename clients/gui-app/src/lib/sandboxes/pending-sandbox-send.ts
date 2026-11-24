@@ -41,6 +41,7 @@ import {
   readStagedSandbox,
   stagedCreateAttemptKey,
   stagedCreateRetryPayload,
+  stagedCreateRetryRow,
   stagedRetryKey,
   useStagedSandboxStore,
   type StagedSandbox,
@@ -242,6 +243,9 @@ export function handPendingSandboxSend(
   // its stage missing, nor mint a different sandbox create key for it.
   const replacing =
     chosenKey !== null && chosenKey !== stagedCreateAttemptKey(stage);
+  const createRetryRow = replacing
+    ? stagedCreateRetryRow(stage, chosenKey)
+    : undefined;
   const runnable =
     replacing || (chosenKey !== null && takesUpRowlessCreate(stage));
   store.report(surfaceKey, {
@@ -249,7 +253,11 @@ export function handPendingSandboxSend(
     ...(replacing
       ? {
           lastCreateKey: chosenKey,
-          lastRetryCreate: stagedCreateRetryPayload(stage, chosenKey),
+          lastRetryCreate:
+            createRetryRow === undefined
+              ? stagedCreateRetryPayload(stage, chosenKey)
+              : undefined,
+          createRetryRow,
           createdSandboxId: null,
           createdHostId: null,
           createAttempt: null,
@@ -569,7 +577,7 @@ export function stagedSandboxDestination(
   stage: StagedSandbox,
 ): ReturnedSandbox {
   const { createdSandboxId, createdHostId, target } = stage;
-  const { lastCreateKey, lastRetryCreate } = stage;
+  const { lastCreateKey, lastRetryCreate, createRetryRow } = stage;
   if (createdSandboxId === null || createdHostId === null)
     return {
       target,
@@ -581,6 +589,9 @@ export function stagedSandboxDestination(
             lastCreateKey,
             ...(lastRetryCreate?.clientRequestId === lastCreateKey
               ? { lastRetryCreate }
+              : {}),
+            ...(lastRetryCreate === undefined && createRetryRow !== undefined
+              ? { createRetryRowId: createRetryRow.sandboxId }
               : {}),
           }
         : {}),

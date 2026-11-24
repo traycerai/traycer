@@ -51,6 +51,7 @@ import {
   holdHandoffOwner,
   ownerGoneOnUnmount,
   readStagedSandbox,
+  stagedCancelStartsOver,
   stagedRetryKey,
   useStagedSandboxStore,
   type StagedSandbox,
@@ -815,11 +816,18 @@ describe("runStagedSandbox creating", () => {
 
   it("uses retry of the 502 row on the next staged press", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const failedRow = row({
+      id: "sbx_failed_502",
+      state: "failed",
+      failureCode: "PROVIDER_CREATE_FAILED",
+      displayName: "review-box",
+    });
     const { auth, deps } = harness(
       {
         createSandbox: () => ({
           ...refusal(502, SANDBOX_REFUSAL_CODE_PROVIDER_FAILED),
           sandboxId: "sbx_failed_502",
+          sandbox: failedRow,
         }),
       },
       true,
@@ -832,6 +840,8 @@ describe("runStagedSandbox creating", () => {
     expect(stage.failure).toMatchObject({
       kind: "refused",
       sandboxId: "sbx_failed_502",
+      retryCreate: { clientRequestId: retryKey },
+      retryRowVerified: true,
     });
     expect(retryKey).toBe("retry:sbx_failed_502");
     await run(retryKey, deps);
@@ -880,6 +890,94 @@ describe("runStagedSandbox creating", () => {
     );
     expect(budgetsAtPost).toEqual([480_000, 600_000]);
     expect(stageOf().createAttempt).toBeNull();
+  });
+
+  it.each([
+    [400, SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED, "shape"],
+    [503, SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE, "unavailable"],
+  ] as const)(
+    "starts a new composer stage after Cancel for exact rowless HTTP %s",
+    async (status, code, failureKind) => {
+      useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+      const answer = refusal(status, code);
+      let creates = 0;
+      const { auth, deps } = harness(
+        {
+          createSandbox: () => {
+            creates += 1;
+            return creates === 1
+              ? answer
+              : { kind: "network-error", detail: "the next response was lost" };
+          },
+        },
+        true,
+      );
+
+      await run(null, deps);
+      const firstRequest = auth.requests[0];
+      if (firstRequest.clientRequestId === null)
+        throw new Error("expected the first create request");
+      const refused = stageOf();
+      expect(refused.failure).toMatchObject({
+        kind: failureKind,
+        rowlessCreateRefusal: {
+          createKey: firstRequest.clientRequestId,
+          attemptId: refused.attemptId,
+        },
+      });
+      expect(stagedCancelStartsOver(surfaceKey, refused)).toBe(true);
+
+      useStagedSandboxStore.getState().cancel(surfaceKey, true);
+      const restarted = stageOf();
+      expect(restarted.phase).toBe("staged");
+      expect(restarted.clientRequestId).not.toBe(firstRequest.clientRequestId);
+      expect(restarted.lastCreateKey).toBeUndefined();
+      expect(restarted.lastRetryCreate).toBeUndefined();
+      expect(restarted.failure).toBeNull();
+      expect(auth.requests).toHaveLength(1);
+
+      await run(null, deps);
+
+      expect(auth.requests).toHaveLength(2);
+      expect(auth.requests[1]).toEqual({
+        ...firstRequest,
+        clientRequestId: restarted.clientRequestId,
+      });
+    },
+  );
+
+  it("does not treat a displayed shape refusal as proof that composer Cancel can start over", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      {
+        createSandbox: () =>
+          refusal(502, SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED),
+      },
+      true,
+    );
+
+    await run(null, deps);
+    const firstRequest = auth.requests[0];
+    if (firstRequest.clientRequestId === null)
+      throw new Error("expected the first create request");
+    const refused = stageOf();
+    expect(refused.failure).toMatchObject({ kind: "shape" });
+    expect(refused.failure?.rowlessCreateRefusal).toBeUndefined();
+    expect(stagedCancelStartsOver(surfaceKey, refused)).toBe(false);
+
+    useStagedSandboxStore.getState().cancel(surfaceKey, true);
+    expect(stageOf()).toMatchObject({
+      phase: "staged",
+      clientRequestId: firstRequest.clientRequestId,
+      lastCreateKey: firstRequest.clientRequestId,
+      lastRetryCreate: firstRequest,
+      failure: null,
+    });
+    expect(auth.requests).toHaveLength(1);
+
+    await run(null, deps);
+
+    expect(auth.requests).toEqual([firstRequest, firstRequest]);
   });
 
   it("uses retry of a joined HTTP 200 failed row on the next staged press", async () => {
@@ -3152,6 +3250,11 @@ describe("retained create attempt", () => {
 
   it("a fresh retry discards the old attempt and reads the new bound", async () => {
     retained();
+    const failedRow = row({
+      id: "sbx_failed-create",
+      state: "failed",
+      failureCode: "PROVIDER_CREATE_FAILED",
+    });
     useStagedSandboxStore.getState().report(surfaceKey, {
       createdSandboxId: "sbx_failed-create",
       createdHostId: "host-failed-create",
@@ -3161,6 +3264,10 @@ describe("retained create attempt", () => {
       { lists: [listOf(row({ state: "creating" }))] },
       true,
     );
+    vi.spyOn(auth, "getSandbox").mockResolvedValue({
+      kind: "ok",
+      sandbox: failedRow,
+    });
     const preflight = vi
       .spyOn(auth, "getSandboxCatalogue")
       .mockResolvedValue({ kind: "ok", catalogue: budgetCatalogue(600_000) });

@@ -14,6 +14,7 @@ import {
 } from "@/lib/drafts/draft-inventory-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
   markReturnedSandboxRestored,
   type ReturnedSandbox,
@@ -93,11 +94,15 @@ function giveBack(): void {
 async function reload(): Promise<void> {
   cleanup();
   const key = persistKey(STORE_KEYS.newConversationDraft);
-  const saved = localStorage.getItem(key);
+  const recordKey = recordMapStorageKey(key, EPIC_ID);
+  const savedHeader = localStorage.getItem(key);
+  const savedRecord = localStorage.getItem(recordKey);
   useStagedSandboxStore.getState().clear(SURFACE);
   useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
-  if (saved === null) localStorage.removeItem(key);
-  else localStorage.setItem(key, saved);
+  if (savedHeader === null) localStorage.removeItem(key);
+  else localStorage.setItem(key, savedHeader);
+  if (savedRecord === null) localStorage.removeItem(recordKey);
+  if (savedRecord !== null) localStorage.setItem(recordKey, savedRecord);
   await useNewConversationModalStore.persist.rehydrate();
 }
 

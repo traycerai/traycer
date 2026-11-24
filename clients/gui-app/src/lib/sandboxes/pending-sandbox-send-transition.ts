@@ -1138,10 +1138,14 @@ function consumeRetry(
     return result(state, ["acknowledge-retry"], facts);
   const event = PENDING_STAGE_RETRY_EVENTS[facts.retryAction];
   const requested = activeTransition(state, event, facts);
+  const runsStage =
+    requested.effects.includes("run-stage") &&
+    (facts.retryAction !== "keep-waiting" ||
+      requested.effects.includes("retry"));
   if (
     facts.retryAction !== "send-again" &&
     stageRetryAllowed(state, facts.retryAction, facts) &&
-    !requested.effects.includes("run-stage") &&
+    !runsStage &&
     (facts.stageStatus !== "handoff" || !requested.effects.includes("retry"))
   ) {
     // The published press remains pending while its owner cannot run it.
