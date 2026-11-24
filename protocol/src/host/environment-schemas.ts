@@ -587,6 +587,26 @@ export type EnvironmentReviewHeldApplyResponse = z.infer<
   typeof environmentReviewHeldApplyResponseSchema
 >;
 
+/** The exact hold and revision shown on the originating computer's review. */
+export const environmentReviewHeldKeepRequestSchema = lazySchema(() =>
+  z.strictObject({
+    heldId: z.string().min(1),
+    revision: z.number().int().nonnegative(),
+  }),
+);
+export type EnvironmentReviewHeldKeepRequest = z.infer<
+  typeof environmentReviewHeldKeepRequestSchema
+>;
+
+export const environmentReviewHeldKeepResponseSchema = lazySchema(() =>
+  z.strictObject({
+    outcome: z.enum(["kept", "gone", "conflict", "forbidden"]),
+  }),
+);
+export type EnvironmentReviewHeldKeepResponse = z.infer<
+  typeof environmentReviewHeldKeepResponseSchema
+>;
+
 /**
  * `environment.review.record@1.0`: this computer's retrospective sheet was
  * `shown`, or the person `acknowledged` it (Got it); the two are recorded

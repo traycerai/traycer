@@ -705,6 +705,7 @@ export interface IRemoteSession<
      * ordinary case.
      */
     requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    requestId: string | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -1692,6 +1693,7 @@ export class RemoteSession<
     responseTimeoutMs: number | undefined,
     replayMustBeKeyed: boolean,
     requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    requestId: string | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     // A typed shell over the untyped path below. The registry's key type never
     // reaches the dispatch - the body indexes its manifests by string - so
@@ -1706,6 +1708,7 @@ export class RemoteSession<
       responseTimeoutMs,
       replayMustBeKeyed,
       requiredHostMethodVersion,
+      requestId,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -1723,9 +1726,10 @@ export class RemoteSession<
     responseTimeoutMs: number | undefined,
     replayMustBeKeyed: boolean,
     requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    requestIdOverride: string | undefined,
   ): Promise<unknown> {
     this.start();
-    const requestId = this.options.requestId();
+    const requestId = requestIdOverride ?? this.options.requestId();
     if (abortSignal !== null && abortSignal.aborted) {
       throw abortedRequestError(requestId, method);
     }
@@ -4079,6 +4083,7 @@ export class RemoteSession<
       2 * SESSION_LIVENESS_PROBE_TIMEOUT_MS,
       false,
       null,
+      undefined,
     ).then(
       () => this.settleSilenceProbe(verdictTimer, origin, false),
       () => this.settleSilenceProbe(verdictTimer, origin, true),

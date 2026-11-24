@@ -232,6 +232,7 @@ export async function applyReviewChoice(
 export interface HeldChangeForMatch {
   readonly heldId: string;
   readonly revision: number;
+  readonly liveRevision: number | null;
   readonly kind: string;
   readonly key: string;
   readonly os: string | null;
@@ -274,6 +275,7 @@ export async function readHeldChangesForMatch(
     holds.push({
       heldId: entry.heldId,
       revision: entry.revision,
+      liveRevision: entry.live?.revision ?? null,
       kind: entry.kind,
       key: entry.key,
       os: entry.os,

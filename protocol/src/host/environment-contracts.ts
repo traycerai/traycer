@@ -1,6 +1,10 @@
 import { defineRpcContract, defineUpgradePath } from "../framework/index";
 import * as schemas from "./environment-schemas";
-import { environmentProposalsV10 } from "./environment/settings-proposals";
+import {
+  environmentProposalsUpgradeV10ToV11,
+  environmentProposalsV10,
+  environmentProposalsV11,
+} from "./environment/settings-proposals";
 import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
 
 /**
@@ -360,6 +364,13 @@ export const environmentReviewUpgradeV11ToV12 = defineUpgradePath<
   }),
 });
 
+export const environmentReviewHeldKeepV10 = defineRpcContract({
+  method: "environment.review.heldKeep",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.environmentReviewHeldKeepRequestSchema,
+  responseSchema: schemas.environmentReviewHeldKeepResponseSchema,
+});
+
 export const environmentSecretsVerifyV10 = defineRpcContract({
   method: "environment.secrets.verify",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -581,11 +592,15 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.proposals": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentProposalsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentProposalsV11,
+          upgradeFromPreviousVersion: environmentProposalsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -976,6 +991,19 @@ export const ENVIRONMENT_RPC_METHODS = {
         2: {
           contract: environmentReviewV12,
           upgradeFromPreviousVersion: environmentReviewUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.review.heldKeep": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentReviewHeldKeepV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},

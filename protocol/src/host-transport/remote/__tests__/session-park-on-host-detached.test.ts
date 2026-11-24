@@ -401,6 +401,7 @@ function hostStatusCall(
     undefined,
     false,
     null,
+    undefined,
   );
 }
 

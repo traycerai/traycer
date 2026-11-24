@@ -642,6 +642,7 @@ async function sendBindingUnary(
       undefined,
       false,
       null,
+      undefined,
     )
     .then(
       () => null,
@@ -1772,6 +1773,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -1959,6 +1961,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
             undefined,
             false,
             { method: "epic.listTasks", version: { major: 1, minor: 6 } },
+            undefined,
           )
           .then(
             () => null,
@@ -2240,6 +2243,7 @@ describe("RemoteSession host_detached readiness evidence", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -2983,7 +2987,17 @@ describe("RemoteSession dial-failure logging", () => {
     expect(session.isClosed()).toBe(true);
 
     const error: unknown = await session
-      .sendUnary("host.status", {}, null, null, null, undefined, false, null)
+      .sendUnary(
+        "host.status",
+        {},
+        null,
+        null,
+        null,
+        undefined,
+        false,
+        null,
+        undefined,
+      )
       .then(
         () => null,
         (reason: unknown) => reason,
@@ -3043,6 +3057,7 @@ describe("RemoteSession dial-failure logging", () => {
           undefined,
           false,
           null,
+          undefined,
         );
         // Still not ready when the call is issued - the await-ready path must
         // hold rather than reject.
@@ -3104,6 +3119,7 @@ describe("RemoteSession dial-failure logging", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -3150,6 +3166,7 @@ describe("RemoteSession dial-failure logging", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -3191,6 +3208,7 @@ describe("RemoteSession dial-failure logging", () => {
           undefined,
           false,
           null,
+          undefined,
         );
         controller.abort();
 
@@ -3241,6 +3259,7 @@ describe("RemoteSession dial-failure logging", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -3319,10 +3338,20 @@ describe("RemoteSession negotiated-manifest publication", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, null, undefined, false, {
-            method: "epic.listTasks",
-            version: { major: 1, minor: 6 },
-          })
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            {
+              method: "epic.listTasks",
+              version: { major: 1, minor: 6 },
+            },
+            undefined,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -3356,10 +3385,20 @@ describe("RemoteSession negotiated-manifest publication", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, null, undefined, false, {
-            method: "epic.listTasks",
-            version: { major: 1, minor: 6 },
-          })
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            {
+              method: "epic.listTasks",
+              version: { major: 1, minor: 6 },
+            },
+            undefined,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -3496,6 +3535,7 @@ describe("RemoteSession absent optional method", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -3624,6 +3664,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
           undefined,
           false,
           null,
+          undefined,
         );
         // adaptResponse ran over the DECLARED 1.0 response shape: no `detail`
         // key, i.e. no canonical-version upgrade was applied on the way back.
@@ -4139,6 +4180,7 @@ describe("RemoteSession wake", () => {
         undefined,
         false,
         null,
+        undefined,
       );
       await new Promise((resolve) => setTimeout(resolve, 1_200));
       // A collapse would have dialed by now (its draw tops out at 1s); the
@@ -4198,6 +4240,7 @@ describe("RemoteSession wake", () => {
           undefined,
           false,
           null,
+          undefined,
         ),
       ).rejects.toBeInstanceOf(RetryableTransportError);
       // Still pre-send, so the caller keeps its retry license - and the
@@ -4249,6 +4292,7 @@ describe("RemoteSession wake", () => {
         undefined,
         false,
         null,
+        undefined,
       );
       controller.abort();
       // An abandoned read is not evidence anybody is waiting, so its
@@ -5036,6 +5080,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
         undefined,
         false,
         null,
+        undefined,
       );
 
       expect(relay.unaryRequests).toHaveLength(1);
@@ -5078,6 +5123,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
           10_000,
           false,
           null,
+          undefined,
         );
         const outcome = pending.then(
           () => null,
@@ -5132,6 +5178,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
             10_000,
             true,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -5727,6 +5774,7 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -6720,6 +6768,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -6766,6 +6815,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -6808,6 +6858,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -6855,6 +6906,7 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,
@@ -6951,6 +7003,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           90_000,
           false,
           null,
+          undefined,
         );
         await vi.waitFor(
           () => expect(relay.unaryRequests).toHaveLength(1),
@@ -6992,6 +7045,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           undefined,
           false,
           null,
+          undefined,
         );
         const settled = pending.then(
           () => null,
@@ -7046,6 +7100,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           60,
           false,
           null,
+          undefined,
         );
         // The positive control: same request, no budget. If the argument were
         // still ignored, both would behave identically - and this one must NOT
@@ -7059,6 +7114,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           undefined,
           false,
           null,
+          undefined,
         );
         let defaultedSettled = false;
         void defaulted.then(
@@ -7126,6 +7182,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           catalogBudgetMs,
           false,
           null,
+          undefined,
         );
         const defaulted = session.sendUnary(
           "host.status",
@@ -7136,6 +7193,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           undefined,
           false,
           null,
+          undefined,
         );
         // Observe the unbudgeted rejection as it happens, not after the clock
         // has already advanced past it.
@@ -7217,6 +7275,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           undefined,
           false,
           null,
+          undefined,
         );
         await vi.waitFor(
           () => expect(relay.unaryRequests).toHaveLength(1),
@@ -9060,6 +9119,7 @@ describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H1
           60,
           false,
           null,
+          undefined,
         );
         await expect(pending).rejects.toBeInstanceOf(HostRpcError);
         await vi.waitFor(
@@ -11037,6 +11097,7 @@ describe("RemoteSession refused attach grant", () => {
             undefined,
             false,
             null,
+            undefined,
           )
           .then(
             () => null,

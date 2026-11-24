@@ -20,6 +20,7 @@ import {
   SETTINGS_SAVE_MEMORY_TTL_MS,
   settingsSaveMemoryRecord,
   useSettingsSaveMemoryStore,
+  type BoundSettingsSave,
   type SettingsSaveMemoryRecord,
 } from "@/stores/settings/settings-save-memory-store";
 
@@ -106,6 +107,11 @@ export interface SettingsSaveCoordinator {
     context: SettingsSaveContext,
     applied: () => void,
   ) => Promise<SettingsSaveBeginning>;
+  /** Remembers a save whose host is running locally, before it has a binding. */
+  readonly beginLocal: (
+    accountId: string,
+    hostId: string,
+  ) => SettingsSaveBeginning;
   /** A proposed save's host is reconciled through `environment.proposals`; no save answer carries it. */
   readonly settle: (
     ticket: SettingsSaveTicket,
@@ -118,7 +124,7 @@ export interface SettingsSaveCoordinator {
 }
 
 function receiptMatches(
-  record: SettingsSaveMemoryRecord,
+  record: BoundSettingsSave,
   receipt: SettingsProposalReceipt,
 ): boolean {
   return (
@@ -133,7 +139,7 @@ function receiptMatches(
 }
 
 function holdMatches(
-  record: SettingsSaveMemoryRecord,
+  record: BoundSettingsSave,
   hold: HeldChangeForMatch,
 ): boolean {
   return (
@@ -157,7 +163,8 @@ function inFlight(id: string): boolean {
 
 interface RememberedSave {
   readonly id: string;
-  readonly record: SettingsSaveMemoryRecord;
+  readonly receipt: SettingsProposalReceipt;
+  readonly promotedRevision: number | null;
 }
 
 function sortByReceipt(
@@ -166,28 +173,48 @@ function sortByReceipt(
   now: number,
   outAtRead: ReadonlySet<string>,
 ): {
-  readonly forget: readonly RememberedSave[];
+  readonly forget: readonly string[];
   readonly proposed: ReadonlyMap<string, readonly RememberedSave[]>;
 } {
-  const forget: RememberedSave[] = [];
+  const forget: string[] = [];
+  const localSaveIds = new Set(proposals.localSaveIds);
   const proposed = new Map<string, RememberedSave[]>();
   for (const [id, record] of mine) {
-    const receipt = proposals.proposals.find((row) =>
-      receiptMatches(record, row.proposal),
-    )?.proposal;
-    if (receipt === undefined) {
-      // A save still out, here or in another window, may not have reached
-      // the host's list yet; one out when the read began may have been
-      // answered after the host listed its proposals.
-      if (!outAtRead.has(id) && now - record.writtenAt > UNLISTED_GRACE_MS) {
-        forget.push({ id, record });
+    const promoted = proposals.proposals.find(
+      (row) =>
+        row.promotion?.saveId === id &&
+        row.proposal.proposalId === id &&
+        row.proposal.hostId === record.hostId,
+    );
+    const row =
+      promoted ??
+      (record.environmentId === null
+        ? undefined
+        : proposals.proposals.find(
+            (candidate) =>
+              candidate.promotion === undefined &&
+              receiptMatches(record, candidate.proposal),
+          ));
+    if (row === undefined) {
+      // A save out when the read began may be recorded after this snapshot.
+      if (
+        !localSaveIds.has(id) &&
+        !outAtRead.has(id) &&
+        now - record.writtenAt > UNLISTED_GRACE_MS
+      ) {
+        forget.push(id);
       }
-    } else if (receipt.state === "refused") {
-      forget.push({ id, record });
-    } else if (receipt.state === "proposed") {
-      const list = proposed.get(record.environmentId) ?? [];
-      list.push({ id, record });
-      proposed.set(record.environmentId, list);
+    } else if (row.proposal.state === "refused") {
+      forget.push(id);
+    } else if (row.proposal.state === "proposed") {
+      const environmentId = row.proposal.environmentId;
+      const list = proposed.get(environmentId) ?? [];
+      list.push({
+        id,
+        receipt: row.proposal,
+        promotedRevision: promoted?.promotion?.heldRevision ?? null,
+      });
+      proposed.set(environmentId, list);
     }
   }
   return { forget, proposed };
@@ -222,13 +249,41 @@ export function createSettingsSaveCoordinator(
 
   const applyHold = async (
     cloud: EnvironmentCloud,
-    id: string,
+    save: RememberedSave,
     record: SettingsSaveMemoryRecord,
     holds: readonly HeldChangeForMatch[],
   ): Promise<"applied" | "stays" | "decided"> => {
-    const hold = holds.find((candidate) => holdMatches(record, candidate));
-    // Proposed and not held: applied by another window, or decided.
+    const { id, receipt, promotedRevision } = save;
+    const hold =
+      promotedRevision === null
+        ? holds.find(
+            (candidate) =>
+              record.environmentId !== null && holdMatches(record, candidate),
+          )
+        : holds.find(
+            (candidate) =>
+              candidate.revision === promotedRevision &&
+              candidate.hostId === receipt.hostId &&
+              candidate.sharingGeneration === receipt.sharingGeneration &&
+              candidate.kind === receipt.kind &&
+              candidate.key === receipt.key &&
+              candidate.os === receipt.os &&
+              candidate.op === receipt.operation,
+          );
+    // A hold can have been decided while the review read was out.
     if (hold === undefined) return "decided";
+    let expectedLiveRevision: number | null;
+    if (promotedRevision === null) {
+      if (record.environmentId === null) return "stays";
+      expectedLiveRevision = record.expectedLiveRevision;
+    } else {
+      if (record.promotionBase?.heldRevision === promotedRevision) {
+        expectedLiveRevision = record.promotionBase.liveRevision;
+      } else {
+        expectedLiveRevision = hold.liveRevision;
+        store().notePromotionBase(id, promotedRevision, expectedLiveRevision);
+      }
+    }
     if (
       record.unanswered?.revision === hold.revision &&
       record.unanswered.tries >= TRIES_PER_HOLD_REVISION
@@ -245,11 +300,15 @@ export function createSettingsSaveCoordinator(
       },
     };
     try {
-      const { outcome } = await applyHeldChange(watched, record.environmentId, {
-        heldId: hold.heldId,
-        revision: hold.revision,
-        expectedLiveRevision: record.expectedLiveRevision,
-      });
+      const { outcome } = await applyHeldChange(
+        watched,
+        receipt.environmentId,
+        {
+          heldId: hold.heldId,
+          revision: hold.revision,
+          expectedLiveRevision,
+        },
+      );
       // A conflict, gone or forbidden decides this hold for this save too.
       return outcome === "applied" ? "applied" : "decided";
     } catch {
@@ -306,7 +365,7 @@ export function createSettingsSaveCoordinator(
     // A later save of the same item may have replaced a record since the reads; then
     // neither its apply nor its forgetting is this run's.
     const sorted = sortByReceipt(mine, proposals, ports.now(), outAtRead);
-    for (const { id } of sorted.forget) {
+    for (const id of sorted.forget) {
       forget(id);
     }
     if (sorted.proposed.size === 0 || cloud === null) return;
@@ -330,7 +389,8 @@ export function createSettingsSaveCoordinator(
     } catch {
       return true;
     }
-    for (const { id } of saves) {
+    for (const save of saves) {
+      const { id } = save;
       if (!mayAct()) return false;
       // Read after the waits: another coordinator may have spent a try since.
       const record = settingsSaveMemoryRecord(store().records, id);
@@ -340,7 +400,7 @@ export function createSettingsSaveCoordinator(
         forget(id);
         continue;
       }
-      const result = await applyHold(cloud, id, record, holds);
+      const result = await applyHold(cloud, save, record, holds);
       if (!mayAct()) return false;
       if (result === "applied") appliedListeners.get(id)?.();
       if (result !== "stays") forget(id);
@@ -420,6 +480,34 @@ export function createSettingsSaveCoordinator(
     followUps.clear();
   };
 
+  const remember = (
+    record: SettingsSaveMemoryRecord,
+    begun: number,
+  ): SettingsSaveBeginning => {
+    const id = store().remember(record);
+    store().markSent(id);
+    dropUnremembered();
+    begunIn.set(id, begun);
+    return { kind: "remembered", ticket: { id } };
+  };
+
+  const beginLocal = (
+    accountId: string,
+    hostId: string,
+  ): SettingsSaveBeginning => {
+    if (memoryAccount() !== accountId) return ACCOUNT_CHANGED;
+    return remember(
+      {
+        editId: crypto.randomUUID(),
+        environmentId: null,
+        hostId,
+        writtenAt: ports.now(),
+        unanswered: null,
+      },
+      generation,
+    );
+  };
+
   const begin = async (
     mapping: SettingsSaveMapping,
     context: SettingsSaveContext,
@@ -435,7 +523,7 @@ export function createSettingsSaveCoordinator(
     // The memory may be another account's by now: an edit is remembered only
     // in the memory of the account it was made for.
     if (memoryAccount() !== context.accountId) return ACCOUNT_CHANGED;
-    const id = store().remember({
+    const record: BoundSettingsSave = {
       editId: crypto.randomUUID(),
       environmentId: context.environmentId,
       hostId: context.hostId,
@@ -448,12 +536,9 @@ export function createSettingsSaveCoordinator(
       expectedLiveRevision: context.expectedLiveRevision,
       writtenAt: ports.now(),
       unanswered: null,
-    });
-    store().markSent(id);
-    dropUnremembered();
-    appliedListeners.set(id, applied);
-    begunIn.set(id, begun);
-    return { kind: "remembered", ticket: { id } };
+    };
+    appliedListeners.set(record.editId, applied);
+    return remember(record, begun);
   };
 
   const settle = async (
@@ -474,5 +559,5 @@ export function createSettingsSaveCoordinator(
     await run(record.hostId, 0, armedIn, false);
   };
 
-  return { account: memoryAccount, begin, settle, reconcile, stop };
+  return { account: memoryAccount, begin, beginLocal, settle, reconcile, stop };
 }
