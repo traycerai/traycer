@@ -17,6 +17,7 @@ import {
   identityFromAuthenticatedUser,
   type RequestContext,
 } from "@traycer/protocol/auth/request-context";
+import { settingsSaveIdFromRequestId } from "@traycer/protocol/framework/settings-save-request-id";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   providerMutationCliStateSchemaV21,
@@ -627,6 +628,40 @@ describe("provider API-key change Settings flow", () => {
         mocks.toastError.mock.calls.some(([shown]) => shown === message),
       ).toBe(true),
     );
+  });
+
+  it("carries the Account Save UUID from Begin through the native key write", async () => {
+    const rig = makeRig("installed", null, null);
+    const native = Promise.withResolvers<void>();
+    rig.messenger.setHandlers({
+      "providers.beginApiKeyChange": () => ({
+        mode: "legacy",
+        changeToken: null,
+        environmentId: null,
+      }),
+      "providers.setApiKey": () => {
+        native.resolve();
+        return providersSetApiKeyResponseSchema.parse({ state: STATE });
+      },
+    });
+    renderSettings(false, null, null);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await native.promise;
+    });
+
+    expect(rig.messenger.calls.map((call) => call.method)).toEqual([
+      "providers.beginApiKeyChange",
+      "providers.setApiKey",
+    ]);
+    const [begin, saved] = rig.messenger.calls;
+    if (begin === undefined || saved === undefined)
+      throw new Error("Missing host key mutation");
+    const saveId = settingsSaveIdFromRequestId(begin.requestId);
+    expect(saveId).not.toBeNull();
+    expect(settingsSaveIdFromRequestId(saved.requestId)).toBe(saveId);
+    expect(teamProviderKeyHttpBoundary.calls).toHaveLength(0);
   });
 
   it("keeps a forbidden draft intact and leaves the established permission copy visible", async () => {
