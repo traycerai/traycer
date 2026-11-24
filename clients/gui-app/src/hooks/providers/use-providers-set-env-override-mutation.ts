@@ -1,4 +1,3 @@
-import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -54,7 +53,7 @@ export function useProvidersSetEnvOverride(
           followClient.getActiveHostId(),
           pressedOn,
         ),
-      proposes: everyAnswerProposes,
+      proposes: (answer) => answer.savedLocally !== true,
     },
     options: {
       mutationKey: providersMutationKeys.setEnvOverride(),
@@ -71,7 +70,10 @@ export function useProvidersSetEnvOverride(
         clearValueInput();
         const hostId = context?.hostId ?? null;
         if (hostId === null) return;
-        for (const method of PROVIDER_INVALIDATIONS) {
+        for (const method of [
+          ...PROVIDER_INVALIDATIONS,
+          "environment.localOverrides",
+        ] as const) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(
               hostRpcServingTierHostId(

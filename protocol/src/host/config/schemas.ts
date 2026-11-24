@@ -395,8 +395,13 @@ export const configEnvDeleteResponseSchema = lazySchema(() =>
     deleted: z.literal(true),
   }),
 );
+export const configEnvDeleteResponseSchemaV11 = lazySchema(() =>
+  configEnvDeleteResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
 export type ConfigEnvDeleteResponse = z.infer<
-  typeof configEnvDeleteResponseSchema
+  typeof configEnvDeleteResponseSchemaV11
 >;
 
 /** The only remote-configurable scopes. `desktop` stays window-local. */

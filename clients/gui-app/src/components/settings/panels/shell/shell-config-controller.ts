@@ -98,7 +98,7 @@ export interface ShellConfigController {
   readonly setEnvAsync: (entry: {
     readonly key: string;
     readonly value: string | null;
-  }) => Promise<void>;
+  }) => Promise<{ readonly savedLocally?: true }>;
   readonly deleteEnv: (key: string, callbacks: ShellCommandCallbacks) => void;
   /**
    * Rename an override as a SINGLE operation: write `newKey`, then drop

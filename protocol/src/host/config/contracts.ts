@@ -21,6 +21,7 @@ import {
   configCatalogSetResponseSchemaV10,
   configEnvDeleteRequestSchema,
   configEnvDeleteResponseSchema,
+  configEnvDeleteResponseSchemaV11,
   configEnvListRequestSchema,
   configEnvListResponseSchema,
   configEnvSetRequestSchema,
@@ -180,6 +181,23 @@ export const configEnvDeleteV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configEnvDeleteRequestSchema,
   responseSchema: configEnvDeleteResponseSchema,
+});
+
+export const configEnvDeleteV11 = defineRpcContract({
+  method: "config.env.delete",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configEnvDeleteRequestSchema,
+  responseSchema: configEnvDeleteResponseSchemaV11,
+});
+
+export const configEnvDeleteUpgradeV10ToV11 = defineUpgradePath<
+  typeof configEnvDeleteV10,
+  typeof configEnvDeleteV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /** Reads machine-user-global CLI and host log thresholds; desktop is local-only. */

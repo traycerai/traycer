@@ -1,5 +1,4 @@
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useMutation } from "@tanstack/react-query";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Info, RotateCcw } from "lucide-react";
@@ -15,13 +14,9 @@ import type {
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
-import {
-  usePersonalPageHost,
-  usePersonalRowNotes,
-} from "@/components/settings/personal/personal-page-context";
+import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { environmentMutationKeys } from "@/lib/query-keys";
+import { useSaveOwnValueEverywhere } from "@/hooks/environment/use-save-own-value-everywhere";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -535,32 +530,19 @@ function ShellSettingsPanelBody(props: {
       });
     });
   };
-  // Use everywhere: this host's own value becomes Personal's, then the host
-  // stops keeping one of its own. Cleared only after the save landed, so a
-  // failed save leaves the host's value where it was.
-  const pageHost = usePersonalPageHost();
-  const clearOwnValue = useHostScopedMutationForClient(pageHost.client, {
-    method: "config.env.localOverride.clear",
-    mutationKey: environmentMutationKeys.localOverrideClear(),
-    errorMessage: "Couldn't stop this computer keeping its own value.",
-    scope: { id: "config.env.localOverride" },
-    invalidateMethods: ["environment.localOverrides", "config.env.list"],
-  });
-  const useEverywhere = useMutation({
-    mutationFn: async (entry: {
-      readonly key: string;
-      readonly value: string;
-    }) => {
-      await controller.setEnvAsync(entry);
-      await clearOwnValue.mutateAsync({
-        target: { kind: "variable", key: entry.key },
-      });
-    },
-  });
+  const useEverywhere = useSaveOwnValueEverywhere(
+    "config.env.set",
+    "config.env.list",
+    ({ target, value }) => controller.setEnvAsync({ key: target.key, value }),
+  );
   const onUseEverywhere = (key: string, value: string): void => {
-    if (envPending || useEverywhere.isPending) return;
+    if (envPending || useEverywhere.isPending || !useEverywhere.available)
+      return;
     beginEnvSave();
-    useEverywhere.mutate({ key, value }, envSaveCallbacks(key));
+    useEverywhere.mutate(
+      { target: { kind: "variable", key }, value },
+      envSaveCallbacks(key),
+    );
   };
 
   return (
@@ -597,7 +579,9 @@ function ShellSettingsPanelBody(props: {
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
         onUseEverywhere={onUseEverywhere}
-        useEverywherePending={useEverywhere.isPending}
+        useEverywhereDisabled={
+          useEverywhere.isPending || !useEverywhere.available
+        }
       />
     </div>
   );
@@ -990,7 +974,7 @@ function HostEnvironmentGroup(props: {
   ) => Promise<void>;
   readonly onDelete: (key: string) => Promise<void>;
   readonly onUseEverywhere: (key: string, value: string) => void;
-  readonly useEverywherePending: boolean;
+  readonly useEverywhereDisabled: boolean;
 }) {
   const viewerId = useCloudChatViewerId();
   const configurationKey = useConfigurationKey();
@@ -1002,7 +986,7 @@ function HostEnvironmentGroup(props: {
       <PersonalRowNoteText
         name={key}
         note={note}
-        disabled={props.pending || props.useEverywherePending}
+        disabled={props.pending || props.useEverywhereDisabled}
         onUseEverywhere={props.onUseEverywhere}
       />,
     );

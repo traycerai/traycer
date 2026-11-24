@@ -150,13 +150,18 @@ vi.mock(
         readValue: () => string | null,
         clearValueInput: () => void,
       ) =>
-        useMutation<void, Error, SetOverrideVariables>({
+        useMutation<
+          { readonly savedLocally?: true },
+          Error,
+          SetOverrideVariables
+        >({
           mutationFn: async (variables) => {
             mocks.setOverrideVariables(variables);
             await mocks.setOverrideMutate({
               ...variables,
               value: readValue(),
             });
+            return {};
           },
           onSettled: () => clearValueInput(),
         }),
