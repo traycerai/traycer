@@ -347,6 +347,18 @@ describe("MobileAppHeader", () => {
     expect(screen.getByTestId("mobile-header-settings-crumb")).not.toBeNull();
   });
 
+  it.each([
+    ["/settings/browser-agent-access", "SettingsBrowser agent access"],
+    ["/settings/browser", "SettingsBrowser"],
+    ["/settings/browser/network", "SettingsBrowser"],
+  ])("crumbs the exact section of a restored %s route", async (path, title) => {
+    presentSettingsTab(path);
+    renderAt("/");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      title,
+    );
+  });
+
   it("crumbs the section a restored route names under an old host's Local pick, though the host lacks its page", async () => {
     pickOldHostLocal();
     presentSettingsTab("/settings/secrets");

@@ -1,4 +1,5 @@
 import { cleanup, renderHook } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { useEnvironmentPickerModel } from "@/components/settings/environment/use-environment-picker-model";
@@ -104,6 +105,24 @@ describe("useEnvironmentPickerModel's pick", () => {
     });
     expect(picks[0]).toEqual({ kind: "personal" });
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(OLD_LAPTOP);
+  });
+
+  it("keeps a newer pick when an earlier render found a stale Local pick", () => {
+    facts.statuses = new Map([
+      ["mac", running],
+      ["old", moved],
+    ]);
+    const newerPick: EnvironmentPick = { kind: "team", environmentId: "env-b" };
+    const store = useSettingsEnvironmentPickStore.getState();
+    store.setPick(OLD_LAPTOP);
+    const { result } = renderHook(() => {
+      useLayoutEffect(() => {
+        store.setPick(newerPick);
+      }, []);
+      return useEnvironmentPickerModel(listingOld).pick;
+    });
+
+    expect(result.current).toEqual(newerPick);
   });
 
   it("keeps a Local pick while its computer still has a Local row", () => {

@@ -547,6 +547,37 @@ describe("a team the environment list no longer carries", () => {
     expect(document.body.textContent).not.toContain("You're no longer in");
   });
 
+  it.each([
+    { kind: "local", hostId: "other-computer", hostName: "Other computer" },
+    { kind: "team", environmentId: "env-b" },
+  ] as const)(
+    "keeps a $kind pick when a different team's boundary confirms removal",
+    async (pick) => {
+      const listed: { current: readonly EnvironmentDescriptorV11[] } = {
+        current: [PERSONAL, team("editor")],
+      };
+      const { rerenderList } = mountBoundary({
+        environments: () => listed.current,
+        invitations: [],
+      });
+      await screen.findByTestId("probe");
+      act(() => useSettingsEnvironmentPickStore.getState().setPick(pick));
+
+      listed.current = [PERSONAL];
+      await rerenderList();
+
+      await waitFor(() => {
+        expect(hoisted.toasts).toEqual([
+          {
+            message: "You're no longer in Acme.",
+            options: { id: "environment-left:env-a" },
+          },
+        ]);
+      });
+      expect(windowPick()).toEqual(pick);
+    },
+  );
+
   it("raises nothing for a team it never read the name of", async () => {
     const { rerenderList } = mountFrame({
       environments: () => [PERSONAL],

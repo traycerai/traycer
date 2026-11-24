@@ -18,7 +18,11 @@ import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
 } from "@traycer/protocol/host/released-wire-rows";
-import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  hostLeaseFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { windowHost } from "@/components/settings/__tests__/secrets-host-away-window-host";
 import { createFakeEnvironmentAuthn } from "@/components/settings/environment/__tests__/environment-authn-test-support";
@@ -32,7 +36,7 @@ import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { hostEntryFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
  * A window whose only host is listed in the host list and is not online, and
@@ -81,17 +85,25 @@ export function offlineWindowHost(): HostScopeOption {
 
 /**
  * Moves the window's host from answered to offline in place: it stays in the
- * scope's host list, its health goes offline, and its handshake and cached
- * reads stay. A mock scope has no subscribers, so the pick store, which the
- * rail and the page both read, is set again to render them anew.
+ * scope's host list and keeps its handshake and cached reads. The authority's
+ * lease confirms it is away and notifies the rail and the page.
  */
 export function takeWindowHostOffline(): void {
   personalHostScopeOverrides.current = {
     ...personalHostScopeOverrides.current,
     host: offlineWindowHost(),
+    client: null,
+    status: "unreachable",
   };
   act(() => {
-    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    recordWindowHostLease(true);
+  });
+}
+
+function recordWindowHostLease(offline: boolean): void {
+  useSelectionAuthorityStore.setState({
+    effectiveHostId: HOST_ID,
+    leases: [hostLeaseFixture(HOST_ID, offline ? { reason: "offline" } : null)],
   });
 }
 
@@ -106,9 +118,11 @@ export function takeWindowHostOnline(
   personalHostScopeOverrides.current = {
     ...personalHostScopeOverrides.current,
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: "dev-box" }),
+    client: windowHost.client,
+    status: "following",
   };
   act(() => {
-    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    recordWindowHostLease(false);
   });
 }
 
@@ -133,10 +147,20 @@ export function resetWindowHost(): void {
   windowHost.auth = null;
   windowHost.fakeAuthn = null;
   useAuthStore.setState({ status: "signed-out" });
+  useSelectionAuthorityStore.getState().reset();
 }
 
 export interface MountedSettings {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
+}
+
+function SecretsSourceProbe() {
+  const source = useConfigurationSource();
+  return (
+    <div data-testid={`secrets-source-${source.kind}`}>
+      <SecretsSettingsPanel />
+    </div>
+  );
 }
 
 /**
@@ -200,11 +224,13 @@ export function mountSettings(options: {
   if (options.manifest !== null) {
     recordManifest(options.host.hostId, options.manifest);
   }
+  const offline = options.host.health.state === "offline";
+  recordWindowHostLease(offline);
   personalHostScopeOverrides.current = {
     host: options.host,
     hostId: options.host.hostId,
-    status: "following",
-    client,
+    status: offline ? "unreachable" : "following",
+    client: offline ? null : client,
   };
   useAuthStore.setState({ status: "signed-in" });
 
@@ -213,7 +239,7 @@ export function mountSettings(options: {
       <>
         <SettingsSidebar mode={{ kind: "route" }} variant="rail" />
         <PersonalPageFrame section="secrets">
-          <SecretsSettingsPanel />
+          <SecretsSourceProbe />
         </PersonalPageFrame>
       </>
     ),

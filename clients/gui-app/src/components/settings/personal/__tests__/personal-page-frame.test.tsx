@@ -565,14 +565,16 @@ describe("usePersonalRowNotes (localOverrides and pendingUploads from the fake h
 function VariablesProbe(props: {
   readonly client: HostClient<HostRpcRegistry>;
 }): ReactNode {
-  useHostQuery<HostRpcRegistry, "config.env.list">({
+  const result = useHostQuery<HostRpcRegistry, "config.env.list">({
     cacheKeyIdentity: undefined,
     client: props.client,
     method: "config.env.list",
     params: {},
     options: { enabled: true },
   });
-  return null;
+  return result.data?.entries.map((entry) => (
+    <span key={entry.key}>{entry.value}</span>
+  ));
 }
 
 // A variable's value can change under a mounted page without the page writing
@@ -580,6 +582,48 @@ function VariablesProbe(props: {
 // shared value while it holds its own) reports a new revision of the person's
 // settings. The variables read is one of the reads that revision re-reads.
 describe("<PersonalPageFrame /> around a page that reads the variables", () => {
+  it("rereads an old Local computer's variables when the window regains focus", async () => {
+    let value = "initial variable value";
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "config.env.list": () => ({ entries: [{ key: "LOG_LEVEL", value }] }),
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ["config.env.list"]);
+    useSettingsEnvironmentPickStore.getState().setPick({
+      kind: "local",
+      hostId: HOST_ID,
+      hostName: HOST_NAME,
+    });
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
+      hostId: HOST_ID,
+      status: "ready",
+      client,
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, refetchOnWindowFocus: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PersonalPageFrame section="shell">
+          <VariablesProbe client={client} />
+        </PersonalPageFrame>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("initial variable value")).toBeTruthy();
+
+    value = "changed on the computer";
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(await screen.findByText("changed on the computer")).toBeTruthy();
+  });
+
   it("requests config.env.list again when the host's received revision moves", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
