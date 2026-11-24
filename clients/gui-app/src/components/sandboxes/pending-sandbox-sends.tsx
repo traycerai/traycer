@@ -25,9 +25,11 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  readKnownSandboxRow,
+  knownSandboxRowCurrent,
+  knownSandboxRowQueryOptions,
+  sandboxListObservationId,
   type SandboxRowRead,
 } from "@/lib/sandboxes/sandbox-row-read";
 import type { AuthService } from "@/lib/auth/auth-service";
@@ -190,7 +192,7 @@ import {
   teamCreditsRanOutLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
-import { sandboxMutationKeys, sandboxQueryKeys } from "@/lib/query-keys";
+import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -1191,17 +1193,6 @@ function pendingRowHost(row: SandboxSummary | null): PendingSendFacts["host"] {
   return "waking";
 }
 
-const omissionObservations = new WeakMap<object, number>();
-let nextOmissionObservation = 0;
-
-function sandboxOmissionId(list: object): number {
-  const existing = omissionObservations.get(list);
-  if (existing !== undefined) return existing;
-  const id = ++nextOmissionObservation;
-  omissionObservations.set(list, id);
-  return id;
-}
-
 interface PendingSandboxByIdInput {
   readonly auth: AuthService | null;
   readonly sandboxId: string | null;
@@ -1212,11 +1203,12 @@ interface PendingSandboxByIdInput {
   readonly omission: number | undefined;
 }
 
-/** Omissions request a read without changing the scope of one already in flight. */
-function missingSandboxQueryOptions(input: PendingSandboxByIdInput) {
+function usePendingSandboxById(
+  input: PendingSandboxByIdInput,
+): SandboxRowRead | null {
   const { auth, sandboxId, hostId, userId, send, stage, omission } = input;
-  return queryOptions({
-    queryKey: sandboxQueryKeys.knownRow({
+  const { data, isFetching, refetch } = useQuery(
+    knownSandboxRowQueryOptions({
       auth,
       userId,
       sandboxId,
@@ -1227,48 +1219,16 @@ function missingSandboxQueryOptions(input: PendingSandboxByIdInput) {
       observationRequestedAt: send?.observationRequestedAt,
       observationRetryId: send?.observationRetryId,
       stopRequestedAt: send?.stopRequestedAt,
+      omission,
     }),
-    gcTime: 0,
-    refetchOnMount: false,
-    refetchOnReconnect: false,
-    refetchOnWindowFocus: false,
-    meta: { omission },
-    queryFn: async ({ meta }) => ({
-      omission: typeof meta?.omission === "number" ? meta.omission : undefined,
-      read:
-        auth === null || sandboxId === null
-          ? null
-          : await readKnownSandboxRow(auth, sandboxId, userId),
-    }),
-    enabled: auth !== null && sandboxId !== null && omission !== undefined,
-  });
-}
-
-function usePendingSandboxById(
-  input: PendingSandboxByIdInput,
-): SandboxRowRead | null {
-  const { hostId, omission } = input;
-  const { data, isFetching, refetch } = useQuery(
-    missingSandboxQueryOptions(input),
   );
-  const row = data?.read?.row;
-  // A recorded destroy is settled for this row. A 404 can also mean
-  // unreachable, and a new omission makes even a cached awake row uncertain.
-  const destroyed = row?.state === "destroyed" && row.hostId === hostId;
-  const current = data?.omission === omission;
+  const current =
+    data !== undefined && knownSandboxRowCurrent(data, omission, hostId);
   useEffect(() => {
-    if (
-      omission !== undefined &&
-      data !== undefined &&
-      !current &&
-      !destroyed &&
-      !isFetching
-    )
+    if (omission !== undefined && data !== undefined && !current && !isFetching)
       void refetch({ cancelRefetch: false });
-  }, [omission, data, current, destroyed, isFetching, refetch]);
-  return omission !== undefined && (current || destroyed)
-    ? (data?.read ?? null)
-    : null;
+  }, [omission, data, current, isFetching, refetch]);
+  return omission !== undefined && current ? data.read : null;
 }
 
 /** Only a successful fresh read made for this account can settle its sandbox. */
@@ -1308,7 +1268,7 @@ function usePendingSandboxRowFacts(
   const list = sandboxList.data;
   const omission =
     list && rows !== null && listed === null
-      ? sandboxOmissionId(list)
+      ? sandboxListObservationId(list)
       : undefined;
   const stage = useStagedSandbox(
     sendId === null ? "" : pendingSendSurfaceKey(sendId),

@@ -1,8 +1,15 @@
 import type { QueryObserverResult } from "@tanstack/react-query";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
-import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
-import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxCatalogue,
+  SandboxCatalogueReadinessRequest,
+  SandboxCreateRequest,
+} from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCatalogueFetchResult,
+  SandboxCreateFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import { budgetCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import { SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED } from "@traycer/protocol/host/sandbox-control";
 import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import {
@@ -68,6 +75,7 @@ import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 
 const DIRTY_CONTENT: JsonContent = {
   type: "doc",
@@ -156,6 +164,7 @@ const testState = vi.hoisted(() => ({
   createSandbox: null as
     | ((request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>)
     | null,
+  catalogueReadiness: [] as SandboxCatalogueReadinessRequest[],
   startTerminal: null as ComposerBodyProps["onStartTerminal"] | null,
   installEditor: null as (() => void) | null,
   snapshot: null as (() => void) | null,
@@ -870,6 +879,7 @@ afterEach(() => {
   testState.refetchCatalogue.mockClear();
   testState.openModelPicker.mockClear();
   testState.clearEditor.mockClear();
+  testState.catalogueReadiness = [];
   vi.mocked(useLandingDraftStore.getState().setDraftContent).mockClear();
 });
 
@@ -971,12 +981,24 @@ function configureRunnerBinding(binding: {
     createSandbox: (
       request: SandboxCreateRequest,
     ) => Promise<SandboxCreateFetchResult>;
+    getSandboxCatalogue: (
+      context: SandboxCatalogueReadinessRequest | null,
+    ) => Promise<SandboxCatalogueFetchResult>;
   };
 }): void {
   testState.runtimeBinding = binding;
   const createSandbox = testState.createSandbox;
-  if (createSandbox === null) return;
-  vi.spyOn(binding.auth, "createSandbox").mockImplementation(createSandbox);
+  if (createSandbox !== null)
+    vi.spyOn(binding.auth, "createSandbox").mockImplementation(createSandbox);
+  vi.spyOn(binding.auth, "getSandboxCatalogue").mockImplementation(
+    (context) => {
+      if (context !== null) testState.catalogueReadiness.push(context);
+      return Promise.resolve({
+        kind: "ok",
+        catalogue: budgetCatalogue(480_000),
+      });
+    },
+  );
 }
 
 const BILLING_ANSWER: SandboxBillingEnvironmentAnswer = {
@@ -984,13 +1006,15 @@ const BILLING_ANSWER: SandboxBillingEnvironmentAnswer = {
   role: "viewer",
 };
 
-function landingComposerWithPendingOwner(): ReactElement {
+function landingComposerWithPendingOwner(
+  queryClient: QueryClient,
+): ReactElement {
   return (
     <SandboxBillingRuntime
       answer={BILLING_ANSWER}
       environmentId="env-acme"
       hostId="host-test"
-      queryClient={undefined}
+      queryClient={queryClient}
       onEnvironmentListRead={null}
       onBinding={configureRunnerBinding}
     >
@@ -1000,8 +1024,15 @@ function landingComposerWithPendingOwner(): ReactElement {
   );
 }
 
-async function sendFromComposerWithPendingOwner(): Promise<void> {
-  render(landingComposerWithPendingOwner());
+async function mountComposerWithPendingOwner(): Promise<void> {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, queryKeyHashFn: hashAppQueryKey },
+      mutations: { retry: false },
+    },
+  });
+  onTestFinished(() => queryClient.clear());
+  render(landingComposerWithPendingOwner(queryClient));
   await waitFor(() => expect(testState.installEditor).not.toBeNull());
   const installEditor = testState.installEditor;
   if (installEditor === null) throw new Error("expected ComposerBody seam");
@@ -1009,9 +1040,14 @@ async function sendFromComposerWithPendingOwner(): Promise<void> {
   const snapshot = testState.snapshot;
   if (snapshot === null) throw new Error("expected snapshot seam");
   act(() => snapshot());
-  await userEvent.click(
-    await screen.findByRole("button", { name: "Submit landing" }),
-  );
+}
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
 }
 
 /** Types a draft and presses Send, as the person does. */
@@ -1082,9 +1118,12 @@ describe("LandingComposer direct submit gate", () => {
       "unverified",
     ],
   ] as const)(
-    "hands a stage through rendered Send and keeps its key and payload after an owner %s",
+    "runs Open terminal first, then hands the saved create to the pending owner after an owner %s",
     async (_caseName, ownerResult, expectedFailure) => {
-      testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+      testState.pickHarness = "codex";
+      testState.pickModel = "gpt-6.1-sol";
+      testState.modelSlug = "gpt-6.1-sol";
+      testState.catalogue = { providers: [], offeredAgents: ["traycer"] };
       const userId = "landing-owner-test";
       useAuthStore
         .getState()
@@ -1093,37 +1132,18 @@ describe("LandingComposer direct submit gate", () => {
           { userId, username: "Test User" },
           [],
         );
-      useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
-      const staged = readStagedSandbox("landing:window-test");
-      if (staged === null || staged.clientRequestId === null)
-        throw new Error("expected a staged create key");
-      const savedRequest: SandboxCreateRequest = {
-        os: SHAPE.os,
-        cpus: SHAPE.cpus,
-        memoryMb: SHAPE.memoryMb,
-        diskMb: SHAPE.diskMb,
-        region: SHAPE.region,
-        displayName: "landing retry",
-        idleMinutes: SHAPE.idleMinutes,
-        burst: false,
-        createdByHostId: null,
-        createdByAgentId: null,
-        environmentId: null,
-        destroyAfterRestingMinutes: SHAPE.destroyAfterRestingMinutes,
-        createdByTaskId: null,
-        clientRequestId: staged.clientRequestId,
-      };
-      useStagedSandboxStore.getState().report("landing:window-test", {
-        phase: "creating",
-        lastCreateKey: staged.clientRequestId,
-        lastRetryCreate: savedRequest,
-        failure: { kind: expectedFailure },
+      useStagedSandboxStore.getState().stage("landing:window-test", {
+        ...NEW_STAGE,
+        name: "handoff-payload",
       });
 
       const requests: SandboxCreateRequest[] = [];
+      const initialCreate = deferred<SandboxCreateFetchResult>();
       testState.createSandbox = (request) => {
         requests.push(request);
-        return Promise.resolve(ownerResult);
+        return requests.length === 1
+          ? initialCreate.promise
+          : Promise.resolve(ownerResult);
       };
       testState.startTask.mockImplementationOnce((args) => {
         const handoff = args.hand("epic-from-rendered-send");
@@ -1133,24 +1153,73 @@ describe("LandingComposer direct submit gate", () => {
         return null;
       });
 
-      await sendFromComposerWithPendingOwner();
+      await mountComposerWithPendingOwner();
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Submit landing" }),
+      );
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Codex doesn't run on sandboxes.",
+      );
+      expect(testState.startTask).not.toHaveBeenCalled();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Open terminal instead" }),
+      );
+      await waitFor(() => expect(requests).toHaveLength(1));
+      const firstRequest = requests[0];
+      expect(firstRequest.createdByTaskId).toBeNull();
+      expect(firstRequest).toMatchObject({
+        os: SHAPE.os,
+        cpus: SHAPE.cpus,
+        memoryMb: SHAPE.memoryMb,
+        diskMb: SHAPE.diskMb,
+        region: SHAPE.region,
+        displayName: "handoff-payload",
+        idleMinutes: SHAPE.idleMinutes,
+        burst: false,
+        createdByHostId: null,
+        createdByAgentId: null,
+        environmentId: null,
+        destroyAfterRestingMinutes: 0,
+      });
+      expect(testState.catalogueReadiness[0]).toEqual({
+        environmentId: null,
+        os: SHAPE.os,
+        cpus: SHAPE.cpus,
+        memoryMb: SHAPE.memoryMb,
+        diskMb: SHAPE.diskMb,
+        region: SHAPE.region,
+      });
+
+      testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+      initialCreate.resolve(ownerResult);
+      await waitFor(() => {
+        expect(readStagedSandbox("landing:window-test")).toMatchObject({
+          failure: { kind: expectedFailure },
+          lastCreateKey: firstRequest.clientRequestId,
+          lastRetryCreate: firstRequest,
+        });
+      });
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Submit landing" }),
+      );
       expect(testState.startTask).toHaveBeenCalledOnce();
 
       await waitFor(() => {
-        const sends = Object.values(
-          usePendingSandboxSendStore.getState().sends,
-        );
-        expect(sends).toHaveLength(1);
-        const ownerStage = readStagedSandbox(
-          pendingSendSurfaceKey(sends[0].id),
-        );
+        expect(requests).toHaveLength(2);
+        const ownerStage = onlyPendingStage();
         expect(ownerStage).toMatchObject({
+          phase: "creating",
           failure: { kind: expectedFailure },
-          lastCreateKey: savedRequest.clientRequestId,
-          lastRetryCreate: savedRequest,
+          lastCreateKey: firstRequest.clientRequestId,
+          lastRetryCreate: firstRequest,
         });
-        expect(ownerStage?.phase).toBe("creating");
-        expect(requests).toEqual([savedRequest]);
+      });
+      expect(requests[1]).toEqual(firstRequest);
+      expect(onlyPendingSend().settings).toMatchObject({
+        harnessId: "codex",
+        model: "gpt-6.1-sol",
       });
     },
   );

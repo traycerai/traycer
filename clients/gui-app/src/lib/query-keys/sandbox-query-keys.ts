@@ -1,5 +1,18 @@
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 
+export interface SandboxKnownRowScope {
+  readonly auth: object | null;
+  readonly userId: string | null;
+  readonly sandboxId: string | null;
+  readonly sendId: string | undefined;
+  readonly observationRequestedAt: number | undefined;
+  readonly observationRetryId: string | undefined;
+  readonly stopRequestedAt: number | undefined;
+  readonly hostId: string | null;
+  readonly stageId: string | null | undefined;
+  readonly attemptId: string | undefined;
+}
+
 /**
  * Query and mutation keys for the sandbox control plane (`/api/sandboxes`),
  * read through `AuthService` like the host registry.
@@ -24,18 +37,7 @@ export const sandboxQueryKeys = {
     "sandboxes",
     "missing",
   ],
-  knownRow: (input: {
-    readonly auth: object | null;
-    readonly userId: string | null;
-    readonly sandboxId: string | null;
-    readonly sendId: string | undefined;
-    readonly observationRequestedAt: number | undefined;
-    readonly observationRetryId: string | undefined;
-    readonly stopRequestedAt: number | undefined;
-    readonly hostId: string | null;
-    readonly stageId: string | null | undefined;
-    readonly attemptId: string | undefined;
-  }): readonly unknown[] => [
+  knownRow: (input: SandboxKnownRowScope): readonly unknown[] => [
     "auth",
     "sandbox-known-row",
     input.auth,

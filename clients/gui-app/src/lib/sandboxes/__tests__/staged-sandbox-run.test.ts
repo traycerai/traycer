@@ -26,6 +26,7 @@ import type {
 import type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -75,6 +76,7 @@ import {
   SANDBOX_ID,
   SHAPE,
   ScriptedDirectory,
+  type ScriptedAuth,
   type Script,
 } from "./staged-sandbox-run-harness";
 
@@ -127,6 +129,25 @@ function stageOf() {
   const stage = readStagedSandbox(surfaceKey);
   if (stage === null) throw new Error("nothing staged");
   return stage;
+}
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
+}
+
+function omittedList(): SandboxListFetchResult {
+  return { kind: "ok", response: { sandboxes: [] } };
+}
+
+function refreshSandboxList(auth: ScriptedAuth, deps: StagedSandboxRunDeps) {
+  return deps.queryClient.fetchQuery({
+    ...sandboxListQueryOptions(auth, deps.userId, true),
+    staleTime: 0,
+  });
 }
 
 async function ownPendingStage(sendId: string): Promise<void> {
@@ -694,6 +715,182 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
     expect(auth.listReads).toBe(1);
     expect(getSandbox).toHaveBeenCalledWith(SANDBOX_ID);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+  });
+});
+
+describe("runStagedSandbox after a shared list refresh", () => {
+  const notFound: SandboxGetFetchResult = {
+    kind: "refused",
+    status: 404,
+    code: SANDBOX_REFUSAL_CODE_NOT_FOUND,
+    reason: null,
+    shortfallMc: null,
+    newRateMcPerHour: null,
+    currentAwakeBurnMcPerHour: null,
+    message: null,
+  };
+
+  function sharedListKey(auth: ScriptedAuth, deps: StagedSandboxRunDeps) {
+    return sandboxListQueryOptions(auth, deps.userId, true).queryKey;
+  }
+
+  it("does not use a typed 404 from an older omission until a read matches the refreshed omission", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      { lists: [omittedList(), omittedList(), omittedList(), omittedList()] },
+      true,
+    );
+    onTestFinished(() => deps.queryClient.clear());
+    const oldRead = deferred<SandboxGetFetchResult>();
+    const currentRead = deferred<SandboxGetFetchResult>();
+    const getSandbox = vi
+      .spyOn(auth, "getSandbox")
+      .mockImplementationOnce(() => oldRead.promise)
+      .mockImplementationOnce(() => currentRead.promise);
+    const runPromise = run(null, deps);
+    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+
+    const key = sharedListKey(auth, deps);
+    const firstOmission = deps.queryClient.getQueryData(key);
+    const refreshed = await refreshSandboxList(auth, deps);
+    expect(deps.queryClient.getQueryData(key)).toBe(refreshed);
+    expect(refreshed).not.toBe(firstOmission);
+
+    oldRead.resolve(notFound);
+    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(2));
+    expect(stageOf().failure).toBeNull();
+    expect(stageOf().phase).toBe("creating");
+
+    currentRead.resolve(notFound);
+    await runPromise;
+    expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+    expect(getSandbox).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not apply an awake row from an older omission after the shared list refreshes", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      { lists: [omittedList(), omittedList(), omittedList(), omittedList()] },
+      true,
+    );
+    onTestFinished(() => deps.queryClient.clear());
+    const oldRead = deferred<SandboxGetFetchResult>();
+    const currentRead = deferred<SandboxGetFetchResult>();
+    const getSandbox = vi
+      .spyOn(auth, "getSandbox")
+      .mockImplementationOnce(() => oldRead.promise)
+      .mockImplementationOnce(() => currentRead.promise);
+    const readSettings = vi.fn(deps.readSettings);
+    const runPromise = run(null, { ...deps, readSettings });
+    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+
+    const key = sharedListKey(auth, deps);
+    const firstOmission = deps.queryClient.getQueryData(key);
+    const refreshed = await refreshSandboxList(auth, deps);
+    expect(deps.queryClient.getQueryData(key)).toBe(refreshed);
+    expect(refreshed).not.toBe(firstOmission);
+
+    oldRead.resolve({
+      kind: "ok",
+      sandbox: row({ state: "awake", guestConfigured: true }),
+    });
+    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(2));
+    expect(readSettings).not.toHaveBeenCalled();
+    expect(stageOf()).toMatchObject({ phase: "creating", failure: null });
+
+    useStagedSandboxStore.getState().cancel(surfaceKey, true);
+    currentRead.resolve({
+      kind: "ok",
+      sandbox: row({ state: "awake", guestConfigured: true }),
+    });
+    await runPromise;
+    expect(readSettings).not.toHaveBeenCalled();
+    expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
+      undefined,
+    );
+  });
+
+  it("accepts the exact destroyed credit-gate row across a later successful omission", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      { lists: [omittedList(), omittedList()] },
+      true,
+    );
+    onTestFinished(() => deps.queryClient.clear());
+    const heldRead = deferred<SandboxGetFetchResult>();
+    const getSandbox = vi
+      .spyOn(auth, "getSandbox")
+      .mockImplementationOnce(() => heldRead.promise)
+      .mockImplementation(() => {
+        useStagedSandboxStore.getState().cancel(surfaceKey, true);
+        return Promise.reject(new Error("unexpected second row read"));
+      });
+    const runPromise = run(null, deps);
+    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+
+    const key = sharedListKey(auth, deps);
+    const firstOmission = deps.queryClient.getQueryData(key);
+    const refreshed = await refreshSandboxList(auth, deps);
+    expect(deps.queryClient.getQueryData(key)).toBe(refreshed);
+    expect(refreshed).not.toBe(firstOmission);
+
+    heldRead.resolve({
+      kind: "ok",
+      sandbox: row({ state: "destroyed", failureCode: "credit-gate" }),
+    });
+    await runPromise;
+    expect(stageOf().failure).toMatchObject({
+      kind: "failed",
+      code: "credit-gate",
+      sandboxId: SANDBOX_ID,
+    });
+    expect(getSandbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for a fresh row after a successful omission arrives while settings are held", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      {
+        lists: [
+          listOf(row({ state: "awake", guestConfigured: true })),
+          omittedList(),
+          omittedList(),
+        ],
+      },
+      true,
+    );
+    onTestFinished(() => deps.queryClient.clear());
+    const heldSettings = deferred<"unsupported">();
+    const heldRead = deferred<SandboxGetFetchResult>();
+    const readSettings = vi
+      .fn<StagedSandboxRunDeps["readSettings"]>()
+      .mockReturnValueOnce(heldSettings.promise)
+      .mockResolvedValueOnce("unsupported");
+    const getSandbox = vi
+      .spyOn(auth, "getSandbox")
+      .mockImplementationOnce(() => heldRead.promise);
+    const runPromise = run(null, { ...deps, readSettings });
+    await vi.waitFor(() => expect(readSettings).toHaveBeenCalledTimes(1));
+
+    const key = sharedListKey(auth, deps);
+    const awakeList = deps.queryClient.getQueryData(key);
+    const refreshed = await refreshSandboxList(auth, deps);
+    expect(deps.queryClient.getQueryData(key)).toBe(refreshed);
+    expect(refreshed).not.toBe(awakeList);
+
+    heldSettings.resolve("unsupported");
+    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+    expect(auth.listReads).toBeGreaterThanOrEqual(3);
+    expect(stageOf()).toMatchObject({ phase: "creating", failure: null });
+    expect(readSettings).toHaveBeenCalledTimes(1);
+
+    heldRead.resolve({
+      kind: "ok",
+      sandbox: row({ state: "awake", guestConfigured: true }),
+    });
+    await runPromise;
+    expect(readSettings).toHaveBeenCalledTimes(2);
+    expect(stageOf()).toMatchObject({ phase: "handoff", failure: null });
   });
 });
 
