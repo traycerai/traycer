@@ -173,11 +173,10 @@ export interface SettingsBaseRow {
 }
 
 /** The app passes rows it read from authn, never rows a host returned; when they differ nothing is applied silently. */
-export interface SettingsSaveBase {
+export interface SettingsSaveBase
+  extends Partial<{ readonly prebind: true | "unanswered" }> {
   readonly rows: readonly SettingsBaseRow[];
   readonly hostOs: HostOs | null;
-  /** The host edits its own settings, so the Personal rows only supply the address and base. */
-  readonly prebind?: true;
 }
 
 const LOCAL_ONLY: SettingsSaveMapping = { kind: "local_only" };
@@ -246,6 +245,8 @@ function objectOf(value: SettingValue): Record<string, SettingValue> | null {
 
 /** This host's own OS's row when the environment holds one, else the `any` row. */
 function perOsRow(base: SettingsSaveBase): EnvironmentOs | null {
+  // The unanswered form supplies the edit's bytes. Its OS is resolved separately.
+  if (base.prebind === "unanswered") return "any";
   const hostOs = base.hostOs;
   if (hostOs === null) return null;
   return base.rows.some((row) => row.os === hostOs) ? hostOs : "any";
@@ -460,7 +461,7 @@ export function settingsSaveItemEdit(
 ): SettingsSaveMapping {
   const mapping = itemEditOf(save, base);
   // A prebind edit can be different on the host even if it agrees with Personal.
-  return base.prebind === true || settingsSaveBaseAddress(save) === null
+  return base.prebind !== undefined || settingsSaveBaseAddress(save) === null
     ? mapping
     : unlessUnchanged(mapping, base);
 }
