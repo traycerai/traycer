@@ -1296,6 +1296,24 @@ describe("settingsSaveItemEdit", () => {
   });
 });
 
+describe("settings saved before binding", () => {
+  it("keeps an explicit put equal to the Personal row", () => {
+    const base = { ...LINUX_KEPT, prebind: true as const };
+
+    expect(settingsSaveItemEdit(overrideSet("kept"), base)).toEqual(
+      overridePut("linux"),
+    );
+  });
+
+  it("keeps an explicit delete when the Personal row is absent", () => {
+    const base = { ...EMPTY, prebind: true as const };
+
+    expect(settingsSaveItemEdit(overrideDeleteSave(), base)).toEqual(
+      overrideDelete("any"),
+    );
+  });
+});
+
 describe("settingsSaveBaseAddress", () => {
   it("names the shell item for set, add, remove and revertArgs", () => {
     for (const method of SHELL_METHODS) {
@@ -1709,7 +1727,7 @@ describe("stated-item contracts", () => {
 
     const proposals = hostRpcRegistry["environment.proposals"];
     expect(proposals.degrade).toEqual({ kind: "unsupported" });
-    expect(proposals[1].latestMinor).toEqual(1);
+    expect(proposals[1].latestMinor).toEqual(2);
     expect(proposals[1].versions[0].contract).toBe(environmentProposalsV10);
   });
 

@@ -86,6 +86,7 @@ const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
 
 /** The family's methods that carry a `@1.2` MINOR over their `@1.1`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
+  "environment.proposals",
   "environment.review",
   "environment.status",
   "environment.secrets.list",
@@ -93,7 +94,6 @@ const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
 
 /** The family's methods that carry an `@1.1` MINOR over their `@1.0`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
-  "environment.proposals",
   "environment.agentDefinitions.put",
   "environment.agentDefinitions.delete",
   "environment.setup.put",
@@ -258,6 +258,65 @@ describe("new methods are off every released floor", () => {
     expect(hostRpcRegistry["environment.status"].degrade).toEqual({
       kind: "unsupported",
     });
+  });
+});
+
+describe("environment.proposals Move evidence", () => {
+  const method = "environment.proposals";
+  const registry = hostRpcRegistry[method];
+  const saveId = "00000000-0000-4000-8000-000000000091";
+  const row = {
+    proposal: {
+      proposalId: saveId,
+      environmentId: "environment-a",
+      hostId: "host-a",
+      sharingGeneration: 3,
+      kind: "agent_memory",
+      key: "memory",
+      os: null,
+      operation: "put",
+      state: "proposed",
+    },
+    deliveredRevision: null,
+    localOverride: true,
+  };
+  const promotion = { saveId, heldRevision: 9 };
+
+  it.each([null, 8])("carries the exact evidence answer %s at 1.2", (revision) => {
+    const response = {
+      proposals: [
+        { ...row, promotion: { ...promotion, moveWrittenRevision: revision } },
+      ],
+    };
+
+    expect(
+      registry[1].versions[2].contract.responseSchema.parse(response),
+    ).toEqual(response);
+    expect(
+      registry[1].versions[1].contract.responseSchema.parse(response),
+    ).toEqual({ proposals: [{ ...row, promotion }] });
+  });
+
+  it("does not invent evidence when decoding an older receipt or a regular proposal", () => {
+    const oldVersion = { major: 1, minor: 1 };
+    const newVersion = { major: 1, minor: 2 };
+    const responses = [
+      { proposals: [{ ...row, promotion }] },
+      { proposals: [row] },
+    ];
+
+    for (const response of responses) {
+      expect(
+        decodeResponsePayload(
+          registry,
+          newVersion,
+          oldVersion,
+          response,
+          "test-request",
+          method,
+        ),
+      ).toEqual(response);
+    }
   });
 });
 

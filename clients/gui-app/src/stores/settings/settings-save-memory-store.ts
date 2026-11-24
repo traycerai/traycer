@@ -14,11 +14,6 @@ interface RememberedSettingsSave {
   readonly editId: string;
   readonly hostId: string;
   readonly writtenAt: number;
-  /** The live revision from the original review of this promotion, including across an unanswered apply. */
-  readonly promotionBase?: {
-    readonly heldRevision: number;
-    readonly liveRevision: number | null;
-  };
   /** A new hold revision starts over. */
   readonly unanswered: {
     readonly revision: number;
@@ -27,9 +22,7 @@ interface RememberedSettingsSave {
 }
 
 /** Never the value nor its canonical text: a put is matched by its digest alone. */
-export interface BoundSettingsSave extends RememberedSettingsSave {
-  readonly environmentId: string;
-  readonly sharingGeneration: number;
+export interface RememberedSettingsItem {
   readonly kind: string;
   readonly key: string;
   readonly os: string | null;
@@ -38,8 +31,19 @@ export interface BoundSettingsSave extends RememberedSettingsSave {
   readonly expectedLiveRevision: number | null;
 }
 
+export interface BoundSettingsSave
+  extends RememberedSettingsSave, RememberedSettingsItem {
+  readonly environmentId: string;
+  readonly sharingGeneration: number;
+}
+
 interface LocalSettingsSave extends RememberedSettingsSave {
   readonly environmentId: null;
+  /** Older records have no target. A missing base is never evidence of absence. */
+  readonly personal?: {
+    readonly environmentId: string;
+    readonly item: RememberedSettingsItem | null;
+  } | null;
 }
 
 export type SettingsSaveMemoryRecord = BoundSettingsSave | LocalSettingsSave;
@@ -51,11 +55,6 @@ interface SettingsSaveMemoryState {
   /** Forgets every earlier save of the same item on the same host. */
   readonly remember: (record: SettingsSaveMemoryRecord) => string;
   readonly forget: (id: string) => void;
-  readonly notePromotionBase: (
-    id: string,
-    heldRevision: number,
-    liveRevision: number | null,
-  ) => void;
   readonly noteUnanswered: (id: string, holdRevision: number) => void;
   readonly markSent: (id: string) => void;
   readonly markAnswered: (id: string) => void;
@@ -65,14 +64,18 @@ function sameItem(
   a: SettingsSaveMemoryRecord,
   b: SettingsSaveMemoryRecord,
 ): boolean {
+  const aTarget = a.environmentId === null ? a.personal : a;
+  const bTarget = b.environmentId === null ? b.personal : b;
+  const aItem = a.environmentId === null ? (a.personal?.item ?? null) : a;
+  const bItem = b.environmentId === null ? (b.personal?.item ?? null) : b;
   return (
-    a.environmentId !== null &&
-    b.environmentId !== null &&
-    a.environmentId === b.environmentId &&
+    aItem !== null &&
+    bItem !== null &&
+    aTarget?.environmentId === bTarget?.environmentId &&
     a.hostId === b.hostId &&
-    a.kind === b.kind &&
-    a.key === b.key &&
-    a.os === b.os
+    aItem.kind === bItem.kind &&
+    aItem.key === bItem.key &&
+    aItem.os === bItem.os
   );
 }
 
@@ -131,24 +134,6 @@ export const useSettingsSaveMemoryStore = create<SettingsSaveMemoryState>()(
           if (!Object.hasOwn(state.records, id)) return state;
           const { [id]: _forgotten, ...records } = state.records;
           return { records };
-        }),
-      notePromotionBase: (id, heldRevision, liveRevision) =>
-        set((state) => {
-          const record = settingsSaveMemoryRecord(state.records, id);
-          if (
-            record === null ||
-            record.promotionBase?.heldRevision === heldRevision
-          )
-            return state;
-          return {
-            records: {
-              ...state.records,
-              [id]: {
-                ...record,
-                promotionBase: { heldRevision, liveRevision },
-              },
-            },
-          };
         }),
       noteUnanswered: (id, holdRevision) =>
         set((state) => {
