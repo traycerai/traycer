@@ -452,6 +452,47 @@ function previewWithDigest(
   return { ...preview(profiles), sheetDigest };
 }
 
+function previewWithChoice(
+  sheetDigest: string,
+  detail: string,
+): EnvironmentMoveStopPreviewResponseV14 {
+  return {
+    ...previewWithDigest(null, sheetDigest),
+    needsChoice: [
+      {
+        row: {
+          kind: "variable",
+          key: "API_TOKEN",
+          os: "any",
+          label: "API_TOKEN",
+          detail,
+        },
+        reason: "edited_here",
+        origin: "changed_here",
+        usedBy: [],
+      },
+    ],
+  };
+}
+
+function queryDataEvent<T>(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  matches: (data: T) => boolean,
+): Promise<T> {
+  return new Promise((resolve) => {
+    let unsubscribe = (): void => {};
+    const check = (): void => {
+      const data = queryClient.getQueryData<T>(queryKey);
+      if (data === undefined || !matches(data)) return;
+      unsubscribe();
+      resolve(data);
+    };
+    unsubscribe = queryClient.getQueryCache().subscribe(check);
+    check();
+  });
+}
+
 function providerList(profiles: readonly ProviderProfile[]): ProvidersList {
   const state = providerState({
     providerId: "codex",
@@ -732,6 +773,190 @@ async function expectFloorRefusalAfterReconnect(
 }
 
 describe("StopSharingSession over the real remote session", () => {
+  it("query refresh clears item choices when the shown digest changes", async () => {
+    const shownDigest = "e".repeat(64);
+    const refreshedDigest = "f".repeat(64);
+    let resolveStopRequest: ((params: unknown) => void) | null = null;
+    const stopRequest = new Promise<unknown>((resolve) => {
+      resolveStopRequest = resolve;
+    });
+    const harness = makeHarness(({ method, params }) => {
+      if (method === "environment.move.stopPreview")
+        return successful(
+          previewWithChoice(shownDigest, "Old credential detail"),
+        );
+      if (method === "environment.move.stop") {
+        resolveStopRequest?.(params);
+        return successful(stopped());
+      }
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    advertiseSheetDigestStopPair(harness.relay);
+    const previewKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "environment.move.stopPreview"
+    >(HOST_ID, "environment.move.stopPreview", {
+      profileMode: "keep-personal",
+    });
+    const shownPreview = queryDataEvent<EnvironmentMoveStopPreviewResponseV14>(
+      harness.queryClient,
+      previewKey,
+      (data) => data.sheetDigest === shownDigest,
+    );
+    await renderSession(
+      harness.client,
+      { showListAfterStop: false, showToaster: false },
+      null,
+    );
+    await shownPreview;
+
+    const keepChoice = screen.getByTestId(
+      "stop-sharing-choice-variable-API_TOKEN-keep_locally",
+    );
+    fireEvent.click(keepChoice);
+    expect(keepChoice.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+    ).toBe(false);
+
+    const refreshedPreview =
+      queryDataEvent<EnvironmentMoveStopPreviewResponseV14>(
+        harness.queryClient,
+        previewKey,
+        (data) => data.sheetDigest === refreshedDigest,
+      );
+    await act(async () => {
+      harness.queryClient.setQueryData(
+        previewKey,
+        previewWithChoice(refreshedDigest, "Updated credential detail"),
+      );
+      await refreshedPreview;
+    });
+
+    expect(screen.getByText("Updated credential detail")).toBeTruthy();
+    expect(keepChoice.getAttribute("aria-pressed")).toBe("false");
+    const confirm = screen.getByTestId("stop-sharing-confirm");
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(keepChoice);
+    expect(confirm.hasAttribute("disabled")).toBe(false);
+    const sentStop = stopRequest;
+    fireEvent.click(confirm);
+    expect(await sentStop).toEqual({
+      choices: [
+        {
+          kind: "variable",
+          key: "API_TOKEN",
+          choice: "keep_locally",
+        },
+      ],
+      profileMode: null,
+      profileSignIns: [],
+      sheetDigest: refreshedDigest,
+    });
+  });
+
+  it("query refresh resets changed profile decisions and preserves matching ones", async () => {
+    const shownDigest = "1".repeat(64);
+    const refreshedDigest = "2".repeat(64);
+    let resolveStopRequest: ((params: unknown) => void) | null = null;
+    const stopRequest = new Promise<unknown>((resolve) => {
+      resolveStopRequest = resolve;
+    });
+    const initialProfiles = [
+      FOLDER("folder-one", "Work", "offered"),
+      FOLDER("folder-two", "Personal", "offered"),
+    ];
+    const refreshedProfiles = [
+      SHARED_FOLDER("folder-one", "Work"),
+      FOLDER("folder-two", "Personal", "offered"),
+    ];
+    const harness = makeHarness(({ method, params }) => {
+      if (method === "environment.move.stopPreview")
+        return successful(previewWithDigest(initialProfiles, shownDigest));
+      if (method === "environment.move.stop") {
+        resolveStopRequest?.(params);
+        return successful(stopped());
+      }
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    advertiseSheetDigestStopPair(harness.relay);
+    const previewKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "environment.move.stopPreview"
+    >(HOST_ID, "environment.move.stopPreview", {
+      profileMode: "keep-personal",
+    });
+    const shownPreview = queryDataEvent<EnvironmentMoveStopPreviewResponseV14>(
+      harness.queryClient,
+      previewKey,
+      (data) => data.sheetDigest === shownDigest,
+    );
+    await renderSession(
+      harness.client,
+      { showListAfterStop: false, showToaster: false },
+      null,
+    );
+    await shownPreview;
+
+    fireEvent.click(
+      within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
+        "button",
+        { name: "Skip" },
+      ),
+    );
+    fireEvent.click(
+      within(screen.getByTestId("personal-leave-codex-folder-two")).getByRole(
+        "button",
+        { name: "Skip" },
+      ),
+    );
+
+    const refreshedPreview =
+      queryDataEvent<EnvironmentMoveStopPreviewResponseV14>(
+        harness.queryClient,
+        previewKey,
+        (data) => data.sheetDigest === refreshedDigest,
+      );
+    await act(async () => {
+      harness.queryClient.setQueryData(
+        previewKey,
+        previewWithDigest(refreshedProfiles, refreshedDigest),
+      );
+      await refreshedPreview;
+    });
+
+    const changedRow = screen.getByTestId("personal-leave-codex-folder-one");
+    const matchingRow = screen.getByTestId("personal-leave-codex-folder-two");
+    expect
+      .soft(within(changedRow).queryByRole("button", { name: "Skip" }))
+      .not.toBeNull();
+    expect
+      .soft(within(matchingRow).getByRole("button", { name: "Undo" }))
+      .toBeTruthy();
+
+    const sentStop = stopRequest;
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    expect(await sentStop).toMatchObject({
+      profileMode: "keep-personal",
+      profileSignIns: [
+        {
+          providerId: "codex",
+          profileId: "folder-one",
+          signIn: { kind: "untouched" },
+        },
+        {
+          providerId: "codex",
+          profileId: "folder-two",
+          signIn: { kind: "skip" },
+        },
+      ],
+      sheetDigest: refreshedDigest,
+    });
+  });
+
   it.each([
     {
       label: "plain",
