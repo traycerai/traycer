@@ -1,5 +1,11 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  defaultScheduler,
+  notifyManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -8,7 +14,15 @@ import {
   within,
 } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostManifest,
@@ -65,7 +79,11 @@ import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { authQueryKeys, hostQueryKeys } from "@/lib/query-keys";
+import {
+  authQueryKeys,
+  environmentMutationKeys,
+  hostQueryKeys,
+} from "@/lib/query-keys";
 import {
   GIVE_ACCEPTANCE_ID,
   GIVE_ATTEMPT_ID,
@@ -384,6 +402,45 @@ function renderCard(
   handlers: MockHandlerMap<HostRpcRegistry>,
 ): QueryClient {
   return renderCardWithRetry(status, handlers, true);
+}
+
+function nextStopPreview(queryClient: QueryClient, choiceCount: number) {
+  const key = hostQueryKeys.method<
+    HostRpcRegistry,
+    "environment.move.stopPreview"
+  >("old", "environment.move.stopPreview", { profileMode: null });
+  return new Promise<void>((resolve) => {
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (
+        event.type !== "updated" ||
+        event.action.type !== "success" ||
+        event.query !==
+          queryClient.getQueryCache().find({ queryKey: key, exact: true })
+      )
+        return;
+      const preview =
+        queryClient.getQueryData<EnvironmentMoveStopPreviewResponseV14>(key);
+      if (preview?.needsChoice.length !== choiceCount) return;
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
+function nextStopSettlement(queryClient: QueryClient) {
+  return new Promise<void>((resolve) => {
+    const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+      if (
+        event.type !== "updated" ||
+        event.action.type !== "success" ||
+        event.mutation.options.mutationKey?.[0] !==
+          environmentMutationKeys.moveStop()[0]
+      )
+        return;
+      unsubscribe();
+      resolve();
+    });
+  });
 }
 
 function renderCardWithRetry(
@@ -1292,7 +1349,9 @@ describe("<HostOverviewSettingsCard />", () => {
   });
 
   it("opens the Stop sharing review when the host's own settings are selected", async () => {
-    renderCard(
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
+    const queryClient = renderCard(
       environmentStatusFixture({
         planes: {
           records: "shared_unrecorded",
@@ -1312,11 +1371,12 @@ describe("<HostOverviewSettingsCard />", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Environment" }), {
       key: "ArrowDown",
     });
-    fireEvent.click(await screen.findByRole("option", { name: /^Old laptop/ }));
-
-    expect(
-      await screen.findByTestId("stop-sharing-managed-empty"),
-    ).toBeTruthy();
+    const preview = nextStopPreview(queryClient, 0);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("option", { name: /^Old laptop/ }));
+      await preview;
+    });
+    expect(screen.getByTestId("stop-sharing-managed-empty")).toBeTruthy();
     expect(
       screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
     ).toBe(false);
@@ -1399,6 +1459,8 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
   });
 
   it("refetches a changed preview on choices_missing, names the row that now needs a choice, and sends again only once it has one", async () => {
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
     const logLevel = {
       row: {
         kind: "variable",
@@ -1429,7 +1491,7 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
     ];
     let previewReads = 0;
     const sent: EnvironmentMoveStopRequestV12[] = [];
-    renderCard(environmentStatusFixture({}), {
+    const queryClient = renderCard(environmentStatusFixture({}), {
       "environment.status": () => environmentStatusFixture({}),
       "environment.move.stopPreview": () => {
         const preview = previews[Math.min(previewReads, previews.length - 1)];
@@ -1445,15 +1507,21 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
-    fireEvent.click(screen.getByTestId("overview-stop-sharing"));
+    const firstPreview = nextStopPreview(queryClient, 1);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("overview-stop-sharing"));
+      await firstPreview;
+    });
     fireEvent.click(
-      await screen.findByTestId(
-        "stop-sharing-choice-variable-LOG_LEVEL-keep_locally",
-      ),
+      screen.getByTestId("stop-sharing-choice-variable-LOG_LEVEL-keep_locally"),
     );
-    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    const refreshedPreview = nextStopPreview(queryClient, 2);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+      await refreshedPreview;
+    });
 
-    const changed = await screen.findByTestId("stop-sharing-preview-changed");
+    const changed = screen.getByTestId("stop-sharing-preview-changed");
     expect(changed.textContent).toContain("EDITOR");
     const confirm = screen.getByTestId("stop-sharing-confirm");
     expect(confirm instanceof HTMLButtonElement && confirm.disabled).toBe(true);
@@ -1463,9 +1531,12 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
         "stop-sharing-choice-variable-EDITOR-remove_from_this_computer",
       ),
     );
-    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-
-    await waitFor(() => expect(sent).toHaveLength(2));
+    const stopped = nextStopSettlement(queryClient);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+      await stopped;
+    });
+    expect(sent).toHaveLength(2);
     expect(sent[1]).toEqual({
       profileMode: null,
       profileSignIns: [],

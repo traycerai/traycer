@@ -1,4 +1,9 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  defaultScheduler,
+  notifyManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -14,7 +19,15 @@ import {
   type ProfilerOnRenderCallback,
   type ReactNode,
 } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { Toaster, toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -172,6 +185,7 @@ interface RemoteHarness {
   readonly session: RemoteSession<HostRpcRegistry, typeof emptyStreamRegistry>;
   readonly capturedFloorRequirements: (RequiredHostMethodVersion | null)[];
   readonly capturedFloorErrors: unknown[];
+  readonly floorRefused: Promise<void>;
   readonly capturedFloorCalls: {
     readonly method: HostMethod;
     readonly params: unknown;
@@ -302,6 +316,7 @@ function makeHarness(
   } | null = null;
   const capturedFloorRequirements: (RequiredHostMethodVersion | null)[] = [];
   const capturedFloorErrors: unknown[] = [];
+  const floorRefused = Promise.withResolvers<void>();
   const capturedFloorCalls: {
     readonly method: HostMethod;
     readonly params: unknown;
@@ -311,15 +326,20 @@ function makeHarness(
     method: HostMethod,
     params: unknown,
     options: HostRequestOptions,
-  ): boolean => {
+  ): Promise<void> | null => {
     const downgrade = armedFloorDowngrade;
-    if (downgrade === null || downgrade.method !== method) return false;
+    if (downgrade === null || downgrade.method !== method) return null;
     armedFloorDowngrade = null;
     capturedFloorRequirements.push(options.requiredHostMethodVersion);
     capturedFloorCalls.push({ method, params });
     setAdvertisedMethodVersion(relay, method, downgrade.version);
+    const recovered = nextAvailabilityRecovered(session);
     relay.dropCurrentConnection();
-    return true;
+    return recovered;
+  };
+  const recordFloorError = (error: unknown): void => {
+    capturedFloorErrors.push(error);
+    floorRefused.resolve();
   };
   const messenger: IHostMessenger<HostRpcRegistry> = {
     async request<Method extends HostMethod>(
@@ -332,17 +352,12 @@ function makeHarness(
         params,
         requiredHostMethodVersion: options.requiredHostMethodVersion,
       });
-      const downgraded = applyFloorDowngrade(method, params, options);
-      if (downgraded) {
-        await vi.waitFor(() => {
-          expect(relay.openBearers).toHaveLength(2);
-          expect(session.isReady()).toBe(true);
-        });
-      }
+      const recovered = applyFloorDowngrade(method, params, options);
+      if (recovered !== null) await recovered;
       try {
         return await remoteMessenger.request(method, params, options);
       } catch (error: unknown) {
-        if (downgraded) capturedFloorErrors.push(error);
+        if (recovered !== null) recordFloorError(error);
         throw error;
       }
     },
@@ -357,13 +372,8 @@ function makeHarness(
         params,
         requiredHostMethodVersion: options.requiredHostMethodVersion,
       });
-      const downgraded = applyFloorDowngrade(method, params, options);
-      if (downgraded) {
-        await vi.waitFor(() => {
-          expect(relay.openBearers).toHaveLength(2);
-          expect(session.isReady()).toBe(true);
-        });
-      }
+      const recovered = applyFloorDowngrade(method, params, options);
+      if (recovered !== null) await recovered;
       try {
         return await remoteMessenger.requestWithResponseTimeout(
           method,
@@ -372,7 +382,7 @@ function makeHarness(
           options,
         );
       } catch (error: unknown) {
-        if (downgraded) capturedFloorErrors.push(error);
+        if (recovered !== null) recordFloorError(error);
         throw error;
       }
     },
@@ -403,6 +413,7 @@ function makeHarness(
     session,
     capturedFloorRequirements,
     capturedFloorErrors,
+    floorRefused: floorRefused.promise,
     capturedFloorCalls,
     observedHostRequests,
     armFloorDowngrade(method, version) {
@@ -573,6 +584,39 @@ function SessionView(props: {
   );
 }
 
+function nextAvailabilityRecovered(session: RemoteHarness["session"]) {
+  return new Promise<void>((resolve) => {
+    let unsubscribe = (): void => undefined;
+    unsubscribe = session.subscribeAvailabilityRecovered(() => {
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
+function nextStopPreview(
+  queryClient: QueryClient,
+  profileMode: "keep-personal" | null,
+) {
+  const key = hostQueryKeys.method<
+    HostRpcRegistry,
+    "environment.move.stopPreview"
+  >(HOST_ID, "environment.move.stopPreview", { profileMode });
+  return new Promise<void>((resolve) => {
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (
+        event.type !== "updated" ||
+        event.action.type !== "success" ||
+        event.query !==
+          queryClient.getQueryCache().find({ queryKey: key, exact: true })
+      )
+        return;
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
 async function renderSession(
   client: HostClient<HostRpcRegistry>,
   options: {
@@ -583,8 +627,9 @@ async function renderSession(
 ): Promise<void> {
   const harness = harnesses.find((harness) => harness.client === client);
   if (harness === undefined) throw new Error("expected a test query client");
+  const ready = nextAvailabilityRecovered(harness.session);
   harness.session.start();
-  await vi.waitFor(() => expect(harness.session.isReady()).toBe(true));
+  await ready;
   mountSession(client, harness.queryClient, options, onRender);
 }
 
@@ -703,8 +748,9 @@ async function expectFloorRefusalAfterReconnect(
   harness: RemoteHarness,
   requirement: RequiredHostMethodVersion,
 ): Promise<void> {
-  await vi.waitFor(() => expect(harness.capturedFloorErrors).toHaveLength(1));
-  await vi.waitFor(() => expect(harness.session.isReady()).toBe(true));
+  await harness.floorRefused;
+  expect(harness.capturedFloorErrors).toHaveLength(1);
+  expect(harness.session.isReady()).toBe(true);
   expect(harness.capturedFloorErrors[0]).toBeInstanceOf(
     HostMethodVersionUnsatisfiedError,
   );
@@ -1814,6 +1860,8 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
   );
 
   it("refuses Stop below 1.2 on the redialed connection through the real sheet mutation", async () => {
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
     const harness = makeHarness(({ method }) => {
       if (method === "environment.move.stopPreview") {
         return successful(preview([]));
@@ -1822,6 +1870,7 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
     cacheProvidersList(harness, []);
+    const previewReady = nextStopPreview(harness.queryClient, "keep-personal");
     await renderSession(
       harness.client,
       {
@@ -1830,13 +1879,20 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
       },
       null,
     );
-    await screen.findByTestId("stop-sharing-managed-empty");
+    await act(async () => {
+      await previewReady;
+    });
+    expect(screen.getByTestId("stop-sharing-managed-empty")).toBeTruthy();
     harness.armFloorDowngrade("environment.move.stop", {
       major: 1,
       minor: 1,
     });
 
-    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    const legacyPreview = nextStopPreview(harness.queryClient, null);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+      await Promise.all([harness.floorRefused, legacyPreview]);
+    });
     await expectFloorRefusalAfterReconnect(harness, {
       method: "environment.move.stop",
       version: { major: 1, minor: 2 },
@@ -1853,17 +1909,15 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
       },
     ]);
     expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
-    await vi.waitFor(() =>
-      expect(
-        harness.relay.unaryRequests.some(
-          (request, index) =>
-            harness.relay.unaryRequestConnectionIds[index] === 1 &&
-            request.method === "environment.move.stopPreview" &&
-            JSON.stringify(request.params) ===
-              JSON.stringify({ profileMode: null }),
-        ),
-      ).toBe(true),
-    );
+    expect(
+      harness.relay.unaryRequests.some(
+        (request, index) =>
+          harness.relay.unaryRequestConnectionIds[index] === 1 &&
+          request.method === "environment.move.stopPreview" &&
+          JSON.stringify(request.params) ===
+            JSON.stringify({ profileMode: null }),
+      ),
+    ).toBe(true);
     expect(
       harness.relay.unaryRequests.some(
         (request, index) =>

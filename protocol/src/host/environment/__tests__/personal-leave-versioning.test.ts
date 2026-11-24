@@ -501,11 +501,25 @@ describe("environment.move Stop digest compatibility matrix", () => {
         );
       }
 
-      const hostPreviewResponse = hostPreviewContract.responseSchema.parse({
+      const previewRows = {
         managed: [moveRow],
         needsChoice: previewV11Response.needsChoice,
         ...(mode.profileMode === null ? {} : { personalProfiles: null }),
+      };
+      const hostPreviewResponse = hostPreviewContract.responseSchema.parse({
+        ...previewRows,
         ...(versions.host.preview.minor === previewV14.minor
+          ? { sheetDigest: digest }
+          : {}),
+      });
+      // The Host validates the result against the schema requested on the wire.
+      const wirePreviewResponse = contractAt(
+        previewCodecRegistry,
+        preparedPreviewRequest.onWireVersion,
+      ).responseSchema.parse(hostPreviewResponse);
+      expect(wirePreviewResponse).toStrictEqual({
+        ...previewRows,
+        ...(preparedPreviewRequest.onWireVersion.minor === previewV14.minor
           ? { sheetDigest: digest }
           : {}),
       });
@@ -513,16 +527,21 @@ describe("environment.move Stop digest compatibility matrix", () => {
         previewRegistry,
         versions.client.preview,
         versions.host.preview,
-        hostPreviewResponse,
+        wirePreviewResponse,
         `preview-response-${versions.client.preview.minor}-${versions.host.preview.minor}`,
         "environment.move.stopPreview",
       );
-      if (
-        versions.host.preview.minor === previewV13.minor &&
-        versions.client.preview.minor === previewV14.minor
-      ) {
-        expect(clientPreviewResponse).toMatchObject({ sheetDigest: null });
-      }
+      expect(clientPreviewResponse).toStrictEqual({
+        ...previewRows,
+        ...(versions.client.preview.minor === previewV14.minor
+          ? {
+              sheetDigest:
+                versions.host.preview.minor === previewV14.minor
+                  ? digest
+                  : null,
+            }
+          : {}),
+      });
 
       const hostStopResponse = hostStopContract.responseSchema.parse({
         outcome: "stopped",
@@ -724,19 +743,24 @@ describe("environment.move personal leave compatibility", () => {
   });
 
   it("rejects malformed latest preview modes and stop profile choices", () => {
-    const previewRequestSchema =
-      previewRegistry[1].versions[2].contract.requestSchema;
+    const previewRequestSchema = contractAt(
+      previewCodecRegistry,
+      previewV14,
+    ).requestSchema;
     expect(previewRequestSchema.parse({})).toEqual({ profileMode: null });
     expect(
       previewRequestSchema.safeParse({ profileMode: "legacy-stop" }).success,
     ).toBe(false);
 
-    const stopRequestSchema =
-      stopRegistry[1].versions[1].contract.requestSchema;
+    const stopRequestSchema = contractAt(
+      stopCodecRegistry,
+      stopV13,
+    ).requestSchema;
     expect(stopRequestSchema.parse({ choices: legacyStopChoices })).toEqual({
       choices: legacyStopChoices,
       profileMode: null,
       profileSignIns: [],
+      sheetDigest: null,
     });
     expect(
       stopRequestSchema.parse({
@@ -748,6 +772,7 @@ describe("environment.move personal leave compatibility", () => {
       choices: legacyStopChoices,
       profileMode: "keep-personal",
       profileSignIns,
+      sheetDigest: null,
     });
     expect(
       stopRequestSchema.safeParse({
