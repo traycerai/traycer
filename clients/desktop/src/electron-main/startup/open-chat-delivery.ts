@@ -2,7 +2,11 @@ import type { OpenChatDeepLinkTarget } from "../auth/deep-link";
 
 /** The window an open-chat link would be handed to, as far as delivery cares. */
 export interface OpenChatWindow {
-  readonly windowId: string;
+  /**
+   * Unique per window instance (its `webContents.id`, which Electron never
+   * reuses): a window restored under an earlier window's id gets a new one.
+   */
+  readonly instanceId: number;
   /** The renderer has finished loading its page (not loading, URL set). */
   readonly loaded: boolean;
   /** Calls `listener` once, on this window's next `did-finish-load`. */
@@ -29,7 +33,7 @@ export interface OpenChatDeliveryPorts {
 export class OpenChatDelivery {
   private pending: OpenChatDeepLinkTarget | null = null;
   private ports: OpenChatDeliveryPorts | null = null;
-  private waitingOnWindowId: string | null = null;
+  private waitingOnInstanceId: number | null = null;
   private windowRequested = false;
 
   offer(target: OpenChatDeepLinkTarget): void {
@@ -59,10 +63,10 @@ export class OpenChatDelivery {
     }
     this.windowRequested = false;
     if (!window.loaded) {
-      if (this.waitingOnWindowId !== window.windowId) {
-        this.waitingOnWindowId = window.windowId;
+      if (this.waitingOnInstanceId !== window.instanceId) {
+        this.waitingOnInstanceId = window.instanceId;
         window.onceLoaded(() => {
-          this.waitingOnWindowId = null;
+          this.waitingOnInstanceId = null;
           this.flush();
         });
       }

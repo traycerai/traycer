@@ -14,7 +14,7 @@ class FakeWindow implements OpenChatWindow {
   private listeners: (() => void)[] = [];
 
   constructor(
-    readonly windowId: string,
+    readonly instanceId: number,
     loaded: boolean,
   ) {
     this.loaded = loaded;
@@ -50,7 +50,7 @@ function ports(window: {
 describe("OpenChatDelivery", () => {
   it("delivers at once to a loaded window", () => {
     const delivery = new OpenChatDelivery();
-    const p = ports({ current: new FakeWindow("w1", true) });
+    const p = ports({ current: new FakeWindow(1, true) });
     delivery.attach(p);
     delivery.offer(A);
     expect(p.delivered).toEqual([A]);
@@ -59,7 +59,7 @@ describe("OpenChatDelivery", () => {
   it("cold start: links before attach and while the renderer loads collapse to the newest, delivered once on load", () => {
     const delivery = new OpenChatDelivery();
     delivery.offer(A);
-    const window = new FakeWindow("w1", false);
+    const window = new FakeWindow(1, false);
     const p = ports({ current: window });
     delivery.attach(p);
     delivery.offer(B);
@@ -78,7 +78,7 @@ describe("OpenChatDelivery", () => {
     expect(p.openWindow).toHaveBeenCalledTimes(1);
     expect(p.delivered).toEqual([]);
 
-    const window = new FakeWindow("w2", false);
+    const window = new FakeWindow(2, false);
     slot.current = window;
     delivery.flush();
     expect(p.delivered).toEqual([]);
@@ -86,9 +86,24 @@ describe("OpenChatDelivery", () => {
     expect(p.delivered).toEqual([B]);
   });
 
+  it("a window closed before it loaded and restored under the same window id gets its own load listener", () => {
+    const delivery = new OpenChatDelivery();
+    const closed = new FakeWindow(1, false);
+    const slot: { current: FakeWindow | null } = { current: closed };
+    const p = ports(slot);
+    delivery.attach(p);
+    delivery.offer(A);
+
+    const restored = new FakeWindow(2, false);
+    slot.current = restored;
+    delivery.flush();
+    restored.finishLoad();
+    expect(p.delivered).toEqual([A]);
+  });
+
   it("delivers each link once", () => {
     const delivery = new OpenChatDelivery();
-    const p = ports({ current: new FakeWindow("w1", true) });
+    const p = ports({ current: new FakeWindow(1, true) });
     delivery.attach(p);
     delivery.offer(A);
     delivery.flush();

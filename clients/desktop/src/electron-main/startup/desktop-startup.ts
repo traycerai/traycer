@@ -1645,7 +1645,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
       }
       const contents = record.window.webContents;
       return {
-        windowId: record.windowId,
+        instanceId: contents.id,
         loaded: !contents.isLoading() && contents.getURL() !== "",
         onceLoaded: (listener) => {
           contents.once("did-finish-load", listener);
