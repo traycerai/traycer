@@ -566,14 +566,24 @@ describe("environment.move Stop digest compatibility matrix", () => {
     }
   });
 
-  it("keeps sheet_changed out of the released preview/stop versions", () => {
+  it("accepts sheet_changed with a digest on stop 1.3 and rejects it on stop 1.2", () => {
+    const changedResponse = {
+      outcome: "sheet_changed",
+      preview: {
+        managed: [],
+        needsChoice: [],
+        sheetDigest: "a".repeat(64),
+      },
+    };
+    const currentStop = contractAt(stopCodecRegistry, stopV13);
+    expect(currentStop.responseSchema.parse(changedResponse)).toEqual(
+      changedResponse,
+    );
+
     const legacyStop = contractAt(stopCodecRegistry, stopV12);
-    expect(
-      legacyStop.responseSchema.safeParse({
-        outcome: "sheet_changed",
-        preview: { managed: [], needsChoice: [] },
-      }).success,
-    ).toBe(false);
+    expect(legacyStop.responseSchema.safeParse(changedResponse).success).toBe(
+      false,
+    );
   });
 
   it("requires a valid digest on current previews and only on changed previews", () => {
