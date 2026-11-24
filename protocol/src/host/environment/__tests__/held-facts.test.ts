@@ -52,6 +52,20 @@ describe("heldFactsOf", () => {
     );
   });
 
+  it("preserves a Nix store executable path and an ordinary absolute shell path", () => {
+    const storeHash = ["a8Zt4Qk2", "Vj6Rf0Xn3", "Db9Hp5Ms7"].join("");
+    const nixPath = `/nix/store/${storeHash}-zsh-5.9/bin/zsh`;
+    expect(
+      factsOf("shell", "zsh", { path: nixPath, args: ["-l"] }).command,
+    ).toBe(`${nixPath} -l`);
+    expect(
+      factsOf("shell", "zsh", {
+        path: "/usr/local/bin/zsh",
+        args: ["-l"],
+      }).command,
+    ).toBe("/usr/local/bin/zsh -l");
+  });
+
   it("names a shell's path and arguments", () => {
     expect(factsOf("shell", "zsh", { path: "/bin/zsh", args: ["-l"] })).toEqual(
       { ...NO_FACTS, command: "/bin/zsh -l" },
