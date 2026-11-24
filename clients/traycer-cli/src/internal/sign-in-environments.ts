@@ -3,23 +3,17 @@ import type {
   EnvironmentDescriptor,
   EnvironmentOwnerKind,
 } from "@traycer/protocol/host/environment/contracts";
-import {
-  MutableBearerLease,
-  readLeaseBearer,
-} from "@traycer-clients/shared/auth/bearer-source";
-import type { RevalidateOutcome } from "@traycer-clients/shared/auth/bearer-revalidator";
+import { readLeaseBearer } from "@traycer-clients/shared/auth/bearer-source";
 import { validateAuthTokenIdentityAccessOnly } from "../../../shared/auth/auth-validation";
 import { config } from "../config";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
-import {
-  createCliCredentialsStore,
-  createStoreBackedRevalidator,
-} from "../store/credentials-store";
-import type { SignInRevalidator } from "./cli-host-tokens";
+import { acquireCliSignIn } from "./cli-host-tokens";
 import { resolveHostAuth } from "./host-auth";
 import {
   AUTHN_UNREACHABLE_MESSAGE,
   hostTokenFailureCliError,
+  signInRejectedCliError,
+  storedCredentialRejectedCliError,
 } from "./host-door-words";
 
 export type SignInEnvironment = Pick<
@@ -92,36 +86,34 @@ export async function readSignInEnvironments(): Promise<
   );
   if (first.kind === "valid") return describeSignInEnvironments(first.user);
   if (first.kind === "network-error") throw unreachable();
-  const lease = new MutableBearerLease(auth.token, auth.userId);
-  const store = createCliCredentialsStore();
-  // Typed to its own refresh, as the mint's is: the shared `AuthRevalidator`
-  // it also satisfies declares the same method as `Promise<unknown>`.
-  const revalidator: SignInRevalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-    signal: null,
-  });
-  let refreshed: RevalidateOutcome;
+  // The person's one sign-in in this process, refreshed through its one
+  // writer of the judge's facts.
+  const signIn = await acquireCliSignIn(auth, null);
   try {
-    refreshed = await revalidator.revalidateCurrentContext();
+    const refreshed = await signIn.tokens.refreshSignIn();
+    if (refreshed === "network-error") throw unreachable();
+    if (refreshed === "rejected") {
+      // The gate's judgement, made after its adopting read: a sign-in another
+      // process saved meanwhile is read below instead.
+      const rejection = await signIn.tokens.signInRejectionNow(null);
+      if (rejection !== null) throw signInRejectedCliError(rejection);
+    }
+    const token = readLeaseBearer(signIn.lease);
+    // No sign-in left to send after authn answered the refresh: today's line,
+    // not a host-token mint verdict, so the gate does not judge it.
+    if (token === null) throw storedCredentialRejectedCliError();
+    const second = await validateAuthTokenIdentityAccessOnly(
+      config.authnBaseUrl,
+      token,
+    );
+    if (second.kind === "valid") return describeSignInEnvironments(second.user);
+    if (second.kind === "network-error") throw unreachable();
+    // authn's own answer refusing this sign-in just now, not a host-token
+    // mint verdict: the gate judges only those.
+    throw storedCredentialRejectedCliError();
   } finally {
-    store.dispose();
+    signIn.dispose();
   }
-  if (refreshed === "network-error") throw unreachable();
-  if (refreshed === "rejected") throw rejected();
-  const token = readLeaseBearer(lease);
-  if (token === null) throw rejected();
-  const second = await validateAuthTokenIdentityAccessOnly(
-    config.authnBaseUrl,
-    token,
-  );
-  if (second.kind === "valid") return describeSignInEnvironments(second.user);
-  if (second.kind === "network-error") throw unreachable();
-  throw rejected();
-}
-
-function rejected(): CliError {
-  return hostTokenFailureCliError({ kind: "sign-in-rejected" });
 }
 
 function unreachable(): CliError {

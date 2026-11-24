@@ -39,7 +39,12 @@ interface SessionCredentialPlane {
 
 export interface SessionDoorObserver {
   readonly refused: (details: FatalErrorDetails) => void;
-  readonly admitted: () => void;
+  /**
+   * The host admitted this session's open. The session calls the answer once,
+   * when that connection ends: lost, closed, or ended by a fatal, before it
+   * reports the fatal that ended it.
+   */
+  readonly admitted: () => () => void;
 }
 
 /**
@@ -53,6 +58,14 @@ export interface RemoteSessionAuth extends SessionCredentialPlane {
   readonly readOpenAuth: (
     attachGrant: AttachGrant,
   ) => RemoteSessionOpenAuth | null;
+  /**
+   * Whether a frame sealed with `bearer` (an `open`'s, or a credential
+   * update's) may still be sent, asked after the seal and just before the
+   * send. A sealed frame can be neither read again nor skipped, so a `false`
+   * ends the connection and the next dial reads its own. Absent: every sealed
+   * credential stays sendable.
+   */
+  readonly sealedStillWritable?: (bearer: string) => boolean;
 }
 
 /** The bearer a pool session presents on `open`. */

@@ -19,7 +19,10 @@ import type {
   StreamContinuity,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import { isIncompatibleCloseForMethod } from "./i-stream-session";
+import {
+  isIncompatibleCloseForMethod,
+  signalsBackoff,
+} from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
 
 export const WORKTREE_DELETE_BATCH_STREAM_METHOD = "worktree.deleteBatchByPath";
@@ -91,6 +94,12 @@ export interface WorktreeDeleteBatchStreamCallbacks {
   readonly onConnectionStatus: (
     change: WorktreeDeleteBatchConnectionStatus,
   ) => void;
+  /**
+   * The transport put this command's session on a delayed redial or
+   * re-attach: it entered backoff. A `reconnecting` it follows at once with
+   * its next dial does not. `startSent` as on `onConnectionStatus`.
+   */
+  readonly onBackoffEntered: (startSent: boolean) => void;
 }
 
 /** One connection-status transition of a deletion command's stream. */
@@ -228,6 +237,15 @@ export class WorktreeDeleteBatchStreamClient {
     session.onStatusChange((status, reason, retryCause, continuity) => {
       this.handleStatusChange(session, status, reason, retryCause, continuity);
     });
+    // A transport that does not report backoff never does; its sessions end
+    // with `closed`.
+    if (signalsBackoff(session))
+      session.onBackoffEntered(() => {
+        if (this.closed || this.session !== session) return;
+        this.callbacks.onBackoffEntered(
+          this.mode === "observe" || session.hasSentOpenRequest(),
+        );
+      });
     return session;
   }
 

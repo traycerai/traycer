@@ -4,7 +4,11 @@ import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
-import type { CliHostTokenFailure } from "./cli-host-tokens";
+import type {
+  CliHostRefusal,
+  CliRefusalEnding,
+  SignInRejection,
+} from "./cli-host-tokens";
 
 /**
  * A refusal with no worded line prints its command's generic line: no server text
@@ -71,28 +75,43 @@ export function olderHostCliError(): CliError {
 export type HostDoorRefusalKind =
   | "sign-in-rejected"
   | "older-host"
+  | "not-provisioned"
   | "unworded";
 
 export function hostDoorRefusalKind(
   refusal: FatalErrorDetails,
-  signInRejected: boolean,
+  rejection: SignInRejection | null,
 ): HostDoorRefusalKind | null {
-  if (signInRejected && isCredentialRefusal(refusal)) return "sign-in-rejected";
-  if (readDoorReason(refusal.doorReason) !== "absent") return "unworded";
+  if (rejection !== null && isCredentialRefusal(refusal))
+    return "sign-in-rejected";
+  const reason = readDoorReason(refusal.doorReason);
+  if (reason === "not_provisioned") return "not-provisioned";
+  if (reason !== "absent") return "unworded";
   return hostDoorStateOfRefusal(refusal) === "older-host" ? "older-host" : null;
 }
 
-/** `generic` is printed for every reason with no words of its own yet. */
+/**
+ * `generic` is printed for every reason with no words of its own yet. A
+ * sign-in is called rejected only on a gate's judgement.
+ */
 export function hostDoorRefusalCliError<Generic extends Error>(
   refusal: FatalErrorDetails,
-  signInRejected: boolean,
+  rejection: SignInRejection | null,
   generic: () => Generic,
 ): CliError | Generic | null {
-  switch (hostDoorRefusalKind(refusal, signInRejected)) {
+  switch (hostDoorRefusalKind(refusal, rejection)) {
     case "sign-in-rejected":
       return storedCredentialRejectedCliError();
     case "older-host":
       return olderHostCliError();
+    // The host's own sentence, as a released command line printed it.
+    case "not-provisioned":
+      return cliError({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: refusal.reason,
+        details: null,
+        exitCode: 1,
+      });
     case "unworded":
       return generic();
     case null:
@@ -100,10 +119,26 @@ export function hostDoorRefusalCliError<Generic extends Error>(
   }
 }
 
-/** What a command says when no host-only token could be had for its host. */
-export function hostTokenFailureCliError(
-  failure: CliHostTokenFailure,
-): CliError {
+/**
+ * The stored-credential line, from a gate's judgement only: a refusal held as
+ * evidence cannot print it.
+ */
+export function signInRejectedCliError(_rejection: SignInRejection): CliError {
+  return storedCredentialRejectedCliError();
+}
+
+/** What a command says when the gate ends it. */
+export function refusalEndingCliError(ending: CliRefusalEnding): CliError {
+  return ending.kind === "sign-in-rejected"
+    ? signInRejectedCliError(ending.rejection)
+    : hostTokenFailureCliError(ending.failure);
+}
+
+/**
+ * What a command says when no host-only token could be had for its host. A
+ * sign-in verdict never reaches it: that is `signInRejectedCliError`'s.
+ */
+export function hostTokenFailureCliError(failure: CliHostRefusal): CliError {
   switch (failure.kind) {
     case "not-a-member":
       return cliError({
@@ -112,9 +147,6 @@ export function hostTokenFailureCliError(
         details: null,
         exitCode: 1,
       });
-    // authn refused the sign-in, and its refresh or the mint after it too.
-    case "sign-in-rejected":
-      return storedCredentialRejectedCliError();
     // No sign-in is held: this machine is signed out in fact.
     case "no-sign-in":
       return signedOutCliError();
@@ -135,6 +167,7 @@ export function hostTokenFailureCliError(
         details: null,
         exitCode: 1,
       });
+    case "process-replaced":
     case "unavailable":
       return cliError({
         code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,

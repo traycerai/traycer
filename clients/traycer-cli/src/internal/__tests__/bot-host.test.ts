@@ -114,12 +114,17 @@ describe("openLocalStreamClient host authority", () => {
     const { endpoint } = await openLocalStreamClient();
     const options = state.options;
     expect(options?.endpoint()).toEqual(endpoint);
+    // The first ask has no token to present and starts the mint beside it.
+    expect(options?.bearer()).toBeNull();
+    await vi.waitFor(() =>
+      expect(options?.bearer()?.getBearerToken()).toBe("bot-host-only-token"),
+    );
+    expect(options?.bearer()?.getBearerToken()).not.toBe(
+      "stored-sign-in-token",
+    );
     expect(state.fetch).toHaveBeenCalledTimes(1);
     const signIn = new Headers(state.fetch.mock.calls[0]?.[1]?.headers);
     expect(signIn.get("Authorization")).toBe("Bearer stored-sign-in-token");
-    const bearer = options?.bearer();
-    expect(bearer?.getBearerToken()).toBe("bot-host-only-token");
-    expect(bearer?.getBearerToken()).not.toBe("stored-sign-in-token");
   });
 
   it("maps a reasonless non-retryable door refusal to the older-host line", async () => {
@@ -129,6 +134,7 @@ describe("openLocalStreamClient host authority", () => {
     const pending = readBotSnapshot(client, "bot-1");
     state.status?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "UNAUTHORIZED",
         reason: "legacy host refusal",
