@@ -2572,6 +2572,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // The environment methods: reads take the latest answer; writes, Verify and
   // the link steps are ordered and never joined.
   "environment.localOverrides": { ...LATEST_SCHEDULING, poll: null },
+  "environment.ownSlots": { ...LATEST_SCHEDULING, poll: null },
   "environment.proposals": { ...LATEST_SCHEDULING, poll: null },
   "environment.secrets.list": {
     ...LATEST_SCHEDULING,
@@ -2848,6 +2849,11 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.members.noticeSeen": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.ownSlots.change": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

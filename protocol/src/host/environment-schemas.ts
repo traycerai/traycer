@@ -630,6 +630,74 @@ export type EnvironmentReviewRecordResponse = z.infer<
 
 // ── Local overrides ─────────────────────────────────────────────────────────
 
+const OWN_SLOT_KINDS_WITHOUT_MCP = [
+  "variable",
+  "env_override",
+  "shell",
+  "browser_agent_access",
+  "agent_selection_guide",
+  "agent_definition",
+  "fallback_policy",
+  "pack_policy",
+  "managed_profile",
+] as const;
+
+const environmentOwnSlotAddressSchema = lazySchema(() =>
+  z.strictObject({
+    kind: z.enum([...OWN_SLOT_KINDS_WITHOUT_MCP, "mcp_server"]),
+    key: z.string().min(1),
+    os: environmentOsSchema,
+  }),
+);
+
+/** The list exposes slot identity and presence. */
+const environmentOwnSlotSchema = lazySchema(() =>
+  environmentOwnSlotAddressSchema.extend({
+    state: z.enum(["value", "absent"]),
+    publishable: z.boolean(),
+  }),
+);
+export type EnvironmentOwnSlot = z.infer<typeof environmentOwnSlotSchema>;
+
+export const environmentOwnSlotsRequestSchema = emptyRequestSchema;
+
+export const environmentOwnSlotsResponseSchema = lazySchema(() =>
+  z.strictObject({ entries: z.array(environmentOwnSlotSchema) }),
+);
+export type EnvironmentOwnSlotsResponse = z.infer<
+  typeof environmentOwnSlotsResponseSchema
+>;
+
+export const environmentOwnSlotChangeRequestSchema = lazySchema(() =>
+  z.union([
+    environmentOwnSlotAddressSchema.extend({
+      action: z.literal("usePersonal"),
+    }),
+    environmentOwnSlotAddressSchema.extend({
+      action: z.literal("publish"),
+      kind: z.enum(OWN_SLOT_KINDS_WITHOUT_MCP),
+    }),
+    environmentOwnSlotAddressSchema.extend({
+      action: z.literal("publish"),
+      kind: z.literal("mcp_server"),
+      os: z.literal("any"),
+      intentOperationId: z.uuid(),
+    }),
+  ]),
+);
+export type EnvironmentOwnSlotChangeRequest = z.infer<
+  typeof environmentOwnSlotChangeRequestSchema
+>;
+
+export const environmentOwnSlotChangeResponseSchema = lazySchema(() =>
+  z.strictObject({
+    outcome: z.enum(["saved", "gone", "conflict", "forbidden"]),
+  }),
+);
+export type EnvironmentOwnSlotChangeResponse = z.infer<
+  typeof environmentOwnSlotChangeResponseSchema
+>;
+
 /**
  * What a local override replaces on this host: a variable, or one harness's
  * env override ("Keep dev-box's value on dev-box").

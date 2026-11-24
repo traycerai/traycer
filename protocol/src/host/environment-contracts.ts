@@ -360,6 +360,20 @@ export const environmentReviewUpgradeV11ToV12 = defineUpgradePath<
   }),
 });
 
+export const environmentOwnSlotsV10 = defineRpcContract({
+  method: "environment.ownSlots",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.environmentOwnSlotsRequestSchema,
+  responseSchema: schemas.environmentOwnSlotsResponseSchema,
+});
+
+export const environmentOwnSlotChangeV10 = defineRpcContract({
+  method: "environment.ownSlots.change",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.environmentOwnSlotChangeRequestSchema,
+  responseSchema: schemas.environmentOwnSlotChangeResponseSchema,
+});
+
 export const environmentReviewHeldKeepV10 = defineRpcContract({
   method: "environment.review.heldKeep",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -983,6 +997,32 @@ export const ENVIRONMENT_RPC_METHODS = {
         2: {
           contract: environmentReviewV12,
           upgradeFromPreviousVersion: environmentReviewUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.ownSlots": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentOwnSlotsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.ownSlots.change": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentOwnSlotChangeV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},

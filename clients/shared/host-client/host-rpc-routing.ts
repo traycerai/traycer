@@ -517,6 +517,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.move.stop": "target-host",
   "environment.move.stopPreview": "target-host",
   "environment.notices": "target-host",
+  "environment.ownSlots": "target-host",
+  "environment.ownSlots.change": "target-host",
   "environment.plans.list": "pool-only",
   "environment.plans.unlink": "pool-only",
   "environment.plans.unlinkPreview": "pool-only",
