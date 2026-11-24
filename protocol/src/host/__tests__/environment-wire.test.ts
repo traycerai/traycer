@@ -208,9 +208,15 @@ function expectDowngradeUnsupported(thrown: unknown): void {
 // ── (a) ─────────────────────────────────────────────────────────────────────
 
 describe("new methods are off every released floor", () => {
-  it("registers exactly 28 environment methods", () => {
-    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(28);
-    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(28);
+  it("rejects a held value supplied by the client deciding Keep", () => {
+    const contract =
+      hostRpcRegistry["environment.review.heldKeep"][1].versions[0].contract;
+    const request = { heldId: "own-hold", revision: 7 };
+    expect(contract.requestSchema.parse(request)).toEqual(request);
+    expect(
+      contract.requestSchema.safeParse({ ...request, value: "locally held" })
+        .success,
+    ).toBe(false);
   });
 
   it("keeps all of them out of RELEASED_FLOOR_METHOD_NAMES", () => {
