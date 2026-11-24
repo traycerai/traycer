@@ -6,7 +6,10 @@ import { expect, TestRunner, vi } from "vitest";
 // real timers inside a test is given the rest of that test's time, so it fails
 // with its own error by the test's deadline; one that starts in the test's
 // last second gets Vitest's own default, as without this file, and can end as
-// the test's timeout instead. Everything else keeps Vitest's own behaviour exactly: a
+// the test's timeout instead. A poll in the test's `beforeEach` is given the
+// test's remaining time too, because Vitest does not expose the hook's own
+// start, so it can keep checking after that hook's timeout has failed it.
+// Everything else keeps Vitest's own behaviour exactly: a
 // poll that names a timeout, one that starts outside a test, and one that
 // starts under fake timers, whose clock is the fake one and which Vitest's
 // poll advances on every check.

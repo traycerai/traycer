@@ -45,6 +45,7 @@ const BASE_TREE = [
   "protocol/src/index.ts",
   "protocol/README.md",
   "scripts/test-worker-environment.ts",
+  "scripts/test-poll-lasts-its-test.ts",
   "clients/shared/src/index.ts",
   "clients/traycer-cli/src/index.ts",
   "clients/gui-app/src/main.tsx",
@@ -180,6 +181,14 @@ describe("protocol-compat.yml reaches the protocol surface and the client transp
     ).toBe("true");
   });
 
+  it("runs on the poll setup file", () => {
+    expect(
+      pushTouching("protocol-compat.yml", [
+        "scripts/test-poll-lasts-its-test.ts",
+      ]),
+    ).toBe("true");
+  });
+
   it("runs on a protocol change", () => {
     expect(pushTouching("protocol-compat.yml", ["protocol/src/index.ts"])).toBe(
       "true",
@@ -213,6 +222,14 @@ describe("real-supervisor.yml reaches the CLI's launchd rows", () => {
     expect(
       pushTouching("real-supervisor.yml", [
         "scripts/test-worker-environment.ts",
+      ]),
+    ).toBe("true");
+  });
+
+  it("runs on the poll setup file", () => {
+    expect(
+      pushTouching("real-supervisor.yml", [
+        "scripts/test-poll-lasts-its-test.ts",
       ]),
     ).toBe("true");
   });
