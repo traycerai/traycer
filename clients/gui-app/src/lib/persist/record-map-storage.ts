@@ -42,7 +42,10 @@ function parseSnapshot(value: string | null, field: string): RecordMapSnapshot {
  * whole map from a stale window must not erase another window's new records.
  * Tombstones fence late writes and simultaneous legacy-snapshot migrations.
  */
-export function createRecordMapStorage(field: string): RecordMapStorage {
+export function createRecordMapStorage(
+  options: string | { readonly field: string; readonly separatePrefix: string },
+): RecordMapStorage {
+  const field = typeof options === "string" ? options : options.field;
   let observed = new Map<string, string>();
   return {
     getItem: (name) => {
@@ -80,7 +83,11 @@ export function createRecordMapStorage(field: string): RecordMapStorage {
         if (record === null || record === "null") continue;
         const id = decodeURIComponent(key.slice(prefix.length));
         records[id] = JSON.parse(record);
-        observed.set(id, record);
+        if (
+          typeof options === "string" ||
+          !id.startsWith(options.separatePrefix)
+        )
+          observed.set(id, record);
       }
       return JSON.stringify({
         state: { [field]: records },

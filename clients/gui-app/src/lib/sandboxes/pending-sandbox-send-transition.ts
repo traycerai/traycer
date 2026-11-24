@@ -115,6 +115,7 @@ export interface PendingSendFacts {
   readonly retryAction: PendingStageRetryAction;
   readonly retryObservation: PendingSendObservation;
   readonly retryAttemptSuperseded?: boolean;
+  readonly retryReplacesCreate?: boolean;
   readonly current: boolean;
   readonly accountActive: boolean;
   readonly owns: boolean;
@@ -1107,8 +1108,12 @@ function retryStage(
 ): PendingSendTransition {
   if (!stageRetryAllowed(state, action, facts) || facts.inFlight)
     return result(state, [], facts);
-  if (facts.host === "ended") return terminalObservation(state, facts);
-  if (facts.frozen || !facts.settingsReady) return observe(state, facts);
+  if (facts.retryReplacesCreate === true) {
+    if (facts.wakeInFlight) return result(state, ["poll"], facts);
+  } else {
+    if (facts.host === "ended") return terminalObservation(state, facts);
+    if (facts.frozen || !facts.settingsReady) return observe(state, facts);
+  }
   if (facts.stageStatus === "handoff") return retry(state, facts);
   if (facts.stageStatus === "missing") return result(state, [], facts);
   return result(
@@ -1127,6 +1132,15 @@ function consumeRetry(
     return result(state, ["acknowledge-retry"], facts);
   const event = PENDING_STAGE_RETRY_EVENTS[facts.retryAction];
   const requested = activeTransition(state, event, facts);
+  if (
+    facts.retryAction !== "send-again" &&
+    stageRetryAllowed(state, facts.retryAction, facts) &&
+    !requested.effects.includes("run-stage") &&
+    (facts.stageStatus !== "handoff" || !requested.effects.includes("retry"))
+  ) {
+    // The published press remains pending while its owner cannot run it.
+    return result(state, ["poll"], facts);
+  }
   const decision = requested.effects.includes("retry")
     ? requested
     : activeTransition(state, facts.retryObservation, facts);

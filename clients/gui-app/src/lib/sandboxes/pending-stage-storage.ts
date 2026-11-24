@@ -36,6 +36,27 @@ export interface PendingDispatchRetryRequest {
 }
 
 const RETRY_REGISTER_PREFIX = "retry-request:";
+const STAGE_RETRY_SLOT_PREFIX = "retry-request:stage:";
+
+function stageRetrySlot(
+  surfaceKey: string,
+  observedCreateKey: string | null | undefined,
+  requestId: string,
+): string {
+  return `${STAGE_RETRY_SLOT_PREFIX}${JSON.stringify([surfaceKey, observedCreateKey, requestId])}`;
+}
+
+function stageRetrySurface(slot: string): string | null {
+  if (!slot.startsWith(STAGE_RETRY_SLOT_PREFIX)) return null;
+  try {
+    const identity: unknown = parse(slot.slice(STAGE_RETRY_SLOT_PREFIX.length));
+    return Array.isArray(identity) && typeof identity[0] === "string"
+      ? identity[0]
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -77,8 +98,78 @@ export function pendingStageAttemptCurrent(
   );
 }
 
-function retryFor(stage: Record<string, unknown>, value: unknown): boolean {
-  return record(value) && value.clientRequestId === stage.clientRequestId;
+function stageRetryCandidate(
+  name: string,
+  stage: Record<string, unknown>,
+  entries: ReadonlyArray<readonly [string, unknown]>,
+): unknown {
+  const currentKey = stage.lastCreateKey ?? stage.clientRequestId;
+  let current: unknown;
+  let stale: unknown;
+  for (const [slot, value] of entries) {
+    if (!record(value) || value.clientRequestId !== stage.clientRequestId)
+      continue;
+    if (value.id === stage.retryHandledId) {
+      // A crash after the stage commit can leave the published request behind.
+      if (!removeAcknowledgedSlot(name, slot, value.id)) return undefined;
+      continue;
+    }
+    if (value.observedCreateKey === currentKey) current ??= value;
+    else stale ??= value;
+  }
+  return current ?? stale;
+}
+
+function removeAcknowledgedSlot(
+  name: string,
+  slot: string,
+  requestId: unknown,
+): boolean {
+  const storageKey = recordMapStorageKey(name, slot);
+  try {
+    const saved = parse(localStorage.getItem(storageKey));
+    if (record(saved) && saved.id === requestId)
+      localStorage.removeItem(storageKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function removeAcknowledgedStageRetry(
+  surfaceKey: string,
+  retry: PendingStageRetryRequest,
+): void {
+  const name = persistKey(STORE_KEYS.stagedSandboxSend);
+  removeAcknowledgedSlot(
+    name,
+    stageRetrySlot(surfaceKey, retry.observedCreateKey, retry.id),
+    retry.id,
+  );
+  removeAcknowledgedSlot(
+    name,
+    `${RETRY_REGISTER_PREFIX}${surfaceKey}`,
+    retry.id,
+  );
+}
+
+function stageRetrySlots(
+  name: string,
+  records: Record<string, unknown>,
+): Map<string, Array<readonly [string, unknown]>> {
+  const bySurface = new Map<string, Array<readonly [string, unknown]>>();
+  for (const [slot, value] of Object.entries(records)) {
+    const surface = stageRetrySurface(slot);
+    if (surface === null || !record(value)) continue;
+    if (localStorage.getItem(recordMapStorageKey(name, surface)) === "null") {
+      removeAcknowledgedSlot(name, slot, value.id);
+      continue;
+    }
+    const entries = bySurface.get(surface) ?? [];
+    entries.push([slot, value]);
+    bySurface.set(surface, entries);
+  }
+  return bySurface;
 }
 
 /**
@@ -89,9 +180,11 @@ function retryFor(stage: Record<string, unknown>, value: unknown): boolean {
  */
 function createPendingRetryStorage(
   field: "bySurface" | "sends",
-  matches: (item: Record<string, unknown>, retry: unknown) => boolean,
 ): StateStorage<void> {
-  const storage = createRecordMapStorage(field);
+  const stageMailbox = field === "bySurface";
+  const storage = createRecordMapStorage(
+    stageMailbox ? { field, separatePrefix: RETRY_REGISTER_PREFIX } : field,
+  );
   return {
     getItem: (name) => {
       const snapshot: unknown = parse(storage.getItem(name));
@@ -103,12 +196,22 @@ function createPendingRetryStorage(
         return null;
       const stages: Record<string, unknown> = {};
       const records = snapshot.state[field];
+      const stageSlots = stageMailbox ? stageRetrySlots(name, records) : null;
       for (const [key, stage] of Object.entries(records)) {
         if (key.startsWith(RETRY_REGISTER_PREFIX) || !record(stage)) continue;
-        const retry = records[`${RETRY_REGISTER_PREFIX}${key}`];
-        stages[key] = matches(stage, retry)
-          ? { ...stage, retryRequest: retry }
-          : stage;
+        const legacySlot = `${RETRY_REGISTER_PREFIX}${key}`;
+        const legacy = records[legacySlot];
+        let retry: unknown;
+        if (stageSlots !== null) {
+          retry = stageRetryCandidate(name, stage, [
+            ...(stageSlots.get(key) ?? []),
+            [legacySlot, legacy],
+          ]);
+        } else if (dispatchRetryFor(stage, legacy)) {
+          retry = legacy;
+        }
+        stages[key] =
+          retry === undefined ? stage : { ...stage, retryRequest: retry };
       }
       return JSON.stringify({
         ...snapshot,
@@ -128,11 +231,12 @@ function createPendingRetryStorage(
         if (!record(stage)) continue;
         const { retryRequest: _request, ...progress } = stage;
         records[key] = progress;
+        if (stageMailbox) continue;
         const registerId = `${RETRY_REGISTER_PREFIX}${key}`;
         const retry: unknown = parse(
           localStorage.getItem(recordMapStorageKey(name, registerId)),
         );
-        if (matches(stage, retry)) records[registerId] = retry;
+        if (dispatchRetryFor(stage, retry)) records[registerId] = retry;
       }
       storage.setItem(
         name,
@@ -147,12 +251,12 @@ function createPendingRetryStorage(
 }
 
 export function createPendingStageStorage(): StateStorage<void> {
-  return createPendingRetryStorage("bySurface", retryFor);
+  return createPendingRetryStorage("bySurface");
 }
 
 /** Pending claims keep their mailbox separate from receipt/progress writes too. */
 export function createPendingSendStorage(): StateStorage<void> {
-  return createPendingRetryStorage("sends", dispatchRetryFor);
+  return createPendingRetryStorage("sends");
 }
 
 function dispatchRetryFor(
@@ -245,7 +349,7 @@ export function requestPendingStageRetry(
     };
     const key = recordMapStorageKey(
       name,
-      `${RETRY_REGISTER_PREFIX}${surfaceKey}`,
+      stageRetrySlot(surfaceKey, request.observedCreateKey, request.id),
     );
     localStorage.setItem(key, JSON.stringify(request));
     return request.id;

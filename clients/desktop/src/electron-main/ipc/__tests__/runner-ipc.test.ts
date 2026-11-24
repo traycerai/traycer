@@ -59,6 +59,7 @@ import type {
   fetchSandboxCatalogueViaHttp,
   fetchTraycerModelsViaHttp,
   fetchSandboxCostsViaHttp,
+  getSandboxViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
   listSandboxesViaHttp,
@@ -139,6 +140,9 @@ vi.mock("../../auth/iap-proxy-token", () => ({
 const NETWORK_ERROR = { kind: "network-error", detail: "unscripted" } as const;
 const listSandboxesViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof listSandboxesViaHttp>(async () => NETWORK_ERROR),
+);
+const getSandboxViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof getSandboxViaHttp>(async () => NETWORK_ERROR),
 );
 const fetchSandboxCostsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxCostsViaHttp>(async () => NETWORK_ERROR),
@@ -257,6 +261,7 @@ vi.mock(
       typeof import("@traycer-clients/shared/host-client/sandbox-control")
     >()),
     listSandboxesViaHttp: listSandboxesViaHttpMock,
+    getSandboxViaHttp: getSandboxViaHttpMock,
     fetchSandboxCostsViaHttp: fetchSandboxCostsViaHttpMock,
     fetchSandboxCatalogueViaHttp: fetchSandboxCatalogueViaHttpMock,
     fetchTraycerModelsViaHttp: fetchTraycerModelsViaHttpMock,
@@ -944,6 +949,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.updateHostVersionPolicy,
           // The sandbox control plane, for traycer-server's CORS reason.
           RunnerHostInvoke.listSandboxes,
+          RunnerHostInvoke.getSandbox,
           RunnerHostInvoke.listEnvironments,
           RunnerHostInvoke.saveAutoPolicy,
           RunnerHostInvoke.attachTaskEnvironment,
@@ -1542,6 +1548,7 @@ describe("RunnerIpcBridge", () => {
     };
     const calls: ReadonlyArray<readonly [string, Mock, readonly unknown[]]> = [
       [RunnerHostInvoke.listSandboxes, listSandboxesViaHttpMock, []],
+      [RunnerHostInvoke.getSandbox, getSandboxViaHttpMock, ["sbx_1"]],
       [RunnerHostInvoke.getSandboxCosts, fetchSandboxCostsViaHttpMock, []],
       [
         RunnerHostInvoke.getSandboxCatalogue,

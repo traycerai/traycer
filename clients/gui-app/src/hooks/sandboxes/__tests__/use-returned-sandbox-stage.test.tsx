@@ -7,6 +7,7 @@ import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument } from "@traycer/protocol/host";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   deleteLandingDraftRow,
   deleteNewChatDraftRow,
@@ -24,6 +25,7 @@ import {
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
+import { STAGED_NEW_TARGET } from "@/stores/composer/__tests__/staged-sandbox-fixtures";
 import {
   applyNewChatHostDocument,
   useNewConversationModalStore,
@@ -189,6 +191,77 @@ describe("a restored stage leaves with its draft", () => {
       target: keyed.target,
       clientRequestId: "key-1",
     });
+  });
+
+  it("restores a legacy null-key returned draft with its saved retry key and payload across reload", async () => {
+    const lastCreateKey = "retry:sbx-failed";
+    const lastRetryCreate: SandboxCreateRequest = {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: "us-east",
+      displayName: "origin/main hook",
+      idleMinutes: 30,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: "env-personal",
+      destroyAfterRestingMinutes: 0,
+      createdByTaskId: null,
+      clientRequestId: lastCreateKey,
+    };
+    act(() => {
+      const drafts = useNewConversationModalStore.getState();
+      drafts.setContent(EPIC_ID, MESSAGE);
+      drafts.setReturnedSandbox(EPIC_ID, {
+        target: STAGED_NEW_TARGET,
+        clientRequestId: null,
+        lastCreateKey,
+        lastRetryCreate,
+      });
+    });
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.draftId;
+    if (draftId === undefined || draftId === null)
+      throw new Error("expected the persisted draft identity");
+    const composer = renderHook(() =>
+      useNewConversationReturnedSandbox(EPIC_ID, null),
+    );
+    const stagedKey = readStagedSandbox(SURFACE)?.clientRequestId;
+    if (stagedKey === undefined || stagedKey === null)
+      throw new Error("expected the returned stage identity");
+    expect(stagedKey).not.toBe(lastCreateKey);
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      clientRequestId: stagedKey,
+      lastCreateKey,
+      lastRetryCreate,
+    });
+    expect(returnedOnDraft()).toMatchObject({
+      clientRequestId: null,
+      lastCreateKey,
+      lastRetryCreate,
+    });
+
+    composer.unmount();
+    await reload();
+    expect(returnedOnDraft()).toMatchObject({
+      clientRequestId: null,
+      lastCreateKey,
+      lastRetryCreate,
+    });
+    mountComposer();
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      clientRequestId: stagedKey,
+      lastCreateKey,
+      lastRetryCreate,
+    });
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.draftId,
+    ).toBe(draftId);
   });
 });
 

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
+import { v5 as uuidv5 } from "uuid";
+import { sandboxCreateKey } from "@/lib/sandboxes/sandbox-create-key";
 import {
   markReturnedSandboxRestored,
   onReturnedSandboxSuperseded,
@@ -25,15 +27,31 @@ function signedInUserId(): string | null {
   return useAuthStore.getState().contextMetadata?.userId ?? null;
 }
 
-function taskReturnedSandbox(
-  epicId: string,
+/** A legacy return did not allocate a create key. The draft records the occurrence. */
+function returnedSandboxForDraft(
+  stored: StoredReturnedSandbox | null,
   userId: string | null,
+  kind: "task" | "landing",
+  draftId: string | null,
 ): StoredReturnedSandbox | null {
-  return returnedSandboxFor(
-    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
-      ?.returnedSandbox ?? null,
-    userId,
-  );
+  const returned = returnedSandboxFor(stored, userId);
+  if (
+    returned === null ||
+    returned.target.kind === "existing" ||
+    returned.clientRequestId !== null
+  )
+    return returned;
+  if (draftId === null)
+    return returned.lastCreateKey === undefined
+      ? null
+      : { ...returned, clientRequestId: returned.lastCreateKey };
+  return {
+    ...returned,
+    clientRequestId: sandboxCreateKey(
+      "stage",
+      uuidv5(`returned-sandbox:${kind}:${draftId}`, uuidv5.URL),
+    ),
+  };
 }
 
 /**
@@ -48,17 +66,27 @@ export function useNewConversationReturnedSandbox(
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const returned = useStoreWithEqualityFn(
     useNewConversationModalStore,
-    (state) =>
-      returnedSandboxFor(
-        state.draftPatchesByEpicId[epicId]?.returnedSandbox ?? null,
+    (state) => {
+      const draft = state.draftPatchesByEpicId[epicId];
+      return returnedSandboxForDraft(
+        draft?.returnedSandbox ?? null,
         userId,
-      ),
+        "task",
+        draft?.draftId ?? null,
+      );
+    },
     sameStoredReturnedSandbox,
   );
-  const read = useCallback(
-    () => taskReturnedSandbox(epicId, signedInUserId()),
-    [epicId],
-  );
+  const read = useCallback(() => {
+    const draft =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+    return returnedSandboxForDraft(
+      draft?.returnedSandbox ?? null,
+      signedInUserId(),
+      "task",
+      draft?.draftId ?? null,
+    );
+  }, [epicId]);
   const forget = useCallback(
     () =>
       useNewConversationModalStore.getState().setReturnedSandbox(epicId, null),
@@ -76,9 +104,11 @@ function landingReturnedSandbox(
   userId: string | null,
 ): StoredReturnedSandbox | null {
   if (draftId === null) return null;
-  return returnedSandboxFor(
+  return returnedSandboxForDraft(
     drafts.find((draft) => draft.id === draftId)?.returnedSandbox ?? null,
     userId,
+    "landing",
+    draftId,
   );
 }
 

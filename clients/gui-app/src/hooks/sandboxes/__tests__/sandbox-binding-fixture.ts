@@ -6,6 +6,7 @@ import type {
   SandboxAutomationOpenFetchResult,
   SandboxControlFailure,
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
@@ -52,6 +53,9 @@ export interface FakeSandboxAuth {
     (teamId: string) => Promise<TeamEnvironmentFetchResult>
   >;
   readonly listSandboxes: Mock<ListSandboxes>;
+  readonly getSandbox: Mock<
+    (sandboxId: string) => Promise<SandboxGetFetchResult>
+  >;
   readonly createSandbox: Mock<CreateSandbox>;
   readonly runSandboxVerb: Mock<RunSandboxVerb>;
   readonly destroySandbox: Mock<DestroySandbox>;
@@ -79,6 +83,9 @@ export function createFakeSandboxBinding(): FakeSandboxBinding {
       >(() => Promise.resolve({ kind: "not-a-member" })),
       listSandboxes: vi.fn<ListSandboxes>(() =>
         Promise.resolve({ kind: "ok", response: { sandboxes: [] } }),
+      ),
+      getSandbox: vi.fn<(sandboxId: string) => Promise<SandboxGetFetchResult>>(
+        () => Promise.resolve({ kind: "network-error", detail: "fake" }),
       ),
       createSandbox: vi.fn<CreateSandbox>(() =>
         Promise.resolve({

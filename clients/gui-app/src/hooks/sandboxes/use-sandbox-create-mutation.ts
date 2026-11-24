@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import type {
   SandboxControlFailure,
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
@@ -30,11 +31,13 @@ import {
   sandboxCreateFailureMessage,
   sandboxFailureMessageFor,
   sandboxFailureCodeMessage,
+  sandboxFailureMessage,
 } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
+import { sandboxRowNotFound } from "@/lib/sandboxes/sandbox-row-read";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { couldntStartLine } from "@/lib/sandboxes/sandbox-strings";
 import {
@@ -51,6 +54,7 @@ export interface SandboxCreateSubmit {
   readonly teamName: string | null;
   /** Keeps the originating failed-row button pending while the press walks. */
   readonly sourceSandboxId?: string;
+  readonly reconcileSandboxId?: string;
 }
 
 /**
@@ -67,18 +71,144 @@ export class SandboxCreateError extends Error {
   }
 }
 
-export function sandboxCreatePressRequest(
+interface UnresolvedSandboxCreate {
+  readonly request: SandboxCreateRequest;
+  readonly sandboxId: string;
+  readonly userId: string | null;
+}
+
+class SandboxUnresolvedCreateError extends SandboxCreateError {
+  constructor(
+    message: string,
+    code: string | null,
+    readonly attempt: UnresolvedSandboxCreate,
+  ) {
+    super(message, code, attempt.request);
+  }
+}
+
+export function sandboxCreatePress(
   initial: SandboxCreateRequest,
   previous: {
     readonly error: Error | null;
     readonly variables: SandboxCreateSubmit | undefined;
   },
-): SandboxCreateRequest {
-  if (previous.error instanceof SandboxCreateError) {
-    return previous.error.nextRequest ?? initial;
+): Pick<SandboxCreateSubmit, "request" | "reconcileSandboxId"> {
+  if (previous.error instanceof SandboxUnresolvedCreateError) {
+    const { attempt } = previous.error;
+    return attempt.userId === signedInUserId()
+      ? { request: attempt.request, reconcileSandboxId: attempt.sandboxId }
+      : { request: initial };
   }
-  if (previous.error !== null) return previous.variables?.request ?? initial;
-  return initial;
+  if (previous.error instanceof SandboxCreateError) {
+    return { request: previous.error.nextRequest ?? initial };
+  }
+  if (previous.error !== null)
+    return { request: previous.variables?.request ?? initial };
+  return { request: initial };
+}
+
+const CREATE_READ_BUDGET_MS = 10_000;
+const CREATE_READ_INTERVAL_MS = 2_000;
+const CREATING_CODE = SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT;
+const UNREADABLE_ROW: SandboxControlFailure = {
+  kind: "network-error",
+  detail: "Sandbox state could not be read.",
+};
+
+function pollCreatingSandbox(result: SandboxGetFetchResult): boolean {
+  if (result.kind === "ok") return result.sandbox.state === "creating";
+  if (result.kind === "network-error") return true;
+  return (
+    result.kind === "refused" && (result.status === 409 || result.status >= 500)
+  );
+}
+
+/** Reconciliation never advances the create walk, even if the row is destroyed. */
+async function reconcileSandboxCreate(
+  auth: AuthService,
+  sandboxId: string,
+  attempted: SandboxCreateRequest,
+  userId: string | null,
+): Promise<SandboxCreateAccepted> {
+  const attempt = { request: attempted, sandboxId, userId };
+  const until = Date.now() + CREATE_READ_BUDGET_MS;
+  let expired = false;
+  let timer: number | undefined;
+  let pollTimer: number | undefined;
+  const readState: { last: SandboxGetFetchResult | null } = { last: null };
+  const current = (): boolean =>
+    !expired && Date.now() < until && signedInUserId() === userId;
+  const read = async (): Promise<void> => {
+    while (current()) {
+      const result = await auth
+        .getSandbox(sandboxId)
+        .catch(() => UNREADABLE_ROW);
+      if (!current()) return;
+      readState.last = result;
+      if (!pollCreatingSandbox(result)) return;
+      await new Promise<void>((resolve) => {
+        pollTimer = window.setTimeout(
+          resolve,
+          Math.min(CREATE_READ_INTERVAL_MS, until - Date.now()),
+        );
+      });
+    }
+  };
+  try {
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        timer = window.setTimeout(resolve, CREATE_READ_BUDGET_MS);
+      }),
+      read(),
+    ]);
+  } finally {
+    expired = true;
+    window.clearTimeout(timer);
+    window.clearTimeout(pollTimer);
+  }
+  const result = signedInUserId() === userId ? readState.last : null;
+  if (result === null || result.kind !== "ok") {
+    const notFound = result !== null && sandboxRowNotFound(result);
+    const code = notFound ? SANDBOX_REFUSAL_CODE_NOT_FOUND : null;
+    const failure =
+      result === null || (result.kind === "refused" && !notFound)
+        ? UNREADABLE_ROW
+        : result;
+    throw new SandboxUnresolvedCreateError(
+      sandboxFailureMessage(failure),
+      code,
+      attempt,
+    );
+  }
+  const { sandbox } = result;
+  switch (sandbox.state) {
+    case "creating":
+    case "destroying":
+      throw new SandboxUnresolvedCreateError(
+        sandboxFailureCodeMessage(CREATING_CODE),
+        CREATING_CODE,
+        attempt,
+      );
+    case "failed":
+      throw new SandboxCreateError(
+        sandboxFailureCodeMessage(SANDBOX_REFUSAL_CODE_PROVIDER_FAILED),
+        SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
+        sandboxRetryCreate(sandbox),
+      );
+    case "destroyed":
+      throw new SandboxCreateError(
+        sandbox.failureCode === "credit-gate"
+          ? couldntStartLine(sandbox.displayName)
+          : sandboxFailureCodeMessage(SANDBOX_REFUSAL_CODE_NOT_FOUND),
+        SANDBOX_REFUSAL_CODE_NOT_FOUND,
+        sandbox.failureCode === "credit-gate"
+          ? sandboxRetryCreate(sandbox)
+          : attempted,
+      );
+    default:
+      return { sandboxId: sandbox.id, hostId: sandbox.hostId, sandbox };
+  }
 }
 
 function nextCreateRequest(
@@ -172,6 +302,7 @@ export function useSandboxCreate(
     mutationFn: async ({
       request,
       teamName,
+      reconcileSandboxId,
     }): Promise<SandboxCreateAccepted> => {
       if (binding === null) {
         throw new SandboxCreateError(
@@ -180,6 +311,13 @@ export function useSandboxCreate(
           request,
         );
       }
+      if (reconcileSandboxId !== undefined)
+        return reconcileSandboxCreate(
+          binding.auth,
+          reconcileSandboxId,
+          request,
+          userId,
+        );
       const { result, attempted } = await walkSandboxCreate(
         binding.auth,
         request,
@@ -188,6 +326,13 @@ export function useSandboxCreate(
       if (result.kind === "ok") {
         const { accepted } = result;
         const sandbox = accepted.sandbox;
+        if (result.joined === true && sandbox.state === "creating")
+          return reconcileSandboxCreate(
+            binding.auth,
+            sandbox.id,
+            attempted,
+            userId,
+          );
         if (result.joined === true && sandbox.state === "destroying") {
           const code = SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT;
           throw new SandboxCreateError(

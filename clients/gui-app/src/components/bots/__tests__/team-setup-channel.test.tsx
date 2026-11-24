@@ -31,7 +31,14 @@ import {
 } from "./bot-tab-surface-mocks";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useState, type ReactNode } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -554,6 +561,110 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(auth().createSandbox.mock.calls[0]?.[0].displayName).toBe(
         "Team bots",
       );
+    });
+
+    it("rechecks a joined creating row before choosing its failed-row retry key", async () => {
+      const joined = sandboxSummaryFixture({
+        id: "team-joined-creating",
+        hostId: "host-team-joined-creating",
+        environmentId: "env-new",
+        state: "creating",
+        displayName: "Team bots",
+      });
+      const failed = sandboxSummaryFixture({
+        ...joined,
+        state: "failed",
+        failureCode: "PROVIDER_CREATE_FAILED",
+        cpus: 6,
+        memoryMb: 12_288,
+        diskMb: 61_440,
+      });
+      const awake = sandboxSummaryFixture({
+        ...joined,
+        state: "awake",
+      });
+      auth()
+        .createSandbox.mockResolvedValueOnce({
+          kind: "ok",
+          joined: true,
+          accepted: {
+            sandboxId: joined.id,
+            hostId: joined.hostId,
+            sandbox: joined,
+          },
+        })
+        .mockResolvedValueOnce({
+          kind: "ok",
+          accepted: {
+            sandboxId: awake.id,
+            hostId: awake.hostId,
+            sandbox: awake,
+          },
+        });
+      let rowReads = 0;
+      const getSandbox = vi
+        .spyOn(auth(), "getSandbox")
+        .mockImplementation((sandboxId) => {
+          expect(sandboxId).toBe(joined.id);
+          rowReads += 1;
+          return Promise.resolve({
+            kind: "ok",
+            sandbox: rowReads <= 5 ? joined : failed,
+          });
+        });
+      render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      vi.useFakeTimers();
+      try {
+        fireEvent.click(enableButton());
+        await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.waitFor(() =>
+          expect(screen.getByRole("alert").textContent).toBe(
+            "This sandbox is changing state. Try again in a moment.",
+          ),
+        );
+        expect(getSandbox).toHaveBeenCalledTimes(5);
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+
+        fireEvent.click(enableButton());
+        await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(6));
+        await vi.waitFor(() =>
+          expect(screen.getByRole("alert").textContent).toBe(
+            "Couldn't complete the sandbox action.",
+          ),
+        );
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+
+        fireEvent.click(enableButton());
+        await vi.waitFor(() =>
+          expect(sandboxToastSpies.success).toHaveBeenCalledWith(
+            "Created Team bots",
+          ),
+        );
+        expect(
+          auth().createSandbox.mock.calls.map(
+            ([request]) => request.clientRequestId,
+          ),
+        ).toEqual(["team-setup:env-new", `retry:${joined.id}`]);
+        expect(auth().createSandbox.mock.calls[1]?.[0]).toMatchObject({
+          clientRequestId: `retry:${joined.id}`,
+          displayName: "Team bots",
+          cpus: 6,
+          memoryMb: 12_288,
+          diskMb: 61_440,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("retries a row-less shape refusal with refreshed defaults under the same team key", async () => {

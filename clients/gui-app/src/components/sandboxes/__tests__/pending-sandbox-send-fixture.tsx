@@ -51,6 +51,7 @@ import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-sc
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
@@ -359,6 +360,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
     >(),
+  getSandbox: vi.fn<(sandboxId: string) => Promise<SandboxGetFetchResult>>(),
   stopSandbox: vi.fn<(verb: string) => void>(),
   /** Repairs started and not finished; calling one succeeds that repair. */
   repairFinishers: [] as Array<() => void>,
@@ -374,6 +376,7 @@ const mocks = vi.hoisted(() => ({
         }[];
       }
     | undefined,
+  settingsRowIds: [] as string[],
   /** The held answer of the next sandbox verb; `null` settles it at rest. */
   verbAnswer: null as Promise<SandboxVerbOutcome> | null,
   /** The verb mutation's reactive state, as `useMutation` reports it. */
@@ -712,6 +715,7 @@ const hostBinding = vi.hoisted(() => ({
   auth: {
     createSandbox: (request: SandboxCreateRequest) =>
       mocks.createSandbox(request),
+    getSandbox: (sandboxId: string) => mocks.getSandbox(sandboxId),
     listSandboxes: () => mocks.listSandboxes(),
     getTeamEnvironment: () =>
       Promise.resolve<TeamEnvironmentFetchResult>({
@@ -897,11 +901,15 @@ vi.mock("@/lib/links/open-link", () => ({
 // The isolated fixtures read the host's settings as ready; a settings hold is
 // exercised by its own test, not by every send.
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
-  useSandboxSettingsStatus: () => ({
+  useSandboxSettingsStatus: (row: SandboxSummary | null | undefined) => {
+    useAnswerVersion();
+    if (row !== null && row !== undefined) mocks.settingsRowIds.push(row.id);
     // A failed item keeps the host's settings unready, as the real read does.
-    ready: mocks.settingsStatus === undefined,
-    data: mocks.settingsStatus,
-  }),
+    return {
+      ready: mocks.settingsStatus === undefined,
+      data: mocks.settingsStatus,
+    };
+  },
 }));
 
 vi.mock(
@@ -1489,6 +1497,11 @@ beforeEach(() => {
   mocks.createChatRefusal = null;
   mocks.openTile.mockReset();
   mocks.createSandbox.mockReset();
+  mocks.getSandbox.mockReset();
+  mocks.getSandbox.mockResolvedValue({
+    kind: "network-error",
+    detail: "row lookup was not scripted",
+  });
   mocks.stopSandbox.mockReset();
   toastSpies.show.mockClear();
   toastSpies.dismiss.mockClear();
@@ -1502,6 +1515,7 @@ beforeEach(() => {
   mocks.legacySupported = false;
   mocks.legacyMutate.mockReset();
   mocks.settingsStatus = undefined;
+  mocks.settingsRowIds.length = 0;
   mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
   mocks.findById.mockReset();

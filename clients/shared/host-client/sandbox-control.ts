@@ -113,6 +113,10 @@ export type SandboxListFetchResult =
   | { readonly kind: "ok"; readonly response: SandboxListResponse }
   | SandboxControlFailure;
 
+export type SandboxGetFetchResult =
+  | { readonly kind: "ok"; readonly sandbox: SandboxSummary }
+  | SandboxControlFailure;
+
 export type SandboxCatalogueFetchResult =
   | { readonly kind: "ok"; readonly catalogue: SandboxCatalogue }
   | SandboxControlFailure;
@@ -369,6 +373,33 @@ export async function listSandboxesViaHttp(
   }
   return { kind: "ok", response: parsed.data };
 }
+
+/** Read a known row even when the sandbox list omits it. */
+export async function getSandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  sandboxId: string,
+): Promise<SandboxGetFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}`),
+    { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
+    bearerToken,
+    proxyToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (raw.status !== 200) return failureOf(raw.status, raw.body);
+  const parsed = sandboxGetBodySchema.safeParse(raw.body);
+  if (parsed.success && parsed.data.sandbox.id === sandboxId)
+    return { kind: "ok", sandbox: parsed.data.sandbox };
+  return {
+    kind: "network-error",
+    detail: "the sandbox row did not match the contract",
+  };
+}
+
+const sandboxGetBodySchema = z.object({ sandbox: sandboxSummarySchema });
 
 /** `GET /api/sandboxes/catalogue`: providers, shapes, regions, prices. */
 export async function fetchSandboxCatalogueViaHttp(

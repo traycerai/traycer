@@ -20,6 +20,7 @@ import {
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
   fetchTraycerModelsViaHttp,
+  getSandboxViaHttp,
   getSandboxAutomationViaHttp,
   isSandboxAsleep,
   isSandboxFrozenInEffect,
@@ -936,6 +937,63 @@ describe("the other sandbox routes parse or fail the same way", () => {
     }
   });
 
+  it("get: reads the exact sandbox id with the user bearer", async () => {
+    const sandbox = { ...SUMMARY, id: ULID };
+    const fetchMock = stubFetch(async () => jsonResponse(200, { sandbox }));
+
+    await expect(
+      getSandboxViaHttp(BASE, BEARER, null, ULID),
+    ).resolves.toMatchObject({
+      kind: "ok",
+      sandbox: { id: ULID, hostId: sandbox.hostId },
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${BASE}/api/sandboxes/${ULID}`);
+    expect(init?.method).toBe("GET");
+    expect(init?.body).toBeNull();
+    expect(init?.headers).toMatchObject({
+      Authorization: `Bearer ${BEARER}`,
+    });
+  });
+
+  it("get: keeps typed not-found and transition-conflict refusals", async () => {
+    stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
+    await expect(
+      getSandboxViaHttp(BASE, BEARER, null, ULID),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 404,
+      code: "sandbox_not_found",
+    });
+
+    stubFetch(async () =>
+      jsonResponse(409, {
+        code: "sandbox_transition_conflict",
+        sandboxId: ULID,
+        state: "destroying",
+      }),
+    );
+    await expect(
+      getSandboxViaHttp(BASE, BEARER, null, ULID),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 409,
+      code: "sandbox_transition_conflict",
+    });
+  });
+
+  it("get: rejects an id that is not one plain path segment before any request", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, { sandbox: SUMMARY }),
+    );
+    for (const id of UNSAFE_IDS) {
+      await expect(getSandboxViaHttp(BASE, BEARER, null, id)).resolves.toEqual(
+        INVALID_ID_RESULT,
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       environmentId: null,
@@ -1023,17 +1081,30 @@ describe("the other sandbox routes parse or fail the same way", () => {
   });
 
   it("create: marks raw 200 joins and preserves the failed row id from 502", async () => {
+    const acceptedSandbox = {
+      ...SUMMARY,
+      id: "sbx_create",
+      hostId: "host_create",
+    };
     const accepted = {
       sandboxId: "sbx_create",
       hostId: "host_create",
-      sandbox: SUMMARY,
+      sandbox: acceptedSandbox,
+    };
+    const failedSandbox = {
+      ...SUMMARY,
+      id: "sbx_failed_create",
+      hostId: "host_failed_create",
+      displayName: "origin/main hook",
+      createdByTaskId: "origin-task",
     };
     const answers = [
       jsonResponse(200, accepted),
       jsonResponse(202, accepted),
       jsonResponse(502, {
         code: "provider_failed",
-        sandboxId: "sbx_failed_create",
+        sandboxId: failedSandbox.id,
+        sandbox: failedSandbox,
       }),
     ];
     let answerIndex = 0;
@@ -1068,7 +1139,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
       accepted: {
         sandboxId: accepted.sandboxId,
         hostId: accepted.hostId,
-        sandbox: { id: SUMMARY.id },
+        sandbox: { id: acceptedSandbox.id, hostId: acceptedSandbox.hostId },
       },
     });
     const created = await createSandboxViaHttp(BASE, BEARER, null, request);
@@ -1077,7 +1148,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
       accepted: {
         sandboxId: accepted.sandboxId,
         hostId: accepted.hostId,
-        sandbox: { id: SUMMARY.id },
+        sandbox: { id: acceptedSandbox.id, hostId: acceptedSandbox.hostId },
       },
     });
     expect(created.kind === "ok" && "joined" in created).toBe(false);
@@ -1087,7 +1158,13 @@ describe("the other sandbox routes parse or fail the same way", () => {
       kind: "refused",
       status: 502,
       code: "provider_failed",
-      sandboxId: "sbx_failed_create",
+      sandboxId: failedSandbox.id,
+      sandbox: {
+        id: failedSandbox.id,
+        hostId: failedSandbox.hostId,
+        displayName: failedSandbox.displayName,
+        createdByTaskId: failedSandbox.createdByTaskId,
+      },
     });
   });
 

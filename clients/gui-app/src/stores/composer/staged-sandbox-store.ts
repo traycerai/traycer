@@ -29,6 +29,7 @@ import {
   createPendingStageStorage,
   pendingStageAttemptCurrent,
   readPendingStageRecord,
+  removeAcknowledgedStageRetry,
   requestPendingStageRetry,
   type PendingStagePress,
   type PendingStageRetryRequest,
@@ -194,7 +195,10 @@ export function stagedFailedSandboxId(stage: StagedSandbox): string | null {
   if (stage.target.kind !== "new") return null;
   const { failure } = stage;
   if (failure?.sandboxId !== undefined) return failure.sandboxId;
-  return failure?.kind === "failed" && failure.code !== "wake"
+  // Older builds marked "gone" from list omission alone.
+  return failure?.kind === "failed" &&
+    failure.code !== "wake" &&
+    failure.code !== "gone"
     ? stage.createdSandboxId
     : null;
 }
@@ -368,8 +372,13 @@ function persistStageRetry(
   } catch {
     // A failed header write can still leave the new stage record intact.
   }
-  if (readPendingStageRecord(surfaceKey)?.retryHandledId === requestId)
+  if (readPendingStageRecord(surfaceKey)?.retryHandledId === requestId) {
+    if (stage.retryRequest?.id === requestId) {
+      removeAcknowledgedStageRetry(surfaceKey, stage.retryRequest);
+      queueMicrotask(() => void useStagedSandboxStore.persist.rehydrate());
+    }
     return true;
+  }
   try {
     useStagedSandboxStore.setState({ bySurface: before });
   } catch {

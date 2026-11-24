@@ -39,6 +39,7 @@ import {
 } from "@/lib/provider-ordering";
 import {
   readStagedSandbox,
+  stagedCreateAttemptKey,
   stagedCreateRetryPayload,
   stagedRetryKey,
   useStagedSandboxStore,
@@ -227,18 +228,20 @@ export function handPendingSandboxSend(
   store.adopt(input.fromSurfaceKey, surfaceKey);
   // Publish the stage first: a different window must never see a send with
   // its stage missing, nor mint a different sandbox create key for it.
+  const replacing =
+    chosenKey !== null && chosenKey !== stagedCreateAttemptKey(stage);
+  const runnable =
+    replacing || (chosenKey !== null && stage.failure?.kind === "unavailable");
   store.report(surfaceKey, {
-    ...(chosenKey !== null &&
-    chosenKey !== (stage.lastCreateKey ?? stage.clientRequestId)
+    ...(runnable ? { phase: "staged", failure: null } : {}),
+    ...(replacing
       ? {
           lastCreateKey: chosenKey,
           lastRetryCreate: stagedCreateRetryPayload(stage, chosenKey),
-          phase: "staged",
           createdSandboxId: null,
           createdHostId: null,
           createAttempt: null,
           rateLimit: null,
-          failure: null,
         }
       : {}),
     ownerId: null,

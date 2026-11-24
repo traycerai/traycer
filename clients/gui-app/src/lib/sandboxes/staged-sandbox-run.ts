@@ -57,6 +57,8 @@ import {
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { readKnownSandboxRow } from "@/lib/sandboxes/sandbox-row-read";
+import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import { pendingStageAttemptCurrent } from "@/lib/sandboxes/pending-stage-storage";
 import {
   handoffOwnerLive,
@@ -112,6 +114,7 @@ interface StagedRunIdentity {
   readonly surfaceKey: string;
   readonly clientRequestId: string;
   readonly createKey: string;
+  readonly userId: string | null;
 }
 
 /** A repeat joins its attempt, and a newer attempt supersedes an old run. */
@@ -191,6 +194,7 @@ export async function runStagedSandbox(
     surfaceKey,
     clientRequestId,
     createKey: active.lastCreateKey ?? clientRequestId,
+    userId: signedInUserId(),
   };
   running.set(surfaceKey, attempt);
   try {
@@ -229,6 +233,7 @@ async function drivePreparedRun(
       clientRequestId,
       resume: run.resume,
       createKey: run.createKey,
+      userId: run.userId,
       retryCreate: run.retryCreate,
       taskId: run.taskId,
       environmentId: prepared.environmentId,
@@ -237,7 +242,7 @@ async function drivePreparedRun(
     made,
     deps,
   );
-  if (started === null) return;
+  if (started === null || !stillCurrent(run)) return;
   let budgetFrom = prepared.startedAt;
   if (
     stage.target.kind === "new" &&
@@ -281,7 +286,12 @@ async function prepareRun(
   const attempt = readStagedSandbox(run.surfaceKey)?.createAttempt ?? null;
   const prepared =
     made === null
-      ? await prepareCreate(stage.target, deps, attempt?.budgetMs ?? null)
+      ? await prepareCreate(
+          stage.target,
+          deps,
+          attempt?.budgetMs ?? null,
+          run.retryCreate,
+        )
       : {
           environmentId: null,
           budgetMs: attempt?.budgetMs ?? STAGED_CREATE_BUDGET_MS,
@@ -300,11 +310,21 @@ async function prepareCreate(
   target: Extract<StagedSandboxTarget, { kind: "new" }>,
   deps: StagedSandboxRunDeps,
   retainedBudgetMs: number | null,
+  retryCreate: SandboxCreateRequest | undefined,
 ): Promise<PreparedCreate | null> {
-  const environmentId = await environmentIdFor(target, deps);
+  const environmentId =
+    retryCreate === undefined
+      ? await environmentIdFor(target, deps)
+      : retryCreate.environmentId;
   if (environmentId === undefined) return null;
   if (retainedBudgetMs !== null)
     return { environmentId, budgetMs: retainedBudgetMs };
+  if (retryCreate?.region === null)
+    return { environmentId, budgetMs: STAGED_CREATE_BUDGET_MS };
+  const shape =
+    retryCreate?.region === undefined
+      ? target.shape
+      : { ...retryCreate, region: retryCreate.region };
   let timer: number | null = null;
   const catalogue = await Promise.race([
     deps.queryClient.fetchQuery(
@@ -312,7 +332,7 @@ async function prepareCreate(
         deps.auth,
         deps.userId,
         true,
-        sandboxReadinessContext(environmentId, target.shape),
+        sandboxReadinessContext(environmentId, shape),
       ),
     ),
     new Promise<null>((resolve) => {
@@ -327,7 +347,7 @@ async function prepareCreate(
       if (timer !== null) window.clearTimeout(timer);
     });
   const entry =
-    catalogue === null ? null : stageProviderForShape(catalogue, target.shape);
+    catalogue === null ? null : stageProviderForShape(catalogue, shape);
   return {
     environmentId,
     budgetMs: Math.max(STAGED_CREATE_BUDGET_MS, entry?.createBudgetMs ?? 0),
@@ -424,7 +444,11 @@ function stagedWakeFailure(
 function stillCurrent(run: StagedRunIdentity): boolean {
   const { surfaceKey } = run;
   const stage = readStagedSandbox(surfaceKey);
+  // The pending strip can prove a credit refusal while this run is reading.
+  if (stage?.failure?.kind === "failed" && stage.failure.code === "credit-gate")
+    return false;
   return (
+    signedInUserId() === run.userId &&
     stage !== null &&
     stage.phase === "creating" &&
     stageMatchesRun(stage, run) &&
@@ -568,24 +592,21 @@ function recordStageCreateAnswer(
     useStagedSandboxStore.getState().report(surfaceKey, {
       failure: retryCreate === null ? failure : { ...failure, retryCreate },
       ...(createRefusedBeforeReservation(result)
-        ? { createAttempt: null }
+        ? {
+            createAttempt: null,
+            ...(result.code === SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE
+              ? { lastRetryCreate: request }
+              : {}),
+          }
         : {}),
     });
     return null;
   }
   const { sandboxId, hostId, sandbox } = result.accepted;
-  if (
-    result.joined === true &&
-    sandbox.state === "destroyed" &&
-    sandbox.failureCode === "credit-gate"
-  ) {
-    fail(surfaceKey, {
-      kind: "failed",
-      code: "credit-gate",
-      step: "creating",
-      sandboxId,
-      retryCreate: sandboxRetryCreate(sandbox),
-    });
+  const creditRefusal =
+    result.joined === true ? stagedCreditRefusal(sandbox) : null;
+  if (creditRefusal !== null) {
+    fail(surfaceKey, creditRefusal);
     return null;
   }
   if (!recordPendingSandboxStageCreated(surfaceKey, sandboxId)) return null;
@@ -611,7 +632,7 @@ function recordStageCreateAnswer(
 /** Only a refusal before reservation releases the previous create's wait budget. */
 function createRefusedBeforeReservation(
   failure: SandboxControlFailure,
-): boolean {
+): failure is Extract<SandboxControlFailure, { kind: "refused" }> {
   return (
     failure.kind === "refused" &&
     failure.sandboxId === undefined &&
@@ -744,11 +765,11 @@ async function settle(
   budgetFrom: number,
   budgetMs: number,
 ): Promise<void> {
-  const { surfaceKey, started, deps } = input;
+  const { surfaceKey, deps } = input;
   const deadline = budgetFrom + budgetMs;
   while (deps.now() < deadline) {
     if (!stillCurrent(input)) return;
-    const row = await readRow(deps, started.sandboxId, surfaceKey);
+    const row = await readRow(input);
     if (!stillCurrent(input)) return;
     if ((await settleRow(input, row)) === "finished") return;
     await deps.sleep(POLL_INTERVAL_MS);
@@ -787,12 +808,16 @@ async function settleRow(
   const verdict = settleVerdict(row);
   if (verdict === null) return "waiting";
   if (verdict.kind === "failure") {
-    fail(
-      surfaceKey,
-      row !== null && verdict.failure.kind === "failed"
-        ? { ...verdict.failure, retryCreate: sandboxRetryCreate(row) }
-        : verdict.failure,
-    );
+    const failure = verdict.failure;
+    if (failure.kind === "failed") {
+      fail(surfaceKey, {
+        ...failure,
+        sandboxId: started.sandboxId,
+        ...(row === null ? {} : { retryCreate: sandboxRetryCreate(row) }),
+      });
+    } else {
+      fail(surfaceKey, failure);
+    }
     return "finished";
   }
   report(surfaceKey, "applying", deps.now());
@@ -832,26 +857,62 @@ async function settleSettings(
   return "finished";
 }
 
-/**
- * One read of the sandbox's row: the row, `null` when the list answered
- * without it (it is gone), or `undefined` when the read failed, which says
- * nothing about the sandbox.
- */
-async function readRow(
-  deps: StagedSandboxRunDeps,
-  sandboxId: string,
-  surfaceKey: string,
-): Promise<SandboxSummary | null | undefined> {
-  // The list query every surface reads, read fresh: the Sandboxes page and
-  // the pickers see the new row as the wait does.
+interface StagedRowObservation {
+  readonly row: SandboxSummary | null;
+  readonly observation: PendingSandboxObservation;
+}
+
+/** A list omission is a reason to read the known row, not proof it ended. */
+async function observeStageRow(
+  input: SandboxSettlement,
+): Promise<StagedRowObservation | null> {
+  const {
+    deps,
+    started: { sandboxId },
+  } = input;
+  const { userId } = input;
   const response = await deps.queryClient
     .fetchQuery({
       ...sandboxListQueryOptions(deps.auth, deps.userId, true),
       staleTime: 0,
     })
     .catch(() => undefined);
-  if (response === undefined || response === null) return undefined;
-  const row = response.sandboxes.find((item) => item.id === sandboxId) ?? null;
+  if (!stillCurrent(input)) return null;
+  const listed = response?.sandboxes.find((item) => item.id === sandboxId);
+  if (listed !== undefined) {
+    return {
+      row: listed,
+      observation: {
+        kind: "list",
+        sentAt: sandboxListReadSentAt(response),
+        mountedAt: 0,
+      },
+    };
+  }
+  const read = await readKnownSandboxRow(deps.auth, sandboxId, userId);
+  if (read === null || !stillCurrent(input)) return null;
+  return {
+    row: read.row,
+    observation: {
+      kind: "by-id",
+      sandboxId,
+      sentAt: read.sentAt,
+      mountedAt: 0,
+    },
+  };
+}
+
+async function readRow(
+  input: SandboxSettlement,
+): Promise<SandboxSummary | null | undefined> {
+  const {
+    surfaceKey,
+    started: { sandboxId, hostId },
+  } = input;
+  const observed = await observeStageRow(input);
+  if (observed === null || !stillCurrent(input)) return undefined;
+  const { row, observation } = observed;
+  if (row !== null && row.hostId !== hostId) return undefined;
   let host: "awake" | "ended" | "resting" | "waking" = "waking";
   if (
     row === null ||
@@ -863,12 +924,6 @@ async function readRow(
   else if (row.state === "awake") host = "awake";
   else if (row.state === "stopped" || row.state === "suspended")
     host = "resting";
-  const observation = {
-    kind: "list",
-    sentAt: sandboxListReadSentAt(response),
-    mountedAt: 0,
-    missingSandboxId: row === null ? sandboxId : undefined,
-  } as const;
   if (
     row !== null &&
     !markPendingSandboxStageRowSeen(surfaceKey, sandboxId, observation)
@@ -884,6 +939,21 @@ type SettleVerdict =
   | { readonly kind: "awake" }
   | { readonly kind: "failure"; readonly failure: StagedSandboxFailure };
 
+/** An omitted credit-gate row has the same outcome when replayed or read. */
+export function stagedCreditRefusal(
+  row: SandboxSummary | null,
+): StagedSandboxFailure | null {
+  if (row?.state !== "destroyed" || row.failureCode !== "credit-gate")
+    return null;
+  return {
+    kind: "failed",
+    code: "credit-gate",
+    step: "booting",
+    sandboxId: row.id,
+    retryCreate: sandboxRetryCreate(row),
+  };
+}
+
 /** What a row says about the wait, or `null` while it is on its way. */
 export function settleVerdict(
   row: SandboxSummary | null,
@@ -894,6 +964,8 @@ export function settleVerdict(
       failure: { kind: "failed", code: "gone", step: "booting" },
     };
   }
+  const refusal = stagedCreditRefusal(row);
+  if (refusal !== null) return { kind: "failure", failure: refusal };
   switch (row.state) {
     case "failed":
     case "destroying":

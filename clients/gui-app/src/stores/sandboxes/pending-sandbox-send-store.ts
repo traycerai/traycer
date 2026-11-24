@@ -417,7 +417,7 @@ export function pendingSandboxStageObservation(
 ): PendingSendFacts["host"] {
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX))
     return decodePendingSandboxObservation(
-      observation.kind === "list"
+      observation.kind === "list" || observation.kind === "by-id"
         ? null
         : { createdAt: 0, observationRequestedAt: 0 },
       host,
@@ -717,8 +717,12 @@ export const usePendingSandboxSendStore =
           if (prior?.sandboxId !== sandboxId) return false;
           if (prior.rowSeen) return true;
           if (
-            observation.kind !== "list" ||
-            observation.missingSandboxId !== undefined ||
+            !(
+              (observation.kind === "list" &&
+                observation.missingSandboxId === undefined) ||
+              (observation.kind === "by-id" &&
+                observation.sandboxId === sandboxId)
+            ) ||
             pendingSandboxSendFacts(id, {
               ...UNKNOWN_PENDING_SEND_FACTS,
               host: "awake",

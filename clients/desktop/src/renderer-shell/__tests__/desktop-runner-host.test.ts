@@ -140,6 +140,7 @@ function buildFakeBridge(
     releaseTeamComputer: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     deregisterHostFromAccount: async () => ({ kind: "network-error" as const }),
+    getSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
     listSandboxes: async () => ({
       kind: "network-error" as const,
       detail: "test",

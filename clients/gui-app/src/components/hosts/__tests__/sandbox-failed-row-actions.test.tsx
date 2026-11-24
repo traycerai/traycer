@@ -245,6 +245,9 @@ function renderFailedChatActions(
         vi.spyOn(runtimeBinding.auth, "getTeamEnvironment").mockImplementation(
           (teamId) => binding.auth.getTeamEnvironment(teamId),
         );
+        vi.spyOn(runtimeBinding.auth, "getSandbox").mockImplementation(
+          (sandboxId) => binding.auth.getSandbox(sandboxId),
+        );
         vi.spyOn(runtimeBinding.auth, "createSandbox").mockImplementation(
           (request) => binding.auth.createSandbox(request),
         );
@@ -295,6 +298,9 @@ function renderFailedRows({
         }
         vi.spyOn(runtimeBinding.auth, "getTeamEnvironment").mockImplementation(
           (teamId) => fakeBinding.auth.getTeamEnvironment(teamId),
+        );
+        vi.spyOn(runtimeBinding.auth, "getSandbox").mockImplementation(
+          (sandboxId) => fakeBinding.auth.getSandbox(sandboxId),
         );
         vi.spyOn(runtimeBinding.auth, "createSandbox").mockImplementation(
           (request) => fakeBinding.auth.createSandbox(request),
@@ -1140,6 +1146,108 @@ describe("SandboxFailedRowActions Retry", () => {
       ),
     ).toEqual([`retry:${FAILED_SANDBOX_ID}`, "retry:credit-gate-row"]);
     view.unmount();
+  });
+
+  it("rechecks a joined creating row before choosing its failed-row retry key", async () => {
+    const binding = createFakeSandboxBinding();
+    const joinedRow = sandboxSummaryFixture({
+      id: "joined-creating-row",
+      hostId: "host-joined-creating-row",
+      state: "creating",
+      displayName: "origin/main hook",
+    });
+    const failedRow = sandboxSummaryFixture({
+      ...joinedRow,
+      state: "failed",
+      failureCode: "PROVIDER_CREATE_FAILED",
+      cpus: 6,
+      memoryMb: 12_288,
+      diskMb: 61_440,
+    });
+    const awakeRow = sandboxSummaryFixture({
+      ...joinedRow,
+      state: "awake",
+    });
+    binding.auth.createSandbox
+      .mockResolvedValueOnce({
+        kind: "ok",
+        joined: true,
+        accepted: {
+          sandboxId: joinedRow.id,
+          hostId: joinedRow.hostId,
+          sandbox: joinedRow,
+        },
+      })
+      .mockResolvedValueOnce({
+        kind: "ok",
+        accepted: {
+          sandboxId: awakeRow.id,
+          hostId: awakeRow.hostId,
+          sandbox: awakeRow,
+        },
+      });
+    let rowReads = 0;
+    binding.auth.getSandbox.mockImplementation((sandboxId) => {
+      expect(sandboxId).toBe(joinedRow.id);
+      rowReads += 1;
+      return Promise.resolve({
+        kind: "ok",
+        sandbox: rowReads <= 5 ? joinedRow : failedRow,
+      });
+    });
+    const view = renderFailedRow(
+      binding,
+      PERSONAL_CONFIGURATION,
+      "editor",
+      createQueryClient(),
+    );
+    signInAs("viewer");
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(retry);
+      await vi.waitFor(() =>
+        expect(binding.auth.getSandbox).toHaveBeenCalledTimes(1),
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "This sandbox is changing state. Try again in a moment.",
+      );
+      expect(binding.auth.getSandbox).toHaveBeenCalledTimes(5);
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(retry).toHaveProperty("disabled", false));
+
+      fireEvent.click(retry);
+      await vi.waitFor(() =>
+        expect(binding.auth.getSandbox).toHaveBeenCalledTimes(6),
+      );
+      await vi.waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(2));
+      expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(retry).toHaveProperty("disabled", false));
+
+      fireEvent.click(retry);
+      await vi.waitFor(() =>
+        expect(mocks.toastSuccess).toHaveBeenCalledWith(
+          "Created origin/main hook",
+        ),
+      );
+      expect(
+        binding.auth.createSandbox.mock.calls.map(
+          ([request]) => request.clientRequestId,
+        ),
+      ).toEqual([`retry:${FAILED_SANDBOX_ID}`, `retry:${joinedRow.id}`]);
+      expect(binding.auth.createSandbox.mock.calls[1]?.[0]).toMatchObject({
+        clientRequestId: `retry:${joinedRow.id}`,
+        displayName: "origin/main hook",
+        cpus: 6,
+        memoryMb: 12_288,
+        diskMb: 61_440,
+      });
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("retains the attempted holder key after an unnamed 402 follows a joined destroyed row", async () => {

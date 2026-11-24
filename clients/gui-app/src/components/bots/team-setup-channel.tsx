@@ -32,7 +32,7 @@ import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   SandboxCreateError,
-  sandboxCreatePressRequest,
+  sandboxCreatePress,
   useSandboxCreate,
 } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import {
@@ -425,7 +425,7 @@ function EnableTeamCloudAction(props: {
     // unmounts before the answer.
     void create
       .mutateAsync({
-        request: sandboxCreatePressRequest(
+        ...sandboxCreatePress(
           {
             os: shape.os,
             cpus: shape.cpus,

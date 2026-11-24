@@ -30,6 +30,7 @@ import type {
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
@@ -253,9 +254,9 @@ describe("runStagedSandbox creating", () => {
     expect(auth.requests[0]?.clientRequestId).toBe(legacyKey);
   });
 
-  it("posts a restored saved retry payload before reading the sandbox list", async () => {
+  it("posts a restored saved team retry payload before reading the environment or sandbox list", async () => {
     await ownPendingStage("restored-retry-send");
-    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
     const lastCreateKey = "retry:saved-row";
     const lastRetryCreate: SandboxCreateRequest = {
       os: "linux",
@@ -268,7 +269,7 @@ describe("runStagedSandbox creating", () => {
       burst: false,
       createdByHostId: null,
       createdByAgentId: null,
-      environmentId: null,
+      environmentId: "env-saved-team",
       destroyAfterRestingMinutes: 1440,
       createdByTaskId: "origin-task",
       clientRequestId: lastCreateKey,
@@ -301,6 +302,7 @@ describe("runStagedSandbox creating", () => {
     );
 
     expect(auth.listReads).toBe(0);
+    expect(auth.environmentReads).toEqual([]);
     expect(auth.requests).toEqual([lastRetryCreate]);
     expect(stageOf()).toMatchObject({
       clientRequestId: stageKey,
@@ -356,7 +358,7 @@ describe("runStagedSandbox creating", () => {
       clientRequestId: stageKey,
       lastCreateKey,
     });
-    expect(stageOf().lastRetryCreate).toBeUndefined();
+    expect(stageOf().lastRetryCreate).toEqual(auth.requests[0]);
   });
 
   it("uses retry of the 502 row on the next staged press", async () => {
@@ -526,26 +528,20 @@ describe("runStagedSandbox creating", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness(
       {
-        createSandbox: () => ({
-          kind: "network-error",
-          detail: "the request never completed",
-        }),
+        createSandbox: () =>
+          refusal(503, SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE),
       },
       true,
     );
+    expect(stageOf().lastRetryCreate).toBeUndefined();
 
     await run("retry:shown-failure", deps);
+    const firstRequest = auth.requests[0];
+    expect(stageOf().lastRetryCreate).toEqual(firstRequest);
     await run(null, deps);
     await run(stageOf().lastCreateKey ?? null, deps);
 
-    const [first, second, third] = auth.requests.map(
-      (request) => request.clientRequestId,
-    );
-    expect([first, second, third]).toEqual([
-      "retry:shown-failure",
-      "retry:shown-failure",
-      "retry:shown-failure",
-    ]);
+    expect(auth.requests).toEqual([firstRequest, firstRequest, firstRequest]);
   });
 
   it("reports the create's own queued rateLimit onto the stage while still waiting, and a fresh poll with none clears it", async () => {
@@ -679,13 +675,24 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
     response: { sandboxes: [] },
   };
 
-  it("keeps the old reading for a stage that is no pending send's: no record of an accepted create, so a missing row is gone", async () => {
+  it("confirms a missing row by id for an unowned stage", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness({ lists: [missing, missing, awake] }, true);
+    const getSandbox = vi.spyOn(auth, "getSandbox").mockResolvedValue({
+      kind: "refused",
+      status: 404,
+      code: SANDBOX_REFUSAL_CODE_NOT_FOUND,
+      reason: null,
+      shortfallMc: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message: null,
+    });
 
     await run(null, deps);
 
     expect(auth.listReads).toBe(1);
+    expect(getSandbox).toHaveBeenCalledWith(SANDBOX_ID);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
   });
 });
@@ -849,7 +856,7 @@ describe("runStagedSandbox settling", () => {
 
   it("fails with the settings code when the sandbox is awake but its settings did not apply, and does not hand off", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
-    const { deps } = harness(
+    const { auth, deps } = harness(
       {
         lists: [
           listOf(
@@ -863,6 +870,16 @@ describe("runStagedSandbox settling", () => {
       },
       true,
     );
+    vi.spyOn(auth, "getSandbox").mockResolvedValue({
+      kind: "refused",
+      status: 404,
+      code: SANDBOX_REFUSAL_CODE_NOT_FOUND,
+      reason: null,
+      shortfallMc: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message: null,
+    });
 
     await run(null, deps);
 
@@ -1292,6 +1309,75 @@ describe("runStagedSandbox on a resting sandbox", () => {
       phase: "handoff",
       createdSandboxId: SANDBOX_ID,
       createdHostId: NEW_HOST_ID,
+    });
+  });
+
+  it("does not let a held wake cancellation overwrite the newer create budget", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    const stageId = store.begin(surfaceKey, 1_000_000, {
+      resume: false,
+      createKey: null,
+    });
+    if (stageId === null) throw new Error("expected the stage to begin");
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      createAttempt: { budgetMs: 480_000, startedAt: 1_000_000 },
+      failure: { kind: "failed", code: "wake", step: "booting" },
+      sendTaken: true,
+    });
+    onTestFinished(holdHandoffOwner(surfaceKey, null, ownerGoneOnUnmount));
+    const { auth, deps } = harness(
+      { lists: [listOf(row({ state: "awake", guestConfigured: true }))] },
+      true,
+    );
+    vi.spyOn(auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: budgetCatalogue(600_000),
+    });
+
+    let releaseCancellation: () => void = () => undefined;
+    const cancellation = new Promise<void>((resolve) => {
+      releaseCancellation = resolve;
+    });
+    const cancelQueries = vi
+      .spyOn(deps.queryClient, "cancelQueries")
+      .mockImplementation(() => cancellation);
+    const oldRun = runStagedSandbox(
+      surfaceKey,
+      { taskId: null, resume: true, createKey: null },
+      deps,
+    );
+
+    await vi.waitFor(() => expect(cancelQueries).toHaveBeenCalledTimes(1));
+    expect(
+      store.begin(surfaceKey, 1_000_001, {
+        resume: false,
+        createKey: "retry:new",
+      }),
+    ).toBe(stageId);
+    await runStagedSandbox(
+      surfaceKey,
+      { taskId: null, resume: false, createKey: "retry:new" },
+      deps,
+    );
+    expect(auth.requests.map(({ clientRequestId }) => clientRequestId)).toEqual(
+      ["retry:new"],
+    );
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      lastCreateKey: "retry:new",
+      createAttempt: { budgetMs: 600_000 },
+    });
+
+    releaseCancellation();
+    await oldRun;
+
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      lastCreateKey: "retry:new",
+      createAttempt: { budgetMs: 600_000 },
     });
   });
 
@@ -1774,10 +1860,10 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     expect(stageOf().failure).toBeNull();
   });
 
-  it("calls the sandbox gone when a fresh read misses a row an earlier read had seen, with rowSeen kept true", async () => {
+  it("confirms a seen row is gone by id after a fresh list omits it", async () => {
     await pendingOwnerWith(false);
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
-    const { deps } = harness(
+    const { auth, deps } = harness(
       {
         lists: [
           listOf(row({ state: "creating" })),
@@ -1786,6 +1872,16 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       },
       true,
     );
+    const getSandbox = vi.spyOn(auth, "getSandbox").mockResolvedValue({
+      kind: "refused",
+      status: 404,
+      code: SANDBOX_REFUSAL_CODE_NOT_FOUND,
+      reason: null,
+      shortfallMc: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message: null,
+    });
 
     // Each read is sent strictly after the one before and the request boundary.
     const request = usePendingSandboxSendStore.getState().sends[SEND];
@@ -1801,6 +1897,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     await run(null, deps);
 
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+    expect(getSandbox).toHaveBeenCalledWith(SANDBOX_ID);
     expect(
       usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
     ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });

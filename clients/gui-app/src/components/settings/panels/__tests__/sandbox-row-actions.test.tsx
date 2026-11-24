@@ -1,7 +1,11 @@
 import { AutomationTerminalPane } from "@/components/home/terminal-panel/automation-terminal-pane";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -14,6 +18,7 @@ import userEvent from "@testing-library/user-event";
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   SandboxCreateAccepted,
+  SandboxCreateRequest,
   SandboxPod,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
@@ -120,13 +125,19 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-create-mutation")
     >()),
-    useSandboxCreate: () => ({
-      mutate: (variables: Parameters<typeof createMutateAsync>[0]) => {
-        void createMutateAsync(variables).catch(swallowCreateMutationRejection);
-      },
-      mutateAsync: createMutateAsync,
-      isPending: false,
-    }),
+    useSandboxCreate: () => {
+      const createMutation = useMutation({ mutationFn: createMutateAsync });
+      return {
+        ...createMutation,
+        mutate: (variables: Parameters<typeof createMutateAsync>[0]) => {
+          void createMutation
+            .mutateAsync(variables)
+            .catch(swallowCreateMutationRejection);
+        },
+        mutateAsync: createMutation.mutateAsync,
+        isPending: createMutation.isPending,
+      };
+    },
   }),
 );
 type SettingsMutate = (variables: Record<string, never>) => void;
@@ -614,58 +625,87 @@ describe("<SandboxRowActions />", () => {
       };
     }> => {
       const callIndex = createMutateAsync.mock.calls.length;
-      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+      const button = screen.getByRole("button", { name: "Retry" });
+      await userEvent.click(button);
+      await waitFor(() => expect(button.hasAttribute("disabled")).toBe(true));
       expect(createMutateAsync.mock.calls).toHaveLength(callIndex + 1);
       const call = createMutateAsync.mock.calls[callIndex];
       const answer = answers[callIndex];
       return { key: call[0].request.clientRequestId, answer };
     };
-    const refusal = (failure: SandboxControlFailure) =>
+    const refusal = (
+      failure: SandboxControlFailure,
+      nextRequest: SandboxCreateRequest | null,
+    ) =>
       new SandboxCreateError(
         "no",
         failure.kind === "refused" ? failure.code : null,
-        null,
+        nextRequest,
       );
 
     const first = await press();
     // The answer never came: the create may have been accepted.
     act(() =>
       first.answer.onError(
-        refusal({ kind: "network-error", detail: "timeout" }),
+        refusal({ kind: "network-error", detail: "timeout" }, null),
       ),
     );
     await waitFor(() =>
       expect(swallowCreateMutationRejection).toHaveBeenCalledTimes(1),
     );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      ).toBe(false),
+    );
     const second = await press();
     expect(second.key).toBe(first.key);
+    const nextRequest = {
+      ...createMutateAsync.mock.calls[1][0].request,
+      clientRequestId: "retry:named-402-next",
+    };
 
     act(() =>
       second.answer.onError(
-        refusal({
-          kind: "refused",
-          status: 402,
-          code: "insufficient_credit",
-          reason: null,
-          shortfallMc: 100,
-          newRateMcPerHour: null,
-          currentAwakeBurnMcPerHour: null,
-          message: null,
-        }),
+        refusal(
+          {
+            kind: "refused",
+            status: 402,
+            code: "insufficient_credit",
+            reason: null,
+            shortfallMc: 100,
+            newRateMcPerHour: null,
+            currentAwakeBurnMcPerHour: null,
+            message: null,
+          },
+          nextRequest,
+        ),
       ),
     );
     await waitFor(() =>
       expect(swallowCreateMutationRejection).toHaveBeenCalledTimes(2),
     );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      ).toBe(false),
+    );
     const third = await press();
-    expect(third.key).toBe(second.key);
+    expect(third.key).toBe(nextRequest.clientRequestId);
+    expect(third.key).not.toBe(first.key);
 
     act(() => third.answer.onSuccess());
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      ).toBe(false),
+    );
     const fourth = await press();
-    expect(fourth.key).toBe(third.key);
+    expect(fourth.key).toBe(first.key);
     expect(fourth.key).toBe(`retry:${summary.id}`);
     expect(fourth.key?.length).toBeGreaterThanOrEqual(1);
     expect(fourth.key?.length).toBeLessThanOrEqual(64);
+    act(() => fourth.answer.onSuccess());
   });
 
   describe("an Automations row", () => {

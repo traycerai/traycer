@@ -11,7 +11,7 @@ import {
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import {
-  sandboxCreatePressRequest,
+  sandboxCreatePress,
   useSandboxCreate,
 } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
@@ -131,7 +131,7 @@ function SandboxFailedRowControls(
     if (signedInUserId() !== userId || queryClient.isMutating(createFilter) > 0)
       return;
     create.mutate({
-      request: sandboxCreatePressRequest(sandboxRetryCreate(summary), create),
+      ...sandboxCreatePress(sandboxRetryCreate(summary), create),
       teamName: configuration.kind === "team" ? configuration.teamName : null,
       sourceSandboxId: summary.id,
     });
