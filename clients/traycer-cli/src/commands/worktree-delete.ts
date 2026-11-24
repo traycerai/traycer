@@ -313,6 +313,10 @@ async function deleteOnStoredSignIn(
       if (attempt.error !== null) throw attempt.error;
       return { deleted: attempt.deleted, declined: attempt.declined };
     }
+    // The batch probe's open was admitted, but that host has no batch method
+    // and ran nothing. The legacy stream dials its own open, and only that
+    // open's admission can have started its delete.
+    admitted = false;
     const deleted = await runLegacyDeleteStream(
       worktreePath,
       ctx,

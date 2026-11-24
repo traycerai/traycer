@@ -1,7 +1,11 @@
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
+import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import { FRAME_TIMEOUT_MS } from "../../internal/host-rpc";
 import {
@@ -26,6 +30,9 @@ import {
   userRow,
 } from "./bot-test-support";
 import { nextCasePerson } from "../../internal/__tests__/case-person-test-support";
+import { completeCredentialsReserve } from "../../internal/__tests__/credentials-reserve-test-support";
+import { createCliCredentialsStore } from "../../store/credentials-store";
+import type { Environment } from "../../runner/environment";
 
 /**
  * Each command here runs its real code over the real stream client, against a
@@ -84,12 +91,14 @@ const harness = vi.hoisted(() => {
   return {
     ScriptSocket,
     sockets: [] as InstanceType<typeof ScriptSocket>[],
-    onSocketCreated: null as
-      | ((socket: InstanceType<typeof ScriptSocket>) => void)
-      | null,
     state: {
       hostId: "",
       hostTokenTable: new Map() as HostTokenTable,
+      onSocketCreated: null as
+        | ((socket: InstanceType<typeof ScriptSocket>) => void)
+        | null,
+      credentialsPath: "",
+      beforePostCloseSignInRead: null as (() => Promise<void>) | null,
       /** What refreshing the stored sign-in answers. */
       refresh: "network-error" as "network-error" | "rotated" | "rejected",
       /** What authn answers a host-only token mint with. */
@@ -112,11 +121,54 @@ vi.mock("../../internal/host-auth", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/host-auth")>();
   return {
     ...actual,
-    resolveHostAuth: async () => ({
-      token: SIGN_IN,
-      authnBaseUrl: "https://authn.test",
-      userId: USER_ID,
-    }),
+    resolveHostAuth: async () => {
+      if (harness.state.credentialsPath === "")
+        return {
+          token: SIGN_IN,
+          authnBaseUrl: "https://authn.test",
+          userId: USER_ID,
+        };
+      const store = createCliCredentialsStore();
+      try {
+        const credentials = await store.read();
+        return {
+          token: credentials?.token ?? SIGN_IN,
+          authnBaseUrl: "https://authn.test",
+          userId: credentials?.user.id ?? USER_ID,
+        };
+      } finally {
+        store.dispose();
+      }
+    },
+  };
+});
+
+vi.mock("../../internal/cli-host-tokens", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/cli-host-tokens")>();
+  return {
+    ...actual,
+    requireCliHostSession: async (
+      ...args: Parameters<typeof actual.requireCliHostSession>
+    ) => {
+      const session = await actual.requireCliHostSession(...args);
+      return {
+        ...session,
+        tokens: {
+          ...session.tokens,
+          signInRejectionNow: async (
+            ...judgeArgs: Parameters<typeof session.tokens.signInRejectionNow>
+          ) => {
+            const beforeRead = harness.state.beforePostCloseSignInRead;
+            if (beforeRead !== null) {
+              harness.state.beforePostCloseSignInRead = null;
+              await beforeRead();
+            }
+            return session.tokens.signInRejectionNow(...judgeArgs);
+          },
+        },
+      };
+    },
   };
 });
 
@@ -184,31 +236,60 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
   };
 });
 
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return {
+    ...actual,
+    cliCredentialsPath: (environment: Environment) =>
+      harness.state.credentialsPath === ""
+        ? actual.cliCredentialsPath(environment)
+        : harness.state.credentialsPath,
+  };
+});
+
 vi.mock("../../store/credentials-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../store/credentials-store")>();
   return {
     ...actual,
-    createCliCredentialsStore: () => ({ dispose: () => undefined }),
-    createStoreBackedRevalidator: ({
-      lease,
-    }: {
-      readonly lease: { getBearerToken(): string };
-    }) => ({
-      revalidateCurrentContext: async () => harness.state.refresh,
-      adoptStoredSignIn: async () => undefined,
-      // The fake rotates no lease: a rotation it accepts installed the
-      // sign-in the lease holds, which the next mint is sent with.
-      rotateSignIn: async () => ({
+    createCliCredentialsStore: () => {
+      if (harness.state.credentialsPath === "")
+        return { dispose: () => undefined };
+      return actual.createCliCredentialsStore();
+    },
+    createStoreBackedRevalidator: (
+      args: Parameters<typeof actual.createStoreBackedRevalidator>[0],
+    ) => {
+      const revalidator = actual.createStoreBackedRevalidator(args);
+      const fakeRotation = async () => ({
         outcome: harness.state.refresh,
         installed:
-          harness.state.refresh === "rotated" ? lease.getBearerToken() : null,
+          harness.state.refresh === "rotated"
+            ? args.lease.getBearerToken()
+            : null,
         refused:
-          harness.state.refresh === "rejected" ? lease.getBearerToken() : null,
+          harness.state.refresh === "rejected"
+            ? args.lease.getBearerToken()
+            : null,
         accepted:
-          harness.state.refresh === "rotated" ? lease.getBearerToken() : null,
-      }),
-    }),
+          harness.state.refresh === "rotated"
+            ? args.lease.getBearerToken()
+            : null,
+      });
+      return harness.state.credentialsPath === ""
+        ? {
+            revalidateCurrentContext: async () => harness.state.refresh,
+            adoptStoredSignIn: async () => undefined,
+            // The fake rotates no lease: a rotation it accepts installed the
+            // sign-in the lease holds, which the next mint then presents.
+            rotateSignIn: fakeRotation,
+          }
+        : {
+            ...revalidator,
+            revalidateCurrentContext: async () => harness.state.refresh,
+            rotateSignIn: fakeRotation,
+          };
+    },
   };
 });
 
@@ -260,12 +341,15 @@ vi.mock("../../runner/std-write", async (importOriginal) => {
 type Socket = InstanceType<typeof harness.ScriptSocket>;
 
 let hostCount = 0;
+let credentialsDir = "";
 
 beforeEach(() => {
   USER_ID = nextCasePerson().userId;
   vi.useFakeTimers();
   harness.sockets.splice(0);
   harness.state.onSocketCreated = null;
+  harness.state.credentialsPath = "";
+  harness.state.beforePostCloseSignInRead = null;
   harness.state.hostTokenTable = new Map();
   harness.state.refresh = "network-error";
   harness.state.grantResponse = () => new Promise<Response>(() => undefined);
@@ -296,11 +380,17 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
   harness.state.onSocketCreated = null;
+  harness.state.credentialsPath = "";
+  harness.state.beforePostCloseSignInRead = null;
   processReleasedHosts.forgetAll();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  if (credentialsDir !== "") {
+    await rm(credentialsDir, { recursive: true, force: true });
+    credentialsDir = "";
+  }
 });
 
 function readObject(raw: string): Record<string, unknown> {
@@ -391,6 +481,43 @@ const RELEASED_REASONS = [
   "Host is not provisioned - run `traycer login` on the host machine to authorize it",
   "Token has been revoked",
 ] as const;
+
+function credentialsOf(token: string): StoredCredentials {
+  return {
+    token,
+    refreshToken: `refresh-${token}`,
+    savedAt: "2026-01-01T00:00:00.000Z",
+    user: { id: USER_ID, email: "user@example.test", name: "User" },
+  };
+}
+
+async function seedRealCredentials(token: string): Promise<void> {
+  vi.useRealTimers();
+  credentialsDir = await mkdtemp(join(tmpdir(), "traycer-local-door-"));
+  harness.state.credentialsPath = join(credentialsDir, "credentials");
+  try {
+    await completeCredentialsReserve(harness.state.credentialsPath);
+    const store = createCliCredentialsStore();
+    try {
+      await store.signIn(credentialsOf(token), false, null);
+    } finally {
+      store.dispose();
+    }
+  } finally {
+    vi.useFakeTimers();
+  }
+}
+
+async function saveRealCredentialsFromAnotherProcess(
+  token: string,
+): Promise<void> {
+  const otherProcess = createCliCredentialsStore();
+  try {
+    await otherProcess.signIn(credentialsOf(token), false, null);
+  } finally {
+    otherProcess.dispose();
+  }
+}
 
 /** A released host's refusal: bare, with no door reason, naming its own reason. */
 function releasedRefusalWith(reason: string): Record<string, unknown> {
@@ -632,6 +759,181 @@ describe("traycer worktree delete against a released computer", () => {
     deleted: true,
     hasBinaryPayload: false,
   };
+
+  it("redials the batch delete on another process's stored sign-in after a terminal verdict", async () => {
+    harness.state.refresh = "rejected";
+    await seedRealCredentials(SIGN_IN);
+    const pending = buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(
+      makeCtx(),
+    );
+    const settled = settledOf(pending);
+
+    await refuseProbeBare(0);
+    const refused = await socketAt(1);
+    refused.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openToken(refused)).toBe(SIGN_IN);
+
+    harness.state.beforePostCloseSignInRead = async () =>
+      saveRealCredentialsFromAnotherProcess("pre-open-sign-in-b");
+    let redialSocket: (socket: Socket) => void = () => undefined;
+    const redial = new Promise<Socket>((resolve) => {
+      redialSocket = resolve;
+    });
+    harness.state.onSocketCreated = redialSocket;
+    refused.fireFrame(releasedRefusalWith("Token has been revoked"));
+
+    const outcome = await Promise.race([
+      settled.then((result) => ({ kind: "settled" as const, result })),
+      redial.then((socket) => ({ kind: "redial" as const, socket })),
+    ]);
+    expect(outcome.kind).toBe("redial");
+    if (outcome.kind !== "redial")
+      throw new Error("the batch stream ended before redialing");
+    outcome.socket.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openToken(outcome.socket)).toBe("no-host-only-token");
+    outcome.socket.fireFrame(
+      releasedRefusalWith("Authenticated user does not own this host"),
+    );
+
+    const redialSignIn = await socketAt(3);
+    redialSignIn.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    const open = framesOfKind(redialSignIn, "open")[0];
+    if (open === undefined)
+      throw new Error("redial sign-in open frame missing");
+    expect(open.token).toBe("pre-open-sign-in-b");
+    redialSignIn.fireFrame({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: open.optionalManifest,
+    });
+    await vi.waitFor(
+      () => expect(framesOfKind(redialSignIn, "subscribe")).toHaveLength(1),
+      WAIT,
+    );
+    expect(framesOfKind(redialSignIn, "subscribe")[0]?.method).toBe(
+      "worktree.deleteBatchByPath",
+    );
+    redialSignIn.fireFrame(TARGET_COMPLETE);
+
+    await expect(pending).resolves.toMatchObject({
+      data: { worktreePath: "/wt/x", deleted: true },
+      exitCode: 0,
+    });
+    expect((await settled).error).toBeNull();
+    expect(
+      harness.sockets.flatMap((socket) => framesOfKind(socket, "subscribe")),
+    ).toHaveLength(1);
+  });
+
+  it("redials the legacy delete on the sign-in saved before the terminal verdict is read", async () => {
+    harness.state.refresh = "rejected";
+    await seedRealCredentials(SIGN_IN);
+    const commandContext = makeCtx();
+    const pending = buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(
+      commandContext,
+    );
+    const settled = settledOf(pending);
+
+    await refuseProbeBare(0);
+    await ackOpenCarrying(1, SIGN_IN, "worktree.deleteBatchByPath");
+    const legacyProbe = await socketAt(2);
+    legacyProbe.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openToken(legacyProbe)).toBe("no-host-only-token");
+    legacyProbe.fireFrame(
+      releasedRefusalWith("Authenticated user does not own this host"),
+    );
+    const legacy = await socketAt(3);
+    legacy.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openToken(legacy)).toBe(SIGN_IN);
+
+    harness.state.beforePostCloseSignInRead = async () =>
+      saveRealCredentialsFromAnotherProcess("pre-open-sign-in-b");
+    let redialSocket: (socket: Socket) => void = () => undefined;
+    const redial = new Promise<Socket>((resolve) => {
+      redialSocket = resolve;
+    });
+    harness.state.onSocketCreated = redialSocket;
+    legacy.fireFrame(releasedRefusalWith("Token has been revoked"));
+
+    const outcome = await Promise.race([
+      settled.then((result) => ({ kind: "settled" as const, result })),
+      redial.then((socket) => ({ kind: "redial" as const, socket })),
+    ]);
+    expect(outcome.kind).toBe("redial");
+    if (outcome.kind !== "redial")
+      throw new Error("the legacy stream ended before redialing");
+    outcome.socket.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openToken(outcome.socket)).toBe("no-host-only-token");
+    outcome.socket.fireFrame(
+      releasedRefusalWith("Authenticated user does not own this host"),
+    );
+
+    const redialSignIn = await socketAt(5);
+    redialSignIn.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    const redialOpen = framesOfKind(redialSignIn, "open")[0];
+    if (redialOpen === undefined)
+      throw new Error("redial sign-in open frame missing");
+    expect(redialOpen.token).toBe("pre-open-sign-in-b");
+    redialSignIn.fireFrame({
+      kind: "openAck",
+      manifest: withoutMethod(
+        redialOpen.manifest,
+        "worktree.deleteBatchByPath",
+      ),
+      optionalManifest: redialOpen.optionalManifest,
+    });
+
+    const redialLegacyProbe = await socketAt(6);
+    redialLegacyProbe.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openToken(redialLegacyProbe)).toBe("no-host-only-token");
+    redialLegacyProbe.fireFrame(
+      releasedRefusalWith("Authenticated user does not own this host"),
+    );
+    const redialLegacy = await socketAt(7);
+    redialLegacy.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openToken(redialLegacy)).toBe("pre-open-sign-in-b");
+    const redialLegacyOpen = framesOfKind(redialLegacy, "open")[0];
+    if (redialLegacyOpen === undefined)
+      throw new Error("legacy redial open frame missing");
+    redialLegacy.fireFrame({
+      kind: "openAck",
+      manifest: redialLegacyOpen.manifest,
+      optionalManifest: redialLegacyOpen.optionalManifest,
+    });
+    await vi.waitFor(
+      () => expect(framesOfKind(redialLegacy, "subscribe")).toHaveLength(1),
+      WAIT,
+    );
+    expect(framesOfKind(redialLegacy, "subscribe")[0]?.method).toBe(
+      "worktree.deleteByPath",
+    );
+    redialLegacy.fireFrame({
+      kind: "complete",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      data: { worktreePath: "/wt/x", deleted: true },
+      exitCode: 0,
+    });
+    const deletes = harness.sockets.flatMap((socket) =>
+      framesOfKind(socket, "subscribe").filter(
+        (frame) => frame.method === "worktree.deleteByPath",
+      ),
+    );
+    expect(deletes).toHaveLength(1);
+    expect((await settled).error).toBeNull();
+  });
 
   it("waits out the stream finding its credential and deletes", async () => {
     const pending = buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(

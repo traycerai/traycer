@@ -7,7 +7,10 @@ import type {
   BearerSourceProvider,
   OpenFrameBearerSource,
 } from "../../../../shared/auth/bearer-source";
-import { buildWorktreeDeleteCommand } from "../worktree-delete";
+import {
+  buildWorktreeDeleteCommand,
+  fatalCloseToCliError,
+} from "../worktree-delete";
 import {
   CliError,
   CLI_ERROR_CODES,
@@ -69,6 +72,7 @@ const hoisted = vi.hoisted(() => ({
     releasedSignIn: null as BearerSourceProvider | null,
     doorAdmission: null as ((instance: HostInstance) => unknown) | null,
     admissionCalls: 0,
+    judgeMode: "normal" as "normal" | "read-error" | "signed-out",
     home: { path: null as string | null },
     fetch: vi.fn(),
     // What the transport's compatibility check would say about the batch
@@ -115,6 +119,38 @@ vi.mock("node:os", async (importOriginal) => {
 vi.mock("../../internal/host-auth", () => ({
   resolveHostAuth: vi.fn(),
 }));
+
+vi.mock("../../internal/cli-host-tokens", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/cli-host-tokens")>();
+  return {
+    ...actual,
+    requireCliHostSession: async (
+      ...args: Parameters<typeof actual.requireCliHostSession>
+    ) => {
+      const session = await actual.requireCliHostSession(...args);
+      if (hoisted.state.judgeMode === "normal") return session;
+      const tokens = {
+        ...session.tokens,
+        signInRejectionNow: async (
+          ...judgeArgs: Parameters<typeof session.tokens.signInRejectionNow>
+        ) => {
+          if (hoisted.state.judgeMode === "read-error")
+            throw new Error("credentials read failed");
+          return session.tokens.signInRejectionNow(...judgeArgs);
+        },
+      };
+      return {
+        ...session,
+        tokens,
+        signInLease:
+          hoisted.state.judgeMode === "signed-out"
+            ? { ...session.signInLease, getBearerToken: () => null }
+            : session.signInLease,
+      };
+    },
+  };
+});
 
 vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
@@ -195,6 +231,7 @@ beforeEach(async () => {
   hoisted.state.releasedSignIn = null;
   hoisted.state.doorAdmission = null;
   hoisted.state.admissionCalls = 0;
+  hoisted.state.judgeMode = "normal";
   hoisted.state.fetch.mockReset();
   hoisted.state.fetch.mockResolvedValue(
     new Response(
@@ -521,57 +558,7 @@ describe("buildWorktreeDeleteCommand judged sign-in close", () => {
     });
   }
 
-  it("redials on the sign-in another process saved after A's refusal and completes once on B", async () => {
-    await seedCredentials(SIGN_IN_A);
-
-    const pending = startWorktreeDelete("/wt/x", ctx);
-    await waitForSessions(1);
-    await saveCredentialsFromAnotherProcess(SIGN_IN_B);
-    commandSession().statusHandler?.("closed", {
-      kind: "fatalError",
-      signInVerdict: { signIn: hostSignInKey(SIGN_IN_A) ?? "" },
-      details: {
-        code: "UNAUTHORIZED",
-        reason: "bearer rejected",
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-        retryable: true,
-      },
-    });
-
-    const firstOutcome = await Promise.race([
-      pending.then(
-        () => ({ kind: "completed" as const }),
-        (error: unknown) => ({ kind: "error" as const, error }),
-      ),
-      waitForSessions(2).then(() => ({ kind: "redial" as const })),
-    ]);
-    if (firstOutcome.kind === "error") {
-      const message =
-        firstOutcome.error instanceof Error
-          ? firstOutcome.error.message
-          : String(firstOutcome.error);
-      throw new Error(`command ended before redial: ${message}`);
-    }
-    expect(firstOutcome.kind).toBe("redial");
-    expect(hoisted.state.releasedSignIn?.()?.getBearerToken()).toBe(SIGN_IN_B);
-    const redial = hoisted.state.sessions[1];
-    if (redial === undefined) throw new Error("redial session missing");
-    redial.frameHandler?.({
-      kind: "target.complete",
-      worktreePath: "/wt/x",
-      deleted: true,
-      hasBinaryPayload: false,
-    });
-
-    await expect(pending).resolves.toMatchObject({
-      data: { worktreePath: "/wt/x", deleted: true },
-      exitCode: 0,
-    });
-    expect(hoisted.state.sessions).toHaveLength(2);
-  });
-
-  it("does not redial on B after an open was admitted on A", async () => {
+  it("does not redial after the command's batch open was admitted", async () => {
     await seedCredentials(SIGN_IN_A);
     const pending = startWorktreeDelete("/wt/x", ctx);
     await waitForSessions(1);
@@ -588,20 +575,18 @@ describe("buildWorktreeDeleteCommand judged sign-in close", () => {
         reason: "bearer rejected",
         incompatibleMethods: null,
         upgradeGuidance: null,
-        retryable: true,
       },
     });
 
-    const firstOutcome = await Promise.race([
+    const outcome = await Promise.race([
       pending.then(
         (result) => ({ kind: "completed" as const, result }),
         (error: unknown) => ({ kind: "error" as const, error }),
       ),
       waitForSessions(2).then(() => ({ kind: "redial" as const })),
     ]);
-    if (firstOutcome.kind === "redial") {
-      const redial = hoisted.state.sessions[1];
-      redial?.frameHandler?.({
+    if (outcome.kind === "redial") {
+      hoisted.state.sessions[1]?.frameHandler?.({
         kind: "target.complete",
         worktreePath: "/wt/x",
         deleted: true,
@@ -609,23 +594,25 @@ describe("buildWorktreeDeleteCommand judged sign-in close", () => {
       });
       await pending;
     }
-    expect(firstOutcome.kind).toBe("error");
-    if (firstOutcome.kind !== "error")
-      throw new Error("admitted delete redialed");
-    expect(firstOutcome.error).toMatchObject({
+    expect(outcome.kind).toBe("error");
+    if (outcome.kind !== "error")
+      throw new Error("the admitted batch delete redialed");
+    expect(outcome.error).toMatchObject({
       code: CLI_ERROR_CODES.UNEXPECTED,
       message: expect.stringContaining("may or may not have been removed"),
     });
-    expect(hoisted.state.releasedSignIn?.()?.getBearerToken()).toBe(SIGN_IN_B);
     expect(hoisted.state.sessions).toHaveLength(1);
     expect(hoisted.state.admissionCalls).toBe(1);
   });
 
   it("redials the legacy delete on B and completes on the second complete frame", async () => {
     await seedCredentials(SIGN_IN_A);
-    hoisted.state.methodSupport = "unsupported";
     const pending = startWorktreeDelete("/wt/x", ctx);
     await waitForSessions(1);
+    const batchAdmission = hoisted.state.doorAdmission;
+    if (batchAdmission === null) throw new Error("no host door observer");
+    batchAdmission({ hostId: "host-1", observed: null });
+    hoisted.state.methodSupport = "unsupported";
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
       signInVerdict: null,
@@ -649,7 +636,6 @@ describe("buildWorktreeDeleteCommand judged sign-in close", () => {
         reason: "bearer rejected",
         incompatibleMethods: null,
         upgradeGuidance: null,
-        retryable: true,
       },
     });
 
@@ -672,6 +658,10 @@ describe("buildWorktreeDeleteCommand judged sign-in close", () => {
     const secondBatchProbe = hoisted.state.sessions[2];
     if (secondBatchProbe === undefined)
       throw new Error("second batch probe missing");
+    const redialAdmission = hoisted.state.doorAdmission;
+    if (redialAdmission === null) throw new Error("no redial door observer");
+    redialAdmission({ hostId: "host-1", observed: null });
+    hoisted.state.methodSupport = "unsupported";
     secondBatchProbe.statusHandler?.("closed", {
       kind: "fatalError",
       signInVerdict: null,
@@ -690,6 +680,11 @@ describe("buildWorktreeDeleteCommand judged sign-in close", () => {
     const redial = legacyStreams[1];
     if (redial === undefined) throw new Error("legacy redial missing");
     expect(hoisted.state.releasedSignIn?.()?.getBearerToken()).toBe(SIGN_IN_B);
+    const legacyRedialAdmission = hoisted.state.doorAdmission;
+    if (legacyRedialAdmission === null)
+      throw new Error("no legacy redial door observer");
+    legacyRedialAdmission({ hostId: "host-1", observed: null });
+    redial.statusHandler?.("open", null);
     redial.frameHandler?.({
       kind: "complete",
       deleted: true,
@@ -701,7 +696,184 @@ describe("buildWorktreeDeleteCommand judged sign-in close", () => {
       exitCode: 0,
     });
     expect(legacyStreams).toHaveLength(2);
-    expect(hoisted.state.admissionCalls).toBe(0);
+    expect(
+      legacyStreams.filter((stream) => stream.openRequestSent),
+    ).toHaveLength(1);
+    expect(hoisted.state.admissionCalls).toBe(3);
+  });
+
+  it("does not redial after the legacy delete was admitted and sent", async () => {
+    await seedCredentials(SIGN_IN_A);
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    const batchAdmission = hoisted.state.doorAdmission;
+    if (batchAdmission === null) throw new Error("no batch door observer");
+    batchAdmission({ hostId: "host-1", observed: null });
+    hoisted.state.methodSupport = "unsupported";
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: null,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host does not offer worktree.deleteBatchByPath",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await waitForSessions(2);
+    const legacy = hoisted.state.sessions[1];
+    if (legacy === undefined) throw new Error("legacy session missing");
+    const legacyAdmission = hoisted.state.doorAdmission;
+    if (legacyAdmission === null) throw new Error("no legacy door observer");
+    legacyAdmission({ hostId: "host-1", observed: null });
+    legacy.statusHandler?.("open", null);
+    expect(legacy.openRequestSent).toBe(true);
+    await saveCredentialsFromAnotherProcess(SIGN_IN_B);
+    legacy.statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey(SIGN_IN_A) ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    const outcome = await Promise.race([
+      pending.then(
+        () => ({ kind: "completed" as const }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      ),
+      waitForSessions(3).then(() => ({ kind: "redial" as const })),
+    ]);
+    if (outcome.kind === "redial") {
+      hoisted.state.sessions[2]?.frameHandler?.({
+        kind: "target.complete",
+        worktreePath: "/wt/x",
+        deleted: true,
+        hasBinaryPayload: false,
+      });
+      await pending;
+    }
+    expect(outcome.kind).toBe("error");
+    if (outcome.kind !== "error")
+      throw new Error("the admitted legacy delete redialed");
+    expect(outcome.error).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: expect.stringContaining("may or may not have been removed"),
+    });
+    expect(
+      hoisted.state.sessions.filter(
+        (session) => session.method === "worktree.deleteByPath",
+      ),
+    ).toHaveLength(1);
+    expect(hoisted.state.admissionCalls).toBe(2);
+  });
+
+  it("does not redial a second verdict for B after redialing from A", async () => {
+    await seedCredentials(SIGN_IN_A);
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    await saveCredentialsFromAnotherProcess(SIGN_IN_B);
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey(SIGN_IN_A) ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await waitForSessions(2);
+    const redial = hoisted.state.sessions[1];
+    if (redial === undefined) throw new Error("redial session missing");
+    expect(hoisted.state.releasedSignIn?.()?.getBearerToken()).toBe(SIGN_IN_B);
+    redial.statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey(SIGN_IN_B) ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected again",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    const finalOutcome = await Promise.race([
+      pending.then(
+        (result) => ({ kind: "completed" as const, result }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      ),
+      waitForSessions(3).then(() => ({ kind: "redial" as const })),
+    ]);
+    if (finalOutcome.kind === "redial") {
+      const third = hoisted.state.sessions[2];
+      third?.frameHandler?.({
+        kind: "target.complete",
+        worktreePath: "/wt/x",
+        deleted: true,
+        hasBinaryPayload: false,
+      });
+      await pending;
+    }
+    expect(finalOutcome.kind).toBe("error");
+    if (finalOutcome.kind !== "error")
+      throw new Error("already-judged sign-in redialed");
+    expect(finalOutcome.error).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: expect.stringContaining("may or may not have been removed"),
+    });
+    expect(hoisted.state.sessions).toHaveLength(2);
+  });
+
+  it("uses signed-out words when the post-close read has no sign-in", async () => {
+    hoisted.state.judgeMode = "signed-out";
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey("token") ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
+    expect(hoisted.state.sessions).toHaveLength(1);
+  });
+
+  it("keeps the close's words when the post-close gate read throws", async () => {
+    hoisted.state.judgeMode = "read-error";
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    const details = {
+      code: "UNAUTHORIZED" as const,
+      reason: "bearer rejected",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey("token") ?? "" },
+      details,
+    });
+
+    // The verdict stands: the command ends with the close's own words, the
+    // ones the same close gives with no verdict.
+    const closeWords = fatalCloseToCliError(details);
+    await expect(pending).rejects.toMatchObject({
+      code: closeWords.code,
+      message: closeWords.message,
+    });
+    expect(hoisted.state.sessions).toHaveLength(1);
   });
 });
 
