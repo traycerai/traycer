@@ -158,6 +158,7 @@ export interface PendingSandboxSend {
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
   readonly observationRequestedAt?: number;
+  readonly observationRetryId?: string;
   /** A create response names a row; only a successful read proves it was listed. */
   readonly createdSandbox?: PendingSandboxPresence;
   /** Original-account observation survives auth clearing the transient stage. */
@@ -185,6 +186,7 @@ interface PendingSandboxSendStoreState {
   readonly holdObservation: (
     id: string,
     plan: PendingSendTransition,
+    retryId: string | undefined,
   ) => number | null;
   readonly ensureObservationBoundary: (id: string) => void;
   readonly recordCreatedSandbox: (id: string, sandboxId: string) => boolean;
@@ -448,7 +450,9 @@ export function holdPendingSandboxStageObservation(
       stageStatus: stage?.phase ?? "missing",
     }),
   );
-  return usePendingSandboxSendStore.getState().holdObservation(id, plan);
+  return usePendingSandboxSendStore
+    .getState()
+    .holdObservation(id, plan, undefined);
 }
 
 /** A newly accepted create is persisted before the runner publishes its id. */
@@ -665,7 +669,7 @@ export const usePendingSandboxSendStore =
             }
           }
         },
-        holdObservation: (id, plan) => {
+        holdObservation: (id, plan, retryId) => {
           const { sends } = get();
           if (
             !Object.hasOwn(sends, id) ||
@@ -685,18 +689,33 @@ export const usePendingSandboxSendStore =
             )
           )
             return null;
+          const prior = storedSend(id);
+          if (
+            retryId !== undefined &&
+            prior?.observationRetryId === retryId &&
+            typeof prior.observationRequestedAt === "number"
+          )
+            return prior.observationRequestedAt;
           const boundary = Date.now();
           try {
             set({
               sends: {
                 ...sends,
-                [id]: { ...sends[id], observationRequestedAt: boundary },
+                [id]: {
+                  ...sends[id],
+                  observationRequestedAt: boundary,
+                  observationRetryId: retryId,
+                },
               },
             });
           } catch {
             /* Readback decides whether the request may leave this window. */
           }
-          if (storedSend(id)?.observationRequestedAt === boundary)
+          const saved = storedSend(id);
+          if (
+            saved?.observationRequestedAt === boundary &&
+            saved.observationRetryId === retryId
+          )
             return boundary;
           try {
             set({ sends });

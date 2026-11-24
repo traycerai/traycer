@@ -827,25 +827,61 @@ vi.mock(
 
 // The real list query backs the staged run's own reads; the hook the ready
 // line reads is the account's rows.
-vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/sandboxes/use-sandbox-list-query")
-  >()),
-  useSandboxList: () => {
-    useAnswerVersion();
-    return {
-      data:
-        sandboxListState.pending || sandboxListState.failed
-          ? undefined
-          : { sandboxes: mocks.sandboxes },
-      dataUpdatedAt: mocks.listReadAt,
-      refetch: mocks.refetchSandboxes,
-      isError: sandboxListState.failed,
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  let previousObservation:
+    | {
+        readonly pending: boolean;
+        readonly failed: boolean;
+        readonly sandboxes: typeof mocks.sandboxes;
+        readonly listReadAt: number;
+        readonly listReadSentAt: number | null;
+        readonly data:
+          | { readonly sandboxes: typeof mocks.sandboxes }
+          | undefined;
+      }
+    | undefined;
+  const dataForCurrentObservation = () => {
+    const { pending, failed } = sandboxListState;
+    const { sandboxes, listReadAt, listReadSentAt } = mocks;
+    if (
+      previousObservation?.pending === pending &&
+      previousObservation.failed === failed &&
+      previousObservation.sandboxes === sandboxes &&
+      previousObservation.listReadAt === listReadAt &&
+      previousObservation.listReadSentAt === listReadSentAt
+    )
+      return previousObservation.data;
+    const data = pending || failed ? undefined : { sandboxes };
+    previousObservation = {
+      pending,
+      failed,
+      sandboxes,
+      listReadAt,
+      listReadSentAt,
+      data,
     };
-  },
-  // The answered request's send time; an old fixture's read is sent when it arrives.
-  sandboxListReadSentAt: () => mocks.listReadSentAt ?? mocks.listReadAt,
-}));
+    return data;
+  };
+  return {
+    ...actual,
+    useSandboxList: () => {
+      useAnswerVersion();
+      const { failed } = sandboxListState;
+      return {
+        data: dataForCurrentObservation(),
+        dataUpdatedAt: mocks.listReadAt,
+        refetch: mocks.refetchSandboxes,
+        isError: failed,
+      };
+    },
+    // The answered request's send time; an old fixture's read is sent when it arrives.
+    sandboxListReadSentAt: () => mocks.listReadSentAt ?? mocks.listReadAt,
+  };
+});
 
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   // A verb as the real mutation reports it: the call is recorded, the result

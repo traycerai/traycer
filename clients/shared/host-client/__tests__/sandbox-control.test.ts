@@ -1095,6 +1095,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
       ...SUMMARY,
       id: "sbx_failed_create",
       hostId: "host_failed_create",
+      failureCode: "PROVIDER_CREATE_FAILED",
       displayName: "origin/main hook",
       createdByTaskId: "origin-task",
     };
@@ -1104,6 +1105,8 @@ describe("the other sandbox routes parse or fail the same way", () => {
       jsonResponse(502, {
         code: "provider_failed",
         sandboxId: failedSandbox.id,
+        hostId: failedSandbox.hostId,
+        failureCode: failedSandbox.failureCode,
         sandbox: failedSandbox,
       }),
     ];
@@ -1162,6 +1165,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
       sandbox: {
         id: failedSandbox.id,
         hostId: failedSandbox.hostId,
+        failureCode: failedSandbox.failureCode,
         displayName: failedSandbox.displayName,
         createdByTaskId: failedSandbox.createdByTaskId,
       },
@@ -1175,6 +1179,8 @@ describe("the other sandbox routes parse or fail the same way", () => {
         code: "insufficient_credit",
         sandboxId,
         reason: "denied",
+        requiredMc: 120,
+        balanceMc: 50,
         shortfallMc: 70,
         creditSource: "team",
         newRateMcPerHour: 120,

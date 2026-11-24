@@ -4,6 +4,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { create } from "zustand";
 import type {
   SandboxControlFailure,
   SandboxCreateFetchResult,
@@ -14,6 +15,7 @@ import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
+  SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   type SandboxCreateAccepted,
@@ -38,7 +40,6 @@ import {
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
 import { sandboxRowNotFound } from "@/lib/sandboxes/sandbox-row-read";
-import { useAuthStore } from "@/stores/auth/auth-store";
 import { couldntStartLine } from "@/lib/sandboxes/sandbox-strings";
 import {
   sandboxRetryAfterRefusal,
@@ -51,6 +52,7 @@ import {
  */
 export interface SandboxCreateSubmit {
   readonly request: SandboxCreateRequest;
+  readonly ownerUserId: string | null;
   readonly teamName: string | null;
   /** Keeps the originating failed-row button pending while the press walks. */
   readonly sourceSandboxId?: string;
@@ -71,41 +73,95 @@ export class SandboxCreateError extends Error {
   }
 }
 
-interface UnresolvedSandboxCreate {
-  readonly request: SandboxCreateRequest;
-  readonly sandboxId: string;
+export interface SandboxCreateScope {
   readonly userId: string | null;
+  readonly source: "failed-row" | "team-environment";
+  readonly id: string;
+}
+
+type SandboxCreateContinuation =
+  | {
+      readonly kind: "read";
+      readonly request: SandboxCreateRequest;
+      readonly sandboxId: string;
+    }
+  | {
+      readonly kind: "retry";
+      readonly request: SandboxCreateRequest;
+      readonly error: SandboxCreateError;
+    };
+
+const useSandboxCreateContinuations = create<{
+  readonly byScope: Readonly<
+    Partial<Record<string, SandboxCreateContinuation>>
+  >;
+}>(() => ({ byScope: {} }));
+
+function scopeKey(scope: SandboxCreateScope): string {
+  return JSON.stringify([scope.userId, scope.source, scope.id]);
+}
+
+export function useSandboxCreateContinuation(
+  scope: SandboxCreateScope,
+): SandboxCreateContinuation | undefined {
+  return useSandboxCreateContinuations(
+    (state) => state.byScope[scopeKey(scope)],
+  );
+}
+
+function replaceContinuation(
+  key: string,
+  next: SandboxCreateContinuation | undefined,
+): void {
+  useSandboxCreateContinuations.setState(({ byScope }) => {
+    const updated = { ...byScope };
+    if (next === undefined) delete updated[key];
+    else updated[key] = next;
+    return { byScope: updated };
+  });
 }
 
 class SandboxUnresolvedCreateError extends SandboxCreateError {
   constructor(
     message: string,
     code: string | null,
-    readonly attempt: UnresolvedSandboxCreate,
+    request: SandboxCreateRequest,
   ) {
-    super(message, code, attempt.request);
+    super(message, code, request);
   }
 }
 
 export function sandboxCreatePress(
-  initial: SandboxCreateRequest,
+  initial: SandboxCreateRequest | null,
   previous: {
     readonly error: Error | null;
     readonly variables: SandboxCreateSubmit | undefined;
   },
-): Pick<SandboxCreateSubmit, "request" | "reconcileSandboxId"> {
-  if (previous.error instanceof SandboxUnresolvedCreateError) {
-    const { attempt } = previous.error;
-    return attempt.userId === signedInUserId()
-      ? { request: attempt.request, reconcileSandboxId: attempt.sandboxId }
-      : { request: initial };
+  scope: SandboxCreateScope,
+): Pick<
+  SandboxCreateSubmit,
+  "request" | "reconcileSandboxId" | "ownerUserId"
+> | null {
+  const ownerUserId = scope.userId;
+  if (signedInUserId() !== ownerUserId) return null;
+  const saved =
+    useSandboxCreateContinuations.getState().byScope[scopeKey(scope)];
+  if (saved?.kind === "read")
+    return {
+      request: saved.request,
+      reconcileSandboxId: saved.sandboxId,
+      ownerUserId,
+    };
+  if (saved?.kind === "retry") return { request: saved.request, ownerUserId };
+
+  const variables = previous.variables;
+  let request = initial;
+  if (variables?.ownerUserId === ownerUserId) {
+    if (previous.error instanceof SandboxCreateError)
+      request = previous.error.nextRequest ?? initial;
+    else if (previous.error !== null) request = variables.request;
   }
-  if (previous.error instanceof SandboxCreateError) {
-    return { request: previous.error.nextRequest ?? initial };
-  }
-  if (previous.error !== null)
-    return { request: previous.variables?.request ?? initial };
-  return { request: initial };
+  return request === null ? null : { request, ownerUserId };
 }
 
 const CREATE_READ_BUDGET_MS = 10_000;
@@ -131,7 +187,6 @@ async function reconcileSandboxCreate(
   attempted: SandboxCreateRequest,
   userId: string | null,
 ): Promise<SandboxCreateAccepted> {
-  const attempt = { request: attempted, sandboxId, userId };
   const until = Date.now() + CREATE_READ_BUDGET_MS;
   let expired = false;
   let timer: number | undefined;
@@ -178,7 +233,7 @@ async function reconcileSandboxCreate(
     throw new SandboxUnresolvedCreateError(
       sandboxFailureMessage(failure),
       code,
-      attempt,
+      attempted,
     );
   }
   const { sandbox } = result;
@@ -188,7 +243,7 @@ async function reconcileSandboxCreate(
       throw new SandboxUnresolvedCreateError(
         sandboxFailureCodeMessage(CREATING_CODE),
         CREATING_CODE,
-        attempt,
+        attempted,
       );
     case "failed":
       throw new SandboxCreateError(
@@ -211,6 +266,43 @@ async function reconcileSandboxCreate(
   }
 }
 
+/** Keep the known row through a remount, including when the foreground read expires. */
+async function finishJoinedCreate(
+  auth: AuthService,
+  scope: SandboxCreateScope,
+  sandboxId: string,
+  attempted: SandboxCreateRequest,
+): Promise<SandboxCreateAccepted> {
+  const key = scopeKey(scope);
+  const reading = { kind: "read", request: attempted, sandboxId } as const;
+  replaceContinuation(key, reading);
+  try {
+    const accepted = await reconcileSandboxCreate(
+      auth,
+      sandboxId,
+      attempted,
+      scope.userId,
+    );
+    if (useSandboxCreateContinuations.getState().byScope[key] === reading)
+      replaceContinuation(key, undefined);
+    return accepted;
+  } catch (error) {
+    if (
+      error instanceof SandboxCreateError &&
+      !(error instanceof SandboxUnresolvedCreateError) &&
+      useSandboxCreateContinuations.getState().byScope[key] === reading
+    ) {
+      replaceContinuation(
+        key,
+        error.nextRequest === null
+          ? undefined
+          : { kind: "retry", request: error.nextRequest, error },
+      );
+    }
+    throw error;
+  }
+}
+
 function nextCreateRequest(
   refusal: SandboxControlFailure,
   request: SandboxCreateRequest,
@@ -220,6 +312,12 @@ function nextCreateRequest(
   if (retryCreate !== null) return retryCreate;
   if (refusal.kind !== "refused") return request;
   if (refusal.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT)
+    return attempted;
+  if (
+    refusal.status === 503 &&
+    refusal.code === SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE &&
+    refusal.sandboxId === undefined
+  )
     return attempted;
   if (refusal.code !== SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) return request;
   // An unreserved team setup can use the current defaults under its base key.
@@ -260,6 +358,58 @@ async function walkSandboxCreate(
   return { result: { kind: "unauthorized" }, attempted };
 }
 
+function acceptedWalkCreate(
+  auth: AuthService,
+  scope: SandboxCreateScope,
+  request: SandboxCreateRequest,
+  walk: {
+    readonly result: Extract<SandboxCreateFetchResult, { kind: "ok" }>;
+    readonly attempted: SandboxCreateRequest;
+  },
+): Promise<SandboxCreateAccepted> {
+  const { result, attempted } = walk;
+  const { accepted } = result;
+  const { sandbox } = accepted;
+  if (result.joined === true && sandbox.state === "creating")
+    return finishJoinedCreate(auth, scope, sandbox.id, attempted);
+  if (result.joined === true && sandbox.state === "destroying") {
+    const code = SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT;
+    throw new SandboxCreateError(
+      sandboxFailureCodeMessage(code),
+      code,
+      request,
+    );
+  }
+  const joinedFailed = result.joined === true && sandbox.state === "failed";
+  if (!joinedFailed && sandbox.state !== "destroyed")
+    return Promise.resolve(accepted);
+  const code = joinedFailed
+    ? SANDBOX_REFUSAL_CODE_PROVIDER_FAILED
+    : SANDBOX_REFUSAL_CODE_NOT_FOUND;
+  throw new SandboxCreateError(
+    result.joined === true &&
+      sandbox.state === "destroyed" &&
+      sandbox.failureCode === "credit-gate"
+      ? couldntStartLine(sandbox.displayName)
+      : sandboxFailureCodeMessage(code),
+    code,
+    sandboxRetryCreate(sandbox),
+  );
+}
+
+export function sandboxCreateRefusal(
+  scope: SandboxCreateScope,
+  previous: {
+    readonly error: Error | null;
+    readonly variables: SandboxCreateSubmit | undefined;
+  },
+  saved: SandboxCreateContinuation | undefined,
+): Error | null {
+  const scoped =
+    previous.variables?.ownerUserId === scope.userId ? previous.error : null;
+  return scoped ?? (saved?.kind === "retry" ? saved.error : null);
+}
+
 interface SandboxCreateContext {
   readonly directory: HostDirectoryService | null;
   /** The account signed in when the create started. */
@@ -283,6 +433,7 @@ export type SandboxCreateRefusals = "toast" | "inline";
 export function useSandboxCreate(
   refusals: SandboxCreateRefusals,
   buysTeamCredits: boolean,
+  scope: SandboxCreateScope,
 ): UseMutationResult<
   SandboxCreateAccepted,
   Error,
@@ -292,19 +443,24 @@ export function useSandboxCreate(
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   // The account the sandbox list and costs are keyed by.
-  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const { userId } = scope;
   return useMutation({
     mutationKey: sandboxMutationKeys.create(userId),
-    onMutate: (): SandboxCreateContext => ({
+    onMutate: ({ ownerUserId }): SandboxCreateContext => ({
       directory: binding === null ? null : binding.directory,
-      userId: signedInUserId(),
+      userId: ownerUserId,
     }),
     mutationFn: async ({
       request,
       teamName,
       reconcileSandboxId,
+      ownerUserId,
     }): Promise<SandboxCreateAccepted> => {
-      if (binding === null) {
+      if (
+        binding === null ||
+        signedInUserId() !== ownerUserId ||
+        userId !== ownerUserId
+      ) {
         throw new SandboxCreateError(
           "Sign in to create a sandbox.",
           null,
@@ -312,51 +468,27 @@ export function useSandboxCreate(
         );
       }
       if (reconcileSandboxId !== undefined)
-        return reconcileSandboxCreate(
+        return finishJoinedCreate(
           binding.auth,
+          scope,
           reconcileSandboxId,
           request,
-          userId,
         );
+      const key = scopeKey(scope);
+      if (
+        useSandboxCreateContinuations.getState().byScope[key]?.kind === "retry"
+      )
+        replaceContinuation(key, undefined);
       const { result, attempted } = await walkSandboxCreate(
         binding.auth,
         request,
         userId,
       );
-      if (result.kind === "ok") {
-        const { accepted } = result;
-        const sandbox = accepted.sandbox;
-        if (result.joined === true && sandbox.state === "creating")
-          return reconcileSandboxCreate(
-            binding.auth,
-            sandbox.id,
-            attempted,
-            userId,
-          );
-        if (result.joined === true && sandbox.state === "destroying") {
-          const code = SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT;
-          throw new SandboxCreateError(
-            sandboxFailureCodeMessage(code),
-            code,
-            request,
-          );
-        }
-        const joinedFailed =
-          result.joined === true && sandbox.state === "failed";
-        if (!joinedFailed && sandbox.state !== "destroyed") return accepted;
-        const code = joinedFailed
-          ? SANDBOX_REFUSAL_CODE_PROVIDER_FAILED
-          : SANDBOX_REFUSAL_CODE_NOT_FOUND;
-        throw new SandboxCreateError(
-          result.joined === true &&
-            sandbox.state === "destroyed" &&
-            sandbox.failureCode === "credit-gate"
-            ? couldntStartLine(sandbox.displayName)
-            : sandboxFailureCodeMessage(code),
-          code,
-          sandboxRetryCreate(sandbox),
-        );
-      }
+      if (result.kind === "ok")
+        return acceptedWalkCreate(binding.auth, scope, request, {
+          result,
+          attempted,
+        });
       const code = result.kind === "refused" ? result.code : null;
       // A refusal for the team's credits tells only a buyer how much to add.
       throw new SandboxCreateError(

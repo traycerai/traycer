@@ -151,6 +151,8 @@ export interface StagedSandbox {
   readonly clientRequestId: string | null;
   /** The POST a reload or Keep waiting repeats. Older stages only have the base key. */
   readonly lastCreateKey?: string;
+  /** Local attempt identity; the server key can repeat after a rowless refusal. */
+  readonly attemptId?: string;
   /** The retry payload already selected for that key. */
   readonly lastRetryCreate?: SandboxCreateRequest;
   /**
@@ -350,6 +352,18 @@ function withStage(
   return { ...bySurface, [surfaceKey]: update(stage) };
 }
 
+function observedAttemptMatches(
+  stage: StagedSandbox,
+  press: PendingStagePress,
+): boolean {
+  return (
+    (press.observedCreateKey === undefined ||
+      press.observedCreateKey === stagedCreateAttemptKey(stage)) &&
+    (press.observedAttemptId === undefined ||
+      press.observedAttemptId === (stage.attemptId ?? null))
+  );
+}
+
 /** A mailbox acknowledgement and the progress it starts share one record. */
 function persistStageRetry(
   surfaceKey: string,
@@ -364,6 +378,7 @@ function persistStageRetry(
       surfaceKey,
       stage.clientRequestId,
       stagedCreateAttemptKey(stage),
+      stage.attemptId,
     )
   )
     return false;
@@ -466,19 +481,9 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           })),
         })),
       begin: (surfaceKey, now, options) => {
-        const {
-          resume,
-          createKey,
-          retryCreate,
-          observedCreateKey,
-          retryRequestId,
-        } = options;
+        const { resume, createKey, retryCreate, retryRequestId } = options;
         const stage = get().bySurface[surfaceKey];
-        if (stage === undefined) return null;
-        if (
-          observedCreateKey !== undefined &&
-          observedCreateKey !== stagedCreateAttemptKey(stage)
-        )
+        if (stage === undefined || !observedAttemptMatches(stage, options))
           return null;
         // A legacy pending stage with no key still has its durable send ID.
         const clientRequestId =
@@ -501,6 +506,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           phase: "creating",
           clientRequestId,
           lastCreateKey,
+          attemptId: resumed ? stage.attemptId : uuidv4(),
           lastRetryCreate,
           createdSandboxId: replacing ? null : stage.createdSandboxId,
           createdHostId: replacing ? null : stage.createdHostId,
@@ -554,6 +560,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
               phase: "staged",
               clientRequestId: newStagedSandboxKey(),
               lastCreateKey: undefined,
+              attemptId: undefined,
               lastRetryCreate: undefined,
               createdSandboxId: null,
               createdHostId: null,
@@ -582,6 +589,10 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           sendId: surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
           action,
           ...press,
+          observedAttemptId:
+            press.observedAttemptId === undefined
+              ? (stage.attemptId ?? null)
+              : press.observedAttemptId,
           observedCreateKey:
             press.observedCreateKey === undefined
               ? stagedCreateAttemptKey(stage)

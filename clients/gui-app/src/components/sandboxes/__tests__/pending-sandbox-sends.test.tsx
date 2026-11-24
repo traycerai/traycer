@@ -111,7 +111,10 @@ import {
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 
-import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxCreateFetchResult,
+  SandboxGetFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 
@@ -2241,6 +2244,57 @@ describe("a send whose task may not exist yet", () => {
         },
         { timeout: 8000 },
       );
+      restoreLocks();
+    }
+  });
+
+  it("does not reuse a prior awake by-ID read after a newer list omission while its refetch is held", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      const fresh = Date.now() + 60_000;
+      seed({ ...SEEDED, phase: "creating", created: true });
+      const awake = sandboxSummaryFixture({
+        id: SANDBOX_ID,
+        hostId: SANDBOX_HOST,
+        state: "awake",
+        environmentId: PERSONAL_ENVIRONMENT_ID,
+      });
+      const currentRead = deferred<SandboxGetFetchResult>();
+      let reads = 0;
+      mocks.getSandbox.mockImplementation(() => {
+        reads += 1;
+        return reads <= 2
+          ? Promise.resolve({ kind: "ok", sandbox: awake })
+          : currentRead.promise;
+      });
+      answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+      answerSandboxRows([], fresh);
+      const view = mount();
+
+      await waitFor(() => {
+        expect(mocks.getSandbox.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.createdSandbox,
+        ).toMatchObject({ sandboxId: SANDBOX_ID, rowSeen: true });
+      });
+      expect(createChatCalls()).toEqual([]);
+
+      answerSandboxRows([], fresh + 1);
+      await waitFor(() =>
+        expect(mocks.getSandbox.mock.calls.length).toBeGreaterThanOrEqual(3),
+      );
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      expect(createChatCalls()).toEqual([]);
+
+      await act(async () => {
+        currentRead.resolve({ kind: "ok", sandbox: awake });
+        await currentRead.promise;
+      });
+      await waitForCreateChats(1);
+      expect(createChatCalls()).toHaveLength(1);
+      expect(createChatCalls()[0]?.clientHostId).toBe(SANDBOX_HOST);
+      view.unmount();
+    } finally {
       restoreLocks();
     }
   });
@@ -8098,6 +8152,21 @@ describe("a retry-family button chosen in a window that does not own the send", 
     });
   }
 
+  function firstCreateRequest(): SandboxCreateRequest {
+    const request = mocks.createSandbox.mock.calls.at(0)?.[0];
+    if (request === undefined)
+      throw new Error("expected the first create attempt");
+    return request;
+  }
+
+  function requireTestValue<T>(
+    value: T | null | undefined,
+    message: string,
+  ): T {
+    if (value === null || value === undefined) throw new Error(message);
+    return value;
+  }
+
   function retryPayloadFor(row: SandboxSummary): SandboxCreateRequest {
     return {
       os: row.os,
@@ -8332,7 +8401,7 @@ describe("a retry-family button chosen in a window that does not own the send", 
     },
   );
 
-  it("keeps a queued named-502 Retry pending when its first owner observation is blocked, then posts its captured request after reopening", async () => {
+  it("keeps a queued named-502 Retry pending when its observation or stage commit cannot persist, then posts after reopening", async () => {
     userSignedIn();
     const failedRow = failedCreateRow("sbx_failed_502", "origin/main hook");
     const retryRequest = retryPayloadFor(failedRow);
@@ -8351,10 +8420,9 @@ describe("a retry-family button chosen in a window that does not own the send", 
       expect(stagedRunActive(SURFACE)).toBe(false);
     });
     expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
-    const firstCall = mocks.createSandbox.mock.calls.at(0);
-    if (firstCall === undefined || firstCall[0].clientRequestId === null)
+    const firstRequest = firstCreateRequest();
+    if (firstRequest.clientRequestId === null)
       throw new Error("expected the first create attempt key");
-    const firstRequest = firstCall[0];
     const observedCreateKey = firstRequest.clientRequestId;
 
     ownerView.unmount();
@@ -8456,6 +8524,82 @@ describe("a retry-family button chosen in a window that does not own the send", 
 
     await reloadPendingSandboxStores();
     ownerLocks = installImmediateExclusiveLocks();
+    const stageRecordKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.stagedSandboxSend),
+      SURFACE,
+    );
+    const failedCommitAttempts: StagedSandbox[] = [];
+    const observationBoundariesAtCommitWrite: Array<number | undefined> = [];
+    const failedStageCommit = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key === stageRecordKey) {
+          const attempted = JSON.parse(value) as StagedSandbox;
+          if (attempted.retryHandledId === retryId) {
+            failedCommitAttempts.push(attempted);
+            const heldSend = JSON.parse(
+              localStorage.getItem(sendRecordKey) ?? "null",
+            ) as { readonly observationRequestedAt?: number } | null;
+            observationBoundariesAtCommitWrite.push(
+              heldSend?.observationRequestedAt,
+            );
+            throw new Error("quota exceeded");
+          }
+        }
+        originalSetItem.call(this, key, value);
+      });
+    let committedObservationBoundary: number | undefined;
+    ownerView = mount();
+    try {
+      await waitFor(() => {
+        expect(failedCommitAttempts.length).toBeGreaterThan(0);
+      });
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
+      expect(failedCommitAttempts).toHaveLength(2);
+      const heldSend = JSON.parse(
+        localStorage.getItem(sendRecordKey) ?? "null",
+      ) as {
+        readonly observationRequestedAt?: number;
+        readonly observationRetryId?: string;
+      } | null;
+      committedObservationBoundary = heldSend?.observationRequestedAt;
+      expect(heldSend?.observationRetryId).toBe(retryId);
+      expect(committedObservationBoundary).toEqual(expect.any(Number));
+      expect(observationBoundariesAtCommitWrite).toEqual([
+        committedObservationBoundary,
+        committedObservationBoundary,
+      ]);
+      expect(failedCommitAttempts[0]).toMatchObject({
+        retryHandledId: retryId,
+        lastCreateKey: retryRequest.clientRequestId,
+        lastRetryCreate: retryRequest,
+      });
+      const stillUncommitted = JSON.parse(
+        localStorage.getItem(stageRecordKey) ?? "null",
+      ) as StagedSandbox | null;
+      expect(stillUncommitted?.retryHandledId).not.toBe(retryId);
+      expect(stillUncommitted?.failure).toMatchObject({
+        kind: "refused",
+        sandboxId: failedRow.id,
+      });
+      expect(readStagedSandbox(SURFACE)?.retryHandledId).not.toBe(retryId);
+      expect(readStagedSandbox(SURFACE)?.retryRequest?.id).toBe(retryId);
+      expect(
+        persistedStageStorage()
+          .filter(([key]) =>
+            decodeURIComponent(key).includes("retry-request:stage:"),
+          )
+          .map(([, value]) => JSON.parse(value) as { id?: string })
+          .map(({ id }) => id),
+      ).toContain(retryId);
+    } finally {
+      ownerView.unmount();
+      failedStageCommit.mockRestore();
+      ownerLocks();
+    }
+
+    await reloadPendingSandboxStores();
+    ownerLocks = installImmediateExclusiveLocks();
     const requestAtPost: SandboxCreateRequest[] = [];
     const stageAtPost: Array<StagedSandbox | null> = [];
     mocks.createSandbox.mockImplementation((request) => {
@@ -8486,6 +8630,103 @@ describe("a retry-family button chosen in a window that does not own the send", 
           .map(([, value]) => JSON.parse(value) as { id?: string })
           .map(({ id }) => id),
       ).not.toContain(retryId);
+    } finally {
+      ownerView.unmount();
+      ownerLocks();
+    }
+  });
+
+  it("runs a foreign-owner rowless 503 Retry with its saved request while no-row settings are unready", async () => {
+    userSignedIn();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    const unavailable: SandboxCreateFetchResult = {
+      kind: "refused",
+      status: 503,
+      code: "provider_unavailable",
+      reason: null,
+      shortfallMc: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message: null,
+    };
+    const requests: SandboxCreateRequest[] = [];
+    const settingsAtPost: Array<typeof mocks.settingsStatus> = [];
+    mocks.createSandbox.mockImplementation((request) => {
+      requests.push(request);
+      settingsAtPost.push(mocks.settingsStatus);
+      return Promise.resolve(unavailable);
+    });
+    seed({ ...SEEDED, phase: "creating", created: false });
+
+    let ownerLocks = installImmediateExclusiveLocks();
+    let ownerView = mount();
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        failure: { kind: "unavailable" },
+        lastCreateKey: requests[0]?.clientRequestId,
+        lastRetryCreate: requests[0],
+      });
+      expect(stagedRunActive(SURFACE)).toBe(false);
+    });
+    expect(requests).toHaveLength(1);
+    const savedRequest = requests[0];
+
+    ownerView.unmount();
+    ownerLocks();
+    await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(false));
+
+    const settingsUnready = {
+      principal: { kind: "personal" as const },
+      items: [{ kind: "variable" as const, status: "applying" as const }],
+    };
+    mocks.settingsStatus = settingsUnready;
+    mocks.settingsRowIds.length = 0;
+    const restoreForeignHolder = queueBehindForeignHolder();
+    const queuedView = mount();
+    let receiptId: string | undefined;
+    try {
+      fireEvent.click(await screen.findByTestId("sandbox-refusal-retry"));
+      await waitFor(() => {
+        const receipt = readStagedSandbox(SURFACE)?.retryRequest;
+        expect(receipt).toMatchObject({
+          action: "retry-stage",
+          createKey: savedRequest.clientRequestId,
+          retryCreate: savedRequest,
+        });
+        receiptId = receipt?.id;
+      });
+      expect(ownsPendingSandboxSend(SEND_ID)).toBe(false);
+      expect(requests).toEqual([savedRequest]);
+    } finally {
+      queuedView.unmount();
+      restoreForeignHolder();
+    }
+
+    await reloadPendingSandboxStores();
+    ownerLocks = installImmediateExclusiveLocks();
+    ownerView = mount();
+    try {
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)).toMatchObject({
+          failure: { kind: "unavailable" },
+          lastCreateKey: savedRequest.clientRequestId,
+          lastRetryCreate: savedRequest,
+          retryHandledId: receiptId,
+        });
+        expect(stagedRunActive(SURFACE)).toBe(false);
+      });
+      expect(requests).toEqual([savedRequest, savedRequest]);
+      expect(settingsAtPost).toEqual([undefined, settingsUnready]);
+      expect(mocks.settingsRowIds).toEqual([]);
+      expect(readStagedSandbox(SURFACE)?.retryRequest).toBeUndefined();
+      expect(
+        persistedStageStorage()
+          .filter(([key]) =>
+            decodeURIComponent(key).includes("retry-request:stage:"),
+          )
+          .map(([, value]) => JSON.parse(value) as { id?: string })
+          .map(({ id }) => id),
+      ).not.toContain(receiptId);
     } finally {
       ownerView.unmount();
       ownerLocks();
@@ -8623,6 +8864,269 @@ describe("a retry-family button chosen in a window that does not own the send", 
         expect(readStagedSandbox(SURFACE)?.retryRequest).toBeUndefined();
       } finally {
         ownerView.unmount();
+        locks();
+      }
+    },
+  );
+
+  it.each(["older press first", "current press first"] as const)(
+    "applies only the current generation when rowless 503 receipts share a server key and publish %s",
+    async (publicationOrder) => {
+      userSignedIn();
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      const unavailable: SandboxCreateFetchResult = {
+        kind: "refused",
+        status: 503,
+        code: "provider_unavailable",
+        reason: null,
+        shortfallMc: null,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+        message: null,
+      };
+      const requests: SandboxCreateRequest[] = [];
+      mocks.createSandbox.mockImplementation((request) => {
+        requests.push(request);
+        return Promise.resolve(unavailable);
+      });
+      seed({ ...SEEDED, phase: "creating", created: false });
+
+      let locks = installImmediateExclusiveLocks();
+      let ownerView = mount();
+      let restoreObservedStageWrites: (() => void) | undefined;
+      const originalRequestRetry =
+        useStagedSandboxStore.getState().requestRetry;
+      try {
+        await waitFor(() => {
+          expect(requests).toHaveLength(1);
+          expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+            kind: "unavailable",
+          });
+          expect(stagedRunActive(SURFACE)).toBe(false);
+        });
+        const firstRequest = requireTestValue(
+          requests.at(0),
+          "expected the first persisted create attempt",
+        );
+        const firstAttemptId = requireTestValue(
+          readStagedSandbox(SURFACE)?.attemptId,
+          "expected the first persisted attempt id",
+        );
+        const createKey = requireTestValue(
+          firstRequest.clientRequestId,
+          "expected the first persisted create key",
+        );
+
+        async function captureRenderedRetry(): Promise<
+          Parameters<typeof originalRequestRetry>
+        > {
+          const captured: {
+            args: Parameters<typeof originalRequestRetry> | null;
+          } = { args: null };
+          useStagedSandboxStore.setState({
+            requestRetry: (...args) => {
+              captured.args = args;
+              return Promise.resolve(null);
+            },
+          });
+          const releaseForeignHolder = queueBehindForeignHolder();
+          const queuedView = mount();
+          try {
+            fireEvent.click(await screen.findByTestId("sandbox-refusal-retry"));
+            await waitFor(() => expect(captured.args).not.toBeNull());
+            if (captured.args === null)
+              throw new Error("expected the rendered Retry press");
+            return captured.args;
+          } finally {
+            queuedView.unmount();
+            useStagedSandboxStore.setState({
+              requestRetry: originalRequestRetry,
+            });
+            releaseForeignHolder();
+          }
+        }
+
+        ownerView.unmount();
+        locks();
+        await waitFor(() =>
+          expect(ownsPendingSandboxSend(SEND_ID)).toBe(false),
+        );
+        const olderArgs = await captureRenderedRetry();
+        const olderPress = {
+          ...olderArgs[3],
+          createKey,
+          observedCreateKey: createKey,
+          observedAttemptId: firstAttemptId,
+          retryCreate: firstRequest,
+        };
+        expect(olderPress).toMatchObject({
+          createKey,
+          observedCreateKey: createKey,
+          observedAttemptId: firstAttemptId,
+          retryCreate: firstRequest,
+        });
+        expect(requests).toEqual([firstRequest]);
+
+        locks = installImmediateExclusiveLocks();
+        ownerView = mount();
+        await waitFor(() => expect(ownsPendingSandboxSend(SEND_ID)).toBe(true));
+        expect(requests).toEqual([firstRequest]);
+        fireEvent.click(await screen.findByTestId("sandbox-refusal-retry"));
+        await waitFor(() => {
+          expect(requests).toHaveLength(2);
+          expect(readStagedSandbox(SURFACE)).toMatchObject({
+            failure: { kind: "unavailable" },
+            lastCreateKey: createKey,
+          });
+          expect(readStagedSandbox(SURFACE)?.attemptId).not.toBe(
+            firstAttemptId,
+          );
+          expect(stagedRunActive(SURFACE)).toBe(false);
+        });
+        const secondAttemptId = requireTestValue(
+          readStagedSandbox(SURFACE)?.attemptId,
+          "expected the second persisted attempt id",
+        );
+        expect(requests).toEqual([firstRequest, firstRequest]);
+
+        ownerView.unmount();
+        locks();
+        await waitFor(() =>
+          expect(ownsPendingSandboxSend(SEND_ID)).toBe(false),
+        );
+        const currentArgs = await captureRenderedRetry();
+        const currentPress = {
+          ...currentArgs[3],
+          createKey,
+          observedCreateKey: createKey,
+          observedAttemptId: secondAttemptId,
+          retryCreate: firstRequest,
+        };
+        expect(currentPress).toMatchObject({
+          createKey,
+          observedCreateKey: createKey,
+          observedAttemptId: secondAttemptId,
+          retryCreate: firstRequest,
+        });
+
+        async function persistRetryPress(
+          args: Parameters<typeof originalRequestRetry>,
+          press: Parameters<typeof originalRequestRetry>[3],
+        ): Promise<string> {
+          const receiptId = await useStagedSandboxStore
+            .getState()
+            .requestRetry(args[0], args[1], args[2], press);
+          if (receiptId === null)
+            throw new Error("expected Retry press persistence");
+          return receiptId;
+        }
+        const firstReceipt =
+          publicationOrder === "older press first"
+            ? await persistRetryPress(olderArgs, olderPress)
+            : await persistRetryPress(currentArgs, currentPress);
+        const secondReceipt =
+          publicationOrder === "older press first"
+            ? await persistRetryPress(currentArgs, currentPress)
+            : await persistRetryPress(olderArgs, olderPress);
+        const currentReceiptId =
+          publicationOrder === "older press first"
+            ? secondReceipt
+            : firstReceipt;
+        const staleReceiptId =
+          publicationOrder === "older press first"
+            ? firstReceipt
+            : secondReceipt;
+        const receiptIds = [firstReceipt, secondReceipt];
+        expect(
+          persistedStageStorage()
+            .filter(([key]) =>
+              decodeURIComponent(key).includes("retry-request:stage:"),
+            )
+            .map(([, value]) => JSON.parse(value) as { id?: string })
+            .map(({ id }) => id),
+        ).toEqual(expect.arrayContaining(receiptIds));
+
+        await reloadPendingSandboxStores();
+        expect(readStagedSandbox(SURFACE)?.retryRequest).toMatchObject({
+          id: currentReceiptId,
+          createKey,
+          observedCreateKey: createKey,
+          observedAttemptId: secondAttemptId,
+          retryCreate: firstRequest,
+        });
+        const stageRecordKey = recordMapStorageKey(
+          persistKey(STORE_KEYS.stagedSandboxSend),
+          SURFACE,
+        );
+        const committedStageWrites: StagedSandbox[] = [];
+        const originalSetItem = Storage.prototype.setItem.bind(localStorage);
+        const observedStageWrites = vi
+          .spyOn(Storage.prototype, "setItem")
+          .mockImplementation(function (this: Storage, key, value) {
+            if (key === stageRecordKey) {
+              const stage = JSON.parse(value) as StagedSandbox;
+              if (
+                stage.retryHandledId === currentReceiptId ||
+                stage.retryHandledId === staleReceiptId
+              )
+                committedStageWrites.push(stage);
+            }
+            originalSetItem.call(this, key, value);
+          });
+        restoreObservedStageWrites = () => observedStageWrites.mockRestore();
+        locks = installImmediateExclusiveLocks();
+        ownerView = mount();
+        await waitFor(() => {
+          expect(requests).toHaveLength(3);
+          expect(readStagedSandbox(SURFACE)).toMatchObject({
+            failure: { kind: "unavailable" },
+            lastCreateKey: createKey,
+            lastRetryCreate: firstRequest,
+          });
+          expect(readStagedSandbox(SURFACE)?.attemptId).not.toBe(
+            secondAttemptId,
+          );
+          expect(stagedRunActive(SURFACE)).toBe(false);
+        });
+        expect(requests).toEqual([firstRequest, firstRequest, firstRequest]);
+        expect(readStagedSandbox(SURFACE)?.retryRequest).toBeUndefined();
+        const currentCommit = requireTestValue(
+          committedStageWrites.find(
+            (stage) =>
+              stage.retryHandledId === currentReceiptId &&
+              stage.lastCreateKey === createKey &&
+              stage.attemptId !== secondAttemptId,
+          ),
+          "expected the current receipt's stage commit",
+        );
+        expect(currentCommit).toMatchObject({
+          retryHandledId: currentReceiptId,
+          lastCreateKey: createKey,
+          lastRetryCreate: firstRequest,
+        });
+        const committedAttemptId = requireTestValue(
+          currentCommit.attemptId,
+          "expected the generation committed for current B",
+        );
+        const staleAcknowledgements = committedStageWrites.filter(
+          (stage) => stage.retryHandledId === staleReceiptId,
+        );
+        for (const staleAcknowledgement of staleAcknowledgements) {
+          expect([secondAttemptId, committedAttemptId]).toContain(
+            staleAcknowledgement.attemptId,
+          );
+        }
+        expect(
+          persistedStageStorage().filter(([key]) =>
+            decodeURIComponent(key).includes("retry-request:stage:"),
+          ),
+        ).toEqual([]);
+        observedStageWrites.mockRestore();
+        restoreObservedStageWrites = undefined;
+      } finally {
+        restoreObservedStageWrites?.();
+        ownerView.unmount();
+        useStagedSandboxStore.setState({ requestRetry: originalRequestRetry });
         locks();
       }
     },
@@ -8891,7 +9395,7 @@ describe("a retry-family button chosen in a window that does not own the send", 
     }
   });
 
-  it("takes an explicit Retry after rowless 503 with the saved key and request through handoff", async () => {
+  it("retries the saved rowless 503 request from an already-seeded pending send", async () => {
     userSignedIn();
     answerHost(SANDBOX_HOST, CODEX_READY);
     const postRequests: SandboxCreateRequest[] = [];
@@ -8983,6 +9487,7 @@ describe("a retry-family button chosen in a window that does not own the send", 
       const {
         lastCreateKey: _createdKey,
         lastRetryCreate: _lastRetry,
+        attemptId: _attemptId,
         ...baseStage
       } = stage;
       const legacyStage: StagedSandbox = {

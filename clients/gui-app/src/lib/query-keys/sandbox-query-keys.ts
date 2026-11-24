@@ -24,6 +24,27 @@ export const sandboxQueryKeys = {
     "sandboxes",
     "missing",
   ],
+  knownRow: (input: {
+    readonly auth: object | null;
+    readonly userId: string | null;
+    readonly sandboxId: string | null;
+    readonly sendId: string | undefined;
+    readonly observationRequestedAt: number | undefined;
+    readonly observationRetryId: string | undefined;
+    readonly stopRequestedAt: number | undefined;
+    readonly omission: number | undefined;
+  }): readonly unknown[] => [
+    "auth",
+    "sandbox-known-row",
+    input.auth,
+    input.userId,
+    input.sandboxId,
+    input.sendId,
+    input.observationRequestedAt,
+    input.observationRetryId,
+    input.stopRequestedAt,
+    input.omission,
+  ],
   // NOT under `registeredHostsAll`: the cost route reads each sandbox's
   // ledger, so it must not ride the directory's liveness tick. It refreshes
   // on focus and on the events `useRefreshSandboxCosts` names.

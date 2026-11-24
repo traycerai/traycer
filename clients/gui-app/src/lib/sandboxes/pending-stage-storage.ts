@@ -15,6 +15,7 @@ export interface PendingStagePress {
   readonly retryCreate?: SandboxCreateRequest;
   /** The attempt visible when the person chose Retry. */
   readonly observedCreateKey?: string | null;
+  readonly observedAttemptId?: string | null;
 }
 
 export interface PendingStageRetryRequest {
@@ -26,6 +27,7 @@ export interface PendingStageRetryRequest {
   readonly retryCreate?: SandboxCreateRequest;
   /** Missing in mailbox entries written before attempt scope was recorded. */
   readonly observedCreateKey?: string | null;
+  readonly observedAttemptId?: string | null;
 }
 
 export interface PendingDispatchRetryRequest {
@@ -89,12 +91,14 @@ export function pendingStageAttemptCurrent(
   surfaceKey: string,
   stageId: string | null,
   createKey: string | null,
+  attemptId: string | undefined,
 ): boolean {
   const stage = readPendingStageRecord(surfaceKey);
   return (
     stage !== null &&
     stage.clientRequestId === stageId &&
-    (stage.lastCreateKey ?? stage.clientRequestId) === createKey
+    (stage.lastCreateKey ?? stage.clientRequestId) === createKey &&
+    stage.attemptId === attemptId
   );
 }
 
@@ -114,7 +118,11 @@ function stageRetryCandidate(
       if (!removeAcknowledgedSlot(name, slot, value.id)) return undefined;
       continue;
     }
-    if (value.observedCreateKey === currentKey) current ??= value;
+    if (
+      value.observedCreateKey === currentKey &&
+      (value.observedAttemptId ?? null) === (stage.attemptId ?? null)
+    )
+      current ??= value;
     else stale ??= value;
   }
   return current ?? stale;
@@ -343,6 +351,7 @@ export function requestPendingStageRetry(
       clientRequestId,
       createKey: input.createKey,
       observedCreateKey: input.observedCreateKey,
+      observedAttemptId: input.observedAttemptId,
       ...(input.retryCreate === undefined
         ? {}
         : { retryCreate: input.retryCreate }),

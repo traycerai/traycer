@@ -8,6 +8,7 @@ import type {
   SandboxCatalogue,
   SandboxListResponse,
   SandboxSummary,
+  SandboxCreateRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -33,7 +34,9 @@ import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-que
 import {
   SandboxCreateError,
   sandboxCreatePress,
+  sandboxCreateRefusal,
   useSandboxCreate,
+  useSandboxCreateContinuation,
 } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import {
   useSandboxDefaults,
@@ -48,6 +51,7 @@ import {
   configurationStageShape,
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxCreateKey } from "@/lib/sandboxes/sandbox-create-key";
 import {
   useTeamCloudCreate,
@@ -374,6 +378,29 @@ function enableTeamCloudBlocked(input: {
   return null;
 }
 
+function teamCloudRequest(
+  environmentId: string,
+  shape: StageShape,
+): SandboxCreateRequest {
+  return {
+    os: shape.os,
+    cpus: shape.cpus,
+    memoryMb: shape.memoryMb,
+    diskMb: shape.diskMb,
+    region: shape.region,
+    displayName: TEAM_SANDBOX_NAME,
+    idleMinutes: shape.idleMinutes,
+    burst: false,
+    createdByHostId: null,
+    createdByAgentId: null,
+    environmentId,
+    // Here 0 is never, while null uses the configuration's default.
+    destroyAfterRestingMinutes: shape.destroyAfterRestingMinutes ?? 0,
+    createdByTaskId: null,
+    clientRequestId: sandboxCreateKey("team-setup", environmentId),
+  };
+}
+
 /**
  * Enable cloud (decision 130): create the team's one kept sandbox in the
  * team's environment, in the configuration's default shape and region. The
@@ -396,17 +423,25 @@ function EnableTeamCloudAction(props: {
   const catalogue = useSandboxCatalogue(true);
   const defaults = useSandboxDefaults([environmentId]).get(environmentId);
   const sandboxes = useSandboxList();
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const scope = {
+    userId,
+    source: "team-environment",
+    id: environmentId,
+  } as const;
   const create = useSandboxCreate(
     "inline",
     useEnvironmentBillingAdmin(environmentId),
+    scope,
   );
+  const continuation = useSandboxCreateContinuation(scope);
   // Held outside the card: a create outlives the card that sent it, and the
   // list's refresh answers after the create settles, so a card mounted in
   // between must still know the team's sandbox is coming.
   const pressed = useTeamCloudCreate(environmentId, sandboxes.data);
   const pending = pressed?.pending === true;
   const shape = teamStageShape(catalogue.data, defaults);
-  const blocked = enableTeamCloudBlocked({
+  const createBlocked = enableTeamCloudBlocked({
     environmentId,
     machineJoining: props.machineJoining,
     models,
@@ -416,47 +451,33 @@ function EnableTeamCloudAction(props: {
     shape,
   });
 
+  const blocked = continuation?.kind === "read" ? null : createBlocked;
   const enable = (): void => {
-    if (blocked !== null || shape === undefined || shape === null) return;
     if (pending) return;
+    const initial =
+      createBlocked === null && shape !== undefined && shape !== null
+        ? teamCloudRequest(environmentId, shape)
+        : null;
+    const press = sandboxCreatePress(initial, create, scope);
+    if (
+      press === null ||
+      (initial === null && press.reconcileSandboxId === undefined)
+    )
+      return;
     const store = useTeamCloudCreateStore.getState();
+    if (store.byEnvironmentId[environmentId]?.pending === true) return;
     store.start(environmentId);
-    // The promise, not `mutate`'s callbacks, which are dropped when the card
-    // unmounts before the answer.
-    void create
-      .mutateAsync({
-        ...sandboxCreatePress(
-          {
-            os: shape.os,
-            cpus: shape.cpus,
-            memoryMb: shape.memoryMb,
-            diskMb: shape.diskMb,
-            region: shape.region,
-            displayName: TEAM_SANDBOX_NAME,
-            idleMinutes: shape.idleMinutes,
-            burst: false,
-            createdByHostId: null,
-            createdByAgentId: null,
-            environmentId,
-            // The shape's `null` is "never"; on a create `null` is the
-            // configuration's default and `0` is never.
-            destroyAfterRestingMinutes: shape.destroyAfterRestingMinutes ?? 0,
-            createdByTaskId: null,
-            clientRequestId: sandboxCreateKey("team-setup", environmentId),
-          },
-          create,
-        ),
-        teamName: props.teamName,
-      })
-      .then(
-        (accepted) =>
-          store.accept(environmentId, accepted.sandboxId, Date.now()),
-        () => store.fail(environmentId),
-      );
+    // The promise outlives the card, unlike the observer's callbacks.
+    void create.mutateAsync({ ...press, teamName: props.teamName }).then(
+      (accepted) => store.accept(environmentId, accepted.sandboxId, Date.now()),
+      () => store.fail(environmentId),
+    );
   };
 
   const note = pending ? null : (blocked?.note ?? null);
-  const refusal = pending ? null : createRefusalLine(create.error);
+  const refusal = pending
+    ? null
+    : createRefusalLine(sandboxCreateRefusal(scope, create, continuation));
   return (
     <div className="flex min-w-0 flex-col items-start gap-1">
       <Button

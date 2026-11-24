@@ -114,6 +114,7 @@ interface StagedRunIdentity {
   readonly surfaceKey: string;
   readonly clientRequestId: string;
   readonly createKey: string;
+  readonly attemptId: string | undefined;
   readonly userId: string | null;
 }
 
@@ -126,6 +127,7 @@ function stageMatchesRun(
 ): boolean {
   return (
     stage.clientRequestId === run.clientRequestId &&
+    stage.attemptId === run.attemptId &&
     stagedCreateAttemptKey(stage) === run.createKey
   );
 }
@@ -140,6 +142,7 @@ function pendingStageMatchesStorage(
       surfaceKey,
       stage.clientRequestId,
       stagedCreateAttemptKey(stage),
+      stage.attemptId,
     )
   );
 }
@@ -194,6 +197,7 @@ export async function runStagedSandbox(
     surfaceKey,
     clientRequestId,
     createKey: active.lastCreateKey ?? clientRequestId,
+    attemptId: active.attemptId,
     userId: signedInUserId(),
   };
   running.set(surfaceKey, attempt);
@@ -233,6 +237,7 @@ async function drivePreparedRun(
       clientRequestId,
       resume: run.resume,
       createKey: run.createKey,
+      attemptId: run.attemptId,
       userId: run.userId,
       retryCreate: run.retryCreate,
       taskId: run.taskId,
@@ -484,6 +489,7 @@ export interface StagedRunRequest {
   readonly createKey: string | null;
   readonly retryCreate?: SandboxCreateRequest;
   readonly observedCreateKey?: string | null;
+  readonly observedAttemptId?: string | null;
   readonly retryRequestId?: string;
 }
 

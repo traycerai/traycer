@@ -101,7 +101,7 @@ export type PendingSendEvent =
   | "attach-ok"
   | "attach-failed"
   | "attach-unsupported";
-export const PENDING_STAGE_RETRY_EVENTS: Readonly<
+const PENDING_STAGE_RETRY_EVENTS: Readonly<
   Record<PendingStageRetryAction, PendingSendEvent>
 > = {
   "send-again": "retry",
@@ -115,7 +115,7 @@ export interface PendingSendFacts {
   readonly retryAction: PendingStageRetryAction;
   readonly retryObservation: PendingSendObservation;
   readonly retryAttemptSuperseded?: boolean;
-  readonly retryReplacesCreate?: boolean;
+  readonly retryStartsCreate?: boolean;
   readonly current: boolean;
   readonly accountActive: boolean;
   readonly owns: boolean;
@@ -1108,7 +1108,7 @@ function retryStage(
 ): PendingSendTransition {
   if (!stageRetryAllowed(state, action, facts) || facts.inFlight)
     return result(state, [], facts);
-  if (facts.retryReplacesCreate === true) {
+  if (facts.retryStartsCreate === true) {
     if (facts.wakeInFlight) return result(state, ["poll"], facts);
   } else {
     if (facts.host === "ended") return terminalObservation(state, facts);

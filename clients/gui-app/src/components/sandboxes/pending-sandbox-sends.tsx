@@ -187,7 +187,7 @@ import {
   teamCreditsRanOutLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
-import { sandboxMutationKeys } from "@/lib/query-keys";
+import { sandboxMutationKeys, sandboxQueryKeys } from "@/lib/query-keys";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -240,7 +240,6 @@ import {
   pendingSendState,
   transitionPendingSend,
   UNKNOWN_PENDING_SEND_FACTS,
-  PENDING_STAGE_RETRY_EVENTS,
   type PendingStageRetryAction,
   type PendingSendObservation,
   type PendingSendFacts,
@@ -504,6 +503,7 @@ function executePendingStageRun(
     createKey: press?.createKey ?? null,
     retryCreate: press?.retryCreate,
     observedCreateKey: press?.observedCreateKey,
+    observedAttemptId: press?.observedAttemptId,
     retryRequestId: press?.retryRequestId,
   });
 }
@@ -693,6 +693,7 @@ function stageObservationCurrent(
   if (stage === null || shown === null) return stage === shown;
   return (
     stage.clientRequestId === shown.clientRequestId &&
+    stage.attemptId === shown.attemptId &&
     stagedCreateAttemptKey(stage) === stagedCreateAttemptKey(shown) &&
     stage.createdSandboxId === shown.createdSandboxId &&
     stage.createdHostId === shown.createdHostId &&
@@ -701,20 +702,17 @@ function stageObservationCurrent(
         surfaceKey,
         current.clientRequestId,
         stagedCreateAttemptKey(current),
+        current.attemptId,
       ))
   );
 }
 
-/** A mailbox press names what the other window saw, independent of its arrival time. */
-function mailboxAttemptMatches(
+/** The old client minted a different identity for a fresh retry. */
+function legacyMailboxAttemptMatches(
   stage: StagedSandbox,
   retry: PendingStageRetryRequest,
+  currentKey: string | null,
 ): boolean {
-  const currentKey = stagedCreateAttemptKey(stage);
-  if (retry.observedCreateKey !== undefined)
-    return retry.observedCreateKey === currentKey;
-  // The old client minted a different identity for a fresh retry. Only that
-  // legacy identity can establish which failure an unscoped press answered.
   if (retry.action === "retry-creation" || retry.action === "retry-stage")
     return (
       stage.lastCreateKey === undefined &&
@@ -729,14 +727,36 @@ function mailboxAttemptMatches(
   return retry.action !== "keep-waiting" || stage.lastCreateKey === undefined;
 }
 
-function replacesStageCreate(
+/** A mailbox press names what the other window saw, independent of its arrival time. */
+function mailboxAttemptMatches(
+  stage: StagedSandbox,
+  retry: PendingStageRetryRequest,
+): boolean {
+  if ((retry.observedAttemptId ?? null) !== (stage.attemptId ?? null))
+    return false;
+  const currentKey = stagedCreateAttemptKey(stage);
+  if (retry.observedCreateKey === undefined)
+    return legacyMailboxAttemptMatches(stage, retry, currentKey);
+  // A receipt from before attempt IDs cannot identify a rowless refusal
+  // after the fixed key was reused. A newly pressed legacy stage can.
+  return (
+    retry.observedCreateKey === currentKey &&
+    (retry.observedAttemptId !== undefined ||
+      stage.failure?.kind !== "unavailable")
+  );
+}
+
+function retryStartsStageCreate(
   stage: StagedSandbox,
   createKey: string | null,
 ): boolean {
   return (
-    stagedFailedSandboxId(stage) !== null &&
-    createKey !== null &&
-    createKey !== stagedCreateAttemptKey(stage)
+    stage.target.kind === "new" &&
+    stage.phase !== "handoff" &&
+    ((stage.createdSandboxId === null && stage.createdHostId === null) ||
+      (stagedFailedSandboxId(stage) !== null &&
+        createKey !== null &&
+        createKey !== stagedCreateAttemptKey(stage)))
   );
 }
 
@@ -756,6 +776,7 @@ function mailboxStagePress(
     retryCreate:
       retry.retryCreate ?? stagedCreateRetryPayload(stage, createKey),
     observedCreateKey: retry.observedCreateKey ?? stagedCreateAttemptKey(stage),
+    observedAttemptId: retry.observedAttemptId ?? stage.attemptId ?? null,
   };
 }
 
@@ -795,7 +816,10 @@ function pendingStageObservation(
       retryAction: action,
       retryObservation: event,
       retryAttemptSuperseded: requestedRetry && press === null,
-      retryReplacesCreate: replacesStageCreate(stage, press?.createKey ?? null),
+      retryStartsCreate: retryStartsStageCreate(
+        stage,
+        press?.createKey ?? null,
+      ),
     }),
   );
   return {
@@ -817,8 +841,9 @@ function executePendingStageDecision(
   const retry = decision.effects.includes("retry");
   if (
     retry &&
-    usePendingSandboxSendStore.getState().holdObservation(send.id, decision) ===
-      null
+    usePendingSandboxSendStore
+      .getState()
+      .holdObservation(send.id, decision, plan.retryRequestId) === null
   )
     return true;
   const running = decision.effects.includes("run-stage");
@@ -1163,30 +1188,43 @@ function pendingRowHost(row: SandboxSummary | null): PendingSendFacts["host"] {
   return "waking";
 }
 
+const omissionObservations = new WeakMap<object, number>();
+let nextOmissionObservation = 0;
+
+function sandboxOmissionId(list: object): number {
+  const existing = omissionObservations.get(list);
+  if (existing !== undefined) return existing;
+  const id = ++nextOmissionObservation;
+  omissionObservations.set(list, id);
+  return id;
+}
+
 /** The existing list poll determines when to recheck a missing ID. */
 function missingSandboxQueryOptions(input: {
   readonly auth: AuthService | null;
   readonly sandboxId: string | null;
   readonly userId: string | null;
   readonly send: PendingSandboxSend | null;
-  readonly missingFromList: boolean;
+  readonly omission: number | undefined;
 }) {
-  const { auth, sandboxId, userId, send } = input;
+  const { auth, sandboxId, userId, send, omission } = input;
   return queryOptions({
-    queryKey: [
-      "sandbox-known-row",
+    queryKey: sandboxQueryKeys.knownRow({
       auth,
       userId,
       sandboxId,
-      send?.id,
-      send?.observationRequestedAt,
-      send?.stopRequestedAt,
-    ],
+      sendId: send?.id,
+      observationRequestedAt: send?.observationRequestedAt,
+      observationRetryId: send?.observationRetryId,
+      stopRequestedAt: send?.stopRequestedAt,
+      omission,
+    }),
+    gcTime: 0,
     queryFn: () =>
       auth === null || sandboxId === null
         ? Promise.resolve(null)
         : readKnownSandboxRow(auth, sandboxId, userId),
-    enabled: auth !== null && sandboxId !== null && input.missingFromList,
+    enabled: auth !== null && sandboxId !== null && omission !== undefined,
   });
 }
 
@@ -1224,22 +1262,21 @@ function usePendingSandboxRowFacts(
   const sentAt = sandboxListReadSentAt(sandboxList.data);
   const binding = useHostBinding();
   const auth = binding?.auth ?? null;
-  const missingFromList = rows !== null && listed === null;
+  const list = sandboxList.data;
+  const omission =
+    list && rows !== null && listed === null
+      ? sandboxOmissionId(list)
+      : undefined;
   const byId = useQuery(
     missingSandboxQueryOptions({
       auth,
       sandboxId,
       userId,
       send,
-      missingFromList,
+      omission,
     }),
   );
-  const refetchById = byId.refetch;
-  useEffect(() => {
-    if (missingFromList && auth !== null && sandboxId !== null)
-      void refetchById({ cancelRefetch: false });
-  }, [auth, sandboxId, missingFromList, sentAt, refetchById]);
-  const read = missingFromList ? (byId.data ?? null) : null;
+  const read = omission === undefined ? null : (byId.data ?? null);
   const row = listed ?? read?.row ?? null;
   const observation = useMemo<PendingSandboxObservation>(() => {
     if (read !== null && sandboxId !== null)
@@ -1247,9 +1284,7 @@ function usePendingSandboxRowFacts(
     if (listed !== null) return { kind: "list", sentAt, mountedAt };
     return { kind: "none" };
   }, [read, sandboxId, mountedAt, listed, sentAt]);
-  const identityMatches =
-    rows !== null &&
-    (row !== null ? row.hostId === hostId : observation.kind === "by-id");
+  const identityMatches = row !== null ? row.hostId === hostId : read !== null;
   useEffect(() => {
     if (
       sendId !== null &&
@@ -2042,8 +2077,9 @@ function PendingMessageDispatchSession(props: {
     );
     if (!plan.effects.includes("dispatch")) return;
     if (
-      usePendingSandboxSendStore.getState().holdObservation(send.id, plan) ===
-      null
+      usePendingSandboxSendStore
+        .getState()
+        .holdObservation(send.id, plan, undefined) === null
     )
       return;
     attempt.current = { handle, epoch: state.connectionEpoch };
@@ -2314,7 +2350,7 @@ function usePendingDispatchLifecycle(
     if (!decision.effects.includes("wake") || wakeRequested.current) return;
     const wakeBoundary = usePendingSandboxSendStore
       .getState()
-      .holdObservation(send.id, decision);
+      .holdObservation(send.id, decision, undefined);
     if (wakeBoundary === null) return;
     wakeRequested.current = true;
     void startSandboxWake(
@@ -2375,8 +2411,9 @@ async function runPendingDispatch(
   );
   if (!plan.effects.includes("dispatch")) return;
   if (
-    usePendingSandboxSendStore.getState().holdObservation(send.id, plan) ===
-    null
+    usePendingSandboxSendStore
+      .getState()
+      .holdObservation(send.id, plan, undefined) === null
   )
     return;
   dispatchesInFlight.add(send.id);
@@ -2978,7 +3015,6 @@ function PendingMessageReturnItem(props: {
 function usePendingStagedSendRetry(
   send: PendingSandboxSend,
   shownStage: StagedSandbox | null,
-  runner: StagedSandboxRunner,
 ): (action: PendingStageRetryAction) => void {
   return useCallback(
     (action: PendingStageRetryAction) => {
@@ -2995,47 +3031,28 @@ function usePendingStagedSendRetry(
       const createKey =
         action === "retry-stage" || action === "retry-creation"
           ? stagedRetryKey(shownStage)
-          : (shownStage.lastCreateKey ?? shownStage.clientRequestId);
+          : stagedCreateAttemptKey(shownStage);
       const press: PendingStagePress = {
         createKey,
         retryCreate: stagedCreateRetryPayload(shownStage, createKey),
         observedCreateKey: stagedCreateAttemptKey(shownStage),
+        observedAttemptId: shownStage.attemptId ?? null,
       };
-      const publish =
-        action === "send-again" || !ownsPendingSandboxSend(send.id);
-      if (
-        !publish &&
-        !stageObservationCurrent(surfaceKey, shownStage, undefined)
-      )
-        return;
       const plan = transitionPendingSend(
         pendingSendState(sends[send.id], stageBlocker(current)),
-        publish ? "request-retry" : PENDING_STAGE_RETRY_EVENTS[action],
+        "request-retry",
         pendingSandboxSendFacts(send.id, {
           ...UNKNOWN_PENDING_SEND_FACTS,
           retryAction: action,
-          retryReplacesCreate: replacesStageCreate(shownStage, createKey),
-          settingsReady: true,
           stageStatus: current.phase,
-          wakeInFlight: stagedRunActive(surfaceKey),
         }),
       );
       if (plan.effects.includes("request-retry"))
         void useStagedSandboxStore
           .getState()
           .requestRetry(surfaceKey, send.userId, action, press);
-      executePendingStageDecision(
-        {
-          send: sends[send.id],
-          stage: current,
-          press,
-          decision: plan,
-          rowState: null,
-        },
-        runner,
-      );
     },
-    [send, shownStage, runner],
+    [send, shownStage],
   );
 }
 
@@ -3377,7 +3394,7 @@ function PendingStagedSendItem(props: {
   );
   const facts = useSetupLineFacts(stage);
   const runner = useStagedSandboxRunner();
-  const retrySend = usePendingStagedSendRetry(send, stage, runner);
+  const retrySend = usePendingStagedSendRetry(send, stage);
   const sandboxId = stage?.createdSandboxId ?? "";
   const verb = useSandboxVerb(sandboxId);
   const activeVerbs = useIsMutatingOf({

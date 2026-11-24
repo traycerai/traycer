@@ -81,7 +81,9 @@ function SandboxFailedRowControls(
   const { summary, configuration, credits } = props;
   // Not known whose sandbox it is: worded as for someone who cannot buy.
   const buysTeamCredits = useOffersAddCredits(credits);
-  const create = useSandboxCreate("toast", buysTeamCredits);
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const scope = { userId, source: "failed-row", id: summary.id } as const;
+  const create = useSandboxCreate("toast", buysTeamCredits, scope);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
   const [destroyOpen, setDestroyOpen] = useState(false);
@@ -92,7 +94,6 @@ function SandboxFailedRowControls(
     settingsFailed: false,
   });
   const pendingVerb = operation?.kind === "pending" ? operation.verb : null;
-  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const queryClient = useQueryClient();
   const baseKey = sandboxCreateKey("retry", summary.id);
   const predicate = useCallback(
@@ -130,8 +131,14 @@ function SandboxFailedRowControls(
     if (configuration === null || actions.primary !== "retry" || busy) return;
     if (signedInUserId() !== userId || queryClient.isMutating(createFilter) > 0)
       return;
+    const press = sandboxCreatePress(
+      sandboxRetryCreate(summary),
+      create,
+      scope,
+    );
+    if (press === null) return;
     create.mutate({
-      ...sandboxCreatePress(sandboxRetryCreate(summary), create),
+      ...press,
       teamName: configuration.kind === "team" ? configuration.teamName : null,
       sourceSandboxId: summary.id,
     });

@@ -1,6 +1,8 @@
 import type { QueryObserverResult } from "@tanstack/react-query";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import {
   userSubscription,
@@ -42,6 +44,11 @@ import type { LandingOwnerTeam } from "@/components/home/composer/landing-owner-
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
+import { PendingSandboxSendsDriver } from "@/components/sandboxes/pending-sandbox-sends";
+import {
+  SandboxBillingRuntime,
+  type SandboxBillingEnvironmentAnswer,
+} from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
 import { useSandboxStaging } from "@/components/composer/use-sandbox-staging";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -55,6 +62,7 @@ import {
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
@@ -143,6 +151,10 @@ const testState = vi.hoisted(() => ({
   /** Reads of the app-wide host's pack gate, which a composer must not make. */
   defaultHostPackGateReads: 0,
   bodySubmit: null as (() => void) | null,
+  runtimeBinding: null as object | null,
+  createSandbox: null as
+    | ((request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>)
+    | null,
   startTerminal: null as ComposerBodyProps["onStartTerminal"] | null,
   installEditor: null as (() => void) | null,
   snapshot: null as (() => void) | null,
@@ -536,17 +548,23 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   }),
 }));
 
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHostOrNull: () => null,
-  useRunnerHost: () => ({
+vi.mock("@/providers/use-runner-host", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/providers/use-runner-host")>();
+  const fallback = {
     signInUrl: "https://billing.test",
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
       copyDroppedFilePaths: (paths: readonly string[]) =>
         Promise.resolve(paths),
     },
-  }),
-}));
+  };
+  return {
+    ...actual,
+    useRunnerHostOrNull: actual.useRunnerHostOrNull,
+    useRunnerHost: () => actual.useRunnerHostOrNull() ?? fallback,
+  };
+});
 
 vi.mock("@/hooks/composer/use-landing-composer-paste", async (importActual) => {
   const actual =
@@ -585,6 +603,14 @@ vi.mock("@/hooks/composer/use-landing-composer-paste", async (importActual) => {
     },
   };
 });
+
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-folderless-terminal-target",
+  () => ({
+    useFolderlessTerminalTarget: (_epicId: string, hostId: string | null) =>
+      hostId === null ? null : { hostId, cwd: "/home/sandbox" },
+  }),
+);
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => ({ folders: [], isLoading: false }),
@@ -717,11 +743,30 @@ vi.mock(
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => () => null,
 }));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
+  () => ({
+    useSandboxSettingsOperation: () => null,
+    useSandboxRetryApplyingSupported: () => false,
+    useSandboxGuestSetupRepairSupported: () => false,
+    useSandboxRepairGuestSetupOnHost: () => ({
+      isPending: false,
+      mutate: vi.fn(),
+    }),
+    useSandboxRepairGuestConfigurationOnHost: () => ({
+      isPending: false,
+      mutate: vi.fn(),
+    }),
+  }),
+);
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: vi.fn() }),
 }));
 // The setup line prices a resting sandbox from the account's list.
-vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+  >()),
   useSandboxList: () => ({ data: undefined }),
 }));
 
@@ -735,17 +780,21 @@ vi.mock(
   }),
 );
 
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
-  useHostClient: () => null,
-  // The staged send's terminal launcher reads the new host's row.
-  useHostDirectory: () => ({
-    findById: () => null,
-    onChange: () => ({ dispose: () => undefined }),
-  }),
-  // The SPINE, a separate export.
-  useHostRuntimeClient: () => null,
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => testState.runtimeBinding,
+    useHostClient: () => null,
+    // The staged send's terminal launcher reads the new host's row.
+    useHostDirectory: () => ({
+      findById: () => null,
+      onChange: () => ({ dispose: () => undefined }),
+    }),
+    // The SPINE, a separate export.
+    useHostRuntimeClient: () => null,
+  };
+});
 vi.mock(
   "@/components/chat/composer/use-profile-rate-limit-switch-prompt",
   () => ({
@@ -782,6 +831,9 @@ afterEach(() => {
   cleanup();
   useStagedSandboxStore.setState({ bySurface: {} });
   usePendingSandboxSendStore.setState({ sends: {} });
+  useAuthStore.getState().setSignedOut();
+  testState.runtimeBinding = null;
+  testState.createSandbox = null;
   testState.startTask.mockClear();
   testState.placementAdmits = true;
   testState.pickHarness = "codex";
@@ -913,6 +965,54 @@ function landingComposer(): ReactElement {
   );
 }
 
+function configureRunnerBinding(binding: {
+  readonly auth: {
+    createSandbox: (
+      request: SandboxCreateRequest,
+    ) => Promise<SandboxCreateFetchResult>;
+  };
+}): void {
+  testState.runtimeBinding = binding;
+  const createSandbox = testState.createSandbox;
+  if (createSandbox === null) return;
+  vi.spyOn(binding.auth, "createSandbox").mockImplementation(createSandbox);
+}
+
+const BILLING_ANSWER: SandboxBillingEnvironmentAnswer = {
+  kind: "ready",
+  role: "viewer",
+};
+
+function landingComposerWithPendingOwner(): ReactElement {
+  return (
+    <SandboxBillingRuntime
+      answer={BILLING_ANSWER}
+      environmentId="env-acme"
+      hostId="host-test"
+      queryClient={undefined}
+      onEnvironmentListRead={null}
+      onBinding={configureRunnerBinding}
+    >
+      <PendingSandboxSendsDriver />
+      {landingComposer()}
+    </SandboxBillingRuntime>
+  );
+}
+
+async function sendFromComposerWithPendingOwner(): Promise<void> {
+  render(landingComposerWithPendingOwner());
+  await waitFor(() => expect(testState.installEditor).not.toBeNull());
+  const installEditor = testState.installEditor;
+  if (installEditor === null) throw new Error("expected ComposerBody seam");
+  installEditor();
+  const snapshot = testState.snapshot;
+  if (snapshot === null) throw new Error("expected snapshot seam");
+  act(() => snapshot());
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Submit landing" }),
+  );
+}
+
 /** Types a draft and presses Send, as the person does. */
 async function sendFromComposer(): Promise<{
   view: RenderResult;
@@ -946,6 +1046,83 @@ function onlyPendingStage() {
 }
 
 describe("LandingComposer direct submit gate", () => {
+  it("hands a rowless 503 stage through rendered Send and retries its saved request in the owner", async () => {
+    testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+    const userId = "landing-owner-test";
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId, userName: "Test User", email: "test@example.test" },
+        { userId, username: "Test User" },
+        [],
+      );
+    useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+    const staged = readStagedSandbox("landing:window-test");
+    if (staged === null || staged.clientRequestId === null)
+      throw new Error("expected a staged create key");
+    const savedRequest: SandboxCreateRequest = {
+      os: SHAPE.os,
+      cpus: SHAPE.cpus,
+      memoryMb: SHAPE.memoryMb,
+      diskMb: SHAPE.diskMb,
+      region: SHAPE.region,
+      displayName: "landing retry",
+      idleMinutes: SHAPE.idleMinutes,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: null,
+      destroyAfterRestingMinutes: SHAPE.destroyAfterRestingMinutes,
+      createdByTaskId: null,
+      clientRequestId: staged.clientRequestId,
+    };
+    useStagedSandboxStore.getState().report("landing:window-test", {
+      phase: "creating",
+      lastCreateKey: staged.clientRequestId,
+      lastRetryCreate: savedRequest,
+      failure: { kind: "unavailable" },
+    });
+
+    const requests: SandboxCreateRequest[] = [];
+    const unavailable: SandboxCreateFetchResult = {
+      kind: "refused",
+      status: 503,
+      code: "provider_unavailable",
+      reason: null,
+      shortfallMc: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message: null,
+    };
+    testState.createSandbox = (request) => {
+      requests.push(request);
+      return Promise.resolve(unavailable);
+    };
+    testState.startTask.mockImplementationOnce((args) => {
+      const handoff = args.hand("epic-from-rendered-send");
+      if (handoff === null)
+        return { message: "The send could not be handed off." };
+      handoff.confirm();
+      return null;
+    });
+
+    await sendFromComposerWithPendingOwner();
+    expect(testState.startTask).toHaveBeenCalledOnce();
+
+    await waitFor(() => {
+      const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+      expect(sends).toHaveLength(1);
+      const ownerStage = readStagedSandbox(pendingSendSurfaceKey(sends[0].id));
+      expect(ownerStage).toMatchObject({
+        failure: { kind: "unavailable" },
+        lastCreateKey: savedRequest.clientRequestId,
+        lastRetryCreate: savedRequest,
+      });
+      expect(ownerStage?.phase).toBe("creating");
+      expect(requests).toEqual([savedRequest]);
+    });
+  });
+
   it("keeps the staged draft when owner resolution is superseded", async () => {
     testState.catalogue = { providers: [], offeredAgents: ["codex"] };
     const ownerResolution = Promise.withResolvers<LandingOwnerTeam | null>();

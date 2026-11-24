@@ -69,6 +69,7 @@ import {
   serveEnvironmentList,
 } from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+import { sandboxQueryKeys } from "@/lib/query-keys/sandbox-query-keys";
 
 const billingRoleRead = vi.hoisted(() => ({ viaTransport: false }));
 const environmentListRequests: number[] = [];
@@ -612,7 +613,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
             sandbox: rowReads <= 5 ? joined : failed,
           });
         });
-      render(surfaceFor(SETUP_BOT_ID));
+      const view = render(surfaceFor(SETUP_BOT_ID));
       await waitFor(() =>
         expect(enableButton()).toHaveProperty("disabled", false),
       );
@@ -628,9 +629,38 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         );
         expect(getSandbox).toHaveBeenCalledTimes(5);
         expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+        expect(sandboxToastSpies.success).not.toHaveBeenCalled();
         await vi.waitFor(() =>
           expect(enableButton()).toHaveProperty("disabled", false),
         );
+
+        const readyDefaults = mocks.sandboxDefaults;
+        mocks.sandboxDefaults = { kind: "pending" };
+        auth().getTraycerModels.mockResolvedValueOnce({
+          kind: "ok",
+          models: [],
+        });
+        auth().getSandboxCatalogue.mockResolvedValueOnce({
+          kind: "network-error",
+          detail: "offline",
+        });
+        await act(async () => {
+          await queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.traycerModels(auth(), "user-viewer"),
+          });
+          await queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.catalogue(auth(), "user-viewer", null),
+          });
+        });
+        view.rerender(surfaceFor(SETUP_BOT_ID));
+        expect(
+          queryClient.getQueryData(
+            sandboxQueryKeys.traycerModels(auth(), "user-viewer"),
+          ),
+        ).toEqual([]);
+        expect(enableButton()).toHaveProperty("disabled", false);
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+        expect(sandboxToastSpies.success).not.toHaveBeenCalled();
 
         fireEvent.click(enableButton());
         await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(6));
@@ -640,6 +670,20 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
           ),
         );
         expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+        expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+        await vi.waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", true),
+        );
+
+        mocks.sandboxDefaults = readyDefaults;
+        await act(async () => {
+          await queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.traycerModels(auth(), "user-viewer"),
+          });
+          await queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.catalogue(auth(), "user-viewer", null),
+          });
+        });
         await vi.waitFor(() =>
           expect(enableButton()).toHaveProperty("disabled", false),
         );
@@ -697,6 +741,8 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       await waitFor(() =>
         expect(enableButton()).toHaveProperty("disabled", false),
       );
+      expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+      const originalEnableButton = enableButton();
       expect(auth().createSandbox.mock.calls[0]?.[0]).toMatchObject({
         clientRequestId: "team-setup:env-new",
         cpus: 4,
@@ -730,6 +776,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         },
       };
       view.rerender(surfaceFor(SETUP_BOT_ID));
+      expect(enableButton()).toBe(originalEnableButton);
 
       await user.click(enableButton());
       await waitFor(() =>
@@ -737,6 +784,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
           "Created Team bots",
         ),
       );
+      expect(sandboxToastSpies.success).toHaveBeenCalledTimes(1);
       expect(auth().createSandbox).toHaveBeenCalledTimes(2);
       expect(auth().createSandbox.mock.calls[1]?.[0]).toMatchObject({
         clientRequestId: "team-setup:env-new",
