@@ -129,6 +129,78 @@ describe("this computer's own slots", () => {
     ).toBe(false);
   });
 
+  it("roundtrips divergent MCP copies with independent publication availability", () => {
+    const contract = environmentContractV10("environment.ownSlots");
+    const entry = {
+      kind: "mcp_server",
+      key: "docs",
+      os: "any",
+      state: "value",
+      publishable: false,
+      copies: [
+        {
+          providerId: "claude-code",
+          sourceSelector: "03ea5aee-06dc-47b8-ad53-86f7b424b427",
+          publishable: true,
+        },
+        {
+          providerId: "cursor",
+          sourceSelector: "99fc22e1-e38d-4451-9ede-37fc9b7ddc32",
+          publishable: false,
+        },
+      ],
+    };
+    expect(contract.responseSchema.parse({ entries: [entry] })).toEqual({
+      entries: [entry],
+    });
+    expect(
+      accepts(contract.responseSchema, {
+        entries: [{ ...entry, kind: "shell" }],
+      }),
+    ).toBe(false);
+    expect(
+      accepts(contract.responseSchema, {
+        entries: [
+          {
+            ...entry,
+            copies: [
+              { ...entry.copies[0], contentHash: "private" },
+              entry.copies[1],
+            ],
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("roundtrips an exact MCP copy selection only on publish with an intent", () => {
+    const contract = environmentContractV10("environment.ownSlots.change");
+    const request = {
+      kind: "mcp_server",
+      key: "docs",
+      os: "any",
+      action: "publish",
+      intentOperationId: "8ffa9716-a826-4cfc-8dfa-ea8750082be5",
+      sourceSelector: "03ea5aee-06dc-47b8-ad53-86f7b424b427",
+    };
+    expect(contract.requestSchema.parse(request)).toEqual(request);
+    expect(
+      accepts(contract.requestSchema, {
+        ...request,
+        intentOperationId: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      accepts(contract.requestSchema, {
+        ...request,
+        sourceSelector: "claude-code",
+      }),
+    ).toBe(false);
+    expect(
+      accepts(contract.requestSchema, { ...request, action: "usePersonal" }),
+    ).toBe(false);
+  });
+
   it("changes an exact address without accepting a client-supplied value", () => {
     const contract = environmentContractV10("environment.ownSlots.change");
     const request = {
