@@ -64,7 +64,7 @@ import { supportMatrix } from "./__fixtures__/support-matrix";
 import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /**
- * The wire of the environment family: the 28 environment methods, the
+ * The wire of the environment family: the 30 environment methods, the
  * released request bridges, the
  * `providers.list@10.5` envelope keys, `providers.nativeMutate@1.3`'s
  * `promoteToPersonal`, and the five secret shapes, field for field.
@@ -83,6 +83,94 @@ function isEnvironmentMethodName(name: string): name is EnvironmentMethodName {
 const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
   isEnvironmentMethodName,
 );
+
+function environmentContractV10(name: string) {
+  if (!isEnvironmentMethodName(name)) {
+    throw new Error(`Missing environment contract: ${name}`);
+  }
+  return ENVIRONMENT_RPC_METHODS[name][1].versions[0].contract;
+}
+
+describe("this computer's own slots", () => {
+  it("reads a present value and a kept absence without sending native values", () => {
+    const contract = environmentContractV10("environment.ownSlots");
+    const browser = {
+      kind: "browser_agent_access",
+      key: "browser",
+      os: "any",
+      state: "value",
+      publishable: true,
+    };
+    const removedShell = {
+      kind: "shell",
+      key: "shell",
+      os: "macos",
+      state: "absent",
+      publishable: true,
+    };
+    const mcp = {
+      kind: "mcp_server",
+      key: "docs",
+      os: "any",
+      state: "value",
+      publishable: false,
+    };
+    const response = { entries: [browser, removedShell, mcp] };
+    expect(contract.responseSchema.parse(response)).toEqual(response);
+    expect(
+      accepts(contract.responseSchema, {
+        entries: [{ ...browser, value: true }],
+      }),
+    ).toBe(false);
+    expect(
+      accepts(contract.responseSchema, {
+        entries: [{ ...mcp, publishable: undefined }],
+      }),
+    ).toBe(false);
+  });
+
+  it("changes an exact address without accepting a client-supplied value", () => {
+    const contract = environmentContractV10("environment.ownSlots.change");
+    const request = {
+      kind: "shell",
+      key: "shell",
+      os: "macos",
+      action: "usePersonal",
+    };
+    expect(contract.requestSchema.parse(request)).toEqual(request);
+    expect(
+      accepts(contract.requestSchema, { ...request, value: "client value" }),
+    ).toBe(false);
+    expect(
+      accepts(contract.requestSchema, { ...request, kind: "setup_script" }),
+    ).toBe(false);
+    expect(contract.responseSchema.parse({ outcome: "saved" })).toEqual({
+      outcome: "saved",
+    });
+  });
+
+  it("requires the interactive MCP publish intent only on MCP publish", () => {
+    const contract = environmentContractV10("environment.ownSlots.change");
+    const publish = {
+      kind: "mcp_server",
+      key: "docs",
+      os: "any",
+      action: "publish",
+    };
+    const withIntent = {
+      ...publish,
+      intentOperationId: "8ffa9716-a826-4cfc-8dfa-ea8750082be5",
+    };
+    expect(accepts(contract.requestSchema, publish)).toBe(false);
+    expect(contract.requestSchema.parse(withIntent)).toEqual(withIntent);
+    expect(
+      accepts(contract.requestSchema, { ...withIntent, providerId: "claude" }),
+    ).toBe(false);
+    expect(
+      accepts(contract.requestSchema, { ...withIntent, action: "usePersonal" }),
+    ).toBe(false);
+  });
+});
 
 /** The family's methods that carry a `@1.2` MINOR over their `@1.1`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
@@ -208,9 +296,9 @@ function expectDowngradeUnsupported(thrown: unknown): void {
 // ── (a) ─────────────────────────────────────────────────────────────────────
 
 describe("new methods are off every released floor", () => {
-  it("registers exactly 28 environment methods", () => {
-    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(28);
-    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(28);
+  it("registers exactly 30 environment methods", () => {
+    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(30);
+    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(30);
   });
 
   it("keeps all of them out of RELEASED_FLOOR_METHOD_NAMES", () => {
