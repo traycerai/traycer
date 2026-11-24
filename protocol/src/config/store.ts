@@ -15,6 +15,10 @@ import { platform as osPlatform, userInfo } from "node:os";
 import * as nodePath from "node:path";
 import { cliConfigDir, cliConfigPath } from "./paths";
 import {
+  CliConfigQueue,
+  throwIfCliConfigLockAborted,
+} from "./cli-config-queue";
+import {
   acquireCliConfigLock,
   acquireHostCliConfigLock,
   type CliConfigLockHandle,
@@ -683,7 +687,7 @@ const CLI_CONFIG_LOCK_LOST_ATTEMPTS = 3;
 
 // Serializes this process's updates, so its writers queue here instead of
 // polling the lock file against each other.
-let cliConfigUpdateQueue: Promise<unknown> = Promise.resolve();
+const cliConfigUpdateQueue = new CliConfigQueue();
 
 function cliConfigLockPath(): string {
   return `${cliConfigPath()}.lock`;
@@ -722,29 +726,30 @@ const reservedCliConfigWrite = new AsyncLocalStorage<ReservedCliConfigWrite>();
 /**
  * The host can wait for the file lock before taking its write gate. The
  * callback may make sequential store mutations under that reserved lock.
+ * Abort stops admission. Once the callback starts it finishes under the lock.
  * Keep callbacks to native file work and its ownership bookkeeping.
  */
 export function withHostCliConfigFileLock<T>(
   run: () => Promise<T>,
   onUnknownHolder: (lockPath: string) => void,
+  signal: AbortSignal,
 ): Promise<T> {
-  return enqueueCliConfigUpdate(async () => {
+  return cliConfigUpdateQueue.run(async () => {
     const lockPath = cliConfigLockPath();
-    const handle = await acquireHostCliConfigLock(lockPath, onUnknownHolder);
+    const handle = await acquireHostCliConfigLock(
+      lockPath,
+      onUnknownHolder,
+      signal,
+    );
     const reservation = { handle, lockPath, active: true, writing: false };
     try {
+      throwIfCliConfigLockAborted(signal);
       return await reservedCliConfigWrite.run(reservation, run);
     } finally {
       reservation.active = false;
       await handle.release();
     }
-  });
-}
-
-function enqueueCliConfigUpdate<T>(run: () => Promise<T>): Promise<T> {
-  const result = cliConfigUpdateQueue.then(run);
-  cliConfigUpdateQueue = result.catch(() => undefined);
-  return result;
+  }, signal);
 }
 
 /**
@@ -759,7 +764,10 @@ async function runCliConfigUpdate<T>(
   if (reservation?.active === true) {
     return applyReservedCliConfigUpdate(produce, reservation);
   }
-  return enqueueCliConfigUpdate(() => runCliConfigUpdateLocked(produce, 1));
+  return cliConfigUpdateQueue.run(
+    () => runCliConfigUpdateLocked(produce, 1),
+    undefined,
+  );
 }
 
 async function applyReservedCliConfigUpdate<T>(
