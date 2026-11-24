@@ -1177,10 +1177,7 @@ export function seed(options: SeedOptions): void {
 // The failed line's real actions build their mutations over the runner host.
 export const RUNNER_HOST = createFakeRunnerHost({});
 
-export function mount() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
+function mountWithClient(client: QueryClient) {
   return render(
     <RunnerHostContext.Provider value={RUNNER_HOST}>
       <QueryClientProvider client={client}>
@@ -1189,6 +1186,18 @@ export function mount() {
       </QueryClientProvider>
     </RunnerHostContext.Provider>,
   );
+}
+
+export function mount() {
+  return mountWithClient(
+    new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    }),
+  );
+}
+
+export function mountWithQueryClient(client: QueryClient) {
+  return mountWithClient(client);
 }
 
 function billingEnvironmentAnswer(): SandboxBillingEnvironmentAnswer {

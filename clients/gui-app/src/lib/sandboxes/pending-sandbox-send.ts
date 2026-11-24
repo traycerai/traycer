@@ -206,6 +206,18 @@ export interface PendingSandboxSendInput {
   readonly now: number;
 }
 
+/** Send can take up a create that never reserved a row, or whose reply was lost. */
+function takesUpRowlessCreate(stage: StagedSandbox): boolean {
+  switch (stage.failure?.kind) {
+    case "unavailable":
+    case "shape":
+    case "unverified":
+      return stage.createdSandboxId === null && stage.createdHostId === null;
+    default:
+      return false;
+  }
+}
+
 /**
  * Hands a surface's staged send to its task: the stage moves, its create key
  * with it, under a pending send's key, and the message and its settings are
@@ -231,7 +243,7 @@ export function handPendingSandboxSend(
   const replacing =
     chosenKey !== null && chosenKey !== stagedCreateAttemptKey(stage);
   const runnable =
-    replacing || (chosenKey !== null && stage.failure?.kind === "unavailable");
+    replacing || (chosenKey !== null && takesUpRowlessCreate(stage));
   store.report(surfaceKey, {
     ...(runnable ? { phase: "staged", failure: null } : {}),
     ...(replacing

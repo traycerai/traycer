@@ -153,6 +153,8 @@ export interface StagedSandbox {
   readonly lastCreateKey?: string;
   /** Local attempt identity; the server key can repeat after a rowless refusal. */
   readonly attemptId?: string;
+  /** Receipt that committed this attempt, independent of later stale acknowledgements. */
+  readonly attemptRetryId?: string;
   /** The retry payload already selected for that key. */
   readonly lastRetryCreate?: SandboxCreateRequest;
   /**
@@ -507,6 +509,8 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           clientRequestId,
           lastCreateKey,
           attemptId: resumed ? stage.attemptId : uuidv4(),
+          attemptRetryId:
+            retryRequestId ?? (resumed ? stage.attemptRetryId : undefined),
           lastRetryCreate,
           createdSandboxId: replacing ? null : stage.createdSandboxId,
           createdHostId: replacing ? null : stage.createdHostId,
@@ -561,6 +565,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
               clientRequestId: newStagedSandboxKey(),
               lastCreateKey: undefined,
               attemptId: undefined,
+              attemptRetryId: undefined,
               lastRetryCreate: undefined,
               createdSandboxId: null,
               createdHostId: null,
@@ -589,7 +594,10 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           sendId: surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
           action,
           ...press,
+          // An observed key belongs to the rendered press. Filling its
+          // missing generation from the store can name a later attempt.
           observedAttemptId:
+            press.observedCreateKey === undefined &&
             press.observedAttemptId === undefined
               ? (stage.attemptId ?? null)
               : press.observedAttemptId,

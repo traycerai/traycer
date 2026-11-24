@@ -26,7 +26,10 @@ import {
   type ReactNode,
 } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
-import { readKnownSandboxRow } from "@/lib/sandboxes/sandbox-row-read";
+import {
+  readKnownSandboxRow,
+  type SandboxRowRead,
+} from "@/lib/sandboxes/sandbox-row-read";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { v5 as uuidv5 } from "uuid";
@@ -1199,33 +1202,73 @@ function sandboxOmissionId(list: object): number {
   return id;
 }
 
-/** The existing list poll determines when to recheck a missing ID. */
-function missingSandboxQueryOptions(input: {
+interface PendingSandboxByIdInput {
   readonly auth: AuthService | null;
   readonly sandboxId: string | null;
+  readonly hostId: string | null;
   readonly userId: string | null;
   readonly send: PendingSandboxSend | null;
+  readonly stage: StagedSandbox | null;
   readonly omission: number | undefined;
-}) {
-  const { auth, sandboxId, userId, send, omission } = input;
+}
+
+/** Omissions request a read without changing the scope of one already in flight. */
+function missingSandboxQueryOptions(input: PendingSandboxByIdInput) {
+  const { auth, sandboxId, hostId, userId, send, stage, omission } = input;
   return queryOptions({
     queryKey: sandboxQueryKeys.knownRow({
       auth,
       userId,
       sandboxId,
+      hostId,
       sendId: send?.id,
+      stageId: stage?.clientRequestId,
+      attemptId: stage?.attemptId,
       observationRequestedAt: send?.observationRequestedAt,
       observationRetryId: send?.observationRetryId,
       stopRequestedAt: send?.stopRequestedAt,
-      omission,
     }),
     gcTime: 0,
-    queryFn: () =>
-      auth === null || sandboxId === null
-        ? Promise.resolve(null)
-        : readKnownSandboxRow(auth, sandboxId, userId),
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    meta: { omission },
+    queryFn: async ({ meta }) => ({
+      omission: typeof meta?.omission === "number" ? meta.omission : undefined,
+      read:
+        auth === null || sandboxId === null
+          ? null
+          : await readKnownSandboxRow(auth, sandboxId, userId),
+    }),
     enabled: auth !== null && sandboxId !== null && omission !== undefined,
   });
+}
+
+function usePendingSandboxById(
+  input: PendingSandboxByIdInput,
+): SandboxRowRead | null {
+  const { hostId, omission } = input;
+  const { data, isFetching, refetch } = useQuery(
+    missingSandboxQueryOptions(input),
+  );
+  const row = data?.read?.row;
+  // A recorded destroy is settled for this row. A 404 can also mean
+  // unreachable, and a new omission makes even a cached awake row uncertain.
+  const destroyed = row?.state === "destroyed" && row.hostId === hostId;
+  const current = data?.omission === omission;
+  useEffect(() => {
+    if (
+      omission !== undefined &&
+      data !== undefined &&
+      !current &&
+      !destroyed &&
+      !isFetching
+    )
+      void refetch({ cancelRefetch: false });
+  }, [omission, data, current, destroyed, isFetching, refetch]);
+  return omission !== undefined && (current || destroyed)
+    ? (data?.read ?? null)
+    : null;
 }
 
 /** Only a successful fresh read made for this account can settle its sandbox. */
@@ -1267,16 +1310,18 @@ function usePendingSandboxRowFacts(
     list && rows !== null && listed === null
       ? sandboxOmissionId(list)
       : undefined;
-  const byId = useQuery(
-    missingSandboxQueryOptions({
-      auth,
-      sandboxId,
-      userId,
-      send,
-      omission,
-    }),
+  const stage = useStagedSandbox(
+    sendId === null ? "" : pendingSendSurfaceKey(sendId),
   );
-  const read = omission === undefined ? null : (byId.data ?? null);
+  const read = usePendingSandboxById({
+    auth,
+    sandboxId,
+    hostId,
+    userId,
+    send,
+    stage,
+    omission,
+  });
   const row = listed ?? read?.row ?? null;
   const observation = useMemo<PendingSandboxObservation>(() => {
     if (read !== null && sandboxId !== null)

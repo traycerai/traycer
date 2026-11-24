@@ -434,6 +434,8 @@ export function pendingSandboxStageObservation(
 /** The low-level create/wake runner shares the pending record's verified boundary. */
 export function holdPendingSandboxStageObservation(
   surfaceKey: string,
+  attemptId: string | undefined,
+  retryId: string | undefined,
 ): number | null {
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return 0;
   const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
@@ -441,18 +443,24 @@ export function holdPendingSandboxStageObservation(
   if (!Object.hasOwn(sends, id) || sends[id].returnRequested !== undefined)
     return null;
   const stage = readStagedSandbox(surfaceKey);
+  if (
+    stage === null ||
+    stage.attemptId !== attemptId ||
+    stage.attemptRetryId !== retryId
+  )
+    return null;
   const plan = transitionPendingSend(
     pendingSendState(sends[id], "none"),
     "observe",
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
       observation: { kind: "intent" },
-      stageStatus: stage?.phase ?? "missing",
+      stageStatus: stage.phase,
     }),
   );
   return usePendingSandboxSendStore
     .getState()
-    .holdObservation(id, plan, undefined);
+    .holdObservation(id, plan, retryId);
 }
 
 /** A newly accepted create is persisted before the runner publishes its id. */

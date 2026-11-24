@@ -115,6 +115,7 @@ interface StagedRunIdentity {
   readonly clientRequestId: string;
   readonly createKey: string;
   readonly attemptId: string | undefined;
+  readonly attemptRetryId: string | undefined;
   readonly userId: string | null;
 }
 
@@ -128,6 +129,7 @@ function stageMatchesRun(
   return (
     stage.clientRequestId === run.clientRequestId &&
     stage.attemptId === run.attemptId &&
+    stage.attemptRetryId === run.attemptRetryId &&
     stagedCreateAttemptKey(stage) === run.createKey
   );
 }
@@ -198,6 +200,7 @@ export async function runStagedSandbox(
     clientRequestId,
     createKey: active.lastCreateKey ?? clientRequestId,
     attemptId: active.attemptId,
+    attemptRetryId: active.attemptRetryId,
     userId: signedInUserId(),
   };
   running.set(surfaceKey, attempt);
@@ -238,6 +241,7 @@ async function drivePreparedRun(
       resume: run.resume,
       createKey: run.createKey,
       attemptId: run.attemptId,
+      attemptRetryId: run.attemptRetryId,
       userId: run.userId,
       retryCreate: run.retryCreate,
       taskId: run.taskId,
@@ -400,7 +404,11 @@ async function wakeCurrentStage(
   const stage = readStagedSandbox(surfaceKey);
   if (stage === null || !stillCurrent(run)) return false;
   report(surfaceKey, "booting", deps.now());
-  const boundary = holdPendingSandboxStageObservation(surfaceKey);
+  const boundary = holdPendingSandboxStageObservation(
+    surfaceKey,
+    run.attemptId,
+    run.attemptRetryId,
+  );
   if (boundary === null) return false;
   const answered = await deps.wake(hostId, stagedWakeGesture(stage));
   if (!stillCurrent(run)) return false;
@@ -574,9 +582,16 @@ async function startCreateTarget(
     createdByTaskId: taskId,
     clientRequestId: createKey,
   };
-  if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
-  const result = await createSandbox(request, deps);
-  if (!stillCurrent(run)) return null;
+  if (
+    holdPendingSandboxStageObservation(
+      surfaceKey,
+      run.attemptId,
+      run.attemptRetryId,
+    ) === null
+  )
+    return null;
+  const result = await createSandbox(run, request, deps);
+  if (result === null || !stillCurrent(run)) return null;
   return recordStageCreateAnswer(surfaceKey, request, result, {
     teamName:
       target.configuration.kind === "team"
@@ -595,16 +610,14 @@ function recordStageCreateAnswer(
   if (result.kind !== "ok") {
     const retryCreate = sandboxRetryAfterRefusal(result, request);
     const failure = createFailure(result, context.teamName);
+    const beforeReservation = createRefusedBeforeReservation(result);
+    const retainRequest =
+      result.kind === "network-error" ||
+      (beforeReservation && result.kind === "refused" && result.status === 503);
     useStagedSandboxStore.getState().report(surfaceKey, {
       failure: retryCreate === null ? failure : { ...failure, retryCreate },
-      ...(createRefusedBeforeReservation(result)
-        ? {
-            createAttempt: null,
-            ...(result.code === SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE
-              ? { lastRetryCreate: request }
-              : {}),
-          }
-        : {}),
+      ...(beforeReservation ? { createAttempt: null } : {}),
+      ...(retainRequest ? { lastRetryCreate: request } : {}),
     });
     return null;
   }
@@ -638,7 +651,7 @@ function recordStageCreateAnswer(
 /** Only a refusal before reservation releases the previous create's wait budget. */
 function createRefusedBeforeReservation(
   failure: SandboxControlFailure,
-): failure is Extract<SandboxControlFailure, { kind: "refused" }> {
+): boolean {
   return (
     failure.kind === "refused" &&
     failure.sandboxId === undefined &&
@@ -682,18 +695,21 @@ async function environmentIdFor(
  * could not be confirmed, so the line stops instead of waiting forever.
  */
 function createSandbox(
+  run: StagedRunIdentity,
   request: SandboxCreateRequest,
   deps: StagedSandboxRunDeps,
-): Promise<SandboxCreateFetchResult> {
+): Promise<SandboxCreateFetchResult | null> {
   const { auth, directory, queryClient } = deps;
-  const context = { userId: signedInUserId() };
-  const observer = new QueryMutationObserver<SandboxCreateFetchResult>(
+  const context = { userId: run.userId };
+  const observer = new QueryMutationObserver<SandboxCreateFetchResult | null>(
     queryClient,
     {
-      mutationKey: sandboxMutationKeys.create(deps.userId),
-      mutationFn: () => auth.createSandbox(request),
+      mutationKey: sandboxMutationKeys.create(run.userId),
+      // TanStack can suspend on onMutate before it invokes the transport.
+      mutationFn: () =>
+        stillCurrent(run) ? auth.createSandbox(request) : Promise.resolve(null),
       onSettled: (result) => {
-        if (!settledForStartingAccount(context)) return;
+        if (result === null || !settledForStartingAccount(context)) return;
         void directory.refresh();
         void queryClient.invalidateQueries({
           queryKey: authQueryKeys.registeredHostsAll(),

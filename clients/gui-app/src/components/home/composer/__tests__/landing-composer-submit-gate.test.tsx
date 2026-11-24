@@ -3,6 +3,7 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import { SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED } from "@traycer/protocol/host/sandbox-control";
 import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import {
   userSubscription,
@@ -1046,82 +1047,113 @@ function onlyPendingStage() {
 }
 
 describe("LandingComposer direct submit gate", () => {
-  it("hands a rowless 503 stage through rendered Send and retries its saved request in the owner", async () => {
-    testState.catalogue = { providers: [], offeredAgents: ["codex"] };
-    const userId = "landing-owner-test";
-    useAuthStore
-      .getState()
-      .setSignedIn(
-        { userId, userName: "Test User", email: "test@example.test" },
-        { userId, username: "Test User" },
-        [],
-      );
-    useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
-    const staged = readStagedSandbox("landing:window-test");
-    if (staged === null || staged.clientRequestId === null)
-      throw new Error("expected a staged create key");
-    const savedRequest: SandboxCreateRequest = {
-      os: SHAPE.os,
-      cpus: SHAPE.cpus,
-      memoryMb: SHAPE.memoryMb,
-      diskMb: SHAPE.diskMb,
-      region: SHAPE.region,
-      displayName: "landing retry",
-      idleMinutes: SHAPE.idleMinutes,
-      burst: false,
-      createdByHostId: null,
-      createdByAgentId: null,
-      environmentId: null,
-      destroyAfterRestingMinutes: SHAPE.destroyAfterRestingMinutes,
-      createdByTaskId: null,
-      clientRequestId: staged.clientRequestId,
-    };
-    useStagedSandboxStore.getState().report("landing:window-test", {
-      phase: "creating",
-      lastCreateKey: staged.clientRequestId,
-      lastRetryCreate: savedRequest,
-      failure: { kind: "unavailable" },
-    });
-
-    const requests: SandboxCreateRequest[] = [];
-    const unavailable: SandboxCreateFetchResult = {
-      kind: "refused",
-      status: 503,
-      code: "provider_unavailable",
-      reason: null,
-      shortfallMc: null,
-      newRateMcPerHour: null,
-      currentAwakeBurnMcPerHour: null,
-      message: null,
-    };
-    testState.createSandbox = (request) => {
-      requests.push(request);
-      return Promise.resolve(unavailable);
-    };
-    testState.startTask.mockImplementationOnce((args) => {
-      const handoff = args.hand("epic-from-rendered-send");
-      if (handoff === null)
-        return { message: "The send could not be handed off." };
-      handoff.confirm();
-      return null;
-    });
-
-    await sendFromComposerWithPendingOwner();
-    expect(testState.startTask).toHaveBeenCalledOnce();
-
-    await waitFor(() => {
-      const sends = Object.values(usePendingSandboxSendStore.getState().sends);
-      expect(sends).toHaveLength(1);
-      const ownerStage = readStagedSandbox(pendingSendSurfaceKey(sends[0].id));
-      expect(ownerStage).toMatchObject({
-        failure: { kind: "unavailable" },
-        lastCreateKey: savedRequest.clientRequestId,
+  it.each([
+    [
+      "rowless 503",
+      {
+        kind: "refused",
+        status: 503,
+        code: "provider_unavailable",
+        reason: null,
+        shortfallMc: null,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+        message: null,
+      },
+      "unavailable",
+    ],
+    [
+      "rowless shape 400",
+      {
+        kind: "refused",
+        status: 400,
+        code: SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+        reason: null,
+        shortfallMc: null,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+        message: null,
+      },
+      "shape",
+    ],
+    [
+      "unconfirmed transport result",
+      { kind: "network-error", detail: "offline" },
+      "unverified",
+    ],
+  ] as const)(
+    "hands a stage through rendered Send and keeps its key and payload after an owner %s",
+    async (_caseName, ownerResult, expectedFailure) => {
+      testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+      const userId = "landing-owner-test";
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId, userName: "Test User", email: "test@example.test" },
+          { userId, username: "Test User" },
+          [],
+        );
+      useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+      const staged = readStagedSandbox("landing:window-test");
+      if (staged === null || staged.clientRequestId === null)
+        throw new Error("expected a staged create key");
+      const savedRequest: SandboxCreateRequest = {
+        os: SHAPE.os,
+        cpus: SHAPE.cpus,
+        memoryMb: SHAPE.memoryMb,
+        diskMb: SHAPE.diskMb,
+        region: SHAPE.region,
+        displayName: "landing retry",
+        idleMinutes: SHAPE.idleMinutes,
+        burst: false,
+        createdByHostId: null,
+        createdByAgentId: null,
+        environmentId: null,
+        destroyAfterRestingMinutes: SHAPE.destroyAfterRestingMinutes,
+        createdByTaskId: null,
+        clientRequestId: staged.clientRequestId,
+      };
+      useStagedSandboxStore.getState().report("landing:window-test", {
+        phase: "creating",
+        lastCreateKey: staged.clientRequestId,
         lastRetryCreate: savedRequest,
+        failure: { kind: expectedFailure },
       });
-      expect(ownerStage?.phase).toBe("creating");
-      expect(requests).toEqual([savedRequest]);
-    });
-  });
+
+      const requests: SandboxCreateRequest[] = [];
+      testState.createSandbox = (request) => {
+        requests.push(request);
+        return Promise.resolve(ownerResult);
+      };
+      testState.startTask.mockImplementationOnce((args) => {
+        const handoff = args.hand("epic-from-rendered-send");
+        if (handoff === null)
+          return { message: "The send could not be handed off." };
+        handoff.confirm();
+        return null;
+      });
+
+      await sendFromComposerWithPendingOwner();
+      expect(testState.startTask).toHaveBeenCalledOnce();
+
+      await waitFor(() => {
+        const sends = Object.values(
+          usePendingSandboxSendStore.getState().sends,
+        );
+        expect(sends).toHaveLength(1);
+        const ownerStage = readStagedSandbox(
+          pendingSendSurfaceKey(sends[0].id),
+        );
+        expect(ownerStage).toMatchObject({
+          failure: { kind: expectedFailure },
+          lastCreateKey: savedRequest.clientRequestId,
+          lastRetryCreate: savedRequest,
+        });
+        expect(ownerStage?.phase).toBe("creating");
+        expect(requests).toEqual([savedRequest]);
+      });
+    },
+  );
 
   it("keeps the staged draft when owner resolution is superseded", async () => {
     testState.catalogue = { providers: [], offeredAgents: ["codex"] };

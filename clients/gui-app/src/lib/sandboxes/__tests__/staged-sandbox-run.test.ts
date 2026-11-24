@@ -56,7 +56,7 @@ import {
 import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import { authQueryKeys } from "@/lib/query-keys";
+import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
@@ -701,15 +701,20 @@ describe("runStagedSandbox refusals", () => {
   it("stops on a create that threw instead of waiting forever", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness({}, true);
-    vi.spyOn(auth, "createSandbox").mockRejectedValueOnce(
-      new Error("createSandbox.request.destroyAfterRestingMinutes"),
-    );
+    vi.spyOn(auth, "createSandbox").mockImplementationOnce((request) => {
+      auth.requests.push(request);
+      return Promise.reject(
+        new Error("createSandbox.request.destroyAfterRestingMinutes"),
+      );
+    });
 
     await run(null, deps);
 
     expect(stageOf().failure).toEqual({
       kind: "unverified",
     });
+    expect(stageOf().phase).toBe("creating");
+    expect(stageOf().lastRetryCreate).toEqual(auth.requests[0]);
   });
 
   it("maps insufficient_credit to the credits failure with the shortfall", async () => {
@@ -1610,6 +1615,67 @@ describe("runStagedSandbox on a resting sandbox", () => {
 });
 
 describe("runStagedSandbox guards", () => {
+  it.each(["account switch", "Cancel"] as const)(
+    "does not post when %s fences the run while QueryMutationObserver waits in onMutate",
+    async (boundary) => {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "user-1", userName: "U", email: "u@example.com" },
+          { userId: "user-1", username: "U" },
+          [],
+        );
+      useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+      const { auth, deps } = harness({}, true);
+      let releaseGate = (): void => undefined;
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      const enteredOnMutate = vi.fn();
+      deps.queryClient.setMutationDefaults(
+        sandboxMutationKeys.create("user-1"),
+        {
+          onMutate: () => {
+            enteredOnMutate();
+            return gate;
+          },
+        },
+      );
+
+      const runPromise = run(null, deps);
+      try {
+        await vi.waitFor(() =>
+          expect(enteredOnMutate).toHaveBeenCalledTimes(1),
+        );
+        expect(auth.requests).toEqual([]);
+
+        if (boundary === "account switch") {
+          useAuthStore.getState().setSignedIn(
+            {
+              userId: "other-user",
+              userName: "Other",
+              email: "other@example.com",
+            },
+            { userId: "other-user", username: "Other" },
+            [],
+          );
+        } else {
+          useStagedSandboxStore.getState().cancel(surfaceKey, true);
+        }
+
+        releaseGate();
+        await runPromise;
+        expect(auth.requests).toEqual([]);
+        if (boundary === "Cancel")
+          expect(stageOf()).toMatchObject({ phase: "staged", failure: null });
+      } finally {
+        releaseGate();
+        await runPromise;
+        useAuthStore.getState().setSignedOut();
+      }
+    },
+  );
+
   it("does nothing when nothing is staged, or the stage is already handing off", async () => {
     const { auth, deps } = harness({}, true);
     await run(null, deps);

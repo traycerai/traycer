@@ -688,12 +688,14 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
           expect(enableButton()).toHaveProperty("disabled", false),
         );
 
+        expect(sandboxToastSpies.success).not.toHaveBeenCalled();
         fireEvent.click(enableButton());
         await vi.waitFor(() =>
           expect(sandboxToastSpies.success).toHaveBeenCalledWith(
             "Created Team bots",
           ),
         );
+        expect(sandboxToastSpies.success).toHaveBeenCalledTimes(1);
         expect(
           auth().createSandbox.mock.calls.map(
             ([request]) => request.clientRequestId,
