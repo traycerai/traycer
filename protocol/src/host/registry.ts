@@ -620,11 +620,15 @@ import {
   configAgentMemoriesSetUpgradeV10ToV11,
   configBrowserGetV10,
   configBrowserSetV10,
+  configEnvDeleteUpgradeV10ToV11,
   configEnvDeleteV10,
+  configEnvDeleteV11,
   configEnvListV10,
   configEnvSetV10,
   configEnvSetV11,
+  configEnvSetV12,
   configEnvSetUpgradeV10ToV11,
+  configEnvSetUpgradeV11ToV12,
   configLogLevelsGetV10,
   configLogLevelsSetV10,
   configShellAddV10,
@@ -1656,6 +1660,7 @@ import {
   providersDeleteEnvOverrideResponseSchema,
   providersDeleteEnvOverrideResponseSchemaV10,
   providersDeleteEnvOverrideResponseSchemaV20,
+  providersDeleteEnvOverrideResponseSchemaV22,
   providersDetectVersionRequestSchema,
   providersDetectVersionResponseSchema,
   providersStartLoginRequestSchemaV10,
@@ -1784,6 +1789,7 @@ import {
   providersSetEnvOverrideRequestSchemaV10,
   providersSetEnvOverrideRequestSchemaV21,
   providersSetEnvOverrideResponseSchema,
+  providersSetEnvOverrideResponseSchemaV23,
   providersSetEnvOverrideResponseSchemaV10,
   providersSetEnvOverrideResponseSchemaV20,
   providersSetSelectionRequestSchema,
@@ -6458,11 +6464,28 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
+const providersSetEnvOverrideV23 = defineRpcContract({
+  method: "providers.setEnvOverride",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: providersSetEnvOverrideRequestSchema,
+  responseSchema: providersSetEnvOverrideResponseSchemaV23,
+});
+
+const providersSetEnvOverrideUpgradeV22ToV23 = defineUpgradePath<
   typeof providersSetEnvOverrideV22,
+  typeof providersSetEnvOverrideV23
+>({
+  from: providersSetEnvOverrideV22.schemaVersion,
+  to: providersSetEnvOverrideV23.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+const providersSetEnvOverrideDowngradeV23ToV10 = defineDowngradePath<
+  typeof providersSetEnvOverrideV23,
   typeof providersSetEnvOverrideV10
 >({
-  from: { major: 2, minor: 2 },
+  from: { major: 2, minor: 3 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) =>
     downgradeProviderRequestForV10(
@@ -6532,6 +6555,23 @@ export const providersDeleteEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
   }),
 });
 
+export const providersDeleteEnvOverrideV22 = defineRpcContract({
+  method: "providers.deleteEnvOverride",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: providersDeleteEnvOverrideRequestSchema,
+  responseSchema: providersDeleteEnvOverrideResponseSchemaV22,
+});
+
+export const providersDeleteEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
+  typeof providersDeleteEnvOverrideV21,
+  typeof providersDeleteEnvOverrideV22
+>({
+  from: { major: 2, minor: 1 },
+  to: { major: 2, minor: 2 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const providersDeleteEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
   typeof providersDeleteEnvOverrideV21,
   typeof providersDeleteEnvOverrideV20
@@ -6548,11 +6588,11 @@ export const providersDeleteEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-export const providersDeleteEnvOverrideDowngradeV21ToV10 = defineDowngradePath<
-  typeof providersDeleteEnvOverrideV21,
+export const providersDeleteEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
+  typeof providersDeleteEnvOverrideV22,
   typeof providersDeleteEnvOverrideV10
 >({
-  from: { major: 2, minor: 1 },
+  from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) =>
     downgradeProviderRequestForV10(
@@ -7194,7 +7234,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.env.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: configEnvSetV10,
@@ -7204,6 +7244,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: configEnvSetV11,
           upgradeFromPreviousVersion: configEnvSetUpgradeV10ToV11,
         },
+        2: {
+          contract: configEnvSetV12,
+          upgradeFromPreviousVersion: configEnvSetUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -7211,11 +7255,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.env.delete": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configEnvDeleteV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configEnvDeleteV11,
+          upgradeFromPreviousVersion: configEnvDeleteUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -14208,7 +14256,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersSetEnvOverrideV20,
@@ -14222,9 +14270,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersSetEnvOverrideV22,
           upgradeFromPreviousVersion: providersSetEnvOverrideUpgradeV21ToV22,
         },
+        3: {
+          contract: providersSetEnvOverrideV23,
+          upgradeFromPreviousVersion: providersSetEnvOverrideUpgradeV22ToV23,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersSetEnvOverrideDowngradeV22ToV10,
+        1: providersSetEnvOverrideDowngradeV23ToV10,
       },
     },
   },
@@ -14240,7 +14292,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersDeleteEnvOverrideV20,
@@ -14250,9 +14302,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersDeleteEnvOverrideV21,
           upgradeFromPreviousVersion: providersDeleteEnvOverrideUpgradeV20ToV21,
         },
+        2: {
+          contract: providersDeleteEnvOverrideV22,
+          upgradeFromPreviousVersion: providersDeleteEnvOverrideUpgradeV21ToV22,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersDeleteEnvOverrideDowngradeV21ToV10,
+        1: providersDeleteEnvOverrideDowngradeV22ToV10,
       },
     },
   },

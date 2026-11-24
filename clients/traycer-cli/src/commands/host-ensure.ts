@@ -1,6 +1,7 @@
 import {
   withStagedTeamToken,
   withTeamTokenInstall,
+  TEAM_INSTALL_RECEIPT_WAIT_MS,
   waitForTeamTokenInstall,
   type PreparedTeamTokenInstall,
 } from "../host/team-install-token";
@@ -203,7 +204,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
           ? await waitForTeamTokenInstall(
               ctx.runtime.environment,
               preparedTeamToken,
-              60_000,
+              TEAM_INSTALL_RECEIPT_WAIT_MS,
             )
           : null;
         const human = buildHuman(

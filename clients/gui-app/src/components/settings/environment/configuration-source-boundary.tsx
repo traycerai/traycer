@@ -12,6 +12,7 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { seeButNotChangeLine } from "@/components/settings/members/copy";
 import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-dialog";
+import { SectionStandIn } from "@/components/settings/environment/page-not-on-computer";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -20,11 +21,7 @@ import {
   useEnvironmentInvitationsEntryHash,
   useEnvironmentInvitationsQuery,
 } from "@/hooks/environment/use-environment-invitations";
-import {
-  moveEnvironmentPick,
-  moveEnvironmentSurface,
-  PERSONAL_PICK,
-} from "@/lib/settings-environment-pages";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { TeamReadFailed } from "./team-read-failed";
@@ -81,6 +78,47 @@ function invitedInsteadLine(invitation: EnvironmentInvitation): string {
  */
 const CONFIGURATION_UNAVAILABLE = "These settings are no longer available.";
 
+/** A cloud-read page while its configuration loads, under its own heading. */
+function ConfigurationLoading(props: {
+  readonly section: SettingsSectionId | null;
+}): ReactNode {
+  const dots = (
+    <AgentSpinningDots
+      className={undefined}
+      testId={undefined}
+      variant={undefined}
+      tone="muted"
+    />
+  );
+  return props.section === null ? (
+    dots
+  ) : (
+    <SectionStandIn
+      section={props.section}
+      testId="configuration-source-loading"
+    >
+      {dots}
+    </SectionStandIn>
+  );
+}
+
+/** An answer in place of the page, under its section's heading where it has one. */
+function ConfigurationAnswer(props: {
+  readonly section: SettingsSectionId | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  return props.section === null ? (
+    <div className="p-5">{props.children}</div>
+  ) : (
+    <SectionStandIn
+      section={props.section}
+      testId="configuration-source-answer"
+    >
+      {props.children}
+    </SectionStandIn>
+  );
+}
+
 /** The configuration a cloud-read page shows: a team's, or Personal. */
 export type CloudConfigurationTarget =
   | { readonly kind: "team"; readonly environmentId: string }
@@ -100,9 +138,8 @@ export type CloudConfigurationTarget =
 export function ConfigurationSourceBoundary(props: {
   readonly target: CloudConfigurationTarget;
   /**
-   * The page this boundary wraps, so a removal can take the surface off a
-   * page Personal does not offer. `null` where the caller is not a page of
-   * the Environment group and nothing needs moving.
+   * The page this boundary wraps, or `null` where the caller is not a page of
+   * the Environment group.
    */
   readonly section: SettingsSectionId | null;
   readonly children: ReactNode;
@@ -151,46 +188,38 @@ export function ConfigurationSourceBoundary(props: {
     // The answer that raises the question, so the answer that settles it can
     // be held to being no older.
     listedAt: list.dataUpdatedAt,
-    section: props.section,
   });
 
   if (descriptor === undefined) {
     if (list.isPending) {
-      return (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-          tone="muted"
-        />
-      );
+      return <ConfigurationLoading section={props.section} />;
     }
     if (list.isError) {
       return (
-        <div className="p-5">
+        <ConfigurationAnswer section={props.section}>
           <TeamReadFailed
             message="Couldn't read these settings."
             onRetry={() => void list.refetch()}
           />
-        </div>
+        </ConfigurationAnswer>
       );
     }
     if (gone.invitation !== null) {
       return (
-        <div className="p-5">
+        <ConfigurationAnswer section={props.section}>
           <InvitedInstead invitation={gone.invitation} />
-        </div>
+        </ConfigurationAnswer>
       );
     }
     // The named removal is said as a toast, because the selection moves and
-    // this page goes with it; what is left to say is that this page cannot be
-    // read, for the frame it still owns.
+    // this page redraws under it; what is left to say is that this page cannot
+    // be read, for the frame it still owns.
     return (
-      <div className="p-5">
+      <ConfigurationAnswer section={props.section}>
         <p role="status" className="text-ui-sm text-muted-foreground">
           {CONFIGURATION_UNAVAILABLE}
         </p>
-      </div>
+      </ConfigurationAnswer>
     );
   }
   return (
@@ -275,13 +304,13 @@ function useGoneConfiguration(input: {
   readonly settled: boolean;
   /** When the membership list that no longer carries it was answered. */
   readonly listedAt: number;
-  /** The page this is happening on, which Personal may not offer. */
-  readonly section: SettingsSectionId | null;
 }): { readonly invitation: EnvironmentInvitation | null } {
-  const { target, listed, settled, listedAt, section } = input;
+  const { target, listed, settled, listedAt } = input;
   const invitations = useEnvironmentInvitationsQuery();
   const entryHash = useEnvironmentInvitationsEntryHash();
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const markPickGone = useSettingsEnvironmentPickStore(
+    (state) => state.markPickGone,
+  );
   // A removed team is in no list, so the label this page read a moment ago is
   // the only thing left that can name it.
   const [read, setRead] = useState<ReadLabel | null>(null);
@@ -425,26 +454,17 @@ function useGoneConfiguration(input: {
     // nothing else can say which team it was.
     if (label !== null)
       toast(noLongerInLine(label), { id: leftToastId(goneId) });
-    // Personal has no Members page, and Members is the likeliest page to be
-    // reading when a membership changes, so the move goes through the same
-    // guard the picker's own moves do: it takes the surface off a page the
-    // selection it lands on does not offer.
-    //
-    // It moves that surface as a server fact, not as a gesture. Nobody pressed
+    // Only the selection moves. The surface stays on the section it holds,
+    // whose body answers for Personal, Members included: nobody pressed
     // anything, and this page can be a Settings pane in a split the person is
-    // not looking at, so activating Settings here would take the focus and the
-    // route off the work they are actually doing.
+    // not looking at.
     //
     // The selection is a store every page and the picker's trigger read, so
     // it moves after the render that found the team gone, never during it. It
-    // moves whether or not the team can be named: no page can read it.
-    moveEnvironmentPick({
-      next: PERSONAL_PICK,
-      activeSection: section,
-      setPick,
-      moveSurface: moveEnvironmentSurface.onServerFact,
-    });
-  }, [goneId, label, section, setPick]);
+    // moves whether or not the team can be named: no page can read it. The
+    // pick itself stays; it reads as Personal for the rest of the window.
+    markPickGone(PERSONAL_PICK);
+  }, [goneId, label, markPickGone]);
 
   return { invitation };
 }

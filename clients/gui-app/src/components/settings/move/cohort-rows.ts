@@ -36,6 +36,9 @@ export const PLANE_DISPLAY_NAME: Readonly<Record<EnvironmentPlaneId, string>> =
   };
 
 export const LOCAL_ROW_NOT_MOVED = "its own settings, not in Personal yet";
+/** A host that serves no `environment.status`: it moves only once updated. */
+export const LOCAL_ROW_OLD_HOST =
+  "its own settings, update to move to Personal";
 export const LOCAL_ROW_NOT_SHARING = "stopped using Personal";
 export const LOCAL_ROW_SHARED_UNRECORDED =
   "Some files were shared by an earlier version; these settings are not in Personal yet.";

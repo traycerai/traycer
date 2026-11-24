@@ -32,7 +32,6 @@ import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
-import { useLocalHostForegroundUpdateLine } from "@/hooks/host/use-local-host-foreground-update-line";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
 import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
 import {
@@ -105,34 +104,29 @@ import { newTransitionId } from "@/components/settings/panels/host-overview-tran
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import type { HostUpdateDispatchSlot } from "@/components/settings/panels/host-service-write-latch-store";
 import {
-  hostServiceWriteLatches,
-  newOverviewIncarnation,
-  registerOverviewIncarnation,
-  useHostServiceWriteLatchStore,
-  UPDATE_DISPATCH_UNSEEN_TTL_MS,
-  type HostUpdateDispatchSlot,
-} from "@/components/settings/panels/host-service-write-latch-store";
-import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
-import { useLocalAttemptRecordObservation } from "@/hooks/host/use-local-attempt-record-observation";
+  hostStatusReadHealth,
+  hostUpdateActivationDebt,
+  hostUpdateDegrades,
+  updateHoldsLifecycleGate,
+  useHostForegroundUpdateLine,
+  useHostUpdateCapabilities,
+  useHostUpdateOperation,
+  useOverviewIncarnation,
+  useUpdateDispatchUpkeep,
+  useUpdateInstallAcceptedLatch,
+} from "@/components/settings/panels/host-overview-update-reads";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
-  holdsLifecycleGate,
   isQuietUpdateView,
-  isRecordObservation,
   offersForceRestart,
   UNKNOWN_FLEET_UPDATE_VIEW,
-  type FleetUpdateObservation,
   type FleetUpdateAttemptPosition,
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
-import { projectLocalUpdate } from "@/lib/host/fleet-update/local-update-projection";
-import {
-  canonicalReadIsLive,
-  observationFromCanonicalRead,
-} from "@/lib/host/fleet-update/canonical-status-observation";
-import { deriveLegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
+import { canonicalReadIsLive } from "@/lib/host/fleet-update/canonical-status-observation";
 import { useActiveUpdatePollAccelerator } from "@/hooks/host/use-active-update-poll-accelerator";
 import {
   toastHostRestartDeclined,
@@ -161,25 +155,6 @@ import type {
 // Matches the RPC Doctor card's own tail size, so a report read over the
 // bridge shows the same amount of log as one read over `diagnostics.logs.tail`.
 const DOCTOR_BRIDGE_LOG_TAIL_LINES = 200;
-
-/** How long an accepted install may hold the page before progress appears. */
-const UPDATE_INSTALL_ACCEPTED_LATCH_MS = 60_000;
-
-/**
- * How often this page re-reads the wall clock.
- *
- * One second, and it is a DEADLINE clock rather than a label clock: the
- * durable-record leg carries a holder probe whose proof lives five seconds
- * (`LOCAL_LIVENESS_PROOF_MS`), and the whole point of that bound is that it
- * expires while the host is unreachable — exactly when every query-derived
- * timestamp on this page has stopped advancing. A tick coarser than the proof
- * could not enforce it; a tick that only fired when something else re-rendered
- * would not fire at all in the state that matters.
- *
- * The visible consequence is that expiry lands on the first tick after the
- * deadline rather than at an exact five-second wall.
- */
-const LOCAL_RECORD_TICK_MS = 1_000;
 
 /**
  * ONE Overview, for every host.
@@ -378,9 +353,9 @@ export function HostOverviewPanel(props: {
   // What this page's update surfaces say in place of their controls during
   // that run - one picker, so the answer card, the update card and the
   // version rows name the same step (`hostForegroundUpdateLine`).
-  const foregroundUpdateLine = useLocalHostForegroundUpdateLine();
-  const localForegroundUpdateLine =
-    (host?.isLocalMachine ?? false) ? foregroundUpdateLine : null;
+  const localForegroundUpdateLine = useHostForegroundUpdateLine(
+    host?.isLocalMachine ?? false,
+  );
   const restartDegrade: OverviewDegradeReason | null = localForegroundRun
     ? "terminal-run"
     : capabilityRestartDegrade;
@@ -443,12 +418,7 @@ export function HostOverviewPanel(props: {
   // against - and the install it leads to is revalidated by the host.
   // `usable` is the health's source: an unusable scope is a read with no
   // live source behind it, whatever the cache still holds.
-  const statusHealth = {
-    isError: statusQuery.isError,
-    fetchStatus: statusQuery.fetchStatus,
-    isStale: statusQuery.isStale,
-    hasLiveSource: usable,
-  };
+  const statusHealth = hostStatusReadHealth(statusQuery, usable);
   const statusLive = canonicalReadIsLive(statusHealth);
   const view = useOverviewDisplay({
     scope,
@@ -649,178 +619,18 @@ export function HostOverviewPanel(props: {
   // and deliberately leaves the controls live, because that is exactly when
   // someone needs to retry.
   // ONE projection, used by both the lifecycle gate below and the card that
-  // renders it — deriving these separately is how a page ends up locked for a
-  // state it is simultaneously describing as parked.
-  //
-  // ⚠ THE FRESHNESS HERE IS DERIVED, NOT ASSERTED, and the previous version of
-  // these lines is why that is worth a paragraph. It built the observation with
-  // `freshUntilMs: Number.POSITIVE_INFINITY` and `connected: true`, and read
-  // `nowMs` from `dataUpdatedAt` — three ways of saying "assume this reading is
-  // current" — on the theory that the page's own live-source helpers already
-  // demoted a retained read. They demoted the BUSY snapshot. Nothing applied
-  // them here, so the two projections read one retained response and disagreed
-  // about it.
-  //
-  // What that cost: a host that reported `downloading` and then went
-  // unreachable kept projecting `downloading` forever. `holdsLifecycleGate`
-  // stayed true, an open restart confirmation closed itself, the Doctor card's
-  // bridge restart stayed refused — on a host whose only way back was the
-  // restart being blocked. Same class as the parked-attempt gate this page
-  // already fixed: a fact consumed outside the conditions that keep it true.
-  //
-  // `observationFromCanonicalRead` now carries those conditions with the fact,
-  // and it is the same function the landing banner and the fleet's coalesced
-  // reads use, so a fourth staleness rule cannot appear here by accident.
-  //
-  // The parks the legacy updater leaves behind WITHOUT a marker - bytes
-  // installed under a host still running the old version, a stage waiting
-  // for a busy host to go idle - are derived from the install and staged
-  // records beside the same status read. This is the one leg that derives
-  // them: the banner keeps its desktop-status debt arm and the fleet legs
-  // read no installation info. `null` until both reads have answered, which
-  // the projector treats as "not observed", never as "no park".
-  //
-  // Two reads, one snapshot: the installation query is keyed by the running
-  // version the status read reported (`useHostInstallationInfoQuery`), so a
-  // record fetched under the previous version is never compared against the
-  // new one - it is a different key with no data yet. And the record leg is
-  // held to the SAME liveness rule the status leg is projected under
-  // (`canonicalReadIsLive` - not "has not failed" alone, and not a second
-  // staleness rule with its own timestamp arithmetic): a read that has
-  // failed, is paused, or has aged past its own staleness keeps its last
-  // payload in the cache, and a comparison built on it would carry the
-  // status read's freshness while the record leg is anyone's guess - a park
-  // derived from a record the host has since consumed or purged, still
-  // offering Force for a stage that is gone. Such a read yields NO facts:
-  // the parks it fed are withdrawn, the offers keyed on them with them,
-  // and the projector falls through to whatever the status leg says. The
-  // demotion is scoped to the record leg on purpose. Expiring the whole
-  // observation instead would demote a live attempt the status leg is
-  // reporting - progress bar, lifecycle gate, fast poll - on one failed
-  // `host.getInstallationInfo` poll, which is likeliest exactly during the
-  // swap; the record leg feeds only the two record-derived rows, so only
-  // those go. An in-flight refetch is live under the shared rule, and a
-  // request whose response never arrives ends as an error rather than as
-  // an indefinitely retained payload - each attempt is bounded by the
-  // transport's 30 s response timeout (`DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS`
-  // on the local leg, `UNARY_RESPONSE_TIMEOUT_MS` on the remote one) and
-  // the query client retries once, so a silent poll withdraws after about
-  // a minute. (`paused` is part of the shared rule; this app's queries run
-  // with `networkMode: "always"`, so it does not arise here.) The source
-  // here is the support flip alone (`installInfoDegrade`), deliberately NOT
-  // `usable`: an unusable scope is demoted through the status leg already,
-  // and that demotion KEEPS the record-derived park as a qualified "Last
-  // seen: …" sentence with its controls withdrawn. Erasing the facts here
-  // on `!usable` would drop the card outright instead (the lifecycle-gate
-  // suite pins the retained sentence). The support flip still has to be
-  // here, because it disables the query over a cached payload, and a
-  // disabled query never ages (`isStale` is false while `enabled` is) - so
-  // without it that payload would read as live forever.
-  const installationLive = canonicalReadIsLive({
-    isError: installationQuery.isError,
-    fetchStatus: installationQuery.fetchStatus,
-    isStale: installationQuery.isStale,
-    hasLiveSource: installInfoDegrade === null,
+  // renders it, read the way every Update now reads it
+  // (`useHostUpdateOperation`).
+  const updateOperation = useHostUpdateOperation({
+    hostId: scope.hostId,
+    isLocalMachine: host?.isLocalMachine ?? false,
+    usable,
+    statusQuery,
+    statusHealth,
+    installationQuery,
+    installInfoDegrade,
   });
-  // The facts as READ - from the last successful record response, live or
-  // not. Liveness is applied where each consumer needs it rather than by
-  // erasing the facts: every OFFER and the projector's park take the live
-  // facts below, while the catalog's comparison baseline keeps the read
-  // debt (`activationDebt.live`). Erasing the facts on one failed poll
-  // dropped the baseline, and the region then re-offered the version that
-  // is already installed as "available" with a live Update now - for bytes
-  // on disk that a failed poll did not change.
-  const legacyFactsRead =
-    statusQuery.data === undefined || installationQuery.data === undefined
-      ? null
-      : deriveLegacyUpdateFacts({
-          installation: installationQuery.data,
-          runningVersion: statusQuery.data.hostVersion,
-          // The RAW read, not the live-source-demoted snapshot: the facts must
-          // describe one instant of one response, and staleness is already
-          // the observation deadline's job below.
-          busy: statusQuery.data.busy,
-          busySessionCount: statusQuery.data.busySessionCount,
-        });
-  const legacyFacts = installationLive ? legacyFactsRead : null;
-  // Built whenever there IS a status read - including for a pre-@1.3 peer
-  // whose `updateOperation` is `null`. This used to bail to `null` for that
-  // peer and render the coarse marker through a separate notice; the
-  // projector already has an arm for exactly that observation (coarse first,
-  // then the record-derived parks, then `unknown`), and routing the old peer
-  // through it is what lets its parks reach the card too.
-  const operationObservation =
-    statusQuery.data === undefined
-      ? null
-      : observationFromCanonicalRead({
-          hostId: scope.hostId ?? "",
-          status: statusQuery.data,
-          dataUpdatedAt: statusQuery.dataUpdatedAt,
-          health: statusHealth,
-          source: "selected",
-          legacyFacts,
-        });
-  // THE DURABLE-RECORD LEG, for the window in which the wire leg above cannot
-  // answer at all: this machine's host is down, so `host.status` has nothing to
-  // say, and `update-attempt.json` on this disk is the only evidence there is.
-  //
-  // LOCAL ONLY, and the gate is the point rather than an optimisation: the
-  // record on this machine describes this machine's host. Handing it to a
-  // remote scoped host would render one machine's update on another machine's
-  // page — the same substitution the scoped-client rule exists to prevent, one
-  // layer down. A remote host keeps the status-only observation and renders its
-  // last polled phase as last-seen.
-  //
-  // Not to be confused with `installationLive` above. #1752's comment there
-  // calls the INSTALLATION query "the record leg"; that is a different record
-  // (the install and staged records, read over RPC from the host) feeding the
-  // two legacy parks, and it says nothing about this one.
-  const localAttemptObservation = useLocalAttemptRecordObservation(
-    (host?.isLocalMachine ?? false) ? scope.hostId : null,
-  );
-  // ⚠ A TICKING CLOCK, and it belongs to the RECORD leg ALONE.
-  //
-  // The record leg's evidence expires on its own. A holder probe's positive
-  // verdict is proof for five seconds (`LOCAL_LIVENESS_PROOF_MS`) and no
-  // longer, and the two timestamps this page could have aged it against BOTH
-  // stop advancing exactly when it matters: `statusQuery.dataUpdatedAt` because
-  // the host is down (that is the whole situation), and the controller query's
-  // own `dataUpdatedAt` because Desktop's broadcaster keeps its idle loop
-  // running through a failing `publish()` — the 5 s loop continues, nothing new
-  // lands in a query with `staleTime: Infinity`, and the payload saying
-  // `liveness: "live"` sits there forever. A deadline measured against either
-  // would never arrive, and the lifecycle gate would be held by a proof nobody
-  // is refreshing.
-  //
-  // The WIRE leg keeps `statusQuery.dataUpdatedAt`, which is what it always
-  // had. `observationFromCanonicalRead` folds the query's health into the
-  // deadline and stamps an unhealthy read as already expired, so freshness
-  // there is a HEALTH verdict — not a race against how long the round trip
-  // took. This page briefly fed the tick to both, and the cost was not the
-  // "one extra condition" the comment here used to claim: a single `host.status`
-  // slower than the fresh window (2.5 × the poll delay, so 5 s while the
-  // accelerator holds the poll at 2 s — reachable over the relay) demoted the card to
-  // "Last seen", dropped the page-wide gate, and disengaged the very
-  // accelerator that was supposed to keep ahead of it, once per cycle.
-  //
-  // What remains is a render per second while this page is open, which is
-  // accepted: the record leg cannot be correct without it, and the surfaces it
-  // re-renders are already re-rendering on a 2 s poll during the window that
-  // matters.
-  const nowMs = useNowMs(LOCAL_RECORD_TICK_MS);
-  // ONE precedence-plus-projection, shared with the landing banner's hook
-  // (`projectLocalUpdate`). This page used to call `projectFleetUpdateView`
-  // directly with the wire observation alone, so the two surfaces held
-  // different opinions about the same host in precisely the window the record
-  // leg exists for.
-  const projection = projectLocalUpdate({
-    wire: operationObservation,
-    record: localAttemptObservation,
-    clock: { wireNowMs: statusQuery.dataUpdatedAt, recordNowMs: nowMs },
-    connected: usable,
-  });
-  const operationView =
-    projection.observation === null ? null : projection.view;
+  const { legacyFacts, projection, operationView } = updateOperation;
   // The same 2s acceleration the landing banner runs, for the same attempt.
   // Not a correctness mechanism — freshness is settled above — but a
   // CONSISTENCY one: without it this card renders the identical operation off
@@ -928,106 +738,27 @@ export function HostOverviewPanel(props: {
   // bridges the second gap - after the answer, before the detached updater
   // publishes progress - and releases the moment progress appears, on a scope
   // flip, or by its bounded timer (the host-keyed store survives remounts).
-  const updateInstallAcceptedAt = useHostServiceWriteLatchStore(
-    (state) =>
-      hostServiceWriteLatches(state.byHost, scope.hostId)
-        .updateInstallAcceptedAt,
+  const updateInstallAcceptedAt = useUpdateInstallAcceptedLatch(
+    scope.hostId,
+    view.updateProgress,
   );
-  useEffect(() => {
-    if (scope.hostId === null || updateInstallAcceptedAt === null) return;
-    const hostId = scope.hostId;
-    // ONLY an `updating` frame releases: it is the one progress state that
-    // proves the NEW detached updater is publishing. A `failed` frame can be
-    // the terminal state of the PREVIOUS attempt, still on `host.status` when
-    // a retry arms the latch - releasing on it reopened exactly the gap the
-    // latch closes. A retry that itself fails fast without an `updating`
-    // frame is covered by the bounded timer, in the safe direction.
-    if (view.updateProgress?.state === "updating") {
-      useHostServiceWriteLatchStore
-        .getState()
-        .releaseUpdateInstallAccepted(hostId);
-      return;
-    }
-    const remaining = Math.max(
-      0,
-      updateInstallAcceptedAt + UPDATE_INSTALL_ACCEPTED_LATCH_MS - Date.now(),
-    );
-    const timer = setTimeout(() => {
-      useHostServiceWriteLatchStore
-        .getState()
-        .releaseUpdateInstallAccepted(hostId);
-    }, remaining);
-    return () => clearTimeout(timer);
-  }, [scope.hostId, updateInstallAcceptedAt, view.updateProgress]);
   // The accepted latch is part of the gate the UPDATE controls consume too:
   // read before the hook below so Check now, Update now and the version rows
   // freeze during the accepted-to-first-progress gap, not only the rest of
   // the page.
   const updateGatePending = gatePending || updateInstallAcceptedAt !== null;
-  // Whatever deployed this host owns its version (`host.status@1.10`): the
-  // update region retires to its one-line reason before a catalog is fetched,
-  // the same retirement the first refused install used to be the only way to
-  // discover. `null` is a host that predates the field, which keeps that
-  // discovery path.
-  const updatesExternallyManaged =
-    statusQuery.data?.updatesExternallyManaged === true;
+  const updateDegrades = hostUpdateDegrades(statusQuery.data, {
+    updateCheck: updateCheckDegrade,
+    updateInstall: updateInstallDegrade,
+  });
 
-  // DISPATCH OWNERSHIP. One token per mount, registered while this panel
-  // is on screen, captured by every update dispatch at arm time.
-  //
-  // It answers one question and gates one thing: may THIS page open a dialog
-  // about the attempt it is looking at? An install's settle deliberately
-  // outlives the mount — that is how the latch settles and the reads are
-  // invalidated for a swap the user navigated away from — and the ownership
-  // write is the one part of it that must not, because its only consumer is a
-  // modal that a mount opens. See `settleUpdateDispatch`.
-  const [incarnation] = useState(newOverviewIncarnation);
-  useEffect(() => registerOverviewIncarnation(incarnation), [incarnation]);
-  const updateDispatch = useHostServiceWriteLatchStore(
-    (state) =>
-      hostServiceWriteLatches(state.byHost, scope.hostId).updateDispatch,
+  // DISPATCH OWNERSHIP: one token per mount (`useOverviewIncarnation`), and
+  // the dispatch slot kept by the frames this host reports.
+  const incarnation = useOverviewIncarnation();
+  const updateDispatch = useUpdateDispatchUpkeep(
+    scope.hostId,
+    view.updateOperation,
   );
-  // `seen` and two of the slot's three frame-driven clears. Reads the RAW peer
-  // frame rather than the projection: this is bookkeeping about which attempt
-  // the host has REPORTED, which a retained response answers as truthfully as
-  // a fresh one — the frame did arrive, and it did name that id. Demoting it
-  // for staleness would leave `seen` false through the exact window the ACK
-  // races the poll, which is the window the flag exists to describe.
-  const reportedOperation = view.updateOperation;
-  useEffect(() => {
-    if (scope.hostId === null) return;
-    useHostServiceWriteLatchStore.getState().observeUpdateDispatchFrame(
-      scope.hostId,
-      reportedOperation === null || reportedOperation.kind !== "attempt"
-        ? null
-        : {
-            attemptId: reportedOperation.attemptId,
-            terminal: reportedOperation.execution === "terminal",
-          },
-    );
-  }, [scope.hostId, reportedOperation]);
-  // THE DISPATCH SLOT'S UNSEEN-TTL CLEAR - the first of the two the
-  // status stream cannot express, beside the deregister clear in
-  // `host-overview-rpc.ts`, and the third of the slot's four in total. An
-  // acknowledged attempt that no frame ever named.
-  // The host answered `accepted {id}` and then either never published it or
-  // published it while nothing was observing — either way this page is waiting
-  // for an ACK it will not recognise, and an owned dispatch nothing can spend
-  // would arm the auto-open against whatever park drifts past next.
-  const dispatchedAt = updateDispatch?.dispatchedAt ?? null;
-  const dispatchSeen = updateDispatch?.seen ?? false;
-  useEffect(() => {
-    if (scope.hostId === null || dispatchedAt === null || dispatchSeen) return;
-    const hostId = scope.hostId;
-    const remaining = Math.max(
-      0,
-      dispatchedAt + UPDATE_DISPATCH_UNSEEN_TTL_MS - Date.now(),
-    );
-    const timer = setTimeout(() => {
-      useHostServiceWriteLatchStore.getState().clearUpdateDispatch(hostId);
-    }, remaining);
-    return () => clearTimeout(timer);
-  }, [scope.hostId, dispatchedAt, dispatchSeen]);
 
   // The update story lives at PAGE level because it renders in two places: the
   // update in flight in the notices strip above the tab bar, on every tab, and
@@ -1052,21 +783,7 @@ export function HostOverviewPanel(props: {
     install: statusQuery.data?.install ?? null,
     // From the facts as READ, qualified by the record leg's liveness - see
     // `legacyFactsRead`.
-    activationDebt:
-      legacyFactsRead?.activationDebt === undefined ||
-      legacyFactsRead.activationDebt === null
-        ? null
-        : {
-            installedVersion: legacyFactsRead.activationDebt.installedVersion,
-            // BOTH legs: the debt is the record's installed version read
-            // against the status read's running version, so a status read
-            // that failed or aged (the host may already have restarted
-            // onto the installed version) makes the sentence "last known"
-            // exactly as a failed record read does. `statusLive` carries
-            // `usable` too. The region renders only under `usable`, so an
-            // unusable scope never reaches this sentence at all.
-            live: installationLive && statusLive,
-          },
+    activationDebt: hostUpdateActivationDebt(updateOperation, statusLive),
     platformKey: host?.platform ?? null,
     // Deliberately NOT held to `installationLive`: the manifest describes
     // the CLI installed on the host - a property of the installation, not
@@ -1089,12 +806,8 @@ export function HostOverviewPanel(props: {
     // settled with no data, and a host that recovers from it would show the
     // list for the span until its status arrived.
     enabled: usable && statusQuery.data !== undefined,
-    checkDegrade: updatesExternallyManaged
-      ? "externally-managed"
-      : updateCheckDegrade,
-    installDegrade: updatesExternallyManaged
-      ? "externally-managed"
-      : updateInstallDegrade,
+    checkDegrade: updateDegrades.check,
+    installDegrade: updateDegrades.install,
     busy: updateGatePending,
     foregroundUpdateLine: localForegroundUpdateLine,
     incarnation,
@@ -1631,8 +1344,6 @@ export function HostOverviewPanel(props: {
     {
       summary: updates.summary,
       degrade: updates.degrade,
-      desktopBridge: desktopUpdates.bridge,
-      onInstallationHelp: () => setDoctorOpen(true),
       foregroundUpdateLine: localForegroundUpdateLine,
     },
     inFlightUpdateKind(operationView) !== null,
@@ -2502,36 +2213,6 @@ function deriveActivationAutoOpen(input: {
 }
 
 /**
- * Whether the update on screen is EXECUTING, and so may hold the page-wide
- * lifecycle gate.
- *
- * `holdsLifecycleGate` answers this for anything the projector produced. The
- * one exception is a pre-@1.3 peer, whose `updateOperation` is `null` and whose
- * only update signal is the coarse `updateProgress` marker — that cohort keeps
- * the gate it shipped with, read off the PROJECTED `updating` kind rather than
- * the raw wire field so a retained, failed or aged read demotes it (an old
- * host whose updater crashed mid-swap leaves that marker behind with nothing
- * to clear it, and a gate held by it would lock Restart indefinitely).
- *
- * The coarse arm is keyed on the observation that WON, not on the peer field
- * alone: a durable-record observation reaches the gate too — a probed-live
- * `restarting` holds it, exactly as a live wire `restarting` does — and it has
- * no marker behind it, so the pre-@1.3 test would find `restarting` where it
- * looks for `updating` and drop a gate the record leg is entitled to hold.
- */
-function updateHoldsLifecycleGate(input: {
-  readonly view: FleetUpdateView | null;
-  readonly observation: FleetUpdateObservation | null;
-  readonly peerReportedOperation: HostStatusUpdateOperation | null;
-}): boolean {
-  const { view, observation } = input;
-  if (view === null || observation === null) return false;
-  if (isRecordObservation(observation)) return holdsLifecycleGate(view);
-  if (input.peerReportedOperation === null) return view.kind === "updating";
-  return holdsLifecycleGate(view);
-}
-
-/**
  * Which bound control this view earns, or `null` for today's fact-based ones.
  *
  * Keyed on the view's own kind rather than on the install records, because the
@@ -2897,18 +2578,7 @@ function useOverviewCapabilities(
       useHostMethodSupport(hostId, "host.doctor"),
       fallback.maintenanceFallback,
     ),
-    installInfo: resolveOverviewMethodDegrade(
-      useHostMethodSupport(hostId, "host.getInstallationInfo"),
-      fallback.maintenanceFallback,
-    ),
-    updateCheck: resolveOverviewMethodDegrade(
-      useHostMethodSupport(hostId, "host.update.check"),
-      fallback.maintenanceFallback,
-    ),
-    updateInstall: resolveOverviewMethodDegrade(
-      useHostMethodSupport(hostId, "host.update.install"),
-      fallback.maintenanceFallback,
-    ),
+    ...useHostUpdateCapabilities(hostId, fallback.maintenanceFallback),
     // The service trio is DELIBERATELY outside the fallback: no IPC member
     // carries service state, `label`, or `manifestPath` (required in the ok
     // arm), and the old bridge derivation lacked `externally-managed` — the

@@ -3,6 +3,7 @@
  * Update that file whenever this settings surface changes.
  */
 import { useState, type ReactNode } from "react";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import { AGENT_SELECTION } from "@/components/settings/panels/agents-settings.definitions";
 import { AgentDefinitionsTab } from "@/components/settings/panels/agent-definitions-tab";
@@ -35,6 +36,20 @@ function isAgentsTab(value: string): value is AgentsTab {
  */
 export function AgentsSettingsPanel(): ReactNode {
   const [tab, setTab] = useState<AgentsTab>("guide");
+  const oldHost = useOldHostLocalPick();
+  // A host from before the Environment group has no definitions: its page is
+  // the guide alone, with no tab strip, as that release drew it.
+  if (oldHost) {
+    return (
+      <SettingsPanelShell
+        title={AGENT_SELECTION.page.label}
+        description={AGENT_SELECTION.page.description}
+        fillHeight
+      >
+        <AgentSelectionGuideSection />
+      </SettingsPanelShell>
+    );
+  }
   return (
     <SettingsPanelShell
       title={AGENT_SELECTION.page.label}

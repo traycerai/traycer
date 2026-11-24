@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
@@ -46,22 +48,25 @@ vi.mock("@/components/settings/environment-picker", () => ({
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  return {
-    useHostScope: () =>
-      hostScopeFixture({
-        host: reads.hostMissing
+  const useScope = () =>
+    hostScopeFixture({
+      host: reads.hostMissing
+        ? null
+        : hostScopeOptionFixture({
+            hostId: "host-a",
+            name: reads.hostName,
+            kind: reads.hostKind,
+          }),
+      hostLabel: reads.hostLabel,
+      vanishedSelection:
+        reads.vanishedName === null
           ? null
-          : hostScopeOptionFixture({
-              hostId: "host-a",
-              name: reads.hostName,
-              kind: reads.hostKind,
-            }),
-        hostLabel: reads.hostLabel,
-        vanishedSelection:
-          reads.vanishedName === null
-            ? null
-            : { name: reads.vanishedName, forget: () => undefined },
-      }),
+          : { name: reads.vanishedName, forget: () => undefined },
+    });
+  return {
+    useHostScope: useScope,
+    usePersonalHostScope: useScope,
+    usePickHostScope: useScope,
   };
 });
 
@@ -146,10 +151,24 @@ import { SettingsPanelForSection } from "@/components/settings/settings-modal-co
 const originalMatchMedia = window.matchMedia.bind(window);
 const originalInnerWidth = window.innerWidth;
 
+// An Environment section's body reads the pick's host
+// (`PageOrNotOnComputer`), whose reads are queries.
 function renderSection(
   section: "diagnostics" | "providers" | "appearance" | "host" | "worktrees",
 ) {
-  return render(<SettingsPanelForSection section={section} />);
+  return render(<SettingsPanelForSection section={section} />, {
+    wrapper: QueryWrapper,
+  });
+}
+
+const queryClient = new QueryClient();
+
+function QueryWrapper(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
 }
 
 function scopeLine(): HTMLElement {
@@ -189,6 +208,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  queryClient.clear();
   setPhoneLayoutOnly(false);
   Object.defineProperty(window, "matchMedia", {
     configurable: true,

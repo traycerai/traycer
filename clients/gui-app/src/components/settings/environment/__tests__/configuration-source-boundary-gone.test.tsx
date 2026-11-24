@@ -10,7 +10,14 @@ vi.mock("sonner", () => ({
   ),
 }));
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { useSyncExternalStore, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -48,13 +55,21 @@ import {
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { SettingsSurface } from "@/components/settings/settings-surface";
-import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import {
+  PERSONAL_PICK,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
 import {
   mountTeamPage,
   configurationItem,
@@ -76,54 +91,33 @@ import {
 
 /**
  * The surface moves are asserted as the COMMANDS they issue, not as a call to
- * the helper that issues them: which helper runs is the thing under test, so a
- * mock of it would pass whatever it was handed. `navigateToSettingsSection` is
- * the real one here, reaching this recording modal bridge, and only
- * `rememberSettingsTabSection` is stood in for — its own target is a tab this
- * suite does not lay out, and what matters is that it, and nothing that
- * activates, is what a server fact reaches for.
+ * the helper that issues them: `navigateToSettingsSection` is the real one
+ * here, reaching this recording modal bridge.
  */
 const surface = vi.hoisted(() => ({
   openSettings: vi.fn(),
   setSection: vi.fn(),
-  remember: vi.fn(),
-  replaceOwnedRoute: vi.fn(),
   overlayActive: false,
+  /** The section the overlay holds. */
+  overlaySection: "",
 }));
 
 /**
- * The route, which is the third presentation and the one `remember` cannot
- * move: `SettingsSurface` prefers the route wherever Settings owns it. The
- * real surface is rendered against this state in the arm that owns the route,
- * so that arm asserts the section DRAWN rather than the call made — with the
- * effect out of frame, a call cannot be told apart from a no-op.
+ * The route: `SettingsSurface` prefers it wherever Settings owns it. The real
+ * surface is rendered against this state in the arm that owns the route, so
+ * that arm asserts the section DRAWN rather than a call made.
  */
-const router = vi.hoisted(() => ({
-  pathname: "/epics",
-  listeners: new Set<() => void>(),
+const router = vi.hoisted(() => ({ pathname: "/epics" }));
+vi.mock("@tanstack/react-router", () => ({
+  useRouter: () => ({ navigate: vi.fn() }),
+  useRouterState: ({
+    select,
+  }: {
+    select: (state: {
+      readonly location: { readonly pathname: string };
+    }) => unknown;
+  }) => select({ location: { pathname: router.pathname } }),
 }));
-vi.mock("@tanstack/react-router", async () => {
-  const { useSyncExternalStore } = await import("react");
-  return {
-    useRouter: () => ({ navigate: vi.fn() }),
-    useRouterState: ({
-      select,
-    }: {
-      select: (state: {
-        readonly location: { readonly pathname: string };
-      }) => unknown;
-    }) =>
-      useSyncExternalStore(
-        (onChange: () => void) => {
-          router.listeners.add(onChange);
-          return () => {
-            router.listeners.delete(onChange);
-          };
-        },
-        () => select({ location: { pathname: router.pathname } }),
-      ),
-  };
-});
 vi.mock("@/components/settings/settings-sidebar", () => ({
   SettingsSidebar: () => null,
 }));
@@ -137,26 +131,13 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
     isOverlayActive: (kind: string) =>
       kind === "settings" && surface.overlayActive,
     openSettings: surface.openSettings,
-    setSection: surface.setSection,
-    // The bridge's own route move, recorded AND performed: what it does to a
-    // real router is asserted in `stores/tabs/__tests__/use-system-tab-modal`,
-    // against real Settings routes. Here it has to actually move the route, or
-    // the surface below has nothing to redraw from.
-    replaceOwnedSettingsRoute: (section: string) => {
-      surface.replaceOwnedRoute(section);
-      if (!router.pathname.startsWith("/settings")) return;
-      router.pathname = `/settings/${section}`;
-      // Notified, not just mutated: a route the surface never re-rendered for
-      // would let a case pass on a move nobody could see.
-      for (const listener of router.listeners) listener();
+    setSection: (section: string) => {
+      surface.setSection(section);
+      surface.overlaySection = section;
     },
     active: null,
     close: () => undefined,
   }),
-}));
-vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
-  rememberSettingsTabSection: surface.remember,
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -203,15 +184,19 @@ afterEach(() => {
   resetNegotiatedManifests();
   surface.openSettings.mockClear();
   surface.setSection.mockClear();
-  surface.remember.mockClear();
-  surface.replaceOwnedRoute.mockClear();
   surface.overlayActive = false;
+  surface.overlaySection = "";
   rerenders.tick = 0;
   router.pathname = "/epics";
+  useTabsStore.setState({ systemTabs: { history: null, settings: null } });
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
+    defaultHostId: null,
+    gone: null,
   });
+  useSelectionAuthorityStore.setState({ effectiveHostId: null });
+  pickReader = null;
 });
 
 const PERSONAL: EnvironmentDescriptorV11 = {
@@ -392,6 +377,19 @@ async function expectOwnershipConsumers(options: {
   }
 }
 
+/**
+ * The pick every Environment page reads, through `useEnvironmentPick`,
+ * mounted once per case: a `waitFor` re-runs on every DOM change, and a
+ * mount is one.
+ */
+let pickReader: {
+  readonly result: { readonly current: EnvironmentPick };
+} | null = null;
+function windowPick(): EnvironmentPick {
+  pickReader ??= renderHook(() => useEnvironmentPick());
+  return pickReader.result.current;
+}
+
 function mountConfigurationPermissionBoundary(options: {
   readonly target: CloudConfigurationTarget;
   readonly environments: readonly EnvironmentDescriptorV11[];
@@ -526,12 +524,12 @@ describe("a team the environment list no longer carries", () => {
     await rerenderList();
 
     // The selection moves off a team no page can read, which is what unmounts
-    // the page the removal happened on.
-    await waitFor(() =>
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-        PERSONAL_PICK,
-      ),
-    );
+    // the page the removal happened on. The pick itself is not rewritten.
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK));
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
     // The sentence outlives that page, and is raised once under the team's own
     // id, so a remount or a re-read of the same removal cannot stack it.
     expect(hoisted.toasts).toEqual([
@@ -556,14 +554,40 @@ describe("a team the environment list no longer carries", () => {
     });
     await rerenderList();
 
-    await waitFor(() =>
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-        PERSONAL_PICK,
-      ),
-    );
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK));
     // A pick made on another computer: the selection still moves, because no
     // page can read it, but no removal is claimed from a team never seen.
     expect(hoisted.toasts).toEqual([]);
+  });
+
+  it("lands on Personal, not this computer's own settings, when this computer has a Local row", async () => {
+    // The window's host, which defaults to its own Local row. Rendered without
+    // the held-value runtime, whose runner has no local host and would publish
+    // a window with no host.
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+      defaultPick: {
+        kind: "local",
+        hostId: mockLocalHostEntry.hostId,
+        hostName: mockLocalHostEntry.label,
+      },
+      defaultHostId: mockLocalHostEntry.hostId,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [PERSONAL] }),
+    });
+    answerInvitations(() => ({ invitations: [] }));
+    render(
+      <PersonalPageFrame section="secrets">
+        <Probe />
+      </PersonalPageFrame>,
+      { wrapper: harness.Wrapper },
+    );
+
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK));
   });
 
   it("offers Review for a team that has invited the person back", async () => {
@@ -583,7 +607,7 @@ describe("a team the environment list no longer carries", () => {
     ).toBeNull();
     // An invitation is not a membership: the selection stays, so the trigger
     // and the Review keep naming the same team.
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -632,7 +656,7 @@ describe("a team the environment list no longer carries", () => {
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Review" })).toBeTruthy();
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -691,7 +715,7 @@ describe("a team the environment list no longer carries", () => {
       await screen.findByText("These settings are no longer available."),
     ).toBeTruthy();
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -720,22 +744,12 @@ describe("a team the environment list no longer carries", () => {
   });
 
   // Personal has no Members page, and Members is the likeliest page to be on
-  // while a membership changes. Moving the selection there without moving the
-  // surface leaves the person on a panel that renders nothing, with the
-  // sidebar row they were standing on gone from under them.
+  // while a membership changes. The selection moves to Personal and the
+  // surface stays where the person is: the page answers for itself.
   //
   // The three arms below are the same removal on the three presentations
-  // Settings has, and each needs a different move — none of which may activate
-  // anything, because nobody pressed anything and `openSettings` would take a
-  // split partner's focus and route for a membership change in the background.
-  //
-  // With the overlay up, the person is looking at Settings and the section is
-  // swapped in place. With it down and a partner owning the route, Settings is
-  // a tab that may be sitting in a pane nobody is looking at, so the tab is
-  // only told where it is. With it down and Settings OWNING the route, being
-  // told is not enough: the surface prefers the route wherever it owns it, so
-  // the route is replaced — which activates nothing, a surface owning the
-  // route being the focused route owner already.
+  // Settings has: the overlay, a background tab whose split partner owns the
+  // route, and a Settings surface that owns the route. None of them moves.
   async function removalOnMembers(alongside: ReactNode): Promise<void> {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
@@ -753,45 +767,39 @@ describe("a team the environment list no longer carries", () => {
       </HeldValueHostRuntime>,
       { wrapper: harness.Wrapper },
     );
-    await waitFor(
-      () =>
-        expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-          PERSONAL_PICK,
-        ),
-      { timeout: 5000 },
-    );
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK), {
+      timeout: 5000,
+    });
   }
 
-  it("swaps the section in place when the person is looking at Settings", async () => {
+  it("leaves the overlay on Members when the person is looking at Settings", async () => {
     surface.overlayActive = true;
+    surface.overlaySection = "members";
 
     await removalOnMembers(null);
 
-    expect(surface.setSection).toHaveBeenCalledWith("providers");
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.remember).not.toHaveBeenCalled();
+    expect(surface.overlaySection).toBe("members");
   });
 
-  it("moves a background Settings tab without activating it", async () => {
+  it("leaves a background Settings tab's remembered path on Members", async () => {
     surface.overlayActive = false;
-    // A split partner owns the route, which is the case `remember` is for.
+    // A split partner owns the route, which is the case a remembered path is for.
     router.pathname = "/epics";
+    useTabsStore.getState().openSystemTab({
+      kind: "settings",
+      name: "Settings",
+      lastPath: "/settings/members",
+    });
 
     await removalOnMembers(null);
 
-    // Where Settings has to end up: on a page Personal offers.
-    expect(surface.remember).toHaveBeenCalledWith("providers");
-    // What must not happen to the pane the person IS working in. This is the
-    // whole assertion: `openSettings` focuses the Settings tab and changes the
-    // active route, so a split partner would lose both to a membership change
-    // in the background.
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.setSection).not.toHaveBeenCalled();
-    // The partner's route is left exactly where it was.
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/members",
+    );
     expect(router.pathname).toBe("/epics");
   });
 
-  it("moves the Settings surface that owns the route, without activating anything", async () => {
+  it("leaves the Settings surface that owns the route on Members", async () => {
     surface.overlayActive = false;
     // The person is reading Settings ▸ Environment ▸ Members with no overlay
     // up: Settings owns the route, so its remembered path is ignored.
@@ -799,16 +807,11 @@ describe("a team the environment list no longer carries", () => {
 
     await removalOnMembers(<SettingsSurface lastPath="/settings/members" />);
 
-    // The real surface, resolving the real route. This is what `remember`
-    // alone cannot do, and asserting the command could not tell apart.
-    await waitFor(() =>
-      expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
-        "providers",
-      ),
+    // The real surface, resolving the real route.
+    expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+      "members",
     );
-    expect(surface.replaceOwnedRoute).toHaveBeenCalledWith("providers");
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.setSection).not.toHaveBeenCalled();
+    expect(router.pathname).toBe("/settings/members");
   });
 
   // A page the selection still offers is left where it is.
@@ -832,16 +835,11 @@ describe("a team the environment list no longer carries", () => {
     // The removal settles through a cancel and a read of its own, so the wait
     // is generous: what this case is about is which page the person lands on,
     // never how quickly.
-    await waitFor(
-      () =>
-        expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-          PERSONAL_PICK,
-        ),
-      { timeout: 5000 },
-    );
+    await waitFor(() => expect(windowPick()).toEqual(PERSONAL_PICK), {
+      timeout: 5000,
+    });
     expect(surface.openSettings).not.toHaveBeenCalled();
     expect(surface.setSection).not.toHaveBeenCalled();
-    expect(surface.remember).not.toHaveBeenCalled();
   });
 
   // `refetch`'s promise resolves with the OBSERVER's state, so a request
@@ -901,7 +899,7 @@ describe("a team the environment list no longer carries", () => {
       });
     });
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -983,7 +981,7 @@ describe("a team the environment list no longer carries", () => {
       ),
     ).toBeTruthy();
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });
@@ -1045,9 +1043,7 @@ describe("a team the environment list no longer carries", () => {
           ]),
         { timeout: 5000 },
       );
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-        PERSONAL_PICK,
-      );
+      expect(windowPick()).toEqual(PERSONAL_PICK);
       // No request count here, unlike the cases above: a held clock makes
       // `timeUntilStale` zero, so every read is perpetually stale and the
       // harness refetches more than the design asks for. That is the frozen
@@ -1135,7 +1131,7 @@ describe("a team the environment list no longer carries", () => {
       ).toBeTruthy();
 
       expect(hoisted.toasts).toEqual([]);
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      expect(windowPick()).toEqual({
         kind: "team",
         environmentId: "env-a",
       });
@@ -1151,9 +1147,7 @@ describe("a team the environment list no longer carries", () => {
           },
         ]),
       );
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-        PERSONAL_PICK,
-      );
+      expect(windowPick()).toEqual(PERSONAL_PICK);
     } finally {
       clock.mockRestore();
     }
@@ -1212,7 +1206,7 @@ describe("a team the environment list no longer carries", () => {
     // asks once, whether or not the one before it got an answer.
     expect(asked).toBe(3);
     expect(hoisted.toasts).toEqual([]);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+    expect(windowPick()).toEqual({
       kind: "team",
       environmentId: "env-a",
     });

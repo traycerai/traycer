@@ -13,6 +13,7 @@ function facts(overrides: Partial<GettingStartedFacts>): GettingStartedFacts {
     hasSecondPersonalComputer: false,
     sandboxStaged: false,
     creditsAboveZero: false,
+    secretsOffered: true,
     thisComputersMove: "unknown",
     ...overrides,
   };
@@ -74,6 +75,18 @@ describe("gettingStartedGuideIsComplete", () => {
     expect(
       gettingStartedVisibleCards(ALL_BUT_CREDITS).map((card) => card.id),
     ).not.toContain("move");
+  });
+
+  it("leaves the Secrets step out where the pick offers no Secrets page, and counts the rest", () => {
+    const withoutSecrets = facts({
+      ...ALL_BUT_CREDITS,
+      hasSecret: false,
+      secretsOffered: false,
+    });
+    expect(
+      gettingStartedVisibleCards(withoutSecrets).map((card) => card.id),
+    ).toEqual(["provider", "task", "install"]);
+    expect(gettingStartedGuideIsComplete(withoutSecrets)).toBe(true);
   });
 
   it("is complete once a staged sandbox's credits balance is above zero and every other step is done", () => {

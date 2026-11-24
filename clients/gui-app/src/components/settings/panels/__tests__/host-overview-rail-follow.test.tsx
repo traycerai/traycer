@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -19,6 +22,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const reads = vi.hoisted(() => ({
@@ -90,7 +94,7 @@ const BINDING: EnvironmentHostBinding = {
   canUnbind: false,
 };
 
-function mount(status: EnvironmentStatusResponseV11): void {
+function mount(status: EnvironmentStatusResponseV13): void {
   reads.statuses.set("old", status);
   recordNegotiatedHostManifest("old", {
     "environment.status": { major: 1, minor: 1 },
@@ -108,7 +112,6 @@ function mount(status: EnvironmentStatusResponseV11): void {
           host,
           activeHostId: "old",
         })}
-        activeSection="mcp-servers"
       />
       <HostOverviewSettingsCard
         client={client}
@@ -132,15 +135,19 @@ async function flushEffects(): Promise<void> {
 
 beforeEach(() => {
   reads.statuses.clear();
+  // The window's own host, as the picker's scope names it.
+  useSelectionAuthorityStore.setState({ effectiveHostId: "old" });
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
+    gone: null,
   });
 });
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  useSelectionAuthorityStore.getState().reset();
 });
 
 describe("the Overview row and the Environment dropdown on a stopped move", () => {

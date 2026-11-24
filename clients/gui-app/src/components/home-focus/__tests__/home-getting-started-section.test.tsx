@@ -20,6 +20,19 @@ import {
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
 import {
+  personalHostScopeOverrides,
+  pickerDefaultPick,
+  resetEnvironmentSectionReads,
+  windowHostRunsPersonal,
+} from "@/components/settings/__tests__/environment-section-reads-fixture";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  PERSONAL_PICK,
+  UNRESOLVED_PICK,
+} from "@/lib/settings-environment-pages";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
   mountTeamPage,
   personalPoolSource,
   resetTeamPageHarness,
@@ -36,6 +49,8 @@ const mocks = vi.hoisted(() => ({
   hosts: [] as RunningHost[],
   user: null as AuthenticatedUser | null,
   staged: null as { readonly target: { readonly kind: string } } | null,
+  /** Whether the window's host serves `environment.secrets.list`. */
+  hostServesSecrets: true,
   openLink: vi.fn(() => Promise.resolve()),
 }));
 
@@ -58,7 +73,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => true,
+  useHostMethodSupport: () => mocks.hostServesSecrets,
 }));
 
 vi.mock("@/hooks/host/use-requester-host-id", () => ({
@@ -121,6 +136,35 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ signInUrl: "https://traycer.ai/sign-in" }),
 }));
+
+// The card is judged on the default pick's page, which reads the window's host
+// through one scope and whether it runs Personal: the shared fixtures answer
+// both, so these cases stay about the cards.
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).personalHostScopeModule,
+);
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).windowHostRunsPersonalModule,
+);
+
+// The default pick comes from the window's computers: the shared fixture
+// resolves what a test sets as `pickerDefaultPick`, as the host's answers
+// would.
+vi.mock(
+  "@/components/settings/environment/use-environment-status-model",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).environmentStatusModelModule,
+);
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const setSectionMock = vi.hoisted(() => vi.fn());
@@ -196,11 +240,29 @@ function renderHomeSection() {
       removed: [],
     }),
   });
-  return render(
+  const element = () => (
     <harness.Wrapper>
       <HomeGettingStartedSection />
-    </harness.Wrapper>,
+    </harness.Wrapper>
   );
+  const view = render(element());
+  return {
+    ...view,
+    /** Reads the fixtures again, as a host answering or going away would. */
+    refresh: () => view.rerender(element()),
+  };
+}
+
+/** The window moves to another computer: the authority and the scope follow. */
+function moveWindowHostTo(hostId: string): void {
+  useSelectionAuthorityStore.setState({ effectiveHostId: hostId });
+  personalHostScopeOverrides.current = {
+    host: hostScopeOptionFixture({ hostId }),
+  };
+}
+
+function secretCard(): HTMLElement | null {
+  return screen.queryByTestId("getting-started-card-secret");
 }
 
 describe("HomeGettingStartedSection", () => {
@@ -220,6 +282,16 @@ describe("HomeGettingStartedSection", () => {
       [],
     );
     mocks.staged = null;
+    mocks.hostServesSecrets = true;
+    moveWindowHostTo("host-a");
+    pickerDefaultPick.current = PERSONAL_PICK;
+    // From the store's initial state, so no case inherits the Secrets card's
+    // decision another made.
+    useSettingsEnvironmentPickStore.setState({
+      ...useSettingsEnvironmentPickStore.getInitialState(),
+      defaultPick: PERSONAL_PICK,
+      defaultHostId: "host-a",
+    });
     mocks.openLink.mockClear();
     navigateMock.mockReset();
     setSectionMock.mockReset();
@@ -229,6 +301,8 @@ describe("HomeGettingStartedSection", () => {
   afterEach(() => {
     cleanup();
     resetTeamPageHarness();
+    resetEnvironmentSectionReads();
+    useSelectionAuthorityStore.getState().reset();
   });
 
   it("renders open with the heading, the count, and the cards as buttons while steps are incomplete", () => {
@@ -293,5 +367,96 @@ describe("HomeGettingStartedSection", () => {
     expect(
       screen.getByRole("button", { name: "Add credits, Not started" }),
     ).toBeTruthy();
+  });
+
+  it("resolves the window's default on a cold Home, so the Secrets step shows once the host is ready", async () => {
+    mocks.providers = [storedKeyProvider()];
+    mocks.tasks = [{ id: "task-1" }];
+    mocks.hosts = [personalHost("a"), personalHost("b")];
+    useSettingsEnvironmentPickStore.setState({
+      defaultPick: UNRESOLVED_PICK,
+      defaultHostId: null,
+    });
+    pickerDefaultPick.current = UNRESOLVED_PICK;
+    const home = renderHomeSection();
+    expect(secretCard()).toBeNull();
+
+    pickerDefaultPick.current = PERSONAL_PICK;
+    home.refresh();
+
+    await waitFor(() => {
+      expect(secretCard()).not.toBeNull();
+    });
+    expect(screen.getByText("3 of 4 complete")).toBeTruthy();
+  });
+
+  describe("the Secrets step, once decided for a window host", () => {
+    it("stays after the host goes away and comes back lacking Secrets, and the next host decides again", async () => {
+      windowHostRunsPersonal.current = false;
+      const home = renderHomeSection();
+      await waitFor(() => {
+        expect(secretCard()).not.toBeNull();
+      });
+
+      windowHostRunsPersonal.current = true;
+      mocks.hostServesSecrets = false;
+      home.refresh();
+
+      expect(secretCard()).not.toBeNull();
+
+      moveWindowHostTo("host-b");
+      home.refresh();
+
+      await waitFor(() => {
+        expect(secretCard()).toBeNull();
+      });
+    });
+
+    describe("while the host lists failed in a window with no host", () => {
+      // Personal is that window's default, and reads the cloud once the lists
+      // say it has no host.
+      beforeEach(() => {
+        useSelectionAuthorityStore.setState({ effectiveHostId: null });
+        useSettingsEnvironmentPickStore.setState({ defaultHostId: null });
+        personalHostScopeOverrides.current = { host: null, listsFailed: true };
+        windowHostRunsPersonal.current = null;
+      });
+
+      it("is decided by the retry that answers, for the same window host", async () => {
+        const home = renderHomeSection();
+        expect(secretCard()).toBeNull();
+
+        personalHostScopeOverrides.current = { host: null };
+        windowHostRunsPersonal.current = false;
+        home.refresh();
+
+        await waitFor(() => {
+          expect(secretCard()).not.toBeNull();
+        });
+      });
+
+      it("keeps the Guide open with every shown step done until Secrets is known", () => {
+        mocks.providers = [storedKeyProvider()];
+        mocks.tasks = [{ id: "task-1" }];
+        mocks.hosts = [personalHost("a"), personalHost("b")];
+
+        renderHomeSection();
+
+        expect(secretCard()).toBeNull();
+        expect(screen.getByText("3 of 3 complete")).toBeTruthy();
+      });
+    });
+
+    it("stays absent after the host goes away and the cloud road serves Secrets", () => {
+      windowHostRunsPersonal.current = true;
+      mocks.hostServesSecrets = false;
+      const home = renderHomeSection();
+      expect(secretCard()).toBeNull();
+
+      windowHostRunsPersonal.current = false;
+      home.refresh();
+
+      expect(secretCard()).toBeNull();
+    });
   });
 });

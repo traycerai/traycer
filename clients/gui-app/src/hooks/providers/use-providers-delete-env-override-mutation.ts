@@ -1,4 +1,3 @@
-import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -29,7 +28,10 @@ export function useProvidersDeleteEnvOverride(): UseMutationResult<
     method: "providers.deleteEnvOverride",
     mutationKey: providersMutationKeys.deleteEnvOverride(),
     errorMessage: "Couldn't remove the variable.",
-    invalidateMethods: PROVIDER_INVALIDATIONS,
+    invalidateMethods: [
+      ...PROVIDER_INVALIDATIONS,
+      "environment.localOverrides",
+    ],
     followSettingsSave: {
       source: cloudSource,
       follow: (request, client, pressedOn) =>
@@ -38,7 +40,7 @@ export function useProvidersDeleteEnvOverride(): UseMutationResult<
           client.getActiveHostId(),
           pressedOn,
         ),
-      proposes: everyAnswerProposes,
+      proposes: (answer) => answer.savedLocally !== true,
     },
   });
 }

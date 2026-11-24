@@ -55,10 +55,15 @@ import {
   moveIsRunning,
 } from "@/lib/environment/move-in-progress";
 import {
+  ACCEPTED_MOVE_CASES,
+  MOVING_SETTINGS_WINDOW_SETUP,
+  REGISTERING_SETUP,
   buildEnvironmentClient,
   environmentStatusFixture,
   itemStatusFixture,
+  moveAttemptFixture,
   pendingUploadFixture,
+  unboundMoveStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
@@ -350,7 +355,8 @@ async function expectGiveChatCount(
 }
 
 interface CardRenderOptions {
-  readonly binding: EnvironmentHostBinding;
+  /** Null is what the card is given for a computer that runs its own settings, and while the binding is unread. */
+  readonly binding: EnvironmentHostBinding | null;
   readonly retrySupported: boolean;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
@@ -442,7 +448,7 @@ function renderCardWithBinding(
             hostName="Old laptop"
             status={status}
             binding={
-              options.binding.hostId === hostId
+              options.binding === null || options.binding.hostId === hostId
                 ? options.binding
                 : { ...options.binding, hostId }
             }
@@ -455,6 +461,20 @@ function renderCardWithBinding(
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+/** The card as production draws it for a computer that runs its own settings: no binding. */
+function renderCardWithoutBinding(
+  status: EnvironmentStatusResponseV13,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): QueryClient {
+  return renderCardWithBinding(status, handlers, {
+    binding: null,
+    retrySupported: true,
+    owner: null,
+    isLocalMachine: false,
+    previewLocalFactsSupported: true,
+  });
 }
 
 function renderCardOnThisComputer(
@@ -1480,6 +1500,17 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
   });
 });
 
+/**
+ * A registering stage that stalled or failed while the host's acceptance is
+ * still open: the move stopped, so the Overview asks for its Retry.
+ */
+const STOPPED_REGISTERING_CASES = [
+  { state: "stalled", reason: "it timed out" },
+  { state: "failed", reason: "it couldn't finish" },
+].flatMap(({ state, reason }) =>
+  (["retry", "running"] as const).map((move) => [state, move, reason] as const),
+);
+
 describe("hostSettingsCardState", () => {
   it("reads moved off status.consent when setup has not started or has left the move", () => {
     const consent = { acceptedAt: ACCEPTED_AT, planHash: "h" };
@@ -1489,6 +1520,48 @@ describe("hostSettingsCardState", () => {
     expect(hostSettingsCardState(environmentStatusFixture({}))).toEqual({
       kind: "other",
     });
+  });
+
+  it.each(STOPPED_REGISTERING_CASES)(
+    "reads a registering stage that %s, with the host's move in state %s, as a stopped move",
+    (state, move, reason) => {
+      expect(
+        hostSettingsCardState(
+          unboundMoveStatusFixture(
+            { stage: "registering", state },
+            moveAttemptFixture(move),
+          ),
+        ),
+      ).toEqual({ kind: "move_stopped", reason, left: 0 });
+    },
+  );
+
+  it.each([
+    ["running", "running"],
+    ["stalled", "retry"],
+  ] as const)(
+    "reads a stage this app does not know (%s), with the host's move in state %s, as a Local row",
+    (state, move) => {
+      expect(
+        hostSettingsCardState(
+          unboundMoveStatusFixture(
+            { stage: "verifying", state },
+            moveAttemptFixture(move),
+          ),
+        ),
+      ).toEqual({ kind: "local", verb: "move_to_personal" });
+    },
+  );
+
+  it("keeps a registering stage that stalled before any move was accepted as a Local row", () => {
+    expect(
+      hostSettingsCardState(
+        unboundMoveStatusFixture(
+          { stage: "registering", state: "stalled" },
+          null,
+        ),
+      ),
+    ).toEqual({ kind: "local", verb: "move_to_personal" });
   });
 });
 
@@ -1657,6 +1730,107 @@ describe("hostSettingsRowModel", () => {
     });
   });
 
+  describe("a move the person already accepted, stopped before authn bound this computer", () => {
+    it.each(ACCEPTED_MOVE_CASES)(
+      "shows progress, not a Local row, in %s while the host's move is in state %s",
+      (_name, state, setup) => {
+        expect(
+          hostSettingsRowModel(
+            unboundMoveStatusFixture(setup, moveAttemptFixture(state)),
+            PERSONAL_BINDING,
+            "Old laptop",
+          ).kind,
+        ).toBe("progress");
+      },
+    );
+
+    it.each([
+      ["registering", REGISTERING_SETUP],
+      ["the moving settings window", MOVING_SETTINGS_WINDOW_SETUP],
+    ])(
+      "keeps the Local row in %s for a computer whose move was never accepted",
+      (_name, setup) => {
+        const model = hostSettingsRowModel(
+          unboundMoveStatusFixture(setup, null),
+          PERSONAL_BINDING,
+          "Old laptop",
+        );
+        expect(model).toMatchObject({ kind: "select", value: "local" });
+        if (model.kind !== "select") return;
+        expect(model.options.map((option) => option.action)).toContain("move");
+      },
+    );
+
+    it.each(STOPPED_REGISTERING_CASES)(
+      "shows the stopped move, not a Local row, in a registering stage that %s with the host's move in state %s",
+      (state, move, reason) => {
+        expect(
+          hostSettingsRowModel(
+            unboundMoveStatusFixture(
+              { stage: "registering", state },
+              moveAttemptFixture(move),
+            ),
+            PERSONAL_BINDING,
+            "Old laptop",
+          ),
+        ).toMatchObject({
+          kind: "progress",
+          progress: { kind: "move_stopped", reason },
+        });
+      },
+    );
+
+    it("keeps the Local row for a registering stage that stalled before any move was accepted", () => {
+      expect(
+        hostSettingsRowModel(
+          unboundMoveStatusFixture(
+            { stage: "registering", state: "stalled" },
+            null,
+          ),
+          PERSONAL_BINDING,
+          "Old laptop",
+        ),
+      ).toMatchObject({ kind: "select", value: "local" });
+    });
+  });
+
+  // The card is given no binding for a computer that runs its own settings. With every plane moved and no
+  // pending upload it has no Local row, so the row waits on the binding read, a registering stage with an open
+  // record as main's moving settings stage does one step later.
+  it.each([
+    {
+      name: "registering, running, record running",
+      setup: { stage: "registering", state: "running" },
+      move: moveAttemptFixture("running"),
+    },
+    {
+      name: "registering, stalled, record retry",
+      setup: { stage: "registering", state: "stalled" },
+      move: moveAttemptFixture("retry"),
+    },
+    {
+      name: "moving settings, running, no record",
+      setup: { stage: "moving_settings", state: "running" },
+      move: null,
+    },
+    {
+      name: "moving settings, stalled, no record",
+      setup: { stage: "moving_settings", state: "stalled" },
+      move: null,
+    },
+  ])(
+    "reserves the row, with no binding and every plane moved, in $name",
+    ({ setup, move }) => {
+      expect(
+        hostSettingsRowModel(
+          environmentStatusFixture({ setup, move }),
+          null,
+          "Old laptop",
+        ),
+      ).toEqual({ kind: "loading" });
+    },
+  );
+
   it("reserves the row while status or binding is unread", () => {
     expect(
       hostSettingsRowModel(null, PERSONAL_BINDING, "Old laptop").kind,
@@ -1761,5 +1935,170 @@ describe("<HostOverviewSettingsCard /> follows the rail", () => {
     await waitFor(() => {
       expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
     });
+  });
+});
+
+/**
+ * Applying comes after the upload has ended, so the open record does not carry
+ * the guard there: every surface reads `setup` and the planes, as it did before
+ * the record was read.
+ */
+const APPLYING_CASES = ["running", "stalled", "failed"].flatMap((state) =>
+  (["running", "retry"] as const).map((move) => [state, move] as const),
+);
+
+describe("a move whose record is open while setup is applying", () => {
+  it.each(APPLYING_CASES)(
+    "reads a computer whose planes are local as a Local row while applying is %s and the host's move is in state %s",
+    (state, move) => {
+      const status = unboundMoveStatusFixture(
+        { stage: "applying", state },
+        moveAttemptFixture(move),
+      );
+
+      expect(hostSettingsCardState(status)).toEqual({
+        kind: "local",
+        verb: "move_to_personal",
+      });
+      expect(
+        hostSettingsRowModel(status, PERSONAL_BINDING, "Old laptop"),
+      ).toMatchObject({ kind: "select", value: "local" });
+    },
+  );
+
+  it.each(APPLYING_CASES)(
+    "draws the settings row, not the move's progress, while applying is %s and the host's move is in state %s",
+    (state, move) => {
+      renderCard(
+        unboundMoveStatusFixture(
+          { stage: "applying", state },
+          moveAttemptFixture(move),
+        ),
+        {},
+      );
+
+      expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
+      expect(
+        screen.queryByTestId("host-settings-card-move-stopped"),
+      ).toBeNull();
+      expect(screen.getByTestId("host-settings-source").textContent).toContain(
+        "Runs its own settings",
+      );
+    },
+  );
+
+  it("leaves the rail on the computer's own settings while applying runs with the move's record open", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    renderCard(
+      unboundMoveStatusFixture(
+        { stage: "applying", state: "running" },
+        moveAttemptFixture("running"),
+      ),
+      {},
+    );
+
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "local",
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+    });
+  });
+});
+
+describe("a move whose record is open while setup names a stage this app does not know", () => {
+  it.each([
+    ["running", "running"],
+    ["stalled", "retry"],
+  ] as const)(
+    "draws the settings row, not the move's progress or stopped row, while a stage this app does not know is %s and the host's move is in state %s",
+    (state, move) => {
+      renderCard(
+        unboundMoveStatusFixture(
+          { stage: "verifying", state },
+          moveAttemptFixture(move),
+        ),
+        {},
+      );
+
+      expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
+      expect(
+        screen.queryByTestId("host-settings-card-move-stopped"),
+      ).toBeNull();
+      expect(screen.getByTestId("host-settings-source").textContent).toContain(
+        "Runs its own settings",
+      );
+    },
+  );
+});
+
+describe("<HostOverviewSettingsCard /> for a move accepted before authn bound this computer", () => {
+  it.each(ACCEPTED_MOVE_CASES)(
+    "shows the move's progress with no row to move again in %s while its state is %s",
+    (_name, state, setup) => {
+      renderCardWithoutBinding(
+        unboundMoveStatusFixture(setup, moveAttemptFixture(state)),
+        {},
+      );
+
+      expect(screen.getByTestId("host-settings-card-progress")).toBeTruthy();
+      const source = screen.getByRole("combobox", { name: "Environment" });
+      expect(source.textContent).toBe("Personal");
+      expect(source.hasAttribute("disabled")).toBe(true);
+    },
+  );
+
+  it.each(STOPPED_REGISTERING_CASES)(
+    "offers Retry, not a row to move again, in a registering stage that %s with the host's move in state %s",
+    (state, move, reason) => {
+      renderCardWithoutBinding(
+        unboundMoveStatusFixture(
+          { stage: "registering", state },
+          moveAttemptFixture(move),
+        ),
+        {},
+      );
+
+      expect(
+        screen.getByTestId("host-settings-card-move-stopped").textContent,
+      ).toBe(`Moving stopped: ${reason}. 0 items left.`);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      expect(screen.queryByTestId("host-settings-source")).toBeNull();
+    },
+  );
+
+  it("still offers Personal, with no Retry, for a registering stage that stalled before any move was accepted", () => {
+    renderCardWithoutBinding(
+      unboundMoveStatusFixture(
+        { stage: "registering", state: "stalled" },
+        null,
+      ),
+      {},
+    );
+
+    expect(screen.queryByTestId("host-settings-card-move-stopped")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Runs its own settings",
+    );
+  });
+
+  it("still offers Personal to a first computer whose move was never accepted", async () => {
+    renderCardWithoutBinding(
+      unboundMoveStatusFixture(REGISTERING_SETUP, null),
+      {},
+    );
+
+    expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(
+      await screen.findByRole("option", { name: /^Personal/ }),
+    ).toBeTruthy();
   });
 });

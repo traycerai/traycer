@@ -101,12 +101,14 @@ export type HostClientUnsubscribe = () => void;
  * are thin wrappers over it so there is exactly one place the messenger is
  * called.
  *
- * EVERY FIELD IS REQUIRED, `null`/`undefined` included. A defaulted option here
+ * Replay, scheduling and version fields are required, `null`/`undefined` included. A defaulted option here
  * would be a silent policy: a caller that forgot the key would still dispatch,
  * and the difference between "this call is replay-safe" and "nobody thought
  * about it" is precisely what must not be inferred from an absent property.
  */
 export interface HostRequestDispatchOptions {
+  /** A request correlation supplied by the caller when its effect is followed separately. */
+  readonly requestId?: string | undefined;
   /**
    * Stable retry identity for a command. Read the allowlist note on
    * {@link HostRequester.requestWithIdempotencyKey} before adding a caller.
@@ -984,6 +986,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       (authority) => {
         const requestOptions = {
           idempotencyKey,
+          requestId: options.requestId,
           authority,
           // Every dispatch this client originates is a caller's FIRST attempt.
           // The replay requirement is raised one layer down, by

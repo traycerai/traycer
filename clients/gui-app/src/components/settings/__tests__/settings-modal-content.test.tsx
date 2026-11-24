@@ -27,12 +27,16 @@ vi.mock("@/components/settings/panels/usage-settings-panel", () => ({
 vi.mock("@/components/settings/personal/personal-page-frame", () => ({
   PersonalPageFrame: (props: { readonly children: React.ReactNode }) =>
     props.children,
+  PersonalPageHeaderStatus: () => null,
 }));
 vi.mock("@/components/settings/panels/agents-settings-panel", () => ({
   AgentsSettingsPanel: () => <div data-testid="agents-page-probe" />,
 }));
 vi.mock("@/components/settings/panels/permissions-settings-panel", () => ({
   PermissionsSettingsPanel: () => <div data-testid="permissions-page-probe" />,
+  PermissionsBrowserAgentAccess: () => (
+    <div data-testid="browser-agent-access-probe" />
+  ),
 }));
 
 vi.mock("@/components/settings/panels/alerts-settings-panel", () => ({
@@ -80,10 +84,14 @@ describe("<SettingsModalContent />", () => {
     expect(screen.getByTestId("agents-page-probe")).toBeTruthy();
   });
 
-  it("opens the Permissions page for a modal opened on the retired Browser agent access", () => {
+  it("opens Browser agent access in place, under its own heading, for a modal opened on it", () => {
     render(<SettingsModalContent section="browser-agent-access" />);
 
-    expect(screen.getByTestId("permissions-page-probe")).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Browser agent access" }),
+    ).toBeTruthy();
+    expect(screen.getByTestId("browser-agent-access-probe")).toBeTruthy();
+    expect(screen.queryByTestId("permissions-page-probe")).toBeNull();
   });
 
   it("opens Alerts for a remembered Sounds when the build has no soundtrack", () => {

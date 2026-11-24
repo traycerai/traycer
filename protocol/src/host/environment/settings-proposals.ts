@@ -2,7 +2,10 @@
 // on its own token, where it is held, and the app that made the edit applies the
 // hold. No receipt carries a hold id or a value.
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   environmentItemKindSchema,
@@ -116,7 +119,20 @@ export const environmentProposalSchema = lazySchema(() =>
     deliveredRevision: z.number().int().nonnegative().nullable(),
   }),
 );
-export type EnvironmentProposal = z.infer<typeof environmentProposalSchema>;
+const environmentPromotionSchema = lazySchema(() =>
+  z.object({
+    saveId: z.uuid(),
+    /** Authn's exact hold revision, once the promoted proposal is accepted. */
+    heldRevision: z.number().int().nonnegative().nullable(),
+  }),
+);
+
+const environmentProposalSchemaV11 = lazySchema(() =>
+  environmentProposalSchema.extend({
+    promotion: environmentPromotionSchema.optional(),
+  }),
+);
+export type EnvironmentProposal = z.infer<typeof environmentProposalSchemaV11>;
 
 export const environmentProposalsRequestSchema = lazySchema(() => z.object({}));
 export type EnvironmentProposalsRequest = z.infer<
@@ -126,8 +142,15 @@ export type EnvironmentProposalsRequest = z.infer<
 export const environmentProposalsResponseSchema = lazySchema(() =>
   z.object({ proposals: z.array(environmentProposalSchema) }),
 );
+const environmentProposalsResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    proposals: z.array(environmentProposalSchemaV11),
+    /** Client saves recorded locally and still awaiting promotion. */
+    localSaveIds: z.array(z.uuid()).optional(),
+  }),
+);
 export type EnvironmentProposalsResponse = z.infer<
-  typeof environmentProposalsResponseSchema
+  typeof environmentProposalsResponseSchemaV11
 >;
 
 export const environmentProposalsV10 = defineRpcContract({
@@ -135,4 +158,21 @@ export const environmentProposalsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentProposalsRequestSchema,
   responseSchema: environmentProposalsResponseSchema,
+});
+
+export const environmentProposalsV11 = defineRpcContract({
+  method: "environment.proposals",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentProposalsRequestSchema,
+  responseSchema: environmentProposalsResponseSchemaV11,
+});
+
+export const environmentProposalsUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentProposalsV10,
+  typeof environmentProposalsV11
+>({
+  from: environmentProposalsV10.schemaVersion,
+  to: environmentProposalsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });

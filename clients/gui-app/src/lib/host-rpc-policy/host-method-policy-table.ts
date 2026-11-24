@@ -2623,6 +2623,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.env.localOverride.saveToPersonal": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.env.localOverride.clear": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

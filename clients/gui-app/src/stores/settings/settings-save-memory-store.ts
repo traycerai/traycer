@@ -9,27 +9,40 @@ export const SETTINGS_SAVE_MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
 /** How many saves are remembered at most; the oldest go first. */
 const SETTINGS_SAVE_MEMORY_CAP = 200;
 
-/** Never the value nor its canonical text: a put is matched by {@link valueDigest} alone. */
-export interface SettingsSaveMemoryRecord {
-  /** A later save of the same item replaces the record, so work begun for the earlier edit finds nothing. */
+interface RememberedSettingsSave {
+  /** A later save of the same item replaces the record, so earlier work finds nothing. */
   readonly editId: string;
-  readonly environmentId: string;
   readonly hostId: string;
-  readonly sharingGeneration: number;
-  readonly kind: string;
-  readonly key: string;
-  readonly os: string | null;
-  readonly operation: "put" | "delete";
-  /** SHA-256 of the put value's canonical text; null for a delete. */
-  readonly valueDigest: string | null;
-  readonly expectedLiveRevision: number | null;
   readonly writtenAt: number;
+  /** The live revision from the original review of this promotion, including across an unanswered apply. */
+  readonly promotionBase?: {
+    readonly heldRevision: number;
+    readonly liveRevision: number | null;
+  };
   /** A new hold revision starts over. */
   readonly unanswered: {
     readonly revision: number;
     readonly tries: number;
   } | null;
 }
+
+/** Never the value nor its canonical text: a put is matched by its digest alone. */
+export interface BoundSettingsSave extends RememberedSettingsSave {
+  readonly environmentId: string;
+  readonly sharingGeneration: number;
+  readonly kind: string;
+  readonly key: string;
+  readonly os: string | null;
+  readonly operation: "put" | "delete";
+  readonly valueDigest: string | null;
+  readonly expectedLiveRevision: number | null;
+}
+
+interface LocalSettingsSave extends RememberedSettingsSave {
+  readonly environmentId: null;
+}
+
+export type SettingsSaveMemoryRecord = BoundSettingsSave | LocalSettingsSave;
 
 interface SettingsSaveMemoryState {
   readonly records: Readonly<Record<string, SettingsSaveMemoryRecord>>;
@@ -38,6 +51,11 @@ interface SettingsSaveMemoryState {
   /** Forgets every earlier save of the same item on the same host. */
   readonly remember: (record: SettingsSaveMemoryRecord) => string;
   readonly forget: (id: string) => void;
+  readonly notePromotionBase: (
+    id: string,
+    heldRevision: number,
+    liveRevision: number | null,
+  ) => void;
   readonly noteUnanswered: (id: string, holdRevision: number) => void;
   readonly markSent: (id: string) => void;
   readonly markAnswered: (id: string) => void;
@@ -48,6 +66,8 @@ function sameItem(
   b: SettingsSaveMemoryRecord,
 ): boolean {
   return (
+    a.environmentId !== null &&
+    b.environmentId !== null &&
     a.environmentId === b.environmentId &&
     a.hostId === b.hostId &&
     a.kind === b.kind &&
@@ -108,6 +128,24 @@ export const useSettingsSaveMemoryStore = create<SettingsSaveMemoryState>()(
           if (!Object.hasOwn(state.records, id)) return state;
           const { [id]: _forgotten, ...records } = state.records;
           return { records };
+        }),
+      notePromotionBase: (id, heldRevision, liveRevision) =>
+        set((state) => {
+          const record = settingsSaveMemoryRecord(state.records, id);
+          if (
+            record === null ||
+            record.promotionBase?.heldRevision === heldRevision
+          )
+            return state;
+          return {
+            records: {
+              ...state.records,
+              [id]: {
+                ...record,
+                promotionBase: { heldRevision, liveRevision },
+              },
+            },
+          };
         }),
       noteUnanswered: (id, holdRevision) =>
         set((state) => {

@@ -4056,8 +4056,13 @@ export const providersSetEnvOverrideResponseSchemaV10 = lazySchema(() =>
     state: providerCliStateSchemaV10,
   }),
 );
+export const providersSetEnvOverrideResponseSchemaV23 = lazySchema(() =>
+  providersSetEnvOverrideResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
 export type ProvidersSetEnvOverrideResponse = z.infer<
-  typeof providersSetEnvOverrideResponseSchema
+  typeof providersSetEnvOverrideResponseSchemaV23
 >;
 
 export const providersDeleteEnvOverrideRequestSchema = lazySchema(() =>
@@ -4091,8 +4096,13 @@ export const providersDeleteEnvOverrideResponseSchemaV10 = lazySchema(() =>
     state: providerCliStateSchemaV10,
   }),
 );
+export const providersDeleteEnvOverrideResponseSchemaV22 = lazySchema(() =>
+  providersDeleteEnvOverrideResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
 export type ProvidersDeleteEnvOverrideResponse = z.infer<
-  typeof providersDeleteEnvOverrideResponseSchema
+  typeof providersDeleteEnvOverrideResponseSchemaV22
 >;
 
 export const providersDetectVersionRequestSchema = lazySchema(() =>

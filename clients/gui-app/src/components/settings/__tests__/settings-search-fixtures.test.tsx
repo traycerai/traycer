@@ -125,6 +125,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     },
     useHostScope: useScope,
     usePersonalHostScope: useScope,
+    usePickHostScope: useScope,
     useHostScopeFor: useScope,
   };
 });

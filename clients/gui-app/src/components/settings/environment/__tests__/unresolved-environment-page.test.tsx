@@ -45,8 +45,8 @@ beforeEach(() => {
 afterEach(cleanup);
 
 it.each(SETTINGS_SECTIONS.filter((section) => section.group === "personal"))(
-  "holds $id without mounting its editors until a configuration is known",
-  ({ id }) => {
+  "holds $id under its heading without mounting its editors until a configuration is known",
+  ({ id, label }) => {
     const queryClient = new QueryClient();
     render(
       <QueryClientProvider client={queryClient}>
@@ -55,6 +55,7 @@ it.each(SETTINGS_SECTIONS.filter((section) => section.group === "personal"))(
         </PersonalPageFrame>
       </QueryClientProvider>,
     );
+    expect(screen.getByRole("heading", { name: label })).toBeTruthy();
     expect(screen.getByTestId("environment-source-loading")).toBeTruthy();
     expect(screen.queryByText("Edit configuration")).toBeNull();
   },

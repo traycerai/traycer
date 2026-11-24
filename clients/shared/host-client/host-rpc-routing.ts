@@ -413,6 +413,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "config.catalog.set": "target-host",
   "config.env.delete": "target-host",
   "config.env.list": "target-host",
+  "config.env.localOverride.saveToPersonal": "target-host",
   "config.env.localOverride.clear": "target-host",
   "config.env.localOverride.set": "target-host",
   "config.env.set": "target-host",

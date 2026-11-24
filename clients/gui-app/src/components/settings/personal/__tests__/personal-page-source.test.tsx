@@ -363,7 +363,9 @@ describe("PersonalPageFrame's source, one per pick", () => {
     expect(mounted.sent("environment.configuration.items")).toHaveLength(0);
   });
 
-  it("shows a spinner and sends neither source's reads until the host's status answers, then mounts the right one", async () => {
+  // The pending body is the section's (`PageOrNotOnComputer`); the frame draws
+  // nothing and reads nothing meanwhile.
+  it("sends neither source's reads until the host's status answers, then mounts the right one", async () => {
     let answer: (status: EnvironmentStatusResponseV13) => void = () =>
       undefined;
     const mounted = mountPage({
@@ -378,7 +380,6 @@ describe("PersonalPageFrame's source, one per pick", () => {
     await waitFor(() => {
       expect(mounted.sent("environment.status").length).toBeGreaterThan(0);
     });
-    expect(screen.getByTestId("personal-source-loading")).toBeTruthy();
     expectNoHostReads(mounted);
     expect(mounted.sent("environment.configuration.items")).toHaveLength(0);
 
@@ -391,24 +392,22 @@ describe("PersonalPageFrame's source, one per pick", () => {
         { environmentId: "env-personal" },
       ]);
     });
-    expect(screen.queryByTestId("personal-source-loading")).toBeNull();
     expectNoHostReads(mounted);
   });
 
-  it("shows the spinner and reads nothing before the window's host has handshaked", () => {
+  it("reads nothing before the window's host has handshaked", () => {
     const mounted = mountPage({
       pick: { kind: "personal" },
       methods: null,
       status: () => environmentStatusFixture({}),
     });
 
-    expect(screen.getByTestId("personal-source-loading")).toBeTruthy();
     expectNoHostReads(mounted);
     expect(mounted.sent("environment.configuration.items")).toHaveLength(0);
   });
 
   it.each(["unreachable", "vanished"] as const)(
-    "reads Personal from the cloud, not a spinner, when the window's host is %s",
+    "reads Personal from the cloud when the window's host is %s",
     async (status) => {
       windowScopeStatus = status;
       const mounted = mountPage({
@@ -422,7 +421,6 @@ describe("PersonalPageFrame's source, one per pick", () => {
           { environmentId: "env-personal" },
         ]);
       });
-      expect(screen.queryByTestId("personal-source-loading")).toBeNull();
       expectNoHostReads(mounted);
     },
   );
@@ -445,7 +443,6 @@ describe("PersonalPageFrame's source, one per pick", () => {
       await waitFor(() => {
         expect(mounted.sent("environment.list").length).toBeGreaterThan(0);
       });
-      expect(screen.queryByTestId("personal-source-loading")).toBeNull();
       expectNoHostReads(mounted);
       // MCP servers lists the configuration; Skills looks for its viewing host.
       const read =

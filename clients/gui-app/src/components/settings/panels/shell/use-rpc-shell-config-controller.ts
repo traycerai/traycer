@@ -38,6 +38,7 @@ import {
 import {
   everyAnswerProposes,
   sendFollowedSave,
+  requestFollowedSettingsSave,
   type PendingSettingsSave,
 } from "@/lib/environment/settings-save-follow";
 
@@ -210,11 +211,11 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
-      proposes: everyAnswerProposes,
+      proposes: (answer) => answer.savedLocally !== true,
     },
     mutationKey: configMutationKeys.envSet(),
     errorMessage: "Couldn't save the variable",
-    invalidateMethods: ["config.env.list"],
+    invalidateMethods: ["config.env.list", "environment.localOverrides"],
   });
   const envDeleteMutation = useHostScopedMutationForClient(client, {
     method: "config.env.delete",
@@ -226,11 +227,11 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
-      proposes: everyAnswerProposes,
+      proposes: (answer) => answer.savedLocally !== true,
     },
     mutationKey: configMutationKeys.envDelete(),
     errorMessage: "Couldn't remove the variable",
-    invalidateMethods: ["config.env.list"],
+    invalidateMethods: ["config.env.list", "environment.localOverrides"],
   });
 
   // Both host writes use one press's editor, sign-in classification and client.
@@ -271,15 +272,27 @@ export function useRpcShellConfigController(props: {
         };
         await sendFollowedSave(
           await prepare({ method: "config.env.set", request: set }),
-          () => pressedClient.request("config.env.set", set),
-          everyAnswerProposes,
+          (requestId) =>
+            requestFollowedSettingsSave(
+              pressedClient,
+              "config.env.set",
+              set,
+              requestId,
+            ),
+          (answer) => answer.savedLocally !== true,
         );
         if (rename.oldKey.length === 0) return;
         const remove = { key: rename.oldKey };
         await sendFollowedSave(
           await prepare({ method: "config.env.delete", request: remove }),
-          () => pressedClient.request("config.env.delete", remove),
-          everyAnswerProposes,
+          (requestId) =>
+            requestFollowedSettingsSave(
+              pressedClient,
+              "config.env.delete",
+              remove,
+              requestId,
+            ),
+          (answer) => answer.savedLocally !== true,
         );
       },
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
@@ -291,6 +304,12 @@ export function useRpcShellConfigController(props: {
         if (hostId === null) return;
         void queryClient.invalidateQueries({
           queryKey: queryKeys.hostMethodScope(hostId, "config.env.list"),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.hostMethodScope(
+            hostId,
+            "environment.localOverrides",
+          ),
         });
       },
       onError: (error) => {
@@ -393,9 +412,7 @@ export function useRpcShellConfigController(props: {
       ),
     setEnv: (entry, callbacks) =>
       envSetMutation.mutate(entry, afterEnvRead(callbacks)),
-    setEnvAsync: async (entry) => {
-      await envSetMutation.mutateAsync(entry);
-    },
+    setEnvAsync: (entry) => envSetMutation.mutateAsync(entry),
     deleteEnv: (key, callbacks) =>
       envDeleteMutation.mutate({ key }, afterEnvRead(callbacks)),
     renameEnv: (rename, callbacks) =>

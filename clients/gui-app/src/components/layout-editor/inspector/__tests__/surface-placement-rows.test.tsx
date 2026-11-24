@@ -890,7 +890,6 @@ describe("<ResourceReadingsRow /> Choose metrics link (L-174)", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });

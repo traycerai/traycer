@@ -98,7 +98,10 @@ afterEach(() => {
   clientMock.current = null;
   pickerModelMock.current = null;
   pickerModelMock.statuses.clear();
-  useSettingsEnvironmentPickStore.setState({ pick: null });
+  useSettingsEnvironmentPickStore.setState({
+    pick: null,
+    gone: null,
+  });
 });
 
 describe("LocalMovePageOr", () => {
@@ -240,7 +243,7 @@ describe("LocalMovePageOr", () => {
       }),
     ],
   ] as const)(
-    "drops a stale Local pick for a %s computer without a picker",
+    "shows the real page for a stale Local pick on a %s computer without a picker",
     async (_label, status) => {
       pickerModelMock.statuses = new Map([[HOST_ID, status]]);
       pickerModelMock.current = environmentPickerModel({
@@ -263,7 +266,6 @@ describe("LocalMovePageOr", () => {
 
       expect(await screen.findByTestId("real-skills-panel")).toBeTruthy();
       expect(screen.queryByTestId("local-move-page")).toBeNull();
-      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
     },
   );
 });
