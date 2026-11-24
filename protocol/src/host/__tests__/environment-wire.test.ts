@@ -237,13 +237,13 @@ describe("new methods are off every released floor", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("registers the frozen environment lines and status minor as unsupported-degrade", () => {
+  it("registers the environment lines as unsupported-degrade", () => {
     const shapes = ENVIRONMENT_METHOD_NAMES.map(
       (name) => `${name}: ${registryShapeOf(hostRpcRegistry[name])}`,
     );
     expect(shapes).toEqual(
       ENVIRONMENT_METHOD_NAMES.map((name) =>
-        name === "environment.status"
+        name === "environment.status" || name === "environment.review"
           ? `${name}: degrade=unsupported majors=1 latestMinor=3 minors=0,1,2,3`
           : name === "host.remoteAccess.set"
             ? `${name}: degrade=unsupported majors=1,2 latestMinor=0 minors=0`
