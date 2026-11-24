@@ -1,33 +1,35 @@
 // One copy the host and the app both draw the masked line from.
 import { z } from "zod";
-import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
+import {
+  classifyCredential,
+  replaceCredentialUrlPathSegments,
+} from "@traycer/protocol/environment/credential-rule";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const PIECE_SEPARATORS = /[\s=&?:,;"']+/;
 
 const SHOWN_MAX = 8192;
 const MASK = "•••";
+const URL_WORD = /(^|[\s="'<(])([a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+)/gi;
 const PIECES = new RegExp(`(${PIECE_SEPARATORS.source})`);
 
 /** The migrator's rule decides (`classifyCredential`); a piece after a credential's name also reads `•••`. */
 function masked(text: string): string {
   return (
     text
+      .replace(
+        URL_WORD,
+        (_match, boundary: string, url: string) =>
+          boundary + replaceCredentialUrlPathSegments(url, MASK),
+      )
       .split(PIECES)
       .map((piece, index, parts) => {
         // Odd indexes are the separators the split kept.
         if (index % 2 === 1) return piece;
         const name = index >= 2 ? (parts[index - 2] ?? "") : "";
-        if (classifyCredential({ name, value: piece }).credentialLike)
-          return MASK;
-        return piece
-          .split("/")
-          .map((segment) =>
-            classifyCredential({ name: "", value: segment }).credentialLike
-              ? MASK
-              : segment,
-          )
-          .join("/");
+        return classifyCredential({ name, value: piece }).credentialLike
+          ? MASK
+          : piece;
       })
       .join("")
       // A whole word the pieces hide, a URL with a password among them.
