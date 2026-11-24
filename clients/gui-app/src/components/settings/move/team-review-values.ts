@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   heldFactsOf,
+  heldMcpConnectionSchema,
   maskedHeldText,
   type HeldFacts,
 } from "@traycer/protocol/host/environment/held-facts";
@@ -74,14 +75,10 @@ export interface TeamReviewEntry {
 
 const textValueSchema = z.object({ text: z.string() });
 const fallbackValueSchema = z.object({ document: fallbackPolicySchema });
-const legacyMcpValueSchema = z.strictObject({
-  definition: z.strictObject({
-    transport: z.literal("stdio"),
-    command: z.string().min(1),
-    args: z.array(z.string()),
-  }),
-  toolToggles: authnMcpServerItemValueSchema.shape.toolToggles,
-});
+const heldMcpValueSchema = authnMcpServerItemValueSchema
+  .omit({ mcpServerId: true })
+  .extend({ definition: heldMcpConnectionSchema })
+  .strict();
 
 const UNREADABLE: TeamReviewValue = { kind: "unreadable" };
 
@@ -137,7 +134,7 @@ function toolGroups(
   }));
 }
 
-function mcpValue(key: string, value: unknown): TeamReviewValue {
+function mcpValue(value: unknown): TeamReviewValue {
   const modern = authnMcpServerItemValueSchema.strict().safeParse(value);
   if (modern.success) {
     return {
@@ -148,14 +145,19 @@ function mcpValue(key: string, value: unknown): TeamReviewValue {
       offFor: (modern.data.offFor ?? []).map(maskedText),
     };
   }
-  const legacy = legacyMcpValueSchema.safeParse(value);
-  if (!legacy.success) return UNREADABLE;
+  const held = heldMcpValueSchema.safeParse(value);
+  if (!held.success) return UNREADABLE;
+  const { definition } = held.data;
   return {
     kind: "mcp",
     reference: null,
-    command: heldFactsOf({ kind: "mcp_server", key, value }).command,
-    groups: toolGroups(legacy.data.toolToggles),
-    offFor: [],
+    command: maskedHeldText(
+      definition.transport === "http"
+        ? definition.url
+        : [definition.command, ...definition.args].join(" "),
+    ),
+    groups: toolGroups(held.data.toolToggles),
+    offFor: (held.data.offFor ?? []).map(maskedText),
   };
 }
 
@@ -234,7 +236,7 @@ function reviewValue(
         : UNREADABLE;
     }
     case "mcp_server":
-      return mcpValue(key, value);
+      return mcpValue(value);
     case "shell":
     case "variable":
     case "env_override":

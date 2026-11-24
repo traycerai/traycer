@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  waitForElementToBeRemoved,
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -996,6 +997,104 @@ describe("Team Review through the addressed page", () => {
         (call) => call.method === "environment.configuration.mcpServers.list",
       ),
     ).toBe(false);
+  });
+
+  it("shows HTTP MCP details and supports Approve and Discard without changing the row line", async () => {
+    const pathToken = ["a8Zt4Qk2", "Vj6Rf0Xn3", "Db9Hp5Ms7"].join("");
+    const url = "https://docs.example.test/v1/mcp";
+    const tokenUrl = `https://docs.example.test/s/${pathToken}/mcp`;
+    const approveRow = held({
+      id: "mcp-http-approve",
+      kind: "mcp_server",
+      key: "docs-server",
+      heldRevision: 21,
+      proposed: {
+        definition: { transport: "http", url },
+        toolToggles: {},
+        offFor: ["cursor"],
+      },
+      current: null,
+      liveRevision: null,
+    });
+    const discardRow = held({
+      id: "mcp-http-discard",
+      kind: "mcp_server",
+      key: "private-server",
+      heldRevision: 22,
+      proposed: {
+        definition: { transport: "http", url: tokenUrl },
+        toolToggles: {},
+      },
+      current: null,
+      liveRevision: null,
+    });
+    const scenario = createReviewHarness("admin", [approveRow, discardRow]);
+    const { harness } = scenario;
+    harness.cloudResponses.set(
+      `POST ${choicePath("mcp-http-approve", "apply")}`,
+      () => {
+        scenario.setRows([discardRow]);
+        return authnAnswer(200, {});
+      },
+    );
+    harness.cloudResponses.set(
+      `POST ${choicePath("mcp-http-discard", "discard")}`,
+      () => {
+        scenario.setRows([]);
+        return authnAnswer(200, {});
+      },
+    );
+    renderTeamPage(harness);
+
+    const dialog = await openReview();
+    const approveRowView = await within(dialog).findByTestId(
+      "retrospective-held-mcp-http-approve",
+    );
+    const discardRowView = await within(dialog).findByTestId(
+      "retrospective-held-mcp-http-discard",
+    );
+    const approveLine = approveRowView.querySelector("p");
+    if (approveLine === null) throw new Error("the review row has no line");
+    expect(approveLine.textContent).toBe("docs-server (MCP server)");
+    expect(approveRowView.textContent).toContain(url);
+    expect(approveRowView.textContent).toContain("Off: Cursor");
+
+    expect(discardRowView.textContent).toContain(
+      "https://docs.example.test/s/•••/mcp",
+    );
+    expect(discardRowView.textContent).not.toContain(pathToken);
+
+    const approveRowRemoved = waitForElementToBeRemoved(() =>
+      within(dialog).queryByTestId("retrospective-held-mcp-http-approve"),
+    );
+    fireEvent.click(
+      within(approveRowView).getByTestId(
+        "retrospective-held-mcp-http-approve-approve",
+      ),
+    );
+    await approveRowRemoved;
+    const discardRowRemoved = waitForElementToBeRemoved(() =>
+      within(dialog).queryByTestId("retrospective-held-mcp-http-discard"),
+    );
+    fireEvent.click(
+      within(dialog).getByTestId("retrospective-held-mcp-http-discard-discard"),
+    );
+    await discardRowRemoved;
+    expect(
+      choiceRequests(harness).map((request) => ({
+        path: new URL(request.url).pathname,
+        body: request.body,
+      })),
+    ).toEqual([
+      {
+        path: choicePath("mcp-http-approve", "apply"),
+        body: { revision: 21, expectedLiveRevision: null },
+      },
+      {
+        path: choicePath("mcp-http-discard", "discard"),
+        body: { revision: 22 },
+      },
+    ]);
   });
 
   it("renders deletes as Remove and withholds actions for unreadable held values", async () => {

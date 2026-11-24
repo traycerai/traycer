@@ -116,3 +116,24 @@ export function classifyCredential(
   if (isCredentialName(input.name)) return { credentialLike: true };
   return { credentialLike: isCredentialValue(value) };
 }
+
+/** Replace only credential-like path segments, preserving the original spelling of the rest of the URL. */
+export function replaceCredentialUrlPathSegments(
+  url: string,
+  replacement: string,
+): string {
+  if (!URL.canParse(url)) return url;
+  return url.replace(
+    /^([a-z][a-z0-9+.-]*:\/\/[^/?#]*)(\/[^?#]*)/i,
+    (_whole, authority: string, pathname: string) =>
+      authority +
+      pathname
+        .split("/")
+        .map((segment) =>
+          classifyCredential({ name: "", value: segment }).credentialLike
+            ? replacement
+            : segment,
+        )
+        .join("/"),
+  );
+}

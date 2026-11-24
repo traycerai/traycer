@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { heldFactsOf } from "@traycer/protocol/host/environment/held-facts";
+import {
+  heldFactsOf,
+  maskedHeldText,
+} from "@traycer/protocol/host/environment/held-facts";
 
 describe("heldFactsOf", () => {
   const NO_FACTS = {
@@ -25,6 +28,42 @@ describe("heldFactsOf", () => {
       ...NO_FACTS,
       command: "npx -y @mcp/memory",
     });
+  });
+
+  it("keeps an HTTP definition out of the shared line facts", () => {
+    expect(
+      factsOf("mcp_server", "docs-server", {
+        definition: {
+          transport: "http",
+          url: "https://docs.example.test/v1/mcp",
+        },
+        toolToggles: {},
+      }),
+    ).toEqual(NO_FACTS);
+  });
+
+  it("masks a credential-like URL path segment and preserves an ordinary MCP path", () => {
+    const pathToken = ["a8Zt4Qk2", "Vj6Rf0Xn3", "Db9Hp5Ms7"].join("");
+    expect(maskedHeldText(`https://docs.example.test/s/${pathToken}/mcp`)).toBe(
+      "https://docs.example.test/s/•••/mcp",
+    );
+    expect(maskedHeldText("https://docs.example.test/v1/mcp")).toBe(
+      "https://docs.example.test/v1/mcp",
+    );
+  });
+
+  it("preserves a Nix store executable path and an ordinary absolute shell path", () => {
+    const storeHash = ["a8Zt4Qk2", "Vj6Rf0Xn3", "Db9Hp5Ms7"].join("");
+    const nixPath = `/nix/store/${storeHash}-zsh-5.9/bin/zsh`;
+    expect(
+      factsOf("shell", "zsh", { path: nixPath, args: ["-l"] }).command,
+    ).toBe(`${nixPath} -l`);
+    expect(
+      factsOf("shell", "zsh", {
+        path: "/usr/local/bin/zsh",
+        args: ["-l"],
+      }).command,
+    ).toBe("/usr/local/bin/zsh -l");
   });
 
   it("names a shell's path and arguments", () => {

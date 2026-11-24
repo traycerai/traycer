@@ -1,18 +1,27 @@
 // One copy the host and the app both draw the masked line from.
 import { z } from "zod";
-import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
+import {
+  classifyCredential,
+  replaceCredentialUrlPathSegments,
+} from "@traycer/protocol/environment/credential-rule";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const PIECE_SEPARATORS = /[\s=&?:,;"']+/;
 
 const SHOWN_MAX = 8192;
 const MASK = "•••";
+const URL_WORD = /(^|[\s="'<(])([a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+)/gi;
 const PIECES = new RegExp(`(${PIECE_SEPARATORS.source})`);
 
 /** The migrator's rule decides (`classifyCredential`); a piece after a credential's name also reads `•••`. */
 function masked(text: string): string {
   return (
     text
+      .replace(
+        URL_WORD,
+        (_match, boundary: string, url: string) =>
+          boundary + replaceCredentialUrlPathSegments(url, MASK),
+      )
       .split(PIECES)
       .map((piece, index, parts) => {
         // Odd indexes are the separators the split kept.
@@ -55,14 +64,19 @@ const NO_FACTS: HeldFacts = {
   value: null,
 };
 
-const heldStdioDefinitionSchema = lazySchema(() =>
-  z.object({
-    definition: z.object({
+export const heldMcpConnectionSchema = lazySchema(() =>
+  z.discriminatedUnion("transport", [
+    z.strictObject({
       transport: z.literal("stdio"),
       command: z.string().min(1),
       args: z.array(z.string()),
     }),
-  }),
+    z.strictObject({ transport: z.literal("http"), url: z.string().min(1) }),
+  ]),
+);
+
+const heldMcpDefinitionSchema = lazySchema(() =>
+  z.object({ definition: heldMcpConnectionSchema }),
 );
 
 /** Only the fields each line reads. */
@@ -85,10 +99,11 @@ export function heldFactsOf(entry: {
 }): HeldFacts {
   switch (entry.kind) {
     case "mcp_server": {
-      const parsed = heldStdioDefinitionSchema.safeParse(entry.value);
-      if (!parsed.success) return NO_FACTS;
+      const parsed = heldMcpDefinitionSchema.safeParse(entry.value);
+      if (!parsed.success || parsed.data.definition.transport !== "stdio")
+        return NO_FACTS;
       const { command, args } = parsed.data.definition;
-      // The definition carries no env, so no env value can reach the line.
+      // The strict definition admits no header or environment values.
       return { ...NO_FACTS, command: shown([command, ...args].join(" ")) };
     }
     case "shell": {
