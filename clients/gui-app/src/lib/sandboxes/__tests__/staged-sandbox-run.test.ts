@@ -52,17 +52,26 @@ import {
   readStagedSandbox,
   stagedRetryKey,
   useStagedSandboxStore,
+  type StagedSandbox,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  knownSandboxRowQueryOptions,
+  sandboxListObservationId,
+} from "@/lib/sandboxes/sandbox-row-read";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
-import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+import {
+  holdPendingSandboxSendOwnership,
+  ownsPendingSandboxSend,
+} from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
+  type PendingSandboxSend,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -331,6 +340,289 @@ describe("runStagedSandbox creating", () => {
       lastRetryCreate,
       failure: { kind: "unavailable" },
     });
+  });
+
+  it("replays the exact first pending create after a held response and runner replacement", async () => {
+    const sendId = "pre-response-restart-send";
+    surfaceKey = pendingSendSurfaceKey(sendId);
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    usePendingSandboxSendStore
+      .getState()
+      .add(pendingSend({ id: sendId, userId: "user-1" }));
+    const ownership = holdPendingSandboxSendOwnership(sendId);
+    let releaseOwnership: (() => void) | undefined = ownership.release;
+    const releaseOldOwnership = () => {
+      releaseOwnership?.();
+      releaseOwnership = undefined;
+    };
+    onTestFinished(releaseOldOwnership);
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
+
+    const initialTarget: StagedSandboxTarget = {
+      ...TEAM_NEW,
+      name: "original setup",
+      shape: { ...SHAPE, cpus: 4, memoryMb: 8192 },
+    };
+    const changedTarget: StagedSandboxTarget = {
+      ...TEAM_NEW,
+      configuration: {
+        kind: "team",
+        teamId: "team-changed",
+        teamName: "Changed team",
+      },
+      name: "changed setup",
+      shape: { ...SHAPE, cpus: 8, memoryMb: 16384 },
+    };
+    useStagedSandboxStore.getState().stage(surfaceKey, initialTarget);
+    useStagedSandboxStore.getState().report(surfaceKey, { sendTaken: true });
+    expect(stageOf().lastRetryCreate).toBeUndefined();
+    await ownership.ready;
+
+    const { auth, deps } = harness({ lists: [omittedList()] }, true);
+    const firstResponse = deferred<SandboxCreateFetchResult>();
+    const resumedResponse = deferred<SandboxCreateFetchResult>();
+    const requests: SandboxCreateRequest[] = [];
+    vi.spyOn(auth, "createSandbox").mockImplementation((request) => {
+      requests.push(request);
+      return requests.length === 1
+        ? firstResponse.promise
+        : resumedResponse.promise;
+    });
+
+    let originalRun: Promise<void> | undefined;
+    let replacementRun: Promise<void> | undefined;
+    let replacementStageStore:
+      | typeof import("@/stores/composer/staged-sandbox-store")
+      | undefined;
+    let replacementPendingStore:
+      | typeof import("@/stores/sandboxes/pending-sandbox-send-store")
+      | undefined;
+    let releaseReplacementOwnership: (() => void) | undefined;
+    const stageStorageKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.stagedSandboxSend),
+      surfaceKey,
+    );
+    const sendStorageKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.pendingSandboxSend),
+      sendId,
+    );
+
+    try {
+      originalRun = runStagedSandbox(
+        surfaceKey,
+        { taskId: "original-task", resume: false, createKey: null },
+        deps,
+      );
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+
+      const originalRequest = requests[0];
+      expect(originalRequest.clientRequestId).toMatch(/^stage:/);
+      const originalStage = readStagedSandbox(surfaceKey);
+      const originalAttemptId = originalStage?.attemptId;
+      if (originalAttemptId === undefined)
+        throw new Error("expected the first attempt to be persisted");
+      const firstStoredStageText = localStorage.getItem(stageStorageKey);
+      if (firstStoredStageText === null)
+        throw new Error("expected the first stage record to be persisted");
+      const firstStoredStage = JSON.parse(
+        firstStoredStageText,
+      ) as StagedSandbox;
+      expect(firstStoredStage).toMatchObject({
+        phase: "creating",
+        attemptId: originalAttemptId,
+        lastCreateKey: originalRequest.clientRequestId,
+        lastRetryCreate: originalRequest,
+        createdSandboxId: null,
+        failure: null,
+      });
+      expect(localStorage.getItem(sendStorageKey)).not.toBeNull();
+      expect(auth.listReads).toBe(0);
+
+      useStagedSandboxStore.getState().setTarget(surfaceKey, changedTarget);
+      expect(readStagedSandbox(surfaceKey)?.createdSandboxId).toBeNull();
+      expect(readStagedSandbox(surfaceKey)?.failure).toBeNull();
+      releaseOldOwnership();
+      await vi.waitFor(() =>
+        expect(ownsPendingSandboxSend(sendId)).toBe(false),
+      );
+
+      vi.resetModules();
+      replacementStageStore =
+        await import("@/stores/composer/staged-sandbox-store");
+      replacementPendingStore =
+        await import("@/stores/sandboxes/pending-sandbox-send-store");
+      const replacementAuthStore = await import("@/stores/auth/auth-store");
+      const replacementRunner =
+        await import("@/lib/sandboxes/staged-sandbox-run");
+      await replacementStageStore.useStagedSandboxStore.persist.rehydrate();
+      await replacementPendingStore.usePendingSandboxSendStore.persist.rehydrate();
+      const replacementOwnershipModule =
+        await import("@/lib/sandboxes/pending-sandbox-send-ownership");
+      const replacementOwnership =
+        replacementOwnershipModule.holdPendingSandboxSendOwnership(sendId);
+      releaseReplacementOwnership = replacementOwnership.release;
+      expect(await replacementOwnership.ready).toBe(true);
+      replacementAuthStore.useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "user-1", userName: "U", email: "u@example.com" },
+          { userId: "user-1", username: "U" },
+          [],
+        );
+      expect(
+        replacementPendingStore.usePendingSandboxSendStore.getState().sends[
+          sendId
+        ],
+      ).toBeDefined();
+      expect(replacementStageStore.readStagedSandbox(surfaceKey)).toMatchObject(
+        {
+          phase: "creating",
+          attemptId: originalAttemptId,
+          lastCreateKey: originalRequest.clientRequestId,
+          lastRetryCreate: originalRequest,
+          target: changedTarget,
+        },
+      );
+      expect(
+        replacementPendingStore.pendingSandboxStageRunAllowed(surfaceKey),
+      ).toBe(true);
+      expect(readStagedSandbox(surfaceKey)?.failure).toBeNull();
+
+      replacementRun = replacementRunner.runStagedSandbox(
+        surfaceKey,
+        { taskId: "changed-task", resume: true, createKey: null },
+        deps,
+      );
+      await vi.waitFor(() => expect(requests).toHaveLength(2));
+      expect(requests[1]).toEqual(originalRequest);
+      expect(auth.environmentReads).toEqual(["team-acme"]);
+      expect(auth.environmentReads).not.toContain("team-changed");
+      expect(auth.listReads).toBe(0);
+      expect(replacementStageStore.readStagedSandbox(surfaceKey)).toMatchObject(
+        {
+          attemptId: originalAttemptId,
+          createdSandboxId: null,
+          failure: null,
+        },
+      );
+
+      const lostResponse: SandboxCreateFetchResult = {
+        kind: "network-error",
+        detail: "the response was lost while the server had no row",
+      };
+      resumedResponse.resolve(lostResponse);
+      await replacementRun;
+      firstResponse.resolve(lostResponse);
+      await originalRun;
+      expect(requests).toEqual([originalRequest, originalRequest]);
+      expect(auth.listReads).toBe(0);
+      const finalStoredStageText = localStorage.getItem(stageStorageKey);
+      if (finalStoredStageText === null)
+        throw new Error("expected the resumed stage record to remain saved");
+      expect(
+        (JSON.parse(finalStoredStageText) as StagedSandbox).lastRetryCreate,
+      ).toEqual(originalRequest);
+    } finally {
+      const lostResponse: SandboxCreateFetchResult = {
+        kind: "network-error",
+        detail: "the held create did not receive a server response",
+      };
+      firstResponse.resolve(lostResponse);
+      resumedResponse.resolve(lostResponse);
+      await replacementRun?.catch(() => undefined);
+      await originalRun?.catch(() => undefined);
+      releaseReplacementOwnership?.();
+      releaseOldOwnership();
+      replacementStageStore?.useStagedSandboxStore.getState().clear(surfaceKey);
+      replacementPendingStore?.usePendingSandboxSendStore
+        .getState()
+        .remove(sendId);
+      useStagedSandboxStore.getState().clear(surfaceKey);
+      usePendingSandboxSendStore.getState().remove(sendId);
+    }
+  });
+
+  it("does not POST a pending create until its exact request is durably saved", async () => {
+    await ownPendingStage("request-save-failure-send");
+    useStagedSandboxStore
+      .getState()
+      .stage(surfaceKey, { ...TEAM_NEW, name: "save before post" });
+    useStagedSandboxStore.getState().report(surfaceKey, { sendTaken: true });
+    expect(stageOf().lastRetryCreate).toBeUndefined();
+
+    const { auth, deps } = harness(
+      { createSandbox: () => refusal(503, "provider_unavailable") },
+      true,
+    );
+    const requests: SandboxCreateRequest[] = [];
+    const persistedAtPost: StagedSandbox[] = [];
+    let restoreFailedWrite: () => void = () => {};
+    const stageStorageKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.stagedSandboxSend),
+      surfaceKey,
+    );
+    vi.spyOn(auth, "createSandbox").mockImplementation((request) => {
+      requests.push(request);
+      restoreFailedWrite();
+      const saved = localStorage.getItem(stageStorageKey);
+      if (saved !== null)
+        persistedAtPost.push(JSON.parse(saved) as StagedSandbox);
+      return Promise.resolve(refusal(503, "provider_unavailable"));
+    });
+
+    let attemptedRecord: StagedSandbox | undefined;
+    const originalSetItem = Storage.prototype.setItem.bind(localStorage);
+    const failedWrite = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key === stageStorageKey) {
+          const stage = JSON.parse(value) as StagedSandbox;
+          if (stage.lastRetryCreate !== undefined) {
+            attemptedRecord = stage;
+            throw new Error("stage create request write failed");
+          }
+        }
+        originalSetItem(key, value);
+      });
+    restoreFailedWrite = () => failedWrite.mockRestore();
+    try {
+      await runStagedSandbox(
+        surfaceKey,
+        { taskId: "save-failure-task", resume: false, createKey: null },
+        deps,
+      );
+    } finally {
+      failedWrite.mockRestore();
+    }
+
+    expect(attemptedRecord?.lastRetryCreate).toBeDefined();
+    expect(requests).toEqual([]);
+    const afterFailedWrite = localStorage.getItem(stageStorageKey);
+    if (afterFailedWrite === null)
+      throw new Error("expected the earlier stage record to remain present");
+    const durableStage = JSON.parse(afterFailedWrite) as StagedSandbox;
+    expect(durableStage.lastRetryCreate).toBeUndefined();
+    expect(durableStage.attemptId).toBe(attemptedRecord?.attemptId);
+
+    await runStagedSandbox(
+      surfaceKey,
+      { taskId: "save-failure-task", resume: true, createKey: null },
+      deps,
+    );
+
+    expect(requests).toEqual([attemptedRecord?.lastRetryCreate]);
+    expect(persistedAtPost).toHaveLength(1);
+    expect(persistedAtPost[0]?.lastRetryCreate).toEqual(requests[0]);
+    expect(persistedAtPost[0]?.lastCreateKey).toBe(
+      attemptedRecord?.lastCreateKey,
+    );
+    expect(persistedAtPost[0]?.attemptId).toBe(attemptedRecord?.attemptId);
   });
 
   it("rebuilds a legacy saved key's request from the restored stage pick", async () => {
@@ -672,6 +964,158 @@ describe("runStagedSandbox through the query cache", () => {
     expect(stageOf().phase).toBe("handoff");
   });
 
+  it("settles a wake from a fresh shared row read before an older suspended read completes", async () => {
+    await ownPendingStage("wake-row-query-race");
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const built = harness(
+      {
+        lists: [omittedList(), omittedList()],
+        entries: [{ ...DIALABLE, hostId: "host-resting" }],
+      },
+      true,
+    );
+    const { auth, wake } = built;
+    const deps: StagedSandboxRunDeps = { ...built.deps, userId: "user-1" };
+    const wakeEntered = deferred<void>();
+    const wakeResult = deferred<boolean>();
+    wake.mockImplementation(() => {
+      wakeEntered.resolve(undefined);
+      return wakeResult.promise;
+    });
+    const oldRead = deferred<SandboxGetFetchResult>();
+    const freshRead = deferred<SandboxGetFetchResult>();
+    const oldReadEntered = deferred<void>();
+    const freshReadEntered = deferred<void>();
+    let getCount = 0;
+    const getSandbox = vi
+      .spyOn(auth, "getSandbox")
+      .mockImplementation((sandboxId) => {
+        expect(sandboxId).toBe(RESTING.sandboxId);
+        getCount += 1;
+        if (getCount === 1) {
+          oldReadEntered.resolve(undefined);
+          return oldRead.promise;
+        }
+        if (getCount === 2) {
+          freshReadEntered.resolve(undefined);
+          return freshRead.promise;
+        }
+        return Promise.reject(new Error("unexpected extra sandbox read"));
+      });
+
+    const runPromise = run(null, deps);
+    await wakeEntered.promise;
+    expect(wake).toHaveBeenCalledWith("host-resting", "send");
+
+    const sendId = surfaceKey.slice("pending-send:".length);
+    const wakeSend = usePendingSandboxSendStore.getState().sends[sendId];
+    const wakeStage = readStagedSandbox(surfaceKey);
+    if (wakeStage === null) throw new Error("expected the pending stage");
+    expect(wakeSend.observationRetryId).toBeDefined();
+    const firstList = await refreshSandboxList(auth, deps);
+    if (firstList === null) throw new Error("expected the first list response");
+    const firstOmission = sandboxListObservationId(firstList);
+    if (firstOmission === undefined)
+      throw new Error("expected the first omission identity");
+    const rowQueryOptions = (
+      send: PendingSandboxSend,
+      stage: StagedSandbox,
+      omission: number | undefined,
+    ) =>
+      knownSandboxRowQueryOptions({
+        auth,
+        userId: "user-1",
+        sandboxId: RESTING.sandboxId,
+        sendId,
+        observationRequestedAt: send.observationRequestedAt,
+        observationRetryId: send.observationRetryId,
+        stopRequestedAt: send.stopRequestedAt,
+        hostId: RESTING.hostId,
+        stageId: stage.clientRequestId,
+        attemptId: stage.attemptId,
+        omission,
+      });
+    const oldOptions = rowQueryOptions(wakeSend, wakeStage, firstOmission);
+    const oldQueryPromise = deps.queryClient.fetchQuery({
+      ...oldOptions,
+      staleTime: 0,
+    });
+    void oldQueryPromise.catch(() => undefined);
+    await oldReadEntered.promise;
+    const oldQuery = deps.queryClient.getQueryCache().find({
+      queryKey: oldOptions.queryKey,
+      exact: true,
+    });
+    if (oldQuery === undefined)
+      throw new Error("expected the suspended query during wake");
+    expect(oldQuery.state.fetchStatus).toBe("fetching");
+    const oldQueryHash = oldQuery.queryHash;
+
+    wakeResult.resolve(true);
+    await freshReadEntered.promise;
+    const completedSend = usePendingSandboxSendStore.getState().sends[sendId];
+    const completedStage = readStagedSandbox(surfaceKey);
+    if (completedStage === null)
+      throw new Error("expected the stage after wake completion");
+    expect(completedSend.observationRetryId).not.toBe(
+      wakeSend.observationRetryId,
+    );
+    const postWakeList = deps.queryClient.getQueryData(
+      sandboxListQueryOptions(auth, deps.userId, true).queryKey,
+    );
+    if (postWakeList === undefined || postWakeList === null)
+      throw new Error("expected the post-wake list response");
+    expect(postWakeList).not.toBe(firstList);
+    const postWakeOmission = sandboxListObservationId(postWakeList);
+    if (postWakeOmission === undefined)
+      throw new Error("expected the post-wake omission identity");
+    const freshOptions = rowQueryOptions(
+      completedSend,
+      completedStage,
+      postWakeOmission,
+    );
+    expect(freshOptions.queryKey).not.toEqual(oldOptions.queryKey);
+    const freshQuery = deps.queryClient.getQueryCache().find({
+      queryKey: freshOptions.queryKey,
+      exact: true,
+    });
+    if (freshQuery === undefined)
+      throw new Error("expected the fresh post-wake query");
+    expect(freshQuery.queryHash).not.toBe(oldQueryHash);
+    expect(freshQuery.state.fetchStatus).toBe("fetching");
+    expect(freshQuery.queryKey[6]).toBe(completedSend.observationRequestedAt);
+    expect(freshQuery.queryKey[7]).toBe(completedSend.observationRetryId);
+    expect(getSandbox).toHaveBeenCalledTimes(2);
+
+    freshRead.resolve({
+      kind: "ok",
+      sandbox: sandboxSummaryFixture({
+        id: RESTING.sandboxId,
+        hostId: RESTING.hostId,
+        state: "awake",
+        guestConfigured: true,
+      }),
+    });
+    await runPromise;
+    expect(freshQuery.state.data).toMatchObject({
+      read: { row: { state: "awake", hostId: RESTING.hostId } },
+    });
+    expect(stageOf()).toMatchObject({ phase: "handoff", failure: null });
+
+    oldRead.resolve({
+      kind: "ok",
+      sandbox: sandboxSummaryFixture({
+        id: RESTING.sandboxId,
+        hostId: RESTING.hostId,
+        state: "suspended",
+      }),
+    });
+    await oldRead.promise;
+    expect(stageOf()).toMatchObject({ phase: "handoff", failure: null });
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(getSandbox).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes the directory and the lists when the create is refused", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { directory, deps } = harness(
@@ -743,12 +1187,21 @@ describe("runStagedSandbox after a shared list refresh", () => {
     onTestFinished(() => deps.queryClient.clear());
     const oldRead = deferred<SandboxGetFetchResult>();
     const currentRead = deferred<SandboxGetFetchResult>();
+    const oldReadEntered = deferred<void>();
+    const currentReadEntered = deferred<void>();
     const getSandbox = vi
       .spyOn(auth, "getSandbox")
-      .mockImplementationOnce(() => oldRead.promise)
-      .mockImplementationOnce(() => currentRead.promise);
+      .mockImplementationOnce(() => {
+        oldReadEntered.resolve(undefined);
+        return oldRead.promise;
+      })
+      .mockImplementationOnce(() => {
+        currentReadEntered.resolve(undefined);
+        return currentRead.promise;
+      });
     const runPromise = run(null, deps);
-    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+    await oldReadEntered.promise;
+    expect(getSandbox).toHaveBeenCalledTimes(1);
 
     const key = sharedListKey(auth, deps);
     const firstOmission = deps.queryClient.getQueryData(key);
@@ -757,7 +1210,8 @@ describe("runStagedSandbox after a shared list refresh", () => {
     expect(refreshed).not.toBe(firstOmission);
 
     oldRead.resolve(notFound);
-    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(2));
+    await currentReadEntered.promise;
+    expect(getSandbox).toHaveBeenCalledTimes(2);
     expect(stageOf().failure).toBeNull();
     expect(stageOf().phase).toBe("creating");
 
@@ -776,13 +1230,22 @@ describe("runStagedSandbox after a shared list refresh", () => {
     onTestFinished(() => deps.queryClient.clear());
     const oldRead = deferred<SandboxGetFetchResult>();
     const currentRead = deferred<SandboxGetFetchResult>();
+    const oldReadEntered = deferred<void>();
+    const currentReadEntered = deferred<void>();
     const getSandbox = vi
       .spyOn(auth, "getSandbox")
-      .mockImplementationOnce(() => oldRead.promise)
-      .mockImplementationOnce(() => currentRead.promise);
+      .mockImplementationOnce(() => {
+        oldReadEntered.resolve(undefined);
+        return oldRead.promise;
+      })
+      .mockImplementationOnce(() => {
+        currentReadEntered.resolve(undefined);
+        return currentRead.promise;
+      });
     const readSettings = vi.fn(deps.readSettings);
     const runPromise = run(null, { ...deps, readSettings });
-    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+    await oldReadEntered.promise;
+    expect(getSandbox).toHaveBeenCalledTimes(1);
 
     const key = sharedListKey(auth, deps);
     const firstOmission = deps.queryClient.getQueryData(key);
@@ -794,7 +1257,8 @@ describe("runStagedSandbox after a shared list refresh", () => {
       kind: "ok",
       sandbox: row({ state: "awake", guestConfigured: true }),
     });
-    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(2));
+    await currentReadEntered.promise;
+    expect(getSandbox).toHaveBeenCalledTimes(2);
     expect(readSettings).not.toHaveBeenCalled();
     expect(stageOf()).toMatchObject({ phase: "creating", failure: null });
 
@@ -818,15 +1282,20 @@ describe("runStagedSandbox after a shared list refresh", () => {
     );
     onTestFinished(() => deps.queryClient.clear());
     const heldRead = deferred<SandboxGetFetchResult>();
+    const heldReadEntered = deferred<void>();
     const getSandbox = vi
       .spyOn(auth, "getSandbox")
-      .mockImplementationOnce(() => heldRead.promise)
+      .mockImplementationOnce(() => {
+        heldReadEntered.resolve(undefined);
+        return heldRead.promise;
+      })
       .mockImplementation(() => {
         useStagedSandboxStore.getState().cancel(surfaceKey, true);
         return Promise.reject(new Error("unexpected second row read"));
       });
     const runPromise = run(null, deps);
-    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+    await heldReadEntered.promise;
+    expect(getSandbox).toHaveBeenCalledTimes(1);
 
     const key = sharedListKey(auth, deps);
     const firstOmission = deps.queryClient.getQueryData(key);
@@ -862,15 +1331,24 @@ describe("runStagedSandbox after a shared list refresh", () => {
     onTestFinished(() => deps.queryClient.clear());
     const heldSettings = deferred<"unsupported">();
     const heldRead = deferred<SandboxGetFetchResult>();
+    const settingsEntered = deferred<void>();
+    const heldReadEntered = deferred<void>();
     const readSettings = vi
       .fn<StagedSandboxRunDeps["readSettings"]>()
-      .mockReturnValueOnce(heldSettings.promise)
+      .mockImplementationOnce(() => {
+        settingsEntered.resolve(undefined);
+        return heldSettings.promise;
+      })
       .mockResolvedValueOnce("unsupported");
     const getSandbox = vi
       .spyOn(auth, "getSandbox")
-      .mockImplementationOnce(() => heldRead.promise);
+      .mockImplementationOnce(() => {
+        heldReadEntered.resolve(undefined);
+        return heldRead.promise;
+      });
     const runPromise = run(null, { ...deps, readSettings });
-    await vi.waitFor(() => expect(readSettings).toHaveBeenCalledTimes(1));
+    await settingsEntered.promise;
+    expect(readSettings).toHaveBeenCalledTimes(1);
 
     const key = sharedListKey(auth, deps);
     const awakeList = deps.queryClient.getQueryData(key);
@@ -879,7 +1357,8 @@ describe("runStagedSandbox after a shared list refresh", () => {
     expect(refreshed).not.toBe(awakeList);
 
     heldSettings.resolve("unsupported");
-    await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+    await heldReadEntered.promise;
+    expect(getSandbox).toHaveBeenCalledTimes(1);
     expect(auth.listReads).toBeGreaterThanOrEqual(3);
     expect(stageOf()).toMatchObject({ phase: "creating", failure: null });
     expect(readSettings).toHaveBeenCalledTimes(1);
@@ -1540,19 +2019,53 @@ describe("runStagedSandbox on a resting sandbox", () => {
     });
 
     let releaseCancellation: () => void = () => undefined;
+    const firstCancellationEntered = deferred<void>();
+    const secondCancellationEntered = deferred<void>();
     const cancellation = new Promise<void>((resolve) => {
       releaseCancellation = resolve;
     });
+    let cancellationCount = 0;
     const cancelQueries = vi
       .spyOn(deps.queryClient, "cancelQueries")
-      .mockImplementation(() => cancellation);
+      .mockImplementation(() => {
+        cancellationCount += 1;
+        if (cancellationCount === 1)
+          firstCancellationEntered.resolve(undefined);
+        else if (cancellationCount === 2)
+          secondCancellationEntered.resolve(undefined);
+        return cancellation;
+      });
     const oldRun = runStagedSandbox(
       surfaceKey,
       { taskId: null, resume: true, createKey: null },
       deps,
     );
 
-    await vi.waitFor(() => expect(cancelQueries).toHaveBeenCalledTimes(1));
+    await firstCancellationEntered.promise;
+    await secondCancellationEntered.promise;
+    expect(cancelQueries).toHaveBeenCalledTimes(2);
+    const expectedRowKey = knownSandboxRowQueryOptions({
+      auth,
+      userId: null,
+      sandboxId: SANDBOX_ID,
+      sendId: undefined,
+      observationRequestedAt: undefined,
+      observationRetryId: undefined,
+      stopRequestedAt: undefined,
+      hostId: NEW_HOST_ID,
+      stageId,
+      attemptId: stageOf().attemptId,
+      omission: undefined,
+    }).queryKey;
+    const expectedListKey = sandboxListQueryOptions(
+      auth,
+      deps.userId,
+      true,
+    ).queryKey;
+    expect(cancelQueries.mock.calls.map(([filters]) => filters)).toEqual([
+      { queryKey: expectedRowKey, exact: true },
+      { queryKey: expectedListKey, exact: true },
+    ]);
     expect(
       store.begin(surfaceKey, 1_000_001, {
         resume: false,

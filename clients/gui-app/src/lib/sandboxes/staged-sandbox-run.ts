@@ -1,4 +1,5 @@
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
+import { v4 as uuidv4 } from "uuid";
 import { stageProviderForShape } from "@/lib/sandboxes/sandbox-stage-model";
 import { sandboxReadinessContext } from "@/lib/sandboxes/sandbox-readiness";
 import {
@@ -71,6 +72,7 @@ import {
   handoffOwnerLive,
   PENDING_SEND_SURFACE_PREFIX,
   readStagedSandbox,
+  saveStagedCreateRequest,
   stagedCreateAttemptKey,
   useStagedSandboxStore,
   type StagedSandbox,
@@ -404,20 +406,22 @@ function stagedWakeGesture(stage: StagedSandbox): SandboxVerbGesture {
 /** Reports a wake only for the current run, preserving its original action. */
 async function wakeCurrentStage(
   run: StagedRunIdentity,
-  hostId: string,
+  started: StartedSandbox,
   deps: StagedSandboxRunDeps,
 ): Promise<boolean> {
-  const { surfaceKey } = run;
+  const { surfaceKey, attemptId, attemptRetryId } = run;
   const stage = readStagedSandbox(surfaceKey);
   if (stage === null || !stillCurrent(run)) return false;
   report(surfaceKey, "booting", deps.now());
+  const observationId = uuidv4();
   const boundary = holdPendingSandboxStageObservation(
     surfaceKey,
-    run.attemptId,
-    run.attemptRetryId,
+    attemptId,
+    attemptRetryId,
+    observationId,
   );
   if (boundary === null) return false;
-  const answered = await deps.wake(hostId, stagedWakeGesture(stage));
+  const answered = await deps.wake(started.hostId, stagedWakeGesture(stage));
   if (!stillCurrent(run)) return false;
   const awake =
     answered === true ||
@@ -428,6 +432,7 @@ async function wakeCurrentStage(
     {
       kind: "wake-result",
       requestedAt: boundary,
+      observationId,
     },
   );
   // A newer request owns settlement. Supersession is not a failed wake.
@@ -436,12 +441,29 @@ async function wakeCurrentStage(
     fail(surfaceKey, stagedWakeFailure(answered));
     return false;
   }
-  // A list read still on its way predates the wake: the wait must not join
-  // it, or its old row reads as a rest.
-  await deps.queryClient.cancelQueries({
-    queryKey: sandboxListQueryOptions(deps.auth, deps.userId, true).queryKey,
-  });
-  return true;
+  // Reads started during the wake can still describe the resting row.
+  const knownRow = stageKnownRowQueryOptions(
+    { ...run, started, deps },
+    undefined,
+  );
+  const completed = holdPendingSandboxStageObservation(
+    surfaceKey,
+    attemptId,
+    attemptRetryId,
+    uuidv4(),
+  );
+  if (!stillCurrent(run)) return false;
+  await Promise.all([
+    deps.queryClient.cancelQueries({
+      queryKey: knownRow.queryKey,
+      exact: true,
+    }),
+    deps.queryClient.cancelQueries({
+      queryKey: sandboxQueryKeys.list(deps.auth, deps.userId),
+      exact: true,
+    }),
+  ]);
+  return completed !== null && stillCurrent(run);
 }
 
 function stagedWakeFailure(
@@ -533,7 +555,7 @@ async function startStagedRun(
   if (
     stage.failure?.kind === "failed" &&
     stage.failure.code === "wake" &&
-    !(await wakeCurrentStage(run, made.hostId, deps))
+    !(await wakeCurrentStage(run, made, deps))
   ) {
     return null;
   }
@@ -552,8 +574,8 @@ async function startExistingTarget(
     step: "booting",
     stepAt: deps.now(),
   });
-  const awake = await wakeCurrentStage(run, target.hostId, deps);
-  return awake ? { sandboxId: target.sandboxId, hostId: target.hostId } : null;
+  const started = { sandboxId: target.sandboxId, hostId: target.hostId };
+  return (await wakeCurrentStage(run, started, deps)) ? started : null;
 }
 
 async function startCreateTarget(
@@ -594,6 +616,7 @@ async function startCreateTarget(
       surfaceKey,
       run.attemptId,
       run.attemptRetryId,
+      run.attemptRetryId,
     ) === null
   )
     return null;
@@ -618,11 +641,9 @@ function recordStageCreateAnswer(
     const retryCreate = sandboxRetryAfterRefusal(result, request);
     const failure = createFailure(result, context.teamName);
     const beforeReservation = createRefusedBeforeReservation(result);
-    const retainRequest = result.kind === "network-error" || beforeReservation;
     useStagedSandboxStore.getState().report(surfaceKey, {
       failure: retryCreate === null ? failure : { ...failure, retryCreate },
       ...(beforeReservation ? { createAttempt: null } : {}),
-      ...(retainRequest ? { lastRetryCreate: request } : {}),
     });
     return null;
   }
@@ -710,9 +731,13 @@ function createSandbox(
     queryClient,
     {
       mutationKey: sandboxMutationKeys.create(run.userId),
-      // TanStack can suspend on onMutate before it invokes the transport.
+      // TanStack can suspend on onMutate. Commit the body at the fenced POST.
       mutationFn: () =>
-        stillCurrent(run) ? auth.createSandbox(request) : Promise.resolve(null),
+        stillCurrent(run) &&
+        saveStagedCreateRequest(run.surfaceKey, request) &&
+        stillCurrent(run)
+          ? auth.createSandbox(request)
+          : Promise.resolve(null),
       onSettled: (result) => {
         if (result === null || !settledForStartingAccount(context)) return;
         void directory.refresh();
@@ -831,7 +856,7 @@ async function settleRow(
       fail(surfaceKey, { kind: "rested" });
       return "finished";
     }
-    const awake = await wakeCurrentStage(input, started.hostId, deps);
+    const awake = await wakeCurrentStage(input, started, deps);
     return awake ? "waiting" : "finished";
   }
   const verdict = settleVerdict(row);

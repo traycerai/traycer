@@ -15,7 +15,11 @@ export type PendingSandboxObservation =
       readonly mountedAt: number;
     }
   | { readonly kind: "stop-result"; readonly requestedAt: number | null }
-  | { readonly kind: "wake-result"; readonly requestedAt: number | null }
+  | {
+      readonly kind: "wake-result";
+      readonly requestedAt: number | null;
+      readonly observationId?: string;
+    }
   | {
       readonly kind: "dispatch-result";
       readonly chatId: string;
@@ -33,6 +37,7 @@ interface HeldSandboxRequest {
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
   readonly observationRequestedAt?: number;
+  readonly observationRetryId?: string;
   readonly createdSandbox?: PendingSandboxPresence;
   readonly delivery?: {
     readonly chatId: string;
@@ -76,7 +81,9 @@ function confirmedObservationMatches(
       return (
         request.stopRequested !== true &&
         observation.requestedAt !== null &&
-        observation.requestedAt === request.observationRequestedAt
+        observation.requestedAt === request.observationRequestedAt &&
+        (observation.observationId === undefined ||
+          observation.observationId === request.observationRetryId)
       );
     case "dispatch-result": {
       const identity = request.dispatch?.input ?? request.delivery;

@@ -2439,6 +2439,7 @@ describe("a send whose task may not exist yet", () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
       expect(mocks.refetchSandboxes).toHaveBeenCalled();
+      expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
       expect(inFlightSendRowQueries()).toHaveLength(1);
       expect(inFlightSendRowQueries().map((query) => query.queryHash)).toEqual(
         inFlightQueryHashes,

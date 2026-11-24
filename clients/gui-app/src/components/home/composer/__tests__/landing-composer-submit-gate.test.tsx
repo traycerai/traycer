@@ -1167,6 +1167,10 @@ describe("LandingComposer direct submit gate", () => {
       );
       await waitFor(() => expect(requests).toHaveLength(1));
       const firstRequest = requests[0];
+      const firstRequestKey = firstRequest.clientRequestId;
+      if (firstRequestKey === null)
+        throw new Error("expected the Open terminal create key");
+      expect(firstRequestKey).toMatch(/^stage:/);
       expect(firstRequest.createdByTaskId).toBeNull();
       expect(firstRequest).toMatchObject({
         os: SHAPE.os,

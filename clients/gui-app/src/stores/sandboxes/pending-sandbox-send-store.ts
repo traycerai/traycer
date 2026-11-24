@@ -158,6 +158,7 @@ export interface PendingSandboxSend {
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
   readonly observationRequestedAt?: number;
+  /** The held observation identity. A create retry reuses its receipt. */
   readonly observationRetryId?: string;
   /** A create response names a row; only a successful read proves it was listed. */
   readonly createdSandbox?: PendingSandboxPresence;
@@ -248,6 +249,10 @@ export function pendingSandboxSendFacts(
     observationRequestedAt:
       typeof stored?.observationRequestedAt === "number"
         ? stored.observationRequestedAt
+        : undefined,
+    observationRetryId:
+      typeof stored?.observationRetryId === "string"
+        ? stored.observationRetryId
         : undefined,
     stopRequestedAt:
       typeof stored?.stopRequestedAt === "number"
@@ -421,7 +426,14 @@ export function pendingSandboxStageObservation(
     return decodePendingSandboxObservation(
       observation.kind === "list" || observation.kind === "by-id"
         ? null
-        : { createdAt: 0, observationRequestedAt: 0 },
+        : {
+            createdAt: 0,
+            observationRequestedAt: 0,
+            observationRetryId:
+              observation.kind === "wake-result"
+                ? observation.observationId
+                : undefined,
+          },
       host,
       observation,
     );
@@ -435,7 +447,8 @@ export function pendingSandboxStageObservation(
 export function holdPendingSandboxStageObservation(
   surfaceKey: string,
   attemptId: string | undefined,
-  retryId: string | undefined,
+  attemptRetryId: string | undefined,
+  observationId: string | undefined,
 ): number | null {
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return 0;
   const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
@@ -446,7 +459,7 @@ export function holdPendingSandboxStageObservation(
   if (
     stage === null ||
     stage.attemptId !== attemptId ||
-    stage.attemptRetryId !== retryId
+    stage.attemptRetryId !== attemptRetryId
   )
     return null;
   const plan = transitionPendingSend(
@@ -460,7 +473,7 @@ export function holdPendingSandboxStageObservation(
   );
   return usePendingSandboxSendStore
     .getState()
-    .holdObservation(id, plan, retryId);
+    .holdObservation(id, plan, observationId);
 }
 
 /** A newly accepted create is persisted before the runner publishes its id. */

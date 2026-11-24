@@ -87,18 +87,29 @@ export function readPendingStageRecord(
   }
 }
 
+export function readPendingStageAttempt(
+  surfaceKey: string,
+  stageId: string | null,
+  createKey: string | null,
+  attemptId: string | undefined,
+): Readonly<Record<string, unknown>> | null {
+  const stage = readPendingStageRecord(surfaceKey);
+  return stage !== null &&
+    stage.clientRequestId === stageId &&
+    (stage.lastCreateKey ?? stage.clientRequestId) === createKey &&
+    stage.attemptId === attemptId
+    ? stage
+    : null;
+}
+
 export function pendingStageAttemptCurrent(
   surfaceKey: string,
   stageId: string | null,
   createKey: string | null,
   attemptId: string | undefined,
 ): boolean {
-  const stage = readPendingStageRecord(surfaceKey);
   return (
-    stage !== null &&
-    stage.clientRequestId === stageId &&
-    (stage.lastCreateKey ?? stage.clientRequestId) === createKey &&
-    stage.attemptId === attemptId
+    readPendingStageAttempt(surfaceKey, stageId, createKey, attemptId) !== null
   );
 }
 

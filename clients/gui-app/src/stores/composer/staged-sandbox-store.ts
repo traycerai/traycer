@@ -28,6 +28,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createPendingStageStorage,
   pendingStageAttemptCurrent,
+  readPendingStageAttempt,
   readPendingStageRecord,
   removeAcknowledgedStageRetry,
   requestPendingStageRetry,
@@ -155,7 +156,7 @@ export interface StagedSandbox {
   readonly attemptId?: string;
   /** Receipt that committed this attempt, independent of later stale acknowledgements. */
   readonly attemptRetryId?: string;
-  /** The retry payload already selected for that key. */
+  /** The exact create request selected for that key, including the first POST. */
   readonly lastRetryCreate?: SandboxCreateRequest;
   /**
    * The draft whose send started the action, where a surface holds several
@@ -750,4 +751,41 @@ export function useStagedTerminalLaunch(
 
 export function readStagedSandbox(surfaceKey: string): StagedSandbox | null {
   return useStagedSandboxStore.getState().bySurface[surfaceKey] ?? null;
+}
+
+/** A pending send can only POST a body committed to its current stage attempt. */
+export function saveStagedCreateRequest(
+  surfaceKey: string,
+  request: SandboxCreateRequest,
+): boolean {
+  const stage = readStagedSandbox(surfaceKey);
+  const key = request.clientRequestId;
+  if (stage === null || key === null || key !== stagedCreateAttemptKey(stage))
+    return false;
+  const readCurrent = () =>
+    surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)
+      ? readPendingStageAttempt(
+          surfaceKey,
+          stage.clientRequestId,
+          key,
+          stage.attemptId,
+        )
+      : readStagedSandbox(surfaceKey);
+  const current = readCurrent();
+  if (current?.phase !== "creating") return false;
+  const payload = JSON.stringify(request);
+  if (current.lastRetryCreate !== undefined)
+    return JSON.stringify(current.lastRetryCreate) === payload;
+  try {
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { lastRetryCreate: request });
+  } catch {
+    // A header failure may follow a committed stage record. Read back the record.
+  }
+  const saved = readCurrent();
+  return (
+    saved?.phase === "creating" &&
+    JSON.stringify(saved.lastRetryCreate) === payload
+  );
 }
