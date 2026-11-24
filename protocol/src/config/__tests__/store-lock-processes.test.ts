@@ -57,15 +57,6 @@ import {
   withHostCliConfigFileLock,
 } from "../store";
 
-type HostCliConfigFileLockWithSignal = <T>(
-  run: () => Promise<T>,
-  onUnknownHolder: (lockPath: string) => void,
-  signal: AbortSignal,
-) => Promise<T>;
-
-const withHostCliConfigFileLockWithSignal: HostCliConfigFileLockWithSignal =
-  withHostCliConfigFileLock;
-
 const HOLDER_CHILD = join(
   dirname(fileURLToPath(import.meta.url)),
   "fixtures",
@@ -229,24 +220,6 @@ async function awaitWithin<T>(promise: Promise<T>, label: string): Promise<T> {
   }
 }
 
-async function settledBeforeNextTurn<T>(
-  promise: Promise<T>,
-): Promise<
-  | { readonly status: "fulfilled"; readonly value: T }
-  | { readonly status: "rejected"; readonly error: unknown }
-  | { readonly status: "pending" }
-> {
-  const outcome = promise.then(
-    (value) => ({ status: "fulfilled" as const, value }),
-    (error: unknown) => ({ status: "rejected" as const, error }),
-  );
-  await Promise.resolve();
-  return Promise.race([
-    outcome,
-    Promise.resolve({ status: "pending" as const }),
-  ]);
-}
-
 async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
   return promise.then(
     () => null,
@@ -360,6 +333,7 @@ describe("config lock across processes", () => {
             unknownPaths.push(reportedPath);
             unknownNotified.resolve();
           },
+          new AbortController().signal,
         ).then(
           () => {
             hostSettled = true;
@@ -462,7 +436,7 @@ describe("config lock across processes", () => {
             wait: releaseProbe.promise,
             verdict: "alive",
           };
-          hostWrite = withHostCliConfigFileLockWithSignal(
+          hostWrite = withHostCliConfigFileLock(
             () => {
               hostRun = true;
               return setEnvOverride("HOST_KEY", "h");
@@ -485,19 +459,16 @@ describe("config lock across processes", () => {
           ).toBe("probing");
 
           controller.abort();
-          const outcome = await settledBeforeNextTurn(hostWrite);
-          expect(outcome.status).toBe("rejected");
-          if (outcome.status === "rejected") expectAbortError(outcome.error);
+          const error = await rejectionOf(
+            awaitWithin(hostWrite, "aborted host write"),
+          );
+          expectAbortError(error);
           expect(hostRun).toBe(false);
           expect(await readFile(cliConfigPath())).toEqual(held.configBefore);
           expect(await readFile(lockPath())).toEqual(held.lockBefore);
 
           releaseProbe.resolve();
           expect(await held.release(), held.stderr()).toBe(0);
-          const error = await rejectionOf(
-            awaitWithin(hostWrite, "aborted host write"),
-          );
-          expectAbortError(error);
           expect((await readCliConfig()).envOverrides).toEqual({
             SEED_KEY: "s",
             CHILD_KEY: "c",
@@ -537,7 +508,7 @@ describe("config lock across processes", () => {
       let hostWrite: Promise<void> | undefined;
 
       try {
-        hostWrite = withHostCliConfigFileLockWithSignal(
+        hostWrite = withHostCliConfigFileLock(
           () => {
             hostRun = true;
             return setEnvOverride("HOST_KEY", "h");
@@ -553,18 +524,15 @@ describe("config lock across processes", () => {
           "unknown-holder notification",
         );
         controller.abort();
-        const outcome = await settledBeforeNextTurn(hostWrite);
-        expect(outcome.status).toBe("rejected");
-        if (outcome.status === "rejected") expectAbortError(outcome.error);
+        const error = await rejectionOf(
+          awaitWithin(hostWrite, "aborted unknown-holder wait"),
+        );
+        expectAbortError(error);
         expect(unknownPaths).toEqual([lockPath()]);
         expect(await readFile(cliConfigPath())).toEqual(configBefore);
         expect(await readFile(lockPath())).toEqual(lockBefore);
 
         await rm(lockPath(), { force: true });
-        const error = await rejectionOf(
-          awaitWithin(hostWrite, "aborted unknown-holder wait"),
-        );
-        expectAbortError(error);
         expect(hostRun).toBe(false);
         expect(await readFile(cliConfigPath())).toEqual(configBefore);
       } finally {
@@ -601,6 +569,7 @@ describe("config lock across processes", () => {
         incumbentWrite = withHostCliConfigFileLock(
           () => setEnvOverride("INCUMBENT_KEY", "i"),
           () => undefined,
+          new AbortController().signal,
         );
         const incumbentOutcome = incumbentWrite.then(
           () => "settled" as const,
@@ -616,7 +585,7 @@ describe("config lock across processes", () => {
           ),
         ).toBe("probing");
 
-        queuedWrite = withHostCliConfigFileLockWithSignal(
+        queuedWrite = withHostCliConfigFileLock(
           () => {
             queuedRun = true;
             return setEnvOverride("QUEUED_KEY", "q");
@@ -625,9 +594,10 @@ describe("config lock across processes", () => {
           controller.signal,
         );
         controller.abort();
-        const outcome = await settledBeforeNextTurn(queuedWrite);
-        expect(outcome.status).toBe("rejected");
-        if (outcome.status === "rejected") expectAbortError(outcome.error);
+        const error = await rejectionOf(
+          awaitWithin(queuedWrite, "queued reservation completion"),
+        );
+        expectAbortError(error);
         expect(queuedRun).toBe(false);
         expect(await readFile(lockPath())).toEqual(held.lockBefore);
         expect(await readFile(cliConfigPath())).toEqual(held.configBefore);
@@ -635,10 +605,6 @@ describe("config lock across processes", () => {
         releaseProbe.resolve();
         expect(await held.release(), held.stderr()).toBe(0);
         await awaitWithin(incumbentWrite, "incumbent release");
-        const error = await rejectionOf(
-          awaitWithin(queuedWrite, "queued reservation completion"),
-        );
-        expectAbortError(error);
         expect((await readCliConfig()).envOverrides).toEqual({
           SEED_KEY: "s",
           CHILD_KEY: "c",

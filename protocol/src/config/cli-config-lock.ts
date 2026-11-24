@@ -13,6 +13,10 @@ import {
 import { basename, dirname, join } from "node:path";
 import { errorCode } from "./credentials-fs";
 import {
+  cliConfigLockAbortError,
+  throwIfCliConfigLockAborted,
+} from "./cli-config-queue";
+import {
   holderProvablyDead,
   ownPidStartFingerprintAsync,
   queryPidStartFingerprintAsync,
@@ -188,26 +192,29 @@ function retryRelease(lockPath: string, record: LockRecord): Promise<boolean> {
 export function acquireCliConfigLock(
   lockPath: string,
 ): Promise<CliConfigLockHandle> {
-  return acquireLock(lockPath, null);
+  return acquireLock(lockPath, null, undefined);
 }
 
-/** Host acquisition waits without a deadline and reports an unknown holder once. */
+/** Host acquisition waits for the lock or abort, reporting an unknown holder once. */
 export function acquireHostCliConfigLock(
   lockPath: string,
   onUnknownHolder: (lockPath: string) => void,
+  signal: AbortSignal,
 ): Promise<CliConfigLockHandle> {
-  return acquireLock(lockPath, onUnknownHolder);
+  return acquireLock(lockPath, onUnknownHolder, signal);
 }
 
 async function acquireLock(
   lockPath: string,
   onUnknownHolder: ((lockPath: string) => void) | null,
+  signal: AbortSignal | undefined,
 ): Promise<CliConfigLockHandle> {
+  throwIfCliConfigLockAborted(signal);
   const timing = currentTiming();
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   const record: LockRecord = {
     pid: process.pid,
-    pidStartTime: await ownPidStartFingerprintAsync(),
+    pidStartTime: await waitForProbe(ownPidStartFingerprintAsync, signal),
     nonce: randomUUID(),
     acquiredAt: Date.now(),
   };
@@ -226,31 +233,39 @@ async function acquireLock(
     liveUntil: new Map(),
   };
   while (true) {
+    throwIfCliConfigLockAborted(signal);
     await releaseUnreleased(lockPath);
     await removeRetainedTokens();
+    throwIfCliConfigLockAborted(signal);
     const created = await tryCreate(lockPath, serialized);
     if (created === "created") {
-      await sweepBreakTokens(lockPath, record.nonce);
-      return makeHandle(lockPath, record);
+      const handle = makeHandle(lockPath, record);
+      try {
+        throwIfCliConfigLockAborted(signal);
+        await sweepBreakTokens(lockPath, record.nonce);
+        throwIfCliConfigLockAborted(signal);
+        return handle;
+      } catch (error) {
+        await handle.release();
+        throw error;
+      }
     }
-    const holder = await readHolder(lockPath);
+    throwIfCliConfigLockAborted(signal);
+    const holder = await waitForProbe(() => readHolder(lockPath), signal);
     if (holder === null) {
       // Released between our create and read: retry at once, within the wait.
       // A create a Windows filter blocked means the released entry is still
       // delete-pending, which can last as long as a handle on it: poll.
       if (deadline !== null && Date.now() >= deadline)
         throw lockTimeoutError(timing, lockPath);
-      if (created === "blocked") await sleep(timing.pollMs);
+      if (created === "blocked") await sleep(timing.pollMs, signal);
       continue;
     }
-    const ageMs = await lockAgeMs(lockPath);
-    if (holder.record === null && ageMs !== null && ageMs >= timing.staleAgeMs)
+    const holderRecord = holder.record;
+    const ageMs = await waitForProbe(() => lockAgeMs(lockPath), signal);
+    if (holderRecord === null && ageMs !== null && ageMs >= timing.staleAgeMs)
       reportUnknownHolder();
-    if (
-      holder.record !== null &&
-      ageMs !== null &&
-      ageMs >= timing.staleAgeMs
-    ) {
+    if (holderRecord !== null && ageMs !== null && ageMs >= timing.staleAgeMs) {
       const reuseVerdict =
         liveVerdict !== null &&
         liveVerdict.raw === holder.raw &&
@@ -258,21 +273,22 @@ async function acquireLock(
       if (!reuseVerdict) {
         const verdict =
           onUnknownHolder === null
-            ? (await recordHolderDead(holder.record))
+            ? (await recordHolderDead(holderRecord))
               ? "dead"
               : "alive"
-            : await probeHolder(holder.record);
+            : await waitForProbe(() => probeHolder(holderRecord), signal);
         if (verdict === "indeterminate") reportUnknownHolder();
         if (verdict === "dead") {
           if (
             await breakDeadLock(
               lockPath,
               holder.raw,
-              holder.record.nonce,
+              holderRecord.nonce,
               serialized,
               timing,
               deadline,
               tokenVerdicts,
+              signal,
             )
           ) {
             continue;
@@ -287,7 +303,7 @@ async function acquireLock(
     }
     if (deadline !== null && Date.now() >= deadline)
       throw lockTimeoutError(timing, lockPath);
-    await sleep(timing.pollMs);
+    await sleep(timing.pollMs, signal);
   }
 }
 
@@ -320,9 +336,13 @@ async function breakDeadLock(
   timing: CliConfigLockTiming,
   deadline: number | null,
   tokenVerdicts: TokenVerdicts,
+  signal: AbortSignal | undefined,
 ): Promise<boolean> {
   const tokenBase = breakTokenBase(lockPath, deadNonce);
-  const generations = await tokenGenerations(tokenBase);
+  const generations = await waitForProbe(
+    () => tokenGenerations(tokenBase),
+    signal,
+  );
   // Any token whose creator is not provably dead is a breaker at work (or one
   // nothing proves dead): it alone may remove this record, so we wait.
   for (const generation of generations) {
@@ -330,10 +350,10 @@ async function breakDeadLock(
     // chain is checked against the deadline before each one.
     if (deadline !== null && Date.now() >= deadline) return false;
     if (
-      !(await tokenCreatorDead(
-        `${tokenBase}.${generation}`,
-        timing,
-        tokenVerdicts,
+      !(await waitForProbe(
+        () =>
+          tokenCreatorDead(`${tokenBase}.${generation}`, timing, tokenVerdicts),
+        signal,
       ))
     ) {
       return false;
@@ -342,6 +362,7 @@ async function breakDeadLock(
   // The probes above, the holder's included, can outlast the wait: a write
   // that timed out must not break and go on to mutate.
   if (deadline !== null && Date.now() >= deadline) return false;
+  throwIfCliConfigLockAborted(signal);
   const next = generations.reduce((max, g) => Math.max(max, g + 1), 0);
   const tokenPath = `${tokenBase}.${next}`;
   // Another breaker claimed that generation first, or a Windows filter held
@@ -351,7 +372,8 @@ async function breakDeadLock(
     // Only this token's creator may remove the record, and the lock cannot
     // change under it: the dead holder will not release, and every other
     // breaker of this record needs this token.
-    const current = await readHolder(lockPath);
+    const current = await waitForProbe(() => readHolder(lockPath), signal);
+    throwIfCliConfigLockAborted(signal);
     // A re-read a Windows filter blocked proves nothing: wait and try again.
     if (current !== null && current.unreadable) return false;
     if (current === null || current.raw !== deadRaw) return true;
@@ -731,7 +753,8 @@ function makeHandle(lockPath: string, record: LockRecord): CliConfigLockHandle {
         }
         // A read a Windows filter blocked has not shown the lock is not ours:
         // retry it like a blocked release.
-        if (attempt < RELEASE_ATTEMPTS - 1) await sleep(RELEASE_RETRY_MS);
+        if (attempt < RELEASE_ATTEMPTS - 1)
+          await sleep(RELEASE_RETRY_MS, undefined);
       }
       // Still unreadable: the owner is unknown, so the write must not rename.
       return false;
@@ -743,7 +766,8 @@ function makeHandle(lockPath: string, record: LockRecord): CliConfigLockHandle {
         if (await removeIfOurs(lockPath, record)) return;
         // Transient (a Windows sharing violation): retry before handing it to
         // the background.
-        if (attempt < RELEASE_ATTEMPTS - 1) await sleep(RELEASE_RETRY_MS);
+        if (attempt < RELEASE_ATTEMPTS - 1)
+          await sleep(RELEASE_RETRY_MS, undefined);
       }
       console.warn(
         `Could not remove the settings lock ${lockPath}; retrying in the background.`,
@@ -754,8 +778,39 @@ function makeHandle(lockPath: string, record: LockRecord): CliConfigLockHandle {
   };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+/** Cancellation can stop waiting for read-only filesystem and process probes. */
+async function waitForProbe<T>(
+  probe: () => Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  throwIfCliConfigLockAborted(signal);
+  if (signal === undefined) return probe();
+  let abort = (): void => {};
+  const cancelled = new Promise<never>((_, reject) => {
+    abort = () => reject(cliConfigLockAbortError());
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  try {
+    return await Promise.race([probe(), cancelled]);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+
+async function sleep(
+  ms: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  throwIfCliConfigLockAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(cliConfigLockAbortError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
   });
 }
