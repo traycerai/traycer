@@ -176,6 +176,8 @@ export interface SettingsBaseRow {
 export interface SettingsSaveBase {
   readonly rows: readonly SettingsBaseRow[];
   readonly hostOs: HostOs | null;
+  /** The host edits its own settings, so the Personal rows only supply the address and base. */
+  readonly prebind?: true;
 }
 
 const LOCAL_ONLY: SettingsSaveMapping = { kind: "local_only" };
@@ -457,8 +459,8 @@ export function settingsSaveItemEdit(
   base: SettingsSaveBase,
 ): SettingsSaveMapping {
   const mapping = itemEditOf(save, base);
-  // Only a save built over an item's rows can be compared with them.
-  return settingsSaveBaseAddress(save) === null
+  // A prebind edit can be different on the host even if it agrees with Personal.
+  return base.prebind === true || settingsSaveBaseAddress(save) === null
     ? mapping
     : unlessUnchanged(mapping, base);
 }

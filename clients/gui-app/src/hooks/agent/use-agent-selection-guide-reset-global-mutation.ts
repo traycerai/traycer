@@ -9,6 +9,8 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { agentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
+import { useGuideSaveFollow } from "./use-guide-save-follow";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 type ResetGlobalContext = {
@@ -30,6 +32,9 @@ export function useAgentSelectionGuideResetGlobalMutation(): UseMutationResult<
   >({
     client,
     method: "agent.selectionGuide.resetGlobalToDefault",
+    followSettingsSave: useGuideSaveFollow(
+      "agent.selectionGuide.resetGlobalToDefault",
+    ),
     mapVariables: (variables) => variables,
     options: {
       mutationKey: agentMutationKeys.resetGlobalSelectionGuide(),
@@ -58,8 +63,11 @@ export function useAgentSelectionGuideResetGlobalMutation(): UseMutationResult<
           },
         );
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't reset agent instructions."),
+      onError: (error) => {
+        const reported = reportedSaveFailure(error);
+        if (reported !== null)
+          toastFromHostError(reported, "Couldn't reset agent instructions.");
+      },
     },
   });
 }

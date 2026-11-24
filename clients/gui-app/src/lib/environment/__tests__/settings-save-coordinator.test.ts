@@ -31,19 +31,6 @@ const SHARING_GENERATION = 3;
 const KEY = "memory";
 const KIND = "agent_memory";
 type BoundSave = Extract<SettingsSaveMemoryRecord, { environmentId: string }>;
-type PromotedProposalRow = EnvironmentProposalsResponse["proposals"][number] & {
-  readonly promotion: {
-    readonly saveId: string;
-    readonly heldRevision: number | null;
-  };
-};
-type PromotedProposalsResponse = Omit<
-  EnvironmentProposalsResponse,
-  "proposals"
-> & {
-  readonly localSaveIds?: readonly string[];
-  proposals: PromotedProposalRow[];
-};
 
 type Value = { readonly enabled: boolean };
 
@@ -107,7 +94,7 @@ function proposals() {
   } satisfies EnvironmentProposalsResponse;
 }
 
-function promotedProposals(saveId: string): PromotedProposalsResponse {
+function promotedProposals(saveId: string): EnvironmentProposalsResponse {
   return {
     localSaveIds: [],
     proposals: [
@@ -125,7 +112,7 @@ function promotedProposals(saveId: string): PromotedProposalsResponse {
         },
         localOverride: true,
         deliveredRevision: null,
-        promotion: { saveId, heldRevision: 9 },
+        promotion: { saveId, heldRevision: 9, moveWrittenRevision: null },
       },
     ],
   };
@@ -288,7 +275,10 @@ describe("settings save edit fence", () => {
         schedule: noFollowUp,
       };
       const first = createSettingsSaveCoordinator(ports);
-      const beginning = first.beginLocal(ACCOUNT_ID, HOST_ID);
+      const beginning = await first.beginLocal(
+        { accountId: ACCOUNT_ID, hostId: HOST_ID, onOriginSignIn: () => true },
+        () => Promise.resolve({ environmentId: ENVIRONMENT_ID, item: null }),
+      );
       if (beginning.kind !== "remembered") throw new Error(beginning.kind);
       saveId = beginning.ticket.id;
       await first.settle(beginning.ticket, true);
@@ -311,84 +301,91 @@ describe("settings save edit fence", () => {
     },
   );
 
-  it("recovers a promoted save from the same account after its window closes", async () => {
-    const first = createSettingsSaveCoordinator({
-      accountId: () => ACCOUNT_ID,
-      cloud: () => null,
-      readProposals: () => Promise.resolve(null),
-      now: () => 100,
-      schedule: noFollowUp,
-    });
-    const record: BoundSave = {
+  it("leaves a hold for a legacy prebind record without a captured base in review", async () => {
+    const saveId = useSettingsSaveMemoryStore.getState().remember({
       editId: "promoted-save",
       hostId: HOST_ID,
       writtenAt: 100,
       unanswered: null,
-      environmentId: ENVIRONMENT_ID,
-      sharingGeneration: SHARING_GENERATION,
-      kind: KIND,
-      key: KEY,
-      os: null,
-      operation: "put",
-      valueDigest: await settingValueDigest({ enabled: true }),
-      expectedLiveRevision: 7,
-    };
-    Object.assign(record, { environmentId: null });
-    const saveId = useSettingsSaveMemoryStore.getState().remember(record);
-    first.stop();
+      environmentId: null,
+    });
 
     const sent: EnvironmentTransportRequest[] = [];
-    const reviewAnswer: EnvironmentTransportAnswer = {
-      status: 200,
-      text: JSON.stringify({
-        review: {
-          hosts: [],
-          needsYou: [
-            {
-              type: "held",
-              heldId: "held-promoted-save",
-              revision: 9,
-              kind: KIND,
-              key: KEY,
-              os: null,
-              hostId: HOST_ID,
-              sharingGeneration: SHARING_GENERATION,
-              hostName: "Host",
-              heldAt: 100,
-              live: { revision: 8, value: { enabled: false } },
-              op: "put",
-              value: { enabled: true },
-            },
-          ],
-        },
-      }),
-    };
-    const second = createSettingsSaveCoordinator({
+    const coordinator = createSettingsSaveCoordinator({
       accountId: () => ACCOUNT_ID,
       cloud: () =>
         makeCloud((request) => {
           sent.push(request);
-          return Promise.resolve(
-            request.method === "GET" ? reviewAnswer : { status: 200, text: "" },
-          );
+          return Promise.resolve(review({ enabled: true }));
         }),
       readProposals: () => Promise.resolve(promotedProposals(saveId)),
       now: () => 100,
       schedule: noFollowUp,
     });
 
-    await second.reconcile(HOST_ID);
+    await coordinator.reconcile(HOST_ID);
 
-    const applied = sent.filter((request) => request.method === "POST");
-    expect(applied).toHaveLength(1);
-    const request = applied[0];
-    expect(request.url).toContain("/held/held-promoted-save/apply");
-    expect(request.body).toEqual({
-      revision: 9,
-      expectedLiveRevision: 8,
-    });
-    expect(useSettingsSaveMemoryStore.getState().records).toEqual({});
+    expect(sent).toEqual([]);
   });
+
+  it.each(["Stop", "sign-out"])(
+    "leaves a prebind hold pending when %s overtakes its Personal binding read",
+    async (reason) => {
+      let onOrigin = true;
+      let saveId = "";
+      const bindingRead = deferred<void>();
+      const bindingReply = deferred<EnvironmentTransportAnswer>();
+      const sent: EnvironmentTransportRequest[] = [];
+      const coordinator = createSettingsSaveCoordinator({
+        accountId: () => ACCOUNT_ID,
+        cloud: () => ({
+          ...makeCloud((request) => {
+            sent.push(request);
+            if (request.url.endsWith("/hosts?include=binding")) {
+              bindingRead.resolve(undefined);
+              return bindingReply.promise;
+            }
+            return Promise.resolve(review({ enabled: true }));
+          }),
+          onOriginSignIn: () => onOrigin,
+        }),
+        readProposals: () => Promise.resolve(promotedProposals(saveId)),
+        now: () => 100,
+        schedule: noFollowUp,
+      });
+      const change = mapping({ enabled: true });
+      if (change.kind !== "proposal") throw new Error("Expected an item edit");
+      const beginning = await coordinator.beginLocal(
+        {
+          accountId: ACCOUNT_ID,
+          hostId: HOST_ID,
+          onOriginSignIn: () => onOrigin,
+        },
+        () =>
+          Promise.resolve({
+            environmentId: ENVIRONMENT_ID,
+            item: { edit: change.edit, expectedLiveRevision: 7 },
+          }),
+      );
+      if (beginning.kind !== "remembered") throw new Error(beginning.kind);
+      saveId = beginning.ticket.id;
+
+      const reconciling = coordinator.reconcile(HOST_ID);
+      await bindingRead.promise;
+      if (reason === "Stop") coordinator.stop();
+      else onOrigin = false;
+      bindingReply.resolve({
+        status: 200,
+        text: JSON.stringify({
+          hosts: [{ hostId: HOST_ID, sharingGeneration: SHARING_GENERATION }],
+        }),
+      });
+      await reconciling;
+
+      expect(sent).toHaveLength(1);
+      expect(useSettingsSaveMemoryStore.getState().records[saveId]).toBeDefined();
+    },
+  );
 
   it("does not apply A's proposal after B replaces A during the proposals read", async () => {
     const reading = deferred<void>();

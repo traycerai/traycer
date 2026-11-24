@@ -132,7 +132,18 @@ const environmentProposalSchemaV11 = lazySchema(() =>
     promotion: environmentPromotionSchema.optional(),
   }),
 );
-export type EnvironmentProposal = z.infer<typeof environmentProposalSchemaV11>;
+const environmentPromotionSchemaV12 = lazySchema(() =>
+  environmentPromotionSchema.extend({
+    /** Absent without verified support. Null when the Move wrote no exact row. */
+    moveWrittenRevision: z.number().int().nonnegative().nullable().optional(),
+  }),
+);
+const environmentProposalSchemaV12 = lazySchema(() =>
+  environmentProposalSchema.extend({
+    promotion: environmentPromotionSchemaV12.optional(),
+  }),
+);
+export type EnvironmentProposal = z.infer<typeof environmentProposalSchemaV12>;
 
 export const environmentProposalsRequestSchema = lazySchema(() => z.object({}));
 const environmentProposalsRequestSchemaV11 = lazySchema(() =>
@@ -166,8 +177,13 @@ const environmentProposalsResponseSchemaV11 = lazySchema(() =>
     pendingProfileNames: z.array(pendingProfileNameSchema).optional(),
   }),
 );
+const environmentProposalsResponseSchemaV12 = lazySchema(() =>
+  environmentProposalsResponseSchemaV11.extend({
+    proposals: z.array(environmentProposalSchemaV12),
+  }),
+);
 export type EnvironmentProposalsResponse = z.infer<
-  typeof environmentProposalsResponseSchemaV11
+  typeof environmentProposalsResponseSchemaV12
 >;
 
 export const environmentProposalsV10 = defineRpcContract({
@@ -184,12 +200,29 @@ export const environmentProposalsV11 = defineRpcContract({
   responseSchema: environmentProposalsResponseSchemaV11,
 });
 
+export const environmentProposalsV12 = defineRpcContract({
+  method: "environment.proposals",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: environmentProposalsRequestSchemaV11,
+  responseSchema: environmentProposalsResponseSchemaV12,
+});
+
 export const environmentProposalsUpgradeV10ToV11 = defineUpgradePath<
   typeof environmentProposalsV10,
   typeof environmentProposalsV11
 >({
   from: environmentProposalsV10.schemaVersion,
   to: environmentProposalsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const environmentProposalsUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentProposalsV11,
+  typeof environmentProposalsV12
+>({
+  from: environmentProposalsV11.schemaVersion,
+  to: environmentProposalsV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

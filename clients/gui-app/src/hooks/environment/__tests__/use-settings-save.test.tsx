@@ -23,7 +23,9 @@ import type {
   EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
+import { settingsSaveRequestId } from "@traycer/protocol/framework/settings-save-request-id";
 import type { EnvironmentProposalsResponse } from "@traycer/protocol/host/environment/settings-proposals";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import type { SetupScript } from "@traycer/protocol/host/environment-schemas";
 import type { ConfigShellGetResponseV11 } from "@traycer/protocol/host/config/index";
 import { hostRpcRegistry } from "@traycer/protocol/host";
@@ -339,6 +341,7 @@ interface SaveHarness {
   readonly hostEvents: string[];
   readonly saveRequests: string[];
   readonly savePayloads: SavePayload[];
+  readonly hostCalls: EnvironmentClientFixture["messenger"]["calls"];
   readonly recordsAtSend: (SettingsSaveMemoryRecord | null)[];
   readonly cloud: EnvironmentCloud;
   readonly environmentCloud: () => EnvironmentCloud;
@@ -477,6 +480,12 @@ function makeSaveHarness(overrides: {
     onOriginSignIn: () => true,
     transport: async (request) => {
       authnRequests.push(request);
+      if (request.url.endsWith("/api/v3/environments/me")) {
+        return {
+          status: 200,
+          text: JSON.stringify({ environmentId: ENVIRONMENT_ID }),
+        };
+      }
       if (request.url.includes("/hosts?include=binding")) {
         return hostListAnswer(state);
       }
@@ -524,7 +533,7 @@ function makeSaveHarness(overrides: {
     canUnbind: false,
     sharingGeneration: SHARING_GENERATION,
   };
-  const { client, hosts } = buildEnvironmentClient({
+  const { client, hosts, messenger } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
       "environment.status": () => {
@@ -676,6 +685,28 @@ function makeSaveHarness(overrides: {
   const authService = new AuthService({ runnerHost });
   const auth = Object.assign(authService, {
     environmentCloud,
+    fetchRegisteredHosts: (): Promise<HostListResponse> =>
+      Promise.resolve({
+        hosts: [
+          {
+            hostId: HOST_ID,
+            displayName: "Computer",
+            platform: "darwin-arm64",
+            kind: "personal",
+            publicKey: "test-key",
+            createdAt: "2026-01-01T00:00:00Z",
+            updatePolicy: "manual",
+            status: {
+              connectivity: "connectable",
+              viewerReachability: "unknown",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: null,
+              lastSeenAt: null,
+            },
+          },
+        ],
+      }),
   });
   const directoryService = createAuthBoundHostDirectory({
     auth: authService,
@@ -734,6 +765,7 @@ function makeSaveHarness(overrides: {
     hostEvents,
     saveRequests,
     savePayloads,
+    hostCalls: messenger.calls,
     recordsAtSend,
     cloud,
     environmentCloud,
@@ -823,6 +855,7 @@ type PromotedLocalProposalRow =
     readonly promotion: {
       readonly saveId: string;
       readonly heldRevision: number | null;
+      readonly moveWrittenRevision?: number | null;
     };
   };
 
@@ -837,6 +870,8 @@ type PromotedLocalProposalsResponse = Omit<
 function promotedLocalProposal(
   saveId: string,
   heldRevision: number,
+  os: AuthnItemRow["os"],
+  moveWrittenRevision: number | null | undefined,
 ): PromotedLocalProposalsResponse {
   return {
     localSaveIds: [],
@@ -849,13 +884,17 @@ function promotedLocalProposal(
           sharingGeneration: SHARING_GENERATION,
           kind: "env_override",
           key: ITEM_KEY,
-          os: null,
+          os,
           operation: "put",
           state: "proposed",
         },
         localOverride: true,
         deliveredRevision: null,
-        promotion: { saveId, heldRevision },
+        promotion: {
+          saveId,
+          heldRevision,
+          ...(moveWrittenRevision === undefined ? {} : { moveWrittenRevision }),
+        },
       },
     ],
   };
@@ -869,7 +908,8 @@ function localSaveIdsResponse(
 
 function localPromotionReviewAnswer(
   heldRevision: number,
-  liveRevision: number,
+  live: AuthnItemRow,
+  proposedValue: string,
 ): EnvironmentTransportAnswer {
   const held = (heldId: string, revision: number) => ({
     type: "held",
@@ -877,14 +917,14 @@ function localPromotionReviewAnswer(
     revision,
     kind: "env_override",
     key: ITEM_KEY,
-    os: null,
+    os: live.os,
     hostId: HOST_ID,
     sharingGeneration: SHARING_GENERATION,
     hostName: "Local host",
     heldAt: 2,
-    live: { revision: liveRevision, value: { value: "personal-value" } },
+    live: { revision: live.revision, value: live.value },
     op: "put",
-    value: { value: "computer-value" },
+    value: { value: proposedValue },
   });
   return {
     status: 200,
@@ -1144,6 +1184,26 @@ function records(): readonly SettingsSaveMemoryRecord[] {
   return Object.values(useSettingsSaveMemoryStore.getState().records);
 }
 
+async function pressPrebindOverride(harness: SaveHarness) {
+  const { result, unmount } = renderHook(
+    () => ({
+      editor: useEnvOverrideEditor(),
+      coordinator: useSettingsSaveCoordinator(),
+    }),
+    { wrapper: harness.wrapper },
+  );
+  await act(async () => harness.statusRequested);
+  await act(async () => {
+    await result.current.editor.mutateAsync(setTarget("computer-value"));
+  });
+  const [record] = records();
+  const { coordinator } = result.current;
+  if (coordinator === null || record?.environmentId !== null) {
+    throw new Error("Expected a remembered prebind save");
+  }
+  return { coordinator, record, unmount };
+}
+
 type BoundSave = Extract<SettingsSaveMemoryRecord, { environmentId: string }>;
 
 function isBoundSave(
@@ -1296,42 +1356,58 @@ describe("settings-save callers", () => {
     expect(records()).toEqual([]);
   });
 
-  it("applies a promoted local save beyond the bound-save expiry using the live revision read with its hold", async () => {
-    const harness = makeSaveHarness({ ownSettings: true, proposalMinor: 1 });
-    const { result } = renderHook(
-      () => ({
-        editor: useEnvOverrideEditor(),
-        coordinator: useSettingsSaveCoordinator(),
-      }),
-      { wrapper: harness.wrapper },
-    );
-    await act(async () => harness.statusRequested);
-
-    await act(async () => {
-      await result.current.editor.mutateAsync(setTarget("computer-value"));
+  it("carries the original prebind UUID through reopen and uses the exact Move revision for an absent row", async () => {
+    const harness = makeSaveHarness({
+      ownSettings: true,
+      hostListed: false,
+      rows: [],
+      proposalMinor: 2,
     });
-
-    const localSave = records()[0];
-    expect(localSave).toMatchObject({ environmentId: null });
+    const { coordinator, record, unmount } = await pressPrebindOverride(harness);
+    const saveId = record.editId;
     expect(harness.saveRequests).toEqual(["providers.setEnvOverride"]);
-    expect(harness.recordsAtSend[0]?.editId).toBe(localSave.editId);
+    expect(
+      harness.hostCalls.find(({ method }) => method === "providers.setEnvOverride"),
+    ).toMatchObject({ requestId: settingsSaveRequestId(saveId) });
+    expect(harness.recordsAtSend[0]?.editId).toBe(saveId);
+    expect(storedRows(ACCOUNT_A)).toEqual([JSON.stringify(record)]);
+    expect(storedRows(ACCOUNT_A)[0]).not.toContain("computer-value");
 
-    const coordinator = result.current.coordinator;
-    if (coordinator === null) throw new Error("save coordinator is missing");
-    harness.state.proposals = localSaveIdsResponse([localSave.editId]);
+    harness.state.proposals = localSaveIdsResponse([saveId]);
     await act(async () => coordinator.reconcile(HOST_ID));
-    expect(records()).toHaveLength(1);
-
     vi.spyOn(Date, "now").mockReturnValue(
-      localSave.writtenAt + SETTINGS_SAVE_MEMORY_TTL_MS + 1,
+      record.writtenAt + SETTINGS_SAVE_MEMORY_TTL_MS + 1,
     );
     await act(async () => coordinator.reconcile(HOST_ID));
-    expect(records()).toEqual([localSave]);
+    expect(records()).toEqual([record]);
+
+    const moveRow = row("any", "move-value", 12);
+    harness.state.proposals = promotedLocalProposal(saveId, 21, "any", 12);
+    harness.state.reviewAnswer = localPromotionReviewAnswer(
+      21,
+      moveRow,
+      "computer-value",
+    );
+    await act(async () => coordinator.reconcile(HOST_ID));
+    expect(reviewApplyRequests(harness)).toEqual([]);
+    expect(records()).toEqual([record]);
+
+    unmount();
+    useSettingsSaveMemoryStore.persist.setOptions({
+      name: settingsSaveMemoryKey(null),
+    });
+    await useSettingsSaveMemoryStore.persist.rehydrate();
+    expect(records()).toEqual([]);
 
     harness.state.ownSettings = false;
-    harness.state.proposals = promotedLocalProposal(localSave.editId, 21);
-    harness.state.reviewAnswer = localPromotionReviewAnswer(21, 12);
-    await act(async () => coordinator.reconcile(HOST_ID));
+    harness.state.hostListed = true;
+    harness.state.rows = [moveRow];
+    const { result } = renderHook(() => useSettingsSaveCoordinator(), {
+      wrapper: harness.wrapper,
+    });
+    const reopened = result.current;
+    if (reopened === null) throw new Error("save coordinator is missing");
+    await act(async () => reopened.reconcile(HOST_ID));
 
     const apply = reviewApplyRequests(harness);
     expect(apply).toHaveLength(1);
@@ -1341,59 +1417,153 @@ describe("settings-save callers", () => {
       revision: 21,
       expectedLiveRevision: 12,
     });
+    expect(harness.saveRequests).toEqual(["providers.setEnvOverride"]);
     expect(records()).toEqual([]);
   });
 
-  it("does not apply another local save's promoted hold", async () => {
-    const harness = makeSaveHarness({ ownSettings: true, proposalMinor: 1 });
-    const { result } = renderHook(
-      () => ({
-        editor: useEnvOverrideEditor(),
-        coordinator: useSettingsSaveCoordinator(),
-      }),
-      { wrapper: harness.wrapper },
-    );
-    await act(async () => harness.statusRequested);
-    await act(async () => {
-      await result.current.editor.mutateAsync(setTarget("computer-value"));
-    });
+  it.each([
+    {
+      label: "an independently inserted row with equal bytes",
+      rows: [],
+      current: row("any", "computer-value", 12),
+      evidence: null,
+      expected: null,
+      failItems: false,
+    },
+    {
+      label: "an independent revision after the proven Move write",
+      rows: [],
+      current: row("any", "computer-value", 13),
+      evidence: 12,
+      expected: 12,
+      failItems: false,
+    },
+    {
+      label: "an existing row even when the receipt carries a Move revision",
+      rows: [row("macos", "old-value", 3)],
+      current: row("macos", "computer-value", 12),
+      evidence: 12,
+      expected: 3,
+      failItems: false,
+    },
+    {
+      label: "a previous host receipt without evidence support",
+      rows: [row("macos", "old-value", 3)],
+      current: row("macos", "old-value", 3),
+      evidence: undefined,
+      expected: undefined,
+      failItems: false,
+    },
+    {
+      label: "an unanswered Personal base read",
+      rows: [],
+      current: row("any", "move-value", 12),
+      evidence: 12,
+      expected: undefined,
+      failItems: true,
+    },
+  ])(
+    "keeps $label in review",
+    async ({ rows, current, evidence, expected, failItems }) => {
+      const harness = makeSaveHarness({
+        ownSettings: true,
+        hostListed: false,
+        proposalMinor: evidence === undefined ? 1 : 2,
+        rows,
+        failItems,
+      });
+      const { coordinator, record } = await pressPrebindOverride(harness);
+      harness.state.failItems = false;
+      harness.state.ownSettings = false;
+      harness.state.hostListed = true;
+      harness.state.rows = [current];
+      harness.state.proposals = promotedLocalProposal(
+        record.editId,
+        21,
+        current.os,
+        evidence,
+      );
+      harness.state.reviewAnswer = localPromotionReviewAnswer(
+        21,
+        current,
+        "computer-value",
+      );
+      harness.state.reviewPostAnswer = {
+        status: 409,
+        text: JSON.stringify({ code: "revision_conflict", current }),
+      };
 
-    const localSave = records()[0];
-    expect(localSave).toMatchObject({ environmentId: null });
-    const coordinator = result.current.coordinator;
-    if (coordinator === null) throw new Error("save coordinator is missing");
-    harness.state.proposals = promotedLocalProposal(
-      "00000000-0000-4000-8000-000000000092",
-      21,
-    );
-    harness.state.reviewAnswer = localPromotionReviewAnswer(21, 12);
+      await act(async () => coordinator.reconcile(HOST_ID));
 
-    await act(async () => coordinator.reconcile(HOST_ID));
+      expect(reviewApplyRequests(harness).map(requestBody)).toEqual(
+        expected === undefined
+          ? []
+          : [{ revision: 21, expectedLiveRevision: expected }],
+      );
+    },
+  );
 
-    expect(reviewApplyRequests(harness)).toEqual([]);
-    expect(records()).toHaveLength(1);
-  });
+  it.each(["another UUID", "Team", "another value", "the 1.1 projection"])(
+    "does not adopt a hold for %s",
+    async (difference) => {
+      const harness = makeSaveHarness({
+        ownSettings: true,
+        proposalMinor: difference === "the 1.1 projection" ? 1 : 2,
+      });
+      const { coordinator, record } = await pressPrebindOverride(harness);
+      const id =
+        difference === "another UUID"
+          ? "00000000-0000-4000-8000-000000000092"
+          : record.editId;
+      const { proposal, promotion, localOverride, deliveredRevision } =
+        promotedLocalProposal(id, 21, "macos", null).proposals[0];
+      const current = row("macos", "old-value", 3);
+      harness.state.ownSettings = false;
+      harness.state.proposals = {
+        proposals: [
+          {
+            proposal:
+              difference === "Team"
+                ? { ...proposal, environmentId: "team-environment" }
+                : proposal,
+            localOverride,
+            deliveredRevision,
+            ...(difference === "the 1.1 projection" ? {} : { promotion }),
+          },
+        ],
+      };
+      harness.state.reviewAnswer = localPromotionReviewAnswer(
+        21,
+        current,
+        difference === "another value" ? "other-edit" : "computer-value",
+      );
+
+      await act(async () => coordinator.reconcile(HOST_ID));
+
+      expect(reviewApplyRequests(harness)).toEqual([]);
+    },
+  );
 
   it("leaves a promoted hold asked when Personal changes after its live read", async () => {
-    const harness = makeSaveHarness({ ownSettings: true, proposalMinor: 1 });
-    const { result } = renderHook(
-      () => ({
-        editor: useEnvOverrideEditor(),
-        coordinator: useSettingsSaveCoordinator(),
-      }),
-      { wrapper: harness.wrapper },
-    );
-    await act(async () => harness.statusRequested);
-    await act(async () => {
-      await result.current.editor.mutateAsync(setTarget("computer-value"));
+    const live = row("macos", "personal-value", 12);
+    const harness = makeSaveHarness({
+      ownSettings: true,
+      proposalMinor: 2,
+      rows: [live],
     });
-
-    const localSave = records()[0];
-    expect(localSave).toMatchObject({ environmentId: null });
-    const coordinator = result.current.coordinator;
-    if (coordinator === null) throw new Error("save coordinator is missing");
-    harness.state.proposals = promotedLocalProposal(localSave.editId, 21);
-    harness.state.reviewAnswer = localPromotionReviewAnswer(21, 12);
+    const { coordinator, record } = await pressPrebindOverride(harness);
+    harness.state.ownSettings = false;
+    harness.state.proposals = promotedLocalProposal(
+      record.editId,
+      21,
+      "macos",
+      null,
+    );
+    harness.state.reviewAnswer = localPromotionReviewAnswer(
+      21,
+      live,
+      "computer-value",
+    );
     const applyAnswer = deferred<EnvironmentTransportAnswer>();
     harness.state.reviewPostGate = applyAnswer;
 
@@ -1430,26 +1600,26 @@ describe("settings-save callers", () => {
     expect(reviewApplyRequests(harness)).toHaveLength(1);
   });
 
-  it("retries a promoted hold after an outage with the first live revision", async () => {
-    const harness = makeSaveHarness({ ownSettings: true, proposalMinor: 1 });
-    const { result } = renderHook(
-      () => ({
-        editor: useEnvOverrideEditor(),
-        coordinator: useSettingsSaveCoordinator(),
-      }),
-      { wrapper: harness.wrapper },
-    );
-    await act(async () => harness.statusRequested);
-    await act(async () => {
-      await result.current.editor.mutateAsync(setTarget("computer-value"));
+  it("retries a promoted hold after an outage with its press-time revision", async () => {
+    const live = row("macos", "personal-value", 12);
+    const harness = makeSaveHarness({
+      ownSettings: true,
+      proposalMinor: 2,
+      rows: [live],
     });
-
-    const localSave = records()[0];
-    expect(localSave).toMatchObject({ environmentId: null });
-    const coordinator = result.current.coordinator;
-    if (coordinator === null) throw new Error("save coordinator is missing");
-    harness.state.proposals = promotedLocalProposal(localSave.editId, 21);
-    harness.state.reviewAnswer = localPromotionReviewAnswer(21, 12);
+    const { coordinator, record } = await pressPrebindOverride(harness);
+    harness.state.ownSettings = false;
+    harness.state.proposals = promotedLocalProposal(
+      record.editId,
+      21,
+      "macos",
+      null,
+    );
+    harness.state.reviewAnswer = localPromotionReviewAnswer(
+      21,
+      live,
+      "computer-value",
+    );
     harness.state.reviewPostAnswer = { status: 503, text: "" };
 
     await act(async () => coordinator.reconcile(HOST_ID));
@@ -1458,8 +1628,12 @@ describe("settings-save callers", () => {
     expect(records()).toHaveLength(1);
     expect(harness.state.reviewAnswer.text).toContain("matching-local-save");
 
-    harness.state.reviewAnswer = localPromotionReviewAnswer(21, 13);
     const current = row("macos", "personal-after-outage", 13);
+    harness.state.reviewAnswer = localPromotionReviewAnswer(
+      21,
+      current,
+      "computer-value",
+    );
     harness.state.rows = [current];
     harness.state.reviewPostAnswer = {
       status: 409,
