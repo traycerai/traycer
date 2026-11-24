@@ -725,7 +725,8 @@ export const environmentMoveStopPreviewUpgradeV12ToV13 = defineUpgradePath<
 });
 
 /**
- * The digest identifies the sheet that Confirm would apply. If a
+ * The digest identifies the displayed sheet and what Confirm targets.
+ * Dependency rows contribute their address and label. If a
  * keep-personal preview returns `personalProfiles: null`, it shows the plain
  * sheet and carries the plain Stop's digest. Older previews upgrade to null.
  */
