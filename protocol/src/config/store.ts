@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { constants as fsConstants, readFileSync } from "node:fs";
 import {
@@ -15,6 +16,7 @@ import * as nodePath from "node:path";
 import { cliConfigDir, cliConfigPath } from "./paths";
 import {
   acquireCliConfigLock,
+  acquireHostCliConfigLock,
   type CliConfigLockHandle,
 } from "./cli-config-lock";
 import {
@@ -695,7 +697,7 @@ function cliConfigLockPath(): string {
  * function of the document read under the lock, so the lock is never held
  * across a caller's own awaited work.
  */
-async function updateCliConfig<T>(
+export async function updateCliConfig<T>(
   apply: (current: CliConfig) => CliConfigUpdate<T>,
 ): Promise<T> {
   return runCliConfigUpdate(async () => {
@@ -708,6 +710,43 @@ async function updateCliConfig<T>(
   });
 }
 
+interface ReservedCliConfigWrite {
+  readonly handle: CliConfigLockHandle;
+  readonly lockPath: string;
+  active: boolean;
+  writing: boolean;
+}
+
+const reservedCliConfigWrite = new AsyncLocalStorage<ReservedCliConfigWrite>();
+
+/**
+ * The host can wait for the file lock before taking its write gate. The
+ * callback may make sequential store mutations under that reserved lock.
+ * Keep callbacks to native file work and its ownership bookkeeping.
+ */
+export function withHostCliConfigFileLock<T>(
+  run: () => Promise<T>,
+  onUnknownHolder: (lockPath: string) => void,
+): Promise<T> {
+  return enqueueCliConfigUpdate(async () => {
+    const lockPath = cliConfigLockPath();
+    const handle = await acquireHostCliConfigLock(lockPath, onUnknownHolder);
+    const reservation = { handle, lockPath, active: true, writing: false };
+    try {
+      return await reservedCliConfigWrite.run(reservation, run);
+    } finally {
+      reservation.active = false;
+      await handle.release();
+    }
+  });
+}
+
+function enqueueCliConfigUpdate<T>(run: () => Promise<T>): Promise<T> {
+  const result = cliConfigUpdateQueue.then(run);
+  cliConfigUpdateQueue = result.catch(() => undefined);
+  return result;
+}
+
 /**
  * Runs `produce` and writes what it returns, queued in-process and under the
  * settings lock. `produce` runs again from the start if the lock was lost
@@ -716,11 +755,39 @@ async function updateCliConfig<T>(
 async function runCliConfigUpdate<T>(
   produce: () => Promise<CliConfigUpdate<T, CliConfigSnapshot>>,
 ): Promise<T> {
-  const run = cliConfigUpdateQueue.then(() =>
-    runCliConfigUpdateLocked(produce, 1),
-  );
-  cliConfigUpdateQueue = run.catch(() => undefined);
-  return run;
+  const reservation = reservedCliConfigWrite.getStore();
+  if (reservation?.active === true) {
+    return applyReservedCliConfigUpdate(produce, reservation);
+  }
+  return enqueueCliConfigUpdate(() => runCliConfigUpdateLocked(produce, 1));
+}
+
+async function applyReservedCliConfigUpdate<T>(
+  produce: () => Promise<CliConfigUpdate<T, CliConfigSnapshot>>,
+  reservation: ReservedCliConfigWrite,
+): Promise<T> {
+  if (reservation.writing || reservation.lockPath !== cliConfigLockPath())
+    throw new Error("Invalid mutation under a reserved settings lock.");
+  reservation.writing = true;
+  try {
+    const applied = await applyCliConfigUpdate(produce, reservation.handle);
+    if (applied.written) return applied.result;
+    throw new Error(
+      `Lost the settings lock ${reservation.lockPath} before writing; nothing was written.`,
+    );
+  } finally {
+    reservation.writing = false;
+  }
+}
+
+async function applyCliConfigUpdate<T>(
+  produce: () => Promise<CliConfigUpdate<T, CliConfigSnapshot>>,
+  handle: CliConfigLockHandle,
+): Promise<{ written: true; result: T } | { written: false }> {
+  const { next, result } = await produce();
+  return next === null || (await writeCliConfigFile(next, handle))
+    ? { written: true, result }
+    : { written: false };
 }
 
 async function runCliConfigUpdateLocked<T>(
@@ -730,10 +797,8 @@ async function runCliConfigUpdateLocked<T>(
   const lockPath = cliConfigLockPath();
   const handle = await acquireCliConfigLock(lockPath);
   try {
-    const { next, result } = await produce();
-    if (next === null || (await writeCliConfigFile(next, handle))) {
-      return result;
-    }
+    const applied = await applyCliConfigUpdate(produce, handle);
+    if (applied.written) return applied.result;
   } finally {
     await handle.release();
   }
