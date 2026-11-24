@@ -84,6 +84,9 @@ const harness = vi.hoisted(() => {
   return {
     ScriptSocket,
     sockets: [] as InstanceType<typeof ScriptSocket>[],
+    onSocketCreated: null as
+      | ((socket: InstanceType<typeof ScriptSocket>) => void)
+      | null,
     state: {
       hostId: "",
       hostTokenTable: new Map() as HostTokenTable,
@@ -242,6 +245,7 @@ vi.mock("../../../../shared/host-transport/whatwg-stream-ws-factory", () => ({
     create: () => {
       const socket = new harness.ScriptSocket();
       harness.sockets.push(socket);
+      harness.state.onSocketCreated?.(socket);
       return socket;
     },
   }),
@@ -261,6 +265,7 @@ beforeEach(() => {
   USER_ID = nextCasePerson().userId;
   vi.useFakeTimers();
   harness.sockets.splice(0);
+  harness.state.onSocketCreated = null;
   harness.state.hostTokenTable = new Map();
   harness.state.refresh = "network-error";
   harness.state.grantResponse = () => new Promise<Response>(() => undefined);
@@ -292,6 +297,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  harness.state.onSocketCreated = null;
   processReleasedHosts.forgetAll();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -1178,6 +1184,62 @@ describe("a one-shot command against a team host that cannot yet check membershi
  * the line its own code gives that refusal.
  */
 describe("a released host that refuses the person's valid sign-in bare", () => {
+  it("keeps the exact rejected-credential message after its own sign-in renewal is refused", async () => {
+    holdUsableHostToken();
+    harness.state.refresh = "rejected";
+    const settled = settledOf(
+      buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(makeCtx()),
+    );
+
+    await refuseOpenWith(0, releasedRefusalWith("Token has been revoked"));
+    const signInSocket = await socketAt(1);
+    signInSocket.fireOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openToken(signInSocket)).toBe(SIGN_IN);
+
+    const thirdSocket = new Promise<Socket>((resolve) => {
+      harness.state.onSocketCreated = resolve;
+    });
+    signInSocket.fireFrame(releasedRefusalWith("Token has been revoked"));
+    const outcome = await Promise.race([
+      settled.then((result) => ({ kind: "settled" as const, result })),
+      thirdSocket.then((socket) => ({ kind: "redial" as const, socket })),
+    ]);
+    if (outcome.kind === "redial") {
+      const socket = outcome.socket;
+      socket.fireOpen();
+      await vi.advanceTimersByTimeAsync(0);
+      const open = framesOfKind(socket, "open")[0];
+      if (open === undefined) throw new Error("redial open frame missing");
+      socket.fireFrame({
+        kind: "openAck",
+        manifest: open.manifest,
+        optionalManifest: open.optionalManifest,
+      });
+      await vi.waitFor(
+        () => expect(framesOfKind(socket, "subscribe")).toHaveLength(1),
+        WAIT,
+      );
+      socket.fireFrame({
+        kind: "target.complete",
+        worktreePath: "/wt/x",
+        deleted: true,
+        hasBinaryPayload: false,
+      });
+      await settled;
+    }
+
+    expect(outcome.kind).toBe("settled");
+    if (outcome.kind !== "settled") throw new Error("refused sign-in redialed");
+    expect(outcome.result.error).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      message:
+        "traycer: host rejected the credential for worktree delete - run `traycer login` and retry.",
+      exitCode: 1,
+    });
+    expect(harness.sockets).toHaveLength(2);
+  });
+
   it.each(RELEASED_REASONS)(
     "ends the delete with the credential-rejected line: %s",
     async (reason) => {

@@ -30,7 +30,9 @@ import type {
   WorktreeDeleteDeclinedKind,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { StreamSignInVerdict } from "@traycer/protocol/host-transport/stream-session";
 import { readLeaseBearer } from "../../../shared/auth/bearer-source";
+import { hostSignInKey } from "../../../shared/auth/host-token-source";
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../../shared/host-transport/worktree-delete-batch-stream-client";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
@@ -55,7 +57,8 @@ import { clientCompatibilityRecoveryHint } from "../host/compat-recovery";
 // worktree, so the ping/pong keepalive must outlast a quiet teardown. A fatal
 // close ends the command - unlike the monitor there is no forever-reconnect
 // loop and no auth-refresh recovery (`auth: null`); a short-lived delete runs
-// on the host-only token it holds, or the probe with none.
+// on the host-only token it holds, or the probe with none. The one exception
+// is a sign-in verdict the gate withdraws (`deleteWithHostToken`).
 const OPEN_ACK_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 60_000;
@@ -161,6 +164,15 @@ async function runWorktreeDelete(
   }
 }
 
+/**
+ * A stream's fatal close that names a judged sign-in ends nothing until the
+ * gate has judged it again after the close, reading the stored sign-in first.
+ * Still the stored one and still rejected: the command ends with the close's
+ * own words. Another sign-in stored, one this run has not had judged, and no
+ * open of this run admitted: nothing was sent, so the delete is dialed again
+ * on that sign-in. The redials are bounded by the distinct sign-ins stored,
+ * never by a count or a delay.
+ */
 async function deleteWithHostToken(
   worktreePath: string,
   ctx: CommandContext,
@@ -168,6 +180,29 @@ async function deleteWithHostToken(
   session: CliHostSession,
   authnBaseUrl: string,
 ): Promise<WorktreeDeleteOutcome> {
+  const judged = new Set<string>();
+  for (;;) {
+    const outcome = await deleteOnStoredSignIn(
+      worktreePath,
+      ctx,
+      endpoint,
+      session,
+      authnBaseUrl,
+      judged,
+    );
+    if (outcome !== null) return outcome;
+  }
+}
+
+/** One dial of the delete; `null` when a withdrawn sign-in verdict asks for another. */
+async function deleteOnStoredSignIn(
+  worktreePath: string,
+  ctx: CommandContext,
+  endpoint: HostTransportEndpoint,
+  session: CliHostSession,
+  authnBaseUrl: string,
+  judged: Set<string>,
+): Promise<WorktreeDeleteOutcome | null> {
   const lease = session.signInLease;
   const tokens = session.tokens;
   const hostId = endpoint.hostId;
@@ -240,21 +275,57 @@ async function deleteWithHostToken(
       client.close("host-token-refused");
     });
   });
+  // A verdict is named only by a close that ends a refused open, so no open
+  // of this dial was admitted when it arrives: after an admission a refused
+  // open needs a redial, and a reconnect already ended the command as a drop.
+  // The `admitted` read keeps that a precondition of dialing again, so a
+  // delete the host may be running is never sent twice.
+  const judgeClose = async (
+    details: FatalErrorDetails,
+    verdict: StreamSignInVerdict,
+  ): Promise<CliError | "redial"> => {
+    judged.add(verdict.signIn);
+    // A read that fails leaves the verdict standing, as the close gave it.
+    const rejection = await tokens
+      .signInRejectionNow({ signIn: verdict.signIn, order: null })
+      .catch(() => "unread" as const);
+    if (rejection !== null) return fatalCloseToCliError(details);
+    const stored = hostSignInKey(readLeaseBearer(lease));
+    if (stored === null) return signedOutCliError();
+    return !admitted && !judged.has(stored)
+      ? "redial"
+      : streamDroppedCliError();
+  };
   try {
-    const attempt = await runDeleteCommand(worktreePath, ctx, client);
+    const attempt = await runDeleteCommand(
+      worktreePath,
+      ctx,
+      client,
+      judgeClose,
+    );
     if (ended.error !== null) throw ended.error;
+    if (attempt.kind === "redial") {
+      client.close("worktree-delete-redial");
+      return null;
+    }
     if (attempt.kind === "settled") {
       client.close("worktree-delete-settled");
       if (attempt.error !== null) throw attempt.error;
       return { deleted: attempt.deleted, declined: attempt.declined };
     }
-    const deleted = await runLegacyDeleteStream(worktreePath, ctx, client)
+    const deleted = await runLegacyDeleteStream(
+      worktreePath,
+      ctx,
+      client,
+      judgeClose,
+    )
       .catch((error: unknown) => {
         throw ended.error ?? error;
       })
       .finally(() => {
         client.close("worktree-delete-settled");
       });
+    if (deleted === "redial") return null;
     // The released single-target stream cannot say why.
     return { deleted, declined: null };
   } finally {
@@ -331,7 +402,15 @@ type DeleteAttempt =
       readonly error: CliError | null;
     }
   /** This host has no `worktree.deleteBatchByPath`, and ran nothing. */
-  | { readonly kind: "unsupported" };
+  | { readonly kind: "unsupported" }
+  /** A sign-in verdict withdrawn before any open was admitted: dial again. */
+  | { readonly kind: "redial" };
+
+/** The gate's judgement of a fatal close's sign-in verdict, after the close. */
+type CloseVerdictJudge = (
+  details: FatalErrorDetails,
+  verdict: StreamSignInVerdict,
+) => Promise<CliError | "redial">;
 
 /**
  * Run the delete as a one-target `worktree.deleteBatchByPath` command.
@@ -351,6 +430,7 @@ function runDeleteCommand(
   worktreePath: string,
   ctx: CommandContext,
   client: WsStreamClient<HostStreamRpcRegistry>,
+  judgeClose: CloseVerdictJudge,
 ): Promise<DeleteAttempt> {
   return new Promise<DeleteAttempt>((resolve) => {
     let settled = false;
@@ -449,6 +529,22 @@ function runDeleteCommand(
             reason !== null &&
             reason.kind === "fatalError"
           ) {
+            const verdict = reason.signInVerdict;
+            if (verdict !== null) {
+              void judgeClose(reason.details, verdict).then((answer) =>
+                finish(
+                  answer === "redial"
+                    ? { kind: "redial" }
+                    : {
+                        kind: "settled",
+                        deleted: false,
+                        declined: null,
+                        error: answer,
+                      },
+                ),
+              );
+              return;
+            }
             finish({
               kind: "settled",
               deleted: false,
@@ -484,8 +580,9 @@ async function runLegacyDeleteStream(
   worktreePath: string,
   ctx: CommandContext,
   client: WsStreamClient<HostStreamRpcRegistry>,
-): Promise<boolean> {
-  return new Promise<boolean>((resolve, reject) => {
+  judgeClose: CloseVerdictJudge,
+): Promise<boolean | "redial"> {
+  return new Promise<boolean | "redial">((resolve, reject) => {
     let settled = false;
     const session = client.subscribe("worktree.deleteByPath", {
       worktreePath,
@@ -579,6 +676,15 @@ async function runLegacyDeleteStream(
           reason !== null &&
           reason.kind === "fatalError"
         ) {
+          const verdict = reason.signInVerdict;
+          if (verdict !== null) {
+            void judgeClose(reason.details, verdict).then((answer) =>
+              finish(() =>
+                answer === "redial" ? resolve("redial") : reject(answer),
+              ),
+            );
+            return;
+          }
           finish(() => reject(fatalCloseToCliError(reason.details)));
           return;
         }
