@@ -196,7 +196,8 @@ interface RemoteHarness {
   subscribeRequests(
     listener: (request: CapturedHostRequest) => void,
   ): () => void;
-  subscribeFloorErrors(listener: () => void): () => void;
+  readonly floorSettled: Promise<void>;
+  holdNextRequest(method: HostMethod): () => void;
   armFloorDowngrade(method: HostMethod, version: HostVersion): void;
   close(): void;
 }
@@ -339,7 +340,13 @@ function makeHarness(
   }[] = [];
   const observedHostRequests: CapturedHostRequest[] = [];
   const requestListeners = new Set<(request: CapturedHostRequest) => void>();
-  const floorErrorListeners = new Set<() => void>();
+  const heldRequests = new Map<HostMethod, Promise<void>>();
+  const takeRequestHold = (method: HostMethod): Promise<void> | undefined => {
+    const hold = heldRequests.get(method);
+    heldRequests.delete(method);
+    return hold;
+  };
+  const floorSettled = Promise.withResolvers<void>();
   const recordRequest = (request: CapturedHostRequest): void => {
     observedHostRequests.push(request);
     for (const listener of requestListeners) listener(request);
@@ -371,6 +378,8 @@ function makeHarness(
         params,
         requiredHostMethodVersion: options.requiredHostMethodVersion,
       });
+      const hold = takeRequestHold(method);
+      if (hold !== undefined) await hold;
       const downgraded = applyFloorDowngrade(method, params, options);
       if (downgraded) {
         if (reconnectAfterFloorDowngrade === null)
@@ -382,11 +391,10 @@ function makeHarness(
       try {
         return await remoteMessenger.request(method, params, options);
       } catch (error: unknown) {
-        if (downgraded) {
-          capturedFloorErrors.push(error);
-          for (const listener of floorErrorListeners) listener();
-        }
+        if (downgraded) capturedFloorErrors.push(error);
         throw error;
+      } finally {
+        if (downgraded) floorSettled.resolve();
       }
     },
     async requestWithResponseTimeout<Method extends HostMethod>(
@@ -400,6 +408,8 @@ function makeHarness(
         params,
         requiredHostMethodVersion: options.requiredHostMethodVersion,
       });
+      const hold = takeRequestHold(method);
+      if (hold !== undefined) await hold;
       const downgraded = applyFloorDowngrade(method, params, options);
       if (downgraded) {
         if (reconnectAfterFloorDowngrade === null)
@@ -416,11 +426,10 @@ function makeHarness(
           options,
         );
       } catch (error: unknown) {
-        if (downgraded) {
-          capturedFloorErrors.push(error);
-          for (const listener of floorErrorListeners) listener();
-        }
+        if (downgraded) capturedFloorErrors.push(error);
         throw error;
+      } finally {
+        if (downgraded) floorSettled.resolve();
       }
     },
   };
@@ -456,9 +465,11 @@ function makeHarness(
       requestListeners.add(listener);
       return () => requestListeners.delete(listener);
     },
-    subscribeFloorErrors(listener) {
-      floorErrorListeners.add(listener);
-      return () => floorErrorListeners.delete(listener);
+    floorSettled: floorSettled.promise,
+    holdNextRequest(method) {
+      const hold = eventGate();
+      heldRequests.set(method, hold.promise);
+      return () => hold.resolve();
     },
     armFloorDowngrade(method, version) {
       armedFloorDowngrade = { method, version };
@@ -643,53 +654,6 @@ function mutationSettledCountEvent(
       resolve();
     };
     unsubscribe = queryClient.getMutationCache().subscribe(check);
-    check();
-  });
-}
-
-function nextMutationStatusEvent(
-  queryClient: QueryClient,
-  mutationKey: readonly unknown[],
-  status: "success" | "error",
-): Promise<void> {
-  const priorCount = queryClient
-    .getMutationCache()
-    .getAll()
-    .filter(
-      (mutation) =>
-        mutation.options.mutationKey?.[0] === mutationKey[0] &&
-        mutation.state.status === status,
-    ).length;
-  return new Promise((resolve) => {
-    let unsubscribe = (): void => undefined;
-    const check = (): void => {
-      const count = queryClient
-        .getMutationCache()
-        .getAll()
-        .filter(
-          (mutation) =>
-            mutation.options.mutationKey?.[0] === mutationKey[0] &&
-            mutation.state.status === status,
-        ).length;
-      if (count <= priorCount) return;
-      unsubscribe();
-      resolve();
-    };
-    unsubscribe = queryClient.getMutationCache().subscribe(check);
-    check();
-  });
-}
-
-function floorRefusalEvent(harness: RemoteHarness): Promise<void> {
-  if (harness.capturedFloorErrors.length > 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    let unsubscribe = (): void => undefined;
-    const check = (): void => {
-      if (harness.capturedFloorErrors.length === 0) return;
-      unsubscribe();
-      resolve();
-    };
-    unsubscribe = harness.subscribeFloorErrors(check);
     check();
   });
 }
@@ -1076,7 +1040,7 @@ async function expectFloorRefusalAfterReconnect(
   harness: RemoteHarness,
   requirement: RequiredHostMethodVersion,
 ): Promise<void> {
-  await floorRefusalEvent(harness);
+  await harness.floorSettled;
   expect(harness.capturedFloorErrors).toHaveLength(1);
   expect(harness.session.isReady()).toBe(true);
   expect(harness.capturedFloorErrors[0]).toBeInstanceOf(
@@ -1396,6 +1360,7 @@ describe("StopSharingSession over the real remote session", () => {
       await vi.advanceTimersByTimeAsync(5000);
       await freshPreview;
     });
+    harness.relay.unaryResponseDelayMs = null;
     expect(screen.getByTestId("personal-leave-codex-folder-one")).toBeTruthy();
     expect(requestCount(harness.relay, "providers.cancelLogin")).toBe(0);
     const stopComplete = moveStopOutcomeEvent(harness.queryClient, "stopped");
@@ -1631,6 +1596,7 @@ describe("StopSharingSession over the real remote session", () => {
         ],
         profileMode: null,
         profileSignIns: [],
+        sheetDigest: null,
       },
     ]);
     expect(harness.relay.errors).toEqual([]);
@@ -2009,16 +1975,9 @@ describe("StopSharingSession over the real remote session", () => {
   it("keeps Stop open after E_INVALID_ARGUMENT, refreshes the preview, then sends null mode on the same connection", async () => {
     let previews = 0;
     let stops = 0;
-    let responseDelayRelay: RemoteHarness["relay"] | null = null;
     const harness = makeHarness(({ method }) => {
       if (method === "environment.move.stopPreview") {
         previews += 1;
-        if (previews === 2) {
-          if (responseDelayRelay === null) {
-            throw new Error("expected the relay before the refreshed preview");
-          }
-          responseDelayRelay.unaryResponseDelayMs = 5000;
-        }
         return successful(
           preview(
             previews === 1 ? [FOLDER("folder-one", "Work", "offered")] : null,
@@ -2034,7 +1993,6 @@ describe("StopSharingSession over the real remote session", () => {
       }
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    responseDelayRelay = harness.relay;
     const commits: LeaveSheetCommit[] = [];
     await renderSession(
       harness.client,
@@ -2042,7 +2000,10 @@ describe("StopSharingSession over the real remote session", () => {
       recordLeaveSheetCommits(harness.queryClient, commits),
     );
 
-    vi.useFakeTimers();
+    const releaseRefresh = harness.holdNextRequest(
+      "environment.move.stopPreview",
+    );
+    onTestFinished(releaseRefresh);
     const refreshedPreview = nextQuerySettlementEvent(
       harness.queryClient,
       hostQueryKeys.method<HostRpcRegistry, "environment.move.stopPreview">(
@@ -2053,10 +2014,10 @@ describe("StopSharingSession over the real remote session", () => {
         },
       ),
     );
-    const stopFailed = nextMutationStatusEvent(
+    const stopSettled = mutationSettledCountEvent(
       harness.queryClient,
       environmentMutationKeys.moveStop(),
-      "error",
+      1,
     );
     const refreshRequest = hostRequestEvent(
       harness,
@@ -2065,7 +2026,7 @@ describe("StopSharingSession over the real remote session", () => {
     );
     await act(async () => {
       fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-      await Promise.all([stopFailed, refreshRequest]);
+      await stopSettled;
     });
     expect(screen.getByTestId("stop-sharing-preview-loading")).toBeTruthy();
     const settledRefreshCommits = commits.filter(
@@ -2104,10 +2065,10 @@ describe("StopSharingSession over the real remote session", () => {
       },
     ]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+      await refreshRequest;
+      releaseRefresh();
       await refreshedPreview;
     });
-    harness.relay.unaryResponseDelayMs = null;
     expect(screen.getByTestId("stop-sharing-managed-empty")).toBeTruthy();
     expect(
       screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
@@ -2157,16 +2118,9 @@ describe("StopSharingSession over the real remote session", () => {
 
   it("shows the failed preview after a refused Stop refresh and sends no second Stop", async () => {
     let previews = 0;
-    let responseDelayRelay: RemoteHarness["relay"] | null = null;
     const harness = makeHarness(({ method }) => {
       if (method === "environment.move.stopPreview") {
         previews += 1;
-        if (previews === 2) {
-          if (responseDelayRelay === null) {
-            throw new Error("expected the relay before the refreshed preview");
-          }
-          responseDelayRelay.unaryResponseDelayMs = 5000;
-        }
         return previews === 1
           ? successful(preview([FOLDER("folder-one", "Work", "offered")]))
           : failed("E_UNEXPECTED", "preview unavailable");
@@ -2177,7 +2131,6 @@ describe("StopSharingSession over the real remote session", () => {
       }
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    responseDelayRelay = harness.relay;
     await renderSession(
       harness.client,
       {
@@ -2188,7 +2141,10 @@ describe("StopSharingSession over the real remote session", () => {
     );
 
     screen.getByTestId("personal-leave-codex-folder-one");
-    vi.useFakeTimers();
+    const releaseRefresh = harness.holdNextRequest(
+      "environment.move.stopPreview",
+    );
+    onTestFinished(releaseRefresh);
     const refreshedPreview = nextQuerySettlementEvent(
       harness.queryClient,
       hostQueryKeys.method<HostRpcRegistry, "environment.move.stopPreview">(
@@ -2199,10 +2155,10 @@ describe("StopSharingSession over the real remote session", () => {
         },
       ),
     );
-    const stopFailed = nextMutationStatusEvent(
+    const stopSettled = mutationSettledCountEvent(
       harness.queryClient,
       environmentMutationKeys.moveStop(),
-      "error",
+      1,
     );
     const refreshRequest = hostRequestEvent(
       harness,
@@ -2211,7 +2167,7 @@ describe("StopSharingSession over the real remote session", () => {
     );
     await act(async () => {
       fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-      await Promise.all([stopFailed, refreshRequest]);
+      await stopSettled;
     });
     expect(screen.getByTestId("stop-sharing-preview-loading")).toBeTruthy();
     expect(
@@ -2221,10 +2177,10 @@ describe("StopSharingSession over the real remote session", () => {
     expect(requestCount(harness.relay, "environment.move.stop")).toBe(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+      await refreshRequest;
+      releaseRefresh();
       await refreshedPreview;
     });
-    harness.relay.unaryResponseDelayMs = null;
     expect(screen.getByTestId("stop-sharing-preview-failed")).toBeTruthy();
     expect(
       screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
@@ -2540,8 +2496,14 @@ describe("StopSharingSession over the real remote session", () => {
       },
       null,
     );
+    await act(async () => {
+      await hostQuerySettledEvent(harness.queryClient, "providers.list");
+    });
 
-    async function startRow(profileId: string): Promise<void> {
+    async function startRow(
+      profileId: string,
+      completion: readonly unknown[],
+    ): Promise<void> {
       fireEvent.click(
         within(
           screen.getByTestId(`personal-leave-codex-${profileId}`),
@@ -2550,7 +2512,7 @@ describe("StopSharingSession over the real remote session", () => {
       screen.getByRole("heading", { name: "Add a profile" });
       const loginSettled = mutationSettledCountEvent(
         harness.queryClient,
-        providersMutationKeys.awaitLogin(),
+        completion,
         1,
       );
       await act(async () => {
@@ -2560,18 +2522,18 @@ describe("StopSharingSession over the real remote session", () => {
     }
 
     screen.getByTestId("personal-leave-codex-mismatch");
-    await startRow("mismatch");
+    await startRow("mismatch", providersMutationKeys.awaitLogin());
     expect(screen.getByText(differentAccountText("Work"))).toBeTruthy();
-    await startRow("unproven");
+    await startRow("unproven", providersMutationKeys.awaitLogin());
     expect(screen.getByText(SIGN_IN_UNPROVEN_TEXT)).toBeTruthy();
     expect(screen.getByText(profileNotChangedText("Home"))).toBeTruthy();
-    await startRow("unfinished");
+    await startRow("unfinished", providersMutationKeys.awaitLogin());
     expect(
       screen.getByText("Sign-in did not finish. Retry when you are ready."),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("heading", { name: "Add a profile" })).toBeNull();
-    await startRow("removed");
+    await startRow("removed", providersMutationKeys.startLogin());
     expect(screen.getByText("Was removed")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.queryByRole("heading", { name: "Add a profile" })).toBeNull();
@@ -2626,6 +2588,9 @@ describe("StopSharingSession over the real remote session", () => {
       },
       null,
     );
+    await act(async () => {
+      await hostQuerySettledEvent(harness.queryClient, "providers.list");
+    });
 
     screen.getByTestId("personal-leave-codex-folder-one");
     fireEvent.click(
@@ -2704,6 +2669,9 @@ describe("StopSharingSession over the real remote session", () => {
         },
         null,
       );
+      await act(async () => {
+        await hostQuerySettledEvent(harness.queryClient, "providers.list");
+      });
 
       screen.getByTestId("personal-leave-codex-folder-one");
       fireEvent.click(
@@ -2718,10 +2686,13 @@ describe("StopSharingSession over the real remote session", () => {
         await loginSettled;
       });
       expect(screen.getByText("Signed in")).toBeTruthy();
+      vi.useFakeTimers();
       const stoppedEvent = moveStopOutcomeEvent(harness.queryClient, "stopped");
       await act(async () => {
         fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
         await stoppedEvent;
+        // Sonner publishes the toast in a timer after the Stop settles.
+        await vi.advanceTimersByTimeAsync(0);
       });
       expect(screen.getByText(toast)).toBeTruthy();
       expect(harness.relay.errors).toEqual([]);
