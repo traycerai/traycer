@@ -506,6 +506,38 @@ function queryDataEvent<T>(
   });
 }
 
+function moveStopOutcomeEvent(
+  queryClient: QueryClient,
+  expectedOutcome: string,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let unsubscribe = (): void => undefined;
+    const check = (): void => {
+      const hasOutcome = queryClient
+        .getMutationCache()
+        .getAll()
+        .some((mutation) => {
+          const data = mutation.state.data;
+          const outcome =
+            typeof data === "object" && data !== null && "outcome" in data
+              ? data.outcome
+              : null;
+          return (
+            mutation.options.mutationKey?.[0] ===
+              environmentMutationKeys.moveStop()[0] &&
+            mutation.state.status === "success" &&
+            outcome === expectedOutcome
+          );
+        });
+      if (!hasOutcome) return;
+      unsubscribe();
+      resolve();
+    };
+    unsubscribe = queryClient.getMutationCache().subscribe(check);
+    check();
+  });
+}
+
 function providerList(profiles: readonly ProviderProfile[]): ProvidersList {
   const state = providerState({
     providerId: "codex",
@@ -1016,6 +1048,8 @@ describe("StopSharingSession over the real remote session", () => {
   ] as const)(
     "sends the displayed sheet digest on a $label Stop",
     async ({ profiles, profileMode }) => {
+      notifyManager.setScheduler((notify) => notify());
+      onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
       const digest = "a".repeat(64);
       const harness = makeHarness(({ method }) => {
         if (method === "environment.move.stopPreview")
@@ -1025,19 +1059,39 @@ describe("StopSharingSession over the real remote session", () => {
         return failed("E_UNEXPECTED", `unexpected method: ${method}`);
       });
       advertiseSheetDigestStopPair(harness.relay);
-      await renderSession(
-        harness.client,
-        { showListAfterStop: false, showToaster: false },
-        null,
-      );
+      const previewKey = hostQueryKeys.method<
+        HostRpcRegistry,
+        "environment.move.stopPreview"
+      >(HOST_ID, "environment.move.stopPreview", {
+        profileMode: "keep-personal",
+      });
+      const shownPreview =
+        queryDataEvent<EnvironmentMoveStopPreviewResponseV14>(
+          harness.queryClient,
+          previewKey,
+          (data) => data.sheetDigest === digest,
+        );
+      await renderSessionWhenReady(harness.client, {
+        showListAfterStop: false,
+        showToaster: false,
+      });
+      await act(async () => {
+        await shownPreview;
+      });
 
       if (profileMode === null) {
-        await screen.findByTestId("stop-sharing-managed-empty");
+        expect(screen.getByTestId("stop-sharing-managed-empty")).toBeTruthy();
       } else {
-        await screen.findByTestId("personal-leave-codex-folder-one");
+        expect(
+          screen.getByTestId("personal-leave-codex-folder-one"),
+        ).toBeTruthy();
       }
-      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-      await screen.findByTestId("stop-complete");
+      const stopComplete = moveStopOutcomeEvent(harness.queryClient, "stopped");
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+        await stopComplete;
+      });
+      expect(screen.getByTestId("stop-complete")).toBeTruthy();
 
       expect(stopRequests(harness)).toEqual([
         {
@@ -1064,6 +1118,8 @@ describe("StopSharingSession over the real remote session", () => {
   );
 
   it("falls back from null personal profiles to plain Stop with that preview digest", async () => {
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
     const digest = "b".repeat(64);
     const harness = makeHarness(({ method }) => {
       if (method === "environment.move.stopPreview")
@@ -1073,16 +1129,33 @@ describe("StopSharingSession over the real remote session", () => {
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
     advertiseSheetDigestStopPair(harness.relay);
-    await renderSession(
-      harness.client,
-      { showListAfterStop: false, showToaster: false },
-      null,
+    const previewKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "environment.move.stopPreview"
+    >(HOST_ID, "environment.move.stopPreview", {
+      profileMode: "keep-personal",
+    });
+    const shownPreview = queryDataEvent<EnvironmentMoveStopPreviewResponseV14>(
+      harness.queryClient,
+      previewKey,
+      (data) => data.sheetDigest === digest,
     );
+    await renderSessionWhenReady(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
+    await act(async () => {
+      await shownPreview;
+    });
 
-    await screen.findByTestId("stop-sharing-managed-empty");
+    expect(screen.getByTestId("stop-sharing-managed-empty")).toBeTruthy();
     expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(1);
-    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-    await screen.findByTestId("stop-complete");
+    const stopComplete = moveStopOutcomeEvent(harness.queryClient, "stopped");
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+      await stopComplete;
+    });
+    expect(screen.getByTestId("stop-complete")).toBeTruthy();
 
     expect(stopRequests(harness)).toEqual([
       {
@@ -1097,6 +1170,8 @@ describe("StopSharingSession over the real remote session", () => {
   });
 
   it("replaces the sheet from sheet_changed and confirms again with its returned digest", async () => {
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
     const shownDigest = "c".repeat(64);
     const changedDigest = "d".repeat(64);
     let stopAttempts = 0;
@@ -1132,15 +1207,37 @@ describe("StopSharingSession over the real remote session", () => {
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
     advertiseSheetDigestStopPair(harness.relay);
-    await renderSession(
-      harness.client,
-      { showListAfterStop: false, showToaster: false },
-      null,
+    const previewKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "environment.move.stopPreview"
+    >(HOST_ID, "environment.move.stopPreview", {
+      profileMode: "keep-personal",
+    });
+    const shownPreview = queryDataEvent<EnvironmentMoveStopPreviewResponseV14>(
+      harness.queryClient,
+      previewKey,
+      (data) => data.sheetDigest === shownDigest,
     );
+    await renderSessionWhenReady(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
+    await act(async () => {
+      await shownPreview;
+    });
 
-    await screen.findByTestId("personal-leave-codex-folder-one");
-    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-    await screen.findByTestId("stop-sharing-managed-variable-PLAIN_ONLY");
+    expect(screen.getByTestId("personal-leave-codex-folder-one")).toBeTruthy();
+    const changedSheet = moveStopOutcomeEvent(
+      harness.queryClient,
+      "sheet_changed",
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+      await changedSheet;
+    });
+    expect(
+      screen.getByTestId("stop-sharing-managed-variable-PLAIN_ONLY"),
+    ).toBeTruthy();
     expect(stopRequests(harness)).toHaveLength(1);
     expect(stopRequests(harness)[0]).toMatchObject({
       profileMode: "keep-personal",
@@ -1149,8 +1246,12 @@ describe("StopSharingSession over the real remote session", () => {
     expect(screen.queryByTestId("personal-leave-codex-folder-one")).toBeNull();
     const confirm = screen.getByTestId("stop-sharing-confirm");
     expect(confirm.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(confirm);
-    await screen.findByTestId("stop-complete");
+    const stopComplete = moveStopOutcomeEvent(harness.queryClient, "stopped");
+    await act(async () => {
+      fireEvent.click(confirm);
+      await stopComplete;
+    });
+    expect(screen.getByTestId("stop-complete")).toBeTruthy();
 
     expect(stopRequests(harness)).toEqual([
       {

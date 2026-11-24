@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -115,12 +115,49 @@ export function usePersonalLeaveProviders(
   return { list, query };
 }
 
+type PersonalLeaveProfiles = ReadonlyMap<
+  string,
+  EnvironmentMovePersonalProfile
+>;
+
+function matchingProfile(
+  profiles: PersonalLeaveProfiles | null,
+  row: EnvironmentMovePersonalProfile,
+): EnvironmentMovePersonalProfile | null {
+  const current = profiles?.get(personalLeaveAddress(row));
+  return current?.signIn === row.signIn && current.shared === row.shared
+    ? current
+    : null;
+}
+
 export function usePersonalLeaveAccounts(
   client: HostClient<HostRpcRegistry> | null,
+  profiles: readonly EnvironmentMovePersonalProfile[] | null | undefined,
+  confirmPending: boolean,
 ) {
-  const [states, setStates] = useState<PersonalLeaveAccountStates>(
-    () => new Map(),
+  // Loading has no new sheet to reconcile. Plain Stop has no profile rows.
+  const shown = useMemo<PersonalLeaveProfiles | null>(
+    () =>
+      profiles === undefined
+        ? null
+        : new Map(
+            (profiles ?? []).map((row) => [personalLeaveAddress(row), row]),
+          ),
+    [profiles],
   );
+  const [sheet, setSheet] = useState<{
+    readonly profiles: PersonalLeaveProfiles | null;
+    readonly states: PersonalLeaveAccountStates;
+  }>(() => ({ profiles: shown, states: new Map() }));
+  if (shown !== null && shown !== sheet.profiles) {
+    const states = new Map<string, PersonalLeaveAccountState>();
+    for (const [address, state] of sheet.states) {
+      const row = sheet.profiles?.get(address);
+      if (row !== undefined && matchingProfile(shown, row) !== null)
+        states.set(address, state);
+    }
+    setSheet({ profiles: shown, states });
+  }
   const cancel = useProvidersCancelLoginForClient(client);
   const held = useRef(
     new Map<
@@ -145,6 +182,23 @@ export function usePersonalLeaveAccounts(
       signIns.clear();
     };
   }, [cancelHeld]);
+  useEffect(() => {
+    if (confirmPending) return;
+    for (const [address, signIn] of held.current) {
+      const decision = sheet.states.get(address);
+      if (
+        decision?.kind === "signed-in" &&
+        decision.admissionId === signIn.admissionId
+      )
+        continue;
+      held.current.delete(address);
+      void cancelHeld({
+        providerId: signIn.providerId,
+        profileId: signIn.admissionId,
+        holderId: null,
+      }).catch(() => {});
+    }
+  }, [cancelHeld, confirmPending, sheet.states]);
   const change = (
     row: EnvironmentMovePersonalProfile,
     state: PersonalLeaveAccountState | null,
@@ -155,31 +209,19 @@ export function usePersonalLeaveAccounts(
         providerId: row.providerId,
         admissionId: state.admissionId,
       });
-    setStates((current) => {
-      const next = new Map(current);
+    setSheet((current) => {
+      if (matchingProfile(current.profiles, row) === null) return current;
+      const next = new Map(current.states);
       if (state === null) next.delete(address);
       else next.set(address, state);
-      return next;
+      return { profiles: current.profiles, states: next };
     });
   };
   return {
-    states,
+    states: sheet.states,
     change,
-    retain: (addresses: ReadonlySet<string>): void => {
-      for (const [address, signIn] of held.current) {
-        if (addresses.has(address)) continue;
-        held.current.delete(address);
-        void cancelHeld({
-          providerId: signIn.providerId,
-          profileId: signIn.admissionId,
-          holderId: null,
-        }).catch(() => {});
-      }
-      setStates(
-        (current) =>
-          new Map([...current].filter(([address]) => addresses.has(address))),
-      );
-    },
+    matchingProfile: (row: EnvironmentMovePersonalProfile) =>
+      matchingProfile(sheet.profiles, row),
     committed: (): void => {
       held.current.clear();
     },
