@@ -404,6 +404,14 @@ describe("cli config store", () => {
     expect(readBrowserConfigSync()).toEqual({ agentAccess: true });
   });
 
+  it("does not store browser access during an unrelated update", async () => {
+    await writeRaw(JSON.stringify({ version: 1, browser: {} }));
+    await setEnvOverride("FOO", "bar");
+    expect(
+      JSON.parse(await readFile(cliConfigPath(), "utf8")),
+    ).not.toHaveProperty("browser.agentAccess");
+  });
+
   it("sets agent browser access without changing shell, env, or log settings", async () => {
     await setShell("/bin/fish", ["-l"]);
     await setEnvOverride("FOO", "bar");
