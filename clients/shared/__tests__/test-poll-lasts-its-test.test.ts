@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,7 +37,11 @@ const KINDS: readonly PollKind[] = [
 
 const INTERVAL_MS = 50;
 const NO_ARRIVAL_TEST_MS = 2_500;
+// Long enough that what is left after the late start is above Vitest's
+// default, which the poll is never given less than.
+const LATE_START_TEST_MS = 4_000;
 const LATE_START_MS = 1_500;
+const DEFAULT_TIMEOUT_MS = 1_000;
 // The poll's own margin before its test's timeout.
 const BEFORE_TEST_TIMEOUT_MS = 100;
 // A hook has its own timeout, so the poll it runs can end at the test's
@@ -73,6 +78,18 @@ async function pollToItsEnd(kind: PollKind): Promise<PollEnd> {
 function mostChecksWithin(budgetMs: number): number {
   return 1 + Math.floor(budgetMs / INTERVAL_MS);
 }
+
+// The setup file again, as a later file sharing this worker runs it.
+const SETUP_AGAIN = `${resolve(import.meta.dirname, "../../../scripts/test-poll-lasts-its-test.ts")}?again`;
+
+it("wraps each poll once, however many files in the worker run it", async () => {
+  const installed = [vi.waitFor, vi.waitUntil, expect.poll];
+  await import(/* @vite-ignore */ SETUP_AGAIN);
+  expect([vi.waitFor, vi.waitUntil, expect.poll]).toEqual(installed);
+  expect(vi.waitFor).toBe(installed[0]);
+  expect(vi.waitUntil).toBe(installed[1]);
+  expect(expect.poll).toBe(installed[2]);
+});
 
 describe.each(KINDS)("$name", (kind) => {
   it("waits out an arrival later than Vitest's one second", async () => {
@@ -128,12 +145,29 @@ describe.each(KINDS)("$name", (kind) => {
       "is given only what is left of its test",
       () => {
         expect(end?.message).toContain(kind.ownError);
-        // Given its test's whole timeout instead, it would check about fifty times.
+        // Given its test's whole timeout instead, it would check about eighty times.
         expect(end?.calls).toBeLessThanOrEqual(
           mostChecksWithin(
-            NO_ARRIVAL_TEST_MS - BEFORE_TEST_TIMEOUT_MS - LATE_START_MS,
+            LATE_START_TEST_MS - BEFORE_TEST_TIMEOUT_MS - LATE_START_MS,
           ),
         );
+      },
+      LATE_START_TEST_MS,
+    );
+  });
+
+  describe("after a beforeEach that used up its test's length", () => {
+    beforeEach(async () => {
+      await sleep(NO_ARRIVAL_TEST_MS);
+    }, HOOK_MS);
+
+    it(
+      "is still given Vitest's own default",
+      async () => {
+        const end = await pollToItsEnd(kind);
+        expect(end.message).toContain(kind.ownError);
+        // A timer never fires before its delay; allow for its rounding.
+        expect(end.afterMs).toBeGreaterThanOrEqual(DEFAULT_TIMEOUT_MS - 5);
       },
       NO_ARRIVAL_TEST_MS,
     );

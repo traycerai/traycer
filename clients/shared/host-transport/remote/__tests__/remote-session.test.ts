@@ -4646,7 +4646,14 @@ describe("RemoteSession forceReconnect", () => {
     signal,
     onTestFinished,
   }) => {
-    const finishNoise = beginFakeNoiseClock();
+    let session: RemoteSession | null = null;
+    let finishNoise: (() => Promise<void>) | null = null;
+    // Registered first, so it runs before the next test however this one ends.
+    onTestFinished(async () => {
+      session?.close();
+      await finishNoise?.();
+    });
+    finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     relay.streamManifest = buildStreamManifest(
       cursorStreamRegistry,
@@ -4659,27 +4666,23 @@ describe("RemoteSession forceReconnect", () => {
       openIndex < 2
         ? { kind: "fatal", details: retryableDropDetails() }
         : { kind: "ack" };
-    const session = new RemoteSession({
+    const live = new RemoteSession({
       ...buildSessionOptions(relay, lease, null),
       streamRegistry: cursorStreamRegistry,
     });
-    const stream = session.subscribe("cursor.subscribe", { cursor: null });
+    session = live;
+    const stream = live.subscribe("cursor.subscribe", { cursor: null });
     if (!signalsBackoff(stream)) throw new Error("a stream tells of backoff");
     let backoffs = 0;
     stream.onBackoffEntered(() => {
       backoffs += 1;
     });
-    // Runs before the next test starts, however this one ends.
-    onTestFinished(async () => {
-      session.close();
-      await finishNoise();
-    });
-    session.start();
-    await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
+    live.start();
+    await advanceNoiseUntil(() => live.isReady(), 8_000, 50);
     expect(relay.openBearers).toHaveLength(3);
     const backoffsBeforeForce = backoffs;
 
-    session.forceReconnect("user-retry");
+    live.forceReconnect("user-retry");
 
     // The fake clock stays where it is, so a redial that waited out any
     // backoff rung never opens and the test ends at its timeout, whose abort
