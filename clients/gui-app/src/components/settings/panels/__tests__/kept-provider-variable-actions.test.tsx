@@ -147,6 +147,11 @@ let fakeAuthn: FakeEnvironmentAuthn | null = null;
  */
 function mount(args: {
   readonly saveAnswersLocally: boolean;
+  readonly negotiation?:
+    | "legacy"
+    | "without-save"
+    | "without-guard"
+    | undefined;
   readonly applyStatus: number;
   readonly applyBody: unknown;
 }) {
@@ -162,6 +167,19 @@ function mount(args: {
       ...(args.saveAnswersLocally ? { savedLocally: true as const } : {}),
     });
   });
+  const deleteEnvOverride = vi.fn(
+    (_request: { providerId: string; key: string }) =>
+      Promise.resolve({
+        state: providerMutationCliStateSchemaV21.parse({
+          ...hostV115MutationV20Fixtures.minimalStatesByProviderId[
+            "claude-code"
+          ],
+          profiles: [],
+          envOverrides: [{ key: KEY, value: PERSONAL_A }],
+        }),
+        savedLocally: true as const,
+      }),
+  );
   const saveToPersonal = vi.fn((_request: ConfigEnvLocalOverrideSetRequest) => {
     order.push("saveToPersonal");
     return Promise.resolve({
@@ -184,6 +202,7 @@ function mount(args: {
     "environment.status": () => environmentStatusFixture({}),
     "environment.localOverrides": () => ({ overrides: [OWN] }),
     "providers.setEnvOverride": setEnvOverride,
+    "providers.deleteEnvOverride": deleteEnvOverride,
     "config.env.localOverride.saveToPersonal": saveToPersonal,
     "config.env.localOverride.clear": clear,
     "environment.list": () => environmentList,
@@ -211,13 +230,19 @@ function mount(args: {
       return authn.cloud.transport(request);
     },
   };
+  const legacy = args.negotiation === "legacy";
+  const guardedClear = !legacy && args.negotiation !== "without-guard";
+  const exactSave = !legacy && args.negotiation !== "without-save";
   recordNegotiatedHostManifest(HOST_ID, {
     "environment.status": { major: 1, minor: 1 },
     "environment.localOverrides": { major: 1, minor: 0 },
     "environment.list": { major: 1, minor: 0 },
-    "config.env.localOverride.clear": { major: 1, minor: 1 },
-    "config.env.localOverride.saveToPersonal": { major: 1, minor: 0 },
-    "providers.setEnvOverride": { major: 2, minor: 3 },
+    "config.env.localOverride.clear": { major: 1, minor: guardedClear ? 1 : 0 },
+    ...(exactSave
+      ? { "config.env.localOverride.saveToPersonal": { major: 1, minor: 0 } }
+      : {}),
+    "providers.setEnvOverride": { major: 2, minor: legacy ? 2 : 3 },
+    "providers.deleteEnvOverride": { major: 2, minor: 2 },
   });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: "dev-box" }),
@@ -258,7 +283,15 @@ function mount(args: {
       </PersonalPageContext.Provider>
     </QueryClientProvider>,
   );
-  return { queryClient, order, applies, setEnvOverride, saveToPersonal, clear };
+  return {
+    queryClient,
+    order,
+    applies,
+    setEnvOverride,
+    deleteEnvOverride,
+    saveToPersonal,
+    clear,
+  };
 }
 
 beforeEach(() => {
@@ -333,6 +366,39 @@ describe("Use everywhere on a provider variable this computer keeps its own valu
   });
 });
 
+describe("Use everywhere with earlier provider-variable contracts", () => {
+  it("uses the shared Save and clear on an older host", async () => {
+    const run = mount({
+      negotiation: "legacy",
+      saveAnswersLocally: false,
+      applyStatus: 200,
+      applyBody: {},
+    });
+
+    await clickUseEverywhere(run.queryClient);
+
+    expect(run.order).toEqual(["setEnvOverride", "clear"]);
+    expect(run.clear.mock.calls[0]?.[0]).toEqual({ target: TARGET });
+  });
+
+  it.each(["without-save", "without-guard"] as const)(
+    "disables the action when a host that saves locally is %s",
+    (negotiation) => {
+      const run = mount({
+        negotiation,
+        saveAnswersLocally: true,
+        applyStatus: 200,
+        applyBody: {},
+      });
+
+      const button = screen.getByRole("button", { name: "Use everywhere" });
+      expect(button).toHaveProperty("disabled", true);
+      fireEvent.click(button);
+      expect(run.order).toEqual([]);
+    },
+  );
+});
+
 describe("an ordinary Save of a kept provider variable", () => {
   // The answer says `savedLocally` and proposes nothing to Personal. The
   // own-override read was not invalidated, so the note kept saying B after C
@@ -366,4 +432,28 @@ describe("an ordinary Save of a kept provider variable", () => {
     expect(run.saveToPersonal).not.toHaveBeenCalled();
     expect(run.clear).not.toHaveBeenCalled();
   });
+});
+
+it("refreshes the own-value note after Delete restores Personal's value here", async () => {
+  const run = mount({
+    saveAnswersLocally: false,
+    applyStatus: 200,
+    applyBody: {},
+  });
+  const invalidate = vi.spyOn(run.queryClient, "invalidateQueries");
+  expect(screen.getByRole("button", { name: "Use everywhere" })).toBeTruthy();
+
+  const removed = mutationsSettled(run.queryClient);
+  fireEvent.click(screen.getByRole("button", { name: `Remove ${KEY}` }));
+  await removed;
+  await commitRender();
+
+  expect(run.deleteEnvOverride.mock.calls.map(([request]) => request)).toEqual([
+    { providerId: "claude-code", key: KEY },
+  ]);
+  expect(
+    invalidate.mock.calls.some(([filters]) =>
+      filters?.queryKey?.includes("environment.localOverrides"),
+    ),
+  ).toBe(true);
 });
