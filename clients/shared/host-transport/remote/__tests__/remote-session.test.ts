@@ -4646,11 +4646,11 @@ describe("RemoteSession forceReconnect", () => {
     signal,
     onTestFinished,
   }) => {
-    let session: RemoteSession | null = null;
+    let closeSession: (() => void) | null = null;
     let finishNoise: (() => Promise<void>) | null = null;
     // Registered first, so it runs before the next test however this one ends.
     onTestFinished(async () => {
-      session?.close();
+      closeSession?.();
       await finishNoise?.();
     });
     finishNoise = beginFakeNoiseClock();
@@ -4670,7 +4670,9 @@ describe("RemoteSession forceReconnect", () => {
       ...buildSessionOptions(relay, lease, null),
       streamRegistry: cursorStreamRegistry,
     });
-    session = live;
+    closeSession = () => {
+      live.close();
+    };
     const stream = live.subscribe("cursor.subscribe", { cursor: null });
     if (!signalsBackoff(stream)) throw new Error("a stream tells of backoff");
     let backoffs = 0;
