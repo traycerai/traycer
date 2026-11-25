@@ -13,8 +13,25 @@ import {
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
-import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
+import {
+  SELECTION_AUTHORITY_CONTRACT_VERSION,
+  type HostLeaseSnapshot,
+  type LocalHostOutageSignal,
+  type SelectionEvidenceReport,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  COLD_START_LOCAL_RESTART_HOLD_CEILING_MS,
+  CONFIRMED_DEATH_REFUSAL_STREAK,
+  HOST_STARTING_BUDGET_MS,
+} from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import {
+  createFakeAuthorityClock,
+  createTestAuthority,
+  fleetHost,
+  type TestAuthority,
+} from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   HostReadinessControllerContext,
   type DefaultHostReadinessPresentation,
@@ -32,6 +49,7 @@ import { appLogger } from "@/lib/logger";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
@@ -328,6 +346,233 @@ function renderGateWithModal(
   );
 }
 
+function renderGateWithAuthorityNarrator(options: {
+  readonly readiness: SurfaceReadiness;
+  readonly hasBeenReady: boolean;
+  readonly hasLocalHost: boolean;
+}): {
+  readonly view: RenderResult;
+  readonly setReadiness: (readiness: SurfaceReadiness) => void;
+} {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: options.hasLocalHost,
+    traycerCli: undefined,
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  let readiness = options.readiness;
+  let hasBeenReady = options.hasBeenReady;
+  const tree = () => (
+    <QueryClientProvider client={client}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostReadinessControllerContext.Provider
+          value={controllerFor(readiness, PRESENTATION, hasBeenReady)}
+        >
+          <HostReadyGate>
+            <main>app</main>
+          </HostReadyGate>
+          <WindowHostModalHost bypassed={false} />
+        </HostReadinessControllerContext.Provider>
+      </RunnerHostProvider>
+    </QueryClientProvider>
+  );
+  const view = render(tree());
+  return {
+    view,
+    setReadiness: (next) => {
+      readiness = next;
+      if (next.kind === "ready") hasBeenReady = true;
+      view.rerender(tree());
+    },
+  };
+}
+
+function applyAuthoritySnapshot(snapshot: SelectionKernelSnapshot): void {
+  act(() => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot(snapshot);
+  });
+}
+
+function syncAuthorityStore(authority: TestAuthority): void {
+  const snapshot = authority.engine.snapshot();
+  applyAuthoritySnapshot({
+    attached: true,
+    preferredHostId: snapshot.preferredHostId,
+    targetHostId: snapshot.targetHostId,
+    effectiveHostId: snapshot.effectiveHostId,
+    servingPeer: snapshot.servingPeer,
+    noPeerPresentation: snapshot.noPeerPresentation,
+    leases: snapshot.leases,
+    selectionRevision: snapshot.revision,
+  });
+}
+
+function attachAuthorityReporter(
+  authority: TestAuthority,
+  reporterId: string,
+): string {
+  const attachSeq = authority.engine.allocateAttachSeq(reporterId);
+  const attached = authority.engine.attach(reporterId, {
+    attachSeq,
+    callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
+    liveSessions: [],
+  });
+  if (!attached.ok) throw new Error("selection authority attach was refused");
+  return attached.incarnationId;
+}
+
+function authoritySessionEvidence(
+  hostId: string,
+  sessionId: string,
+  transition: "established" | "lost",
+  at: number,
+): SelectionEvidenceReport {
+  return {
+    kind: "session",
+    hostId,
+    sessionId,
+    transition,
+    transportKind: "remote-relay",
+    at,
+  };
+}
+
+function loseAuthorityPeer(
+  authority: TestAuthority,
+  reporter: { readonly reporterId: string; readonly incarnationId: string },
+  hostId: string,
+  sessionId: string,
+): void {
+  const { reporterId, incarnationId } = reporter;
+  authority.engine.ingestEvidence(
+    reporterId,
+    incarnationId,
+    authoritySessionEvidence(hostId, sessionId, "lost", authority.clock.now()),
+  );
+  for (
+    let attempt = 0;
+    attempt < CONFIRMED_DEATH_REFUSAL_STREAK;
+    attempt += 1
+  ) {
+    authority.engine.ingestEvidence(reporterId, incarnationId, {
+      kind: "dial",
+      hostId,
+      attemptId: `${hostId}-failure-${String(attempt)}`,
+      outcome: "confirmed-refusal",
+      transportKind: "remote-relay",
+      at: authority.clock.now(),
+    });
+  }
+}
+
+async function authorityWithServingComputer(poolConfigured: boolean): Promise<{
+  readonly authority: TestAuthority;
+  readonly reporterId: string;
+  readonly incarnationId: string;
+  readonly computerHostId: string;
+}> {
+  const computerHostId = "computer-authority-clock";
+  const authority = createTestAuthority({
+    initialFleet: {
+      identityGeneration: 0,
+      localHostId: null,
+      hosts: [fleetHost(computerHostId, "remote")],
+    },
+    initialIdentityKey: "viewer-1",
+    clock: createFakeAuthorityClock(0),
+    poolConfigured,
+  });
+  const reporterId = "window";
+  const incarnationId = attachAuthorityReporter(authority, reporterId);
+  authority.fleet.publish(1, null, [fleetHost(computerHostId, "remote")]);
+  const activation = await authority.engine.activate(
+    reporterId,
+    incarnationId,
+    computerHostId,
+  );
+  if (!activation.ok) throw new Error("computer activation was refused");
+  if (poolConfigured) {
+    authority.engine.ingestEvidence(
+      reporterId,
+      incarnationId,
+      authoritySessionEvidence(
+        POOL_HOST_ID,
+        "pool-session",
+        "established",
+        authority.clock.now(),
+      ),
+    );
+  }
+  authority.engine.ingestEvidence(
+    reporterId,
+    incarnationId,
+    authoritySessionEvidence(
+      computerHostId,
+      "computer-session",
+      "established",
+      authority.clock.now(),
+    ),
+  );
+  return { authority, reporterId, incarnationId, computerHostId };
+}
+
+async function authorityWithConnectingRemote(): Promise<{
+  readonly authority: TestAuthority;
+  readonly reporterId: string;
+  readonly incarnationId: string;
+  readonly remoteHostId: string;
+}> {
+  const remoteHostId = "remote-authority-clock";
+  const authority = createTestAuthority({
+    initialFleet: {
+      identityGeneration: 0,
+      localHostId: null,
+      hosts: [fleetHost(remoteHostId, "remote")],
+    },
+    initialIdentityKey: "viewer-1",
+    clock: createFakeAuthorityClock(0),
+    poolConfigured: true,
+  });
+  const reporterId = "window";
+  const incarnationId = attachAuthorityReporter(authority, reporterId);
+  authority.fleet.publish(1, null, [fleetHost(remoteHostId, "remote")]);
+  const activation = await authority.engine.activate(
+    reporterId,
+    incarnationId,
+    remoteHostId,
+  );
+  if (!activation.ok) throw new Error("remote activation was refused");
+  return { authority, reporterId, incarnationId, remoteHostId };
+}
+
+function authorityWithLocalColdStartHold(): TestAuthority {
+  const localHostId = "local-authority-clock";
+  const localOutage: LocalHostOutageSignal = {
+    inExpectedOutage: () => true,
+    onChanged: () => ({ dispose: () => undefined }),
+  };
+  const authority = createTestAuthority({
+    initialFleet: {
+      identityGeneration: 0,
+      localHostId: null,
+      hosts: [],
+    },
+    initialIdentityKey: "viewer-1",
+    clock: createFakeAuthorityClock(0),
+    localHostOutage: localOutage,
+    poolConfigured: true,
+  });
+  attachAuthorityReporter(authority, "window");
+  authority.fleet.publish(0, localHostId, [fleetHost(localHostId, "local")]);
+  return authority;
+}
+
 /**
  * The presentation each post-latch kind needs to render its own surface: the
  * provisioning-error card only exists while a converge error is live, and the
@@ -356,11 +601,14 @@ beforeEach(() => {
   hostStatus.data = undefined;
   discovery.concluded = false;
   useAuthStore.setState({ status: "signed-in" });
+  useSignOutConfirmStore.setState({ open: false, status: "idle" });
 });
 
 afterEach(() => {
   cleanup();
+  useSelectionAuthorityStore.getState().reset();
   useAuthStore.getState().setSignedOut();
+  useSignOutConfirmStore.setState({ open: false, status: "idle" });
   useDesktopDialogStore.setState({
     activeDialog: null,
     reportIssueAvailable: false,
@@ -1090,6 +1338,362 @@ describe("<HostReadyGate />", () => {
         useSelectionAuthorityStore.getState().applyKernelSnapshot(snapshot);
       });
     }
+
+    it.each(["inside", "after"] as const)(
+      "the authority clock closes the real remote no-peer presentation on recovery %s its deadline",
+      async (recoveryTiming) => {
+        const { authority, reporterId, incarnationId, remoteHostId } =
+          await authorityWithConnectingRemote();
+        try {
+          expect(authority.engine.snapshot().effectiveHostId).toBe(
+            remoteHostId,
+          );
+          expect(
+            authority.engine
+              .snapshot()
+              .leases.find((lease) => lease.hostId === remoteHostId)?.status,
+          ).toBe("connecting");
+          expect(authority.engine.snapshot().noPeerPresentation).toBe(
+            "connecting",
+          );
+          syncAuthorityStore(authority);
+          const { setReadiness } = renderGateWithAuthorityNarrator({
+            readiness: { kind: "ready" },
+            hasBeenReady: true,
+            hasLocalHost: false,
+          });
+          expect(
+            screen
+              .getByTestId("window-host-startup-card")
+              .getAttribute("data-cause"),
+          ).toBe("cold-start");
+          expect(screen.queryByTestId("window-host-modal")).toBeNull();
+
+          if (recoveryTiming === "inside") {
+            authority.clock.advance(HOST_STARTING_BUDGET_MS - 1);
+            expect(authority.engine.snapshot().noPeerPresentation).toBe(
+              "connecting",
+            );
+            syncAuthorityStore(authority);
+            expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+          } else {
+            authority.clock.advance(HOST_STARTING_BUDGET_MS + 1);
+            expect(authority.engine.snapshot().noPeerPresentation).toBe(
+              "offline",
+            );
+            syncAuthorityStore(authority);
+            expect(screen.queryByTestId("window-host-startup-card")).toBeNull();
+            expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+            expect(screen.getByText("No host is available")).toBeTruthy();
+          }
+
+          authority.engine.ingestEvidence(
+            reporterId,
+            incarnationId,
+            authoritySessionEvidence(
+              remoteHostId,
+              "remote-recovered",
+              "established",
+              authority.clock.now(),
+            ),
+          );
+          syncAuthorityStore(authority);
+          act(() => setReadiness({ kind: "ready" }));
+
+          expect(authority.engine.snapshot().servingPeer).toEqual({
+            kind: "computer",
+            hostId: remoteHostId,
+          });
+          expect(authority.engine.snapshot().noPeerPresentation).toBeNull();
+          expect(screen.queryByTestId("window-host-startup-card")).toBeNull();
+          expect(screen.queryByTestId("window-host-modal")).toBeNull();
+          expect(screen.getByRole("main").textContent).toBe("app");
+        } finally {
+          authority.dispose();
+        }
+      },
+    );
+
+    it("the real narrator closes the post-service offline card when the pool returns", () => {
+      const hostId = "computer-that-served";
+      const deadHost: HostLeaseSnapshot = {
+        hostId,
+        status: "dead",
+        dead: { reason: "offline" },
+      };
+      applyAuthoritySnapshot({
+        attached: true,
+        preferredHostId: hostId,
+        targetHostId: hostId,
+        effectiveHostId: hostId,
+        servingPeer: { kind: "computer", hostId },
+        noPeerPresentation: null,
+        leases: [{ ...deadHost, status: "ready", dead: null }],
+        selectionRevision: 1,
+      });
+      const { setReadiness } = renderGateWithAuthorityNarrator({
+        readiness: { kind: "ready" },
+        hasBeenReady: true,
+        hasLocalHost: false,
+      });
+      expect(screen.queryByTestId("window-host-modal")).toBeNull();
+
+      const publishLostComputer = (
+        noPeerPresentation: "connecting" | "offline",
+        selectionRevision: number,
+      ) => {
+        applyAuthoritySnapshot({
+          attached: true,
+          preferredHostId: hostId,
+          targetHostId: hostId,
+          effectiveHostId: null,
+          servingPeer: null,
+          noPeerPresentation,
+          leases: [deadHost],
+          selectionRevision,
+        });
+      };
+      publishLostComputer("connecting", 2);
+      expect(screen.queryByTestId("window-host-modal")).toBeNull();
+      expect(
+        screen
+          .getByTestId("window-host-startup-card")
+          .getAttribute("data-cause"),
+      ).toBe("cold-start");
+      publishLostComputer("offline", 3);
+      expect(screen.queryByTestId("window-host-startup-card")).toBeNull();
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+      expect(screen.getByText("No host is available")).toBeTruthy();
+
+      applyAuthoritySnapshot({
+        attached: true,
+        preferredHostId: hostId,
+        targetHostId: hostId,
+        effectiveHostId: null,
+        servingPeer: { kind: "pool" },
+        noPeerPresentation: null,
+        leases: [deadHost],
+        selectionRevision: 4,
+      });
+      act(() => setReadiness({ kind: "ready" }));
+
+      expect(screen.queryByTestId("window-host-modal")).toBeNull();
+      expect(screen.getByRole("main").textContent).toBe("app");
+    });
+
+    it("keeps the cold-start card through a local restart hold before the no-peer clock starts", () => {
+      const authority = authorityWithLocalColdStartHold();
+      try {
+        expect(authority.engine.snapshot().effectiveHostId).toBeNull();
+        expect(authority.engine.snapshot().servingPeer).toBeNull();
+        expect(authority.engine.snapshot().noPeerPresentation).toBeNull();
+        expect(
+          authority.engine
+            .snapshot()
+            .leases.find((lease) => lease.hostId === "local-authority-clock")
+            ?.status,
+        ).toBe("restarting-expected");
+        syncAuthorityStore(authority);
+        renderGateWithAuthorityNarrator({
+          readiness: { kind: "unavailable-host" },
+          hasBeenReady: false,
+          hasLocalHost: true,
+        });
+        expect(
+          screen
+            .getByTestId("window-host-startup-card")
+            .getAttribute("data-cause"),
+        ).toBe("cold-start");
+
+        authority.clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS - 1);
+        expect(authority.engine.snapshot().noPeerPresentation).toBeNull();
+        syncAuthorityStore(authority);
+        expect(
+          screen
+            .getByTestId("window-host-startup-card")
+            .getAttribute("data-cause"),
+        ).toBe("cold-start");
+
+        authority.clock.advance(1);
+        expect(authority.engine.snapshot().noPeerPresentation).toBe(
+          "connecting",
+        );
+        syncAuthorityStore(authority);
+        expect(
+          screen
+            .getByTestId("window-host-startup-card")
+            .getAttribute("data-cause"),
+        ).toBe("cold-start");
+        expect(screen.queryByTestId("window-host-modal")).toBeNull();
+
+        authority.clock.advance(HOST_STARTING_BUDGET_MS - 1);
+        expect(authority.engine.snapshot().noPeerPresentation).toBe(
+          "connecting",
+        );
+        syncAuthorityStore(authority);
+        expect(screen.queryByTestId("window-host-modal")).toBeNull();
+        authority.clock.advance(1);
+        expect(authority.engine.snapshot().noPeerPresentation).toBe("offline");
+        syncAuthorityStore(authority);
+        expect(
+          screen
+            .getByTestId("window-host-startup-card")
+            .getAttribute("data-cause"),
+        ).toBe("no-usable-host");
+        expect(screen.getByText("No host is available")).toBeTruthy();
+      } finally {
+        authority.dispose();
+      }
+    });
+
+    it.each([
+      { recoveryPeer: "computer", deadline: "inside" },
+      { recoveryPeer: "computer", deadline: "after" },
+      { recoveryPeer: "pool", deadline: "inside" },
+      { recoveryPeer: "pool", deadline: "after" },
+    ] as const)(
+      "the authority clock keeps the card until $recoveryPeer recovers $deadline its deadline",
+      async ({ recoveryPeer, deadline }) => {
+        const { authority, reporterId, incarnationId, computerHostId } =
+          await authorityWithServingComputer(true);
+        try {
+          expect(authority.engine.snapshot().servingPeer).toEqual({
+            kind: "computer",
+            hostId: computerHostId,
+          });
+          syncAuthorityStore(authority);
+          const { setReadiness } = renderGateWithAuthorityNarrator({
+            readiness: { kind: "ready" },
+            hasBeenReady: true,
+            hasLocalHost: false,
+          });
+          expect(screen.queryByTestId("window-host-startup-card")).toBeNull();
+          expect(screen.queryByTestId("window-host-modal")).toBeNull();
+
+          loseAuthorityPeer(
+            authority,
+            { reporterId, incarnationId },
+            POOL_HOST_ID,
+            "pool-session",
+          );
+          expect(authority.engine.snapshot().servingPeer).toEqual({
+            kind: "computer",
+            hostId: computerHostId,
+          });
+          loseAuthorityPeer(
+            authority,
+            { reporterId, incarnationId },
+            computerHostId,
+            "computer-session",
+          );
+          expect(authority.engine.snapshot().noPeerPresentation).toBe(
+            "connecting",
+          );
+          syncAuthorityStore(authority);
+          expect(
+            screen
+              .getByTestId("window-host-startup-card")
+              .getAttribute("data-cause"),
+          ).toBe("cold-start");
+
+          if (deadline === "inside") {
+            authority.clock.advance(HOST_STARTING_BUDGET_MS - 1);
+            syncAuthorityStore(authority);
+            expect(authority.engine.snapshot().noPeerPresentation).toBe(
+              "connecting",
+            );
+            expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+            expect(screen.queryByTestId("window-host-modal")).toBeNull();
+          } else {
+            authority.clock.advance(HOST_STARTING_BUDGET_MS);
+            syncAuthorityStore(authority);
+            expect(authority.engine.snapshot().noPeerPresentation).toBe(
+              "offline",
+            );
+            expect(screen.queryByTestId("window-host-startup-card")).toBeNull();
+            expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+            expect(screen.getByText("No host is available")).toBeTruthy();
+          }
+
+          const recoveryHostId =
+            recoveryPeer === "pool" ? POOL_HOST_ID : computerHostId;
+          const recoverySessionId = `${recoveryHostId}-recovered`;
+          authority.engine.ingestEvidence(
+            reporterId,
+            incarnationId,
+            authoritySessionEvidence(
+              recoveryHostId,
+              recoverySessionId,
+              "established",
+              authority.clock.now(),
+            ),
+          );
+          syncAuthorityStore(authority);
+
+          expect(authority.engine.snapshot().servingPeer).toEqual(
+            recoveryPeer === "pool"
+              ? { kind: "pool" }
+              : { kind: "computer", hostId: computerHostId },
+          );
+          expect(authority.engine.snapshot().noPeerPresentation).toBeNull();
+          expect(screen.queryByTestId("window-host-startup-card")).toBeNull();
+          expect(screen.queryByTestId("window-host-modal")).toBeNull();
+          expect(screen.getByRole("main").textContent).toBe("app");
+          act(() => setReadiness({ kind: "ready" }));
+        } finally {
+          authority.dispose();
+        }
+      },
+    );
+
+    it("keeps the no-pool loss and recovery on the effective computer", async () => {
+      const { authority, reporterId, incarnationId, computerHostId } =
+        await authorityWithServingComputer(false);
+      try {
+        expect(authority.engine.snapshot().servingPeer).toEqual({
+          kind: "computer",
+          hostId: authority.engine.snapshot().effectiveHostId,
+        });
+        syncAuthorityStore(authority);
+        renderGateWithAuthorityNarrator({
+          readiness: { kind: "ready" },
+          hasBeenReady: true,
+          hasLocalHost: false,
+        });
+
+        loseAuthorityPeer(
+          authority,
+          { reporterId, incarnationId },
+          computerHostId,
+          "computer-session",
+        );
+        expect(authority.engine.snapshot().servingPeer).toBeNull();
+        expect(authority.engine.snapshot().effectiveHostId).toBeNull();
+        expect(authority.engine.snapshot().noPeerPresentation).toBeNull();
+        syncAuthorityStore(authority);
+        expect(screen.queryByTestId("window-host-modal")).toBeNull();
+        expect(screen.getByRole("main").textContent).toBe("app");
+
+        authority.engine.ingestEvidence(
+          reporterId,
+          incarnationId,
+          authoritySessionEvidence(
+            computerHostId,
+            "computer-recovered",
+            "established",
+            authority.clock.now(),
+          ),
+        );
+        syncAuthorityStore(authority);
+        expect(authority.engine.snapshot().servingPeer).toEqual({
+          kind: "computer",
+          hostId: computerHostId,
+        });
+        expect(screen.queryByTestId("window-host-modal")).toBeNull();
+      } finally {
+        authority.dispose();
+      }
+    });
 
     it("A (positive control): the gate's provisioning-error card CAN render", () => {
       renderGateWithModal(

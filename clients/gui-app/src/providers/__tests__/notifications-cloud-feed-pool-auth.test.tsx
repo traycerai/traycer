@@ -23,12 +23,17 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { accountWideManifestFixtures } from "@traycer-clients/shared/test-fixtures/account-wide-manifest";
 import { stageNotificationPartitionFloors } from "./notification-partition-floors";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
-import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import {
+  FakeStreamClient,
+  type FakeStreamSession,
+} from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -42,6 +47,7 @@ interface PoolProviderHarness {
   client: HostClient<HostRpcRegistry> | null;
   messenger: MockHostMessenger<HostRpcRegistry> | null;
   noComputer: boolean;
+  teamServing: boolean;
   readonly streams: Map<string, IHostStreamClient<HostStreamRpcRegistry>>;
 }
 
@@ -49,6 +55,7 @@ const harness = vi.hoisted<PoolProviderHarness>(() => ({
   client: null,
   messenger: null,
   noComputer: false,
+  teamServing: false,
   streams: new Map(),
 }));
 
@@ -110,8 +117,10 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 }));
 
 vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
-  useReactiveLocalHostEntry: () =>
-    harness.noComputer ? null : mockLocalHostEntry,
+  useReactiveLocalHostEntry: () => {
+    if (harness.noComputer) return null;
+    return harness.teamServing ? teamComputerEntry : mockLocalHostEntry;
+  },
 }));
 
 vi.mock("@/lib/host/stream-auth-revalidator", () => ({
@@ -177,7 +186,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string) => {
     if (hostId.length === 0) return null;
     if (hostId === poolEntry.hostId) return poolEntry;
-    return mockLocalHostEntry;
+    return harness.teamServing ? teamComputerEntry : mockLocalHostEntry;
   },
 }));
 
@@ -222,6 +231,11 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 
 settleProcessHostRpcTierPlan(poolEntry);
 
+const teamComputerEntry: HostDirectoryEntry = {
+  ...mockLocalHostEntry,
+  owner: { kind: "team", id: "team-1", name: "Team" },
+};
+
 function createHostClient(): HostClient<HostRpcRegistry> {
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -247,7 +261,9 @@ function createHostClient(): HostClient<HostRpcRegistry> {
     messenger,
     findHostById: (hostId) => {
       if (hostId === poolEntry.hostId) return poolEntry;
-      if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+      if (hostId === mockLocalHostEntry.hostId) {
+        return harness.teamServing ? teamComputerEntry : mockLocalHostEntry;
+      }
       return null;
     },
     routing: {
@@ -259,7 +275,7 @@ function createHostClient(): HostClient<HostRpcRegistry> {
         let entry: HostDirectoryEntry | null = null;
         if (peer.kind === "pool") entry = poolEntry;
         else if (peer.hostId === mockLocalHostEntry.hostId) {
-          entry = mockLocalHostEntry;
+          entry = harness.teamServing ? teamComputerEntry : mockLocalHostEntry;
         }
         return {
           servingPeer: entry,
@@ -336,6 +352,28 @@ function recordComputerNotificationsManifest(): void {
   });
 }
 
+function recordTeamComputerManifest(): void {
+  const current = accountWideManifestFixtures().current;
+  if (current.size !== 23) {
+    throw new Error("the current team computer manifest must have 23 methods");
+  }
+  const manifest: Record<string, { major: number; minor: number }> = {};
+  for (const method of current) {
+    manifest[method] = { major: 1, minor: 1 };
+  }
+  Object.assign(manifest, {
+    "host.notifications.list": { major: 2, minor: 2 },
+    "host.notifications.markAllRead": { major: 1, minor: 1 },
+    "host.notifications.indicatorState": { major: 1, minor: 1 },
+    "host.notifications.clearAll": { major: 1, minor: 1 },
+    "host.notifications.cloudFeed.subscribe": { major: 1, minor: 2 },
+  });
+  recordNegotiatedHostManifest(
+    mockLocalHostEntry.hostId,
+    manifest satisfies ConnectionManifest,
+  );
+}
+
 function fatalUnauthorized(): StreamCloseReason {
   return {
     kind: "fatalError",
@@ -362,11 +400,11 @@ function sessionFor(
 }
 
 function emitCloudSnapshot(
-  client: FakeStreamClient,
+  session: FakeStreamSession,
   version: number,
   rows: ReadonlyArray<HostNotificationsCloudFeedRow>,
 ): void {
-  sessionFor(client, "host.notifications.cloudFeed.subscribe").emit(
+  session.emit(
     {
       kind: "snapshot",
       hasBinaryPayload: false,
@@ -386,6 +424,7 @@ function emitCloudSnapshot(
 async function renderPoolNotificationsProvider(options: {
   readonly noComputer: boolean;
   readonly servingPeer: "pool" | "computer" | null;
+  readonly teamServing: boolean;
   readonly child: ReactNode;
 }): Promise<{
   readonly serving: FakeStreamClient;
@@ -398,11 +437,13 @@ async function renderPoolNotificationsProvider(options: {
   const queryClient = new QueryClient();
   harness.client = createHostClient();
   harness.noComputer = options.noComputer;
+  harness.teamServing = options.teamServing;
   harness.streams.clear();
   harness.streams.set(mockLocalHostEntry.hostId, serving);
   harness.streams.set(poolEntry.hostId, pool);
   if (options.servingPeer === "computer") {
-    recordComputerNotificationsManifest();
+    if (options.teamServing) recordTeamComputerManifest();
+    else recordComputerNotificationsManifest();
   }
   if (options.servingPeer !== null) {
     publishServingPeer(options.servingPeer, 1);
@@ -426,8 +467,9 @@ async function renderPoolNotificationsProvider(options: {
   );
 
   await waitFor(() => {
-    const openedClient = options.noComputer ? pool : serving;
-    const openedMethod = options.noComputer
+    const opensCloudOnly = options.noComputer;
+    const openedClient = opensCloudOnly ? pool : serving;
+    const openedMethod = opensCloudOnly
       ? "host.notifications.cloudFeed.subscribe"
       : "host.notifications.feed.subscribe";
     expect(openedClient.subscribes.map(({ method }) => method)).toContain(
@@ -446,6 +488,7 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     useSelectionAuthorityStore.getState().reset();
     useNotificationsPopoverStore.getState().setOpen(false);
     harness.noComputer = false;
+    harness.teamServing = false;
     harness.messenger = null;
     showNotificationMock.mockClear();
     stageNotificationPartitionFloors([mockLocalHostEntry.hostId]);
@@ -462,6 +505,7 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     harness.client = null;
     harness.messenger = null;
     harness.noComputer = false;
+    harness.teamServing = false;
     harness.streams.clear();
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
@@ -481,6 +525,7 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     const { pool } = await renderPoolNotificationsProvider({
       noComputer: false,
       servingPeer: null,
+      teamServing: false,
       child: <div />,
     });
     act(() => {
@@ -496,6 +541,7 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
       await renderPoolNotificationsProvider({
         noComputer: true,
         servingPeer: "pool",
+        teamServing: false,
         child: <NotificationsBell />,
       });
     expect(pool.subscribes.map(({ method }) => method)).toEqual([
@@ -504,8 +550,20 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     expect(serving.subscribes).toEqual([]);
 
     const row = cloudRow("pool-cloud-entry", 7);
-    act(() => emitCloudSnapshot(pool, 1, []));
-    act(() => emitCloudSnapshot(pool, 2, [row]));
+    act(() =>
+      emitCloudSnapshot(
+        sessionFor(pool, "host.notifications.cloudFeed.subscribe"),
+        1,
+        [],
+      ),
+    );
+    act(() =>
+      emitCloudSnapshot(
+        sessionFor(pool, "host.notifications.cloudFeed.subscribe"),
+        2,
+        [row],
+      ),
+    );
     await waitFor(() => {
       expect(showNotificationMock).toHaveBeenCalledTimes(1);
     });
@@ -576,7 +634,13 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
       ).toBe(true);
     });
 
-    act(() => emitCloudSnapshot(serving, 3, [row]));
+    act(() =>
+      emitCloudSnapshot(
+        sessionFor(serving, "host.notifications.cloudFeed.subscribe"),
+        3,
+        [row],
+      ),
+    );
     await waitFor(() => {
       expect(screen.getAllByTestId("notification-title")).toHaveLength(1);
     });
@@ -587,12 +651,40 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
         ({ method }) => method === "host.notifications.cloudFeed.subscribe",
       ),
     ).toHaveLength(1);
+
+    act(() => {
+      harness.noComputer = true;
+      publishServingPeer("pool", 3);
+    });
+    await waitFor(() => {
+      expect(
+        pool.subscribes.filter(
+          ({ method }) => method === "host.notifications.cloudFeed.subscribe",
+        ),
+      ).toHaveLength(2);
+      expect(serving.sessions.every((session) => session.closed)).toBe(true);
+    });
+    expect(pool.sessions).toHaveLength(2);
+    expect(pool.sessions[0].closed).toBe(true);
+    const reopenedPoolSession = pool.sessions[1];
+    expect(reopenedPoolSession.closed).toBe(false);
+    act(() => emitCloudSnapshot(reopenedPoolSession, 4, [row]));
+    await waitFor(() => {
+      expect(screen.getAllByTestId("notification-title")).toHaveLength(1);
+    });
+    expect(showNotificationMock).toHaveBeenCalledTimes(1);
+    expect(
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId(row.entryId)
+      ],
+    ).toBeDefined();
   });
 
   it("opens the existing four stream composition when a computer serves from startup", async () => {
     const { pool, serving } = await renderPoolNotificationsProvider({
       noComputer: false,
       servingPeer: "computer",
+      teamServing: false,
       child: <NotificationsBell />,
     });
 
@@ -607,6 +699,59 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     expect(pool.subscribes).toEqual([]);
   });
 
+  it("keeps the team-serving peer's cloud bell feed and mark-read on the pool", async () => {
+    const { messenger, pool, serving } = await renderPoolNotificationsProvider({
+      noComputer: false,
+      servingPeer: "computer",
+      teamServing: true,
+      child: <NotificationsBell />,
+    });
+    expect(teamComputerEntry.owner).toEqual({
+      kind: "team",
+      id: "team-1",
+      name: "Team",
+    });
+    expect(accountWideManifestFixtures().current.size).toBe(23);
+    expect(
+      pool.subscribes.filter(
+        ({ method }) => method === "host.notifications.cloudFeed.subscribe",
+      ),
+    ).toHaveLength(1);
+    expect(
+      serving.subscribes.filter(
+        ({ method }) => method === "host.notifications.cloudFeed.subscribe",
+      ),
+    ).toEqual([]);
+
+    const row = cloudRow("team-cloud-entry", 9);
+    act(() =>
+      emitCloudSnapshot(
+        sessionFor(pool, "host.notifications.cloudFeed.subscribe"),
+        1,
+        [row],
+      ),
+    );
+    fireEvent.click(screen.getByTestId("notifications-bell"));
+    expect((await screen.findByTestId("notification-title")).textContent).toBe(
+      "Cloud epic",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "host.notifications.cloudFeed.markRead",
+        ),
+      ).toHaveLength(1);
+    });
+    expect(
+      messenger.calls
+        .filter(
+          (call) => call.method === "host.notifications.cloudFeed.markRead",
+        )
+        .map((call) => call.authority.endpoint.hostId),
+    ).toEqual([poolEntry.hostId]);
+  });
+
   it.each([
     "agent.activity.subscribe",
     "notifications.subscribe",
@@ -617,6 +762,7 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
       const { serving } = await renderPoolNotificationsProvider({
         noComputer: false,
         servingPeer: null,
+        teamServing: false,
         child: <div />,
       });
       act(() => {

@@ -223,6 +223,7 @@ export type WindowNarrationState =
       readonly kind: "narrating";
       readonly cause: WindowNarrationCause;
       readonly variant: WindowNarrationVariant;
+      readonly keepConnectingCard?: true;
     };
 
 export interface WindowNarrationInput {
@@ -600,7 +601,12 @@ function noPeerNarration(
     return { kind: "narrating", cause: "no-usable-host", variant: scanned };
   }
   return noPeer === "connecting"
-    ? { kind: "narrating", cause: "cold-start", variant: { kind: "offline" } }
+    ? {
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+        keepConnectingCard: true,
+      }
     : {
         kind: "narrating",
         cause: "no-usable-host",

@@ -6,6 +6,11 @@ import {
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
 import { releasedStreamMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-stream-method-names";
+import {
+  accountWideManifestFixtures,
+  CURRENT_TEAM_COMPUTER_METHODS,
+  RELEASED_151_ACCOUNT_WIDE_METHODS,
+} from "../../test-fixtures/account-wide-manifest";
 import { POOL_HOST_ID } from "../host-directory";
 import {
   HOST_STREAM_RPC_ROUTES,
@@ -202,60 +207,18 @@ describe("decideHostRpcDispatch", () => {
   });
 
   it("uses each account-wide method's manifest and authority to choose its serving peer", () => {
-    const accountWideMethods = [
-      ...Object.entries(HOST_UNARY_RPC_ROUTES),
-      ...Object.entries(HOST_STREAM_RPC_ROUTES),
-    ]
-      .filter(([, route]) => route === "account-wide")
-      .map(([method]) => method)
-      .sort();
-    // Resolver registrations at host-v1.4.0 through host-v1.5.1; see
-    // closure-c-app.md, Q4(a). The later release fixtures are derived from the
-    // route table so new account-wide methods cannot be omitted silently.
-    const released151Names = [
-      "autoPolicy.get",
-      "autoPolicy.set",
-      "epic.listTasks",
-      "host.notifications.cloudFeed.clear",
-      "host.notifications.cloudFeed.clearAll",
-      "host.notifications.cloudFeed.markAllRead",
-      "host.notifications.cloudFeed.markRead",
-      "host.notifications.cloudFeed.resolve",
-      "host.notifications.cloudFeed.subscribe",
-      "organization.command",
-      "organization.history",
-      "organization.read",
-      "organization.refresh",
-      "organization.subscribe",
-    ];
-    const released151 = new Set(
-      accountWideMethods.filter((method) => released151Names.includes(method)),
-    );
-    const released154 = new Set(
-      accountWideMethods.filter(
-        (method) =>
-          method !== "environment.binding.read" &&
-          method !== "epic.getChatTitle",
-      ),
-    );
-    const current = new Set(
-      [
-        ...released151Names,
-        "epic.getChatTitle",
-        "environment.configuration.guide.get",
-        "environment.configuration.guide.reset",
-        "environment.configuration.guide.set",
-        "environment.configuration.skills.list",
-        "environment.configuration.skills.remove",
-        "environment.configuration.skills.setPolicy",
-        "environment.configuration.skills.setProviders",
-        "environment.configuration.skills.upload",
-      ].filter((method) => accountWideMethods.includes(method)),
-    );
+    const {
+      methods: accountWideMethods,
+      released151,
+      released154,
+      current,
+    } = accountWideManifestFixtures();
     const fixtures = [released151, released154, current];
     expect(fixtures.map((fixture) => fixture.size)).toEqual([14, 54, 23]);
     expect(
-      released151Names.filter((method) => !accountWideMethods.includes(method)),
+      RELEASED_151_ACCOUNT_WIDE_METHODS.filter(
+        (method) => !accountWideMethods.includes(method),
+      ),
     ).toEqual([]);
 
     for (const method of accountWideMethods) {
@@ -347,28 +310,50 @@ describe("decideHostRpcDispatch", () => {
   });
 
   it("dispatches every unary route for both build shapes and addressed peers", () => {
+    const manifests = accountWideManifestFixtures();
     const servingCases = [
+      ...[
+        manifests.released151,
+        manifests.released154,
+        manifests.current,
+      ].flatMap((methods) => [
+        {
+          peer: personalRemoteEntry,
+          methods,
+          environmentId: null,
+          callEnvironmentId: null,
+        },
+        {
+          peer: personalRemoteEntry,
+          methods: new Set<string>(),
+          environmentId: null,
+          callEnvironmentId: null,
+        },
+      ]),
       {
-        peer: personalRemoteEntry,
-        methods: new Set<string>(Object.keys(HOST_UNARY_RPC_ROUTES)),
-        environmentId: null,
-      },
-      {
-        peer: personalRemoteEntry,
-        methods: new Set<string>(),
-        environmentId: null,
+        peer: teamSandboxEntry,
+        methods: manifests.current,
+        environmentId: "env-team",
+        callEnvironmentId: "env-team",
       },
       {
         peer: teamSandboxEntry,
-        methods: new Set<string>(Object.keys(HOST_UNARY_RPC_ROUTES)),
+        methods: manifests.current,
         environmentId: "env-team",
+        callEnvironmentId: "env-other",
       },
       {
         peer: poolEntry,
-        methods: new Set<string>(Object.keys(HOST_UNARY_RPC_ROUTES)),
+        methods: manifests.current,
         environmentId: null,
+        callEnvironmentId: null,
       },
-      { peer: null, methods: null, environmentId: null },
+      {
+        peer: null,
+        methods: null,
+        environmentId: null,
+        callEnvironmentId: null,
+      },
     ];
     for (const [method, route] of Object.entries(HOST_UNARY_RPC_ROUTES)) {
       for (const target of [
@@ -392,29 +377,38 @@ describe("decideHostRpcDispatch", () => {
                   servingPeerMethods: servingCase.methods,
                   servingPeerEnvironmentId: servingCase.environmentId,
                 },
-                null,
+                servingCase.callEnvironmentId,
               );
               let expected: typeof result;
               switch (route) {
                 case "account-wide":
-                  expected =
-                    plan.pool === null
-                      ? target === null
+                  if (plan.pool === null) {
+                    expected =
+                      target === null
                         ? {
                             kind: "refuse",
                             code: "RPC_ERROR",
                             message:
                               "Cannot call host RPC without an active host",
                           }
-                        : { kind: "dispatch", entry: target }
-                      : servingCase.peer !== null &&
-                          accountWideAnswerer(method, null, {
-                            servingPeer: servingCase.peer,
-                            servingPeerMethods: servingCase.methods,
-                            servingPeerEnvironmentId: servingCase.environmentId,
-                          }) === "computer"
-                        ? { kind: "dispatch", entry: servingCase.peer }
-                        : { kind: "dispatch", entry: poolEntry };
+                        : { kind: "dispatch", entry: target };
+                    break;
+                  }
+                  const peer = servingCase.peer;
+                  const isComputer = peer !== null && peer !== poolEntry;
+                  const methodNegotiated =
+                    servingCase.methods?.has(method) === true;
+                  const isTeamComputer = peer === teamSandboxEntry;
+                  const teamCallAuthorized =
+                    !isTeamComputer ||
+                    (CURRENT_TEAM_COMPUTER_METHODS.has(method) &&
+                      servingCase.callEnvironmentId ===
+                        servingCase.environmentId);
+                  const computerAnswers =
+                    isComputer && methodNegotiated && teamCallAuthorized;
+                  expected = computerAnswers
+                    ? { kind: "dispatch", entry: peer }
+                    : { kind: "dispatch", entry: poolEntry };
                   break;
                 case "target-host":
                 case "sender-host":
