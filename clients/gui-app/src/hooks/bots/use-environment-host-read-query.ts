@@ -132,23 +132,45 @@ export function useEnvironmentHostReadQuery(
     },
   });
   if (statusAnswer === "own_settings") return { kind: "own_settings" };
-  if (statusAnswer === "failed") {
-    const bindingVisible =
-      enabled &&
-      hostId !== null &&
-      (!fromPool || (cloudAuthorized && viewerUserId.length > 0));
-    const query = fromPool ? pooled : own;
-    const bindingAuthorityLost = environmentReadLostAuthority(query.error);
-    return {
-      kind: "failed",
+  const query = fromPool ? pooled : own;
+  if (statusAnswer === "failed")
+    return failedHostBinding({
+      query,
       retry: retryStatus,
-      lastBinding:
-        bindingVisible && !bindingAuthorityLost ? (query.data ?? null) : null,
-      bindingAuthorityLost,
-    };
-  }
+      enabled,
+      hostId,
+      fromPool,
+      cloudAuthorized,
+      viewerUserId,
+    });
   if (enabled && statusAnswer === "unsettled") return { kind: "pending" };
-  return { kind: "binding", query: fromPool ? pooled : own };
+  return { kind: "binding", query };
+}
+
+function failedHostBinding(input: {
+  readonly query: UseQueryResult<EnvironmentHostBinding, HostRpcError>;
+  readonly retry: () => void;
+  readonly enabled: boolean;
+  readonly hostId: string | null;
+  readonly fromPool: boolean;
+  readonly cloudAuthorized: boolean;
+  readonly viewerUserId: string;
+}): EnvironmentHostRead {
+  const bindingVisible =
+    input.enabled &&
+    input.hostId !== null &&
+    (!input.fromPool ||
+      (input.cloudAuthorized && input.viewerUserId.length > 0));
+  const bindingAuthorityLost = environmentReadLostAuthority(input.query.error);
+  return {
+    kind: "failed",
+    retry: input.retry,
+    lastBinding:
+      bindingVisible && !bindingAuthorityLost
+        ? (input.query.data ?? null)
+        : null,
+    bindingAuthorityLost,
+  };
 }
 
 /**

@@ -31,6 +31,28 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const DETAILS_LOAD_FAILED = "Couldn't load details.";
 
+interface DetailsSelection {
+  readonly subject: DetailsSubject;
+  readonly title: string;
+}
+
+function resolveDetailsSelection(
+  rootSubject: DetailsSubject | null,
+  rootTitle: string,
+  selection: DetailsSelection | null,
+): {
+  readonly selected: DetailsSelection | null;
+  readonly subject: DetailsSubject | null;
+  readonly title: string;
+} {
+  const selected = rootSubject === null ? null : selection;
+  return {
+    selected,
+    subject: selected?.subject ?? rootSubject,
+    title: selected?.title ?? rootTitle,
+  };
+}
+
 /** Keep the controls mounted while their diagnostics subject is being read. */
 function DetailsSession(props: {
   readonly subject: DetailsSubject | null;
@@ -47,13 +69,12 @@ function DetailsSession(props: {
   const recovery = useDetailsRecovery();
   const itemRetry = useSecretRemovalRetry();
   const viewerUserId = useCloudChatViewerId();
-  const [selection, setSelected] = useState<{
-    readonly subject: DetailsSubject;
-    readonly title: string;
-  } | null>(null);
-  const selected = props.subject === null ? null : selection;
-  const subject = selected?.subject ?? props.subject;
-  const title = selected?.title ?? props.title;
+  const [selection, setSelected] = useState<DetailsSelection | null>(null);
+  const { selected, subject, title } = resolveDetailsSelection(
+    props.subject,
+    props.title,
+    selection,
+  );
   const load = async (target: DetailsSubject) => {
     const provider = getDetailsProvider(target.kind);
     if (provider === null)

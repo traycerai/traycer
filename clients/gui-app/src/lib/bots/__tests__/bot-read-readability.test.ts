@@ -2,7 +2,10 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { botConversationListV10 } from "@traycer/protocol/host/bot/contracts";
-import { CHANNEL_LIST, TAB_HOST_ID } from "@/components/bots/__tests__/bot-channel-cloud-test-support";
+import {
+  CHANNEL_LIST,
+  TAB_HOST_ID,
+} from "@/components/bots/__tests__/bot-channel-cloud-test-support";
 import { BOT_ID } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
   installBotReadReadability,
@@ -80,7 +83,11 @@ describe("installBotReadReadability", () => {
     const readable = retainedReadableBy(read.data, viewer, lifetime);
     expect(
       botReadView({ ...read, isError: read.status === "error" }, readable),
-    ).toEqual({ kind: "failed", failure: "access-refused", rowsWithheld: true });
+    ).toEqual({
+      kind: "failed",
+      failure: "access-refused",
+      rowsWithheld: true,
+    });
     expect(readable).toBe(false);
     expect(reread).toHaveBeenCalledOnce();
   });

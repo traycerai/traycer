@@ -229,24 +229,12 @@ export function DetailsDrawer(props: {
   const history = props.entry?.history();
   const hasHistory =
     history !== undefined && history.readerScope !== "status_only";
-  const [selection, setSelection] = useState<{
-    readonly tab: string;
-    readonly hasSubject: boolean;
-  }>({ tab: props.initialTab, hasSubject: props.hasSubject });
-  const lostSubject = selection.hasSubject && !props.hasSubject;
-  const lostHistory =
-    selection.tab === "history" && entry !== null && !hasHistory;
-  // A failed diagnostics read still has a subject, and Retry can answer it.
-  if (selection.hasSubject !== props.hasSubject || lostHistory) {
-    setSelection({
-      tab: lostSubject || lostHistory ? "status" : selection.tab,
-      hasSubject: props.hasSubject,
-    });
-  }
-  const tabUnavailable =
-    (selection.tab === "export" && entry === null) ||
-    (selection.tab === "history" && !hasHistory);
-  const tab = tabUnavailable ? "status" : selection.tab;
+  const { tab, selectTab } = useDetailsTabSelection(
+    props.initialTab,
+    props.hasSubject,
+    entry !== null,
+    hasHistory,
+  );
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
@@ -295,12 +283,7 @@ export function DetailsDrawer(props: {
           {/* The controls keep one place, so they never remount (and lose
               what they hold) when the status arrives. */}
           {entry === null && props.controls === null ? null : (
-            <Tabs
-              value={tab}
-              onValueChange={(next) =>
-                setSelection({ tab: next, hasSubject: props.hasSubject })
-              }
-            >
+            <Tabs value={tab} onValueChange={selectTab}>
               <TabsList variant="line" className="max-w-full flex-wrap">
                 <TabsTrigger value="status">Status</TabsTrigger>
                 {hasHistory ? (
@@ -343,6 +326,35 @@ export function DetailsDrawer(props: {
       </SheetContent>
     </Sheet>
   );
+}
+
+function useDetailsTabSelection(
+  initialTab: DetailsTab,
+  hasSubject: boolean,
+  hasEntry: boolean,
+  hasHistory: boolean,
+): { readonly tab: string; readonly selectTab: (tab: string) => void } {
+  const [selection, setSelection] = useState<{
+    readonly tab: string;
+    readonly hasSubject: boolean;
+  }>({ tab: initialTab, hasSubject });
+  const lostSubject = selection.hasSubject && !hasSubject;
+  const lostHistory = selection.tab === "history" && hasEntry && !hasHistory;
+  // A failed diagnostics read still has a subject, and Retry can answer it.
+  if (selection.hasSubject !== hasSubject || lostHistory) {
+    setSelection({
+      tab: lostSubject || lostHistory ? "status" : selection.tab,
+      hasSubject,
+    });
+  }
+  const tabUnavailable =
+    (selection.tab === "export" && !hasEntry) ||
+    (selection.tab === "history" && !hasHistory);
+  const tab = tabUnavailable ? "status" : selection.tab;
+  return {
+    tab,
+    selectTab: (next) => setSelection({ tab: next, hasSubject }),
+  };
 }
 
 function DetailsExportTab(props: {

@@ -1,6 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import {
   afterEach,
   beforeEach,
@@ -50,17 +56,16 @@ interface TeamDirectoryRead {
   isError: boolean;
 }
 
-const detailsBinding = vi.hoisted(
-  (): DetailsBindingRead => ({
-    enabled: false,
-    answer: null,
-    error: null,
-    held: null,
-  }),
-);
-const teamDirectory = vi.hoisted(
-  (): TeamDirectoryRead => ({ data: undefined, isError: false }),
-);
+const detailsBinding = vi.hoisted((): DetailsBindingRead => ({
+  enabled: false,
+  answer: null,
+  error: null,
+  held: null,
+}));
+const teamDirectory = vi.hoisted((): TeamDirectoryRead => ({
+  data: undefined,
+  isError: false,
+}));
 
 interface FixtureRead<Data> {
   data: Data | null;
@@ -362,7 +367,9 @@ function committedBindingState(state: string): Promise<HTMLElement> {
   });
 }
 
-function committedBindingError(code: HostRpcError["code"]): Promise<HTMLElement> {
+function committedBindingError(
+  code: HostRpcError["code"],
+): Promise<HTMLElement> {
   return committedElement(() => {
     const marker = screen.getByTestId("details-binding-read");
     return marker.getAttribute("data-code") === code ? marker : null;

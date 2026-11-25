@@ -699,9 +699,11 @@ export function HostOverviewSettingsCardSlot(props: {
   );
   const bindingRead = overviewBindingRead(binding);
   const readFailed = status.isError || bindingRead.failed;
-  const missingRequiredBinding =
-    bindingSupport === false &&
-    !overviewHasOwnSettings(binding, status.isError ? status.data : null);
+  const missingRequiredBinding = lacksRequiredOverviewBinding(
+    bindingSupport,
+    binding,
+    status,
+  );
   const authorityLost =
     environmentReadLostAuthority(status.error ?? null) ||
     bindingRead.authorityLost;
@@ -744,12 +746,17 @@ export function HostOverviewSettingsCardSlot(props: {
 }
 
 /** An earlier Local status is sufficient while its fresh read is unavailable. */
-function overviewHasOwnSettings(
+function lacksRequiredOverviewBinding(
+  bindingSupport: boolean | null,
   binding: EnvironmentHostRead,
-  lastStatus: EnvironmentStatusResponseV13 | null,
+  status: {
+    readonly isError: boolean;
+    readonly data: EnvironmentStatusResponseV13 | null;
+  },
 ): boolean {
-  if (binding.kind === "own_settings") return true;
-  return lastStatus !== null && localRowCohort(lastStatus).kind === "local";
+  if (bindingSupport !== false || binding.kind === "own_settings") return false;
+  if (!status.isError || status.data === null) return true;
+  return localRowCohort(status.data).kind !== "local";
 }
 
 function overviewBindingRead(read: EnvironmentHostRead): {
