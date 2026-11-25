@@ -44,7 +44,41 @@ export interface SandboxHourlyPrice {
   readonly awakeMc: number;
   readonly suspendedMc: number;
   readonly stoppedMc: number;
+  /**
+   * For a shape that grows by itself: the awake price at its starting size
+   * and the most it can cost fully grown. A range is rendered from this,
+   * never from `awakeMc`, which is the current rate on a running sandbox.
+   * Absent for a fixed shape and from older servers.
+   */
+  readonly offer?: SandboxPriceOffer;
 }
+
+/** Awake prices, in millicredits an hour, of a shape that grows by itself. */
+export interface SandboxPriceOffer {
+  readonly startAwakeMc: number;
+  readonly ceilingAwakeMc: number;
+}
+
+/** The most a shape that grows by itself can grow to. */
+export interface SandboxGrowth {
+  readonly cpus: number;
+  readonly memoryMb: number;
+}
+
+export const sandboxPriceOfferSchema: z.ZodType<SandboxPriceOffer> = lazySchema(
+  () =>
+    z.object({
+      startAwakeMc: z.number().nonnegative(),
+      ceilingAwakeMc: z.number().nonnegative(),
+    }),
+);
+
+export const sandboxGrowthSchema: z.ZodType<SandboxGrowth> = lazySchema(() =>
+  z.object({
+    cpus: z.number().positive(),
+    memoryMb: z.number().int().positive(),
+  }),
+);
 
 export const sandboxHourlyPriceSchema: z.ZodType<SandboxHourlyPrice> =
   lazySchema(() =>
@@ -52,6 +86,8 @@ export const sandboxHourlyPriceSchema: z.ZodType<SandboxHourlyPrice> =
       awakeMc: z.number().nonnegative(),
       suspendedMc: z.number().nonnegative(),
       stoppedMc: z.number().nonnegative(),
+      // An unreadable offer must not fail the price, and with it the row.
+      offer: sandboxPriceOfferSchema.optional().catch(undefined),
     }),
   );
 
@@ -150,9 +186,12 @@ export interface SandboxSummary {
   readonly provider: string;
   readonly region: string;
   readonly os: SandboxOs;
+  /** For a shape that grows by itself, its starting size. */
   readonly cpus: number;
   readonly memoryMb: number;
   readonly diskMb: number;
+  /** What a shape that grows by itself grows to; absent for a fixed shape. */
+  readonly grows?: SandboxGrowth;
   readonly displayName: string;
   readonly state: HostSandboxState;
   readonly frozen: boolean;
@@ -460,6 +499,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     cpus: z.number().positive(),
     memoryMb: z.number().int().positive(),
     diskMb: z.number().int().nonnegative(),
+    grows: sandboxGrowthSchema.optional().catch(undefined),
     displayName: z.string(),
     state: z.enum(HOST_SANDBOX_STATES),
     frozen: z.boolean(),
@@ -666,6 +706,12 @@ export interface SandboxShapeRung {
   readonly memoryMb: number;
   readonly diskMb: number;
   readonly default: boolean;
+  /**
+   * Set when this rung is a starting size that grows by itself, live, up to
+   * these limits; its `diskMb` is then the default disk, which the shape's
+   * bounds let the person change.
+   */
+  readonly grows?: SandboxGrowth;
 }
 
 export const sandboxShapeRungSchema: z.ZodType<SandboxShapeRung> = lazySchema(
@@ -675,6 +721,7 @@ export const sandboxShapeRungSchema: z.ZodType<SandboxShapeRung> = lazySchema(
       memoryMb: z.number().int().positive(),
       diskMb: z.number().int().positive(),
       default: z.boolean(),
+      grows: sandboxGrowthSchema.optional().catch(undefined),
     }),
 );
 

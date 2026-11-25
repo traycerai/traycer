@@ -28,6 +28,10 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  expectGrowingRestingAwakeRateCard,
+  GROWING_RESTING_CARD_OVERRIDES,
+} from "@/components/hosts/__tests__/sandbox-growing-card-test-support";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -155,6 +159,7 @@ import {
   SandboxHeaderActions,
   SandboxHeaderCost,
   SandboxHeaderNotices,
+  SandboxCostsPanel,
   SandboxInstallationGroup,
 } from "@/components/hosts/sandbox-card";
 import { HostOverviewSecretsTab } from "@/components/settings/panels/host-overview-secrets-tab";
@@ -365,6 +370,47 @@ describe("team creator and billing identity", () => {
 });
 
 describe("team cost view", () => {
+  it("shows the growing awake rate in the team costs panel", () => {
+    const sandbox = sandboxOf(
+      "suspended",
+      false,
+      GROWING_RESTING_CARD_OVERRIDES,
+    );
+    render(<SandboxCostsPanel sandbox={{ ...sandbox, teamOwned: true }} />);
+
+    expect(screen.getByText("$0.14–$1.44 an hour while awake")).toBeTruthy();
+  });
+
+  it("shows the growing size and chosen disk on the team card", () => {
+    // A 30 GB disk chosen over the 50 GB default, at the server's 30 GB quote.
+    renderCard(
+      sandboxOf("suspended", false, {
+        ...GROWING_RESTING_CARD_OVERRIDES,
+        diskMb: 30_720,
+        priceMcPerHour: {
+          awakeMc: 261,
+          suspendedMc: 5,
+          stoppedMc: 5,
+          offer: { startAwakeMc: 133, ceilingAwakeMc: 1_442 },
+        },
+      }),
+      true,
+    );
+
+    expect(screen.getByTestId("sandbox-card-shape").textContent).toBe(
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · 30 GB disk",
+    );
+  });
+
+  it("shows a growing sandbox's awake range on its resting team card", () => {
+    renderCard(
+      sandboxOf("suspended", false, GROWING_RESTING_CARD_OVERRIDES),
+      true,
+    );
+
+    expectGrowingRestingAwakeRateCard();
+  });
+
   it("opens the team Secrets page from Manage", () => {
     mocks.grantsData = { version: 3, grants: [], github: null };
     renderCard(sandboxOf("awake", false, { environmentId: ENV }), true);
