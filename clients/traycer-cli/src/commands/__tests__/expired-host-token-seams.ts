@@ -181,3 +181,40 @@ export function pidMetadataModule<T extends object>(
     publishedHostProcessGone: () => false,
   };
 }
+
+/**
+ * What the case holds back of the token source's `update()`: the real write
+ * has landed and the lock is released, and the source has not yet set the
+ * table the person's choices read. `written` settles when that point is reached.
+ */
+export const publishLag: {
+  hold: Promise<void> | null;
+  written: (() => void) | null;
+} = { hold: null, written: null };
+
+type HostTokenFileModule =
+  typeof import("@traycer-clients/shared/auth/host-token-file");
+
+/**
+ * `host-token-file`: the real file persistence, whose `update()` returns to
+ * the token source only once `publishLag.hold` (when set) settles.
+ */
+export function hostTokenFileModule(
+  actual: HostTokenFileModule,
+): HostTokenFileModule {
+  return {
+    ...actual,
+    createHostTokenFilePersistence: (options) => {
+      const real = actual.createHostTokenFilePersistence(options);
+      return {
+        ...real,
+        update: async (change) => {
+          const next = await real.update(change);
+          publishLag.written?.();
+          if (publishLag.hold !== null) await publishLag.hold;
+          return next;
+        },
+      };
+    },
+  };
+}

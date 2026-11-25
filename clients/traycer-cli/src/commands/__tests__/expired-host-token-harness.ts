@@ -19,6 +19,10 @@ import { resetNegotiatedStreamVersions } from "../../../../shared/host-transport
 import { StubStreamWebSocket } from "../../../../shared/host-transport/__testing__/stub-stream-socket";
 import { config } from "../../config";
 import { createCliCredentialsStore } from "../../store/credentials-store";
+import {
+  acquireCliSignIn,
+  type CliSignInHandle,
+} from "../../internal/cli-host-tokens";
 import { nextCasePerson } from "../../internal/__tests__/case-person-test-support";
 import type { CommandContext, CommandResult } from "../../runner/runner";
 import { CliError } from "../../runner/errors";
@@ -26,6 +30,7 @@ import { makeCtx } from "./bot-test-support";
 import {
   endpointDelaysMs,
   live,
+  publishLag,
   rpcCalls,
   seams,
 } from "./expired-host-token-seams";
@@ -699,6 +704,8 @@ export async function openWorld(
     close: async () => {
       output.restore();
       live.door = null;
+      publishLag.hold = null;
+      publishLag.written = null;
       vi.unstubAllGlobals();
       const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
       if (existsSync(lockPath)) {
@@ -726,10 +733,51 @@ export async function openWorld(
   return world;
 }
 
-/** Settles when the stored host-only token is the one authn minted. */
-export async function whenFreshTokenStored(world: World): Promise<void> {
+/**
+ * Holds what the token source does after the mint's grant is on disk: the file
+ * has the grant, and this process has not yet been told. The order is the
+ * test's: `written` settles at that point, and nothing is published until
+ * `release` is called. The world's close lifts it.
+ */
+export function holdPublication(): {
+  readonly written: Promise<void>;
+  readonly release: () => void;
+} {
+  const release = deferred();
+  const written = deferred();
+  publishLag.hold = release.promise;
+  publishLag.written = written.settle;
+  return { written: written.promise, release: release.settle };
+}
+
+/**
+ * The person's own handle on this process's host-token source: what a choice
+ * about the sign-in reads (`ownerSignInEligible`) is read through it. Dispose
+ * it at the end of the case.
+ */
+export function personOf(world: World): Promise<CliSignInHandle> {
+  return acquireCliSignIn(
+    {
+      token: STORED_SIGN_IN,
+      authnBaseUrl: "http://authn.invalid",
+      userId: world.userId,
+    },
+    null,
+  );
+}
+
+/**
+ * Settles when the answer of the mint is published in this process: the read
+ * the choice about the sign-in makes (`ownerSignInEligible`) no longer holds.
+ * Waiting on the file is not this: the file is written before the process
+ * publishes what it wrote.
+ */
+export async function whenPublishedInProcess(
+  person: CliSignInHandle,
+  world: World,
+): Promise<void> {
   await vi.waitFor(
-    async () => expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN),
+    () => expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(false),
     WAIT,
   );
 }
@@ -808,6 +856,16 @@ export function prepareHostFor(member: Member, world: World): void {
   for (let index = 0; index < member.faultedOpen; index += 1) {
     world.host.expiredAt.set(index, ANSWERS_AT_ONCE("admit"));
   }
+}
+
+/**
+ * What a second run of the command starts with: this process's memory of what
+ * the host answered to the first run is gone, as it is in a new process.
+ */
+export function startNewProcess(): void {
+  processReleasedHosts.forgetAll();
+  resetNegotiatedManifests();
+  resetNegotiatedStreamVersions();
 }
 
 /** Lets the work already due settle: a mint's answer reaching its waiters. */

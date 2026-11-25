@@ -9,6 +9,7 @@ import type {
 import type { ConnectionManifest } from "@traycer/protocol/framework/ws-protocol";
 import {
   ANSWERS_AT_ONCE,
+  STORED_SIGN_IN,
   deferred,
   readFrame,
   refusalFrame,
@@ -67,6 +68,8 @@ export class UnaryDoor {
   readonly expiredAt = new Map<number, DoorScript>();
   /** The answer to the placeholder an open with no token presents. */
   probe: DoorScript = ANSWERS_AT_ONCE("owner-sign-in");
+  /** The answer to an open that presents the person's own sign-in. */
+  signIn: DoorScript = ANSWERS_AT_ONCE("admit");
   /** What the host serves for a unary request. */
   serve: (method: string, params: unknown) => unknown = () => {
     throw new Error("no unary read was expected");
@@ -212,6 +215,7 @@ export class UnaryDoor {
     if (token === this.expiredHeld)
       return this.expiredAt.get(index) ?? this.expired;
     if (token === NO_HOST_TOKEN_PROBE) return this.probe;
+    if (token === STORED_SIGN_IN) return this.signIn;
     return ANSWERS_AT_ONCE("admit");
   }
 }

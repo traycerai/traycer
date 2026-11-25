@@ -5,7 +5,10 @@ import {
   FRESH_HOST_TOKEN,
   STORED_SIGN_IN,
   deferred,
+  holdPublication,
   openWorld,
+  personOf,
+  whenPublishedInProcess,
   type HomeRef,
   type World,
 } from "./expired-host-token-harness";
@@ -30,6 +33,15 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => home.path ?? actual.homedir() };
 });
+vi.mock(
+  "@traycer-clients/shared/auth/host-token-file",
+  async (importOriginal) =>
+    (await import("./expired-host-token-seams")).hostTokenFileModule(
+      await importOriginal<
+        typeof import("@traycer-clients/shared/auth/host-token-file")
+      >(),
+    ),
+);
 vi.mock("../../logger", async () =>
   (await import("./expired-host-token-seams")).loggerModule(),
 );
@@ -159,47 +171,95 @@ describe("a unary call with a held token past its end", () => {
   }, 20_000);
 });
 
-describe("a create-like call with no cached grant, on a personal host", () => {
-  it("goes on the grant the mint bought before the host's owner_sign_in, and the stored sign-in never leaves", async () => {
-    await world.close();
-    world = await openWorld(home, "none");
-    unary = new UnaryDoor(world.mint, world.expiredHeld);
-    liveUnary.door = unary;
-    unary.serve = () => ({ bots: [], mainBotIds: null });
+/**
+ * A create-like call with no cached grant, on a host whose answer to the
+ * no-token probe is its `owner_sign_in` invitation. What the call presents
+ * after the invitation is read in this process, at the moment the invitation
+ * arrives (`ownerSignInEligible`): the grant the mint bought counts once it is
+ * published in the process, not once it is on disk.
+ */
+const CREATE_LIKE = {
+  ...PLAIN_DISPATCH,
+  failFast: true,
+  reauthenticate: "before-request",
+  idempotencyKey: "task-1",
+} as const;
+
+async function reopenWithoutHeldToken(): Promise<void> {
+  await world.close();
+  world = await openWorld(home, "none");
+  unary = new UnaryDoor(world.mint, world.expiredHeld);
+  liveUnary.door = unary;
+  unary.serve = () => ({ bots: [], mainBotIds: null });
+}
+
+function startCreateLikeCall(): Promise<unknown> {
+  return callHostRpcWithDispatch("bot.list", {}, CREATE_LIKE).then(
+    (value) => ({ ok: value }),
+    (error: unknown) => ({ error }),
+  );
+}
+
+const botListRequests = (): number =>
+  unary.requests.filter((request) => request.method === "bot.list").length;
+
+describe("a create-like call with no cached grant, on this person's own computer", () => {
+  it("goes on the grant the mint bought once it is published in the process, before the host's owner_sign_in: the sign-in never leaves", async () => {
+    await reopenWithoutHeldToken();
     // The host answers the probe with its owner-sign-in invitation only after
     // the mint has answered.
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
-    const run = callHostRpcWithDispatch(
-      "bot.list",
-      {},
-      {
-        ...PLAIN_DISPATCH,
-        failFast: true,
-        reauthenticate: "before-request",
-        idempotencyKey: "task-1",
-      },
-    );
+    const run = startCreateLikeCall();
     await unary.whenOpened(0);
-    world.mint.respond("ok");
-    await vi.waitFor(
-      () => expect(world.mint.requests.length).toBeGreaterThan(0),
-      { timeout: 5_000, interval: 5 },
-    );
-    // The grant is saved before the host speaks.
-    await vi.waitFor(
-      async () => expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN),
-      { timeout: 5_000, interval: 5 },
-    );
-    invitation.settle();
-    await run;
-    expect(unary.opens.map((open) => open.token)).toEqual([
-      NO_HOST_TOKEN_PROBE,
-      FRESH_HOST_TOKEN,
-    ]);
-    expect(unary.opens.map((open) => open.token)).not.toContain(STORED_SIGN_IN);
-    expect(
-      unary.requests.filter((request) => request.method === "bot.list"),
-    ).toHaveLength(1);
+    const person = await personOf(world);
+    try {
+      world.mint.respond("ok");
+      // What the choice reads: the grant is published in this process.
+      await whenPublishedInProcess(person, world);
+      invitation.settle();
+      expect(await run).toMatchObject({ ok: { bots: [] } });
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        FRESH_HOST_TOKEN,
+      ]);
+      expect(unary.opens.map((open) => open.token)).not.toContain(
+        STORED_SIGN_IN,
+      );
+      expect(botListRequests()).toBe(1);
+    } finally {
+      person.dispose();
+    }
+  }, 20_000);
+
+  it("goes on the person's sign-in when the host's invitation comes while the grant is on disk but not yet published in the process: one request, nothing else sent", async () => {
+    await reopenWithoutHeldToken();
+    const lag = holdPublication();
+    const invitation = deferred();
+    unary.probe = { answer: "owner-sign-in", after: invitation.promise };
+    const run = startCreateLikeCall();
+    await unary.whenOpened(0);
+    const person = await personOf(world);
+    try {
+      world.mint.respond("ok");
+      await lag.written;
+      // On disk, and not yet published: the state the choice reads still
+      // says no grant is held.
+      expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN);
+      expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(true);
+      invitation.settle();
+      await unary.whenOpened(1);
+      lag.release();
+      expect(await run).toMatchObject({ ok: { bots: [] } });
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        STORED_SIGN_IN,
+      ]);
+      expect(unary.requests).toEqual([{ index: 1, method: "bot.list" }]);
+      expect(world.mint.requests).toHaveLength(1);
+    } finally {
+      lag.release();
+      person.dispose();
+    }
   }, 20_000);
 });

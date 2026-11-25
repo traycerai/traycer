@@ -8,7 +8,11 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEpicRequestSchemaV13 } from "@traycer/protocol/host/epic/unary-schemas";
-import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  markMayHaveReachedHost,
+  mayHaveReachedHost,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
+import type { IWebSocketFactory } from "../../../../shared/host-transport/ws-factory";
 import { buildTaskCreateCommand } from "../task-create";
 import { resolveHostAuth } from "../../internal/host-auth";
 import {
@@ -85,7 +89,39 @@ vi.mock(
     return {
       ...actual,
       WsRpcClient: class {
-        request = socketRequest;
+        constructor(
+          private readonly options: {
+            readonly webSocketFactory: IWebSocketFactory;
+          },
+        ) {}
+        // A real client has written the request frame before any failure that
+        // may have reached the host: a send that was acknowledged by no
+        // answer, or whose end carries the host's mark. The stub writes that
+        // one frame, through the factory it was given, before it rejects as
+        // it always did. A refusal before the request is written writes none.
+        request = async (...args: unknown[]): Promise<unknown> => {
+          try {
+            return await socketRequest(...args);
+          } catch (error) {
+            if (
+              mayHaveReachedHost(error) ||
+              (error instanceof RetryableTransportError &&
+                error.replaySafetyFromKey)
+            )
+              this.options.webSocketFactory
+                .create("ws://127.0.0.1:9/rpc", "interactive")
+                .send(
+                  JSON.stringify({
+                    kind: "request",
+                    requestId: "req-a",
+                    method: "epic.create",
+                    schemaVersion: 1,
+                    params: {},
+                  }),
+                );
+            throw error;
+          }
+        };
         // The CLI finally calls this after every real send. A missing method
         // throws and replaces the call's result.
         releaseIdleLocalSessions(): void {}
@@ -93,6 +129,21 @@ vi.mock(
     };
   },
 );
+
+// The socket the stub client's frame is written to: it keeps nothing.
+vi.mock("../../../../shared/host-transport/whatwg-ws-factory", () => ({
+  createWhatwgWebSocketFactory: () => ({
+    create: () => ({
+      onopen: null,
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+      dialStarted: Promise.resolve(),
+      send: () => undefined,
+      close: () => undefined,
+    }),
+  }),
+}));
 
 // The host-only tokens held on this machine; a test seeds one to be presented by the first dial.
 vi.mock("../../../../shared/auth/host-token-file", async (importOriginal) => {

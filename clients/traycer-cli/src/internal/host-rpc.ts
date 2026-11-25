@@ -69,6 +69,7 @@ import {
   WsRpcClient,
 } from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
+import type { IWebSocketFactory } from "../../../shared/host-transport/ws-factory";
 import {
   isProfileLifecycleRejection,
   isRemovedProfileRefusal,
@@ -455,6 +456,27 @@ export async function callHostRpcAtEndpoint<
   );
 }
 
+/**
+ * The errors that left `requestAtEndpoint` while no request frame of the call
+ * had been written: an open frame at most. Only errors go in.
+ */
+const wroteNoRequest = new WeakSet<object>();
+
+/**
+ * Whether `error` left a CLI call that wrote no request frame: the host had
+ * nothing to carry out, whatever it did with the open.
+ */
+export function hostRpcWroteNoRequest(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && wroteNoRequest.has(error)
+  );
+}
+
+function markWroteNoRequest<Failure>(error: Failure): Failure {
+  if (typeof error === "object" && error !== null) wroteNoRequest.add(error);
+  return error;
+}
+
 /** A call the gate's ending stops, logged once. */
 function blockedCallCliError(
   method: string,
@@ -535,6 +557,27 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   // A refusal that may end the command is kept as evidence only: unless the
   // call was answered anyway, the gate decides what ends it.
   const ended: { refusal: CliRefusalEvidence | null } = { refusal: null };
+  // Whether a frame other than the open went out on any socket of this call.
+  // Only this boolean survives: the frame is never kept.
+  let requestWritten = false;
+  const noteFrameSent = (data: unknown): void => {
+    try {
+      if (typeof data === "string") {
+        const frame: unknown = JSON.parse(data);
+        if (
+          typeof frame === "object" &&
+          frame !== null &&
+          !Array.isArray(frame) &&
+          "kind" in frame &&
+          frame.kind === "open"
+        )
+          return;
+      }
+    } catch {
+      // Not read: written, as is any frame this does not recognise as the open.
+    }
+    requestWritten = true;
+  };
   const stopRefusals = session.tokens.onRefusalEndingCommand((evidence) => {
     if (evidence.hostId === endpoint.hostId) ended.refusal ??= evidence;
   });
@@ -571,7 +614,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       : await verdictBeforeCaller(verdict(), dispatch.signal, budgetMs);
     const ending = judged?.kind === "answer" ? judged.value : null;
     if (ending !== null && Date.now() < budgetEndsAt)
-      throw blockedCallCliError(method, endpoint, ending);
+      throw markWroteNoRequest(blockedCallCliError(method, endpoint, ending));
     // That mint is the one the call's first open would have started.
     let firstOpen = true;
     try {
@@ -596,6 +639,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
             session.tokens.admitted(
               processReleasedHosts.currentInstance(endpoint.hostId),
             ),
+          noteFrameSent,
         },
         retryPolicy,
         dispatch,
@@ -604,6 +648,10 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       // A caller that has given up gets its own ending at once: no verdict
       // read starts after its deadline, and one under way replaces nothing.
       if (dispatch.signal?.aborted === true) throw err;
+      // A request frame of this call was written: the host may have carried
+      // it out, and the call's failure leaves as the client produced it. The
+      // gate's refusal ends a call only when nothing was written.
+      if (requestWritten) throw err;
       // The one judgement for this exit, and the exit in the same turn as it.
       // With no refusal reported, the gate's verdict on the stored sign-in
       // rides on the refusal thrown now, to its synchronous mapping.
@@ -620,15 +668,18 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
             rejectionOfRefusal.set(refusal, judged.value);
           }
         }
-        throw err;
+        throw markWroteNoRequest(err);
       }
       const judged = await verdictBeforeCaller(
         session.tokens.refusalEndingCommandNow(endpoint.hostId),
         dispatch.signal,
         null,
       );
-      if (judged.kind !== "answer" || judged.value === null) throw err;
-      throw blockedCallCliError(method, endpoint, judged.value);
+      if (judged.kind !== "answer" || judged.value === null)
+        throw markWroteNoRequest(err);
+      throw markWroteNoRequest(
+        blockedCallCliError(method, endpoint, judged.value),
+      );
     }
   } finally {
     stopRefusals();
@@ -651,6 +702,31 @@ interface LocalHostDoor {
   ) => Promise<OpenFrameBearerSource | null>;
   /** The host admitted a call; the release is called when that connection leaves. */
   readonly admitted: () => DoorAdmissionRelease;
+  /** Called with every frame this call's sockets send, before it goes out. */
+  readonly noteFrameSent: (data: unknown) => void;
+}
+
+/**
+ * The factory a local call dials through: each socket reports every frame it
+ * sends to the door before sending it, and sends it as it would have.
+ */
+function recordingSocketFactory(localDoor: LocalHostDoor): IWebSocketFactory {
+  const inner = createWhatwgWebSocketFactory();
+  return {
+    create: (url, priority) => {
+      const socket = inner.create(url, priority);
+      const send = socket.send.bind(socket);
+      socket.send = (data: string): void => {
+        try {
+          localDoor.noteFrameSent(data);
+        } catch {
+          // The recorder never throws; the frame goes out either way.
+        }
+        send(data);
+      };
+      return socket;
+    },
+  };
 }
 
 async function requestWithHostToken<
@@ -710,7 +786,10 @@ async function requestWithHostToken<
         }),
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),
-    webSocketFactory: createWhatwgWebSocketFactory(),
+    webSocketFactory:
+      localDoor === null
+        ? createWhatwgWebSocketFactory()
+        : recordingSocketFactory(localDoor),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     frameTimeoutMs: FRAME_TIMEOUT_MS,
     hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
