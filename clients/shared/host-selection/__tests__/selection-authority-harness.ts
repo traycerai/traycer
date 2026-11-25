@@ -161,6 +161,7 @@ export function createTestAuthority(input: {
   readonly localHostEnsure?: LocalHostEnsurePort;
   readonly preferredStore?: PreferredHostStore;
   readonly seedPreferred?: string | null;
+  readonly poolConfigured?: boolean;
   /** Defaults to the silent log; pass a recorder to assert on diagnostics. */
   readonly log?: AuthorityLog;
 }): TestAuthority {
@@ -188,7 +189,7 @@ export function createTestAuthority(input: {
     clock: input.clock,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: input.log ?? silentAuthorityLog,
-    poolConfigured: false,
+    poolConfigured: input.poolConfigured ?? false,
   });
   const { events, subscriptions } = recordEngineEvents(engine);
   return {

@@ -16,6 +16,8 @@ import {
   isMachineHostDirectoryEntry,
   createHostRpcTierPlan,
   decideHostRpcDispatch,
+  decideHostStreamDispatch,
+  accountWideAnswerer,
   hostRpcRouteOf,
   hostRpcServingTierHostId,
   type ChatServingKey,
@@ -30,8 +32,7 @@ import {
 
 const POOL_PLAN = createHostRpcTierPlan(poolEntry);
 
-/** A configuration's own cloud state: served with no host running it. */
-const CONFIGURATION_POOL_ONLY = [
+const CONFIGURATION_ACCOUNT_WIDE = [
   "environment.configuration.guide.get",
   "environment.configuration.guide.reset",
   "environment.configuration.guide.set",
@@ -70,33 +71,6 @@ const CONFIGURATION_POOL_ONLY = [
   "environment.secrets.verify",
   "environment.secrets.versions",
 ];
-
-const EXPECTED_POOL_ONLY = [
-  ...CONFIGURATION_POOL_ONLY,
-  "autoPolicy.get",
-  "autoPolicy.set",
-  "chat.serving.subscribe",
-  "environment.chats.subscribe",
-  "environment.invitations.accept",
-  "environment.invitations.list",
-  "environment.binding.read",
-  "environment.communicationGraph.subscribe",
-  "environment.list",
-  "epic.getChatTitle",
-  "epic.listTasks",
-  "environment.plainTerminals.subscribe",
-  "host.notifications.cloudFeed.clear",
-  "host.notifications.cloudFeed.clearAll",
-  "host.notifications.cloudFeed.markAllRead",
-  "host.notifications.cloudFeed.markRead",
-  "host.notifications.cloudFeed.resolve",
-  "host.notifications.cloudFeed.subscribe",
-  "organization.command",
-  "organization.history",
-  "organization.read",
-  "organization.refresh",
-  "organization.subscribe",
-].sort();
 
 const EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS = [
   "host.profileSync.apply",
@@ -158,7 +132,7 @@ describe("host RPC routing table", () => {
     expect(hostRpcRouteOf("not.a.method")).toBeNull();
   });
 
-  it("routes exactly the account-wide families pool-only", () => {
+  it("routes exactly the four pool-only streams to the pool", () => {
     const poolOnly = [
       ...Object.entries(HOST_UNARY_RPC_ROUTES),
       ...Object.entries(HOST_STREAM_RPC_ROUTES),
@@ -166,7 +140,18 @@ describe("host RPC routing table", () => {
       .filter(([, route]) => route === "pool-only")
       .map(([name]) => name)
       .sort();
-    expect(poolOnly).toEqual(EXPECTED_POOL_ONLY);
+    expect(poolOnly).toEqual([
+      "chat.serving.subscribe",
+      "environment.chats.subscribe",
+      "environment.communicationGraph.subscribe",
+      "environment.plainTerminals.subscribe",
+    ]);
+    expect(
+      [
+        ...Object.entries(HOST_UNARY_RPC_ROUTES),
+        ...Object.entries(HOST_STREAM_RPC_ROUTES),
+      ].filter(([, route]) => route === "account-wide"),
+    ).toHaveLength(56);
   });
 
   it("reads the local History contribution from the host that holds it", () => {
@@ -216,6 +201,396 @@ describe("decideHostRpcDispatch", () => {
     }
   });
 
+  it("uses each account-wide method's manifest and authority to choose its serving peer", () => {
+    const accountWideMethods = [
+      ...Object.entries(HOST_UNARY_RPC_ROUTES),
+      ...Object.entries(HOST_STREAM_RPC_ROUTES),
+    ]
+      .filter(([, route]) => route === "account-wide")
+      .map(([method]) => method)
+      .sort();
+    // Resolver registrations at host-v1.4.0 through host-v1.5.1; see
+    // closure-c-app.md, Q4(a). The later release fixtures are derived from the
+    // route table so new account-wide methods cannot be omitted silently.
+    const released151Names = [
+      "autoPolicy.get",
+      "autoPolicy.set",
+      "epic.listTasks",
+      "host.notifications.cloudFeed.clear",
+      "host.notifications.cloudFeed.clearAll",
+      "host.notifications.cloudFeed.markAllRead",
+      "host.notifications.cloudFeed.markRead",
+      "host.notifications.cloudFeed.resolve",
+      "host.notifications.cloudFeed.subscribe",
+      "organization.command",
+      "organization.history",
+      "organization.read",
+      "organization.refresh",
+      "organization.subscribe",
+    ];
+    const released151 = new Set(
+      accountWideMethods.filter((method) => released151Names.includes(method)),
+    );
+    const released154 = new Set(
+      accountWideMethods.filter(
+        (method) =>
+          method !== "environment.binding.read" &&
+          method !== "epic.getChatTitle",
+      ),
+    );
+    const current = new Set(
+      [
+        ...released151Names,
+        "epic.getChatTitle",
+        "environment.configuration.guide.get",
+        "environment.configuration.guide.reset",
+        "environment.configuration.guide.set",
+        "environment.configuration.skills.list",
+        "environment.configuration.skills.remove",
+        "environment.configuration.skills.setPolicy",
+        "environment.configuration.skills.setProviders",
+        "environment.configuration.skills.upload",
+      ].filter((method) => accountWideMethods.includes(method)),
+    );
+    const fixtures = [released151, released154, current];
+    expect(fixtures.map((fixture) => fixture.size)).toEqual([14, 54, 23]);
+    expect(
+      released151Names.filter((method) => !accountWideMethods.includes(method)),
+    ).toEqual([]);
+
+    for (const method of accountWideMethods) {
+      const route =
+        HOST_UNARY_RPC_ROUTES[method as keyof typeof HOST_UNARY_RPC_ROUTES];
+      if (route === undefined) continue;
+      const teamScoped =
+        method.startsWith("environment.configuration.guide.") ||
+        method.startsWith("environment.configuration.skills.");
+      for (const manifest of fixtures) {
+        const servingOwn = {
+          servingPeer: personalRemoteEntry,
+          servingPeerMethods: manifest,
+          servingPeerEnvironmentId: null,
+        };
+        const ownResult = decideHostRpcDispatch(
+          method,
+          route,
+          localEntry,
+          null,
+          POOL_PLAN,
+          null,
+          servingOwn,
+          null,
+        );
+        expect(ownResult).toEqual({
+          kind: "dispatch",
+          entry: manifest.has(method) ? personalRemoteEntry : poolEntry,
+        });
+
+        const team = {
+          ...personalRemoteEntry,
+          owner: { kind: "team" as const, id: "team-1", name: "Team" },
+        };
+        const servingTeam = {
+          servingPeer: team,
+          servingPeerMethods: new Set(accountWideMethods),
+          servingPeerEnvironmentId: "env-1",
+        };
+        const matchingEnvironment = teamScoped;
+        const teamResult = decideHostRpcDispatch(
+          method,
+          route,
+          localEntry,
+          null,
+          POOL_PLAN,
+          null,
+          servingTeam,
+          matchingEnvironment ? "env-1" : null,
+        );
+        expect(teamResult).toEqual({
+          kind: "dispatch",
+          entry: matchingEnvironment ? team : poolEntry,
+        });
+
+        for (const servingPeer of [poolEntry, null]) {
+          expect(
+            decideHostRpcDispatch(
+              method,
+              route,
+              localEntry,
+              null,
+              POOL_PLAN,
+              null,
+              {
+                servingPeer,
+                servingPeerMethods:
+                  servingPeer === null ? null : new Set(accountWideMethods),
+                servingPeerEnvironmentId: null,
+              },
+              null,
+            ),
+          ).toEqual({ kind: "dispatch", entry: poolEntry });
+        }
+        expect(
+          decideHostRpcDispatch(
+            method,
+            route,
+            localEntry,
+            null,
+            NO_POOL_HOST_RPC_TIER_PLAN,
+            null,
+            servingOwn,
+            null,
+          ),
+        ).toEqual({ kind: "dispatch", entry: localEntry });
+      }
+    }
+  });
+
+  it("dispatches every unary route for both build shapes and addressed peers", () => {
+    const servingCases = [
+      {
+        peer: personalRemoteEntry,
+        methods: new Set<string>(Object.keys(HOST_UNARY_RPC_ROUTES)),
+        environmentId: null,
+      },
+      {
+        peer: personalRemoteEntry,
+        methods: new Set<string>(),
+        environmentId: null,
+      },
+      {
+        peer: teamSandboxEntry,
+        methods: new Set<string>(Object.keys(HOST_UNARY_RPC_ROUTES)),
+        environmentId: "env-team",
+      },
+      {
+        peer: poolEntry,
+        methods: new Set<string>(Object.keys(HOST_UNARY_RPC_ROUTES)),
+        environmentId: null,
+      },
+      { peer: null, methods: null, environmentId: null },
+    ];
+    for (const [method, route] of Object.entries(HOST_UNARY_RPC_ROUTES)) {
+      for (const target of [
+        personalRemoteEntry,
+        teamSandboxEntry,
+        poolEntry,
+        null,
+      ]) {
+        for (const targetMethods of [new Set([method]), new Set<string>()]) {
+          for (const plan of [POOL_PLAN, NO_POOL_HOST_RPC_TIER_PLAN]) {
+            for (const servingCase of servingCases) {
+              const result = decideHostRpcDispatch(
+                method,
+                route,
+                target,
+                targetMethods,
+                plan,
+                localEntry,
+                {
+                  servingPeer: servingCase.peer,
+                  servingPeerMethods: servingCase.methods,
+                  servingPeerEnvironmentId: servingCase.environmentId,
+                },
+                null,
+              );
+              let expected: typeof result;
+              switch (route) {
+                case "account-wide":
+                  expected =
+                    plan.pool === null
+                      ? target === null
+                        ? {
+                            kind: "refuse",
+                            code: "RPC_ERROR",
+                            message:
+                              "Cannot call host RPC without an active host",
+                          }
+                        : { kind: "dispatch", entry: target }
+                      : servingCase.peer !== null &&
+                          accountWideAnswerer(method, null, {
+                            servingPeer: servingCase.peer,
+                            servingPeerMethods: servingCase.methods,
+                            servingPeerEnvironmentId: servingCase.environmentId,
+                          }) === "computer"
+                        ? { kind: "dispatch", entry: servingCase.peer }
+                        : { kind: "dispatch", entry: poolEntry };
+                  break;
+                case "target-host":
+                case "sender-host":
+                  expected =
+                    target === null
+                      ? {
+                          kind: "refuse",
+                          code: "RPC_ERROR",
+                          message:
+                            "Cannot call host RPC without an active host",
+                        }
+                      : target === poolEntry
+                        ? {
+                            kind: "refuse",
+                            code: "E_HOST_UNSUPPORTED",
+                            message:
+                              "The server pool does not serve this method",
+                          }
+                        : { kind: "dispatch", entry: target };
+                  break;
+                case "selected-host":
+                  expected = { kind: "dispatch", entry: localEntry };
+                  break;
+                case "addressed-peer":
+                  expected = targetMethods.has(method)
+                    ? target === null
+                      ? {
+                          kind: "refuse",
+                          code: "RPC_ERROR",
+                          message:
+                            "Cannot call host RPC without an active host",
+                        }
+                      : { kind: "dispatch", entry: target }
+                    : {
+                        kind: "refuse",
+                        code: "E_HOST_UNSUPPORTED",
+                        message:
+                          "The addressed peer does not serve this method",
+                      };
+                  break;
+                case "target-host-live-pool-at-rest":
+                  expected =
+                    target === null
+                      ? {
+                          kind: "refuse",
+                          code: "RPC_ERROR",
+                          message:
+                            "Cannot call host RPC without an active host",
+                        }
+                      : { kind: "dispatch", entry: target };
+                  break;
+              }
+              expect(result).toEqual(expected);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps a task call on its addressed session and checks that peer's manifest before dispatch", () => {
+    for (const method of [
+      "artifact.read",
+      "comments.listThreads",
+      "epic.getTask",
+    ] as const) {
+      const accepted = decideHostRpcDispatch(
+        method,
+        "addressed-peer",
+        personalRemoteEntry,
+        new Set([method]),
+        POOL_PLAN,
+        null,
+        {
+          servingPeer: localEntry,
+          servingPeerMethods: new Set([method]),
+          servingPeerEnvironmentId: null,
+        },
+        null,
+      );
+      expect(accepted).toEqual({
+        kind: "dispatch",
+        entry: personalRemoteEntry,
+      });
+      const refused = decideHostRpcDispatch(
+        method,
+        "addressed-peer",
+        personalRemoteEntry,
+        new Set(),
+        POOL_PLAN,
+        null,
+        {
+          servingPeer: localEntry,
+          servingPeerMethods: new Set([method]),
+          servingPeerEnvironmentId: null,
+        },
+        null,
+      );
+      expect(refused).toMatchObject({
+        kind: "refuse",
+        code: "E_HOST_UNSUPPORTED",
+      });
+    }
+    expect(
+      decideHostRpcDispatch(
+        "artifact.read",
+        "addressed-peer",
+        poolEntry,
+        new Set(["artifact.read"]),
+        POOL_PLAN,
+        null,
+        NO_SERVING_PEER_DECISION,
+        null,
+      ),
+    ).toEqual({ kind: "dispatch", entry: poolEntry });
+  });
+
+  it("dispatches every stream by its route and keeps account-wide stream keys on their answering peer", () => {
+    for (const [method, route] of Object.entries(HOST_STREAM_RPC_ROUTES)) {
+      const result = decideHostStreamDispatch(
+        method as keyof typeof HOST_STREAM_RPC_ROUTES,
+        localEntry,
+        new Set([method]),
+        POOL_PLAN,
+        localEntry,
+        NO_SERVING_PEER_DECISION,
+      );
+      const expected =
+        route === "pool-only" || route === "account-wide"
+          ? poolEntry
+          : localEntry;
+      expect(result).toEqual({ kind: "dispatch", entry: expected });
+      if (route === "pool-only" || route === "account-wide") {
+        expect(
+          decideHostStreamDispatch(
+            method as keyof typeof HOST_STREAM_RPC_ROUTES,
+            localEntry,
+            new Set([method]),
+            NO_POOL_HOST_RPC_TIER_PLAN,
+            localEntry,
+            NO_SERVING_PEER_DECISION,
+          ),
+        ).toEqual({ kind: "dispatch", entry: localEntry });
+      }
+    }
+    const cloudFeed = "host.notifications.cloudFeed.subscribe";
+    const computerServing = {
+      servingPeer: personalRemoteEntry,
+      servingPeerMethods: new Set([cloudFeed]),
+      servingPeerEnvironmentId: null,
+    };
+    expect(
+      decideHostStreamDispatch(
+        cloudFeed,
+        personalRemoteEntry,
+        new Set([cloudFeed]),
+        POOL_PLAN,
+        null,
+        computerServing,
+      ),
+    ).toEqual({ kind: "dispatch", entry: personalRemoteEntry });
+    expect(
+      decideHostStreamDispatch(
+        cloudFeed,
+        personalRemoteEntry,
+        new Set([cloudFeed]),
+        POOL_PLAN,
+        null,
+        NO_SERVING_PEER_DECISION,
+      ),
+    ).toEqual({ kind: "dispatch", entry: poolEntry });
+    expect(accountWideAnswerer(cloudFeed, null, computerServing)).toBe(
+      "computer",
+    );
+  });
+
   it("keeps a pool-only call on the target when the build has no pool", () => {
     expect(
       decideHostRpcDispatch(
@@ -231,27 +606,31 @@ describe("decideHostRpcDispatch", () => {
     ).toEqual({ kind: "dispatch", entry: personalRemoteEntry });
   });
 
-  it.each(CONFIGURATION_POOL_ONLY)(
-    "serves %s from the pool when the plan has one, else from the caller's host",
+  it.each(CONFIGURATION_ACCOUNT_WIDE)(
+    "serves %s from the account-wide tier when the plan has one, else from the caller's host",
     (method) => {
       const route = hostRpcRouteOf(method);
-      expect(route).toBe("pool-only");
+      expect(route).toBe("account-wide");
       if (route === null) return;
       expect(
         decideHostRpcDispatch(
-          "test.method",
+          method,
           route,
           personalRemoteEntry,
           null,
           POOL_PLAN,
           null,
-          NO_SERVING_PEER_DECISION,
+          {
+            servingPeer: null,
+            servingPeerMethods: null,
+            servingPeerEnvironmentId: null,
+          },
           null,
         ),
       ).toEqual({ kind: "dispatch", entry: poolEntry });
       expect(
         decideHostRpcDispatch(
-          "test.method",
+          method,
           route,
           personalRemoteEntry,
           null,

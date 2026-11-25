@@ -1067,11 +1067,60 @@ function renderWindowNarrationHook(serving: boolean) {
   });
 }
 
+function publishPoolNarration(
+  noPeerPresentation: "connecting" | "offline" | null,
+  serving: boolean,
+  selectionRevision: number,
+): void {
+  act(() => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: null,
+      targetHostId: null,
+      effectiveHostId: null,
+      servingPeer: serving ? { kind: "pool" } : null,
+      noPeerPresentation,
+      leases: [],
+      selectionRevision,
+    });
+  });
+}
+
+function renderPoolWindowNarration() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderHook(() => useWindowNarration(), {
+    wrapper: ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children),
+  });
+}
+
 describe("useWindowNarration door states through the real stores", () => {
   afterEach(() => {
     cleanup();
     useSelectionAuthorityStore.getState().reset();
     useHostDoorStateStore.setState({ byHost: new Map() });
+  });
+
+  it("shows the connecting then offline card from the authority and closes when the pool serves", () => {
+    publishPoolNarration("connecting", false, 1);
+    const { result } = renderPoolWindowNarration();
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "cold-start",
+      variant: { kind: "offline" },
+    });
+
+    publishPoolNarration("offline", false, 2);
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+
+    publishPoolNarration(null, true, 3);
+    expect(result.current.narration).toEqual({ kind: "silent" });
   });
 
   it("covers a not-admitted target while no host serves", () => {
