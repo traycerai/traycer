@@ -38,6 +38,7 @@ export type EnvironmentMoveResult =
     }
   | { readonly kind: "plan_changed" }
   | { readonly kind: "not_awaiting" }
+  | { readonly kind: "local_source_unread"; readonly message: string }
   | { readonly kind: "refused" }
   | { readonly kind: "sign_in_changed" };
 
@@ -109,6 +110,14 @@ export async function runEnvironmentMove(
   } catch (error) {
     if (!cloud.onOriginSignIn()) return SIGN_IN_CHANGED;
     if (isNotAwaiting(error)) return { kind: "not_awaiting" };
+    if (
+      accepted.target.kind === "personal" &&
+      error instanceof HostRpcError &&
+      error.method === "environment.move.stage" &&
+      error.code === "E_MOVE_LOCAL_SOURCE_UNREAD"
+    ) {
+      return { kind: "local_source_unread", message: error.message };
+    }
     throw error;
   }
 }

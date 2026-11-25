@@ -1,17 +1,21 @@
-import { useState } from "react";
-import type { UseMutationResult } from "@tanstack/react-query";
+import { useLayoutEffect, useRef, useState } from "react";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
-  EnvironmentSetupRetryRequest,
-  EnvironmentSetupRetryResponse,
-  EnvironmentStatusResponseV13,
+import {
+  environmentStatusResponseSchemaV13,
+  type EnvironmentSetupRetryRequest,
+  type EnvironmentSetupRetryResponse,
+  type EnvironmentStatusResponseV13,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   useHostScopedMutationForClient,
   type HostScopedMutationContext,
 } from "@/hooks/host/use-host-scoped-mutation";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostQuery,
+  useHostQueryEntryHash,
+} from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -40,7 +44,7 @@ export function useMoveRetryMutation(
 
 export interface MoveRerun {
   /** The plan read's own key once a Retry has run the move again. */
-  readonly planKey: readonly unknown[] | undefined;
+  readonly planKey: readonly [string] | undefined;
   /** False from a Retry until the move it started waits for the person again. */
   readonly planReadable: boolean;
   /** A Retry's re-run went on with the accepted move instead of asking again. */
@@ -50,7 +54,10 @@ export interface MoveRerun {
   /** The move, or a Retry's re-run of it, stopped: it refuses every plan until it runs again. */
   readonly stopped: boolean;
   readonly pending: boolean;
-  readonly rerun: (refusal: string, started: () => void) => void;
+  readonly rerun: (
+    refusal: string,
+    started: (attemptId: string) => void,
+  ) => void;
 }
 
 interface Rerun {
@@ -98,13 +105,17 @@ function rerunReading(
 export function useMoveRerun(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string,
+  onStoppedAgain: (attemptId: string) => void,
 ): MoveRerun {
   const statusServed = useHostMethodSupport(hostId, "environment.status");
-  const statusRead = useHostQuery<HostRpcRegistry, "environment.status">({
+  const statusRequest = {
     cacheKeyIdentity: undefined,
     client,
     method: "environment.status",
     params: {},
+  } as const;
+  const statusRead = useHostQuery<HostRpcRegistry, "environment.status">({
+    ...statusRequest,
     // Read again on every opening, so Retry need not wait for the next poll.
     options: { enabled: statusServed === true, poll: true, staleTime: 0 },
   });
@@ -113,6 +124,42 @@ export function useMoveRerun(
     useHostMethodSupport(hostId, "environment.setup.retry") === true;
   const retry = useMoveRetryMutation(client);
   const [rerun, setRerun] = useState<Rerun | null>(null);
+  const watchedRerun = useRef<Rerun | null>(null);
+  const queryClient = useQueryClient();
+  const statusHash = useHostQueryEntryHash<
+    HostRpcRegistry,
+    "environment.status"
+  >(statusRequest);
+  useLayoutEffect(
+    () =>
+      queryClient.getQueryCache().subscribe((event) => {
+        const attempt = watchedRerun.current;
+        if (
+          attempt === null ||
+          event.type !== "updated" ||
+          event.query.queryHash !== statusHash ||
+          event.action.type !== "success" ||
+          event.action.manual === true
+        ) {
+          return;
+        }
+        const status = environmentStatusResponseSchemaV13.safeParse(
+          event.action.data,
+        );
+        if (!status.success) return;
+        if (
+          rerunReading(
+            attempt,
+            status.data,
+            event.query.state.dataUpdatedAt,
+          ) === "stopped_again"
+        ) {
+          watchedRerun.current = null;
+          onStoppedAgain(attempt.attemptId);
+        }
+      }),
+    [queryClient, statusHash, onStoppedAgain],
+  );
   const reading = rerunReading(rerun, status, statusRead.dataUpdatedAt);
   return {
     planKey: rerun === null ? undefined : [rerun.attemptId],
@@ -136,12 +183,14 @@ export function useMoveRerun(
         {},
         {
           onSuccess: (answer) => {
-            started();
-            setRerun({
+            const next = {
               attemptId: answer.attemptId,
               refusal,
               answeredAt: Date.now(),
-            });
+            };
+            watchedRerun.current = next;
+            started(next.attemptId);
+            setRerun(next);
           },
         },
       );
