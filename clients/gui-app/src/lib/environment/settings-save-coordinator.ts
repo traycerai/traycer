@@ -10,7 +10,13 @@ import {
   settingValueDigest,
   type HeldChangeForMatch,
 } from "@traycer-clients/shared/environment/environment-review";
-import { readSettingsSaveHost } from "@traycer-clients/shared/environment/settings-save-target";
+import {
+  readAcceptedPersonalMoveRevision,
+  readSettingsItemRows,
+  readSettingsSaveHost,
+  readSettingsSavePersonal,
+} from "@traycer-clients/shared/environment/settings-save-target";
+import type { HostOs } from "@traycer/protocol/host/environment/host-os";
 import type {
   EnvironmentProposalsResponse,
   PendingProfileName,
@@ -26,7 +32,9 @@ import {
   settingsSaveMemoryRecord,
   useSettingsSaveMemoryStore,
   type BoundSettingsSave,
+  type RememberedPersonalSave,
   type RememberedSettingsItem,
+  type UnansweredMoveSave,
   type SettingsSaveMemoryRecord,
 } from "@/stores/settings/settings-save-memory-store";
 
@@ -83,13 +91,20 @@ export interface SettingsSaveContext {
   readonly expectedLiveRevision: number | null;
 }
 
-export interface PrebindSettingsSaveTarget {
-  readonly environmentId: string;
-  readonly item: {
-    readonly edit: SettingsItemEdit;
-    readonly expectedLiveRevision: number | null;
-  } | null;
-}
+export type PrebindSettingsSaveTarget =
+  | {
+      readonly environmentId: string;
+      readonly item: {
+        readonly edit: SettingsItemEdit;
+        readonly expectedLiveRevision: number | null;
+      } | null;
+    }
+  | {
+      readonly environmentId: string | null;
+      readonly acceptanceId: string;
+      readonly resolveHostOs: boolean;
+      readonly edit: SettingsItemEdit;
+    };
 
 interface PrebindSettingsSaveContext {
   readonly accountId: string;
@@ -156,18 +171,19 @@ function receiptMatches(
     receipt.environmentId === record.environmentId &&
     receipt.hostId === record.hostId &&
     receipt.sharingGeneration === record.sharingGeneration &&
-    receiptMatchesItem(record, receipt)
+    receiptMatchesItem(record, receipt, false)
   );
 }
 
 function receiptMatchesItem(
   item: RememberedSettingsItem,
   receipt: SettingsProposalReceipt,
+  resolveHostOs: boolean,
 ): boolean {
   return (
     receipt.kind === item.kind &&
     receipt.key === item.key &&
-    receipt.os === item.os &&
+    (resolveHostOs || receipt.os === item.os) &&
     receipt.operation === item.operation
   );
 }
@@ -182,7 +198,7 @@ function holdMatches(
     hold.sharingGeneration === receipt.sharingGeneration &&
     hold.kind === item.kind &&
     hold.key === item.key &&
-    hold.os === item.os &&
+    hold.os === receipt.os &&
     hold.op === item.operation &&
     hold.valueDigest === item.valueDigest
   );
@@ -221,12 +237,21 @@ function findReceiptForSave(
       return receiptMatches(record, proposal);
     }
     const personal = record.personal ?? null;
+    if (personal === null) return false;
+    if ("acceptanceId" in personal) {
+      return (
+        promotion.moveAcceptanceId === personal.acceptanceId &&
+        typeof promotion.moveWrittenRevision === "number" &&
+        (personal.environmentId === null ||
+          personal.environmentId === proposal.environmentId) &&
+        receiptMatchesItem(personal.moveItem, proposal, personal.resolveHostOs)
+      );
+    }
     return (
-      personal !== null &&
       personal.item !== null &&
       promotion.moveWrittenRevision !== undefined &&
       proposal.environmentId === personal.environmentId &&
-      receiptMatchesItem(personal.item, proposal)
+      receiptMatchesItem(personal.item, proposal, false)
     );
   });
   if (promoted !== undefined || record.environmentId === null) return promoted;
@@ -286,6 +311,7 @@ interface ApplyHoldOptions {
   readonly save: RememberedSave;
   readonly record: SettingsSaveMemoryRecord;
   readonly holds: readonly HeldChangeForMatch[];
+  readonly hostOs: HostOs | null;
   readonly mayApply: () => boolean;
 }
 
@@ -296,6 +322,113 @@ interface ApplyProposedOptions {
   readonly saves: readonly RememberedSave[];
   readonly mayAct: () => boolean;
   readonly mayAdoptLocal: () => boolean;
+}
+
+async function verifiesUnansweredMove(
+  cloud: EnvironmentCloud,
+  receipt: SettingsProposalReceipt,
+  witness: UnansweredMoveSave,
+  {
+    moveRevision,
+    hostOs,
+  }: {
+    readonly moveRevision: number;
+    readonly hostOs: HostOs | null;
+  },
+): Promise<boolean> {
+  if (witness.resolveHostOs && hostOs === null) return false;
+  const { environmentId, hostId, kind, key, os } = receipt;
+  const [personal, acceptedRevision, rows] = await Promise.all([
+    readSettingsSavePersonal(cloud),
+    readAcceptedPersonalMoveRevision(cloud, hostId, witness.acceptanceId),
+    witness.resolveHostOs
+      ? readSettingsItemRows(cloud, environmentId, kind)
+      : [],
+  ]);
+  if (personal !== environmentId || acceptedRevision !== moveRevision)
+    return false;
+  if (!witness.resolveHostOs) return true;
+  const effectiveOs = rows.some((row) => row.key === key && row.os === hostOs)
+    ? hostOs
+    : "any";
+  return os === effectiveOs;
+}
+
+async function checkMoveBase(
+  cloud: EnvironmentCloud,
+  unansweredMove: UnansweredMoveSave,
+  hold: HeldChangeForMatch,
+  {
+    receipt,
+    moveWrittenRevision,
+    hostOs,
+    mayApply,
+  }: {
+    readonly receipt: SettingsProposalReceipt;
+    readonly moveWrittenRevision: number | null;
+    readonly hostOs: HostOs | null;
+    readonly mayApply: () => boolean;
+  },
+): Promise<"ready" | "decided" | "stays"> {
+  // Any new revision, including a rewrite of equal bytes, stays in Review.
+  if (moveWrittenRevision === null || hold.liveRevision !== moveWrittenRevision)
+    return "decided";
+  let verified: boolean;
+  try {
+    verified = await verifiesUnansweredMove(cloud, receipt, unansweredMove, {
+      moveRevision: moveWrittenRevision,
+      hostOs,
+    });
+  } catch {
+    return "stays";
+  }
+  if (!verified) return "decided";
+  if (!mayApply()) return "stays";
+  return "ready";
+}
+
+function rememberedHoldItem(record: SettingsSaveMemoryRecord): {
+  readonly item: RememberedSettingsItem | null;
+  readonly unansweredMove: UnansweredMoveSave | null;
+} {
+  if (record.environmentId !== null)
+    return { item: record, unansweredMove: null };
+  const personal = record.personal;
+  if (
+    personal !== null &&
+    personal !== undefined &&
+    "acceptanceId" in personal
+  ) {
+    return { item: personal.moveItem, unansweredMove: personal };
+  }
+  return { item: personal?.item ?? null, unansweredMove: null };
+}
+
+function exhaustedHoldAttempts(
+  record: SettingsSaveMemoryRecord,
+  revision: number,
+): boolean {
+  return (
+    record.unanswered?.revision === revision &&
+    record.unanswered.tries >= TRIES_PER_HOLD_REVISION
+  );
+}
+
+function rememberPersonalTarget(
+  personal: PrebindSettingsSaveTarget | null,
+  item: RememberedSettingsItem | null,
+): RememberedPersonalSave | null {
+  if (personal === null) return null;
+  if (!("acceptanceId" in personal))
+    return { environmentId: personal.environmentId, item };
+  if (item === null) return null;
+  return {
+    environmentId: personal.environmentId,
+    acceptanceId: personal.acceptanceId,
+    resolveHostOs: personal.resolveHostOs,
+    item: null,
+    moveItem: item,
+  };
 }
 
 export function createSettingsSaveCoordinator(
@@ -331,11 +464,11 @@ export function createSettingsSaveCoordinator(
     save,
     record,
     holds,
+    hostOs,
     mayApply,
   }: ApplyHoldOptions): Promise<HoldAttemptResult> => {
     const { id, receipt, heldRevision, moveWrittenRevision } = save;
-    const item =
-      record.environmentId === null ? (record.personal?.item ?? null) : record;
+    const { item, unansweredMove } = rememberedHoldItem(record);
     if (item === null) return "decided";
     const hold = holds.find(
       (candidate) =>
@@ -344,15 +477,21 @@ export function createSettingsSaveCoordinator(
     );
     // A hold can have been decided while the review read was out.
     if (hold === undefined) return "decided";
-    // An answered absence can use only the durable revision of this Move's write.
+    if (unansweredMove !== null) {
+      const decision = await checkMoveBase(cloud, unansweredMove, hold, {
+        receipt,
+        moveWrittenRevision,
+        hostOs,
+        mayApply,
+      });
+      if (decision !== "ready") return decision;
+    }
+    // An answered absence can also use the durable revision of this Move's write.
     const expectedLiveRevision =
       item.expectedLiveRevision ?? (save.prebind ? moveWrittenRevision : null);
-    if (
-      record.unanswered?.revision === hold.revision &&
-      record.unanswered.tries >= TRIES_PER_HOLD_REVISION
-    ) {
-      return "stays";
-    }
+    const latest = settingsSaveMemoryRecord(store().records, id);
+    if (latest === null) return "stays";
+    if (exhaustedHoldAttempts(latest, hold.revision)) return "stays";
     const answered: { status: number | null } = { status: null };
     const watched: EnvironmentCloud = {
       ...cloud,
@@ -362,6 +501,7 @@ export function createSettingsSaveCoordinator(
         return answer;
       },
     };
+    if (unansweredMove !== null && !mayApply()) return "stays";
     try {
       const { outcome } = await applyHeldChange(
         watched,
@@ -544,7 +684,14 @@ export function createSettingsSaveCoordinator(
         forget(id);
         continue;
       }
-      const result = await applyHold({ cloud, save, record, holds, mayApply });
+      const result = await applyHold({
+        cloud,
+        save,
+        record,
+        holds,
+        hostOs: host?.hostOs ?? null,
+        mayApply,
+      });
       if (!mayAct()) return false;
       if (!mayApply()) continue;
       finishHoldAttempt(id, result);
@@ -651,7 +798,10 @@ export function createSettingsSaveCoordinator(
     const personal = await readPersonal();
     if (!onOrigin()) return ACCOUNT_CHANGED;
     if (generation !== begun) return NOTHING_TO_REMEMBER;
-    const item = personal?.item ?? null;
+    const item =
+      personal !== null && "acceptanceId" in personal
+        ? { edit: personal.edit, expectedLiveRevision: null }
+        : (personal?.item ?? null);
     let rememberedItem: RememberedSettingsItem | null = null;
     if (item !== null) {
       const { edit, expectedLiveRevision } = item;
@@ -672,18 +822,13 @@ export function createSettingsSaveCoordinator(
     }
     if (!onOrigin()) return ACCOUNT_CHANGED;
     if (generation !== begun) return NOTHING_TO_REMEMBER;
+    const target = rememberPersonalTarget(personal, rememberedItem);
     return remember(
       {
         editId: crypto.randomUUID(),
         environmentId: null,
         hostId,
-        personal:
-          personal === null
-            ? null
-            : {
-                environmentId: personal.environmentId,
-                item: rememberedItem,
-              },
+        personal: target,
         writtenAt,
         unanswered: null,
       },

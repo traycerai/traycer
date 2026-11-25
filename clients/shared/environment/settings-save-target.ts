@@ -1,6 +1,7 @@
 // The app recognises its own hold by these reads and what it sent, never by
 // anything a host returned.
 import { z } from "zod";
+import { PATH_ID_PATTERN } from "../host-client/path-id";
 import {
   hostOsOfPlatform,
   type HostOs,
@@ -26,6 +27,53 @@ const authnBoundHostsSchema = z.object({
     }),
   ),
 });
+
+const personalTargetSchema = z.object({
+  environmentId: z.string().regex(PATH_ID_PATTERN),
+});
+
+const consumedPersonalMoveSchema = z.object({
+  state: z.literal("consumed"),
+  acceptanceId: z.uuid(),
+  result: z.object({
+    targetKind: z.literal("personal"),
+    migration: z.object({
+      acceptanceId: z.uuid(),
+      migration: z.object({ revision: z.number().int().nonnegative() }),
+    }),
+  }),
+});
+
+export async function readSettingsSavePersonal(
+  cloud: EnvironmentCloud,
+): Promise<string> {
+  return parseSettings(
+    await sendSettings(cloud, "GET", "api/v3/environments/me", null),
+    personalTargetSchema,
+  ).environmentId;
+}
+
+/** This read is authorized for the person who accepted the Move. */
+export async function readAcceptedPersonalMoveRevision(
+  cloud: EnvironmentCloud,
+  hostId: string,
+  acceptanceId: string,
+): Promise<number | null> {
+  const answer = parseSettings(
+    await sendSettings(
+      cloud,
+      "GET",
+      `api/v3/hosts/${encodeURIComponent(hostId)}/move-acceptances/${encodeURIComponent(acceptanceId)}`,
+      null,
+    ),
+    consumedPersonalMoveSchema,
+  );
+  const { migration } = answer.result;
+  return answer.acceptanceId === acceptanceId &&
+    migration.acceptanceId === acceptanceId
+    ? migration.migration.revision
+    : null;
+}
 
 export interface SettingsSaveHost {
   readonly sharingGeneration: number;
