@@ -112,6 +112,9 @@ function handlers(options: {
   return {
     "environment.configuration.guide.get": options.guide,
     "environment.configuration.guide.set": () => ({ outcome: "set" as const }),
+    "environment.configuration.guide.reset": () => ({
+      outcome: "reset" as const,
+    }),
     "environment.host.list": () => ({ hosts: [...options.hosts] }),
     "environment.list": () => teamEnvironments,
   };
@@ -262,7 +265,7 @@ describe("TeamGuide on a build with a server pool and no host running the team",
     ).toEqual(new Set([POOL_HOST_ID]));
   });
 
-  it("offers the guide's editor with no host when the pool advertises the save", async () => {
+  it("uses the pool's set capability without offering reset when reset is absent", async () => {
     poolAdvertises(true);
     const harness = mountTeamPageOnPoolBuild(
       poolSource("editor"),
@@ -282,6 +285,9 @@ describe("TeamGuide on a build with a server pool and no host running the team",
         document.querySelector("[data-testid='team-guide-input']"),
       ).not.toBeNull();
     });
+    expect(
+      screen.getByTestId("team-guide-revert").hasAttribute("disabled"),
+    ).toBe(true);
     expect(screen.queryByText(/The guide needs a host/)).toBeNull();
     expect(
       screen.getAllByRole("heading", { name: "Agent selection guide" }),
@@ -291,6 +297,48 @@ describe("TeamGuide on a build with a server pool and no host running the team",
         "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
       ),
     ).toBeNull();
+  });
+
+  it("enables reset when a reset-capable serving computer takes over", async () => {
+    poolAdvertises(true);
+    const harness = mountTeamPageOnPoolBuild(
+      poolSource("editor"),
+      handlers({
+        hosts: [],
+        guide: () => ({
+          outcome: "ok" as const,
+          text: "Prefer sonnet",
+          revision: "rev-1",
+        }),
+      }),
+    );
+    const view = render(<TeamGuide />, { wrapper: harness.Wrapper });
+    const revert = await screen.findByTestId("team-guide-revert");
+    expect(revert.hasAttribute("disabled")).toBe(true);
+
+    const methods = [
+      "environment.configuration.guide.get",
+      "environment.configuration.guide.set",
+      "environment.configuration.guide.reset",
+    ] as const;
+    recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [...methods]);
+    servingFixture.current = {
+      servingPeer: mockLocalHostEntry,
+      servingPeerMethods: new Set(methods),
+      servingPeerEnvironmentId: null,
+    };
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+      servingPeer: { kind: "computer", hostId: mockLocalHostEntry.hostId },
+    });
+    view.rerender(<TeamGuide />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("team-guide-revert").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    view.unmount();
   });
 
   it("says the read failed, with Retry and no host pick, when the pool predates the guide read", async () => {

@@ -45,6 +45,9 @@ const runtimeClient = vi.hoisted(() => ({
 const runtimeBindingRef = vi.hoisted(() => ({
   current: null as HostRuntimeBinding<HostRpcRegistry> | null,
 }));
+const routedStream: { client: object | null } = vi.hoisted(() => ({
+  client: null,
+}));
 const servingDecision = vi.hoisted(() => {
   let current: HostServingDecision = {
     servingPeer: null,
@@ -112,7 +115,10 @@ vi.mock("@/hooks/host/use-pool-tier", async (importOriginal) => {
     await importOriginal<typeof import("@/hooks/host/use-pool-tier")>();
   return {
     ...actual,
-    useRoutedStreamClient: () => ({ client: null, peerHostId: null }),
+    useRoutedStreamClient: () => ({
+      client: routedStream.client,
+      peerHostId: "pool",
+    }),
   };
 });
 
@@ -148,34 +154,47 @@ const personalComputer: HostDirectoryEntry = {
 function OrganizationCommandProbe() {
   const organization = useOrganization();
   return (
-    <button
-      type="button"
-      onClick={() =>
-        void organization?.command({
-          kind: "groups",
-          operations: [
-            {
-              operation: "create",
-              groupId: "group-new",
-              name: "New group",
-              color: "#4488cc",
-              position: 0,
-            },
-          ],
-        })
-      }
-    >
-      Create group
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() =>
+          void organization?.command({
+            kind: "groups",
+            operations: [
+              {
+                operation: "create",
+                groupId: "group-new",
+                name: "New group",
+                color: "#4488cc",
+                position: 0,
+              },
+            ],
+          })
+        }
+      >
+        Create group
+      </button>
+      <button type="button" onClick={() => void organization?.refresh()}>
+        Refresh organization
+      </button>
+    </>
   );
 }
 
 function OrganizationGroupsProbe() {
+  const organization = useOrganization();
   const groupNames = useOrganizationView(
     (view) => view?.groups.groups.map((group) => group.name).join(",") ?? "",
     Object.is,
   );
-  return <output data-testid="organization-groups">{groupNames}</output>;
+  return (
+    <>
+      <output data-testid="organization-groups">{groupNames}</output>
+      <button type="button" onClick={() => void organization?.refresh()}>
+        Refresh organization
+      </button>
+    </>
+  );
 }
 
 describe("OrganizationProvider uses the pool for a team serving peer", () => {
@@ -184,6 +203,7 @@ describe("OrganizationProvider uses the pool for a team serving peer", () => {
     runtimeClient.current?.dispose();
     runtimeClient.current = null;
     runtimeBindingRef.current = null;
+    routedStream.client = null;
     servingDecision.publish({
       servingPeer: null,
       servingPeerMethods: null,
@@ -309,6 +329,16 @@ describe("OrganizationProvider uses the pool for a team serving peer", () => {
           ),
         ).toHaveLength(1);
       });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Refresh organization" }),
+      );
+      await waitFor(() => {
+        expect(
+          messenger.calls.filter(
+            (call) => call.method === "organization.refresh",
+          ),
+        ).toHaveLength(2);
+      });
       fireEvent.click(screen.getByRole("button", { name: "Create group" }));
       await waitFor(() => {
         expect(
@@ -324,6 +354,7 @@ describe("OrganizationProvider uses the pool for a team serving peer", () => {
           call.authority.endpoint.hostId,
         ]),
       ).toEqual([
+        ["organization.refresh", poolEntry.hostId],
         ["organization.refresh", poolEntry.hostId],
         ["organization.command", poolEntry.hostId],
       ]);
@@ -443,14 +474,191 @@ describe("OrganizationProvider uses the pool for a team serving peer", () => {
           "Personal group",
         );
       });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Refresh organization" }),
+      );
+      await waitFor(() => {
+        expect(
+          messenger.calls.filter(
+            (call) => call.method === "organization.refresh",
+          ),
+        ).toHaveLength(2);
+      });
       expect(
         messenger.calls.map((call) => [
           call.method,
           call.authority.endpoint.hostId,
         ]),
-      ).toEqual([["organization.refresh", personalComputer.hostId]]);
+      ).toEqual([
+        ["organization.refresh", personalComputer.hostId],
+        ["organization.refresh", personalComputer.hostId],
+      ]);
     } finally {
       view.unmount();
+      queryClient.clear();
+    }
+  });
+
+  it("keeps the pool organization subscription open when the read answerer changes", async () => {
+    const plan = settleProcessHostRpcTierPlan(poolEntry);
+    recordNegotiatedHostMethods(personalComputer.hostId, [
+      "organization.read",
+      "organization.refresh",
+      "organization.command",
+    ]);
+    recordNegotiatedHostMethods(poolEntry.hostId, [
+      "organization.subscribe",
+      "organization.refresh",
+    ]);
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "viewer-1", userName: "Viewer", email: "viewer@example.com" },
+        { userId: "viewer-1", username: "Viewer" },
+        [],
+      );
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: personalComputer.hostId,
+      targetHostId: personalComputer.hostId,
+      servingPeer: { kind: "computer", hostId: personalComputer.hostId },
+    });
+    const resolveServing = (hostId: string) =>
+      hostId === personalComputer.hostId ? personalComputer : null;
+    act(() => servingDecision.publish(readHostServingDecision(resolveServing)));
+
+    const subscription = {
+      close: vi.fn(),
+      onServerFrame: vi.fn<(listener: (envelope: unknown) => void) => void>(),
+    };
+    const stream = {
+      subscribe: vi.fn(() => subscription),
+      subscribeAvailabilityRecovered: () => () => undefined,
+    };
+    routedStream.client = stream;
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity, gcTime: Infinity },
+      },
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "organization-answerer-change-request",
+      handlers: {
+        "organization.refresh": () => ({
+          catalog: [],
+          groups: { version: "0", groups: [], memberships: [] },
+          appearances: [],
+          taskLabels: {},
+          ready: true,
+          authenticationRequired: false,
+          pending: [],
+          failures: [],
+        }),
+      },
+    });
+    const hosts = new Map<string, HostDirectoryEntry>([
+      [poolEntry.hostId, poolEntry],
+      [personalComputer.hostId, personalComputer],
+    ]);
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => hosts.get(hostId) ?? null,
+      messenger,
+      routing: {
+        plan,
+        selectedHostId: () => personalComputer.hostId,
+        serving: () => servingDecision.get(),
+      },
+    });
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "fixture-token",
+        identity: {
+          userId: "viewer-1",
+          username: "Viewer",
+          providerHandle: "viewer",
+        },
+      }),
+    );
+    runtimeClient.current = client;
+    runtimeBindingRef.current = Object.assign(Object.create(null), {
+      hostClient: client,
+    }) as HostRuntimeBinding<HostRpcRegistry>;
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <OrganizationProvider>
+          <OrganizationGroupsProbe />
+        </OrganizationProvider>
+      </QueryClientProvider>,
+    );
+
+    try {
+      await waitFor(() => {
+        expect(
+          messenger.calls.some(
+            (call) => call.method === "organization.refresh",
+          ),
+        ).toBe(true);
+        expect(stream.subscribe).toHaveBeenCalledTimes(1);
+      });
+      expect(stream.subscribe).toHaveBeenCalledWith("organization.subscribe", {
+        taskIds: [],
+      });
+
+      act(() => {
+        recordNegotiatedHostMethods(personalComputer.hostId, [
+          "organization.refresh",
+          "organization.command",
+        ]);
+        servingDecision.publish(readHostServingDecision(resolveServing));
+      });
+
+      await waitFor(() => {
+        expect(servingDecision.get().servingPeerMethods).not.toBeNull();
+      });
+      expect(subscription.close).not.toHaveBeenCalled();
+      expect(stream.subscribe).toHaveBeenCalledTimes(1);
+      const deliverFrame = subscription.onServerFrame.mock.calls.at(0)?.[0];
+      if (deliverFrame === undefined)
+        throw new Error("organization frame listener missing");
+      act(() => {
+        deliverFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          view: {
+            catalog: [],
+            groups: {
+              version: "1",
+              groups: [
+                {
+                  groupId: "moved-frame",
+                  name: "Moved frame",
+                  color: "#4488cc",
+                  position: 0,
+                },
+              ],
+              memberships: [],
+            },
+            appearances: [],
+            taskLabels: {},
+            ready: true,
+            authenticationRequired: false,
+            pending: [],
+            failures: [],
+          } satisfies OrganizationView,
+        });
+      });
+      await waitFor(() =>
+        expect(screen.getByTestId("organization-groups").textContent).toBe(
+          "Moved frame",
+        ),
+      );
+    } finally {
+      view.unmount();
+      client.dispose();
       queryClient.clear();
     }
   });

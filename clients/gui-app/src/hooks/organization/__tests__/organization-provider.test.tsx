@@ -131,8 +131,14 @@ vi.mock("@/lib/host", () => ({
 // pool stream, which is what a pool build resolves the surface's stream to.
 vi.mock("@/hooks/host/use-pool-tier", () => ({
   usePoolTierHostClient: <T,>(client: T): T => client,
-  usePoolTierStreamClient: (client: FakeStreamClient | null) =>
-    state.poolStream.current ?? client,
+  useRoutedStreamClient: (
+    _method: string,
+    peerHostId: string | null,
+    client: FakeStreamClient | null,
+  ) => ({
+    client: state.poolStream.current ?? client,
+    peerHostId,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({

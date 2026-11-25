@@ -494,6 +494,7 @@ async function renderPoolNotificationsProvider(options: {
   readonly servingPeer: "pool" | "computer" | "remote" | null;
   readonly teamServing: boolean;
   readonly child: ReactNode;
+  readonly waitForInitialOpen?: boolean;
 }): Promise<{
   readonly serving: FakeStreamClient;
   readonly pool: FakeStreamClient;
@@ -542,16 +543,18 @@ async function renderPoolNotificationsProvider(options: {
     </QueryClientProvider>,
   );
 
-  await waitFor(() => {
-    const opensCloudOnly = options.noComputer;
-    const openedClient = opensCloudOnly ? pool : serving;
-    const openedMethod = opensCloudOnly
-      ? "host.notifications.cloudFeed.subscribe"
-      : "host.notifications.feed.subscribe";
-    expect(openedClient.subscribes.map(({ method }) => method)).toContain(
-      openedMethod,
-    );
-  });
+  if (options.waitForInitialOpen !== false) {
+    await waitFor(() => {
+      const opensCloudOnly = options.noComputer;
+      const openedClient = opensCloudOnly ? pool : serving;
+      const openedMethod = opensCloudOnly
+        ? "host.notifications.cloudFeed.subscribe"
+        : "host.notifications.feed.subscribe";
+      expect(openedClient.subscribes.map(({ method }) => method)).toContain(
+        openedMethod,
+      );
+    });
+  }
   const messenger = harness.messenger;
   if (messenger === null) throw new Error("Pool host messenger is missing");
   return { serving, pool, remote, messenger, queryClient };
@@ -834,15 +837,36 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     expect(pool.subscribes).toEqual([]);
   });
 
-  it("keeps every bell stream on the healthy local computer while another computer serves the app", async () => {
+  it("keeps every bell stream on the healthy local computer while the pool waits for another computer and after it serves", async () => {
+    recordComputerNotificationsManifest();
     const { pool, remote, serving } = await renderPoolNotificationsProvider({
       addressableHostId: mockLocalHostEntry.hostId,
       noComputer: false,
-      servingPeer: "remote",
+      servingPeer: "pool",
       teamServing: false,
       child: <NotificationsBell />,
+      waitForInitialOpen: false,
     });
 
+    await waitFor(() => {
+      expect({
+        local: serving.subscribes.map(({ method }) => method).sort(),
+        remote: remote.subscribes.map(({ method }) => method).sort(),
+        pool: pool.subscribes.map(({ method }) => method).sort(),
+      }).toEqual({
+        local: [
+          "agent.activity.subscribe",
+          "host.notifications.cloudFeed.subscribe",
+          "host.notifications.feed.subscribe",
+          "notifications.subscribe",
+        ].sort(),
+        remote: [],
+        pool: [],
+      });
+    });
+
+    recordRemoteCloudFeedManifest();
+    act(() => publishServingPeer("remote", 2));
     await waitFor(() => {
       expect({
         local: serving.subscribes.map(({ method }) => method).sort(),

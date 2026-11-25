@@ -601,6 +601,8 @@ export function filteredHistoryContributionQueryOptions(input: {
       );
     },
     enabled: computerId !== null && userId !== null && filters !== null,
+    // The computer may have changed its local rows while it wasn't serving.
+    staleTime: 0,
   });
 }
 

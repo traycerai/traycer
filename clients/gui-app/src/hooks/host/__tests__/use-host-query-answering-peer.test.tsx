@@ -123,6 +123,7 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
     let titleRequests = 0;
     let taskListRequests = 0;
     let localHistoryRequests = 0;
+    let teamContributionReentered = false;
     let requestId = 0;
     const messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -172,14 +173,23 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
         },
         "epic.localHistory.read": () => {
           localHistoryRequests += 1;
-          return {
-            complete: true,
-            willComplete: true,
-            localHomeRows: [taskLight("team-local-task", null)],
-            preservedRows: [],
-            tombstonedEpicIds: ["deleted-pool-task"],
-            localRows: "present",
-          } satisfies LocalHistoryReadResponse;
+          return teamContributionReentered
+            ? {
+                complete: true,
+                willComplete: true,
+                localHomeRows: [taskLight("team-reentered-task", null)],
+                preservedRows: [],
+                tombstonedEpicIds: ["pool-task"],
+                localRows: "present",
+              }
+            : ({
+                complete: true,
+                willComplete: true,
+                localHomeRows: [taskLight("team-local-task", null)],
+                preservedRows: [],
+                tombstonedEpicIds: ["deleted-pool-task"],
+                localRows: "present",
+              } satisfies LocalHistoryReadResponse);
         },
       },
     });
@@ -493,7 +503,9 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
           .filter((call) => call.method === "epic.localHistory.read")
           .map((call) => call.authority.endpoint.hostId)
           .sort(),
-      ).toEqual([teamPeer.hostId, mockRemoteHostEntry.hostId].sort());
+      ).toEqual(
+        [teamPeer.hostId, teamPeer.hostId, mockRemoteHostEntry.hostId].sort(),
+      );
 
       act(() =>
         useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } }),
@@ -509,7 +521,42 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
         ).toEqual(["deleted-pool-task", "pool-task"]);
       });
       expect(taskListRequests).toBe(1);
-      expect(localHistoryRequests).toBe(2);
+      expect(localHistoryRequests).toBe(3);
+
+      teamContributionReentered = true;
+      act(() =>
+        useSelectionAuthorityStore.setState({
+          effectiveHostId: teamPeer.hostId,
+          servingPeer: { kind: "computer", hostId: teamPeer.hostId },
+        }),
+      );
+      await waitFor(() => expect(localHistoryRequests).toBe(4));
+      await waitFor(() => {
+        expect(
+          rendered.result.current.tasks.tasks
+            .map((task) => task.epic?.light?.id)
+            .sort(),
+        ).toEqual(["deleted-pool-task", "team-reentered-task"]);
+      });
+      expect(taskListRequests).toBe(1);
+      expect(
+        messenger.calls
+          .filter((call) => call.method === "epic.listTasks")
+          .map((call) => call.authority.endpoint.hostId),
+      ).toEqual([POOL_HOST_ID]);
+      expect(
+        messenger.calls
+          .filter((call) => call.method === "epic.localHistory.read")
+          .map((call) => call.authority.endpoint.hostId)
+          .sort(),
+      ).toEqual(
+        [
+          mockRemoteHostEntry.hostId,
+          teamPeer.hostId,
+          teamPeer.hostId,
+          teamPeer.hostId,
+        ].sort(),
+      );
     } finally {
       rendered.unmount();
       client.dispose();

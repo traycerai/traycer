@@ -74,6 +74,7 @@ import {
 } from "@/stores/auth/auth-store";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { useNotificationsServingHostEntry } from "@/hooks/host/use-notifications-serving-host-entry";
+import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationNotifies } from "@/hooks/notifications/use-notification-notifies";
@@ -119,6 +120,7 @@ import { NotificationConsumptionContext } from "@/components/notifications/notif
 import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
 import { useServingPeerHostId } from "@/lib/host/serving-decision";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { HostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { useRoutedStreamClient } from "@/hooks/host/use-pool-tier";
@@ -172,9 +174,19 @@ function hostIdOf(entry: HostDirectoryEntry | null): string | null {
 }
 
 function useNotificationsCompositionPeer() {
-  const cloudOnly = useServingPeerHostId() === POOL_HOST_ID;
+  const servingHostId = useServingPeerHostId();
   const computerEntry = useNotificationsServingHostEntry();
-  return { cloudOnly, servingHostEntry: cloudOnly ? null : computerEntry };
+  const localEntry = useReactiveLocalHostEntry();
+  const servingHostEntry =
+    readProcessHostRpcTierPlan().pool === null ||
+    localEntry !== null ||
+    computerEntry?.hostId === servingHostId
+      ? computerEntry
+      : null;
+  return {
+    cloudOnly: servingHostId === POOL_HOST_ID && servingHostEntry === null,
+    servingHostEntry,
+  };
 }
 
 const POOL_CLOUD_LANE: HostNotificationsCloudLane = {

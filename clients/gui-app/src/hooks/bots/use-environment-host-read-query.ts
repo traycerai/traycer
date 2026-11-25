@@ -60,7 +60,7 @@ export type EnvironmentHostRead =
  * Per host by construction: a binding is a fact about one machine, so the
  * caller names the host (the scoped Settings client and its host id) and this
  * hook never reaches for the app-wide one on its own. In a build with a pool
- * the answer is the pool's (`environment.binding.read { hostId }`, keyed by
+ * the answer is account-wide (`environment.binding.read { hostId }`, keyed by
  * the viewer, as `useEnvironmentListQuery` explains); without one it is the
  * host's own (`environment.host.read`). Either way it lands in the entry
  * `useHostEnvironmentBindings` reads for the same host, and a bind writes
@@ -71,7 +71,7 @@ export type EnvironmentHostRead =
  * the pool answers a host that runs its own settings as Personal, and the
  * host refuses to answer at all. Without a pool the host is asked for its
  * binding only after its status has said it is in an environment; with one,
- * the pool's answer waits for that status. With no client there is no
+ * the account-wide answer waits for that status. With no client there is no
  * status to wait for.
  */
 export function useEnvironmentHostReadQuery(

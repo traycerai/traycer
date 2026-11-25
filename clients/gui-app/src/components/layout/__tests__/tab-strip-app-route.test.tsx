@@ -97,7 +97,7 @@ vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
 }));
 vi.mock("@/hooks/host/use-pool-tier", () => ({
   usePoolTierHostClient: (surfaceClient: unknown) => surfaceClient,
-  usePoolTierStreamClient: () => null,
+  useRoutedStreamClient: () => ({ client: null, peerHostId: null }),
 }));
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map(),

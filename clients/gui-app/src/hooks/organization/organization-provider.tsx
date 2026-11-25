@@ -13,6 +13,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useMemo,
@@ -569,8 +570,22 @@ function OrganizationSubscription(props: {
     binding?.wsStreamClient ?? null,
     { userId: props.userId, computerScope: "app-serving-peer" },
   ).client;
-  const { taskIds, accept } = props;
-  const receivedFrame = useRef(false);
+  const { taskIds, accept, userId } = props;
+  const lastFrame = useRef<OrganizationView | null>(null);
+  const acceptFrame = useEffectEvent(
+    (
+      view: OrganizationView,
+      source: NonNullable<typeof streamClient>,
+      sourceUserId: string | null,
+    ) => {
+      if (source !== streamClient || sourceUserId !== userId) return;
+      lastFrame.current = view;
+      accept(view, taskIds);
+    },
+  );
+  const poolBuild = readProcessHostRpcTierPlan().pool !== null;
+  const legacyClient = poolBuild ? null : client;
+  const legacyAccept = poolBuild ? null : accept;
   const refresh = useHostQuery({
     client,
     method: "organization.refresh",
@@ -591,16 +606,17 @@ function OrganizationSubscription(props: {
   // while `data` stays the cached answer, so success is required too.
   const refreshedAfterMount = refresh.isFetchedAfterMount && refresh.isSuccess;
   useEffect(() => {
-    if (refresh.data && refreshedAfterMount && !receivedFrame.current)
+    if (refresh.data && refreshedAfterMount && lastFrame.current === null)
       accept(refresh.data, taskIds);
   }, [refresh.data, refreshedAfterMount, accept, taskIds]);
   useEffect(() => {
+    // A new read key can show the existing subscription's latest view.
+    const view = lastFrame.current;
+    if (poolBuild && view !== null) accept(view, taskIds);
+  }, [poolBuild, accept, taskIds]);
+  useEffect(() => {
+    if (streamClient === null) return;
     let active = true;
-    if (streamClient === null)
-      return () => {
-        active = false;
-      };
-    receivedFrame.current = false;
     const session = streamClient.subscribe("organization.subscribe", {
       taskIds,
     });
@@ -608,15 +624,15 @@ function OrganizationSubscription(props: {
       const result =
         organizationSubscribeV11.serverFrameSchema.safeParse(envelope);
       if (active && result.success) {
-        receivedFrame.current = true;
-        accept(result.data.view, taskIds);
+        acceptFrame(result.data.view, streamClient, userId);
       }
     });
     return () => {
       active = false;
+      lastFrame.current = null;
       session.close();
     };
-  }, [client, streamClient, taskIds, accept]);
+  }, [legacyClient, legacyAccept, streamClient, userId, taskIds]);
   return null;
 }
 
