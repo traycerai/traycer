@@ -1,7 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { HostOverviewSettingsCardSlot } from "@/components/settings/panels/host-overview-settings-card";
@@ -25,6 +33,7 @@ const reads = vi.hoisted(() => ({
     },
   },
   bindingOwnSettings: false,
+  bindingFailed: false,
   bindingSupport: true as boolean | null,
 }));
 
@@ -32,8 +41,10 @@ vi.mock("@/hooks/environment/use-environment-reads", () => ({
   useEnvironmentStatusRead: () => reads.status,
 }));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
-  useEnvironmentHostReadQuery: () =>
-    reads.bindingOwnSettings ? { kind: "own_settings" } : reads.binding,
+  useEnvironmentHostReadQuery: () => {
+    if (reads.bindingFailed) return { kind: "failed", retry: () => undefined };
+    return reads.bindingOwnSettings ? { kind: "own_settings" } : reads.binding;
+  },
 }));
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
   readsHostBindingsFromPool: () => false,
@@ -57,7 +68,29 @@ const BINDING: EnvironmentHostBinding = {
   canUnbind: false,
 };
 
-const { client } = buildEnvironmentClient({ hostId: "host-a", handlers: {} });
+const { client } = buildEnvironmentClient({
+  hostId: "host-a",
+  handlers: {
+    "environment.move.stopPreview": () => ({
+      managed: [],
+      needsChoice: [
+        {
+          row: {
+            kind: "variable",
+            key: "LOG_LEVEL",
+            os: "any",
+            label: "LOG_LEVEL",
+            detail: null,
+          },
+          reason: "edited_here",
+          origin: "changed_here",
+          usedBy: [],
+        },
+      ],
+      sheetDigest: null,
+    }),
+  },
+});
 
 function mount(usable: boolean, hostId: string | null): void {
   mountWatching(usable, hostId, () => undefined);
@@ -88,10 +121,32 @@ function mountWatching(
   return (next) => view.rerender(slot(next));
 }
 
+function committedElement(
+  read: () => HTMLElement | null,
+): Promise<HTMLElement> {
+  const existing = read();
+  if (existing !== null) return Promise.resolve(existing);
+  const committed = Promise.withResolvers<HTMLElement>();
+  const observer = new MutationObserver(() => {
+    const element = read();
+    if (element === null) return;
+    observer.disconnect();
+    committed.resolve(element);
+  });
+  observer.observe(document.body, {
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
+  onTestFinished(() => observer.disconnect());
+  return committed.promise;
+}
+
 beforeEach(() => {
   reads.status = { data: null, supported: true, isError: false };
   reads.binding = { kind: "binding", query: { data: null, isError: false } };
   reads.bindingOwnSettings = false;
+  reads.bindingFailed = false;
   reads.bindingSupport = true;
 });
 
@@ -168,6 +223,50 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     expect(screen.getByText("Personal")).toBeTruthy();
     expect(onReturn).toHaveBeenCalledOnce();
   });
+
+  it.each(["status", "binding"])(
+    "keeps the Overview card and its open Stop sheet after a failed %s reread",
+    async (read) => {
+      reads.status.data = environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "shared_unrecorded",
+          room: "shared_unrecorded",
+        },
+      });
+      reads.binding.query.data = BINDING;
+      const rerender = mountWatching(true, "host-a", () => undefined);
+      const row = screen.getByTestId("host-settings-source");
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Environment" }), {
+        key: "ArrowDown",
+      });
+      const option = await committedElement(() =>
+        screen.queryByRole("option", { name: /^A computer/ }),
+      );
+      fireEvent.click(option);
+      const choiceId = "stop-sharing-choice-variable-LOG_LEVEL-keep_locally";
+      const choice = await committedElement(() =>
+        screen.queryByTestId(choiceId),
+      );
+      fireEvent.click(choice);
+      expect(choice.getAttribute("aria-pressed")).toBe("true");
+      const sheet = screen.getByTestId("stop-sharing-sheet");
+
+      if (read === "status") {
+        reads.status.isError = true;
+        reads.bindingFailed = true;
+      } else {
+        reads.binding.query.isError = true;
+      }
+      rerender(true);
+
+      expect(screen.getByTestId("stop-sharing-sheet")).toBe(sheet);
+      expect(screen.getByTestId("host-settings-source")).toBe(row);
+      expect(screen.getByTestId(choiceId).getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+    },
+  );
 
   it("calls onReturn when the card shows again after a failed read", () => {
     reads.status.data = environmentStatusFixture({});
