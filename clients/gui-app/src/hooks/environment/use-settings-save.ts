@@ -7,21 +7,18 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
-import { z } from "zod";
 import { settingsSaveRequestId } from "@traycer/protocol/framework/settings-save-request-id";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
-import {
-  parseSettings,
-  sendSettings,
-  type EnvironmentCloud,
-  type EnvironmentCloudSource,
+import type {
+  EnvironmentCloud,
+  EnvironmentCloudSource,
 } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   readSettingsItemRows,
   readSettingsSaveHost,
+  readSettingsSavePersonal,
 } from "@traycer-clients/shared/environment/settings-save-target";
-import { PATH_ID_PATTERN } from "@traycer-clients/shared/host-client/path-id";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import { hostOsOfPlatform } from "@traycer/protocol/host/environment/host-os";
 import { settingValueSchema } from "@traycer/protocol/host/environment/settings-proposals";
@@ -31,11 +28,13 @@ import {
   settingsSaveItemEdit,
   type SettingsItemEdit,
   type SettingsSave,
+  type SettingsSaveMapping,
 } from "@traycer/protocol/host/environment/settings-save-mapping";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
+import { readHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import type {
@@ -68,10 +67,6 @@ const NOTHING_TO_FOLLOW: PendingSettingsSave = {
   answered: () => undefined,
   failed: () => undefined,
 };
-
-const personalTargetSchema = z.object({
-  environmentId: z.string().regex(PATH_ID_PATTERN),
-});
 
 // The revision edited over is the one read when the editor opened, so a newer value
 // from elsewhere makes the hold a conflict in the review list.
@@ -246,23 +241,23 @@ async function keepOwnWrite(
 interface SaveOperation {
   readonly cloud: EnvironmentCloud;
   readonly order: number;
+  readonly accountId: string;
 }
 
-async function followSave(
+async function readBoundSave(
   scope: SaveScope,
-  operation: SaveOperation,
+  cloud: EnvironmentCloud,
   save: SettingsSave,
-  accountId: string,
-): Promise<PendingSettingsSave> {
-  const { coordinator, queryClient, environmentId, hostId } = scope;
+) {
+  const { queryClient, hostId } = scope;
   // A base read this save makes goes out on the save's own sign-in.
-  const reads: EditBaseScope = { ...scope, source: () => operation.cloud };
+  const reads: EditBaseScope = { ...scope, source: () => cloud };
   const rowsOf = async (kind: string, key: string) =>
     (await queryClient.fetchQuery(saveItemsQuery(reads, kind))).filter(
       (row) => row.key === key,
     );
   const host = await queryClient.fetchQuery(saveHostQuery(reads, hostId));
-  if (host === null) return NOTHING_TO_FOLLOW;
+  if (host === null) return undefined;
   const address = settingsSaveBaseAddress(save);
   const baseRows =
     address === null ? [] : await rowsOf(address.kind, address.key);
@@ -270,27 +265,50 @@ async function followSave(
     rows: baseRows.map((row) => ({ os: row.os, value: row.value })),
     hostOs: host.hostOs,
   });
-  if (mapping.kind !== "proposal") return NOTHING_TO_FOLLOW;
+  if (mapping.kind === "unmapped" && mapping.reason === "host_os_unknown") {
+    return undefined;
+  }
+  if (mapping.kind !== "proposal") return null;
   const { edit } = mapping;
   const editRows =
     address?.kind === edit.kind && address.key === edit.key
       ? baseRows
       : await rowsOf(edit.kind, edit.key);
+  return {
+    mapping,
+    sharingGeneration: host.sharingGeneration,
+    expectedLiveRevision: liveRowAt(editRows, edit.os)?.revision ?? null,
+  };
+}
+
+async function followSave(
+  scope: SaveScope,
+  operation: SaveOperation,
+  save: SettingsSave,
+  onUnanswered: () => Promise<PendingSettingsSave>,
+): Promise<PendingSettingsSave> {
+  const { coordinator, environmentId, hostId } = scope;
+  const base = await readBoundSave(scope, operation.cloud, save).catch(
+    () => undefined,
+  );
   // Nothing is remembered for a press whose sign-in has ended.
   if (!operation.cloud.onOriginSignIn()) {
     return { kind: "abandoned", method: save.method };
   }
+  if (base === undefined) return onUnanswered();
+  if (base === null) return NOTHING_TO_FOLLOW;
+  const { mapping, expectedLiveRevision, sharingGeneration } = base;
   const beginning = await coordinator.begin(
     mapping,
     {
-      accountId,
+      accountId: operation.accountId,
       environmentId,
       hostId,
-      sharingGeneration: host.sharingGeneration,
-      expectedLiveRevision: liveRowAt(editRows, edit.os)?.revision ?? null,
+      sharingGeneration,
+      expectedLiveRevision,
     },
     () => {
-      void keepOwnWrite(scope, operation, edit).catch(() => undefined);
+      void keepOwnWrite(scope, operation, mapping.edit).catch(() => undefined);
     },
   );
   return followBeginning(coordinator, beginning, save);
@@ -321,27 +339,89 @@ function followBeginning(
 interface LocalSaveScope {
   readonly coordinator: SettingsSaveCoordinator;
   readonly auth: AuthService;
+  readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
+  readonly beforeBinding: boolean;
   readonly viewerId: string;
+}
+
+async function readAcceptedMoveAtPress(
+  scope: LocalSaveScope,
+): Promise<string | null> {
+  const { client, hostId } = scope;
+  const version = readHostMethodSchemaVersion(hostId, "environment.status");
+  if (version !== null && (version.major !== 1 || version.minor < 3))
+    return null;
+  if (client.getActiveHostId() !== hostId) return null;
+  const context = client.getRequestContext();
+  const { move } = await client.request("environment.status", {}).catch(() => ({
+    move: null,
+  }));
+  if (
+    client.getActiveHostId() !== hostId ||
+    client.getRequestContext() !== context
+  ) {
+    return null;
+  }
+  return move === null || move.state === "done" ? null : move.acceptanceId;
+}
+
+function unansweredMoveTarget(
+  save: SettingsSave,
+  environmentId: string | null,
+  acceptanceId: string | null,
+): PrebindSettingsSaveTarget | null {
+  const unknown = environmentId === null ? null : { environmentId, item: null };
+  if (acceptanceId === null) return unknown;
+  const base = { rows: [], hostOs: null, prebind: true as const };
+  const stated = settingsSaveItemEdit(save, base);
+  const resolveHostOs =
+    stated.kind === "unmapped" && stated.reason === "host_os_unknown";
+  const mapping = resolveHostOs
+    ? settingsSaveItemEdit(save, { ...base, prebind: "unanswered" })
+    : stated;
+  return mapping.kind === "proposal"
+    ? { environmentId, acceptanceId, resolveHostOs, edit: mapping.edit }
+    : unknown;
+}
+
+async function followLocalSave(
+  scope: LocalSaveScope,
+  save: SettingsSave,
+  {
+    accountId,
+    cloud,
+  }: { readonly accountId: string; readonly cloud: EnvironmentCloud },
+  readTarget: () => Promise<PrebindSettingsSaveTarget | null>,
+): Promise<PendingSettingsSave> {
+  const { coordinator, hostId } = scope;
+  const beginning = await coordinator.beginLocal(
+    { accountId, hostId, onOriginSignIn: cloud.onOriginSignIn },
+    readTarget,
+  );
+  return followBeginning(coordinator, beginning, save);
+}
+
+function needsHostOs(mapping: SettingsSaveMapping): boolean {
+  return mapping.kind === "unmapped" && mapping.reason === "host_os_unknown";
 }
 
 async function readPrebindTarget(
   scope: LocalSaveScope,
   cloud: EnvironmentCloud,
   save: SettingsSave,
+  acceptedMove: Promise<string | null>,
 ): Promise<PrebindSettingsSaveTarget | null> {
   const { auth, hostId } = scope;
+  const unavailable = async (environmentId: string | null) =>
+    unansweredMoveTarget(save, environmentId, await acceptedMove);
   let environmentId: string;
   try {
-    ({ environmentId } = parseSettings(
-      await sendSettings(cloud, "GET", "api/v3/environments/me", null),
-      personalTargetSchema,
-    ));
+    environmentId = await readSettingsSavePersonal(cloud);
   } catch {
-    return null;
+    return unavailable(null);
   }
-
-  const unavailable = { environmentId, item: null };
+  const targetWithoutItem = { environmentId, item: null };
   const rowsOf = async (kind: string, key: string) =>
     (await readSettingsItemRows(cloud, environmentId, kind)).filter(
       (row) => row.key === key,
@@ -352,7 +432,7 @@ async function readPrebindTarget(
       address === null ? [] : await rowsOf(address.kind, address.key);
     const base = { rows: baseRows, hostOs: null, prebind: true as const };
     let mapping = settingsSaveItemEdit(save, base);
-    if (mapping.kind === "unmapped" && mapping.reason === "host_os_unknown") {
+    if (needsHostOs(mapping)) {
       if (!cloud.onOriginSignIn()) return null;
       const registry = await auth.fetchRegisteredHosts(auth.currentAuthEra());
       const platform = registry?.hosts.find(
@@ -363,7 +443,11 @@ async function readPrebindTarget(
         hostOs: hostOsOfPlatform(platform ?? null),
       });
     }
-    if (mapping.kind !== "proposal") return unavailable;
+    if (mapping.kind !== "proposal") {
+      return needsHostOs(mapping)
+        ? await unavailable(environmentId)
+        : targetWithoutItem;
+    }
     const { edit } = mapping;
     const rows =
       address?.kind === edit.kind && address.key === edit.key
@@ -377,7 +461,7 @@ async function readPrebindTarget(
       },
     };
   } catch {
-    return unavailable;
+    return unavailable(environmentId);
   }
 }
 
@@ -457,15 +541,57 @@ function useSaveScope(
     () =>
       coordinator !== null &&
       auth !== null &&
+      client !== null &&
       hostId !== null &&
-      viewerId.length > 0 &&
-      (environmentRead.kind === "own_settings" ||
-        environmentRead.kind === "pending")
-        ? { coordinator, auth, hostId, viewerId }
+      viewerId.length > 0
+        ? {
+            coordinator,
+            auth,
+            client,
+            hostId,
+            viewerId,
+            beforeBinding:
+              environmentRead.kind === "own_settings" ||
+              environmentRead.kind === "pending",
+          }
         : null,
-    [auth, coordinator, environmentRead.kind, hostId, viewerId],
+    [auth, client, coordinator, environmentRead.kind, hostId, viewerId],
   );
   return { shared: scope, local };
+}
+
+function followAtPress(
+  { shared, local }: SaveScopes,
+  pressedOn: EnvironmentCloud,
+  save: SettingsSave,
+  accountId: string,
+): Promise<PendingSettingsSave> {
+  // Begin on the requester before any cloud read can outlast this Move.
+  const acceptedMove =
+    local === null ? Promise.resolve(null) : readAcceptedMoveAtPress(local);
+  const followWithMove = async (
+    environmentId: string | null,
+  ): Promise<PendingSettingsSave> => {
+    const acceptanceId = await acceptedMove;
+    if (local === null || acceptanceId === null) return NOTHING_TO_FOLLOW;
+    return followLocalSave(local, save, { accountId, cloud: pressedOn }, () =>
+      Promise.resolve(unansweredMoveTarget(save, environmentId, acceptanceId)),
+    );
+  };
+  if (shared !== null) {
+    return followSave(
+      shared,
+      { cloud: pressedOn, order: shared.ledger.take(), accountId },
+      save,
+      () => followWithMove(shared.environmentId),
+    );
+  }
+  if (local?.beforeBinding === true) {
+    return followLocalSave(local, save, { accountId, cloud: pressedOn }, () =>
+      readPrebindTarget(local, pressedOn, save, acceptedMove),
+    );
+  }
+  return followWithMove(null);
 }
 
 /** A save made while the host uses its own settings can be followed after it binds. */
@@ -500,24 +626,12 @@ export function useSettingsSave(
       if (accountId === null) return NOTHING_TO_FOLLOW;
       let pending: PendingSettingsSave = NOTHING_TO_FOLLOW;
       try {
-        if (shared !== null) {
-          pending = await followSave(
-            shared,
-            { cloud: pressedOn, order: shared.ledger.take() },
-            save,
-            accountId,
-          );
-        } else if (local !== null) {
-          const beginning = await local.coordinator.beginLocal(
-            {
-              accountId,
-              hostId: local.hostId,
-              onOriginSignIn: pressedOn.onOriginSignIn,
-            },
-            () => readPrebindTarget(local, pressedOn, save),
-          );
-          pending = followBeginning(local.coordinator, beginning, save);
-        }
+        pending = await followAtPress(
+          { shared, local },
+          pressedOn,
+          save,
+          accountId,
+        );
       } catch {
         pending = NOTHING_TO_FOLLOW;
       }
