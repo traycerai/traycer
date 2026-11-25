@@ -69,15 +69,19 @@ import {
   environmentMoveStopPreviewUpgradeV10ToV11,
   environmentMoveStopPreviewUpgradeV11ToV12,
   environmentMoveStopPreviewUpgradeV12ToV13,
+  environmentMoveStopPreviewUpgradeV13ToV14,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
   environmentMoveStopPreviewV12,
   environmentMoveStopPreviewV13,
+  environmentMoveStopPreviewV14,
   environmentMoveStopUpgradeV10ToV11,
   environmentMoveStopUpgradeV11ToV12,
+  environmentMoveStopUpgradeV12ToV13,
   environmentMoveStopV10,
   environmentMoveStopV11,
   environmentMoveStopV12,
+  environmentMoveStopV13,
 } from "@traycer/protocol/host/environment/move-contracts";
 
 /**
@@ -213,7 +217,7 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.stopPreview": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: environmentMoveStopPreviewV10,
@@ -231,6 +235,10 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
           contract: environmentMoveStopPreviewV13,
           upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV12ToV13,
         },
+        4: {
+          contract: environmentMoveStopPreviewV14,
+          upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV13ToV14,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -238,7 +246,7 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: environmentMoveStopV10,
@@ -251,6 +259,13 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
         2: {
           contract: environmentMoveStopV12,
           upgradeFromPreviousVersion: environmentMoveStopUpgradeV11ToV12,
+        },
+        3: {
+          contract: environmentMoveStopV13,
+          upgradeFromPreviousVersion: environmentMoveStopUpgradeV12ToV13,
+          // Only a digest-bearing Confirm can receive sheet_changed. Older
+          // Stop requests always upgrade with a null digest.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},

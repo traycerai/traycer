@@ -371,7 +371,14 @@ export const configEnvSetResponseSchema = lazySchema(() =>
     value: z.string().nullable(),
   }),
 );
-export type ConfigEnvSetResponse = z.infer<typeof configEnvSetResponseSchema>;
+export const configEnvSetResponseSchemaV12 = lazySchema(() =>
+  configEnvSetResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
+export type ConfigEnvSetResponse = z.infer<
+  typeof configEnvSetResponseSchemaV12
+>;
 
 export const configEnvDeleteRequestSchema = lazySchema(() =>
   z.object({
@@ -388,8 +395,13 @@ export const configEnvDeleteResponseSchema = lazySchema(() =>
     deleted: z.literal(true),
   }),
 );
+export const configEnvDeleteResponseSchemaV11 = lazySchema(() =>
+  configEnvDeleteResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
 export type ConfigEnvDeleteResponse = z.infer<
-  typeof configEnvDeleteResponseSchema
+  typeof configEnvDeleteResponseSchemaV11
 >;
 
 /** The only remote-configurable scopes. `desktop` stays window-local. */

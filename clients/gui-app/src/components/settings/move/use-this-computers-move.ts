@@ -28,7 +28,9 @@ import { moveIsPastTheAccept } from "@/lib/environment/move-in-progress";
  *
  * A move that stopped partway is past the accept, so it reads `moved` and
  * this invitation stays quiet: the Overview is already asking that person to
- * Retry, and two surfaces asking differently for the same thing is noise.
+ * Retry, and two surfaces asking differently for the same thing is noise. So
+ * is a move its acceptance still holds open while a Retry or a restart runs
+ * first start again, at any stage (`moveIsPastTheAccept`).
  *
  * A move waiting for consent reads `not_moved` whatever its planes say: a
  * failed upload can leave every plane moved while the host waits to be

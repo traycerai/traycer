@@ -1,3 +1,4 @@
+import { settingsSaveRequestId } from "@traycer/protocol/framework/settings-save-request-id";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { z } from "zod";
 import type {
@@ -7,14 +8,14 @@ import type {
   ProvidersSettleApiKeyChangeResponse,
   ProvidersSettleApiKeyChangeRequest,
 } from "@traycer/protocol/host/provider-schemas";
-import type { HostRequester } from "./host-client";
+import type { HostRequester, HostRequestDispatchOptions } from "./host-client";
 import { HostRpcError } from "../host-transport/host-messenger";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { isRedirectAnswer } from "../auth/redirect-answer";
 import { PATH_ID_PATTERN } from "./path-id";
 type ProviderApiKeyChangeHost = Pick<
   HostRequester<HostRpcRegistry>,
-  "request" | "getRequestContext"
+  "request" | "requestWithOptions" | "getRequestContext"
 >;
 export interface ProviderApiKeyChangeOutcome {
   readonly response: ProvidersSetApiKeyResponse;
@@ -47,39 +48,94 @@ export async function changeProviderApiKey(
   host: ProviderApiKeyChangeHost,
   records: ProviderKeyRecordClient,
   providerId: ProviderId,
-  change: ProviderApiKeyChange,
+  change: ProviderApiKeyHostChange,
   expectedEnvironmentId: string | null,
+  origin: "account-save" | undefined,
 ): Promise<ProviderApiKeyChangeOutcome> {
-  const legacy = async (): Promise<ProviderApiKeyChangeOutcome> => ({
-    response:
-      change.action === "set"
-        ? await host.request("providers.setApiKey", {
-            providerId,
-            apiKey: change.apiKey,
-          })
-        : await host.request("providers.clearApiKey", { providerId }),
-    result: null,
-  });
-  if (!isProviderKeyProviderId(providerId)) {
-    if (expectedEnvironmentId !== null)
+  if ("usePersonal" in change) {
+    return {
+      response: await host.request("providers.clearKeptApiKey", { providerId }),
+      result: null,
+    };
+  }
+  if ("intent" in change) {
+    if (change.intent === "keep") {
+      return {
+        response: await host.request("providers.setKeptApiKey", {
+          providerId,
+          apiKey: change.apiKey,
+        }),
+        result: null,
+      };
+    }
+    if (change.environmentId === null) {
+      throw new ProviderApiKeyEnvironmentChangedError(change.action);
+    }
+  }
+  const shareEnvironmentId = "intent" in change ? change.environmentId : null;
+  const requiredEnvironmentId = shareEnvironmentId ?? expectedEnvironmentId;
+  const supportsRecords = isProviderKeyProviderId(providerId);
+  const context = supportsRecords ? host.getRequestContext() : null;
+  const options: HostRequestDispatchOptions | null =
+    origin === "account-save" &&
+    change.action === "set" &&
+    requiredEnvironmentId === null &&
+    context?.cloudAuthorized === true &&
+    !context.abortSignal.aborted
+      ? {
+          requestId: settingsSaveRequestId(crypto.randomUUID()),
+          idempotencyKey: null,
+          responseTimeoutMs: null,
+          requiredHostMethodVersion: null,
+          signal: context.abortSignal,
+        }
+      : null;
+  const legacy = async (): Promise<ProviderApiKeyChangeOutcome> => {
+    if (change.action === "clear")
+      return {
+        response: await host.request("providers.clearApiKey", { providerId }),
+        result: null,
+      };
+    const params = { providerId, apiKey: change.apiKey };
+    return {
+      response:
+        options === null
+          ? await host.request("providers.setApiKey", params)
+          : await host.requestWithOptions(
+              "providers.setApiKey",
+              params,
+              options,
+            ),
+      result: null,
+    };
+  };
+  if (!supportsRecords) {
+    if (requiredEnvironmentId !== null)
       throw new ProviderApiKeyEnvironmentChangedError(change.action);
     return legacy();
   }
-  const context = host.getRequestContext();
   let begin: ProvidersBeginApiKeyChangeResponse;
   try {
-    begin = await host.request("providers.beginApiKeyChange", { providerId });
+    const params = { providerId };
+    begin =
+      options === null
+        ? await host.request("providers.beginApiKeyChange", params)
+        : await host.requestWithOptions(
+            "providers.beginApiKeyChange",
+            params,
+            options,
+          );
   } catch (error) {
     if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {
-      if (expectedEnvironmentId !== null)
+      if (requiredEnvironmentId !== null)
         throw new ProviderApiKeyEnvironmentChangedError(change.action);
       return legacy();
     }
     throw error;
   }
   if (
-    expectedEnvironmentId !== null &&
-    (begin.mode === "legacy" || begin.environmentId !== expectedEnvironmentId)
+    requiredEnvironmentId !== null &&
+    (begin.mode === "legacy" || begin.environmentId !== requiredEnvironmentId)
   ) {
     throw new ProviderApiKeyEnvironmentChangedError(change.action);
   }
@@ -97,7 +153,7 @@ export async function changeProviderApiKey(
   const accepted = await records.changeProviderKeyRecord(
     begin.environmentId,
     providerId,
-    change,
+    change.action === "set" ? { action: "set", apiKey: change.apiKey } : change,
     context.abortSignal,
   );
   if (
@@ -107,7 +163,10 @@ export async function changeProviderApiKey(
   ) {
     throw changeRefusal(method, "UNAUTHORIZED");
   }
-  if (accepted.kind === "legacy") return legacy();
+  if (accepted.kind === "legacy") {
+    if (shareEnvironmentId !== null) throw changeRefusal(method, "RPC_ERROR");
+    return legacy();
+  }
   if (accepted.kind === "refused") throw changeRefusal(method, accepted.code);
   const common = { providerId, changeToken: begin.changeToken };
   let request: ProvidersSettleApiKeyChangeRequest;
@@ -161,6 +220,17 @@ export type ProviderApiKeyChange =
   | { readonly action: "set"; readonly apiKey: string }
   | { readonly action: "clear" };
 
+export type ProviderApiKeyHostChange =
+  | ProviderApiKeyChange
+  | { readonly action: "clear"; readonly usePersonal: true }
+  | { readonly action: "set"; readonly apiKey: string; readonly intent: "keep" }
+  | {
+      readonly action: "set";
+      readonly apiKey: string;
+      readonly intent: "share";
+      readonly environmentId: string | null;
+    };
+
 const revisionSchema = z.string().regex(/^(0|[1-9][0-9]{0,18})$/);
 const recordSchema = z.strictObject({
   profileId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
@@ -194,6 +264,10 @@ export interface ProviderKeyRecordClient {
 const codedBodySchema = z.object({ code: z.string() });
 const keySchema = z.string().regex(/^[\x21-\x7e]{1,4096}$/);
 
+export function isProviderKeyRecordDraft(value: string): boolean {
+  return keySchema.safeParse(value).success;
+}
+
 export function isProviderKeyProviderId(
   providerId: string,
 ): providerId is ProviderKeyProviderId {
@@ -211,7 +285,7 @@ export async function changeProviderKeyRecordViaHttp(
 ): Promise<ProviderKeyRecordChangeResult> {
   if (
     !PATH_ID_PATTERN.test(environmentId) ||
-    (change.action === "set" && !keySchema.safeParse(change.apiKey).success)
+    (change.action === "set" && !isProviderKeyRecordDraft(change.apiKey))
   ) {
     return { kind: "refused", code: "RPC_ERROR" };
   }

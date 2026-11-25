@@ -536,6 +536,28 @@ export const environmentSetupPutUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+const configEnvLocalOverrideClearV10 = defineRpcContract({
+  method: "config.env.localOverride.clear",
+  schemaVersion: { major: 1, minor: 0 },
+  requestSchema: schemas.configEnvLocalOverrideClearRequestSchema,
+  responseSchema: schemas.configEnvLocalOverrideResponseSchema,
+});
+const configEnvLocalOverrideClearV11 = defineRpcContract({
+  method: "config.env.localOverride.clear",
+  schemaVersion: { major: 1, minor: 1 },
+  requestSchema: schemas.configEnvLocalOverrideClearRequestSchemaV11,
+  responseSchema: schemas.configEnvLocalOverrideResponseSchema,
+});
+const configEnvLocalOverrideClearUpgradeV10ToV11 = defineUpgradePath<
+  typeof configEnvLocalOverrideClearV10,
+  typeof configEnvLocalOverrideClearV11
+>({
+  from: configEnvLocalOverrideClearV10.schemaVersion,
+  to: configEnvLocalOverrideClearV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const ENVIRONMENT_RPC_METHODS = {
   "config.env.localOverride.set": {
     degrade: { kind: "unsupported" },
@@ -558,14 +580,33 @@ export const ENVIRONMENT_RPC_METHODS = {
   "config.env.localOverride.clear": {
     degrade: { kind: "unsupported" },
     1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: configEnvLocalOverrideClearV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configEnvLocalOverrideClearV11,
+          upgradeFromPreviousVersion:
+            configEnvLocalOverrideClearUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.env.localOverride.saveToPersonal": {
+    degrade: { kind: "unsupported" },
+    1: {
       latestMinor: 0,
       versions: {
         0: {
           contract: defineRpcContract({
-            method: "config.env.localOverride.clear",
+            method: "config.env.localOverride.saveToPersonal",
             schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.configEnvLocalOverrideClearRequestSchema,
-            responseSchema: schemas.configEnvLocalOverrideResponseSchema,
+            requestSchema: schemas.configEnvLocalOverrideSetRequestSchema,
+            responseSchema:
+              schemas.configEnvLocalOverrideSaveToPersonalResponseSchema,
           }),
           upgradeFromPreviousVersion: null,
         },

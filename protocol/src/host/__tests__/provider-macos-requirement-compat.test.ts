@@ -72,12 +72,9 @@ const MACOS_INELIGIBLE = {
 describe("providers.list@10.2 carries macosRequirement", () => {
   it("keeps list@10.2 registered after the next minor opens", () => {
     const entry = hostRpcRegistry["providers.list"][10];
-    // 10.3 (MCP origin), 10.4 (open-chat plugins), 10.5 (the envelope keys),
-    // 10.6 (OpenCode's managed lines), 10.7 (`chatsFollow`),
-    // 10.8 (native memory), 10.9 (credential facts),
-    // 10.10 (hidden model providers), 10.11 (profile-sync keys) and
-    // 10.12 (the sign-in offer) and 10.13 (key-record environment) opened above it.
-    expect(entry.latestMinor).toBe(13);
+    expect(entry.latestMinor).toBeGreaterThan(
+      entry.versions[2].contract.schemaVersion.minor,
+    );
     expect(entry.versions[2].contract.schemaVersion).toEqual({
       major: 10,
       minor: 2,

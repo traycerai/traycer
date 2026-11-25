@@ -2,8 +2,6 @@ import type { SurfaceGroupId } from "@/components/layout-editor/regions/region-g
 import type { RegionId } from "@/lib/layout/region-id";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
-import { settingsSectionPath } from "@/stores/tabs/kinds/settings";
-import { useTabsStore } from "@/stores/tabs/store";
 
 /**
  * Move the Settings surface to `sectionId`, whichever surface it is.
@@ -162,19 +160,4 @@ export function subscribePendingLayoutLanding(
   return () => {
     pendingLayoutLandingListeners.delete(listener);
   };
-}
-
-/**
- * Move the Settings TAB's own section without activating anything.
- *
- * `navigateToSettingsSection` is a command: it focuses the Settings tab, which
- * in a split takes the partner's focus and route. This is for the caller that
- * has to change what Settings shows while Settings is not the focused surface -
- * Settings is only remembering where it is, and the section it draws follows
- * that remembered path whenever a split partner owns the route.
- */
-export function rememberSettingsTabSection(sectionId: SettingsSectionId): void {
-  useTabsStore
-    .getState()
-    .rememberSystemTabPath("settings", settingsSectionPath(sectionId));
 }

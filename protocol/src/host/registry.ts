@@ -70,6 +70,7 @@ import {
   defineRpcContract,
   defineUpgradePath,
   type DowngradeResult,
+  type ResponseOf,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
@@ -620,11 +621,15 @@ import {
   configAgentMemoriesSetUpgradeV10ToV11,
   configBrowserGetV10,
   configBrowserSetV10,
+  configEnvDeleteUpgradeV10ToV11,
   configEnvDeleteV10,
+  configEnvDeleteV11,
   configEnvListV10,
   configEnvSetV10,
   configEnvSetV11,
+  configEnvSetV12,
   configEnvSetUpgradeV10ToV11,
+  configEnvSetUpgradeV11ToV12,
   configLogLevelsGetV10,
   configLogLevelsSetV10,
   configShellAddV10,
@@ -1656,6 +1661,7 @@ import {
   providersDeleteEnvOverrideResponseSchema,
   providersDeleteEnvOverrideResponseSchemaV10,
   providersDeleteEnvOverrideResponseSchemaV20,
+  providersDeleteEnvOverrideResponseSchemaV22,
   providersDetectVersionRequestSchema,
   providersDetectVersionResponseSchema,
   providersStartLoginRequestSchemaV10,
@@ -1680,6 +1686,7 @@ import {
   // shape.
   providersListRequestSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV1014,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
   providersListResponseSchemaV102Preimage,
@@ -1784,6 +1791,7 @@ import {
   providersSetEnvOverrideRequestSchemaV10,
   providersSetEnvOverrideRequestSchemaV21,
   providersSetEnvOverrideResponseSchema,
+  providersSetEnvOverrideResponseSchemaV23,
   providersSetEnvOverrideResponseSchemaV10,
   providersSetEnvOverrideResponseSchemaV20,
   providersSetSelectionRequestSchema,
@@ -3396,6 +3404,23 @@ export const providersListUpgradeV1012ToV1013 = defineUpgradePath<
   }),
 });
 
+const providersListV1014 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 14 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchemaV1014,
+});
+
+const providersListUpgradeV1013ToV1014 = defineUpgradePath<
+  typeof providersListV1013,
+  typeof providersListV1014
+>({
+  from: { major: 10, minor: 13 },
+  to: { major: 10, minor: 14 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const providersListUpgradeV102ToV103 = defineUpgradePath<
   typeof providersListV102,
   typeof providersListV103
@@ -4102,11 +4127,20 @@ export function downgradeNativeListErrorForPublishedLines(
   return { ...native, code: "unsupported_action" };
 }
 
+// Remove the kept-key marker before applying the older major projections.
+function projectProvidersListRowsToV1013(
+  response: ResponseOf<typeof providersListV1014>,
+): ResponseOf<typeof providersListV1013>["providers"] {
+  return response.providers.map(
+    ({ apiKeyKeptLocally: _apiKeyKeptLocally, ...provider }) => provider,
+  );
+}
+
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV92
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
@@ -4122,17 +4156,19 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
       {
         ...response,
         native: downgradeNativeListErrorForPublishedLines(response.native),
-        providers: downgradeProviderCliStateListToV92(response.providers),
+        providers: downgradeProviderCliStateListToV92(
+          projectProvidersListRowsToV1013(response),
+        ),
       },
     ),
   }),
 });
 
 export const providersListDowngradeV10ToV8 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV80
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4145,17 +4181,19 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
       {
         ...response,
         native: downgradeNativeListErrorForPublishedLines(response.native),
-        providers: downgradeProviderCliStateListToV80(response.providers),
+        providers: downgradeProviderCliStateListToV80(
+          projectProvidersListRowsToV1013(response),
+        ),
       },
     ),
   }),
 });
 
 export const providersListDowngradeV10ToV7 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV70
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4168,17 +4206,19 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
       {
         ...response,
         native: downgradeNativeListErrorForPublishedLines(response.native),
-        providers: downgradeProviderCliStateListToV70(response.providers),
+        providers: downgradeProviderCliStateListToV70(
+          projectProvidersListRowsToV1013(response),
+        ),
       },
     ),
   }),
 });
 
 export const providersListDowngradeV10ToV6 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV60
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4188,17 +4228,17 @@ export const providersListDowngradeV10ToV6 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV60.parse({
       providers: downgradeProviderCliStateListToV60(
-        enabledProviderProfilesOnly(response.providers),
+        enabledProviderProfilesOnly(projectProvidersListRowsToV1013(response)),
       ),
     }),
   }),
 });
 
 export const providersListDowngradeV10ToV5 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV50
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4208,17 +4248,17 @@ export const providersListDowngradeV10ToV5 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV50.parse({
       providers: downgradeProviderCliStateListToV50(
-        enabledProviderProfilesOnly(response.providers),
+        enabledProviderProfilesOnly(projectProvidersListRowsToV1013(response)),
       ),
     }),
   }),
 });
 
 export const providersListDowngradeV10ToV4 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV40
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4228,17 +4268,17 @@ export const providersListDowngradeV10ToV4 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV40.parse({
       providers: downgradeProviderCliStateListToV40(
-        enabledProviderProfilesOnly(response.providers),
+        enabledProviderProfilesOnly(projectProvidersListRowsToV1013(response)),
       ),
     }),
   }),
 });
 
 export const providersListDowngradeV10ToV3 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV30
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4248,17 +4288,17 @@ export const providersListDowngradeV10ToV3 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV30.parse({
       providers: downgradeProviderCliStateListToV30(
-        enabledProviderProfilesOnly(response.providers),
+        enabledProviderProfilesOnly(projectProvidersListRowsToV1013(response)),
       ),
     }),
   }),
 });
 
 export const providersListDowngradeV10ToV2 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV20
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4268,17 +4308,17 @@ export const providersListDowngradeV10ToV2 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV20.parse({
       providers: downgradeProviderCliStateListToV20(
-        enabledProviderProfilesOnly(response.providers),
+        enabledProviderProfilesOnly(projectProvidersListRowsToV1013(response)),
       ),
     }),
   }),
 });
 
 export const providersListDowngradeV10ToV1 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV10
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4287,12 +4327,14 @@ export const providersListDowngradeV10ToV1 = defineDowngradePath<
   downgradeResponse: (response) => ({
     ok: true,
     value: providersListResponseSchemaV10.parse({
-      providers: enabledProviderProfilesOnly(response.providers).flatMap(
-        (provider) => {
-          const downgraded = downgradeProviderCliStateToV10(provider);
-          return downgraded === null ? [] : [downgraded];
-        },
-      ),
+      providers: enabledProviderProfilesOnly(
+        projectProvidersListRowsToV1013(response).map(
+          ({ usageReporting: _usageReporting, ...provider }) => provider,
+        ),
+      ).flatMap((provider) => {
+        const downgraded = downgradeProviderCliStateToV10(provider);
+        return downgraded === null ? [] : [downgraded];
+      }),
     }),
   }),
 });
@@ -6192,6 +6234,20 @@ export const providersSetApiKeyDowngradeV21ToV10 = defineDowngradePath<
   },
 });
 
+const providersSetKeptApiKeyV10 = defineRpcContract({
+  method: "providers.setKeptApiKey",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetApiKeyRequestSchema,
+  responseSchema: providersSetApiKeyResponseSchema,
+});
+
+const providersClearKeptApiKeyV10 = defineRpcContract({
+  method: "providers.clearKeptApiKey",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersClearApiKeyRequestSchema,
+  responseSchema: providersClearApiKeyResponseSchema,
+});
+
 export const providersClearApiKeyV10 = defineRpcContract({
   method: "providers.clearApiKey",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -6458,11 +6514,28 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
+const providersSetEnvOverrideV23 = defineRpcContract({
+  method: "providers.setEnvOverride",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: providersSetEnvOverrideRequestSchema,
+  responseSchema: providersSetEnvOverrideResponseSchemaV23,
+});
+
+const providersSetEnvOverrideUpgradeV22ToV23 = defineUpgradePath<
   typeof providersSetEnvOverrideV22,
+  typeof providersSetEnvOverrideV23
+>({
+  from: providersSetEnvOverrideV22.schemaVersion,
+  to: providersSetEnvOverrideV23.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+const providersSetEnvOverrideDowngradeV23ToV10 = defineDowngradePath<
+  typeof providersSetEnvOverrideV23,
   typeof providersSetEnvOverrideV10
 >({
-  from: { major: 2, minor: 2 },
+  from: { major: 2, minor: 3 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) =>
     downgradeProviderRequestForV10(
@@ -6532,6 +6605,23 @@ export const providersDeleteEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
   }),
 });
 
+export const providersDeleteEnvOverrideV22 = defineRpcContract({
+  method: "providers.deleteEnvOverride",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: providersDeleteEnvOverrideRequestSchema,
+  responseSchema: providersDeleteEnvOverrideResponseSchemaV22,
+});
+
+export const providersDeleteEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
+  typeof providersDeleteEnvOverrideV21,
+  typeof providersDeleteEnvOverrideV22
+>({
+  from: { major: 2, minor: 1 },
+  to: { major: 2, minor: 2 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const providersDeleteEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
   typeof providersDeleteEnvOverrideV21,
   typeof providersDeleteEnvOverrideV20
@@ -6548,11 +6638,11 @@ export const providersDeleteEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-export const providersDeleteEnvOverrideDowngradeV21ToV10 = defineDowngradePath<
-  typeof providersDeleteEnvOverrideV21,
+export const providersDeleteEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
+  typeof providersDeleteEnvOverrideV22,
   typeof providersDeleteEnvOverrideV10
 >({
-  from: { major: 2, minor: 1 },
+  from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) =>
     downgradeProviderRequestForV10(
@@ -7194,7 +7284,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.env.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: configEnvSetV10,
@@ -7204,6 +7294,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: configEnvSetV11,
           upgradeFromPreviousVersion: configEnvSetUpgradeV10ToV11,
         },
+        2: {
+          contract: configEnvSetV12,
+          upgradeFromPreviousVersion: configEnvSetUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -7211,11 +7305,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.env.delete": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configEnvDeleteV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configEnvDeleteV11,
+          upgradeFromPreviousVersion: configEnvDeleteUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -14037,6 +14135,32 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
     },
   },
+  "providers.setKeptApiKey": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetKeptApiKeyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.clearKeptApiKey": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersClearKeptApiKeyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.clearApiKey": {
     1: {
       latestMinor: 0,
@@ -14208,7 +14332,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersSetEnvOverrideV20,
@@ -14222,9 +14346,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersSetEnvOverrideV22,
           upgradeFromPreviousVersion: providersSetEnvOverrideUpgradeV21ToV22,
         },
+        3: {
+          contract: providersSetEnvOverrideV23,
+          upgradeFromPreviousVersion: providersSetEnvOverrideUpgradeV22ToV23,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersSetEnvOverrideDowngradeV22ToV10,
+        1: providersSetEnvOverrideDowngradeV23ToV10,
       },
     },
   },
@@ -14240,7 +14368,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersDeleteEnvOverrideV20,
@@ -14250,9 +14378,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersDeleteEnvOverrideV21,
           upgradeFromPreviousVersion: providersDeleteEnvOverrideUpgradeV20ToV21,
         },
+        2: {
+          contract: providersDeleteEnvOverrideV22,
+          upgradeFromPreviousVersion: providersDeleteEnvOverrideUpgradeV21ToV22,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersDeleteEnvOverrideDowngradeV21ToV10,
+        1: providersDeleteEnvOverrideDowngradeV22ToV10,
       },
     },
   },
@@ -15050,14 +15182,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
 } as const;
 
 /**
- * `providers.list` major 10, named. Its fourteen minors and nine bridges inline
+ * `providers.list` major 10, named. Its fifteen minors and nine bridges inline
  * push `HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION` over TS7056's
  * declaration-serialization ceiling; a named slot type is emitted by name,
  * as `HostRpcNotificationMethodMap` is. The literal below is checked against
  * it, so the slot keeps every exact contract and bridge.
  */
 type ProvidersListMajor10 = {
-  readonly latestMinor: 13;
+  readonly latestMinor: 14;
   readonly versions: {
     readonly 0: {
       readonly contract: typeof providersListV100;
@@ -15117,6 +15249,10 @@ type ProvidersListMajor10 = {
       readonly contract: typeof providersListV1013;
       readonly upgradeFromPreviousVersion: typeof providersListUpgradeV1012ToV1013;
     };
+    readonly 14: {
+      readonly contract: typeof providersListV1014;
+      readonly upgradeFromPreviousVersion: typeof providersListUpgradeV1013ToV1014;
+    };
   };
   readonly downgradePathsFromLatest: {
     readonly 1: typeof providersListDowngradeV10ToV1;
@@ -15132,7 +15268,7 @@ type ProvidersListMajor10 = {
 };
 
 const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
-  latestMinor: 13,
+  latestMinor: 14,
   versions: {
     0: {
       contract: providersListV100,
@@ -15203,6 +15339,10 @@ const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
     13: {
       contract: providersListV1013,
       upgradeFromPreviousVersion: providersListUpgradeV1012ToV1013,
+    },
+    14: {
+      contract: providersListV1014,
+      upgradeFromPreviousVersion: providersListUpgradeV1013ToV1014,
     },
   },
   downgradePathsFromLatest: {

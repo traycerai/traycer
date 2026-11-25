@@ -1,4 +1,4 @@
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
 import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 
@@ -7,7 +7,7 @@ export const TEAM_EPIC_PERSONAL_LINE = "Running on your Personal settings.";
 
 /** The tab host's settings place, using the Overview's classification. */
 export function teamEpicSettingsLine(
-  status: EnvironmentStatusResponseV11 | null,
+  status: EnvironmentStatusResponseV13 | null,
 ): string | null {
   if (status === null) return null;
   const state = hostSettingsCardState(status);

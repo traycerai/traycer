@@ -6,7 +6,7 @@ import {
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -71,16 +71,16 @@ export function useRegisteredHostEnvironmentStatuses(
     readonly hostId: string;
     readonly connectable: boolean;
   }>,
-): ReadonlyMap<string, EnvironmentStatusResponseV12 | null> {
+): ReadonlyMap<string, EnvironmentStatusResponseV13 | null> {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const coordinator = getConditionPollEpisodeCoordinator(queryClient);
   const combine = useCallback(
     (
       results: Array<
-        UseQueryResult<EnvironmentStatusResponseV12, HostRpcError>
+        UseQueryResult<EnvironmentStatusResponseV13, HostRpcError>
       >,
-    ): ReadonlyMap<string, EnvironmentStatusResponseV12 | null> =>
+    ): ReadonlyMap<string, EnvironmentStatusResponseV13 | null> =>
       new Map(
         results.map((result, index) => [
           hosts[index]?.hostId ?? "",
@@ -121,13 +121,13 @@ export function environmentStatusQueryOptions(
   // `binding` only resolves the requester, whose host the key already
   // names; adding it would refetch on binding identity drift alone.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
-  return queryOptions<EnvironmentStatusResponseV12, HostRpcError>({
+  return queryOptions<EnvironmentStatusResponseV13, HostRpcError>({
     queryKey: queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(
       hostId,
       METHOD,
       EMPTY_PARAMS,
     ),
-    queryFn: ({ signal }): Promise<EnvironmentStatusResponseV12> =>
+    queryFn: ({ signal }): Promise<EnvironmentStatusResponseV13> =>
       withHostQueryErrorBoundary(METHOD, async () => {
         const client = resolveNamedHostClient(binding, hostId);
         if (client === null) throw hostClientUnavailableError(METHOD);

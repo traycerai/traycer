@@ -87,6 +87,7 @@ import {
   PersonalPageContext,
   type PersonalPageContextValue,
 } from "@/components/settings/personal/personal-page-context";
+import { useEnvironmentLocalOverridesRead } from "@/hooks/environment/use-environment-reads";
 import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -99,7 +100,10 @@ import {
   buildConfigHostFixture,
   type ConfigHostFixture,
 } from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
-import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type {
+  MockHandlerMap,
+  MockPhaseEvent,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 
 afterEach(() => {
@@ -148,6 +152,7 @@ function renderShellPanelOverRpc(options: {
   readonly connectable?: boolean;
   /** Supplies the Personal page context that offers local values for Use everywhere. */
   readonly localOverrides?: readonly LocalOverride[];
+  readonly liveLocalOverrides?: true;
   /**
    * Recorded via `recordNegotiatedHostMethods`. Defaults to the full shell
    * family (a host that has handshaked and supports everything); pass `null`
@@ -229,20 +234,28 @@ function renderShellPanelOverRpc(options: {
     notices: [],
     review: [],
   } satisfies PersonalPageContextValue;
-  const panel = () => (
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <HostRereaders hostId={hostId} />
-        {options.localOverrides === undefined ? (
+  const panel = () => {
+    let settingsPanel = <ShellSettingsPanel />;
+    if (options.liveLocalOverrides === true) {
+      settingsPanel = (
+        <ShellPanelWithLiveLocalOverrides page={personalPageValue} />
+      );
+    } else if (options.localOverrides !== undefined) {
+      settingsPanel = (
+        <PersonalPageContext.Provider value={personalPageValue}>
           <ShellSettingsPanel />
-        ) : (
-          <PersonalPageContext.Provider value={personalPageValue}>
-            <ShellSettingsPanel />
-          </PersonalPageContext.Provider>
-        )}
-      </RunnerHostProvider>
-    </QueryClientProvider>
-  );
+        </PersonalPageContext.Provider>
+      );
+    }
+    return (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <HostRereaders hostId={hostId} />
+          {settingsPanel}
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    );
+  };
   const rendered = render(panel());
   return {
     ...fixture,
@@ -250,6 +263,24 @@ function renderShellPanelOverRpc(options: {
     rerenderPanel: () => rendered.rerender(panel()),
     unmountPanel: () => rendered.unmount(),
   };
+}
+
+function ShellPanelWithLiveLocalOverrides(props: {
+  readonly page: PersonalPageContextValue;
+}) {
+  const { page } = props;
+  const { data } = useEnvironmentLocalOverridesRead(
+    page.client,
+    page.hostId,
+    true,
+  );
+  return (
+    <PersonalPageContext.Provider
+      value={{ ...page, localOverrides: data?.overrides ?? [] }}
+    >
+      <ShellSettingsPanel />
+    </PersonalPageContext.Provider>
+  );
 }
 
 /**
@@ -1414,6 +1445,84 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
   });
 });
 
+function observeVariableRows(predicate: () => boolean): {
+  readonly ready: Promise<void>;
+  readonly stop: () => void;
+} {
+  let observer: MutationObserver | undefined;
+  const ready = new Promise<void>((resolve) => {
+    const check = (): void => {
+      if (!predicate()) return;
+      observer?.disconnect();
+      resolve();
+    };
+    observer = new MutationObserver(check);
+    observer.observe(document.body, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
+    check();
+  });
+  return { ready, stop: () => observer?.disconnect() };
+}
+
+function isVariableRemove(method: string): boolean {
+  return (
+    method === "config.env.localOverride.clear" ||
+    method === "config.env.delete"
+  );
+}
+
+function variableRemoveRequests(fixture: ConfigHostFixture) {
+  return fixture.messenger.phases.flatMap((event) =>
+    event.kind === "request" && isVariableRemove(event.method)
+      ? [{ method: event.method, params: event.params }]
+      : [],
+  );
+}
+
+function nextVariableRemove(
+  fixture: ConfigHostFixture,
+): Promise<Extract<MockPhaseEvent, { kind: "response" }>> {
+  return new Promise((resolve) => {
+    const stop = fixture.messenger.subscribe((event) => {
+      if (event.kind === "response" && isVariableRemove(event.method)) {
+        stop();
+        resolve(event);
+      }
+    });
+  });
+}
+
+function observeReadsAfterClear(fixture: ConfigHostFixture): {
+  readonly ready: Promise<void>;
+  readonly stop: () => void;
+} {
+  let unsubscribe: (() => void) | undefined;
+  const ready = new Promise<void>((resolve) => {
+    let cleared = false;
+    const remaining = new Set([
+      "config.env.list",
+      "environment.localOverrides",
+    ]);
+    unsubscribe = fixture.messenger.subscribe((event) => {
+      if (event.kind !== "response" || event.error !== null) return;
+      if (event.method === "config.env.localOverride.clear") cleared = true;
+      if (!cleared || !remaining.delete(event.method) || remaining.size > 0)
+        return;
+      unsubscribe?.();
+      resolve();
+    });
+  });
+  return { ready, stop: () => unsubscribe?.() };
+}
+
+function variableRemoveButton(): HTMLButtonElement | null {
+  const button = screen.queryByRole("button", { name: "Remove LOG_LEVEL" });
+  return button instanceof HTMLButtonElement ? button : null;
+}
+
 describe("<ShellSettingsPanel /> host environment names that look like credentials", () => {
   const PASSWORD_URL = "https://user:pw@example.com/x";
 
@@ -1520,6 +1629,239 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
+
+  it.each([
+    { personalValue: "info", description: "Personal's value" },
+    { personalValue: null, description: "nothing in Personal" },
+  ])(
+    "clears a kept variable with $description before any shared Delete",
+    async ({ personalValue }) => {
+      const key = "LOG_LEVEL";
+      let personal = personalValue;
+      let local = [localVariableOverride(key, "debug")];
+      const fixture = renderShellPanelOverRpc({
+        cli: envCli(),
+        liveLocalOverrides: true,
+        methods: [
+          ...CONFIG_SHELL_METHODS,
+          "environment.localOverrides",
+          "config.env.localOverride.clear",
+        ],
+        overrideHandlers: {
+          "environment.localOverrides": () => ({ overrides: local }),
+          "config.env.list": () => {
+            if (local.length !== 0)
+              return { entries: [{ key, value: "debug" }] };
+            return {
+              entries: personal === null ? [] : [{ key, value: personal }],
+            };
+          },
+          "config.env.localOverride.clear": () => {
+            local = [];
+            return { outcome: "saved" as const, overrides: local };
+          },
+          "config.env.delete": (request) => {
+            personal = null;
+            return { key: request.key, deleted: true as const };
+          },
+        },
+      });
+
+      const initial = observeVariableRows(
+        () =>
+          screen.queryByTestId("env-row-own-value") !== null &&
+          variableRemoveButton()?.disabled === false,
+      );
+      await initial.ready;
+      const initialButton = variableRemoveButton();
+      if (initialButton === null) throw new Error("missing kept row");
+      const refresh = observeReadsAfterClear(fixture);
+      const rendered = observeVariableRows(() => {
+        if (screen.queryByTestId("env-row-own-value") !== null) return false;
+        const button = variableRemoveButton();
+        return personalValue === null
+          ? button === null
+          : button?.disabled === false;
+      });
+      try {
+        const reply = nextVariableRemove(fixture);
+        fireEvent.click(initialButton);
+        expect(await reply).toMatchObject({
+          method: "config.env.localOverride.clear",
+          error: null,
+        });
+        await refresh.ready;
+        await rendered.ready;
+        expect(variableRemoveRequests(fixture)).toEqual([
+          {
+            method: "config.env.localOverride.clear",
+            params: { target: { kind: "variable", key } },
+          },
+        ]);
+        expect(screen.queryByTestId("env-row-own-value")).toBeNull();
+
+        if (personalValue === null) {
+          expect(variableRemoveButton()).toBeNull();
+          return;
+        }
+
+        expect(inputValue(screen.getByLabelText("Value for LOG_LEVEL"))).toBe(
+          personalValue,
+        );
+        const plainButton = variableRemoveButton();
+        if (plainButton === null)
+          throw new Error("missing restored Personal row");
+        expect(plainButton.disabled).toBe(false);
+        const second = nextVariableRemove(fixture);
+        fireEvent.click(plainButton);
+        expect(await second).toMatchObject({
+          method: "config.env.delete",
+          error: null,
+        });
+        expect(variableRemoveRequests(fixture)).toEqual([
+          {
+            method: "config.env.localOverride.clear",
+            params: { target: { kind: "variable", key } },
+          },
+          { method: "config.env.delete", params: { key } },
+        ]);
+      } finally {
+        refresh.stop();
+        rendered.stop();
+      }
+    },
+  );
+
+  it.each([
+    { supportsClear: true, description: "a host with Clear" },
+    { supportsClear: false, description: "a host without Clear" },
+  ])(
+    "does not send shared Delete while the kept-list read is parked on $description",
+    async ({ supportsClear }) => {
+      const key = "LOG_LEVEL";
+      let releaseRead: (() => void) | undefined;
+      const parked = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      let requestStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        requestStarted = resolve;
+      });
+      const fixture = renderShellPanelOverRpc({
+        cli: envCli(),
+        liveLocalOverrides: true,
+        methods: [
+          ...CONFIG_SHELL_METHODS,
+          "environment.localOverrides",
+          ...(supportsClear ? ["config.env.localOverride.clear"] : []),
+        ],
+        overrideHandlers: {
+          "environment.localOverrides": async () => {
+            requestStarted?.();
+            await parked;
+            return { overrides: [localVariableOverride(key, "debug")] };
+          },
+          "config.env.list": () => ({ entries: [{ key, value: "debug" }] }),
+        },
+      });
+
+      try {
+        await started;
+        await observeVariableRows(() => variableRemoveButton() !== null).ready;
+        const remove = variableRemoveButton();
+        if (remove === null)
+          throw new Error("missing row during the kept read");
+        const disabledBeforePress = remove.disabled;
+        fireEvent.click(remove);
+        expect(disabledBeforePress).toBe(true);
+        expect(variableRemoveRequests(fixture)).toEqual([]);
+        const known = observeVariableRows(() => {
+          if (screen.queryByTestId("env-row-own-value") === null) return false;
+          const button = variableRemoveButton();
+          return supportsClear ? button?.disabled === false : button === null;
+        });
+        releaseRead?.();
+        await known.ready;
+        expect(variableRemoveRequests(fixture)).toEqual([]);
+      } finally {
+        releaseRead?.();
+      }
+    },
+  );
+
+  it("offers no Remove for a kept variable on a host without Clear", async () => {
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "debug" }];
+    const fixture = renderShellPanelOverRpc({
+      cli,
+      liveLocalOverrides: true,
+      methods: [...CONFIG_SHELL_METHODS, "environment.localOverrides"],
+      overrideHandlers: {
+        "environment.localOverrides": () => ({
+          overrides: [localVariableOverride("LOG_LEVEL", "debug")],
+        }),
+      },
+    });
+
+    await observeVariableRows(
+      () =>
+        screen.queryByTestId("env-row-own-value") !== null &&
+        screen.queryByLabelText("Name for LOG_LEVEL") !== null,
+    ).ready;
+    expect(variableRemoveButton()).toBeNull();
+    expect(variableRemoveRequests(fixture)).toEqual([]);
+  });
+
+  it.each([
+    {
+      readsKeptList: true,
+      supportsClear: true,
+      description: "a host with Clear",
+    },
+    {
+      readsKeptList: true,
+      supportsClear: false,
+      description: "a host without Clear",
+    },
+    {
+      readsKeptList: false,
+      supportsClear: false,
+      description: "a legacy host with neither RPC",
+    },
+  ])(
+    "uses ordinary Delete for a plain variable on $description",
+    async ({ readsKeptList, supportsClear }) => {
+      const cli = envCli();
+      cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+      const fixture = renderShellPanelOverRpc({
+        cli,
+        liveLocalOverrides: true,
+        methods: [
+          ...CONFIG_SHELL_METHODS,
+          ...(readsKeptList ? ["environment.localOverrides"] : []),
+          ...(supportsClear ? ["config.env.localOverride.clear"] : []),
+        ],
+        overrideHandlers: {
+          "environment.localOverrides": () => ({ overrides: [] }),
+        },
+      });
+
+      await observeVariableRows(
+        () => variableRemoveButton()?.disabled === false,
+      ).ready;
+      const remove = variableRemoveButton();
+      if (remove === null) throw new Error("missing ordinary Delete");
+      const reply = nextVariableRemove(fixture);
+      fireEvent.click(remove);
+      expect(await reply).toMatchObject({
+        method: "config.env.delete",
+        error: null,
+      });
+      expect(variableRemoveRequests(fixture)).toEqual([
+        { method: "config.env.delete", params: { key: "LOG_LEVEL" } },
+      ]);
+    },
+  );
 
   it("offers Use everywhere for a password URL shown as dots and saves that URL", async () => {
     const cli = envCli();

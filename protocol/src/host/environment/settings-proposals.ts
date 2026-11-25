@@ -136,6 +136,8 @@ const environmentPromotionSchemaV12 = lazySchema(() =>
   environmentPromotionSchema.extend({
     /** Absent without verified support. Null when the Move wrote no exact row. */
     moveWrittenRevision: z.number().int().nonnegative().nullable().optional(),
+    /** The consumed acceptance when the Move wrote this exact address. */
+    moveAcceptanceId: z.uuid().optional(),
   }),
 );
 const environmentProposalSchemaV12 = lazySchema(() =>

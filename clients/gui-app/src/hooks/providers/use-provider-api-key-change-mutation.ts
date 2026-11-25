@@ -8,7 +8,7 @@ import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import {
   changeProviderApiKey,
   ProviderApiKeyEnvironmentChangedError,
-  type ProviderApiKeyChange,
+  type ProviderApiKeyHostChange,
   type ProviderApiKeyChangeResponse,
 } from "@traycer-clients/shared/host-client/provider-api-key-change";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
@@ -41,13 +41,14 @@ const UNAVAILABLE_CHANGE_MESSAGES = {
 
 interface ProviderApiKeyChangeMutationArgs<Variables> {
   readonly expectedEnvironmentId: string | null;
+  readonly origin: "account-save" | undefined;
   readonly method: "providers.setApiKey" | "providers.clearApiKey";
   readonly mutationKey: readonly unknown[];
   readonly errorMessage: string;
   readonly clearInput: () => void;
   readonly changeOf: (variables: Variables) => {
     readonly providerId: ProviderId;
-    readonly change: ProviderApiKeyChange;
+    readonly change: ProviderApiKeyHostChange;
   };
 }
 
@@ -83,6 +84,7 @@ export function useProviderApiKeyChangeMutation<Variables>(
             providerId,
             change,
             args.expectedEnvironmentId,
+            args.origin,
           );
           if (
             outcome.result !== null &&

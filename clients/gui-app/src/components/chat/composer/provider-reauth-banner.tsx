@@ -1123,6 +1123,7 @@ function TokenReauthForm({
     () => {
       sentApiKey.current = null;
     },
+    undefined,
   );
   const refreshProviders = useTabRefreshProviders();
   const queryClient = useQueryClient();

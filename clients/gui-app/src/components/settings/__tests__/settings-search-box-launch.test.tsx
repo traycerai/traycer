@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-regions";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
+import { everySectionShown } from "@/lib/settings-search/__tests__/every-section-shown";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 
@@ -26,7 +27,13 @@ vi.mock("@/lib/layout/editor-session", () => ({
 
 function Harness(): ReactNode {
   const [query, setQuery] = useState("");
-  return <SettingsSearch query={query} onQueryChange={setQuery} />;
+  return (
+    <SettingsSearch
+      query={query}
+      onQueryChange={setQuery}
+      sectionShown={everySectionShown}
+    />
+  );
 }
 
 function combobox(): HTMLInputElement {

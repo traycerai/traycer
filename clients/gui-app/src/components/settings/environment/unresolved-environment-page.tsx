@@ -5,13 +5,28 @@ import {
   useHostScopeFor,
   WINDOW_HOST_SELECTION,
 } from "@/components/settings/host-scope/use-host-scope";
+import { SectionStandIn } from "@/components/settings/environment/page-not-on-computer";
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
+import type { SettingsSectionId } from "@/lib/settings-sections";
 
-/** No configuration is known yet: never mount a configuration's editors. */
-export function UnresolvedEnvironmentPage(): ReactNode {
+/**
+ * No configuration is known yet: never mount a configuration's editors. What
+ * stands in says why, under `section`'s heading.
+ */
+export function UnresolvedEnvironmentPage(props: {
+  readonly section: SettingsSectionId;
+}): ReactNode {
+  return (
+    <SectionStandIn section={props.section} testId="environment-unresolved">
+      <UnresolvedEnvironmentBody />
+    </SectionStandIn>
+  );
+}
+
+function UnresolvedEnvironmentBody(): ReactNode {
   const scope = useHostScopeFor(WINDOW_HOST_SELECTION);
   const queryClient = useQueryClient();
   const hostId = scope.activeHostId;

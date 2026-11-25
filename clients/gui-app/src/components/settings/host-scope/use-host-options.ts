@@ -28,6 +28,7 @@ import {
   hostListReadiness,
   sandboxSummariesPending,
   sandboxSummariesUnread,
+  type HostListOutcome,
 } from "@/components/settings/host-scope/host-scope-status";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 
@@ -73,7 +74,7 @@ export interface HostOptions {
    * person is most likely to be opening it.
    */
   readonly directoryResolved: boolean;
-  /** The directory request itself failed — nothing dialable could be listed. */
+  /** The directory request failed before returning any route data. */
   readonly directoryFailed: boolean;
   /**
    * Both lists have ANSWERED (an error is an answer). Callers that decide a
@@ -138,6 +139,15 @@ function mutationBringsHostUp(kind: MutationKind): boolean {
     case "stopHost":
       return false;
   }
+}
+
+function directoryReadiness(
+  outcome: HostListOutcome,
+): Pick<HostOptions, "directoryResolved" | "directoryFailed"> {
+  return {
+    directoryResolved: outcome.hasData || outcome.isError,
+    directoryFailed: !outcome.hasData && outcome.isError,
+  };
 }
 
 export function useHostOptions(): HostOptions {
@@ -311,10 +321,14 @@ export function useHostOptions(): HostOptions {
   // of an already-resolved list must not re-open the "still loading" window and
   // un-say `vanished`. The rule itself — including that an error is an ANSWER —
   // lives in `hostListReadiness`, where a test can reach it.
-  const lists = hostListReadiness(
-    { hasData: directory !== undefined, isError: directoryQuery.isError },
-    { hasData: registry !== undefined, isError: registryQuery.isError },
-  );
+  const directoryOutcome = {
+    hasData: directory !== undefined,
+    isError: directoryQuery.isError,
+  };
+  const lists = hostListReadiness(directoryOutcome, {
+    hasData: registry !== undefined,
+    isError: registryQuery.isError,
+  });
   // A sandbox list that failed before its first answer hides every sandbox
   // from the pickers, so it fails the lists too: the pickers then say hosts
   // may be missing and offer the retry, instead of looking complete.
@@ -335,8 +349,7 @@ export function useHostOptions(): HostOptions {
     activeHostId,
     isLoading:
       directoryQuery.isLoading || registryQuery.isLoading || sandboxesPending,
-    directoryResolved: directory !== undefined || directoryQuery.isError,
-    directoryFailed: directoryQuery.isError,
+    ...directoryReadiness(directoryOutcome),
     listsResolved: lists.resolved && !sandboxesPending,
     listsFailed: lists.failed || sandboxesUnread,
     retryLists: () => {

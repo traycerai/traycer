@@ -292,7 +292,6 @@ describe("<EnvironmentSheetsHost /> inventory links", () => {
       openHistory: () => undefined,
       close: () => undefined,
       setSection: () => undefined,
-      replaceOwnedSettingsRoute: () => undefined,
       promoteToTab: () => undefined,
       isOverlayActive: () => false,
     });

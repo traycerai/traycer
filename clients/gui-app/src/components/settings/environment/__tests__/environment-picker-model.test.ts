@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import {
   environmentPickerModel,
   hostRunsPersonal,
@@ -9,8 +9,11 @@ import {
   unresolvedSetupText,
   type EnvironmentPickerModel,
 } from "@/components/settings/environment/environment-picker-model";
-import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
-import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import {
+  environmentStatusFixture,
+  moveAttemptFixture,
+  unboundMoveStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
 import {
   PERSONAL_PICK,
   UNRESOLVED_PICK,
@@ -113,27 +116,53 @@ describe("localPickerRow", () => {
     expect(localPickerRow(OLD_LAPTOP, status, V11)).toBeNull();
   });
 
-  it.each<[string, NegotiatedMethodVersion]>([
-    ["negotiated at 1.0", V10],
-    ["absent from the host's methods", false],
-  ])(
-    "greys a host with environment.status %s that has not reached applying",
-    (_label, version) => {
-      const status = environmentStatusFixture({
-        principal: null,
-        setup: { stage: "moving_settings", state: "running" },
-      });
-      expect(localPickerRow(OLD_LAPTOP, status, version)).toEqual({
-        kind: "local",
-        hostId: "old",
-        name: "Old laptop",
-        subtitle: "Update to view these settings.",
-        verb: null,
-        needsUpdate: true,
-        defaultsToLocal: false,
-      });
-    },
-  );
+  it("greys a host with environment.status negotiated at 1.0 that has not reached applying", () => {
+    const status = environmentStatusFixture({
+      principal: null,
+      setup: { stage: "moving_settings", state: "running" },
+    });
+    expect(localPickerRow(OLD_LAPTOP, status, V10)).toEqual({
+      kind: "local",
+      hostId: "old",
+      name: "Old laptop",
+      subtitle: "Update to view these settings.",
+      verb: null,
+      needsUpdate: true,
+      defaultsToLocal: false,
+    });
+  });
+
+  it("gives a host whose methods lack environment.status its own pickable row, whatever it last said", () => {
+    const row = {
+      kind: "local",
+      hostId: "old",
+      name: "Old laptop",
+      subtitle: "its own settings, update to move to Personal",
+      verb: null,
+      needsUpdate: false,
+      defaultsToLocal: true,
+    };
+    expect(localPickerRow(OLD_LAPTOP, null, false)).toEqual(row);
+    expect(
+      localPickerRow(
+        OLD_LAPTOP,
+        environmentStatusFixture({
+          principal: null,
+          setup: { stage: "moving_settings", state: "running" },
+        }),
+        false,
+      ),
+    ).toEqual(row);
+  });
+
+  it("leaves the Personal row's rule alone for a host whose methods lack environment.status", () => {
+    const personal = environmentStatusFixture({
+      principal: { kind: "personal" },
+      setup: { stage: "done", state: "done" },
+    });
+    expect(hostRunsPersonal(OLD_LAPTOP, personal, V11)).toBe(true);
+    expect(hostRunsPersonal(OLD_LAPTOP, personal, false)).toBe(false);
+  });
 
   it("greys an old host that has not answered, or has no setup at all", () => {
     expect(localPickerRow(OLD_LAPTOP, null, V10)?.needsUpdate).toBe(true);
@@ -181,8 +210,8 @@ describe("personalSubtitle", () => {
 });
 
 function statusMap(
-  entries: ReadonlyArray<[string, EnvironmentStatusResponseV11 | null]>,
-): ReadonlyMap<string, EnvironmentStatusResponseV11 | null> {
+  entries: ReadonlyArray<[string, EnvironmentStatusResponseV13 | null]>,
+): ReadonlyMap<string, EnvironmentStatusResponseV13 | null> {
   return new Map(entries);
 }
 
@@ -312,6 +341,226 @@ describe("environmentPickerModel", () => {
     expect(greyed.localRows[0]?.needsUpdate).toBe(true);
     expect(greyed.defaultPick).toEqual(PERSONAL_PICK);
   });
+
+  it("defaults to the Local row of a window host whose methods lack environment.status, with no status to wait for", () => {
+    const model = environmentPickerModel({
+      hosts: [OLD_LAPTOP],
+      statuses: statusMap([["old", null]]),
+      versions: new Map([["old", false]]),
+      windowHostId: "old",
+    });
+
+    expect(model.localRows).toEqual([
+      {
+        kind: "local",
+        hostId: "old",
+        name: "Old laptop",
+        subtitle: "its own settings, update to move to Personal",
+        verb: null,
+        needsUpdate: false,
+        defaultsToLocal: true,
+      },
+    ]);
+    expect(model.defaultPick).toEqual({
+      kind: "local",
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+  });
+
+  it("keeps waiting for a window host that has not negotiated yet and has no row", () => {
+    const model = environmentPickerModel({
+      hosts: [OLD_LAPTOP],
+      statuses: statusMap([["old", null]]),
+      versions: new Map([["old", null]]),
+      windowHostId: "old",
+    });
+
+    expect(model.localRows).toEqual([]);
+    expect(model.defaultPick).toEqual(UNRESOLVED_PICK);
+  });
+});
+
+const OWN_SETTINGS_SUBTITLE = "its own settings, not in Personal yet";
+
+/** The Local row the dropdown draws for `status`, through the model the picker reads. */
+function localRowOf(status: EnvironmentStatusResponseV13) {
+  return environmentPickerModel({
+    hosts: [OLD_LAPTOP],
+    statuses: statusMap([["old", status]]),
+    versions: new Map([["old", V11]]),
+    windowHostId: "old",
+  }).localRows[0];
+}
+
+describe("the Local row of an accepted move", () => {
+  it("keeps an old computer's row pickable without a move action when the last cached move stopped", () => {
+    const stopped = unboundMoveStatusFixture(
+      { stage: "registering", state: "stalled" },
+      moveAttemptFixture("retry"),
+    );
+    const model = environmentPickerModel({
+      hosts: [OLD_LAPTOP],
+      statuses: statusMap([["old", stopped]]),
+      versions: new Map([["old", false]]),
+      windowHostId: "old",
+    });
+
+    expect(model.localRows).toEqual([localPickerRow(OLD_LAPTOP, null, false)]);
+    expect(model.defaultPick).toEqual({
+      kind: "local",
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+  });
+
+  // Registering after a Retry or a restart, and the moving settings stage: the move stopped and waits for its Retry.
+  it.each([
+    ["registering, stalled", "stalled", "retry"],
+    ["registering, failed", "failed", "retry"],
+    ["registering, stalled", "stalled", "running"],
+  ] as const)(
+    "finishes a stopped move from %s with the host's move in state %s",
+    (_name, state, move) => {
+      expect(
+        localRowOf(
+          unboundMoveStatusFixture(
+            { stage: "registering", state },
+            moveAttemptFixture(move),
+          ),
+        ),
+      ).toEqual({
+        kind: "local",
+        hostId: "old",
+        name: "Old laptop",
+        subtitle: OWN_SETTINGS_SUBTITLE,
+        verb: "finish_moving",
+        needsUpdate: false,
+        defaultsToLocal: true,
+      });
+    },
+  );
+
+  it.each(["stalled", "failed"] as const)(
+    "finishes a move stopped at moving settings (%s) whose record is retry",
+    (state) => {
+      expect(
+        localRowOf(
+          unboundMoveStatusFixture(
+            { stage: "moving_settings", state },
+            moveAttemptFixture("retry"),
+          ),
+        ),
+      ).toMatchObject({
+        verb: "finish_moving",
+        subtitle: OWN_SETTINGS_SUBTITLE,
+      });
+    },
+  );
+
+  // Guards: the verb stays Move to Personal wherever the move has not stopped, or was never accepted.
+  it.each([
+    [
+      "registering, running, record running",
+      { stage: "registering", state: "running" },
+      moveAttemptFixture("running"),
+    ],
+    [
+      "moving settings, running, record retry",
+      { stage: "moving_settings", state: "running" },
+      moveAttemptFixture("retry"),
+    ],
+    [
+      "the moving settings window, record running",
+      { stage: "moving_settings", state: "awaiting_consent" },
+      moveAttemptFixture("running"),
+    ],
+    [
+      "the moving settings window, record needs_person",
+      { stage: "moving_settings", state: "awaiting_consent" },
+      moveAttemptFixture("needs_person"),
+    ],
+    [
+      "registering, stalled, record needs_person",
+      { stage: "registering", state: "stalled" },
+      moveAttemptFixture("needs_person"),
+    ],
+    [
+      "registering, stalled, no record",
+      { stage: "registering", state: "stalled" },
+      null,
+    ],
+    [
+      "moving settings, stalled, no record",
+      { stage: "moving_settings", state: "stalled" },
+      null,
+    ],
+    [
+      "done, record done, planes still local",
+      { stage: "done", state: "done" },
+      moveAttemptFixture("done"),
+    ],
+    [
+      "a stage this app does not know, running, record running",
+      { stage: "verifying", state: "running" },
+      moveAttemptFixture("running"),
+    ],
+    [
+      "a stage this app does not know, stalled, record retry",
+      { stage: "verifying", state: "stalled" },
+      moveAttemptFixture("retry"),
+    ],
+  ])("keeps Move to Personal in %s", (_name, setup, move) => {
+    expect(localRowOf(unboundMoveStatusFixture(setup, move))).toMatchObject({
+      kind: "local",
+      verb: "move_to_personal",
+      subtitle: OWN_SETTINGS_SUBTITLE,
+    });
+  });
+
+  it.each(["running", "stalled", "failed"])(
+    "does not finish a move from an applying stage that is %s: it has no stopped upload to retry here",
+    (state) => {
+      expect(
+        localRowOf(
+          unboundMoveStatusFixture(
+            { stage: "applying", state },
+            moveAttemptFixture("retry"),
+          ),
+        ),
+      ).toMatchObject({ kind: "local", verb: "move_to_personal" });
+    },
+  );
+
+  it.each(["retry", null] as const)(
+    "gives pending uploads the partly-moved row whatever the move says (record %s)",
+    (record) => {
+      expect(
+        localRowOf(
+          environmentStatusFixture({
+            principal: { kind: "personal" },
+            planes: { records: "local", broker: "local", room: "local" },
+            pendingUploads: partlyMoved.pendingUploads,
+            setup: { stage: "registering", state: "stalled" },
+            move: record === null ? null : moveAttemptFixture(record),
+          }),
+        ),
+      ).toMatchObject({
+        verb: "finish_moving",
+        subtitle: "partly in Personal",
+      });
+    },
+  );
+
+  it("keeps the stopped setup row for an applying stage that stalled with the move's record open", () => {
+    expect(
+      localRowOf({ ...applyingStalled, move: moveAttemptFixture("retry") }),
+    ).toMatchObject({
+      kind: "setup",
+      subtitle: "Setup stopped while applying your settings.",
+      verb: null,
+    });
+  });
 });
 
 describe("isStaleLocalPick", () => {
@@ -333,7 +582,7 @@ describe("isStaleLocalPick", () => {
     windowHostId: null,
   });
 
-  function personalHostMoved(): EnvironmentStatusResponseV11 {
+  function personalHostMoved(): EnvironmentStatusResponseV13 {
     return environmentStatusFixture({
       setup: { stage: "done", state: "done" },
     });

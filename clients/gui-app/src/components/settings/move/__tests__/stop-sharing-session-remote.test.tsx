@@ -30,7 +30,7 @@ import { AddProviderProfileDialog } from "@/components/settings/panels/add-provi
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   EnvironmentMovePersonalProfile,
-  EnvironmentMoveStopPreviewResponseV13,
+  EnvironmentMoveStopPreviewResponseV14,
   EnvironmentMoveStopResponseV11,
 } from "@traycer/protocol/host/environment/move-contracts";
 import {
@@ -205,11 +205,15 @@ function fullHostManifest(): Record<string, { major: number; minor: number }> {
     hostRpcRegistry,
     SERVES_EVERY_INSTALLED_MAJOR,
   );
+  // Preserve the previous released Stop pair for existing compatibility cases.
   return Object.fromEntries(
-    Object.entries(manifest).map(([method, version]) => [
-      method,
-      { major: version.major, minor: version.minor },
-    ]),
+    Object.entries(manifest).map(([method, version]) => {
+      if (method === "environment.move.stopPreview")
+        return [method, { major: 1, minor: 3 }];
+      if (method === "environment.move.stop")
+        return [method, { major: 1, minor: 2 }];
+      return [method, { major: version.major, minor: version.minor }];
+    }),
   );
 }
 
@@ -423,8 +427,8 @@ function failed(code: string, message: string): HostResponse {
 
 function preview(
   profiles: readonly EnvironmentMovePersonalProfile[] | null | undefined,
-): EnvironmentMoveStopPreviewResponseV13 {
-  const base = { managed: [], needsChoice: [] };
+): EnvironmentMoveStopPreviewResponseV14 {
+  const base = { managed: [], needsChoice: [], sheetDigest: null };
   return profiles === undefined
     ? base
     : { ...base, personalProfiles: profiles === null ? null : [...profiles] };
@@ -1844,6 +1848,7 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
           choices: [],
           profileMode: "keep-personal",
           profileSignIns: [],
+          sheetDigest: null,
         },
       },
     ]);

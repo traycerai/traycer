@@ -131,6 +131,7 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
     stop.mutate(
       {
         profileMode: personalProfiles === null ? null : "keep-personal",
+        sheetDigest: null,
         profileSignIns: personalLeaveSignIns(
           personalProfiles ?? [],
           accounts.states,
@@ -143,6 +144,7 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
       },
       {
         onSuccess: (data) => {
+          if (data.outcome === "sheet_changed") return;
           if (data.outcome === "choices_missing") {
             setAnsweredBeforeChange(answered);
             void preview.refetch();

@@ -2188,8 +2188,18 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "providers.setKeptApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Clearing an API key removes persisted credentials.
   "providers.clearApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.clearKeptApiKey": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2619,6 +2629,11 @@ export const HOST_METHOD_POLL_TABLE = {
   "environment.notices": { ...LATEST_SCHEDULING, poll: null },
   "environment.review": { ...LATEST_SCHEDULING, poll: null },
   "config.env.localOverride.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.env.localOverride.saveToPersonal": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

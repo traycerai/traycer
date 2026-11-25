@@ -37,13 +37,27 @@ export interface BoundSettingsSave
   readonly sharingGeneration: number;
 }
 
-interface LocalSettingsSave extends RememberedSettingsSave {
+export interface UnansweredMoveSave {
+  readonly environmentId: string | null;
+  readonly acceptanceId: string;
+  readonly resolveHostOs: boolean;
+  /** A P5 reader must still see an unanswered base after the app downgrades. */
+  readonly item: null;
+  readonly moveItem: RememberedSettingsItem;
+}
+
+export type RememberedPersonalSave =
+  | {
+      readonly environmentId: string;
+      readonly item: RememberedSettingsItem | null;
+    }
+  | UnansweredMoveSave;
+
+interface LocalSettingsSave
+  extends
+    RememberedSettingsSave,
+    Partial<{ readonly personal: RememberedPersonalSave | null }> {
   readonly environmentId: null;
-  /** Older records have no target. A missing base is never evidence of absence. */
-  readonly personal?: {
-    readonly environmentId: string;
-    readonly item: RememberedSettingsItem | null;
-  } | null;
 }
 
 export type SettingsSaveMemoryRecord = BoundSettingsSave | LocalSettingsSave;
@@ -55,9 +69,19 @@ interface SettingsSaveMemoryState {
   /** Forgets every earlier save of the same item on the same host. */
   readonly remember: (record: SettingsSaveMemoryRecord) => string;
   readonly forget: (id: string) => void;
+  readonly retireUnansweredMoves: () => void;
   readonly noteUnanswered: (id: string, holdRevision: number) => void;
   readonly markSent: (id: string) => void;
   readonly markAnswered: (id: string) => void;
+}
+
+function itemFor(
+  record: SettingsSaveMemoryRecord,
+): RememberedSettingsItem | null {
+  if (record.environmentId !== null) return record;
+  const personal = record.personal;
+  if (personal && "acceptanceId" in personal) return personal.moveItem;
+  return personal?.item ?? null;
 }
 
 function sameItemSlot(
@@ -73,12 +97,18 @@ function sameItem(
 ): boolean {
   const aTarget = a.environmentId === null ? a.personal : a;
   const bTarget = b.environmentId === null ? b.personal : b;
-  const aItem = a.environmentId === null ? (a.personal?.item ?? null) : a;
-  const bItem = b.environmentId === null ? (b.personal?.item ?? null) : b;
+  const aItem = itemFor(a);
+  const bItem = itemFor(b);
+  const sameTarget =
+    aTarget?.environmentId === null && bTarget?.environmentId === null
+      ? "acceptanceId" in aTarget &&
+        "acceptanceId" in bTarget &&
+        aTarget.acceptanceId === bTarget.acceptanceId
+      : aTarget?.environmentId === bTarget?.environmentId;
   return (
     aItem !== null &&
     bItem !== null &&
-    aTarget?.environmentId === bTarget?.environmentId &&
+    sameTarget &&
     a.hostId === b.hostId &&
     sameItemSlot(aItem, bItem)
   );
@@ -140,6 +170,20 @@ export const useSettingsSaveMemoryStore = create<SettingsSaveMemoryState>()(
           const { [id]: _forgotten, ...records } = state.records;
           return { records };
         }),
+      retireUnansweredMoves: () =>
+        set((state) => ({
+          records: Object.fromEntries(
+            Object.entries(state.records).filter(([, record]) => {
+              if (record.environmentId !== null) return true;
+              const personal = record.personal;
+              return (
+                personal === null ||
+                personal === undefined ||
+                !("acceptanceId" in personal)
+              );
+            }),
+          ),
+        })),
       noteUnanswered: (id, holdRevision) =>
         set((state) => {
           const record = settingsSaveMemoryRecord(state.records, id);

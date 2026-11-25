@@ -434,7 +434,6 @@ describe("providers.list@10.9 additive response projection", () => {
   });
 
   it("carries optional usage reporting in 10.9 and strips it for 10.8", () => {
-    expect(providersList.latestMinor).toBe(13);
     expect(providersList.versions[12].contract.responseSchema).toBe(
       providersListResponseSchemaV1012Preimage,
     );
@@ -447,10 +446,8 @@ describe("providers.list@10.9 additive response projection", () => {
     });
     expect(carried.providers[0]).toHaveProperty("usageReporting", true);
 
-    // And on the LIVE line, not only the frozen 10.9 one: every other check
-    // here reads a frozen row, so dropping the field from the live row would
-    // otherwise pass this suite.
-    const live = providersList.versions[13].contract.responseSchema;
+    const live =
+      providersList.versions[providersList.latestMinor].contract.responseSchema;
     const onLive = live.parse({ providers: [usageReporting] });
     expect(onLive.providers[0]).toHaveProperty("usageReporting", true);
 

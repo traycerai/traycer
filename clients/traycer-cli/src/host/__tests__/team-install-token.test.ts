@@ -22,6 +22,7 @@ import type { Environment } from "../../runner/environment";
 import { hostTeamInstallTokenPath } from "../../store/paths";
 import {
   MAX_INSTALL_TOKEN_LENGTH,
+  TEAM_INSTALL_RECEIPT_WAIT_MS,
   withStagedTeamToken,
   withTeamTokenInstall,
   waitForTeamTokenInstall,
@@ -524,6 +525,62 @@ describe("waitForTeamTokenInstall", () => {
       expect(diagnostic).not.toContain(TOKEN);
     },
   );
+
+  it("returns a receipt the host's restarted boot writes 90 s after the redemption", async () => {
+    const prepared = await preparePipedToken(environment, environmentId, TOKEN);
+    vi.useFakeTimers();
+    let settled = false;
+    const waiting = observeSettlement(
+      waitForTeamTokenInstall(
+        environment,
+        prepared,
+        TEAM_INSTALL_RECEIPT_WAIT_MS,
+      ),
+    );
+    void waiting.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(settled).toBe(false);
+    await writeFile(
+      identityFile(environment, "team-install-completed.json"),
+      JSON.stringify({ tokenHash, environmentId, hostId }),
+      { mode: 0o600 },
+    );
+    for (let elapsed = 0; elapsed < 10_000 && !settled; elapsed += 100) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+
+    expect(await waiting).toEqual({
+      status: "fulfilled",
+      value: { hostId, environmentId },
+    });
+  });
+
+  it("is still waiting 1 s before TEAM_INSTALL_RECEIPT_WAIT_MS and refuses at it", async () => {
+    const prepared = await preparePipedToken(environment, environmentId, TOKEN);
+    vi.useFakeTimers();
+    let settled = false;
+    const waiting = observeSettlement(
+      waitForTeamTokenInstall(
+        environment,
+        prepared,
+        TEAM_INSTALL_RECEIPT_WAIT_MS,
+      ),
+    );
+    void waiting.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(TEAM_INSTALL_RECEIPT_WAIT_MS - 1_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(cliErrorFromSettlement(await waiting).code).toBe(
+      CLI_ERROR_CODES.AUTH_REJECTED,
+    );
+  });
 
   it("does not treat the staged token file being absent as a completed install", async () => {
     const prepared = await preparePipedToken(environment, environmentId, TOKEN);

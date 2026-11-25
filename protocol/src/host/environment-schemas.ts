@@ -686,9 +686,27 @@ export type ConfigEnvLocalOverrideSetRequest = z.infer<
 export const configEnvLocalOverrideClearRequestSchema = lazySchema(() =>
   z.object({ target: localOverrideTargetSchema }),
 );
+/** A caller publishing an own value can clear just the value it published. */
+export const configEnvLocalOverrideClearRequestSchemaV11 = lazySchema(() =>
+  configEnvLocalOverrideClearRequestSchema.extend({
+    expectedValue: z.string().optional(),
+  }),
+);
 export type ConfigEnvLocalOverrideClearRequest = z.infer<
-  typeof configEnvLocalOverrideClearRequestSchema
+  typeof configEnvLocalOverrideClearRequestSchemaV11
 >;
+
+/** The hold the person's session can apply before clearing the local value. */
+export const configEnvLocalOverrideSaveToPersonalResponseSchema = lazySchema(
+  () =>
+    z.object({
+      environmentId: z.string().min(1),
+      heldId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      expectedLiveRevision: z.number().int().nonnegative().nullable(),
+      reviewRequired: z.boolean(),
+    }),
+);
 
 /** Both answer the host's overrides after the write, or `needs_grant`. */
 export const configEnvLocalOverrideResponseSchema = lazySchema(() =>

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
+import { everySectionShown } from "@/lib/settings-search/__tests__/every-section-shown";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
@@ -16,7 +17,13 @@ vi.mock("@/lib/settings-navigation", () => ({
 /** The box with its query owned by a parent, as the rail owns it. */
 function Harness(): ReactNode {
   const [query, setQuery] = useState("");
-  return <SettingsSearch query={query} onQueryChange={setQuery} />;
+  return (
+    <SettingsSearch
+      query={query}
+      onQueryChange={setQuery}
+      sectionShown={everySectionShown}
+    />
+  );
 }
 
 function combobox(): HTMLElement {

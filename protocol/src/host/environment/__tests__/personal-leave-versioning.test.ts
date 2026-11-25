@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  type MethodVersionRegistry,
+  type SchemaVersion,
+} from "@traycer/protocol/framework";
 import { upgradeRequestToVersion } from "@traycer/protocol/framework/versioned-rpc";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -23,6 +27,25 @@ const previewV12 = { major: 1, minor: 2 } as const;
 const previewV13 = { major: 1, minor: 3 } as const;
 const stopV11 = { major: 1, minor: 1 } as const;
 const stopV12 = { major: 1, minor: 2 } as const;
+const previewV14 = { major: 1, minor: 4 } as const;
+const stopV13 = { major: 1, minor: 3 } as const;
+
+const previewCodecRegistry: MethodVersionRegistry = previewRegistry;
+const stopCodecRegistry: MethodVersionRegistry = stopRegistry;
+
+function contractAt(registry: MethodVersionRegistry, version: SchemaVersion) {
+  const contract = registry[version.major]?.versions[version.minor]?.contract;
+  expect(
+    contract,
+    `missing registered contract ${version.major}.${version.minor}`,
+  ).toBeDefined();
+  if (contract === undefined) {
+    throw new Error(
+      `missing registered contract ${version.major}.${version.minor}`,
+    );
+  }
+  return contract;
+}
 
 type PreviewMinor = 0 | 1;
 
@@ -346,6 +369,253 @@ const profileResults = [
   },
 ] as const;
 
+const digest = "a".repeat(64);
+const compatibilityMatrix = [
+  {
+    name: "old client / old host",
+    client: { preview: previewV13, stop: stopV12 },
+    host: { preview: previewV13, stop: stopV12 },
+  },
+  {
+    name: "old client / new host",
+    client: { preview: previewV13, stop: stopV12 },
+    host: { preview: previewV14, stop: stopV13 },
+  },
+  {
+    name: "new client / old host",
+    client: { preview: previewV14, stop: stopV13 },
+    host: { preview: previewV13, stop: stopV12 },
+  },
+  {
+    name: "new client / new host",
+    client: { preview: previewV14, stop: stopV13 },
+    host: { preview: previewV14, stop: stopV13 },
+  },
+] satisfies ReadonlyArray<{
+  name: string;
+  client: { preview: SchemaVersion; stop: SchemaVersion };
+  host: { preview: SchemaVersion; stop: SchemaVersion };
+}>;
+
+const stopModes = [
+  {
+    name: "plain",
+    profileMode: null,
+    profileSignIns: [],
+  },
+  {
+    name: "keep-personal",
+    profileMode: "keep-personal",
+    profileSignIns,
+  },
+] as const;
+
+describe("environment.move Stop digest compatibility matrix", () => {
+  it.each(compatibilityMatrix)("$name", (versions) => {
+    for (const mode of stopModes) {
+      const clientPreviewContract = contractAt(
+        previewCodecRegistry,
+        versions.client.preview,
+      );
+      const hostPreviewContract = contractAt(
+        previewCodecRegistry,
+        versions.host.preview,
+      );
+      const clientStopContract = contractAt(
+        stopCodecRegistry,
+        versions.client.stop,
+      );
+      const hostStopContract = contractAt(
+        stopCodecRegistry,
+        versions.host.stop,
+      );
+
+      const previewRequest = clientPreviewContract.requestSchema.parse({
+        profileMode: mode.profileMode,
+      });
+      const preparedPreviewRequest = prepareRequestPayload(
+        previewRegistry,
+        versions.client.preview,
+        versions.host.preview,
+        previewRequest,
+        `preview-${versions.client.preview.minor}-${versions.host.preview.minor}`,
+        "environment.move.stopPreview",
+      );
+      expect(preparedPreviewRequest.onWireVersion).toEqual(
+        versions.client.preview.minor <= versions.host.preview.minor
+          ? versions.client.preview
+          : versions.host.preview,
+      );
+      if (versions.client.preview.minor < versions.host.preview.minor) {
+        expect(
+          upgradeRequestToVersion(
+            previewCodecRegistry,
+            preparedPreviewRequest.onWireVersion,
+            versions.host.preview,
+            preparedPreviewRequest.onWirePayload,
+          ),
+        ).toMatchObject({ profileMode: mode.profileMode });
+      }
+
+      const stopRequestInput = {
+        choices: legacyStopChoices,
+        profileMode: mode.profileMode,
+        profileSignIns: mode.profileSignIns,
+        ...(versions.client.stop.minor === stopV13.minor
+          ? { sheetDigest: digest }
+          : {}),
+      };
+      const stopRequest =
+        clientStopContract.requestSchema.parse(stopRequestInput);
+      const preparedStopRequest = prepareRequestPayload(
+        stopRegistry,
+        versions.client.stop,
+        versions.host.stop,
+        stopRequest,
+        `stop-${versions.client.stop.minor}-${versions.host.stop.minor}`,
+        "environment.move.stop",
+      );
+      expect(preparedStopRequest.onWireVersion).toEqual(
+        versions.client.stop.minor <= versions.host.stop.minor
+          ? versions.client.stop
+          : versions.host.stop,
+      );
+
+      if (versions.client.stop.minor < versions.host.stop.minor) {
+        expect(
+          upgradeRequestToVersion(
+            stopCodecRegistry,
+            preparedStopRequest.onWireVersion,
+            versions.host.stop,
+            preparedStopRequest.onWirePayload,
+          ),
+        ).toMatchObject({ sheetDigest: null });
+      } else if (versions.client.stop.minor > versions.host.stop.minor) {
+        expect(preparedStopRequest.onWirePayload).not.toHaveProperty(
+          "sheetDigest",
+        );
+      } else if (versions.client.stop.minor === stopV13.minor) {
+        expect(preparedStopRequest.onWirePayload).toHaveProperty(
+          "sheetDigest",
+          digest,
+        );
+      }
+
+      const hostPreviewResponse = hostPreviewContract.responseSchema.parse({
+        managed: [moveRow],
+        needsChoice: previewV11Response.needsChoice,
+        ...(mode.profileMode === null ? {} : { personalProfiles: null }),
+        ...(versions.host.preview.minor === previewV14.minor
+          ? { sheetDigest: digest }
+          : {}),
+      });
+      const clientPreviewResponse = decodeResponsePayload<unknown>(
+        previewRegistry,
+        versions.client.preview,
+        versions.host.preview,
+        hostPreviewResponse,
+        `preview-response-${versions.client.preview.minor}-${versions.host.preview.minor}`,
+        "environment.move.stopPreview",
+      );
+      if (
+        versions.host.preview.minor === previewV13.minor &&
+        versions.client.preview.minor === previewV14.minor
+      ) {
+        expect(clientPreviewResponse).toMatchObject({ sheetDigest: null });
+      }
+
+      const hostStopResponse = hostStopContract.responseSchema.parse({
+        outcome: "stopped",
+        profileResults: [],
+      });
+      const clientStopResponse = decodeResponsePayload<unknown>(
+        stopRegistry,
+        versions.client.stop,
+        versions.host.stop,
+        hostStopResponse,
+        `stop-response-${versions.client.stop.minor}-${versions.host.stop.minor}`,
+        "environment.move.stop",
+      );
+      expect(clientStopResponse).toMatchObject({ outcome: "stopped" });
+
+      if (
+        versions.client.stop.minor === stopV13.minor &&
+        versions.host.stop.minor === stopV13.minor
+      ) {
+        const freshPreview = {
+          managed: [moveRow],
+          needsChoice: previewV11Response.needsChoice,
+          ...(mode.profileMode === null ? {} : { personalProfiles: null }),
+          sheetDigest: digest,
+        };
+        const changedResponse = hostStopContract.responseSchema.parse({
+          outcome: "sheet_changed",
+          preview: freshPreview,
+        });
+        expect(
+          decodeResponsePayload<unknown>(
+            stopRegistry,
+            versions.client.stop,
+            versions.host.stop,
+            changedResponse,
+            `changed-response-${mode.name}`,
+            "environment.move.stop",
+          ),
+        ).toEqual(changedResponse);
+      }
+    }
+  });
+
+  it("keeps sheet_changed out of the released preview/stop versions", () => {
+    const legacyStop = contractAt(stopCodecRegistry, stopV12);
+    expect(
+      legacyStop.responseSchema.safeParse({
+        outcome: "sheet_changed",
+        preview: { managed: [], needsChoice: [] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a valid digest on current previews and only on changed previews", () => {
+    const previewContract = contractAt(previewCodecRegistry, previewV14);
+    const stopContract = contractAt(stopCodecRegistry, stopV13);
+    const previewWithoutDigest = { managed: [], needsChoice: [] };
+
+    expect(
+      previewContract.responseSchema.safeParse(previewWithoutDigest).success,
+    ).toBe(false);
+    expect(
+      previewContract.responseSchema.safeParse({
+        ...previewWithoutDigest,
+        sheetDigest: "not-a-sha256",
+      }).success,
+    ).toBe(false);
+    expect(
+      previewContract.responseSchema.parse({
+        ...previewWithoutDigest,
+        sheetDigest: null,
+      }),
+    ).toMatchObject({ sheetDigest: null });
+
+    expect(
+      stopContract.requestSchema.parse({ choices: [], profileMode: null }),
+    ).toMatchObject({ sheetDigest: null });
+    expect(
+      stopContract.requestSchema.safeParse({
+        choices: [],
+        profileMode: null,
+        sheetDigest: "not-a-sha256",
+      }).success,
+    ).toBe(false);
+    expect(
+      stopContract.responseSchema.safeParse({
+        outcome: "sheet_changed",
+        preview: { ...previewWithoutDigest, sheetDigest: null },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("environment.move personal leave compatibility", () => {
   it.each(previewRequestUpCases)("$name", (testCase) => {
     expect(upgradePreviewRequest(testCase.minor, testCase.input)).toEqual(
@@ -613,10 +883,13 @@ const mixedSignIns = [
 ] as const;
 
 describe("environment.move stopPreview@1.3 marks a shared folder", () => {
-  it("names 1.3 the latest preview and 1.2 the one before it", () => {
-    expect(previewRegistry[1].latestMinor).toBe(3);
+  it("keeps 1.3 installed and names 1.4 the latest preview", () => {
+    expect(previewRegistry[1].latestMinor).toBe(4);
     expect(previewRegistry[1].versions[3].contract.schemaVersion).toEqual(
       previewV13,
+    );
+    expect(previewRegistry[1].versions[4].contract.schemaVersion).toEqual(
+      previewV14,
     );
   });
 
@@ -712,9 +985,10 @@ describe("environment.move stopPreview@1.3 marks a shared folder", () => {
 });
 
 describe("environment.move stop@1.2 tells a pressed Skip from an untouched row", () => {
-  it("names 1.2 the latest stop", () => {
-    expect(stopRegistry[1].latestMinor).toBe(2);
+  it("keeps 1.2 installed and names 1.3 the latest stop", () => {
+    expect(stopRegistry[1].latestMinor).toBe(3);
     expect(stopRegistry[1].versions[2].contract.schemaVersion).toEqual(stopV12);
+    expect(stopRegistry[1].versions[3].contract.schemaVersion).toEqual(stopV13);
   });
 
   it("accepts skip, untouched and signed-in in one request", () => {

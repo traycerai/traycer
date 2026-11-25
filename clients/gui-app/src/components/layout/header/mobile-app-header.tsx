@@ -297,12 +297,11 @@ function useMobileHeaderEpicId(epicTabId: string | null): string | null {
  * too, where the router has not been to `/settings` at all.
  */
 function settingsSectionLabel(surface: MobileHeaderSurface): string | null {
-  if (surface.kind !== "settings" || surface.path === null) return null;
-  const path = surface.path;
-  const section = SETTINGS_SECTIONS.find((s) =>
-    path.startsWith(`/settings/${s.id}`),
-  );
-  return section === undefined ? null : section.label;
+  const path = surface.kind === "settings" ? surface.path : null;
+  return path === null
+    ? null
+    : (SETTINGS_SECTIONS.find((s) => path.startsWith(`/settings/${s.id}`))
+        ?.label ?? null);
 }
 
 /**

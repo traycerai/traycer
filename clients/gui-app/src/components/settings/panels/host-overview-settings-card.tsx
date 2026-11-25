@@ -23,7 +23,10 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
 import {
   isStaleLocalPick,
@@ -65,7 +68,10 @@ import {
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
 
 /** A give whose start answered: the team it names and the line its receipt shows. */
 export interface StartedGive {
@@ -88,7 +94,7 @@ export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
-  readonly status: EnvironmentStatusResponseV11 | null;
+  readonly status: EnvironmentStatusResponseV13 | null;
   readonly binding: EnvironmentHostBinding | null;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
@@ -583,9 +589,7 @@ function railFollowKey(pick: EnvironmentPick): string {
  */
 function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
-  const current = useSettingsEnvironmentPickStore(
-    (state) => state.pick ?? state.defaultPick,
-  );
+  const current = useEnvironmentPick();
   const nextKey = pick === null ? null : railFollowKey(pick);
   const currentKey = railFollowKey(current);
   const held = useRef<string | null>(null);
@@ -598,10 +602,11 @@ function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
 }
 
 /**
- * A Local pick the Environment dropdown would keep. One it would drop
- * (`isStaleLocalPick`: no Local row, or a row that needs an update) is not
- * written. The stopped-move row still shows the computer's name; the rail
- * stays where it is, because Personal is not what that row shows.
+ * A Local pick on a computer that still has its Local row. One with no row,
+ * or a row that needs an update (`isStaleLocalPick`), is not written: the
+ * window reads it as the default. The stopped-move row still shows the
+ * computer's name; the rail stays where it is, because Personal is not what
+ * that row shows.
  */
 function selectableLocalPick(
   hostId: string,

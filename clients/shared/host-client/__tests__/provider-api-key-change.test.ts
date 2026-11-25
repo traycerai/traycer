@@ -246,6 +246,7 @@ describe("changeProviderApiKey shared flow", () => {
           apiKey: API_KEY,
         },
         null,
+        undefined,
       );
       const clear = await changeProviderApiKey(
         rig.host,
@@ -255,6 +256,7 @@ describe("changeProviderApiKey shared flow", () => {
           action: "clear",
         },
         null,
+        undefined,
       );
 
       const requests = fetchMock.mock.calls;
@@ -362,6 +364,7 @@ describe("changeProviderApiKey shared flow", () => {
         apiKey: API_KEY,
       },
       null,
+      undefined,
     );
 
     const legacy = callParams(rig, "providers.setApiKey");
@@ -405,6 +408,7 @@ describe("changeProviderApiKey shared flow", () => {
         apiKey: API_KEY,
       },
       null,
+      undefined,
     );
     await changeProviderApiKey(
       rig.host,
@@ -414,6 +418,7 @@ describe("changeProviderApiKey shared flow", () => {
         action: "clear",
       },
       null,
+      undefined,
     );
 
     const set = callParams(rig, "providers.setApiKey");
@@ -456,6 +461,7 @@ describe("changeProviderApiKey shared flow", () => {
         action: "clear",
       },
       null,
+      undefined,
     );
 
     expect(
@@ -492,6 +498,7 @@ describe("changeProviderApiKey shared flow", () => {
         action: "clear",
       },
       null,
+      undefined,
     );
 
     expect(
@@ -518,6 +525,7 @@ describe("changeProviderApiKey shared flow", () => {
         "cursor",
         { action: "clear" },
         null,
+        undefined,
       ),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(
@@ -549,6 +557,7 @@ describe("changeProviderApiKey shared flow", () => {
         "cursor",
         { action: "set", apiKey: API_KEY },
         EXPECTED_ENVIRONMENT_ID,
+        undefined,
       ),
     );
     const clearFailure = await failureInfo(
@@ -558,6 +567,7 @@ describe("changeProviderApiKey shared flow", () => {
         "cursor",
         { action: "clear" },
         EXPECTED_ENVIRONMENT_ID,
+        undefined,
       ),
     );
 
@@ -598,6 +608,7 @@ describe("changeProviderApiKey shared flow", () => {
         "cursor",
         { action: "set", apiKey: API_KEY },
         EXPECTED_ENVIRONMENT_ID,
+        undefined,
       ),
     );
     const clearFailure = await failureInfo(
@@ -607,6 +618,7 @@ describe("changeProviderApiKey shared flow", () => {
         "cursor",
         { action: "clear" },
         EXPECTED_ENVIRONMENT_ID,
+        undefined,
       ),
     );
 
@@ -646,6 +658,7 @@ describe("changeProviderApiKey shared flow", () => {
         "cursor",
         { action: "set", apiKey: API_KEY },
         EXPECTED_ENVIRONMENT_ID,
+        undefined,
       ),
     );
     const clearFailure = await failureInfo(
@@ -655,6 +668,7 @@ describe("changeProviderApiKey shared flow", () => {
         "cursor",
         { action: "clear" },
         EXPECTED_ENVIRONMENT_ID,
+        undefined,
       ),
     );
 
@@ -698,6 +712,7 @@ describe("changeProviderApiKey shared flow", () => {
       "cursor",
       { action: "clear" },
       null,
+      undefined,
     );
 
     const settle = providersSettleApiKeyChangeRequestSchema.safeParse(
@@ -741,6 +756,7 @@ describe("changeProviderApiKey shared flow", () => {
           action: "clear",
         },
         null,
+        undefined,
       ),
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     expect(fetchMock.mock.calls.length === 0 && recordCalls.length === 0).toBe(
@@ -774,6 +790,7 @@ describe("changeProviderApiKey shared flow", () => {
       "cursor",
       { action: "set", apiKey: API_KEY },
       null,
+      undefined,
     );
     expect(
       bareRig.messenger.calls.some(
@@ -801,6 +818,7 @@ describe("changeProviderApiKey shared flow", () => {
           action: "clear",
         },
         null,
+        undefined,
       ),
     ).rejects.toMatchObject({ code: "RPC_ERROR" });
     expect(
@@ -841,6 +859,7 @@ describe("changeProviderApiKey shared flow", () => {
             apiKey: API_KEY,
           },
           null,
+          undefined,
         ),
       );
       const expectedCode =
@@ -897,6 +916,7 @@ describe("changeProviderApiKey shared flow", () => {
           apiKey: API_KEY,
         },
         null,
+        undefined,
       ),
     );
 
@@ -946,6 +966,7 @@ describe("changeProviderApiKey shared flow", () => {
           apiKey: API_KEY,
         },
         null,
+        undefined,
       ),
     );
 
@@ -998,6 +1019,7 @@ describe("changeProviderApiKey shared flow", () => {
       "cursor",
       { action: "set", apiKey: API_KEY },
       null,
+      undefined,
     );
     await started;
     const replacement = requestContext(true);
@@ -1095,6 +1117,7 @@ describe("changeProviderApiKey shared flow", () => {
       "cursor",
       { action: "set", apiKey: API_KEY },
       null,
+      undefined,
     ).then((result) => {
       completed = true;
       return result;
@@ -1148,6 +1171,7 @@ describe("changeProviderApiKey shared flow", () => {
         "cursor",
         { action: "set", apiKey: API_KEY },
         null,
+        undefined,
       );
       expect(outcome.result === result).toBe(true);
     },

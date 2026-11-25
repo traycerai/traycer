@@ -47,6 +47,15 @@ vi.mock("@/components/settings/secrets/secrets-page", () => ({
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import type {
+  OpenSettingsModalOpts,
+  SystemOverlayKind,
+  SystemTabModalApi,
+} from "@/stores/tabs/use-system-tab-modal";
+import type { SettingsSectionId } from "@/lib/settings-sections";
+import { useTabsStore } from "@/stores/tabs/store";
+import { SECRETS } from "@/components/settings/panels/secrets.definitions";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
@@ -60,6 +69,8 @@ const HOST_ID = "host-a";
 
 afterEach(() => {
   cleanup();
+  setSystemTabModalApi(null);
+  useTabsStore.setState({ systemTabs: { history: null, settings: null } });
   scopeOverrides.current = {};
   support.current = null;
   statusRead.current = null;
@@ -88,6 +99,34 @@ function renderPanel(options: {
   );
 }
 
+/**
+ * The Settings surface's commands, published through the real bridge and
+ * recorded, over a Settings tab remembered at Secrets: the helper a server
+ * fact reaches for decides which of them it issues.
+ */
+function publishSurface(options: { readonly overlayActive: boolean }) {
+  const surface = {
+    openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
+    setSection: vi.fn<(section: SettingsSectionId) => void>(),
+  };
+  const api: SystemTabModalApi = {
+    ...surface,
+    active: null,
+    openHistory: () => undefined,
+    close: () => undefined,
+    promoteToTab: () => undefined,
+    isOverlayActive: (kind: SystemOverlayKind) =>
+      kind === "settings" && options.overlayActive,
+  };
+  useTabsStore.getState().openSystemTab({
+    kind: "settings",
+    name: "Settings",
+    lastPath: "/settings/secrets",
+  });
+  setSystemTabModalApi(api);
+  return surface;
+}
+
 describe("<SecretsSettingsPanel />", () => {
   it("shows the page on a personal host that serves the secrets list", () => {
     renderPanel({
@@ -98,7 +137,6 @@ describe("<SecretsSettingsPanel />", () => {
 
     expect(screen.getByTestId("secrets-page")).toBeTruthy();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
-    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the page while the host's principal is not yet read", () => {
@@ -122,7 +160,6 @@ describe("<SecretsSettingsPanel />", () => {
     );
     expect(screen.getByTestId("team-owned-line").textContent).toContain("Acme");
     expect(screen.queryByTestId("secrets-page")).toBeNull();
-    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the team line on a team's host that predates the page", () => {
@@ -135,32 +172,52 @@ describe("<SecretsSettingsPanel />", () => {
     });
 
     expect(screen.getByTestId("secrets-team-view")).toBeTruthy();
-    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
-  it("asks to update a host that predates the page", () => {
+  it("shows the title and description, and nothing under them, once the host says it does not serve the list", () => {
+    const surface = publishSurface({ overlayActive: true });
+
     renderPanel({
       supported: false,
       status: environmentStatusFixture({ principal: { kind: "personal" } }),
       hasClient: true,
     });
 
-    expect(screen.getByTestId("secrets-update-host").textContent).toBe(
-      "Update this host to use your secrets here.",
+    expect(
+      screen.getByRole("heading", { name: SECRETS.page.label }),
+    ).toBeTruthy();
+    expect(screen.getByText(SECRETS.page.description)).toBeTruthy();
+    expect(
+      document.querySelector("[data-settings-panel-body]")?.textContent,
+    ).toBe("");
+    expect(surface.setSection).not.toHaveBeenCalled();
+    expect(surface.openSettings).not.toHaveBeenCalled();
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/secrets",
     );
-    expect(screen.queryByTestId("secrets-page")).toBeNull();
-    expect(screen.queryByTestId("secrets-team-view")).toBeNull();
   });
 
-  it("shows neither before the host's handshake says what it serves", () => {
+  it("neither moves nor shows a line, and keeps the description, before the host's handshake says what it serves", () => {
+    const surface = publishSurface({ overlayActive: true });
+
     renderPanel({
       supported: null,
       status: environmentStatusFixture({ principal: { kind: "personal" } }),
       hasClient: true,
     });
 
+    expect(
+      screen.getByRole("heading", { name: SECRETS.page.label }),
+    ).toBeTruthy();
+    expect(screen.getByText(SECRETS.page.description)).toBeTruthy();
+    expect(
+      document.querySelector("[data-settings-panel-body]")?.textContent,
+    ).toBe("");
+    expect(surface.setSection).not.toHaveBeenCalled();
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/secrets",
+    );
     expect(screen.queryByTestId("secrets-page")).toBeNull();
-    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
   });
 

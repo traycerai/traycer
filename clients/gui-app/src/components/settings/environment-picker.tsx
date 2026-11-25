@@ -1,11 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import { ChevronDown } from "lucide-react";
 import {
-  isStaleLocalPick,
   LOCAL_BADGE_TOOLTIP,
   personalSubtitle,
-  type EnvironmentPickerModel,
   type LocalPickerRow,
 } from "@/components/settings/environment/environment-picker-model";
 import {
@@ -20,7 +18,7 @@ import {
   usePickedTeamLabel,
 } from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
-import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
+import { useEnvironmentPickerModel } from "@/components/settings/environment/use-environment-picker-model";
 import {
   useHostScopeFor,
   WINDOW_HOST_SELECTION,
@@ -42,13 +40,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   environmentPickValue,
-  moveEnvironmentPick,
-  moveEnvironmentSurface,
   PERSONAL_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
@@ -56,34 +51,6 @@ import {
   useMoveSheetStore,
   type MoveSheetTarget,
 } from "@/stores/settings/move-sheet-store";
-
-/**
- * The model the Environment dropdown draws, from each computer's
- * `environment.status` (`isEnvironmentComputer`). Also keeps the window's
- * default pick current and drops a Local pick whose computer has since moved:
- * the store is what every Environment page reads (`useEnvironmentPick`), and
- * this is the one place that knows each computer's state.
- */
-function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
-  const model = useEnvironmentStatusModel(scope);
-  const pick = useSettingsEnvironmentPickStore((state) => state.pick);
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
-  const setDefaultPick = useSettingsEnvironmentPickStore(
-    (state) => state.setDefaultPick,
-  );
-  const statuses = model.statuses;
-  const stale = isStaleLocalPick(pick, model.picker, statuses);
-  const { defaultPick } = model.picker;
-  // Syncs host-reported state into the window's pick: the store is read by
-  // pages that do not mount this hook.
-  useEffect(() => {
-    setDefaultPick(defaultPick, scope.activeHostId);
-  }, [defaultPick, setDefaultPick, scope.activeHostId]);
-  useEffect(() => {
-    if (stale) setPick(null);
-  }, [stale, setPick]);
-  return model.picker;
-}
 
 /**
  * The dropdown's pick upkeep for while the dropdown is not on screen: a phone
@@ -106,26 +73,13 @@ export function EnvironmentPickUpkeep(): ReactNode {
  */
 export function EnvironmentPicker(props: {
   readonly scope: HostScope;
-  /** The section on screen, so a pick that hides it can leave it. */
-  readonly activeSection: SettingsSectionId | null;
 }): ReactNode {
   const model = useEnvironmentPickerModel(props.scope);
   const running = useHostsRunningPersonal(true);
   const openAddHost = useAddHostDialogStore((state) => state.openDialog);
-  const pick = useSettingsEnvironmentPickStore(
-    (state) => state.pick ?? model.defaultPick,
-  );
+  const { pick } = model;
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  const choose = (next: EnvironmentPick): void => {
-    moveEnvironmentPick({
-      next,
-      activeSection: props.activeSection,
-      setPick,
-      // A person just pressed this row, so the surface follows the press.
-      moveSurface: moveEnvironmentSurface.onGesture,
-    });
-  };
   // Finish moving and Rename both continue on that host's Overview.
   const openHostOverview = (hostId: string): void => {
     carryViewedHostIntoSettingsScope(hostId);
@@ -159,7 +113,7 @@ export function EnvironmentPicker(props: {
               nested={false}
               disabled={false}
               testId="environment-picker-personal"
-              onSelect={() => choose(PERSONAL_PICK)}
+              onSelect={() => setPick(PERSONAL_PICK)}
               verb={null}
             />
             {running.collisions.map((collision) => (
@@ -175,7 +129,7 @@ export function EnvironmentPicker(props: {
             ))}
             <TeamRows
               pick={pick}
-              onPick={choose}
+              onPick={setPick}
               onReview={setReviewing}
               onConnectComputer={() =>
                 openAddHost(props.scope.hosts.map((host) => host.hostId))
@@ -207,7 +161,7 @@ export function EnvironmentPicker(props: {
                 disabled={row.needsUpdate}
                 testId={`environment-picker-local-${row.hostId}`}
                 onSelect={() =>
-                  choose({
+                  setPick({
                     kind: "local",
                     hostId: row.hostId,
                     hostName: row.name,
@@ -224,7 +178,7 @@ export function EnvironmentPicker(props: {
         onClose={() => setReviewing(null)}
         onAccepted={(environmentId) => {
           setReviewing(null);
-          choose({ kind: "team", environmentId });
+          setPick({ kind: "team", environmentId });
         }}
       />
     </>

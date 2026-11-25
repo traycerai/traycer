@@ -19,6 +19,7 @@ import {
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import type { SettingsSectionId } from "@/lib/settings-sections";
 import { openLayoutEditor } from "@/lib/layout/editor-session";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import type { LayoutEditorEntryMethod } from "@/stores/layout/layout-editor-store";
@@ -31,6 +32,8 @@ const RESULTS_SELECTOR = "[data-settings-search-results]";
 export interface SettingsSearchProps {
   readonly query: string;
   readonly onQueryChange: (query: string) => void;
+  /** The sections the picked configuration's source can draw. */
+  readonly sectionShown: (section: SettingsSectionId) => boolean;
 }
 
 /**
@@ -47,7 +50,7 @@ export interface SettingsSearchProps {
  * section list while a search is running and cannot ask a child for that.
  */
 export function SettingsSearch(props: SettingsSearchProps): ReactNode {
-  const { query, onQueryChange } = props;
+  const { query, onQueryChange, sectionShown } = props;
   const requestReveal = useSettingsSearchStore((state) => state.requestReveal);
   // The highlight, not a selection: nothing is chosen until Enter or a click.
   // Reset to the top on every query change, because result 3 of the previous
@@ -68,8 +71,8 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
   const navigate = useNavigate();
 
   const results = useMemo(
-    () => searchSettings(query, availability),
-    [query, availability],
+    () => searchSettings(query, availability, sectionShown),
+    [query, availability, sectionShown],
   );
   const active = isSettingsSearchActive(query);
   // Clamped rather than stored-and-corrected: `results` shrinks as the user

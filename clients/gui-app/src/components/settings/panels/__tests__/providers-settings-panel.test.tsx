@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   PROVIDER_DISPLAY_NAMES,
   PROVIDER_PROFILE_ACCENT_COLORS,
+  providerMutationCliStateSchemaV21,
   type ProviderProfileAccentColor,
   type ProviderAuth,
   type ProviderCliCandidate,
@@ -28,6 +29,10 @@ import type {
   RequestOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  changeProviderKeyRecordViaHttp,
+  type ProviderKeyRecordClient,
+} from "@traycer-clients/shared/host-client/provider-api-key-change";
 import type { ProfileRecordEnablementResult } from "@traycer-clients/shared/host-client/provider-profile-enablement";
 import type { EnvironmentHostReadResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
@@ -39,6 +44,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { pickOldHostLocal } from "@/components/settings/__tests__/old-host-pick-fixture";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -287,10 +293,14 @@ const providerMocks = vi.hoisted(() => {
     liveList: false,
     liveClient: null as HostClient<HostRpcRegistry> | null,
     useRealProfileEnablementMutation: false,
+    useRealApiKeyChange: false,
+    personalEnvironmentId: null as string | null,
     realStartLogin: false,
     signInRecordingService: {
       recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
     },
+    changeProviderKeyRecord:
+      vi.fn<ProviderKeyRecordClient["changeProviderKeyRecord"]>(),
     setSelectionMutate: vi.fn(),
     addCustomPathMutate: vi.fn(),
     removeCustomPathMutate: vi.fn(),
@@ -625,19 +635,70 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
-  useProvidersSetApiKey: () => ({
-    mutate: providerMocks.setApiKeyMutate,
-    isPending: false,
-  }),
-}));
+vi.mock(
+  "@/hooks/environment/use-addressed-environment",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/environment/use-addressed-environment")
+      >();
+    return {
+      ...actual,
+      usePersonalEnvironment: (enabled: boolean) =>
+        providerMocks.useRealApiKeyChange
+          ? {
+              environmentId: enabled
+                ? providerMocks.personalEnvironmentId
+                : null,
+              resolved: true,
+              retry: () => undefined,
+            }
+          : actual.usePersonalEnvironment(enabled),
+    };
+  },
+);
 
-vi.mock("@/hooks/providers/use-providers-clear-api-key-mutation", () => ({
-  useProvidersClearApiKey: () => ({
-    mutate: providerMocks.clearApiKeyMutate,
-    isPending: false,
-  }),
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-set-api-key-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-set-api-key-mutation")
+      >();
+    return {
+      useProvidersSetApiKey: (
+        environmentId: string | null,
+        readApiKey: () => string,
+        clearInput: () => void,
+        origin: "account-save" | undefined,
+      ) =>
+        providerMocks.useRealApiKeyChange
+          ? actual.useProvidersSetApiKey(
+              environmentId,
+              readApiKey,
+              clearInput,
+              origin,
+            )
+          : { mutate: providerMocks.setApiKeyMutate, isPending: false },
+    };
+  },
+);
+
+vi.mock(
+  "@/hooks/providers/use-providers-clear-api-key-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-clear-api-key-mutation")
+      >();
+    return {
+      useProvidersClearApiKey: (expectedEnvironmentId: string | null) =>
+        providerMocks.useRealApiKeyChange
+          ? actual.useProvidersClearApiKey(expectedEnvironmentId)
+          : { mutate: providerMocks.clearApiKeyMutate, isPending: false },
+    };
+  },
+);
 
 vi.mock(
   "@/hooks/providers/use-providers-set-terminal-agent-args-mutation",
@@ -881,8 +942,13 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
     >();
   return {
     ...actual,
-    useHostSupportsMethod: (_hostId: string | null, method: string) =>
-      !settingsFileMocks.unsupportedMethods.has(method),
+    useHostSupportsMethod: (hostId: string | null, method: string) =>
+      method === "providers.clearKeptApiKey" ||
+      method === "providers.setKeptApiKey" ||
+      method === "providers.beginApiKeyChange" ||
+      method === "providers.settleApiKeyChange"
+        ? actual.useHostSupportsMethod(hostId, method)
+        : !settingsFileMocks.unsupportedMethods.has(method),
   };
 });
 
@@ -1032,6 +1098,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     useAuthService: () => ({
       ...providerMocks.signInRecordingService,
       setProfileRecordEnabled: providerMocks.setProfileRecordEnabled,
+      changeProviderKeyRecord: providerMocks.changeProviderKeyRecord,
     }),
   };
 });
@@ -2153,6 +2220,7 @@ beforeEach(() => {
   providerMocks.liveList = false;
   providerMocks.liveClient = null;
   providerMocks.useRealProfileEnablementMutation = false;
+  providerMocks.useRealApiKeyChange = false;
   providerMocks.realStartLogin = false;
   useSettingsEnvironmentPickStore.setState({
     defaultPick: { kind: "personal" },
@@ -2871,9 +2939,12 @@ describe("<ProvidersSettingsPanel />", () => {
     // (see `permissionsTab`), through the real manifest registry - only the
     // scope's host id is mocked. `9.1` is the line `auto` became expressible
     // on, so this is the ordinary auto-capable host; the cases about the gate
-    // record their own manifest over it.
+    // record their own manifest over it. It advertises `environment.status`:
+    // the suite's Local pick is on this host, and a host without it is an old
+    // one, whose pick offers no Secrets page.
     recordNegotiatedHostManifest(hostScopeMocks.hostId, {
       "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+      "environment.status": { major: 1, minor: 3 },
     });
     guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
     useProvidersFocusStore.setState({
@@ -4806,6 +4877,29 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.refreshedHostIds).not.toContain("host-ambient");
   });
 
+  it("offers Open Secrets under an old host's Local pick, and pressing it opens Secrets", () => {
+    pickOldHostLocal();
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Secrets" }));
+
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+  });
+
+  it("offers Open Secrets under Personal", () => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Open Secrets" })).toBeDefined();
+  });
+
   it("mounts NO global control - and no RPC - until the scope is ready", () => {
     // The real invariant, and the reason this control was kept out of the
     // header for a round. `headerAction` is not gated, so it is only safe
@@ -5830,6 +5924,492 @@ describe("<ProvidersSettingsPanel />", () => {
         value: KEY_VALUE,
       });
       expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    });
+  });
+
+  describe("a provider API key in Personal's Providers page", () => {
+    const hostId = "provider-key-host";
+    const hostName = "Work desktop";
+    const note = `${hostName} uses: ••••••••`;
+    const environmentId = "env_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const localDraft = "synthetic-local-draft";
+    const sharedDraft = "synthetic-shared-draft";
+    const keptMethods = {
+      "providers.setKeptApiKey": { major: 1, minor: 0 },
+      "providers.clearKeptApiKey": { major: 1, minor: 0 },
+    };
+
+    async function renderKeyPage(
+      mode: "kept" | "kept-mirror-off" | "kept-unsupported" | "unmarked",
+    ) {
+      let kept = mode !== "unmarked";
+      let mirrorAnswered = mode !== "kept-mirror-off";
+      const hasRecordAtList = mirrorAnswered;
+      const provider = providerState({
+        providerId: "cursor",
+        selected: { kind: "bundled" },
+        candidates: [],
+        envOverrides: [],
+        nativeCapabilities: CURSOR_TABS,
+        apiKey: {
+          supported: true,
+          configured: true,
+          source: "stored",
+          recordEnvironmentId: hasRecordAtList ? environmentId : null,
+        },
+      });
+      const state = providerMutationCliStateSchemaV21.parse(provider);
+      const { client, messenger } = buildEnvironmentClient({
+        hostId,
+        handlers: {
+          "providers.list": () => ({
+            providers: [
+              kept
+                ? { ...provider, apiKeyKeptLocally: true }
+                : {
+                    ...provider,
+                    apiKey: {
+                      ...provider.apiKey,
+                      recordEnvironmentId: environmentId,
+                    },
+                  },
+            ],
+            native: null,
+          }),
+          "providers.setKeptApiKey": () => ({ state }),
+          "providers.clearKeptApiKey": () => {
+            kept = false;
+            return { state };
+          },
+          "providers.beginApiKeyChange": () =>
+            mode === "unmarked" || !mirrorAnswered
+              ? { mode: "legacy", changeToken: null, environmentId: null }
+              : {
+                  mode: "record",
+                  changeToken: "synthetic-change",
+                  environmentId,
+                },
+          "providers.settleApiKeyChange": () => {
+            kept = false;
+            return { state, result: "installed" };
+          },
+          "providers.clearApiKey": () => ({ state }),
+          "providers.setApiKey": () => ({ state }),
+        },
+      });
+      providerMocks.liveList = true;
+      providerMocks.liveClient = client;
+      providerMocks.useRealApiKeyChange = true;
+      providerMocks.personalEnvironmentId = environmentId;
+      providerMocks.changeProviderKeyRecord.mockReset();
+      providerMocks.changeProviderKeyRecord.mockResolvedValue({
+        kind: "record",
+        record: {
+          providerId: "cursor",
+          profileId: "synthetic-key-record",
+          state: "live",
+          signInNumber: "3",
+          recordRevision: "8",
+          personIntentNumber: "5",
+        },
+      });
+      hostScopeMocks.hostId = hostId;
+      hostScopeMocks.client = { getActiveHostId: () => hostId };
+      useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+      recordNegotiatedHostManifest("unpicked-provider-key-host", keptMethods);
+      recordNegotiatedHostManifest(hostId, {
+        "providers.list": { major: 10, minor: kept ? 14 : 13 },
+        "providers.beginApiKeyChange": { major: 1, minor: 0 },
+        "providers.settleApiKeyChange": { major: 1, minor: 0 },
+        "providers.clearApiKey": { major: 2, minor: 1 },
+        "providers.setApiKey": { major: 2, minor: 1 },
+        ...(mode !== "kept-unsupported" && mode !== "unmarked"
+          ? keptMethods
+          : {}),
+      });
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      onTestFinished(() => queryClient.clear());
+      const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+        hostId,
+        "providers.list",
+        { native: null },
+      );
+      function watchListAnswer() {
+        const answer = Promise.withResolvers<void>();
+        const stop = queryClient.getQueryCache().subscribe((event) => {
+          if (
+            event.type === "updated" &&
+            (event.action.type === "success" ||
+              event.action.type === "error") &&
+            event.query ===
+              queryClient
+                .getQueryCache()
+                .find({ queryKey: listKey, exact: true })
+          ) {
+            answer.resolve();
+          }
+        });
+        return { completed: answer.promise, stop };
+      }
+
+      function watchPageCommit(applied: () => boolean) {
+        const commit = Promise.withResolvers<void>();
+        const observer = new MutationObserver(() => {
+          if (applied()) commit.resolve();
+        });
+        observer.observe(document.body, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+          attributes: true,
+        });
+        return { completed: commit.promise, stop: () => observer.disconnect() };
+      }
+
+      const initial = watchPageCommit(
+        () => screen.queryByRole("tab", { name: "Account" }) !== null,
+      );
+      onTestFinished(initial.stop);
+      rtlRender(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <PersonalPageContext.Provider
+              value={{
+                section: "providers",
+                pick: { kind: "personal" },
+                state: { kind: "unknown" },
+                hostName,
+                hostId,
+                client,
+                localOverrides: [],
+                notices: [],
+                review: [],
+              }}
+            >
+              <ProvidersSettingsPanel />
+            </PersonalPageContext.Provider>
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+      await initial.completed;
+      initial.stop();
+      selectTab("Account");
+      const panel = within(screen.getByRole("tabpanel"));
+      const input = panel.getByLabelText("API key");
+      const keyCalls = () =>
+        messenger.calls
+          .filter(({ method }) =>
+            [
+              "providers.beginApiKeyChange",
+              "providers.settleApiKeyChange",
+              "providers.clearApiKey",
+              "providers.clearKeptApiKey",
+              "providers.setApiKey",
+              "providers.setKeptApiKey",
+            ].includes(method),
+          )
+          .map(({ method, params }) => ({ method, params }));
+
+      async function clickKeyAction(
+        name: string,
+        expected: "released" | "unchanged" | "refused",
+      ): Promise<void> {
+        const button = panel.getByRole("button", { name });
+        expect(button).toHaveProperty("disabled", false);
+        const errorCount = vi.mocked(toast.error).mock.calls.length;
+        const settled = Promise.withResolvers<void>();
+        const unsubscribe = queryClient
+          .getMutationCache()
+          .subscribe((event) => {
+            if (
+              event.type === "updated" &&
+              (event.action.type === "success" || event.action.type === "error")
+            ) {
+              settled.resolve();
+            }
+          });
+        const refresh = watchListAnswer();
+        const commit =
+          expected === "released"
+            ? watchPageCommit(() => panel.queryByText(note) === null)
+            : null;
+        if (commit !== null) onTestFinished(commit.stop);
+        try {
+          await act(async () => {
+            fireEvent.click(button);
+            await Promise.all([settled.promise, refresh.completed]);
+          });
+          if (commit !== null) await commit.completed;
+          if (expected === "refused" && button.hasAttribute("disabled")) {
+            const enabled = watchPageCommit(
+              () => !button.hasAttribute("disabled"),
+            );
+            onTestFinished(enabled.stop);
+            try {
+              await enabled.completed;
+            } finally {
+              enabled.stop();
+            }
+          }
+        } finally {
+          commit?.stop();
+          refresh.stop();
+          unsubscribe();
+        }
+        expect(toast.error).toHaveBeenCalledTimes(
+          errorCount + (expected === "refused" ? 1 : 0),
+        );
+      }
+
+      return {
+        panel,
+        input,
+        keyCalls,
+        clickKeyAction,
+        recoverMirror: () => {
+          mirrorAnswered = true;
+        },
+      };
+    }
+
+    it("lists Save, Use everywhere and Clear on the marked key row and sends each pasted draft to the chosen destination", async () => {
+      const { panel, input, keyCalls, clickKeyAction } =
+        await renderKeyPage("kept");
+      const save = panel.getByRole("button", { name: "Save" });
+      const share = panel.getByRole("button", {
+        name: "Use everywhere",
+      });
+      const row = save.parentElement;
+      if (row === null)
+        throw new Error("The key inputs and actions need a row.");
+      expect(row.contains(input)).toBe(true);
+      expect(
+        within(row)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(["Save", "Use everywhere", "Clear"]);
+      expect(save).toHaveProperty("disabled", true);
+      expect(share).toHaveProperty("disabled", true);
+      const keptNote = panel.getByText(note);
+      expect(keptNote.textContent).toBe(note);
+      expect(keptNote.querySelector("button, a")).toBeNull();
+      expect(keptNote.parentElement).toBe(row.parentElement);
+      expect(
+        row.compareDocumentPosition(keptNote) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(panel.queryByText(/^Stored encrypted/)).toBeNull();
+
+      for (const invalid of ["embedded space", "x".repeat(4_097)]) {
+        fireEvent.change(input, { target: { value: invalid } });
+        expect(save).toHaveProperty("disabled", true);
+        expect(share).toHaveProperty("disabled", true);
+      }
+      expect(keyCalls()).toEqual([]);
+
+      fireEvent.change(input, { target: { value: localDraft } });
+      await clickKeyAction("Save", "unchanged");
+      const localSave = {
+        method: "providers.setKeptApiKey",
+        params: { providerId: "cursor", apiKey: localDraft },
+      };
+      expect(keyCalls()).toEqual([localSave]);
+      expect(providerMocks.changeProviderKeyRecord).not.toHaveBeenCalled();
+      expect(panel.getByText(note)).toBeDefined();
+
+      fireEvent.change(input, { target: { value: sharedDraft } });
+      await clickKeyAction("Use everywhere", "released");
+      expect(keyCalls()).toEqual([
+        localSave,
+        {
+          method: "providers.beginApiKeyChange",
+          params: { providerId: "cursor" },
+        },
+        {
+          method: "providers.settleApiKeyChange",
+          params: {
+            providerId: "cursor",
+            action: "set",
+            changeToken: "synthetic-change",
+            recordId: "synthetic-key-record",
+            signInNumber: "3",
+            recordRevision: "8",
+          },
+        },
+      ]);
+      expect(
+        providerMocks.changeProviderKeyRecord.mock.calls.map(
+          ([environment, providerId, change]) => ({
+            environment,
+            providerId,
+            change,
+          }),
+        ),
+      ).toEqual([
+        {
+          environment: environmentId,
+          providerId: "cursor",
+          change: { action: "set", apiKey: sharedDraft },
+        },
+      ]);
+      expect(
+        panel.getByText(/^Stored encrypted in Traycer's cloud/),
+      ).toBeDefined();
+      expect(panel.queryByText(note)).toBeNull();
+    });
+
+    it("retains the draft on a refused Share and publishes it after mirror recovery on the same marked row", async () => {
+      const { panel, input, keyCalls, clickKeyAction, recoverMirror } =
+        await renderKeyPage("kept-mirror-off");
+      expect(
+        panel.getByRole("button", { name: "Use everywhere" }),
+      ).toHaveProperty("disabled", true);
+      fireEvent.change(input, { target: { value: sharedDraft } });
+      await clickKeyAction("Use everywhere", "refused");
+
+      const begin = {
+        method: "providers.beginApiKeyChange",
+        params: { providerId: "cursor" },
+      };
+      expect(keyCalls()).toEqual([begin]);
+      expect(providerMocks.changeProviderKeyRecord).not.toHaveBeenCalled();
+      expect(vi.mocked(toast.error).mock.lastCall?.[0]).toBe(
+        "Couldn't save the API key.",
+      );
+      expect(panel.getByText(note).textContent).toBe(note);
+      expect(input).toHaveProperty("value", sharedDraft);
+
+      recoverMirror();
+      await clickKeyAction("Use everywhere", "released");
+      expect(keyCalls()).toEqual([
+        begin,
+        begin,
+        {
+          method: "providers.settleApiKeyChange",
+          params: {
+            providerId: "cursor",
+            action: "set",
+            changeToken: "synthetic-change",
+            recordId: "synthetic-key-record",
+            signInNumber: "3",
+            recordRevision: "8",
+          },
+        },
+      ]);
+      expect(
+        providerMocks.changeProviderKeyRecord.mock.calls.map(
+          ([environment, providerId, change]) => ({
+            environment,
+            providerId,
+            change,
+          }),
+        ),
+      ).toEqual([
+        {
+          environment: environmentId,
+          providerId: "cursor",
+          change: { action: "set", apiKey: sharedDraft },
+        },
+      ]);
+      expect(panel.getByLabelText("API key")).toBe(input);
+      expect(panel.queryByText(note)).toBeNull();
+      expect(
+        panel.getByText(/^Stored encrypted in Traycer's cloud/),
+      ).toBeDefined();
+    });
+
+    it("refuses a bare broker 404 without sending a native key write", async () => {
+      const { panel, input, keyCalls, clickKeyAction } =
+        await renderKeyPage("kept");
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(null, { status: 404 }));
+      onTestFinished(() => fetch.mockRestore());
+      providerMocks.changeProviderKeyRecord.mockImplementation((...request) =>
+        changeProviderKeyRecordViaHttp(
+          "https://authn.example.test",
+          "synthetic-token",
+          ...request,
+        ),
+      );
+      fireEvent.change(input, { target: { value: sharedDraft } });
+      await clickKeyAction("Use everywhere", "refused");
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(keyCalls()).toEqual([
+        {
+          method: "providers.beginApiKeyChange",
+          params: { providerId: "cursor" },
+        },
+      ]);
+      expect(panel.getByText(note).textContent).toBe(note);
+    });
+
+    it("sends only the guarded Clear for a marked row", async () => {
+      const { panel, keyCalls, clickKeyAction } = await renderKeyPage("kept");
+      await clickKeyAction("Clear", "released");
+      expect(keyCalls()).toEqual([
+        {
+          method: "providers.clearKeptApiKey",
+          params: { providerId: "cursor" },
+        },
+      ]);
+      expect(providerMocks.changeProviderKeyRecord).not.toHaveBeenCalled();
+      expect(
+        panel.getByText(/^Stored encrypted in Traycer's cloud/),
+      ).toBeDefined();
+      expect(panel.queryByText(note)).toBeNull();
+    });
+
+    it("keeps the marked note and omits kept-key actions on an unsupported picked host", async () => {
+      const { panel, input, keyCalls } =
+        await renderKeyPage("kept-unsupported");
+      expect(panel.getByText(note).textContent).toBe(note);
+      for (const name of ["Save", "Use everywhere", "Clear"]) {
+        expect(panel.queryByRole("button", { name })).toBeNull();
+      }
+      fireEvent.change(input, { target: { value: sharedDraft } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(keyCalls()).toEqual([]);
+    });
+
+    it("keeps legacy Save, Clear and custody without Use everywhere on an unmarked 10.13 row", async () => {
+      const { panel, input, keyCalls, clickKeyAction } =
+        await renderKeyPage("unmarked");
+      expect(input).toHaveProperty("placeholder", "Replace stored key…");
+      expect(panel.getByRole("button", { name: "Save" })).toHaveProperty(
+        "disabled",
+        true,
+      );
+      expect(
+        panel.queryByRole("button", { name: "Use everywhere" }),
+      ).toBeNull();
+      expect(panel.queryByText(note)).toBeNull();
+      expect(
+        panel.getByText(/^Stored encrypted in Traycer's cloud/),
+      ).toBeDefined();
+
+      fireEvent.change(input, { target: { value: sharedDraft } });
+      await clickKeyAction("Save", "unchanged");
+      await clickKeyAction("Clear", "unchanged");
+      expect(keyCalls()).toEqual([
+        {
+          method: "providers.beginApiKeyChange",
+          params: { providerId: "cursor" },
+        },
+        {
+          method: "providers.setApiKey",
+          params: { providerId: "cursor", apiKey: sharedDraft },
+        },
+        {
+          method: "providers.beginApiKeyChange",
+          params: { providerId: "cursor" },
+        },
+        { method: "providers.clearApiKey", params: { providerId: "cursor" } },
+      ]);
+      expect(providerMocks.changeProviderKeyRecord).not.toHaveBeenCalled();
     });
   });
 

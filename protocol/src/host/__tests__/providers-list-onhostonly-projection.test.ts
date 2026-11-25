@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/index";
+import { decodeResponsePayload } from "@traycer/protocol/host-transport/remote/rpc-codec";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
@@ -201,4 +203,134 @@ describe("providers.list@10.5 projected to 10.0, with a provider row that has pr
     };
     expect(project100(withoutEnvelopeKeys)).toEqual(EXPECTED_TEN_ZERO);
   });
+});
+
+describe("providers.list@10.14 kept provider-key marker", () => {
+  const registry = hostRpcRegistry["providers.list"];
+  const previous = registry[10].versions[13].contract;
+  const current = registry[10].versions[14].contract;
+
+  function listWithKeyFacts() {
+    const response = tenOneResponse();
+    return {
+      ...response,
+      providers: response.providers.map((provider) => ({
+        ...provider,
+        usageReporting: true,
+        apiKey: {
+          ...provider.apiKey,
+          recordEnvironmentId: "synthetic-environment",
+        },
+      })),
+    };
+  }
+
+  function markedList(marker: unknown) {
+    const response = listWithKeyFacts();
+    return {
+      ...response,
+      providers: response.providers.map((provider) => ({
+        ...provider,
+        apiKeyKeptLocally: marker,
+        apiKey: { ...provider.apiKey, key: "synthetic-provider-key" },
+      })),
+    };
+  }
+
+  it("carries the marker through the codec with the existing provider fields", () => {
+    const wire = current.responseSchema.parse(markedList(true));
+    const decoded = decodeResponsePayload<unknown>(
+      registry,
+      current.schemaVersion,
+      current.schemaVersion,
+      wire,
+      "request-provider-list",
+      current.method,
+    );
+    const received = current.responseSchema.parse(decoded);
+
+    expect(received.providers).toMatchObject([
+      {
+        providerId: "claude-code",
+        usageReporting: true,
+        apiKeyKeptLocally: true,
+        apiKey: { recordEnvironmentId: "synthetic-environment" },
+        profiles: [{ profileId: "ambient" }, { profileId: "p1" }],
+      },
+    ]);
+    expect(JSON.stringify(received)).not.toContain("synthetic-provider-key");
+  });
+
+  it.each([false, null, "true"])(
+    "rejects an explicit marker of %s",
+    (marker) => {
+      expect(current.responseSchema.safeParse(markedList(marker)).success).toBe(
+        false,
+      );
+    },
+  );
+
+  it("projects to 10.13 and upgrades a 10.13 host response without a marker", () => {
+    const expected = previous.responseSchema.parse(listWithKeyFacts());
+    const oldWire = previous.responseSchema.parse(
+      current.responseSchema.parse(markedList(true)),
+    );
+    expect(oldWire).toEqual(expected);
+
+    const decoded = decodeResponsePayload<unknown>(
+      registry,
+      current.schemaVersion,
+      previous.schemaVersion,
+      oldWire,
+      "request-provider-list",
+      current.method,
+    );
+    expect(current.responseSchema.parse(decoded)).toEqual(expected);
+  });
+
+  it("keeps the populated 1.0 row and strips both list-only fields", () => {
+    const live = current.responseSchema.parse(markedList(true));
+    const result = downgradeResponseAcrossMajors(registry, 10, 1, live);
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        providers: [
+          {
+            providerId: "claude-code",
+            enabled: true,
+            disabledBy: null,
+            selected: { kind: "bundled" },
+            candidates: [],
+            auth: {
+              status: "unknown",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            authPending: false,
+            checkedAt: null,
+            apiKey: { supported: false, configured: false, source: null },
+            terminalAgentArgs: "",
+            envOverrides: [],
+            loginCapability: null,
+          },
+        ],
+      },
+    });
+  });
+
+  it.each([2, 3, 4, 5, 6, 7, 8, 9] as const)(
+    "strips the marker before the major-%s downgrade",
+    (major) => {
+      const live = current.responseSchema.parse(markedList(true));
+      const result = downgradeResponseAcrossMajors(registry, 10, major, live);
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: { providers: [{ providerId: "claude-code" }] },
+      });
+      expect(keysAtAnyDepth(result)).not.toContain("apiKeyKeptLocally");
+    },
+  );
 });

@@ -14,6 +14,7 @@ import {
 import { PersonalPageNotices } from "@/components/settings/personal/personal-page-notices";
 import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { HostMinimumVersionGate } from "@/components/settings/host-scope/host-scope-gate";
@@ -41,9 +42,7 @@ import {
   ConfigurationSourceBoundary,
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
-import { hostRunsPersonal } from "@/components/settings/environment/environment-picker-model";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { UnresolvedEnvironmentPage } from "@/components/settings/environment/unresolved-environment-page";
@@ -139,7 +138,7 @@ export function PersonalPageFrame(props: {
     (section) => section.id === props.section && section.group === "personal",
   );
   if (pick.kind === "unresolved" && environmentPage) {
-    return <UnresolvedEnvironmentPage />;
+    return <UnresolvedEnvironmentPage section={props.section} />;
   }
   if (pick.kind === "team" && environmentPage) {
     return (
@@ -188,24 +187,16 @@ const CLOUD_ONLY_SECTIONS: ReadonlySet<SettingsSectionId> = new Set([
 /**
  * Personal from the cloud, or from the window's host when it runs Personal.
  * Nothing renders while that host's status is unknown: a guess would show
- * one source's values and then swap to the other's.
+ * one source's values and then swap to the other's. The section's body says
+ * Connecting under its heading meanwhile (`PageOrNotOnComputer`).
  */
 function PersonalSourceFrame(props: {
   readonly section: SettingsSectionId;
   readonly pick: EnvironmentPick;
   readonly children: ReactNode;
 }): ReactNode {
-  const runs = useWindowHostRunsPersonal();
-  if (runs === null) {
-    return (
-      <AgentSpinningDots
-        className={undefined}
-        testId="personal-source-loading"
-        variant={undefined}
-        tone="muted"
-      />
-    );
-  }
+  const { runs } = useWindowHostRunsPersonal(usePersonalHostScope());
+  if (runs === null) return null;
   if (runs) {
     return (
       <HostPageFrame section={props.section}>{props.children}</HostPageFrame>
@@ -222,50 +213,61 @@ function PersonalSourceFrame(props: {
   );
 }
 
-/**
- * Whether the window's host runs Personal; `null` while it is unknown: no
- * handshake yet, or a host that serves `environment.status` and has not
- * answered. A window with no host runs nothing, and neither does one whose
- * host cannot be reached: its pages read the cloud rather than wait for a
- * handshake that cannot happen.
- */
-function useWindowHostRunsPersonal(): boolean | null {
-  const scope = usePersonalHostScope();
-  const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
-  const version = useHostNegotiatedMethodVersion(
-    scope.client,
-    "environment.status",
-  );
-  if (scope.hostId === null) return false;
-  if (scope.status === "unreachable" || scope.status === "vanished")
-    return false;
-  if (version === null) return null;
-  if (version !== false && status.data === null && !status.isError) {
-    return null;
-  }
-  return hostRunsPersonal(
-    { hostId: scope.hostId, name: scope.hostLabel },
-    status.data,
-    version,
-  );
-}
-
 /** A page whose source is a host's own: Personal on its host, or a Local row. */
 function HostPageFrame(props: {
   readonly section: SettingsSectionId;
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
+  const oldHost = useOldHostLocalPick();
   const computerPage = SETTINGS_SECTIONS.some(
     (section) =>
       section.id === props.section &&
       (section.group === "personal" || section.group === "host"),
   );
-  const content = <HostPageContents {...props} />;
+  const content = oldHost ? (
+    <HostOwnPageFrame section={props.section}>
+      {props.children}
+    </HostOwnPageFrame>
+  ) : (
+    <HostPageContents {...props} />
+  );
   return pick.kind === "local" && computerPage ? (
     <LocalComputerPageGate>{content}</LocalComputerPageGate>
   ) : (
     content
+  );
+}
+
+/**
+ * A Local row on a host that serves no `environment.status`: every page is
+ * that host's own, read through it as the release before the Environment
+ * group read them. The frame reads nothing, since the host reports no status,
+ * notice or value kept on one host; the context carries the host for the rows
+ * that address it.
+ */
+function HostOwnPageFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly children: ReactNode;
+}): ReactNode {
+  const pick = useEnvironmentPick();
+  const scope = usePersonalHostScope();
+  return (
+    <PersonalPageContext.Provider
+      value={{
+        section: props.section,
+        pick,
+        state: { kind: "unknown" },
+        hostName: scope.hostLabel,
+        hostId: scope.hostId,
+        client: scope.client,
+        localOverrides: NO_OVERRIDES,
+        notices: NO_NOTICES,
+        review: NO_REVIEW,
+      }}
+    >
+      {props.children}
+    </PersonalPageContext.Provider>
   );
 }
 
