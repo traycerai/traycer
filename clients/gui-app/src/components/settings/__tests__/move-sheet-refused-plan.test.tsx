@@ -661,6 +661,21 @@ async function retryLocalPlan(
   await settle();
 }
 
+async function retryStoppedSourceMove(): Promise<Harness> {
+  const harness = mountLocalSourceSheet(
+    sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
+    shortLivedQueryClient(),
+    true,
+  );
+  await settle();
+  harness.computer.status = stoppedStatus();
+  await deliverNextStatusRead();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await settle();
+  expect(harness.retries()).toBe(1);
+  return harness;
+}
+
 describe("<MoveSheet /> with unread computer settings", () => {
   it("shows the opening refusal without automatically retrying the plan", async () => {
     const harness = mountLocalSourceSheet(
@@ -743,6 +758,72 @@ describe("<MoveSheet /> with unread computer settings", () => {
     expect(acceptIsDisabled()).toBe(true);
 
     await retryLocalPlan(harness, "success");
+    expect(acceptIsDisabled()).toBe(false);
+  });
+
+  it("keeps the source refusal when active invalidation replaces the held Retry", async () => {
+    const harness = mountLocalSourceSheet(
+      sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
+      shortLivedQueryClient(),
+      undefined,
+    );
+    await settle();
+    harness.computer.planFailure = null;
+    await rereadPlan(harness);
+
+    const finishSupersededRead = harness.holdNextPlanRead();
+    const reads = harness.planReads();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(harness.planReads()).toBe(reads + 1);
+
+    harness.computer.plan = FRESH_PLAN;
+    await rereadPlan(harness);
+    expect(harness.planReads()).toBe(reads + 2);
+    finishSupersededRead();
+    await settle();
+
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    await retryLocalPlan(harness, "success");
+    expect(acceptIsDisabled()).toBe(false);
+  });
+
+  it("keeps the source refusal when the setup Retry stops and another client restarts it", async () => {
+    const harness = await retryStoppedSourceMove();
+    const reads = harness.planReads();
+    await deliverNextStatusRead();
+    expect(planIsDrawn()).toBe(false);
+    expect(harness.planReads()).toBe(reads);
+
+    harness.computer.planFailure = null;
+    harness.computer.plan = FRESH_PLAN;
+    harness.computer.status = awaitingConsentStatus();
+    await deliverNextStatusRead();
+    await settle();
+    expect(harness.planReads()).toBe(reads + 1);
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    await retryLocalPlan(harness, "success");
+    expect(acceptIsDisabled()).toBe(false);
+  });
+
+  it("enables Move when the setup Retry's first plan answers successfully", async () => {
+    const harness = await retryStoppedSourceMove();
+    expect(acceptIsDisabled()).toBe(true);
+    const reads = harness.planReads();
+
+    harness.computer.planFailure = null;
+    harness.computer.plan = FRESH_PLAN;
+    harness.computer.status = awaitingConsentStatus();
+    await deliverNextStatusRead();
+    await settle();
+
+    expect(harness.planReads()).toBe(reads + 1);
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).toBeNull();
+    expect(summaryText()).toBe("3 variables");
     expect(acceptIsDisabled()).toBe(false);
   });
 
