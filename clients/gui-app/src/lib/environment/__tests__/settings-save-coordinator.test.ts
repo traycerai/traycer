@@ -383,7 +383,9 @@ describe("settings save edit fence", () => {
       await reconciling;
 
       expect(sent).toHaveLength(1);
-      expect(useSettingsSaveMemoryStore.getState().records[saveId]).toBeDefined();
+      expect(
+        useSettingsSaveMemoryStore.getState().records[saveId],
+      ).toBeDefined();
     },
   );
 

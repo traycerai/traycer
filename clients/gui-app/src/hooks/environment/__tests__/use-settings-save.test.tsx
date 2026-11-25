@@ -1196,9 +1196,13 @@ async function pressPrebindOverride(harness: SaveHarness) {
   await act(async () => {
     await result.current.editor.mutateAsync(setTarget("computer-value"));
   });
-  const [record] = records();
+  const record = records().at(0);
   const { coordinator } = result.current;
-  if (coordinator === null || record?.environmentId !== null) {
+  if (
+    coordinator === null ||
+    record === undefined ||
+    record.environmentId !== null
+  ) {
     throw new Error("Expected a remembered prebind save");
   }
   return { coordinator, record, unmount };
@@ -1363,11 +1367,14 @@ describe("settings-save callers", () => {
       rows: [],
       proposalMinor: 2,
     });
-    const { coordinator, record, unmount } = await pressPrebindOverride(harness);
+    const { coordinator, record, unmount } =
+      await pressPrebindOverride(harness);
     const saveId = record.editId;
     expect(harness.saveRequests).toEqual(["providers.setEnvOverride"]);
     expect(
-      harness.hostCalls.find(({ method }) => method === "providers.setEnvOverride"),
+      harness.hostCalls.find(
+        ({ method }) => method === "providers.setEnvOverride",
+      ),
     ).toMatchObject({ requestId: settingsSaveRequestId(saveId) });
     expect(harness.recordsAtSend[0]?.editId).toBe(saveId);
     expect(storedRows(ACCOUNT_A)).toEqual([JSON.stringify(record)]);

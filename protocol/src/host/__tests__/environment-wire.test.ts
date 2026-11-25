@@ -282,20 +282,26 @@ describe("environment.proposals Move evidence", () => {
   };
   const promotion = { saveId, heldRevision: 9 };
 
-  it.each([null, 8])("carries the exact evidence answer %s at 1.2", (revision) => {
-    const response = {
-      proposals: [
-        { ...row, promotion: { ...promotion, moveWrittenRevision: revision } },
-      ],
-    };
+  it.each([null, 8])(
+    "carries the exact evidence answer %s at 1.2",
+    (revision) => {
+      const response = {
+        proposals: [
+          {
+            ...row,
+            promotion: { ...promotion, moveWrittenRevision: revision },
+          },
+        ],
+      };
 
-    expect(
-      registry[1].versions[2].contract.responseSchema.parse(response),
-    ).toEqual(response);
-    expect(
-      registry[1].versions[1].contract.responseSchema.parse(response),
-    ).toEqual({ proposals: [{ ...row, promotion }] });
-  });
+      expect(
+        registry[1].versions[2].contract.responseSchema.parse(response),
+      ).toEqual(response);
+      expect(
+        registry[1].versions[1].contract.responseSchema.parse(response),
+      ).toEqual({ proposals: [{ ...row, promotion }] });
+    },
+  );
 
   it("does not invent evidence when decoding an older receipt or a regular proposal", () => {
     const oldVersion = { major: 1, minor: 1 };
