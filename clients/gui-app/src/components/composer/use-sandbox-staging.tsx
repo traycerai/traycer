@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type {
   SandboxCatalogue,
+  SandboxGrowth,
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 import type {
@@ -61,6 +62,8 @@ import {
   stageConfigurationCopy,
   stageConfigurationKey,
   stageConfigurations,
+  stageCreditShortfallMc,
+  stageGrowth,
   stageNeedsCredits,
   stagePrice,
   stageProviderFor,
@@ -85,7 +88,7 @@ import {
   reachRemedyLine,
   reachSentence,
   sandboxOsLabel,
-  sandboxShapeLabel,
+  sandboxSizeLabel,
   stagedChipLabel,
   stoppedPickLabel,
   suspendedPickLabel,
@@ -230,6 +233,8 @@ interface NewRowFacts {
   readonly configuration: StageConfiguration;
   /** `null` before the catalogue answers, or when it offers no shape. */
   readonly shape: StageShape | null;
+  /** What the shape grows to; `null` for a fixed shape. */
+  readonly grows: SandboxGrowth | null;
   /** The catalogue answered with nothing this account can create. */
   readonly uncreatable: boolean;
   readonly price: StagePrice | null;
@@ -352,10 +357,7 @@ export function useSandboxStaging(input: {
         stage,
         stagedHost === undefined ? null : stagedHost.sandbox,
       ),
-      shortfallMc:
-        balance === null || price === null
-          ? null
-          : Math.max(1, price.awakeMcPerHour - balance),
+      shortfallMc: stageCreditShortfallMc(balance, price),
       // Waking a team's sandbox uses the team's credits whoever woke it last.
       wakingName: stage.target.kind === "existing" ? stage.target.name : null,
       audience: audienceFor(stagedConfiguration),
@@ -707,6 +709,10 @@ function newRowFacts(input: {
     return {
       configuration,
       shape,
+      grows:
+        input.catalogue === null || shape === null
+          ? null
+          : stageGrowth(input.catalogue, shape),
       uncreatable: input.catalogue !== null && shape === null,
       price,
       needsCredits: stageNeedsCredits(
@@ -727,6 +733,7 @@ function stagedNewFacts(
   return {
     configuration: target.configuration,
     shape: target.shape,
+    grows: stageGrowth(catalogue, target.shape),
     uncreatable: false,
     price,
     needsCredits: stageNeedsCredits(
@@ -773,7 +780,7 @@ function newRowPresentation(
   if (facts.shape !== null) {
     parts.push(
       sandboxOsLabel(facts.shape.os),
-      sandboxShapeLabel(facts.shape.cpus, facts.shape.memoryMb),
+      sandboxSizeLabel(facts.shape.cpus, facts.shape.memoryMb, facts.grows),
     );
   }
   if (facts.price !== null) {
@@ -791,8 +798,8 @@ function newRowPresentation(
 
 function newRowPrice(price: StagePrice, needsCredits: boolean): string {
   return needsCredits
-    ? needsCreditsRow(price.awakeMcPerHour)
-    : fundedRowPrice(price.awakeMcPerHour, price.exact);
+    ? needsCreditsRow(price.awakeMcPerHour, price.offer)
+    : fundedRowPrice(price.awakeMcPerHour, price.offer, price.exact);
 }
 
 /**
@@ -833,15 +840,15 @@ function stagedLabel(
       ? suspendedPickLabel(target.name)
       : stoppedPickLabel(target.name);
   }
+  const price = facts === null ? null : facts.price;
   return stagedChipLabel({
     configuration: stageConfigurationCopy(target.configuration),
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
-    priceMcPerHour:
-      facts === null || facts.price === null
-        ? null
-        : facts.price.awakeMcPerHour,
-    priceIsFrom: facts !== null && facts.price !== null && !facts.price.exact,
+    grows: facts === null ? null : facts.grows,
+    priceMcPerHour: price === null ? null : price.awakeMcPerHour,
+    offer: price === null ? null : price.offer,
+    priceIsFrom: price !== null && !price.exact,
   });
 }
 
@@ -1113,5 +1120,6 @@ function existingTargetPrice(
     suspendedMcPerHour: summary.priceMcPerHour.suspendedMc,
     stoppedMcPerHour: summary.priceMcPerHour.stoppedMc,
     exact: true,
+    offer: summary.priceMcPerHour.offer ?? null,
   };
 }

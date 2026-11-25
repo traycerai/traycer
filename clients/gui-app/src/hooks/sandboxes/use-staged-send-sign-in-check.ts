@@ -10,6 +10,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { sandboxAddCreditsUrl } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   stageBalanceMc,
+  stageCreditShortfallMc,
   stageNeedsCredits,
   stagePrice,
   type StageConfiguration,
@@ -153,12 +154,8 @@ export function useStagedSendSignInCheck(
         const { configuration, shape } = stage.target;
         const price = stagePrice(catalogue.data, shape);
         const balance = stageBalanceMc(user, configuration, teamBalance);
-        if (
-          stageNeedsCredits(balance, price) &&
-          price !== null &&
-          balance !== null
-        ) {
-          const shortfall = Math.max(1, price.awakeMcPerHour - balance);
+        if (stageNeedsCredits(balance, price)) {
+          const shortfall = stageCreditShortfallMc(balance, price);
           return {
             kind: "refused",
             message:

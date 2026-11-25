@@ -69,9 +69,11 @@ import {
 } from "@/lib/sandboxes/sandbox-balance";
 import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
+  awakeHourlyRate,
   formatSandboxCost,
   formatSandboxDollars,
   hourlyRate,
+  sandboxSizeLabel,
   sandboxVerbPendingLine,
   WINDOWS_SANDBOX_LIMITATION,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -445,9 +447,7 @@ function SandboxFacts(props: {
   return (
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-ui-xs">
       <dt className="text-muted-foreground">Size</dt>
-      <dd data-testid="sandbox-card-shape">
-        {formatShape(summary.cpus, summary.memoryMb, summary.diskMb)}
-      </dd>
+      <dd data-testid="sandbox-card-shape">{formatShape(summary)}</dd>
       {regionLabel === null ? null : (
         <>
           <dt className="text-muted-foreground">Region</dt>
@@ -504,15 +504,16 @@ function SandboxOtherRate(props: {
   if (sandboxRateNeedsLedger(state) || state === "destroyed") return null;
   const field = sandboxBilledPriceField(state);
   const resting = field === "suspendedMc" || field === "stoppedMc";
-  const rate = resting
-    ? price.awakeMc
-    : Math.max(price.suspendedMc, price.stoppedMc);
   return (
     <>
       <dt className="text-muted-foreground">
         {resting ? "Awake rate" : "Storage rate"}
       </dt>
-      <dd data-testid="sandbox-card-other-rate">{hourlyRate(rate)}</dd>
+      <dd data-testid="sandbox-card-other-rate">
+        {resting
+          ? awakeHourlyRate(price.awakeMc, price.offer ?? null)
+          : hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))}
+      </dd>
     </>
   );
 }
@@ -678,7 +679,7 @@ function SandboxCostRates(props: {
   return (
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
       <dt className="text-muted-foreground">Rate</dt>
-      <dd>{`${hourlyRate(price.awakeMc)} while awake`}</dd>
+      <dd>{`${awakeHourlyRate(price.awakeMc, price.offer ?? null)} while awake`}</dd>
       <dt className="text-muted-foreground">Storage rate</dt>
       <dd>{`${hourlyRate(storage)} while suspended or stopped`}</dd>
     </dl>
@@ -1287,11 +1288,17 @@ function SandboxHeaderActionSet(props: {
   );
 }
 
-function formatShape(cpus: number, memoryMb: number, diskMb: number): string {
-  const vcpu = `${cpus} vCPU`;
-  return diskMb > 0
-    ? `${vcpu} · ${formatMemory(memoryMb)} memory · ${formatMemory(diskMb)} disk`
-    : `${vcpu} · ${formatMemory(memoryMb)} memory`;
+/**
+ * `2 vCPU · 4 GB memory · 20 GB disk`; a size that grows, `2 vCPU · 4 GB,
+ * grows to 16 vCPU · 64 GB · 50 GB disk`.
+ */
+function formatShape(summary: SandboxSummary): string {
+  const { cpus, memoryMb, diskMb } = summary;
+  const size =
+    summary.grows === undefined
+      ? `${cpus} vCPU · ${formatMemory(memoryMb)} memory`
+      : sandboxSizeLabel(cpus, memoryMb, summary.grows);
+  return diskMb > 0 ? `${size} · ${formatMemory(diskMb)} disk` : size;
 }
 
 /**

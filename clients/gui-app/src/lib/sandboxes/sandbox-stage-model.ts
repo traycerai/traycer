@@ -1,11 +1,13 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SandboxCatalogue,
+  SandboxGrowth,
   SandboxHourlyPrice,
   SandboxCataloguePricing,
   SandboxCatalogueRegion,
   SandboxCatalogueProvider,
   SandboxOs,
+  SandboxPriceOffer,
   SandboxShapeRung,
 } from "@traycer/protocol/host/sandbox-control";
 import {
@@ -141,15 +143,47 @@ export function stageProviderForShape(
   );
 }
 
-/** Whether a stage's size is this listed shape; an unset disk uses the rung's disk. */
-export function stageSizeIsRung(
+/**
+ * Whether this rung is a candidate for the request. The quote validates a
+ * growing rung's editable disk against the provider's bounds.
+ */
+function stageSizeIsRung(
   rung: SandboxShapeRung,
   size: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
 ): boolean {
   return (
     size.cpus === rung.cpus &&
     size.memoryMb === rung.memoryMb &&
-    (size.diskMb === null || size.diskMb === rung.diskMb)
+    (rung.grows !== undefined ||
+      size.diskMb === null ||
+      size.diskMb === rung.diskMb)
+  );
+}
+
+/**
+ * An explicit disk names a fixed rung before it can customize a growing one.
+ * When the wire cannot distinguish two rungs, the first listed one wins.
+ */
+export function stageRungForSize(
+  shapes: readonly SandboxShapeRung[],
+  size: Pick<StageSize, "cpus" | "memoryMb" | "diskMb">,
+): SandboxShapeRung | null {
+  const matching = shapes.filter((rung) => stageSizeIsRung(rung, size));
+  const preferred =
+    size.diskMb === null
+      ? matching.find((rung) => rung.default)
+      : matching.find((rung) => rung.grows === undefined);
+  if (preferred === undefined) return matching.at(0) ?? null;
+  return matching.find((rung) => sameGeometry(rung, preferred)) ?? preferred;
+}
+
+/** Only the first rung at each wire geometry can be selected in a menu. */
+export function selectableStageRungs(
+  shapes: readonly SandboxShapeRung[],
+): readonly SandboxShapeRung[] {
+  return shapes.filter(
+    (rung, index) =>
+      shapes.findIndex((candidate) => sameGeometry(candidate, rung)) === index,
   );
 }
 
@@ -159,9 +193,31 @@ interface StageGeometry {
   readonly diskMb: number;
 }
 
-interface QuotedStageSize {
+interface StageQuote {
   readonly shape: StageGeometry;
   readonly exact: boolean;
+}
+
+interface GrowingStageQuote extends StageQuote {
+  readonly grows: SandboxGrowth;
+  readonly listedDiskMb: number;
+}
+
+type QuotedStageSize =
+  | GrowingStageQuote
+  | (StageQuote & { readonly grows: null });
+
+/** A chosen disk a provider's bounds allow, in whole GB. */
+function diskInBounds(
+  bounds: SandboxCatalogueProvider["shape"],
+  diskMb: number,
+): boolean {
+  return (
+    Number.isSafeInteger(diskMb) &&
+    diskMb % MB_PER_GIB === 0 &&
+    diskMb >= bounds.diskMinMb &&
+    diskMb <= bounds.diskMaxMb
+  );
 }
 
 /** The allocated geometry the server quotes, or a lower bound when an older server omits its disk step. */
@@ -170,23 +226,29 @@ export function stageQuotedSize(
   requestedSize: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
 ): QuotedStageSize | null {
   if (provider.shapes !== null) {
-    const matching = provider.shapes.filter((candidate) =>
-      stageSizeIsRung(candidate, requestedSize),
-    );
-    const rung =
-      (requestedSize.diskMb === null
-        ? matching.find((candidate) => candidate.default)
-        : undefined) ?? matching.at(0);
-    return rung === undefined
-      ? null
-      : {
-          shape: {
-            cpus: rung.cpus,
-            memoryMb: rung.memoryMb,
-            diskMb: rung.diskMb,
-          },
-          exact: true,
-        };
+    const rung = stageRungForSize(provider.shapes, requestedSize);
+    if (rung === null) return null;
+    if (rung.grows === undefined) {
+      return {
+        shape: {
+          cpus: rung.cpus,
+          memoryMb: rung.memoryMb,
+          diskMb: rung.diskMb,
+        },
+        exact: true,
+        grows: null,
+      };
+    }
+    const diskMb = requestedSize.diskMb ?? rung.diskMb;
+    if (diskMb !== rung.diskMb && !diskInBounds(provider.shape, diskMb)) {
+      return null;
+    }
+    return {
+      shape: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb },
+      exact: true,
+      grows: rung.grows,
+      listedDiskMb: rung.diskMb,
+    };
   }
   if (sandboxShapeProblem(provider.shape, requestedSize) !== null) return null;
   const bounds = provider.shape;
@@ -208,7 +270,19 @@ export function stageQuotedSize(
     shape: { ...roundSandboxShape(bounds, requestedSize), diskMb },
     exact:
       bounds.diskStepMb !== undefined || requestedDisk === bounds.diskDefaultMb,
+    grows: null,
   };
+}
+
+/** What a staged size grows to; `null` for a fixed shape or one not offered. */
+export function stageGrowth(
+  catalogue: SandboxCatalogue,
+  shape: StageSize,
+): SandboxGrowth | null {
+  const provider = stageProviderForShape(catalogue, shape);
+  return provider === null
+    ? null
+    : (stageQuotedSize(provider, shape)?.grows ?? null);
 }
 
 /** The listed shape a provider defaults to, or `null` when it lists none. */
@@ -285,7 +359,7 @@ export function configurationShapeOptions(
     if (provider.shapes === null) {
       return [{ os, region, ...providerDefaultSize(provider) }];
     }
-    return provider.shapes.map((rung) => ({
+    return selectableStageRungs(provider.shapes).map((rung) => ({
       os,
       region,
       cpus: rung.cpus,
@@ -327,17 +401,43 @@ export function configurationStageShape(
     destroyAfterRestingMinutes: defaults.restingMinutes,
   };
   const provider = stageProviderFor(catalogue, defaults.os);
-  if (provider !== null && stageQuotedSize(provider, defaults) !== null) {
+  const size = provider === null ? null : defaultsSize(provider, defaults);
+  if (provider !== null && size !== null) {
     return {
       os: defaults.os,
-      cpus: defaults.cpus,
-      memoryMb: defaults.memoryMb,
-      diskMb: defaults.diskMb,
+      ...size,
       region: provider.regions[0].id,
       ...periods,
     };
   }
   return fallback === null ? null : { ...fallback, ...periods };
+}
+
+/**
+ * The size a configuration's defaults name, while the provider still offers
+ * it. A saved disk still names a listed fixed shape when available.
+ * Defaults for a growing start take its listed disk, including those saved
+ * before the provider offered growing sizes.
+ */
+function defaultsSize(
+  provider: SandboxCatalogueProvider,
+  defaults: SandboxConfigurationDefaults,
+): Pick<StageShape, "cpus" | "memoryMb" | "diskMb"> | null {
+  const rung = stageRungForSize(provider.shapes ?? [], defaults);
+  if (rung?.grows !== undefined) {
+    return {
+      cpus: rung.cpus,
+      memoryMb: rung.memoryMb,
+      diskMb: rung.diskMb,
+    };
+  }
+  return stageQuotedSize(provider, defaults) === null
+    ? null
+    : {
+        cpus: defaults.cpus,
+        memoryMb: defaults.memoryMb,
+        diskMb: defaults.diskMb,
+      };
 }
 
 /**
@@ -390,10 +490,13 @@ export function rememberedOrConfigurationStageShape(
  * for a shape at least as large on every axis; a smaller disk is unpriced.
  */
 export interface StagePrice {
+  /** A starting size that grows: its start's rate, which the spend gate checks. */
   readonly awakeMcPerHour: number;
   readonly suspendedMcPerHour: number;
   readonly stoppedMcPerHour: number;
   readonly exact: boolean;
+  /** A starting size that grows: its awake range at the chosen disk; else `null`. */
+  readonly offer: SandboxPriceOffer | null;
 }
 
 /**
@@ -401,8 +504,8 @@ export interface StagePrice {
  */
 function ratedHourlyPrice(
   rates: SandboxCataloguePricing,
-  quoted: QuotedStageSize,
-): StagePrice {
+  quoted: Pick<QuotedStageSize, "shape" | "exact">,
+): Omit<StagePrice, "offer"> {
   const size = quoted.shape;
   const memoryGib = size.memoryMb / MB_PER_GIB;
   const diskGib = size.diskMb / MB_PER_GIB;
@@ -475,6 +578,28 @@ function sameGeometry(left: StageGeometry, right: StageGeometry): boolean {
   );
 }
 
+/** Compare growing starts at the same chosen disk. */
+function growingSmallestShape(
+  catalogue: SandboxCatalogue,
+  shape: StageSize,
+  selected: StageGeometry,
+  minimum: StageGeometry,
+): { readonly isStaged: boolean; readonly awakeMcPerHour: number } | null {
+  const price = stagePrice(catalogue, {
+    ...shape,
+    cpus: minimum.cpus,
+    memoryMb: minimum.memoryMb,
+  });
+  return price === null || !price.exact
+    ? null
+    : {
+        isStaged:
+          selected.cpus === minimum.cpus &&
+          selected.memoryMb === minimum.memoryMb,
+        awakeMcPerHour: price.awakeMcPerHour,
+      };
+}
+
 /** The true smallest offered shape's awake price; unknown when no served rates can price it. */
 export function stageSmallestShape(
   catalogue: SandboxCatalogue,
@@ -495,20 +620,32 @@ export function stageSmallestShape(
   const minimum = stageQuotedSize(provider, smallest);
   const selected = stageQuotedSize(provider, shape);
   if (minimum === null || selected === null) return null;
+  if (selected.grows !== null) {
+    return growingSmallestShape(
+      catalogue,
+      shape,
+      selected.shape,
+      minimum.shape,
+    );
+  }
   const exact = exactShapePrice(region, minimum.shape);
-  if (
-    exact === null &&
-    region.pricing === null &&
-    !sameGeometry(minimum.shape, source)
-  )
+  const rates = region.pricing;
+  let awakeMcPerHour: number;
+  if (exact !== null) {
+    awakeMcPerHour = exact.awakeMc;
+  } else if (rates !== null) {
+    awakeMcPerHour =
+      minimum.grows === null
+        ? ratedHourlyPrice(rates, minimum).awakeMcPerHour
+        : growingAwakeMc(rates, minimum.shape);
+  } else if (sameGeometry(minimum.shape, source)) {
+    awakeMcPerHour = region.fromPriceMcPerHour.awakeMc;
+  } else {
     return null;
+  }
   return {
     isStaged: sameGeometry(selected.shape, minimum.shape),
-    awakeMcPerHour:
-      exact?.awakeMc ??
-      (region.pricing === null
-        ? region.fromPriceMcPerHour.awakeMc
-        : ratedHourlyPrice(region.pricing, minimum).awakeMcPerHour),
+    awakeMcPerHour,
   };
 }
 
@@ -523,6 +660,9 @@ export function stagePrice(
   );
   const quoted = stageQuotedSize(provider, shape);
   if (region === undefined || quoted === null) return null;
+  if (quoted.grows !== null) {
+    return growingStagePrice(region, quoted);
+  }
   const exact = exactShapePrice(region, quoted.shape);
   if (exact !== null)
     return {
@@ -530,8 +670,11 @@ export function stagePrice(
       suspendedMcPerHour: exact.suspendedMc,
       stoppedMcPerHour: exact.stoppedMc,
       exact: quoted.exact,
+      offer: null,
     };
-  if (region.pricing !== null) return ratedHourlyPrice(region.pricing, quoted);
+  if (region.pricing !== null) {
+    return { ...ratedHourlyPrice(region.pricing, quoted), offer: null };
+  }
   const source = catalogueSourceGeometry(provider);
   if (
     source === null ||
@@ -545,6 +688,79 @@ export function stagePrice(
     suspendedMcPerHour: region.fromPriceMcPerHour.suspendedMc,
     stoppedMcPerHour: region.fromPriceMcPerHour.stoppedMc,
     exact: sameGeometry(quoted.shape, source),
+    offer: null,
+  };
+}
+
+/**
+ * A size that grows bills its disk at the storage rate in every state, the
+ * storage part rounded up on its own before the whole, as the server quotes
+ * it. Suspended and stopped are the disk alone.
+ */
+function growingStorageMc(
+  rates: SandboxCataloguePricing,
+  diskMb: number,
+): number {
+  return Math.ceil(
+    (diskMb / MB_PER_GIB) * rates.diskGbHourMillicredits * rates.multiplier,
+  );
+}
+
+function growingAwakeMc(
+  rates: SandboxCataloguePricing,
+  size: StageGeometry,
+): number {
+  return Math.ceil(
+    (size.cpus * rates.vcpuHourMillicredits +
+      (size.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits) *
+      rates.multiplier +
+      growingStorageMc(rates, size.diskMb),
+  );
+}
+
+/**
+ * A listed start uses its served offer or a single exact price. Unit rates
+ * supply both ends of a range when there is no exact price at the chosen disk.
+ * Without rates, the listed disk can give a lower bound for a larger disk.
+ */
+function growingStagePrice(
+  region: SandboxCatalogueRegion,
+  quoted: GrowingStageQuote,
+): StagePrice | null {
+  const rates = region.pricing;
+  const exact = exactShapePrice(region, quoted.shape);
+  if (exact !== null || rates === null) {
+    const listed =
+      exact ??
+      (quoted.shape.diskMb > quoted.listedDiskMb
+        ? exactShapePrice(region, {
+            ...quoted.shape,
+            diskMb: quoted.listedDiskMb,
+          })
+        : null);
+    if (listed === null) return null;
+    return {
+      awakeMcPerHour: listed.awakeMc,
+      suspendedMcPerHour: listed.suspendedMc,
+      stoppedMcPerHour: listed.stoppedMc,
+      exact: exact !== null && quoted.exact,
+      offer: exact?.offer ?? null,
+    };
+  }
+  const storage = growingStorageMc(rates, quoted.shape.diskMb);
+  const start = growingAwakeMc(rates, quoted.shape);
+  return {
+    awakeMcPerHour: start,
+    suspendedMcPerHour: storage,
+    stoppedMcPerHour: storage,
+    exact: quoted.exact,
+    offer: {
+      startAwakeMc: start,
+      ceilingAwakeMc: growingAwakeMc(rates, {
+        ...quoted.grows,
+        diskMb: quoted.shape.diskMb,
+      }),
+    },
   };
 }
 
@@ -566,8 +782,7 @@ export function stageBalanceMc(
 }
 
 /**
- * A zero or short balance: it cannot cover an hour at the stage's price
- * (the region's smallest shape's, from a server without per-unit rates).
+ * The balance cannot cover even the quoted price or lower bound for an hour.
  * Unknown either side is not short; the server's gate stays the authority
  * at send.
  */
@@ -579,6 +794,16 @@ export function stageNeedsCredits(
     balanceMc,
     price === null ? null : price.awakeMcPerHour,
   );
+}
+
+/** Only an exact quote can establish how much credit would cover the hour. */
+export function stageCreditShortfallMc(
+  balanceMc: number | null,
+  price: StagePrice | null,
+): number | null {
+  return balanceMc === null || price?.exact !== true
+    ? null
+    : Math.max(1, price.awakeMcPerHour - balanceMc);
 }
 
 /** The audience the block speaks to: a task that has or may gain readers. */
@@ -640,7 +865,7 @@ export function priceClause(input: ConsequencesInput): ConsequenceClause {
   if (input.price === null) {
     return { kind: "price", text: unpricedCostLine(copy) };
   }
-  const line = costLine(input.price.awakeMcPerHour, copy);
+  const line = costLine(input.price.awakeMcPerHour, input.price.offer, copy);
   return { kind: "price", text: input.price.exact ? line : `from ${line}` };
 }
 
