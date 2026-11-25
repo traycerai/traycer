@@ -10,8 +10,10 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { epicCollaboratorsCacheIdentity } from "./epic-collaborators-query-key";
 
 export const EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS = 30_000;
 export const EPIC_COLLABORATORS_OPEN_REFRESH_MS = 5 * 60_000;
@@ -132,8 +134,9 @@ export function useEpicCollaboratorsQuery(
   const poll = options.poll ?? false;
   const client = options.client;
   const enabled = options.enabled;
+  const viewerUserId = useCloudChatViewerId();
   const query = useHostQuery({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: epicCollaboratorsCacheIdentity(viewerUserId),
     client,
     method: "epic.listCollaborators",
     params: { epicId },
@@ -146,9 +149,9 @@ export function useEpicCollaboratorsQuery(
   });
 
   const data = useMemo<EpicCollaboratorsView | undefined>(() => {
-    if (!enabled || query.data === undefined) return undefined;
+    if (!enabled || query.isError || query.data === undefined) return undefined;
     return projectCollaborators(query.data.collaborators);
-  }, [enabled, query.data]);
+  }, [enabled, query.data, query.isError]);
 
   return {
     query,

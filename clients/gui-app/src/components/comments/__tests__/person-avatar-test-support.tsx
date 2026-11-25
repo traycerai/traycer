@@ -11,7 +11,7 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { queryKeys } from "@/lib/query-keys";
+import { epicCollaboratorsQueryKey } from "@/hooks/epics/epic-collaborators-query-key";
 import { createAppQueryClient } from "@/lib/query-client";
 import {
   EpicSessionContext,
@@ -115,10 +115,10 @@ export function createPersonAvatarHarness(): PersonAvatarHarness {
     publishCollaborators: (response) => {
       served = response;
       queryClient.setQueryData(
-        queryKeys.hostMethod<HostRpcRegistry, "epic.listCollaborators">(
+        epicCollaboratorsQueryKey(
           mockLocalHostEntry.hostId,
-          "epic.listCollaborators",
-          { epicId: EPIC_ID },
+          EPIC_ID,
+          VIEWER_USER_ID,
         ),
         response,
       );
