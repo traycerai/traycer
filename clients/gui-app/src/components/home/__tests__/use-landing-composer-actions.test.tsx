@@ -681,6 +681,46 @@ describe("useLandingComposerActions", () => {
       });
     }
 
+    async function readAcceptedEditReceipt(operationId: string) {
+      const result = await runDraftAuthorityTransaction(
+        ["receipts"],
+        "readonly",
+        ({ receipts }) => readDraftAuthorityEditReceipt(receipts, operationId),
+      );
+      if (result.kind !== "complete") {
+        throw new Error("could not read the accepted Landing edit receipt");
+      }
+      return result.value ?? null;
+    }
+
+    function confirmSeededActionMessageAccepted(
+      session: ReturnType<typeof sendSeededAction>,
+      input: {
+        readonly epicId: string;
+        readonly chatId: string;
+        readonly messageId: string;
+      },
+    ): void {
+      session.callbacks.onMessageAccepted({
+        kind: "messageAccepted",
+        hasBinaryPayload: false,
+        epicId: input.epicId,
+        chatId: input.chatId,
+        message: {
+          role: "user",
+          messageId: input.messageId,
+          sender: { type: "user", userId: "user-landing" },
+          message: {
+            kind: "user",
+            content: jsonContentForPrompt(SUBMITTED_PROMPT),
+            browserAnnotations: [],
+          },
+          timestamp: 4,
+          sessionAnchor: null,
+        },
+      });
+    }
+
     it("keeps an ownerless source until its exact seeded ACK, then replaces its alias from the receipt", async () => {
       recordNegotiatedHostManifest(TEST_HOST_ID, {
         "epic.create": { major: 1, minor: 3 },
@@ -732,8 +772,25 @@ describe("useLandingComposerActions", () => {
       });
 
       acceptSeededAction(session, identity);
+      expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+        confirmedByHost: false,
+      });
+      expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+        kind: "current",
+        record: { kind: "live", draft: { version: sourceVersion } },
+      });
+      expect(await readAcceptedEditReceipt(identity.clientActionId)).toBeNull();
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "tab",
+        ref: { kind: "draft", id: draftId },
+      });
+
+      confirmSeededActionMessageAccepted(session, identity);
+      expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+        confirmedByHost: true,
+      });
       await waitFor(async () => {
-        expect(await readDraftAuthorityEditReceipt(identity.clientActionId)).toMatchObject({
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toMatchObject({
           operationId: identity.clientActionId,
           kind: "tombstone",
           draft: { slot: { kind: "landing", id: draftId } },
@@ -795,15 +852,50 @@ describe("useLandingComposerActions", () => {
       const identity = initialMessageIds();
       const session = sendSeededAction(identity);
       const originalConsume = draftAuthorityModule.consumeAcceptedDirectLandingSend;
-      const consumeFinished = deferred<Awaited<ReturnType<typeof draftAuthorityModule.consumeAcceptedDirectLandingSend>>>();
+      type ConsumeResult = Awaited<ReturnType<typeof draftAuthorityModule.consumeAcceptedDirectLandingSend>>;
+      type ConsumeOutcome =
+        | { readonly kind: "fulfilled"; readonly result: ConsumeResult }
+        | { readonly kind: "rejected"; readonly error: unknown };
+      const consumeFinished = deferred<ConsumeOutcome>();
       const consumeSpy = vi.spyOn(draftAuthorityModule, "consumeAcceptedDirectLandingSend").mockImplementation(async (input) => {
-        const result = await originalConsume(input);
-        if (input.actionId === identity.clientActionId) consumeFinished.resolve(result);
-        return result;
+        try {
+          const result = await originalConsume(input);
+          if (input.actionId === identity.clientActionId) {
+            consumeFinished.resolve({ kind: "fulfilled", result });
+          }
+          return result;
+        } catch (error) {
+          if (input.actionId === identity.clientActionId) {
+            consumeFinished.resolve({ kind: "rejected", error });
+          }
+          throw error;
+        }
       });
       try {
         acceptSeededAction(session, identity);
-        const consumeResult = await consumeFinished.promise;
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: false,
+        });
+        expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+          kind: "current",
+          record: { kind: "live", draft: { version: newerVersion }, payload: { content: newer } },
+        });
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toBeNull();
+        expect(useTabsStore.getState().items[0]).toMatchObject({
+          kind: "tab",
+          ref: { kind: "draft", id: draftId },
+        });
+
+        confirmSeededActionMessageAccepted(session, identity);
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: true,
+        });
+        const consumeOutcome = await consumeFinished.promise;
+        expect(consumeOutcome.kind).toBe("fulfilled");
+        if (consumeOutcome.kind !== "fulfilled") {
+          throw new Error("accepted Landing consume rejected before its CAS result");
+        }
+        const consumeResult = consumeOutcome.result;
         expect(consumeSpy).toHaveBeenCalledTimes(1);
         const consumeInput = consumeSpy.mock.calls[0]?.[0];
         expect(consumeInput).toMatchObject({
@@ -821,7 +913,7 @@ describe("useLandingComposerActions", () => {
         if (consumeResult.kind !== "conflict") {
           throw new Error("expected the accepted stale Landing action to conflict");
         }
-        expect(await readDraftAuthorityEditReceipt(identity.clientActionId)).toBeUndefined();
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toBeNull();
         expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
           kind: "current",
           record: { kind: "live", draft: { version: newerVersion }, payload: { content: newer } },
@@ -846,7 +938,7 @@ describe("useLandingComposerActions", () => {
         "epic.create": { major: 1, minor: 3 },
       });
       const draftId = "landing-late-close";
-      await seedLandingAuthorityDraft(draftId, jsonContentForPrompt(SUBMITTED_PROMPT));
+      const sourceVersion = await seedLandingAuthorityDraft(draftId, jsonContentForPrompt(SUBMITTED_PROMPT));
       focusDraftTab(draftId);
       const existence = deferred<"exists" | "absent" | "unknown">();
       const ambiguousDrop = new HostTransportFailureError({
@@ -887,8 +979,22 @@ describe("useLandingComposerActions", () => {
       const replaceSpy = vi.spyOn(tabCommandCoordinator, "replaceConsumedDraftWithEpic");
       try {
         acceptSeededAction(session, identity);
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: false,
+        });
+        expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+          kind: "current",
+          record: { kind: "live", draft: { version: sourceVersion } },
+        });
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toBeNull();
+        expect(projectionEntered).toBe(false);
+
+        confirmSeededActionMessageAccepted(session, identity);
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: true,
+        });
         await waitFor(() => expect(projectionEntered).toBe(true));
-        expect(await readDraftAuthorityEditReceipt(identity.clientActionId)).toMatchObject({
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toMatchObject({
           operationId: identity.clientActionId,
           kind: "tombstone",
         });
@@ -962,7 +1068,7 @@ describe("useLandingComposerActions", () => {
         createResponse.resolve({ roomInfo: null, initialTurnStarted: true });
 
         await waitFor(async () => {
-          expect(await readDraftAuthorityEditReceipt(identity.clientActionId)).toMatchObject({
+          expect(await readAcceptedEditReceipt(identity.clientActionId)).toMatchObject({
             operationId: identity.clientActionId,
             kind: "tombstone",
             draft: { slot: { kind: "landing", id: draftId } },

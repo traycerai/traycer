@@ -65,10 +65,12 @@ import {
   consumeDraftAuthorityOutboxSource,
   readDraftAuthorityOutbox,
   readDraftAuthorityRestoredIssue,
+  type DraftAuthorityHostEndEvidence,
   type DraftAuthorityOutbox,
   type DraftAuthorityOutboxSubmission,
   type DraftAuthorityPendingEpicPrerequisite,
   type DraftAuthorityReturnDisposition,
+  type DraftAuthorityReturnEvidence,
   type DraftAuthorityReturnReceipt,
   type DraftAuthorityRestoredPredecessor,
 } from "@/lib/drafts/draft-authority-pending";
@@ -1141,8 +1143,25 @@ type ReturnEvidence = Pick<
   "evidence" | "stopOperationId" | "legacyTaskLoss"
 >;
 
-type PendingReturnEvidence = NonNullable<DraftAuthorityReturnDisposition["evidence"]>;
+type PendingReturnEvidence = DraftAuthorityReturnEvidence;
 type LegacyStopRestEvidence = Extract<PendingReturnEvidence, { kind: "legacy-stop-rest" }>;
+
+const heldHostEndReturnKind = {
+  setup: {
+    "settled-destroy": "setup-destroy",
+    "signed-terminal": "setup-host-end",
+  },
+  dispatch: {
+    "settled-destroy": "dispatch-host-end",
+    "signed-terminal": "dispatch-host-end",
+  },
+} satisfies Record<
+  DraftAuthorityHostEndEvidence["ownership"],
+  Record<
+    DraftAuthorityHostEndEvidence["kind"],
+    Exclude<DraftAuthorityReturnEvidence["kind"], "legacy-stop-rest">
+  >
+>;
 
 function samePendingReturnEvidence(
   recorded: DraftAuthorityReturnDisposition["evidence"],
@@ -1547,7 +1566,15 @@ export async function returnPendingSandboxAfterHeldHostEnd(input: {
     decision.reason !== "host-end"
   )
     return { kind: "none" };
-  const { kind, attemptId, hostId, sandboxId, observationGeneration } = decision.evidence;
+  const {
+    kind: proofKind,
+    ownership,
+    attemptId,
+    hostId,
+    sandboxId,
+    observationGeneration,
+  } = decision.evidence;
+  const kind = heldHostEndReturnKind[ownership][proofKind];
   return returnExactPendingMessage(
     actor,
     outbox,

@@ -883,10 +883,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
   };
 });
 
-vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
+vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => {
   // A verb as the real mutation reports it: the call is recorded, the result
   // is pending until it answers, and a failure stays readable as `error`.
-  useSandboxVerb: () => {
+  const useSandboxVerb = (_sandboxId: string) => {
     // A mutation hook must stay in its provider tree when its button moves into a toast.
     useQueryClient();
     useAnswerVersion();
@@ -922,8 +922,30 @@ vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
       isPending: mocks.verbState.isPending,
       error: mocks.verbState.error,
     };
-  },
-}));
+  };
+  return {
+    useSandboxVerb,
+    usePendingSandboxStop: (sandboxId: string) => {
+      const verb = useSandboxVerb(sandboxId);
+      return {
+        stop: async (issue: {
+          readonly sandboxId: string;
+          readonly hostId: string;
+          readonly verify: () => Promise<boolean>;
+          readonly isCurrent: () => boolean;
+        }) => {
+          if (issue.sandboxId !== sandboxId || !issue.isCurrent())
+            throw new Error("The pending stop no longer owns this sandbox.");
+          if (!(await issue.verify()) || !issue.isCurrent())
+            throw new Error("The pending stop no longer owns this sandbox.");
+          return verb.mutateAsync("stop");
+        },
+        isPending: verb.isPending,
+        error: verb.error,
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
