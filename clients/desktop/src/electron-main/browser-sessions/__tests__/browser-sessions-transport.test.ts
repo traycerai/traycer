@@ -37,10 +37,12 @@ const remote = vi.hoisted(() => {
   return {
     start,
     close,
-    createRemoteHostTransport: vi.fn(() => ({
-      session: { start, close },
-      streamClient: {},
-    })),
+    createRemoteHostTransport: vi.fn(
+      (_options: { readonly opensReleasedWay: () => boolean }) => ({
+        session: { start, close },
+        streamClient: {},
+      }),
+    ),
   };
 });
 vi.mock(
@@ -88,12 +90,15 @@ const DEPS = {
   bearer: BEARER,
   cloudAuthorized: () => true,
   endpoint: () => null,
+  liveRow: () => null,
+  confirmRow: () => Promise.resolve(true),
   appVersion: "1.5.0",
   hostTokens: HOST_TOKENS,
 };
 
 function remoteEntry(
   kind: "personal" | "sandbox" | "team",
+  ownerId: string | null,
 ): RemoteHostDirectoryEntry {
   const item: HostListItem = {
     hostId: "host-r",
@@ -116,6 +121,9 @@ function remoteEntry(
       : {}),
     ...(kind === "team"
       ? { owner: { kind: "team", id: "team-a", name: "Alpha" } }
+      : {}),
+    ...(kind === "personal" && ownerId !== null
+      ? { owner: { kind: "user", id: ownerId } }
       : {}),
   };
   return hostListItemToDirectoryEntry(item, "wss://relay.test/attach");
@@ -159,7 +167,7 @@ const EXPECTED: Readonly<Record<HostKind, JarTransport>> = {
 
 const ENTRY_OF_KIND: Readonly<Record<HostKind, () => HostDirectoryEntry>> = {
   local: () => entryWithKind("local"),
-  remote: () => remoteEntry("personal"),
+  remote: () => remoteEntry("personal", null),
   mock: () => entryWithKind("mock"),
   pool: poolEntry,
 };
@@ -175,7 +183,7 @@ beforeEach(() => {
 describe("openBrowserSessionsTransport", () => {
   it("builds no transport for a sandbox, and never constructs a remote one", () => {
     const transport = openBrowserSessionsTransport(
-      remoteEntry("sandbox"),
+      remoteEntry("sandbox", null),
       "user-1",
       DEPS,
     );
@@ -186,7 +194,7 @@ describe("openBrowserSessionsTransport", () => {
   });
 
   it("builds no cookie-jar transport for a physical team host", () => {
-    const entry = remoteEntry("team");
+    const entry = remoteEntry("team", null);
     expect(entry.sandbox).toBeNull();
 
     const transport = openBrowserSessionsTransport(entry, "user-1", DEPS);
@@ -198,7 +206,7 @@ describe("openBrowserSessionsTransport", () => {
 
   it("builds a personal remote host's transport on the host-only token, and starts it", () => {
     const transport = openBrowserSessionsTransport(
-      remoteEntry("personal"),
+      remoteEntry("personal", null),
       "user-1",
       DEPS,
     );
@@ -216,6 +224,29 @@ describe("openBrowserSessionsTransport", () => {
 
     transport?.close();
     expect(remote.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the target's row afresh for every open, so a row that left the person is sent no sign-in", () => {
+    let row: HostDirectoryEntry | null = remoteEntry("personal", "user-1");
+    const transport = openBrowserSessionsTransport(
+      remoteEntry("personal", "user-1"),
+      "user-1",
+      { ...DEPS, liveRow: () => row },
+    );
+    const opensReleasedWay =
+      remote.createRemoteHostTransport.mock.calls[0]?.[0].opensReleasedWay;
+    if (opensReleasedWay === undefined)
+      throw new Error("the remote transport was not built");
+
+    expect(opensReleasedWay()).toBe(true);
+    row = remoteEntry("personal", "user-2");
+    expect(opensReleasedWay()).toBe(false);
+    row = remoteEntry("personal", "user-1");
+    expect(opensReleasedWay()).toBe(true);
+    row = null;
+    expect(opensReleasedWay()).toBe(false);
+
+    transport?.close();
   });
 
   it.each(KINDS)(

@@ -33,10 +33,11 @@ import {
   findBot,
   type BotStreamClient,
   listBots,
-  openLocalStreamClient,
+  refusalEndingCommand,
   refuseUnlessBoundHere,
   toBotCliError,
   unreadableStreamError,
+  withLocalBotStream,
 } from "../internal/bot-host";
 import {
   callHostRpc,
@@ -44,6 +45,7 @@ import {
   parseUserInput,
   resolveEndpoint,
 } from "../internal/host-rpc";
+import { refusalEndingCliError } from "../internal/host-door-words";
 import { cliError, CLI_ERROR_CODES } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
@@ -145,20 +147,35 @@ function sendToBot(opts: {
     if (waitMs === null) {
       return { data: sentData, human: sentLine, exitCode: 0 };
     }
-    const { client } = await openLocalStreamClient();
     // A post's request is its row on the channel and its answer is on the
     // thread it opened, or on the channel when the bot answers it there; a
-    // thread message's request and answer are both on the thread.
-    const outcome = await waitForBotReply({
-      client,
-      botId: bot.botId,
-      requestChatId: opts.threadId ?? conversationId,
-      replyChatId: opts.threadId === null ? sent.threadId : null,
-      requestId: sent.requestId,
-      timeoutMs: waitMs,
-    }).finally(() => {
-      client.close("bot-wait-settled");
-    });
+    // thread message's request and answer are both on the thread. The wait
+    // starts once the stream is set up, as before; a mint of the host-only
+    // token before the dial, and a dial after a refused expired token, wait
+    // out what is left of it.
+    const outcome = await withLocalBotStream<BotReplyOutcome>(
+      null,
+      {
+        span: { kind: "whole-wait", ms: waitMs },
+        ended: () => Promise.resolve({ kind: "timed-out" }),
+      },
+      (ending) => Promise.reject(refusalEndingCliError(ending)),
+      (client, _endpoint, dial) => {
+        const timeoutMs = dial.endsAt - Date.now();
+        // A dial whose wait has run out subscribes nothing.
+        if (timeoutMs <= 0) return Promise.resolve({ kind: "timed-out" });
+        return waitForBotReply({
+          client,
+          botId: bot.botId,
+          requestChatId: opts.threadId ?? conversationId,
+          replyChatId: opts.threadId === null ? sent.threadId : null,
+          requestId: sent.requestId,
+          timeoutMs,
+        }).finally(() => {
+          client.close("bot-wait-settled");
+        });
+      },
+    );
     return {
       data: { ...sentData, outcome },
       human: `${sentLine}\n${describeOutcome(bot.title, opts.wait ?? "", outcome)}`,
@@ -435,6 +452,12 @@ class ReplyFollower {
       this.onFrame(envelope);
     });
     session.onStatusChange((status, reason) => {
+      // A mint refusal that ended the command closed the client.
+      const refused = refusalEndingCommand(this.input.client);
+      if (refused !== null) {
+        this.finish(() => this.reject(refused));
+        return;
+      }
       // A drop re-subscribes on its own and the new snapshot starts over;
       // the person's timeout bounds the wait either way.
       if (

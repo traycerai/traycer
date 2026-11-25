@@ -189,6 +189,7 @@ function createCountingArtifactFactory(): CountingArtifactFactory {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "artifact.subscribe is not served by this host",
@@ -252,6 +253,7 @@ function createCountingStatusFactory(): CountingStatusFactory {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "epic.status.subscribe is not served by this host",
@@ -335,6 +337,7 @@ function createCountingStateFactory(): CountingStateFactory {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "epic.state.subscribe is not served by this host",

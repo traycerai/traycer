@@ -1,0 +1,183 @@
+import type { WebSocketLike } from "@traycer/protocol/host-transport/websocket";
+import type { StubStreamWebSocket } from "../../../../shared/host-transport/__testing__/stub-stream-socket";
+
+/**
+ * What the test files mock the commands' neighbours with. This module imports
+ * nothing a mocked module imports: a mock factory that awaited the harness
+ * would wait on a module that is itself waiting on that mock.
+ */
+
+/** What a case's endpoint and unary reads answer; see `hostRpcModule`. */
+export interface Seams {
+  endpoint: { hostId: string; websocketUrl: string };
+  rpc: (method: string, params: unknown) => Promise<unknown>;
+}
+
+export const seams: Seams = {
+  endpoint: { hostId: "", websocketUrl: "ws://127.0.0.1:9/rpc" },
+  rpc: () => Promise.reject(new Error("no unary read was expected")),
+};
+/**
+ * How long each `resolveEndpoint` call of the case waits before it answers, in
+ * call order; a call past the list answers at once. A command's set-up slowed
+ * past its wait.
+ */
+export const endpointDelaysMs: number[] = [];
+/** Every unary read the case's commands made, by method, in order. */
+export const rpcCalls: string[] = [];
+/** The case's host door; `streamFactoryModule` dials it. */
+export const live: {
+  door: { accept: () => StubStreamWebSocket } | null;
+} = { door: null };
+/** The case's unary door; `unaryFactoryModule` dials it. */
+export const liveUnary: {
+  door: { accept: () => WebSocketLike } | null;
+} = { door: null };
+
+/** What the case's unary reads (`bot.list` and the like) answer. */
+export function answerUnaryReads(
+  routes: Readonly<Record<string, (params: unknown) => unknown>>,
+): void {
+  seams.rpc = (method, params) => {
+    const route = routes[method];
+    if (route === undefined)
+      return Promise.reject(new Error(`unexpected host RPC ${method}`));
+    return Promise.resolve(route(params));
+  };
+}
+
+// ---- the seams the test files mock ---------------------------------------- //
+
+/** `whatwg-stream-ws-factory`: every socket the stream dials is the host door's. */
+export function streamFactoryModule(): {
+  createWhatwgStreamWebSocketFactory: () => {
+    create: () => StubStreamWebSocket;
+  };
+} {
+  return {
+    createWhatwgStreamWebSocketFactory: () => ({
+      create: () => {
+        const door = live.door;
+        if (door === null) throw new Error("no case is open");
+        return door.accept();
+      },
+    }),
+  };
+}
+
+/** `host-rpc`: the endpoint this machine's host pid names, and the unary reads. */
+export function hostRpcModule<T extends object>(
+  actual: T,
+): T & {
+  resolveEndpoint: () => Promise<Seams["endpoint"]>;
+  callHostRpc: (method: string, params: unknown) => Promise<unknown>;
+} {
+  return {
+    ...actual,
+    resolveEndpoint: async () => {
+      const delay = endpointDelaysMs.shift() ?? 0;
+      if (delay > 0)
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      return seams.endpoint;
+    },
+    callHostRpc: (method, params) => {
+      rpcCalls.push(method);
+      return seams.rpc(method, params);
+    },
+  };
+}
+
+export function loggerModule(): {
+  createCliLogger: () => Record<string, () => void>;
+  noopLogger: Record<string, () => void>;
+  errorFromUnknown: (value: unknown) => Error;
+} {
+  const quiet = {
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  };
+  return {
+    createCliLogger: () => quiet,
+    noopLogger: quiet,
+    errorFromUnknown: (value) =>
+      value instanceof Error ? value : new Error(String(value)),
+  };
+}
+
+/** `sign-in-environments`: the environments the sign-in lists. */
+export function signInEnvironmentsModule<T extends object>(
+  actual: T,
+): T & {
+  readSignInEnvironments: () => Promise<{
+    readonly userId: string;
+    readonly environments: readonly never[];
+  }>;
+} {
+  return {
+    ...actual,
+    // The person the command acts as is the stored sign-in's user.
+    readSignInEnvironments: async () => ({
+      userId:
+        (await (await import("../../internal/host-auth")).resolveHostAuth())
+          ?.userId ?? "",
+      environments: [],
+    }),
+  };
+}
+
+/** `host-ownership`: authn's directory has no row for this computer. */
+export function hostOwnershipModule<T extends object>(
+  actual: T,
+): T & {
+  readHostOwnershipViaHttp: () => Promise<{ readonly kind: "not-found" }>;
+} {
+  return {
+    ...actual,
+    readHostOwnershipViaHttp: () => Promise.resolve({ kind: "not-found" }),
+  };
+}
+
+/** `whatwg-ws-factory`: every unary socket the real `callHostRpc` dials is the unary door's. */
+export function unaryFactoryModule(): {
+  createWhatwgWebSocketFactory: () => { create: () => WebSocketLike };
+} {
+  return {
+    createWhatwgWebSocketFactory: () => ({
+      create: () => {
+        const door = liveUnary.door;
+        if (door === null) throw new Error("no case is open");
+        return door.accept();
+      },
+    }),
+  };
+}
+
+/**
+ * `pid-metadata`: this machine's host pid file names the case's endpoint, and
+ * its process is alive, so the real `resolveEndpoint` answers it.
+ */
+export function pidMetadataModule<T extends object>(
+  actual: T,
+): T & {
+  readHostPidMetadata: () => Promise<Record<string, unknown>>;
+  publishedHostProcessGone: () => boolean;
+} {
+  return {
+    ...actual,
+    readHostPidMetadata: () =>
+      Promise.resolve({
+        pid: process.pid,
+        hostId: seams.endpoint.hostId,
+        version: "0.0.0",
+        websocketUrl: seams.endpoint.websocketUrl,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        processStartIdentity: null,
+        processStartIdentityRead: "absent",
+        layer0: null,
+        layer0Slot: null,
+      }),
+    publishedHostProcessGone: () => false,
+  };
+}

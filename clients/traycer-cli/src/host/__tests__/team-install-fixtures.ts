@@ -95,6 +95,7 @@ export const MINT_FAILURES = [
       code: CLI_ERROR_CODES.FORBIDDEN,
       message: UNWORDED_MINT_REFUSAL_MESSAGE,
     },
+    mints: 1,
   },
   {
     label: "authn refuses the mint with a server error",
@@ -104,6 +105,7 @@ export const MINT_FAILURES = [
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
       message: AUTHN_UNREACHABLE_SENTENCE,
     },
+    mints: 1,
   },
   {
     label: "authn rate-limits the mint with an unrecognized body",
@@ -113,14 +115,19 @@ export const MINT_FAILURES = [
       code: CLI_ERROR_CODES.FORBIDDEN,
       message: UNWORDED_MINT_REFUSAL_MESSAGE,
     },
+    mints: 1,
   },
   {
-    label: "authn rejects the stored sign-in",
+    // F6: authn refused the sign-in sent and then takes the stored one, which
+    // is asked again: a second refusal is not the sign-in's fault, so no
+    // sign-in advice (that needs authn refusing the stored sign-in itself).
+    label: "authn refuses the sign-in sent but takes the stored one",
     answer: (): Response | null => new Response(null, { status: 401 }),
     error: {
-      code: CLI_ERROR_CODES.AUTH_REJECTED,
-      message: STORED_CREDENTIAL_REJECTED_MESSAGE,
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message: UNWORDED_MINT_REFUSAL_MESSAGE,
     },
+    mints: 2,
   },
   {
     label: "authn cannot be reached",
@@ -129,6 +136,7 @@ export const MINT_FAILURES = [
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
       message: AUTHN_UNREACHABLE_SENTENCE,
     },
+    mints: 1,
   },
   {
     label: "authn answers for a different environment",
@@ -145,6 +153,7 @@ export const MINT_FAILURES = [
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
       message: AUTHN_UNREACHABLE_SENTENCE,
     },
+    mints: 1,
   },
 ];
 

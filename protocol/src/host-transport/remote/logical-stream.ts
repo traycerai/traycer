@@ -117,6 +117,7 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
 
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
+  private readonly backoffListeners = new Set<() => void>();
   private outboundProgressHandler: (() => void) | null = null;
   private status: StreamConnectionStatus = "connecting";
   private statusReason: StreamCloseReason | null = null;
@@ -307,6 +308,35 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
   }
 
   /**
+   * Called each time the session puts this stream on a wait: a delayed
+   * redial or re-open, or a park that only something outside can end. Never
+   * for an attach that follows at once, nor for a recovery's own timed redial.
+   * Internal: no status changes with it.
+   */
+  onBackoffEntered(listener: () => void): () => void {
+    this.backoffListeners.add(listener);
+    return () => {
+      this.backoffListeners.delete(listener);
+    };
+  }
+
+  /** The session's side of {@link onBackoffEntered}. */
+  notifyBackoffEntered(): void {
+    if (this.disposed) {
+      return;
+    }
+    // Each listener alone: a throw reaches neither the others nor the
+    // session's caller, where it would end the whole session.
+    for (const listener of [...this.backoffListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[remote-session] backoff listener threw", error);
+      }
+    }
+  }
+
+  /**
    * Projects the session-wide connection status onto this stream.
    * `retryCause` is the retryable close behind a `reconnecting` projection, or
    * `null` (see `StatusChangeHandler`).
@@ -361,7 +391,12 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
       return;
     }
     this.disposed = true;
-    this.transition("closed", { kind: "fatalError", details }, null, null);
+    this.transition(
+      "closed",
+      { kind: "fatalError", details, signInVerdict: null },
+      null,
+      null,
+    );
   }
 
   private transition(
