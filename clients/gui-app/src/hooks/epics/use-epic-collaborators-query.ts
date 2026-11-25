@@ -13,7 +13,10 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { epicCollaboratorsCacheIdentity } from "./epic-collaborators-query-key";
+import {
+  canReadCachedCollaborators,
+  epicCollaboratorsQueryScope,
+} from "./epic-collaborators-query-key";
 
 export const EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS = 30_000;
 export const EPIC_COLLABORATORS_OPEN_REFRESH_MS = 5 * 60_000;
@@ -122,8 +125,9 @@ export interface UseEpicCollaboratorsQueryOptions {
  *   `data` kept rendering the grants it loaded under the verdict the session
  *   has since lost - the "Shared with task" glyph stayed on a chat after
  *   demotion for as long as the tab lived. Withheld means `data: undefined`,
- *   whatever the cache still holds, which every consumer renders as "not
- *   loaded" rather than as an empty grant set.
+ *   whatever the cache still holds. A lasting access refusal also withholds
+ *   retained data. A transient failure leaves the current key's data
+ *   available and still exposes the error to the Sharing panel.
  */
 export function useEpicCollaboratorsQuery(
   epicId: string,
@@ -136,10 +140,8 @@ export function useEpicCollaboratorsQuery(
   const enabled = options.enabled;
   const viewerUserId = useCloudChatViewerId();
   const query = useHostQuery({
-    cacheKeyIdentity: epicCollaboratorsCacheIdentity(viewerUserId),
+    ...epicCollaboratorsQueryScope(epicId, viewerUserId),
     client,
-    method: "epic.listCollaborators",
-    params: { epicId },
     preflight: cloudVerdictPreflight("epic.listCollaborators"),
     options: {
       enabled,
@@ -149,9 +151,14 @@ export function useEpicCollaboratorsQuery(
   });
 
   const data = useMemo<EpicCollaboratorsView | undefined>(() => {
-    if (!enabled || query.isError || query.data === undefined) return undefined;
+    if (
+      !enabled ||
+      query.data === undefined ||
+      !canReadCachedCollaborators(query.error)
+    )
+      return undefined;
     return projectCollaborators(query.data.collaborators);
-  }, [enabled, query.data, query.isError]);
+  }, [enabled, query.data, query.error]);
 
   return {
     query,

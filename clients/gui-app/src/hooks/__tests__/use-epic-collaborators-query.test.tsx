@@ -500,7 +500,7 @@ describe("epic.listCollaborators fixed-path poll inventory", () => {
       "utf8",
     );
     expect(chatTile).toMatch(
-      /method:\s*"epic\.listCollaborators"[\s\S]*?poll:\s*false/,
+      /\.\.\.epicCollaboratorsQueryScope\([\s\S]*?poll:\s*false/,
     );
 
     const sourcePaths = sourceFiles(guiAppSrc);
@@ -508,6 +508,7 @@ describe("epic.listCollaborators fixed-path poll inventory", () => {
       const source = readFileSync(path.join(guiAppSrc, relativePath), "utf8");
       return (
         /method:\s*"epic\.listCollaborators"/.test(source) ||
+        /\.\.\.epicCollaboratorsQueryScope\(/.test(source) ||
         /useEpicCollaboratorsQuery\(/.test(source)
       );
     });

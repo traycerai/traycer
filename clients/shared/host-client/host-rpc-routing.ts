@@ -53,9 +53,10 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   `.communicationGraph.subscribe`) and the chat serving witness
  *   (`chat.serving.subscribe`), the server's published fact. Always the pool
  *   in a build with one.
- * - `addressed-peer` - `host.status` and `host.getRuntimeCapabilities`: the
- *   session-level floor every peer genuinely serves, the pool included, so
- *   they go to whichever peer the requester names.
+ * - `addressed-peer` - requests go to the named peer. A computer negotiates
+ *   method support on its connection. An addressed pool needs to advertise
+ *   the method, except for the session-floor methods `host.status` and
+ *   `host.getRuntimeCapabilities`.
  * - `target-host-live-pool-at-rest` - a chat's transcript: its host serves
  *   it while it is live, the pool at rest (a team sandbox that is not awake,
  *   or a machine that dropped the chat's records). Which one is the caller's
@@ -304,9 +305,9 @@ export function decideHostRpcDispatch(
       }
       return dispatchToTarget(target);
     case "addressed-peer":
-      // The session floors can establish a fresh handshake when the cached
-      // manifest is stale. Task methods require the addressed peer's support.
       if (
+        target !== null &&
+        isPoolHostDirectoryEntry(target) &&
         method !== "host.status" &&
         method !== "host.getRuntimeCapabilities" &&
         targetMethods !== null &&

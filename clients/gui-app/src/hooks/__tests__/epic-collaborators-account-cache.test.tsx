@@ -178,6 +178,69 @@ afterEach(() => {
 });
 
 describe("collaborator query account scope", () => {
+  it("retains same-key rows through a transient failure and withholds them after access refusal", async () => {
+    let failure: "transient" | "access-refused" | null = null;
+    const harness = createHarness("account-a", "pool", () => {
+      if (failure === "transient") {
+        throw new HostRpcError({
+          code: "E_CLOUD_REQUEST_REFUSED",
+          requestId: "collaborator-request",
+          method: METHOD,
+          message: "synthetic transient failure",
+          fatalDetails: null,
+        });
+      }
+      if (failure === "access-refused") {
+        throw new HostRpcError({
+          code: "FORBIDDEN",
+          requestId: "collaborator-request",
+          method: METHOD,
+          message: "synthetic access refusal",
+          fatalDetails: null,
+        });
+      }
+      return collaboratorResponse("account-a");
+    });
+    const hook = mount(harness);
+    await waitFor(() => {
+      expect(hook.result.current.data?.directUsers[0]?.email).toBe(
+        "account-a@example.test",
+      );
+    });
+
+    failure = "transient";
+    const transientRequest = nextCollaboratorsRequest(harness.messenger);
+    await act(async () => {
+      await hook.result.current.query.refetch();
+    });
+    await transientRequest;
+
+    await waitFor(() => {
+      expect(hook.result.current.query.error?.code).toBe(
+        "E_CLOUD_REQUEST_REFUSED",
+      );
+    });
+    expect(hook.result.current.isError).toBe(true);
+    expect(hook.result.current.error?.code).toBe("E_CLOUD_REQUEST_REFUSED");
+    expect(hook.result.current.data?.directUsers[0]?.email).toBe(
+      "account-a@example.test",
+    );
+
+    failure = "access-refused";
+    const refusalRequest = nextCollaboratorsRequest(harness.messenger);
+    await act(async () => {
+      await hook.result.current.query.refetch();
+    });
+    await refusalRequest;
+
+    await waitFor(() => {
+      expect(hook.result.current.query.error?.code).toBe("FORBIDDEN");
+    });
+    expect(hook.result.current.isError).toBe(true);
+    expect(hook.result.current.error?.code).toBe("FORBIDDEN");
+    expect(hook.result.current.data).toBeUndefined();
+  });
+
   it("drops account A rows as account B's answer is pending, then shows B's rows", async () => {
     let currentAnswer: () =>
       | ListEpicCollaboratorsResponse

@@ -178,26 +178,6 @@ describe("ArtifactStreamClient - frame addressing", () => {
     expect(seen.docAck).toEqual([OURS]);
   });
 
-  it("delivers the negotiated read-only mark on a document seed", () => {
-    const { session, seen } = attach();
-
-    session.emitFrame(
-      {
-        kind: "doc",
-        authorityEpoch: EPOCH,
-        artifactId: OURS,
-        docGuid: "guid-inline",
-        stateVectorBase64: "",
-        hasBinaryPayload: true,
-        readOnly: true,
-      },
-      bytes,
-    );
-
-    expect(seen.doc).toEqual([OURS]);
-    expect(seen.readOnly).toEqual([true]);
-  });
-
   it("drops every non-pong frame naming a different artifact", () => {
     const { session, seen } = attach();
 

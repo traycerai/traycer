@@ -485,7 +485,12 @@ export const artifactSubscribeServerFrameSchemaV13 = lazySchema(() =>
       readOnly: z.literal(true).optional(),
     }),
     ...artifactSubscribeServerFrameSchemaV12.options.filter(
-      (option) => option !== artifactSubscribeDocFrameSchemaV10,
+      (
+        option,
+      ): option is Exclude<
+        typeof option,
+        typeof artifactSubscribeDocFrameSchemaV10
+      > => option !== artifactSubscribeDocFrameSchemaV10,
     ),
   ]),
 );

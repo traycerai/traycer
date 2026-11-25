@@ -3,6 +3,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import { hostQueryEntryKey } from "@/hooks/host/use-host-query";
 import { readAppServingDecision } from "@/lib/host/app-serving-decision";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { lastingHostRefusal } from "@/lib/host/lasting-host-refusal";
 
 export interface EpicCollaboratorsCacheOwner {
   readonly hostId: string | null;
@@ -18,10 +19,20 @@ export function captureEpicCollaboratorsCacheOwner(
   };
 }
 
-export function epicCollaboratorsCacheIdentity(
+export function epicCollaboratorsQueryScope(
+  epicId: string,
   viewerUserId: string,
-): readonly [string] {
-  return [viewerUserId];
+) {
+  return {
+    method: "epic.listCollaborators",
+    params: { epicId },
+    cacheKeyIdentity: [viewerUserId],
+  } as const;
+}
+
+export function canReadCachedCollaborators(error: unknown): boolean {
+  const refusal = lastingHostRefusal(error);
+  return refusal !== "access-refused" && refusal !== "signed-out";
 }
 
 export function epicCollaboratorsQueryKey(
@@ -32,9 +43,7 @@ export function epicCollaboratorsQueryKey(
   return hostQueryEntryKey<HostRpcRegistry, "epic.listCollaborators">({
     hostId,
     effectiveHostId: hostId,
-    method: "epic.listCollaborators",
-    params: { epicId },
-    cacheKeyIdentity: epicCollaboratorsCacheIdentity(viewerUserId),
+    ...epicCollaboratorsQueryScope(epicId, viewerUserId),
     serving: readAppServingDecision(),
   });
 }

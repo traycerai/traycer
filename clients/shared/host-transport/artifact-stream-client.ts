@@ -8,11 +8,8 @@
  * frame, and a payload that contradicts the declaration is dropped rather than
  * reinterpreted.
  *
- * Frames are parsed with the `@1.2` union whatever minor the connection
- * negotiated. That is safe in the one direction it has to be: each minor is a
- * strict superset of the one before (`@1.1` adds the `bodySync` frame, `@1.2`
- * the `bodyMoved` code), and a host on a lower minor simply never sends what
- * the wider union adds.
+ * Parse with the negotiated minor so a field outside that minor has no effect
+ * on the document. `@1.3` adds `readOnly` to the `doc` frame.
  *
  * ## The attach is bound to ONE authority epoch, for life
  *
@@ -38,6 +35,9 @@
  * attach.
  */
 import {
+  artifactSubscribeServerFrameSchemaV10,
+  artifactSubscribeServerFrameSchemaV11,
+  artifactSubscribeServerFrameSchemaV12,
   artifactSubscribeServerFrameSchemaV13,
   type ArtifactSubscribeClientFrameV10,
   type ArtifactSubscribeSeedOffer,
@@ -52,6 +52,13 @@ import type {
 import type { IStreamClient } from "./i-stream-client";
 
 export const ARTIFACT_SUBSCRIBE_METHOD = "artifact.subscribe";
+
+const ARTIFACT_SERVER_FRAME_SCHEMAS = [
+  artifactSubscribeServerFrameSchemaV10,
+  artifactSubscribeServerFrameSchemaV11,
+  artifactSubscribeServerFrameSchemaV12,
+  artifactSubscribeServerFrameSchemaV13,
+];
 
 type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV13["kind"]> =
   Extract<ArtifactSubscribeServerFrameV13, { readonly kind: Kind }>;
@@ -177,7 +184,13 @@ export class ArtifactStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (this.closed) return;
-    const parsed = artifactSubscribeServerFrameSchemaV13.safeParse(envelope);
+    const version = this.session.getNegotiatedSchemaVersion();
+    const schema =
+      (version === null
+        ? undefined
+        : ARTIFACT_SERVER_FRAME_SCHEMAS[version.minor]) ??
+      artifactSubscribeServerFrameSchemaV13;
+    const parsed = schema.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     // The address invariant the contract STATES but cannot enforce: every
