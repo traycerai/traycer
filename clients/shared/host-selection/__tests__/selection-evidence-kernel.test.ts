@@ -115,6 +115,8 @@ function okAttach(revision: number): SelectionAttachResult {
       preferredHostId: null,
       targetHostId: null,
       effectiveHostId: null,
+      servingPeer: null,
+      noPeerPresentation: null,
       leases: [],
     },
   };
@@ -349,6 +351,8 @@ describe("SelectionEvidenceKernel - render surface", () => {
         preferredHostId: null,
         targetHostId: "H",
         effectiveHostId: "H",
+        servingPeer: { kind: "computer", hostId: "H" },
+        noPeerPresentation: null,
         previousEffectiveHostId: null,
         cause: "failover",
       },
@@ -399,6 +403,8 @@ function okAttachWithTarget(
       preferredHostId: null,
       targetHostId,
       effectiveHostId: null,
+      servingPeer: null,
+      noPeerPresentation: null,
       leases: [],
     },
   };
@@ -437,6 +443,8 @@ describe("SelectionEvidenceKernel - C1: applied-revision ordering", () => {
         preferredHostId: null,
         targetHostId: null,
         effectiveHostId: null,
+        servingPeer: null,
+        noPeerPresentation: null,
         leases: [{ hostId: "H", status: "connecting", dead: null }],
       },
     });
@@ -500,6 +508,11 @@ function attachSnapshot(input: {
       preferredHostId: input.preferredHostId,
       targetHostId: input.targetHostId,
       effectiveHostId: input.effectiveHostId,
+      servingPeer:
+        input.effectiveHostId === null
+          ? null
+          : { kind: "computer", hostId: input.effectiveHostId },
+      noPeerPresentation: null,
       leases: input.leases,
     },
   };
@@ -547,6 +560,8 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
       preferredHostId: "H",
       targetHostId: "H",
       effectiveHostId: "H",
+      servingPeer: { kind: "computer", hostId: "H" },
+      noPeerPresentation: null,
       leases: replayedLeases,
       // The selection slice took the SNAPSHOT, so it reports the snapshot's
       // revision - not the replayed leases' higher one. Per-slice is the whole
@@ -581,6 +596,8 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
         preferredHostId: null,
         targetHostId: "S-host",
         effectiveHostId: "S-host",
+        servingPeer: { kind: "computer", hostId: "S-host" },
+        noPeerPresentation: null,
         previousEffectiveHostId: null,
         cause: "failover",
       },
@@ -605,6 +622,8 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
       preferredHostId: null,
       targetHostId: "S-host",
       effectiveHostId: "S-host",
+      servingPeer: { kind: "computer", hostId: "S-host" },
+      noPeerPresentation: null,
       leases: snapshotLeases,
       // Mirror of the case above: here the REPLAY won the selection slice, so
       // the reported revision is the replay's, not the snapshot's.
@@ -645,6 +664,8 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
       preferredHostId: "A-host",
       targetHostId: "A-host",
       effectiveHostId: "A-host",
+      servingPeer: { kind: "computer", hostId: "A-host" },
+      noPeerPresentation: null,
       leases: leasesA,
       selectionRevision: 5,
     });
@@ -674,6 +695,8 @@ describe("SelectionEvidenceKernel - closure round: per-slice snapshot merge", ()
       preferredHostId: "B-host",
       targetHostId: "B-host",
       effectiveHostId: "B-host",
+      servingPeer: { kind: "computer", hostId: "B-host" },
+      noPeerPresentation: null,
       leases: leasesB,
       // The re-attach's revision, so nothing of the outgoing identity - not
       // even the revision the window last narrated against - survives.

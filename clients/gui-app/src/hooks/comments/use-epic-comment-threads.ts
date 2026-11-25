@@ -8,6 +8,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryEntryKey, useHostQuery } from "@/hooks/host/use-host-query";
+import { readAppServingDecision } from "@/lib/host/app-serving-decision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudReadRefusedWithoutVerdict } from "@/lib/host/cloud-verdict-preflight";
 import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
@@ -36,6 +37,7 @@ export function commentThreadsQueryKey(
     method: "epic.listCommentThreads",
     params,
     cacheKeyIdentity: [viewerUserId],
+    serving: readAppServingDecision(),
   });
 }
 

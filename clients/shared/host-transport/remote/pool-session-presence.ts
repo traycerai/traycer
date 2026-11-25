@@ -1,11 +1,15 @@
 import type { RemoteSessionEvidence } from "@traycer/protocol/host-transport/remote/session";
 import { RESTART_INTENT_EPISODE_MS } from "../../host-selection/selection-authority-engine";
+import type { TransportEvidenceReporter } from "../../host-selection/transport-evidence";
 import type { TimerHandle } from "../timer-handle";
 
 /**
- * The evidence sink for sessions to the server pool, and the only one they
- * get. A pool session never reports to the selection authority: the pool is
- * not a host the authority may choose, and it holds no lease there.
+ * The evidence sink for sessions to the server pool. The pool is not a host
+ * the authority may choose and holds no lease there, so no dial evidence
+ * leaves here. What does - a pool session opening or closing, and a drain the
+ * pool announced - goes on to the window's selection reporter once one is
+ * bound ({@link bindReporter}): it is what the authority derives the serving
+ * peer from.
  *
  * Whether the pool is reachable is read from the session cache, as for any
  * remote session (`hasReadyRemoteSession`). What this adds is the one fact
@@ -29,9 +33,20 @@ export class PoolSessionPresence implements RemoteSessionEvidence<"pool-direct">
   >();
   private readonly seenTombstoneIds = new Map<string, Set<string>>();
   private readonly listeners = new Set<() => void>();
+  private reporter: TransportEvidenceReporter | null = null;
 
   constructor(now: () => number) {
     this.now = now;
+  }
+
+  /**
+   * Forwards pool session evidence to `reporter`, replacing any earlier one.
+   * The window's composition root binds its relay, whose lifetime is the
+   * session cache's, so a pooled pool session keeps reporting across a
+   * runtime remount.
+   */
+  bindReporter(reporter: TransportEvidenceReporter): void {
+    this.reporter = reporter;
   }
 
   /** Whether `hostId`'s pool announced a drain whose hold has not lapsed. */
@@ -47,13 +62,15 @@ export class PoolSessionPresence implements RemoteSessionEvidence<"pool-direct">
     };
   }
 
-  sessionEstablished(hostId: string): void {
+  sessionEstablished(hostId: string, sessionId: string): void {
     this.endHold(hostId);
+    this.reporter?.sessionEstablished(hostId, sessionId, "pool-direct");
   }
 
-  sessionLost(): void {
-    // The loss itself reaches readers through the session cache's readiness
-    // edge; a hold, if one is open, already covers it.
+  sessionLost(hostId: string, sessionId: string): void {
+    // The loss reaches readers through the session cache's readiness edge; a
+    // hold, if one is open, already covers it.
+    this.reporter?.sessionLost(hostId, sessionId, "pool-direct");
   }
 
   reportDialSuccess(hostId: string): void {
@@ -69,7 +86,12 @@ export class PoolSessionPresence implements RemoteSessionEvidence<"pool-direct">
     // Says nothing about the pool.
   }
 
-  reportRestartIntent(hostId: string, tombstoneId: string): void {
+  reportRestartIntent(
+    hostId: string,
+    tombstoneId: string,
+    expiresAt: number | null,
+  ): void {
+    this.reporter?.reportRestartIntent(hostId, tombstoneId, expiresAt);
     const seen = this.seenTombstoneIds.get(hostId) ?? new Set<string>();
     if (seen.has(tombstoneId)) {
       return;

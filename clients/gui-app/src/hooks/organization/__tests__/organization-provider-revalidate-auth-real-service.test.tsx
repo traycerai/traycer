@@ -297,9 +297,12 @@ vi.mock("@/lib/host", () => ({
 
 vi.mock("@/hooks/host/use-pool-tier", () => ({
   usePoolTierHostClient: <T,>(c: T): T => c,
-  usePoolTierStreamClient: () =>
-    (mocks.stream.current as CapturedOrganizationStream | null)
-      ?.wsStreamClient ?? null,
+  useRoutedStreamClient: (_method: string, peerHostId: string | null) => ({
+    client:
+      (mocks.stream.current as CapturedOrganizationStream | null)
+        ?.wsStreamClient ?? null,
+    peerHostId,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({

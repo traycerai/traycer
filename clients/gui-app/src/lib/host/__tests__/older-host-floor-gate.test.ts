@@ -159,6 +159,8 @@ function attachNarration(): void {
     preferredHostId: FLOOR_HOST,
     targetHostId: FLOOR_HOST,
     effectiveHostId: FLOOR_HOST,
+    servingPeer: { kind: "computer", hostId: FLOOR_HOST },
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
   });

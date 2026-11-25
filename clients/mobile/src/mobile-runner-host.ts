@@ -273,6 +273,8 @@ export interface MobileRunnerHostOptions {
   readonly hostLabel: string;
   /** The relay's fixed WS attach endpoint (`IRunnerHost.relayBaseUrl`). */
   readonly relayBaseUrl: string;
+  /** The server pool's endpoint (`IRunnerHost.poolBaseUrl`); `""` for none. */
+  readonly poolBaseUrl: string;
   /**
    * OS push lifecycle owner, or `null` where pushes cannot exist (the dev web
    * entry, tests). Its click relay and its permission reads are consumed here -
@@ -405,8 +407,7 @@ export class MobileRunnerHost implements IRunnerHost {
   private readonly serverBaseUrl: string;
   readonly sandboxControlUnavailableReason: string | null;
   readonly relayBaseUrl: string;
-  // The mobile app has not adopted the server pool yet.
-  readonly poolBaseUrl = "";
+  readonly poolBaseUrl: string;
   readonly hasLocalHost = false;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
   readonly tokenStore: ITokenStore;
@@ -506,6 +507,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.sandboxControlUnavailableReason =
       options.sandboxControlUnavailableReason;
     this.relayBaseUrl = options.relayBaseUrl;
+    this.poolBaseUrl = options.poolBaseUrl;
     this.fleetHostIds = options.fleetHostIds;
     this.linkCodeScanner = options.linkCodeScanner;
     this.deviceDescriber = options.deviceDescriber;
@@ -569,6 +571,7 @@ export class MobileRunnerHost implements IRunnerHost {
       clock: systemAuthorityClock,
       newIncarnationId: createIncrementingIncarnationIds(),
       log: silentAuthorityLog,
+      poolConfigured: this.poolBaseUrl.length > 0,
     });
     this.selectionAuthority = this.selectionAuthorityMount.client;
     // The identity port follows the token store: the stored credential IS the

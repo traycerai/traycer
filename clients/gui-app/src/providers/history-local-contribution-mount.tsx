@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ViewReplicaContributionRegistration } from "@traycer-clients/shared/view-replica/service";
-import { useHostClient } from "@/lib/host";
+import { useHostBinding, useHostClient } from "@/lib/host";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
 import {
@@ -14,19 +15,30 @@ import {
 } from "@/lib/history-composition/history-local-contribution";
 import { historyReplicaService } from "@/lib/view-replica/history-replica";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
  * Registers History's local contribution on the replica's paint gate, so no
  * cached History page paints without the host's local rows and tombstones.
  *
- * The host is History's own: the app-wide host whose page History lists
- * (`useCloudEpicTasksQuery` reads the same client). When that host or the
- * account changes, a contribution it has not answered for yet holds the
- * paint, and this mount reads it once - History's own fetches refresh it
- * after that.
+ * The local contribution belongs to the computer serving the app. It can
+ * be combined with a page that the pool answers.
  */
 export function HistoryLocalContributionMount(): null {
-  const client = useHostClient();
+  const appClient = useHostClient();
+  const runtimeClient = useHostBinding()?.hostClient ?? appClient;
+  const servingComputerId = useSelectionAuthorityStore((state) =>
+    state.servingPeer?.kind === "computer" ? state.servingPeer.hostId : null,
+  );
+  const poolBuild = readProcessHostRpcTierPlan().pool !== null;
+  const clientRoot = poolBuild ? runtimeClient : appClient;
+  const client = useMemo(
+    () =>
+      poolBuild
+        ? clientRoot.createRequesterForHostId(servingComputerId)
+        : clientRoot,
+    [clientRoot, poolBuild, servingComputerId],
+  );
   const readiness = useReactiveHostReadiness(client);
   const status = useAuthStore((state) => state.status);
   const contextUserId = useAuthStore(
@@ -63,7 +75,8 @@ export function HistoryLocalContributionMount(): null {
       accountId === null ||
       hostId === null ||
       requestContextUserId !== accountId ||
-      unfilteredHistoryContribution(accountId, hostId) !== undefined
+      (!poolBuild &&
+        unfilteredHistoryContribution(accountId, hostId) !== undefined)
     ) {
       return;
     }
@@ -79,23 +92,22 @@ export function HistoryLocalContributionMount(): null {
       filters: null,
       signal: abort.signal,
       onIncomplete: null,
-    }).then(
-      (contribution) =>
-        noteUnfilteredHistoryContribution(
-          accountId,
-          hostId,
-          contribution,
-          readStartedAt,
-        ),
-      abandonPending,
-    );
+    }).then((contribution) => {
+      if (abort.signal.aborted) return;
+      noteUnfilteredHistoryContribution(
+        accountId,
+        hostId,
+        contribution,
+        readStartedAt,
+      );
+    }, abandonPending);
     // An unanswered read gives its scope back, so the next mount of this
     // host and account reads it again instead of finding a stale `pending`.
     return () => {
       abort.abort();
       abandonPending();
     };
-  }, [accountId, client, hostId, requestContextUserId]);
+  }, [accountId, client, hostId, poolBuild, requestContextUserId]);
 
   return null;
 }

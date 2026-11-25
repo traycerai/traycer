@@ -6,10 +6,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import {
   providersCommitProfileMoveResponseSchema,
   type ProvidersCommitProfileMoveRequest,
@@ -172,12 +169,7 @@ export function useProvidersCommitProfileMove(
         if (group.hostId === null) return;
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(
-            hostRpcServingTierHostId(
-              "agent.list",
-              group.hostId,
-              readProcessHostRpcTierPlan(),
-              null,
-            ),
+            readServingTierHostId("agent.list", group.hostId, null, null),
             "agent.list",
           ),
         });

@@ -10,7 +10,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { poolHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { createHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
@@ -30,6 +35,7 @@ import {
 } from "@/components/comments/canvas-comment-drafts";
 import { CommentThreadCard } from "@/components/comments/comment-thread-card";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
@@ -54,6 +60,8 @@ const EPIC_ID = "epic-1";
 const ARTIFACT_ID = "spec-1";
 const THREAD_ID = "thread-1";
 const COMMENT_ID = "comment-1";
+const poolEntry = poolHostDirectoryEntry("wss://pool.test/rpc");
+if (poolEntry === null) throw new Error("pool fixture must build");
 
 interface RecordedCall<Request, Response> {
   readonly request: Request;
@@ -72,6 +80,7 @@ const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
 let queryClient: QueryClient;
 let epicHandle: OpenEpicStoreHandle;
 let hostClient: HostClient<HostRpcRegistry>;
+let messenger: MockHostMessenger<HostRpcRegistry>;
 let replies: Array<
   RecordedCall<ReplyToCommentThreadRequest, ReplyToCommentThreadResponse>
 >;
@@ -115,41 +124,61 @@ beforeEach(() => {
     );
   queryClient = createAppQueryClient();
   let requestCount = 0;
+  messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `req-${String((requestCount += 1))}`,
+    handlers: {
+      "epic.replyToCommentThread": (request) => {
+        const answer = createDeferred<ReplyToCommentThreadResponse>();
+        replies.push({ request, answer });
+        return answer.promise;
+      },
+      "epic.editComment": (request) => {
+        const answer = createDeferred<EditCommentResponse>();
+        edits.push({ request, answer });
+        return answer.promise;
+      },
+      "epic.createCommentThread": () => {
+        createCount += 1;
+        return { threadId: "unexpected-thread" };
+      },
+      "epic.listCommentThreads": () => ({ threads: [thread] }),
+      "epic.listCollaborators": () => ({
+        collaborators: [],
+        collaboratorsAvailable: true,
+      }),
+    },
+  });
+  const appServingHost = {
+    ...mockRemoteHostEntry,
+    hostId: "app-serving-computer",
+  };
+  const directory = [mockLocalHostEntry, appServingHost, poolEntry];
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `req-${String((requestCount += 1))}`,
-      handlers: {
-        "epic.replyToCommentThread": (request) => {
-          const answer = createDeferred<ReplyToCommentThreadResponse>();
-          replies.push({ request, answer });
-          return answer.promise;
-        },
-        "epic.editComment": (request) => {
-          const answer = createDeferred<EditCommentResponse>();
-          edits.push({ request, answer });
-          return answer.promise;
-        },
-        "epic.createCommentThread": () => {
-          createCount += 1;
-          return { threadId: "unexpected-thread" };
-        },
-        "epic.listCommentThreads": () => ({ threads: [thread] }),
-        "epic.listCollaborators": () => ({
-          collaborators: [],
-          collaboratorsAvailable: true,
-        }),
-      },
-    }),
+      directory.find((entry) => entry.hostId === hostId) ?? null,
+    messenger,
+    routing: {
+      plan: createHostRpcTierPlan(poolEntry),
+      selectedHostId: () => appServingHost.hostId,
+      serving: () => ({
+        servingPeer: appServingHost,
+        servingPeerMethods: new Set(["epic.replyToCommentThread"]),
+        servingPeerEnvironmentId: null,
+      }),
+    },
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   hostClient = spine.createRequester(mockLocalHostEntry);
+  useSelectionAuthorityStore.setState({
+    attached: true,
+    effectiveHostId: appServingHost.hostId,
+    servingPeer: { kind: "computer", hostId: appServingHost.hostId },
+  });
   epicHandle = openStoreForTest({
     epicId: EPIC_ID,
     userId: "user-1",
@@ -167,6 +196,7 @@ afterEach(() => {
   epicHandle.dispose();
   queryClient.clear();
   useAuthStore.getState().setSignedOut();
+  useSelectionAuthorityStore.getState().reset();
 });
 
 function cardElement(threadToRender: CommentThreadWire, isExpanded: boolean) {
@@ -243,6 +273,29 @@ function editAt(
 }
 
 describe("<CommentThreadCard /> reply submit", () => {
+  it("sends a task comment action to the session peer while another computer serves the app", async () => {
+    await renderExpandedCard();
+    typeIntoEditor(composerEditorAt(0), "original task reply");
+    fireEvent.click(replyButton());
+
+    await waitFor(() => expect(replies).toHaveLength(1));
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      "app-serving-computer",
+    );
+    expect(
+      messenger.calls.map((call) => [
+        call.method,
+        call.authority.endpoint.hostId,
+      ]),
+    ).toEqual([
+      ["epic.listCollaborators", mockLocalHostEntry.hostId],
+      ["epic.replyToCommentThread", mockLocalHostEntry.hostId],
+    ]);
+
+    replyAt(0).answer.resolve({ ok: true });
+    await settle();
+  });
+
   it("sends one reply for repeated submits, then accepts the next reply after the ack resets the composer", async () => {
     await renderExpandedCard();
     const replyEditor = composerEditorAt(0);

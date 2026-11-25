@@ -6,17 +6,26 @@ import {
   HostClient,
   type HostRequester,
 } from "@traycer-clients/shared/host-client/host-client";
+import {
+  poolHostDirectoryEntry,
+  POOL_HOST_ID,
+} from "@traycer-clients/shared/host-client/host-directory";
+import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCollaboratorsQuery } from "@/hooks/epics/use-epic-collaborators-query";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { readAppServingDecision } from "@/lib/host/app-serving-decision";
 
 const EPIC_ID = "shared-task";
 const METHOD = "epic.listCollaborators" as const;
@@ -78,10 +87,15 @@ interface Harness {
 
 function createHarness(
   initialViewer: string,
+  initialPeer: "computer" | "pool",
   answer: () =>
     | ListEpicCollaboratorsResponse
     | Promise<ListEpicCollaboratorsResponse>,
 ): Harness {
+  const poolEntry = poolHostDirectoryEntry("wss://pool.test/rpc");
+  if (poolEntry === null) throw new Error("Expected a pool peer");
+  const plan = settleProcessHostRpcTierPlan(poolEntry);
+  recordNegotiatedHostMethods(POOL_HOST_ID, [METHOD]);
   const queryClient = createAppQueryClient();
   clients.push(queryClient);
   queryClient.setDefaultOptions({
@@ -103,12 +117,19 @@ function createHarness(
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) => {
       if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
-      if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
+      if (hostId === POOL_HOST_ID) return poolEntry;
       return null;
     },
     messenger,
+    routing: {
+      plan,
+      selectedHostId: () => mockLocalHostEntry.hostId,
+      serving: readAppServingDecision,
+    },
   });
-  const client = rootClient.createRequester(mockLocalHostEntry);
+  const client = rootClient.createRequester(
+    initialPeer === "computer" ? mockLocalHostEntry : poolEntry,
+  );
   const harness: Harness = {
     queryClient,
     rootClient,
@@ -123,7 +144,7 @@ function createHarness(
     },
     setPeer(peer) {
       harness.client = rootClient.createRequester(
-        peer === "computer" ? mockLocalHostEntry : mockRemoteHostEntry,
+        peer === "computer" ? mockLocalHostEntry : poolEntry,
       );
     },
   };
@@ -151,6 +172,7 @@ function mount(harness: Harness) {
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   for (const client of clients.splice(0)) client.clear();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
@@ -161,7 +183,7 @@ describe("collaborator query account scope", () => {
       | ListEpicCollaboratorsResponse
       | Promise<ListEpicCollaboratorsResponse> = () =>
       collaboratorResponse("account-a");
-    const harness = createHarness("account-a", () => currentAnswer());
+    const harness = createHarness("account-a", "pool", () => currentAnswer());
     const hook = mount(harness);
     await waitFor(() => {
       expect(hook.result.current.data?.directUsers[0]?.email).toBe(
@@ -198,7 +220,7 @@ describe("collaborator query account scope", () => {
 
   it("does not project account A rows when account B's collaborator read is refused", async () => {
     let refuse = false;
-    const harness = createHarness("account-a", () => {
+    const harness = createHarness("account-a", "pool", () => {
       if (!refuse) return collaboratorResponse("account-a");
       throw new HostRpcError({
         code: "E_CLOUD_REQUEST_REFUSED",
@@ -238,7 +260,9 @@ describe("collaborator query account scope", () => {
       | ListEpicCollaboratorsResponse
       | Promise<ListEpicCollaboratorsResponse> = () =>
       collaboratorResponse("computer-peer");
-    const harness = createHarness("account-a", () => currentAnswer());
+    const harness = createHarness("account-a", "computer", () =>
+      currentAnswer(),
+    );
     const hook = mount(harness);
     await waitFor(() => {
       expect(hook.result.current.data?.directUsers[0]?.email).toBe(
@@ -259,7 +283,7 @@ describe("collaborator query account scope", () => {
     expect(hook.result.current.data).toBeUndefined();
     await poolRequest;
     expect(harness.messenger.calls.at(-1)?.authority.endpoint.hostId).toBe(
-      mockRemoteHostEntry.hostId,
+      POOL_HOST_ID,
     );
     act(() => {
       resolvePoolAnswer(collaboratorResponse("pool-peer"));

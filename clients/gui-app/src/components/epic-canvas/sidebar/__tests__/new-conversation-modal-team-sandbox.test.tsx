@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ModelOption } from "@/components/home/data/landing-options";
 /**
  * On a team's sandbox host only a harness whose credential stays a
@@ -963,6 +964,7 @@ async function createAttachmentAuthBinding(
     requestCoordinator: null,
     connectionRegistry: null,
     selectedHostId: () => "host-modal",
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     singleAttemptMessenger: null,
   });
   const fixture: AttachmentAuthFixture = {

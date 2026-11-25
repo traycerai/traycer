@@ -73,6 +73,8 @@ function publishFleet(
     preferredHostId: effectiveHostId,
     targetHostId: effectiveHostId,
     effectiveHostId,
+    servingPeer: { kind: "computer", hostId: effectiveHostId },
+    noPeerPresentation: null,
     // Built per ARM, not with a conditional field: `HostLeaseSnapshot` is a
     // discriminated union, and a mapped object with a `"ready" | "dead"` status
     // is neither member.

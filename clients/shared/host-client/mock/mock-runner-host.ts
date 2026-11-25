@@ -528,6 +528,7 @@ export class MockRunnerHost implements IRunnerHost {
       clock: systemAuthorityClock,
       newIncarnationId: createIncrementingIncarnationIds(),
       log: silentAuthorityLog,
+      poolConfigured: this.poolBaseUrl.length > 0,
     });
     this.selectionAuthority = this.selectionAuthorityMount.client;
     this.publishSelectionFleet();

@@ -10,7 +10,10 @@ import type {
 import type { IHostMessenger } from "../host-transport/host-messenger";
 import { HostClient, type IHostQueryInvalidator } from "./host-client";
 import { POOL_HOST_ID, type HostDirectoryEntry } from "./host-directory";
-import { settleProcessHostRpcTierPlan } from "./host-rpc-routing";
+import {
+  settleProcessHostRpcTierPlan,
+  type HostServingDecision,
+} from "./host-rpc-routing";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistry,
@@ -98,6 +101,11 @@ export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
    * methods (the person's input devices) go, whatever the caller's target.
    */
   readonly selectedHostId: () => string | null;
+  /**
+   * The app's serving peer and what it negotiated, read at dispatch: decides
+   * where an account-wide call goes (`host-rpc-routing.ts`).
+   */
+  readonly servingDecision: () => HostServingDecision;
 }
 
 /**
@@ -178,6 +186,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
           options.directory.findById(POOL_HOST_ID),
         ),
         selectedHostId: options.selectedHostId,
+        serving: options.servingDecision,
       },
     });
   }

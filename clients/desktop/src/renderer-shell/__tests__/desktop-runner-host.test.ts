@@ -1749,6 +1749,20 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
   });
 });
 
+describe("DesktopRunnerHost pool address", () => {
+  it("normalizes a missing poolBaseUrl from a legacy preload bridge", () => {
+    const fake = buildFakeBridge(null);
+    expect(Reflect.deleteProperty(fake.bridge, "poolBaseUrl")).toBe(true);
+    expect("poolBaseUrl" in fake.bridge).toBe(false);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    expect(host.poolBaseUrl).toBe("");
+  });
+});
+
 describe("DesktopRunnerHost.onSystemResumed", () => {
   it("fans out through one bridge subscription and releases it on dispose", () => {
     const fake = buildFakeBridge(null);

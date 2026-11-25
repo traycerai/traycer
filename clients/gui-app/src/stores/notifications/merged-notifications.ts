@@ -5,7 +5,9 @@ import {
   HostRpcError,
   type RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -960,6 +962,20 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   const notificationHost = useNotificationResolveHost();
   const notificationHostId = notificationHost.hostId;
   const client = notificationHost.client;
+  // The cloud feed's own mutations are account-wide: dispatch sends each to
+  // the peer that answers it whichever requester carries it. While the pool
+  // serves the app with no computer serving the notifications there is no
+  // host requester, so they ride the pool's; otherwise the host's, as before.
+  const hostBinding = useHostBinding();
+  const cloudFeedClient = useMemo(
+    () =>
+      client !== null ||
+      hostBinding === null ||
+      readProcessHostRpcTierPlan().pool === null
+        ? client
+        : resolvePoolTierHostClient(hostBinding.hostClient),
+    [client, hostBinding],
+  );
   const queryClient = useQueryClient();
   const globalMarkAsRead = useNotificationsStore((state) => state.markAsRead);
   const globalMarkAllAsRead = useNotificationsStore(
@@ -1059,23 +1075,23 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   };
   const captureCloudMutationContext = useCallback(
     (): CloudFeedMutationContext => ({
-      hostId: client?.getActiveHostId() ?? null,
+      hostId: cloudFeedClient?.getActiveHostId() ?? null,
       sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
       accountId: useAuthStore.getState().contextMetadata?.userId ?? null,
     }),
-    [client],
+    [cloudFeedClient],
   );
   const isCurrentCloudMutation = useCallback(
     (context: CloudFeedMutationContext | null): boolean =>
       context !== null &&
       liveFeedMode.current === "cloud" &&
       cloudFeedAuthorizedNow(context.accountId) &&
-      client?.getActiveHostId() === context.hostId &&
+      cloudFeedClient?.getActiveHostId() === context.hostId &&
       useCloudNotificationsStore.getState().sessionEpoch ===
         context.sessionEpoch &&
       (useAuthStore.getState().contextMetadata?.userId ?? null) ===
         context.accountId,
-    [client],
+    [cloudFeedClient],
   );
   const cloudMarkRead = useHostMutation<
     HostRpcRegistry,
@@ -1083,7 +1099,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     CloudFeedMutationScope,
     CloudMarkReadVariables
   >({
-    client,
+    client: cloudFeedClient,
     method: "host.notifications.cloudFeed.markRead",
     mapVariables: (variables) => {
       if (variables.bulkFeed !== null) {
@@ -1130,7 +1146,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     CloudFeedMutationScope,
     CloudFeedBulkVariables
   >({
-    client,
+    client: cloudFeedClient,
     method: "host.notifications.cloudFeed.markAllRead",
     mapVariables: (variables) => {
       if (
@@ -1181,7 +1197,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     CloudFeedMutationScope,
     CloudFeedEntryVariables
   >({
-    client,
+    client: cloudFeedClient,
     method: "host.notifications.cloudFeed.clear",
     mapVariables: (variables) => {
       if (
@@ -1222,7 +1238,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     CloudFeedMutationScope,
     CloudFeedBulkVariables
   >({
-    client,
+    client: cloudFeedClient,
     method: "host.notifications.cloudFeed.clearAll",
     mapVariables: (variables) => {
       if (

@@ -333,6 +333,7 @@ async function mount(input: {
         : null,
     hostLabel: config.hostLabel,
     relayBaseUrl: config.relayBaseUrl,
+    poolBaseUrl: config.poolBaseUrl,
     pushRegistration,
     openPushSettings: buildOpenPushSettings(),
     returnScheme,

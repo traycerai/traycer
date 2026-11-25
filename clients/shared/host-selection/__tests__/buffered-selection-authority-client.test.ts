@@ -28,6 +28,8 @@ function snapshotAt(revision: number): SelectionAuthoritySnapshot {
     preferredHostId: null,
     targetHostId: null,
     effectiveHostId: null,
+    servingPeer: null,
+    noPeerPresentation: null,
     leases: [],
   };
 }
@@ -37,6 +39,8 @@ function selectionChangeStub(): SelectionChange {
     preferredHostId: null,
     targetHostId: null,
     effectiveHostId: null,
+    servingPeer: null,
+    noPeerPresentation: null,
     previousEffectiveHostId: null,
     cause: "failover",
   };

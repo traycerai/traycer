@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient } from "@tanstack/react-query";
@@ -68,6 +69,7 @@ function buildBinding(): TestBinding {
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
   });
   return {

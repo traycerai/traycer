@@ -13,10 +13,7 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   useHostMutation,
@@ -236,12 +233,7 @@ export function useHostScopedMutationForClient<
           // pool-only read is filed under the pool whichever host carried this.
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(
-              hostRpcServingTierHostId(
-                method,
-                sentOn,
-                readProcessHostRpcTierPlan(),
-                null,
-              ),
+              readServingTierHostId(method, sentOn, null, null),
               method,
             ),
           });

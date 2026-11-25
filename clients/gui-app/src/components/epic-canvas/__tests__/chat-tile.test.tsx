@@ -2498,6 +2498,8 @@ describe("<ChatTile />", () => {
       preferredHostId: HOST_ID,
       targetHostId: HOST_ID,
       effectiveHostId: HOST_ID,
+      servingPeer: { kind: "computer", hostId: HOST_ID },
+      noPeerPresentation: null,
       leases: [{ hostId: HOST_ID, status: "ready", dead: null }],
       selectionRevision: 1,
     });

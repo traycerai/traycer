@@ -36,6 +36,8 @@ import {
   type FollowingSurfaceResetListener,
 } from "@/stores/host/surface-host-selection-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { readHostServingDecision } from "@/lib/host/serving-decision";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 
 /** Flushes the microtask queue enough times for the attach choreography to settle. */
 async function flushMicrotasks(): Promise<void> {
@@ -111,6 +113,7 @@ function buildAuthority(input: {
     clock,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: silentAuthorityLog,
+    poolConfigured: false,
   });
   const client = createInProcessSelectionAuthorityClient(
     engine,
@@ -206,6 +209,86 @@ afterEach(() => {
 });
 
 describe("mountSelectionAuthorityBridge", () => {
+  it("keeps a desktop-v1.5.4 attach and event usable by the serving decision", async () => {
+    const selectionListeners: Array<
+      (event: SelectionRevisioned<SelectionChange>) => void
+    > = [];
+    const legacyAttach = {
+      ok: true,
+      incarnationId: "inc-desktop-1.5.4",
+      snapshot: {
+        contractVersion: 1,
+        revision: 4,
+        preferredHostId: "host-legacy",
+        targetHostId: "host-legacy",
+        effectiveHostId: "host-legacy",
+        leases: [],
+      },
+    };
+    const client = {
+      attach: vi.fn().mockResolvedValue(legacyAttach),
+      reportEvidence: vi.fn().mockResolvedValue(undefined),
+      activate: vi
+        .fn()
+        .mockResolvedValue({ ok: false, reason: "unrecognized" }),
+      onSelectionChanged: vi.fn(
+        (listener: (event: SelectionRevisioned<SelectionChange>) => void) => {
+          selectionListeners.push(listener);
+          return { dispose: () => undefined };
+        },
+      ),
+      onLeasesChanged: vi.fn(() => ({ dispose: () => undefined })),
+      onReattachRequired: vi.fn(() => ({ dispose: () => undefined })),
+    } satisfies SelectionAuthorityClient;
+    const kernel = new SelectionEvidenceKernel({
+      client,
+      now: () => 0,
+      log: silentAuthorityLog,
+    });
+    await kernel.start();
+    const bridge = mountBridge({ client, kernel });
+    const host = remoteEntry("host-legacy", null);
+
+    expect(client.attach).toHaveBeenCalledWith(1, []);
+    expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "host-legacy",
+    });
+    expect(kernel.snapshot().noPeerPresentation).toBeNull();
+    expect(
+      readHostServingDecision((hostId) =>
+        hostId === host.hostId ? host : null,
+      ).servingPeer,
+    ).toBe(host);
+
+    const legacyEvent = {
+      revision: 5,
+      change: {
+        preferredHostId: null,
+        targetHostId: "host-legacy",
+        effectiveHostId: null,
+        previousEffectiveHostId: "host-legacy",
+        cause: "deregister-clear",
+      },
+    };
+    for (const listener of selectionListeners) {
+      Reflect.apply(listener, undefined, [legacyEvent]);
+    }
+    expect(
+      readHostServingDecision((hostId) =>
+        hostId === host.hostId ? host : null,
+      ).servingPeer,
+    ).toBeNull();
+    expect(kernel.snapshot()).toMatchObject({
+      effectiveHostId: null,
+      servingPeer: null,
+      noPeerPresentation: null,
+    });
+
+    bridge.dispose();
+    kernel.dispose();
+  });
+
   it("(a) pushes a kernel snapshot's effectiveHostId into the store", async () => {
     const authority = buildAuthority({
       localHostId: "L",
@@ -473,6 +556,8 @@ describe("mountSelectionAuthorityBridge", () => {
             preferredHostId: null,
             targetHostId: null,
             effectiveHostId: null,
+            servingPeer: null,
+            noPeerPresentation: null,
             leases: [],
           },
         }),
@@ -508,6 +593,8 @@ describe("mountSelectionAuthorityBridge", () => {
         preferredHostId: "H",
         targetHostId: "H",
         effectiveHostId: null,
+        servingPeer: null,
+        noPeerPresentation: null,
         previousEffectiveHostId: null,
         cause: "failover",
       },
@@ -522,6 +609,8 @@ describe("mountSelectionAuthorityBridge", () => {
         preferredHostId: "H",
         targetHostId: "H",
         effectiveHostId: "H",
+        servingPeer: { kind: "computer", hostId: "H" },
+        noPeerPresentation: null,
         previousEffectiveHostId: "H",
         cause: "recovery",
       },
@@ -557,6 +646,8 @@ describe("mountSelectionAuthorityBridge", () => {
             preferredHostId: null,
             targetHostId: null,
             effectiveHostId: null,
+            servingPeer: null,
+            noPeerPresentation: null,
             leases: [],
           },
         }),
@@ -584,6 +675,8 @@ describe("mountSelectionAuthorityBridge", () => {
       preferredHostId: "H",
       targetHostId: "H",
       effectiveHostId: "H",
+      servingPeer: { kind: "computer", hostId: "H" },
+      noPeerPresentation: null,
       previousEffectiveHostId: null,
       cause: "activate",
     };

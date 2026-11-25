@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   QueryClient,
   QueryClientProvider,
@@ -243,6 +244,7 @@ async function createDirectAuthFixture(
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => POOL_HOST_ID,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
     singleAttemptMessenger: null,
   });

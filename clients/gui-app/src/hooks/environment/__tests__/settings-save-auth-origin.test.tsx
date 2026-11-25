@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import "../../../../__tests__/test-browser-apis";
 import { installAuthValidationFetch } from "../../../../__tests__/test-browser-apis";
 import {
@@ -234,6 +235,7 @@ function makeHarness(mutationGate: Promise<void> | null): AuthSaveHarness {
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => HOST_ID,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
     onHostTokenRenewal: () => undefined,
   });

@@ -75,7 +75,7 @@ vi.mock("@/lib/host", () => ({
 
 vi.mock("@/hooks/host/use-pool-tier", () => ({
   usePoolTierHostClient: <T,>(client: T): T => client,
-  usePoolTierStreamClient: () => null,
+  useRoutedStreamClient: () => ({ client: null, peerHostId: null }),
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({

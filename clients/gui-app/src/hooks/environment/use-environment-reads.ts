@@ -1,7 +1,4 @@
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import { useEffect, useRef } from "react";
 import { type Query, useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -133,12 +130,7 @@ function useRereadOnRevision(
     if (previous.revision === revision) return;
     const scopes = DELTA_FED_READS.map((method) =>
       hostQueryKeys.methodScope(
-        hostRpcServingTierHostId(
-          method,
-          hostId,
-          readProcessHostRpcTierPlan(),
-          null,
-        ),
+        readServingTierHostId(method, hostId, null, null),
         method,
       ),
     );

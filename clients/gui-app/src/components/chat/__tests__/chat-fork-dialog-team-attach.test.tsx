@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import {
   act,
@@ -760,6 +761,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
       authorityRegistry: null,
       requestCoordinator: null,
       selectedHostId: () => TAB_HOST_ID,
+      servingDecision: () => NO_SERVING_PEER_DECISION,
       connectionRegistry: null,
       singleAttemptMessenger: null,
     });

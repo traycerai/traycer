@@ -1,6 +1,7 @@
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import { hostQueryEntryKey } from "@/hooks/host/use-host-query";
+import { readAppServingDecision } from "@/lib/host/app-serving-decision";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 export interface EpicCollaboratorsCacheOwner {
@@ -34,5 +35,6 @@ export function epicCollaboratorsQueryKey(
     method: "epic.listCollaborators",
     params: { epicId },
     cacheKeyIdentity: epicCollaboratorsCacheIdentity(viewerUserId),
+    serving: readAppServingDecision(),
   });
 }

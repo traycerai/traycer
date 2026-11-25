@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { QueryClient } from "@tanstack/react-query";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
@@ -157,6 +158,7 @@ export async function createLandingAttachmentFixture(options: {
     requestCoordinator: null,
     connectionRegistry: null,
     selectedHostId: () => options.hostId,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
   });
   const authnCalls: LandingAttachmentCall[] = [];
   vi.spyOn(runnerHost, "listEnvironments").mockImplementation((bearer) => {

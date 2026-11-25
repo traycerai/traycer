@@ -12,7 +12,10 @@ import { HostClient, type IHostQueryInvalidator } from "../host-client";
 import { MockHostMessenger } from "../mock/mock-host-messenger";
 import { HostRpcError } from "../../host-transport/host-messenger";
 import type { HostDirectoryEntry } from "../host-directory";
-import { createHostRpcTierPlan } from "../host-rpc-routing";
+import {
+  NO_SERVING_PEER_DECISION,
+  createHostRpcTierPlan,
+} from "../host-rpc-routing";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import {
   localEntry,
@@ -107,6 +110,7 @@ function buildHarness(
     routing: {
       plan: createHostRpcTierPlan(poolEntry),
       selectedHostId: () => selectedHostId,
+      serving: () => NO_SERVING_PEER_DECISION,
     },
   });
   const user = createAuthenticatedUserFixture(undefined);

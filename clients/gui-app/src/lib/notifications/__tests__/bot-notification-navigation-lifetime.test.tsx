@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   afterEach,
   beforeEach,
@@ -589,6 +590,7 @@ describe("a bot notification that names the host it came from", () => {
         method: "bot.list",
         params: {},
         cacheKeyIdentity: undefined,
+        serving: NO_SERVING_PEER_DECISION,
       }),
       { bots: botIds.map(botRecord) },
     );
@@ -603,6 +605,7 @@ describe("a bot notification that names the host it came from", () => {
         method: "bot.list",
         params: {},
         cacheKeyIdentity: undefined,
+        serving: NO_SERVING_PEER_DECISION,
       }),
       refetchType: "none",
     });
@@ -624,6 +627,7 @@ describe("a bot notification that names the host it came from", () => {
       method: "bot.list",
       params: {},
       cacheKeyIdentity: undefined,
+      serving: NO_SERVING_PEER_DECISION,
     });
     const read = queryClient.fetchQuery(
       queryOptions({

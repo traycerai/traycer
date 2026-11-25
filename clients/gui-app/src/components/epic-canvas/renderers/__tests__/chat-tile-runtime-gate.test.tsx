@@ -81,6 +81,8 @@ function publishLease(lease: HostLeaseSnapshot | null): void {
     preferredHostId: HOST_ID,
     targetHostId: HOST_ID,
     effectiveHostId: HOST_ID,
+    servingPeer: { kind: "computer", hostId: HOST_ID },
+    noPeerPresentation: null,
     leases: lease === null ? [] : [lease],
     selectionRevision: 1,
   });

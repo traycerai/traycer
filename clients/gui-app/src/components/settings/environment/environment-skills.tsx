@@ -49,6 +49,7 @@ import {
 } from "@/lib/provider-ordering";
 import {
   useCanEditConfiguration,
+  useConfigurationEnvironmentId,
   useConfigurationIsPersonal,
   useConfigurationSource,
 } from "./configuration-source";
@@ -138,27 +139,28 @@ function useSkillProviders(): readonly ProviderId[] {
 function useServedSkills() {
   const scope = useTeamViewingHost();
   const readClient = useConfigurationReadClient();
+  const environmentId = useConfigurationEnvironmentId();
   const servingHostId = readClient.getActiveHostId();
-  const listVersion = useHostNegotiatedMethodVersion(
-    readClient,
-    "environment.configuration.skills.list",
-  );
-  const switchesVersion = useHostNegotiatedMethodVersion(
-    readClient,
-    "environment.configuration.skills.setProviders",
-  );
-  const removable = useHostSupportsMethod(
-    servingHostId,
-    "environment.configuration.skills.remove",
-  );
-  const uploadable = useHostSupportsMethod(
-    servingHostId,
-    "environment.configuration.skills.upload",
-  );
-  const policiesSettable = useHostSupportsMethod(
-    servingHostId,
-    "environment.configuration.skills.setPolicy",
-  );
+  const listVersion = useHostNegotiatedMethodVersion(readClient, {
+    method: "environment.configuration.skills.list",
+    environmentId,
+  });
+  const switchesVersion = useHostNegotiatedMethodVersion(readClient, {
+    method: "environment.configuration.skills.setProviders",
+    environmentId,
+  });
+  const removable = useHostSupportsMethod(servingHostId, {
+    method: "environment.configuration.skills.remove",
+    environmentId,
+  });
+  const uploadable = useHostSupportsMethod(servingHostId, {
+    method: "environment.configuration.skills.upload",
+    environmentId,
+  });
+  const policiesSettable = useHostSupportsMethod(servingHostId, {
+    method: "environment.configuration.skills.setPolicy",
+    environmentId,
+  });
   // An update and a restore write the viewing host's own build's skills.
   const viewingHostId = scope.viewingHost?.hostId ?? null;
   const updatable = useHostSupportsMethod(

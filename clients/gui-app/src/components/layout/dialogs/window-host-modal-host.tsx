@@ -34,7 +34,6 @@ import { appLogger } from "@/lib/logger";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   offersDoorRetry,
-  type WindowNarrationCause,
   type WindowNarrationState,
   type WindowNarrationVariant,
 } from "@/lib/host/window-narration";
@@ -168,7 +167,7 @@ function NarratingWindowHostModal(props: {
   const { hostTokens } = useRunnerHost();
   const presentation = controller.defaultHostPresentation;
   const localLifecycle = presentsLocalHostLifecycle(presentation);
-  const settled = hasSettledFailure(narration.cause, presentation);
+  const settled = hasSettledFailure(narration, presentation);
   const retry = resolveRetry({
     variant: narration.variant,
     hostTokens,
@@ -222,18 +221,21 @@ function NarratingWindowHostModal(props: {
   const gateDrawn = gateCardReadiness(predicateInput);
   // WHICH PRESENTATION: the same predicate the gate itself renders from, so
   // the two can never disagree about whether an app exists behind this
-  // surface. While the gate blocks (cold start - the frame is empty), the
-  // narration is the released-style full-screen CARD in that frame: no
-  // overlay, no pointer trap, toasts alive. Once the gate has latched, a
-  // narration can only be the ∅ verdict over a mounted app, and only THAT
-  // renders the blocking dialog.
-  const blocking = gateBlocksApp(predicateInput);
+  // surface. The authority's no-peer wait also uses the startup card over a
+  // mounted app, without a pointer trap.
+  const showStartupCard =
+    gateBlocksApp(predicateInput) || narration.keepConnectingCard === true;
   // `gateCardReadiness` rather than the boolean wrapper: the log's whole value
   // is naming WHICH card won, and re-deriving that from the readiness here
   // would be the second copy this suppression exists to avoid.
   useSuppressionLog(gateDrawn?.kind ?? null, narration);
   useMarkDrawnDoorCover(
-    drawsNarration(gateDrawn !== null, signOutQuestionOpen, blocking, narration)
+    drawsNarration(
+      gateDrawn !== null,
+      signOutQuestionOpen,
+      showStartupCard,
+      narration,
+    )
       ? props.doorCoverHostId
       : null,
   );
@@ -245,7 +247,7 @@ function NarratingWindowHostModal(props: {
   // then draws no action row of its own). Two derivations of this would let a
   // card render the settings link in both places or in neither.
   //
-  // It is true exactly on the healthy blocking start - `offline`, nothing to
+  // It is true exactly on the healthy startup card - `offline`, nothing to
   // retry, nothing to update, nothing failed - and that is also exactly when
   // `buildBootBody` draws the boot body, so the link always has its footer row
   // to sit on. This gate used to ask a fourth question, "is the target this
@@ -253,7 +255,7 @@ function NarratingWindowHostModal(props: {
   // was a card that drew nothing but the `Open settings` link. The body no
   // longer depends on the target (see `buildBootBody`), so neither does this.
   const settingsOnly =
-    blocking &&
+    showStartupCard &&
     narration.variant.kind === "offline" &&
     retry.onRetry === null &&
     !settled.failed;
@@ -305,7 +307,7 @@ function NarratingWindowHostModal(props: {
     // there through the gate frame's own header and "Configure shell…".)
     settingsEmphasis: settled.failed || settled.slow ? "button" : "link",
   };
-  if (blocking) {
+  if (showStartupCard) {
     return <WindowHostStartupCard {...narrationProps} />;
   }
   if (narration.cause === "cold-start") {
@@ -354,11 +356,11 @@ function NarratingWindowHostModal(props: {
 function drawsNarration(
   gateCardDrawn: boolean,
   signOutQuestionOpen: boolean,
-  blocking: boolean,
+  showStartupCard: boolean,
   narration: Extract<WindowNarrationState, { readonly kind: "narrating" }>,
 ): boolean {
   if (gateCardDrawn || signOutQuestionOpen) return false;
-  return blocking || narration.cause !== "cold-start";
+  return showStartupCard || narration.cause !== "cold-start";
 }
 
 /**
@@ -372,8 +374,8 @@ function drawsNarration(
  * Only the cold-start cause gets the healthy grace period. `no-usable-host`
  * means nothing can serve this window right now, which IS the settled failure -
  * there is no in-progress start to protect there, and withholding recovery on
- * that arm would be the mirror defect. `door-state` is no failure of this app:
- * the host or the sign-in answered, so there is nothing to report.
+ * that arm would be the mirror defect. A door response and the authority's
+ * no-peer wait do not use the local startup attempt's diagnostics.
  */
 interface SettledFailure {
   readonly failed: boolean;
@@ -381,11 +383,13 @@ interface SettledFailure {
 }
 
 function hasSettledFailure(
-  cause: WindowNarrationCause,
+  narration: Extract<WindowNarrationState, { readonly kind: "narrating" }>,
   presentation: DefaultHostReadinessPresentation,
 ): SettledFailure {
-  if (cause === "no-usable-host") return { failed: true, slow: false };
-  if (cause === "door-state") return { failed: false, slow: false };
+  if (narration.cause === "no-usable-host")
+    return { failed: true, slow: false };
+  if (narration.cause === "door-state" || narration.keepConnectingCard === true)
+    return { failed: false, slow: false };
   return {
     // `provisioningError` is read ONLY under this cause. Its own contract warns
     // it outlives the attempt that produced it - a host that failed to install
