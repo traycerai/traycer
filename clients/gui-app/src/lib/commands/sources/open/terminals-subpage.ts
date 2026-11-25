@@ -1,3 +1,4 @@
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 /**
  * Opener "Terminals" sub-page: pinned "Create new terminal" (which drills into
  * workspace selection without leaving cmdk), then existing terminals from
@@ -258,6 +259,7 @@ interface TerminalWorkspaceQueryState {
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly isFetching: boolean;
+  readonly retryDisabled: boolean;
   readonly retry: () => void;
 }
 
@@ -293,7 +295,7 @@ function terminalWorkspaceQueryItems(
         run: query.retry,
       }),
       keepOpen: true,
-      disabled: query.isFetching,
+      disabled: query.isFetching || query.retryDisabled,
     },
   ];
 }
@@ -304,6 +306,7 @@ function useHostTerminalWorkspaceItems(
 ): ReadonlyArray<CommandItem> {
   const hostClient = useHostClient();
   const client = useHostClientForHostId(hostId);
+  const retryDisabled = usePoolComputerUnavailable(hostId);
   const bindings = useTerminalWorkspaceBindingsForClient({
     client,
     epicId: ctx.activeEpicId ?? "",
@@ -321,6 +324,7 @@ function useHostTerminalWorkspaceItems(
           isPending: bindings.isPending,
           isError: bindings.isError,
           isFetching: bindings.isFetching,
+          retryDisabled,
           retry: () => {
             void retryBindings({ cancelRefetch: false });
           },
@@ -333,6 +337,7 @@ function useHostTerminalWorkspaceItems(
       bindings.isFetching,
       bindings.isPending,
       retryBindings,
+      retryDisabled,
       ctx,
       hostClient,
       hostId,
@@ -371,6 +376,7 @@ function useNewTerminalWorkspaceItems(
     ctx.activeEpicId,
   );
   const client = useHostClientForHostId(resolvedHostId);
+  const retryDisabled = usePoolComputerUnavailable(resolvedHostId);
   const hostClient = useHostClient();
   const bindings = useTerminalWorkspaceBindingsForClient({
     client,
@@ -413,6 +419,7 @@ function useNewTerminalWorkspaceItems(
               isPending: bindings.isPending,
               isError: bindings.isError,
               isFetching: bindings.isFetching,
+              retryDisabled,
               retry: () => {
                 void retryBindings({ cancelRefetch: false });
               },
@@ -448,6 +455,7 @@ function useNewTerminalWorkspaceItems(
     bindings.isFetching,
     bindings.isPending,
     retryBindings,
+    retryDisabled,
     ctx,
     directory.data,
     hostClient,
@@ -469,6 +477,12 @@ export function useTerminalsOpenerItems(
   // NEW terminal below is a placement flow sharing the sidebar's host pin
   // and task-agent default.)
   const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const surfaceKey = useTabSurfaceKey("new-terminal", ctx.activeTabId ?? "");
+  const { resolvedHostId } = useActiveEpicSurfaceHostPin(
+    surfaceKey,
+    ctx.activeEpicId,
+  );
+  const createDisabled = usePoolComputerUnavailable(resolvedHostId);
   const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const hostClient = useHostClientForHostId(activeEpicHostId);
   const scope = { kind: "epic" as const, epicId: ctx.activeEpicId ?? "" };
@@ -518,6 +532,13 @@ export function useTerminalsOpenerItems(
         null,
       );
     });
-    return [newTerminal, ...existing];
-  }, [ctx, defaultHostId, scope.epicId, sessionsData, taskHome]);
+    return [{ ...newTerminal, disabled: createDisabled }, ...existing];
+  }, [
+    createDisabled,
+    ctx,
+    defaultHostId,
+    scope.epicId,
+    sessionsData,
+    taskHome,
+  ]);
 }

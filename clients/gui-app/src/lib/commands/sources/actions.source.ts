@@ -1,3 +1,5 @@
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 /**
  * One flat row per `chord`-kind action in `ACTION_META`. Runs as
@@ -47,6 +49,8 @@ export const actionsSource: ReactCommandSource = {
     const homeTabEnabled = isHomeTabEnabled();
     const placement = useTabStripPlacement();
     const collapseOffered = useSideStripCollapseOffered();
+    const composer = useComposerSurfaceHostPin();
+    const noComputer = usePoolComputerUnavailable(composer.resolvedHostId);
     const stripCollapsible = placement !== "top" && collapseOffered;
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];
@@ -57,10 +61,15 @@ export const actionsSource: ReactCommandSource = {
           (id === "tab.reopen" && !canRecover)
         )
           continue;
-        items.push(buildActionItem(meta, bindings[id] ?? null));
+        const item = buildActionItem(meta, bindings[id] ?? null);
+        items.push(
+          noComputer && (id === "app.terminal.new" || id === "app.browser.new")
+            ? { ...item, disabled: true }
+            : item,
+        );
       }
       return items;
-    }, [bindings, canRecover, homeTabEnabled, stripCollapsible]);
+    }, [bindings, canRecover, homeTabEnabled, noComputer, stripCollapsible]);
   },
 };
 

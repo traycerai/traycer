@@ -1,3 +1,8 @@
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
+import { useTerminalAgentDocRename } from "@/hooks/epic/use-terminal-agent-doc-rename";
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { useArtifactById } from "@/lib/epic-selectors";
 import { useCallback, useState, type ReactElement } from "react";
@@ -78,6 +83,8 @@ interface RowMenuInput {
   readonly kind: SwitcherRowKind;
   readonly canMutate: boolean;
   readonly chatWriteUnavailable: boolean;
+  readonly renameUnavailable: boolean;
+  readonly deleteUnavailable: boolean;
   readonly canExport: boolean;
   readonly canExportNested: boolean;
   readonly exportPending: boolean;
@@ -134,7 +141,7 @@ function rowMenuEntries(
       id: "rename",
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
-      disabled: !canMutate || chatWriteUnavailable,
+      disabled: !canMutate || chatWriteUnavailable || input.renameUnavailable,
       disabledTooltip,
       variant: "default",
       testIds: {
@@ -150,7 +157,9 @@ function rowMenuEntries(
       label: isTerminal ? "Close" : "Delete",
       icon: <Trash2 className="size-3.5" />,
       disabled:
-        !canMutate || (isTerminal ? input.closePending : chatWriteUnavailable),
+        !canMutate ||
+        input.deleteUnavailable ||
+        (isTerminal ? input.closePending : chatWriteUnavailable),
       disabledTooltip,
       variant: "destructive",
       testIds: {
@@ -263,6 +272,12 @@ function SwitcherRowActionsBody(
   const ownerHostId = useEpicNodeHostId(nodeId);
   const sessionHostId = useEpicSessionHostId();
   const mutationHostId = ownerHostId ?? sessionHostId;
+  const terminalOwnerUnavailable =
+    usePoolComputerUnavailable(mutationHostId) && kind === "terminal-agent";
+  const terminalDocRename = useTerminalAgentDocRename(
+    kind === "terminal-agent" ? nodeId : null,
+    mutationHostId,
+  );
   const rename = useSwitcherRename(epicId, mutationHostId);
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact(nodeId);
@@ -348,6 +363,11 @@ function SwitcherRowActionsBody(
   );
 
   const confirmDelete = useCallback(() => {
+    if (
+      kind === "terminal-agent" &&
+      readPoolComputerUnavailable(mutationHostId)
+    )
+      return;
     if (kind === "chat")
       deleteChat.mutate({ epicId, chatId: nodeId, hostId: mutationHostId });
     else if (kind === "terminal-agent")
@@ -392,6 +412,8 @@ function SwitcherRowActionsBody(
     kind,
     canMutate,
     chatWriteUnavailable,
+    renameUnavailable: terminalOwnerUnavailable && !terminalDocRename,
+    deleteUnavailable: terminalOwnerUnavailable,
     canExport,
     canExportNested,
     exportPending: exportArtifacts.isPending,

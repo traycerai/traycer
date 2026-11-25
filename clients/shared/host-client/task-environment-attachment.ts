@@ -10,6 +10,13 @@ const ATTACHMENT_TIMEOUT_MS = 70_000;
 
 const attachmentAnswerSchema = z.object({ attached: z.literal(true) });
 
+export const TEAM_PLAN_REQUIRED_MESSAGE =
+  "Sharing with this team requires a paid team plan";
+
+const teamPlanRefusalSchema = z.object({
+  error: z.literal(TEAM_PLAN_REQUIRED_MESSAGE),
+});
+
 export interface TaskEnvironmentAttachmentRequest {
   readonly taskId: string;
   readonly environmentId: string;
@@ -19,6 +26,7 @@ export type TaskEnvironmentAttachmentResult =
   | { readonly kind: "ok" }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "forbidden" }
+  | { readonly kind: "team_plan_required" }
   | { readonly kind: "refused" }
   | { readonly kind: "no_response" };
 
@@ -62,7 +70,18 @@ export async function attachTaskEnvironmentViaHttp(
     abort.clear();
   }
   if (answer.status === 401) return { kind: "unauthorized" };
-  if (answer.status === 403) return { kind: "forbidden" };
+  if (answer.status === 403) {
+    if (answer.text !== null) {
+      try {
+        if (teamPlanRefusalSchema.safeParse(JSON.parse(answer.text)).success) {
+          return { kind: "team_plan_required" };
+        }
+      } catch {
+        return { kind: "forbidden" };
+      }
+    }
+    return { kind: "forbidden" };
+  }
   if (answer.status < 200 || answer.status >= 300 || answer.text === null) {
     return { kind: "refused" };
   }

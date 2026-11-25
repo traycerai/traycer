@@ -1,3 +1,6 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { useHostLeases } from "@/hooks/host/use-host-lease";
 import type { BrowserCatalogModel } from "@/hooks/browser/use-browser-catalog-inventory";
 import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 import { isBrowserDeviceOffline } from "./browser-device-availability";
@@ -79,6 +82,8 @@ export function BrowserCreatePicker(props: {
   readonly trigger: "icon" | "label";
 }) {
   const options = useHostOptions();
+  const onPool = useServingPeerHostId() === POOL_HOST_ID;
+  const leases = useHostLeases();
   const catalog = useBrowserCatalogContext();
   const localSessions = useBrowserSessionsContext();
   const pin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
@@ -165,6 +170,16 @@ export function BrowserCreatePicker(props: {
     ownerHostId: localSessions.hostId,
     suggestedHostId: preferredHostId,
   });
+  const withoutEligibleOwner =
+    onPool &&
+    !ordered.some(
+      (host) =>
+        !isBrowserDeviceOffline(host) &&
+        host.sandbox?.frozen !== true &&
+        leases.some(
+          (lease) => lease.hostId === host.hostId && lease.status === "ready",
+        ),
+    );
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -174,7 +189,9 @@ export function BrowserCreatePicker(props: {
           size={props.trigger === "icon" ? "icon-sm" : "sm"}
           aria-label="Add browser"
           data-testid={props.testId}
-          disabled={adding || catalog?.scope === "inaccessible"}
+          disabled={
+            adding || catalog?.scope === "inaccessible" || withoutEligibleOwner
+          }
         >
           {adding ? (
             <AgentSpinningDots

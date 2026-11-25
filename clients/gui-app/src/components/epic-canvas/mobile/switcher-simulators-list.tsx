@@ -1,3 +1,4 @@
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { useCallback } from "react";
 import { Smartphone, X } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -200,12 +201,13 @@ function SwitcherCloseAction(props: {
   const { row } = props;
   const { closeRecords, closing } = useSimulatorCatalogActions(props.epicId);
   const pending = row.records.some((record) => closing(record.sessionId));
+  const unavailable = usePoolComputerUnavailable(row.hostId);
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-sm"
-      disabled={pending}
+      disabled={pending || unavailable}
       aria-label={`Close ${row.name} in this task`}
       data-testid={`switcher-simulator-close-${row.instanceKey}`}
       className="shrink-0"
@@ -232,12 +234,13 @@ function SwitcherDismissAction(props: {
   const { row } = props;
   const { closeRecords, closing } = useSimulatorCatalogActions(props.epicId);
   const pending = closing(row.record.sessionId);
+  const unavailable = usePoolComputerUnavailable(row.hostId);
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-sm"
-      disabled={pending}
+      disabled={pending || unavailable}
       aria-label={`Dismiss ${row.name}`}
       data-testid={`switcher-simulator-dismiss-${row.record.sessionId}`}
       className="shrink-0"

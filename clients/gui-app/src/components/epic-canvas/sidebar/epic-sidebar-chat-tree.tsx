@@ -1,3 +1,10 @@
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
+import { useTerminalAgentDocRename } from "@/hooks/epic/use-terminal-agent-doc-rename";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
 import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
@@ -1824,6 +1831,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // Read HERE rather than in the shell body because `startRename` needs it:
   // an unadopted chat's title must never become editable in the first place.
   const writeRoute = useChatWriteRoute(artifactType === "chat", nodeId);
+  const unavailableTerminalOwner =
+    usePoolComputerUnavailable(mutationHostId) &&
+    artifactType === "terminal-agent";
+  const docRename = useTerminalAgentDocRename(
+    artifactType === "terminal-agent" ? nodeId : null,
+    mutationHostId,
+  );
 
   const startRename = useCallback(() => {
     if (!canMutate) return;
@@ -1831,14 +1845,26 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     // keyboard and double-click path. Refusing to ENTER edit mode is the
     // point: the user is told before they type, not after - a commit-time
     // refusal would silently discard what they wrote.
-    if (writeRoute === "unavailable") return;
+    if (
+      writeRoute === "unavailable" ||
+      (unavailableTerminalOwner && !docRename)
+    )
+      return;
     setRenameValue(nodeName);
     setIsRenaming(true);
     setTimeout(() => {
       renameInputRef.current?.focus();
       renameInputRef.current?.select();
     }, 0);
-  }, [canMutate, nodeName, setIsRenaming, setRenameValue, writeRoute]);
+  }, [
+    canMutate,
+    docRename,
+    nodeName,
+    setIsRenaming,
+    setRenameValue,
+    unavailableTerminalOwner,
+    writeRoute,
+  ]);
 
   // ASYNC: the doc write's verdict and the rename-stamp check are both round
   // trips now. Callers fire-and-forget it, and a function returning
@@ -1876,6 +1902,11 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         return;
       }
     }
+    if (
+      artifactType === "terminal-agent" &&
+      readPoolComputerUnavailable(mutationHostId)
+    )
+      return;
     // The optimistic overlay, in place of the `renameArtifact` doc write this
     // used to do. That write no-opped for every registry-backed row — which
     // post chats-off-YJS is most of this tree — so these renames had no local
@@ -1982,11 +2013,16 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   );
 
   const performDelete = () => {
-    if (!canMutate) return;
+    if (!canMutate || unavailableTerminalOwner) return;
     setConfirmDeleteOpen(true);
   };
 
   const confirmDelete = () => {
+    if (
+      artifactType === "terminal-agent" &&
+      readPoolComputerUnavailable(mutationHostId)
+    )
+      return;
     const rollback = prepareAgentDelete(
       epicHandle,
       nodeId,
@@ -2267,6 +2303,15 @@ function ChatNodeShellBody(
   ]);
   const sharing = useChatRowSharing(epicId, nodeId, artifactType, canMutate);
   const { writeRoute } = props;
+  const sessionHostId = useEpicSessionHostId();
+  const terminalHostId = ownerHostId ?? sessionHostId;
+  const terminalOwnerUnavailable =
+    usePoolComputerUnavailable(terminalHostId) &&
+    artifactType === "terminal-agent";
+  const terminalDocRename = useTerminalAgentDocRename(
+    artifactType === "terminal-agent" ? nodeId : null,
+    terminalHostId,
+  );
   // The hover button is the SECOND dispatcher of `epic.setChatArchived`, so
   // gating only the menu entry would leave a one-click path to an RPC naming
   // no registry row. It is withdrawn rather than disabled, which is this
@@ -2283,6 +2328,8 @@ function ChatNodeShellBody(
     nodeId,
     canMutate,
     writeRoute,
+    renameUnavailable: terminalOwnerUnavailable && !terminalDocRename,
+    deleteUnavailable: terminalOwnerUnavailable,
     archiveEntry: decision.entry,
     sharingEntry: sharing.entry,
     onNewChildAgent: handleNewChildAgent,
@@ -3277,6 +3324,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     [epicId, nodeId, sourceHostId, viewTabId],
   );
   const dragDisabled = useDragSourceDisabled();
+  const onPool = useServingPeerHostId() === POOL_HOST_ID;
   const {
     attributes,
     listeners,
@@ -3284,7 +3332,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     isDragging,
   } = useDraggable({
     id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
-    disabled: dragDisabled || selectionMode || dragData === null,
+    disabled: dragDisabled || onPool || selectionMode || dragData === null,
     data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(
@@ -3906,6 +3954,8 @@ interface ChatRowMenuEntriesProps {
    * the UI can say. Always `"registry-rpc"` for a non-chat row.
    */
   readonly writeRoute: ChatWriteRoute;
+  readonly renameUnavailable: boolean;
+  readonly deleteUnavailable: boolean;
   readonly archiveEntry: ChatRowArchiveEntry | null;
   readonly sharingEntry: ChatSharingMenuDecision;
   readonly onNewChildAgent: () => void;
@@ -4085,7 +4135,10 @@ function chatRowMenuEntries(
       id: "rename",
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
-      disabled: !props.canMutate || props.writeRoute === "unavailable",
+      disabled:
+        !props.canMutate ||
+        props.writeRoute === "unavailable" ||
+        props.renameUnavailable,
       disabledTooltip: chatWriteBlockedTooltip(props),
       variant: "default",
       testIds: {
@@ -4103,7 +4156,10 @@ function chatRowMenuEntries(
       id: "delete",
       label: "Delete",
       icon: <Trash2 className="size-3.5" />,
-      disabled: !props.canMutate || props.writeRoute === "unavailable",
+      disabled:
+        !props.canMutate ||
+        props.writeRoute === "unavailable" ||
+        props.deleteUnavailable,
       disabledTooltip: chatWriteBlockedTooltip(props),
       variant: "destructive",
       testIds: {

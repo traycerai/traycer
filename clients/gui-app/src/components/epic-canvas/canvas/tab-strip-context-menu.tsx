@@ -47,7 +47,7 @@ export interface TabStripContextMenuProps {
   /** Whether this tab kind can be renamed (chat / artifact / terminal). */
   readonly canRename: boolean;
   /** Switches the tab title into the inline editable input. */
-  readonly onEditTitle: () => void;
+  readonly onEditTitle: (() => void) | null;
   /**
    * The chat cost line - opens the chat's usage/drill-down dialog.
    * `null` for every non-chat tab and for a chat whose host has not
@@ -115,7 +115,10 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
       {canRename ? (
         <>
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={onEditTitle}>
+          <ContextMenuItem
+            disabled={onEditTitle === null}
+            onSelect={onEditTitle ?? undefined}
+          >
             <Pencil className="size-4" />
             Edit Title
           </ContextMenuItem>

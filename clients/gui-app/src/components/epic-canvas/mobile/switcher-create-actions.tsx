@@ -1,3 +1,8 @@
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  useSurfaceHostPin,
+  useTabSurfaceKey,
+} from "@/hooks/host/use-surface-host-pin";
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -76,11 +81,16 @@ export function SwitcherNewChatAction(props: {
 export function SwitcherNewTerminalRow(props: SwitcherCreateProps) {
   const { epicId, tabId, onClose } = props;
   const [pickerOpen, setPickerOpen] = useState(false);
+  const pin = useSurfaceHostPin(useTabSurfaceKey("new-terminal", tabId));
+  const disabled = usePoolComputerUnavailable(pin.resolvedHostId);
   return (
     <>
       <SwitcherNewItemRow
         label="New terminal"
-        onSelect={() => setPickerOpen(true)}
+        disabled={disabled}
+        onSelect={() => {
+          if (!disabled) setPickerOpen(true);
+        }}
         testId="switcher-new-terminal"
       />
       <MobileNewTerminalDialog

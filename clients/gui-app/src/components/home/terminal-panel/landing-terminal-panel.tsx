@@ -1,3 +1,4 @@
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useCallback,
@@ -1012,7 +1013,9 @@ export function LandingTerminalPanel(): ReactNode {
   // open gesture and create from THAT captured snapshot up-front (the non-empty
   // set suppresses the open reconciliation's auto-spawn). If already open, it is
   // just a `+` - create against the effective target, never re-capturing.
+  const noPoolComputer = usePoolComputerUnavailable(target.hostId);
   const revealAndCreateTerminal = useCallback(() => {
+    if (noPoolComputer) return;
     // A sandbox staged on the composer is where this terminal is wanted, and
     // asking for one there is its first action: it is created or woken, and
     // the terminal opens on the handoff. Never on the host the composer falls
@@ -1075,6 +1078,7 @@ export function LandingTerminalPanel(): ReactNode {
     composerSurfaceKey,
     createTerminalTab,
     dismissPlaceholder,
+    noPoolComputer,
     panelOpen,
     pending,
     replaceDirectoryRequest,
@@ -1668,13 +1672,14 @@ export function LandingTerminalPanel(): ReactNode {
   // chooser on an empty panel, and this gesture has already answered the very
   // question the chooser asks.
   const revealAndOpenBrowserTab = useCallback(() => {
+    if (noPoolComputer) return;
     if (!panelOpen) setPanelOpen(true);
     // The row this ask is for, read NOW like every other opener - a chooser
     // the reader opens while the device is answering is a later choice than
     // this one, and `fulfillPlaceholder` leaves a row this ask did not name
     // alone.
     openBrowserTab({ placeholderInstanceId: claimAskedRow() });
-  }, [claimAskedRow, openBrowserTab, panelOpen, setPanelOpen]);
+  }, [claimAskedRow, noPoolComputer, openBrowserTab, panelOpen, setPanelOpen]);
 
   // The TERMINAL card's gate, reading the effective target only: capability
   // from the captured host, fail-closed on an unpinned client, and the

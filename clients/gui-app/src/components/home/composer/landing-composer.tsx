@@ -1,3 +1,5 @@
+import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
@@ -122,7 +124,10 @@ import {
 } from "@/components/home/data/landing-options";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
-import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
+import {
+  useComposerPlacement,
+  type ComposerPlacement,
+} from "@/hooks/host/use-composer-placement";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import {
   useStagedSandboxHandoff,
@@ -224,17 +229,35 @@ function landingSendRefusal(
 }
 
 export function LandingComposer(props: LandingComposerProps) {
+  const namedHostId = useLandingDraftNamedHostId(props.draftId);
+  const placement = useComposerPlacement(namedHostId);
+  const unavailable = usePoolComputerUnavailable(
+    placement.target.resolvedHostId,
+  );
+  if (unavailable && namedHostId === null) {
+    return (
+      <PoolComposerActions epicId={null} place={placement.pin.setSelection} />
+    );
+  }
+  return (
+    <ComputerLandingComposer
+      {...props}
+      namedHostId={namedHostId}
+      placement={placement}
+    />
+  );
+}
+
+function ComputerLandingComposer(
+  props: LandingComposerProps & {
+    readonly namedHostId: string | null;
+    readonly placement: ComposerPlacement;
+  },
+) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const createdUnboundDraftIdRef = useRef<string | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
-  // The composer's PLACEMENT: its own
-  // window-keyed surface pin, or the effective host while it follows. Not the
-  // app-wide selection - the picker no longer moves that - so every RPC this
-  // surface makes, and every create it performs, resolves through here. A
-  // draft opened for one machine names it instead, which fixes the picker and
-  // refuses Send while that machine is offline.
-  const namedHostId = useLandingDraftNamedHostId(props.draftId);
-  const placement = useComposerPlacement(namedHostId);
+  const { namedHostId, placement } = props;
   // READ target for this surface's queries; SUBMIT target (host-frozen client)
   // for anything that creates - see `useComposerPlacement`.
   const placementTarget = placement.target;

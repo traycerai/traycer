@@ -33,7 +33,7 @@ const WAKE_POLL_INTERVAL_MS = 2_000;
 /**
  * The minimum wait, also used for a server that predates row wake budgets.
  */
-const WAKE_TIMEOUT_MS = 120_000;
+export const WAKE_TIMEOUT_MS = 120_000;
 
 /**
  * One wake per host at a time, across every caller: two tabs opened together
@@ -308,7 +308,7 @@ function addCreditsLine(shortfallMc: number | null): string {
     : `Add ${formatCreditsRequired(shortfallMc)} credits, then try again.`;
 }
 
-function toastWakeFailed(): void {
+export function toastWakeFailed(): void {
   toast.error("Couldn't wake this sandbox", {
     description: "Try again in a moment.",
   });
@@ -346,6 +346,23 @@ export function startSandboxWake(
   hostId: string,
   gesture: SandboxVerbGesture | null,
 ): Promise<SandboxWakeOutcome | null> {
+  return startSandboxWakeWithNotice({
+    client,
+    binding,
+    hostId,
+    gesture,
+    report: (show) => show(),
+  });
+}
+
+function startSandboxWakeWithNotice(input: {
+  readonly client: QueryClient;
+  readonly binding: SandboxWakeBinding | null;
+  readonly hostId: string;
+  readonly gesture: SandboxVerbGesture | null;
+  readonly report: (show: () => void) => void;
+}): Promise<SandboxWakeOutcome | null> {
+  const { client, binding, hostId, gesture, report } = input;
   // Signed out there is no sandbox row to wake, and nothing a retry fixes.
   if (binding === null) return Promise.resolve(null);
   const { auth, directory } = binding;
@@ -353,7 +370,9 @@ export function startSandboxWake(
   // says why once, instead of a failed request's "try again".
   const unavailable = auth.sandboxControlUnavailableReason();
   if (unavailable !== null) {
-    toast.warning("Couldn't wake this sandbox", { description: unavailable });
+    report(() => {
+      toast.warning("Couldn't wake this sandbox", { description: unavailable });
+    });
     return Promise.resolve(null);
   }
   const entry = directory.findById(hostId);
@@ -368,7 +387,14 @@ export function startSandboxWake(
       configuration = { kind: "personal" };
     }
   }
-  return runSandboxWake({ client, binding, hostId, configuration, gesture });
+  return runSandboxWake({
+    client,
+    binding,
+    hostId,
+    configuration,
+    gesture,
+    report,
+  });
 }
 
 function runSandboxWake(input: {
@@ -377,8 +403,9 @@ function runSandboxWake(input: {
   readonly hostId: string;
   readonly configuration: SandboxConfigurationCopy | null;
   readonly gesture: SandboxVerbGesture | null;
+  readonly report: (show: () => void) => void;
 }): Promise<SandboxWakeOutcome | null> {
-  const { client, binding, hostId, configuration, gesture } = input;
+  const { client, binding, hostId, configuration, gesture, report } = input;
   const { auth, directory } = binding;
   // The account this wake runs for. A wake that ends under another account
   // stops polling (see `readSandboxFacts`), and reports and refreshes nothing:
@@ -394,11 +421,13 @@ function runSandboxWake(input: {
       void client.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
       });
-      toastWakeOutcome(run.outcome, configuration);
+      if (run.outcome.kind !== "awake") {
+        report(() => toastWakeOutcome(run.outcome, configuration));
+      }
     },
     onError: () => {
       if (signedInUserId() !== startedBy) return;
-      toastWakeFailed();
+      report(toastWakeFailed);
     },
   });
   // Subscribed for the mutation's life, so the cache can collect it once it
@@ -436,4 +465,19 @@ export function wakeSandboxOnPick(
     host.hostId,
     gesture,
   );
+}
+
+/** The pool start owns the notice while its readiness deadline is running. */
+export function wakeSandboxOnPickWithNotice(
+  host: HostScopeOption,
+  report: (show: () => void) => void,
+): void {
+  if (!isSleepingSandboxPick(host)) return;
+  void startSandboxWakeWithNotice({
+    client: queryClient,
+    binding: getHostBindingSnapshot(),
+    hostId: host.hostId,
+    gesture: null,
+    report,
+  });
 }

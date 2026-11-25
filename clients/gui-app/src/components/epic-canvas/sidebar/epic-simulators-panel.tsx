@@ -1,3 +1,4 @@
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { useDraggable } from "@dnd-kit/core";
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { RotateCcw, Smartphone, TriangleAlert, X } from "lucide-react";
@@ -323,6 +324,7 @@ function SimulatorLiveRowItem(props: {
   });
   const versionLabel = simulatorVersionLabel(row);
   const countdown = simulatorIdleCountdownLabel(row.idleUntil, props.nowMs);
+  const unavailable = usePoolComputerUnavailable(row.hostId);
   const rowClosing = row.records.some((record) => closing(record.sessionId));
   return (
     <li>
@@ -377,7 +379,7 @@ function SimulatorLiveRowItem(props: {
           type="button"
           variant="muted-destructive"
           size="icon-xs"
-          disabled={rowClosing}
+          disabled={rowClosing || unavailable}
           aria-label={`Close ${row.name} in this task`}
           data-testid={`epic-simulator-row-close-${row.instanceKey}`}
           className={cn(
@@ -408,6 +410,7 @@ function SimulatorEndedRowItem(props: {
 }) {
   const { row, epicId } = props;
   const { closeRecords, closing } = useSimulatorCatalogActions(epicId);
+  const unavailable = usePoolComputerUnavailable(row.hostId);
   const dismissing = closing(row.record.sessionId);
   const notice = simulatorSessionEndedLabel(row.reason);
   return (
@@ -431,7 +434,7 @@ function SimulatorEndedRowItem(props: {
           type="button"
           variant="muted"
           size="icon-xs"
-          disabled={dismissing}
+          disabled={dismissing || unavailable}
           aria-label={`Dismiss ${row.name}: ${notice}`}
           data-testid={`epic-simulator-row-dismiss-${row.record.sessionId}`}
           className="size-6 cursor-pointer justify-self-center"

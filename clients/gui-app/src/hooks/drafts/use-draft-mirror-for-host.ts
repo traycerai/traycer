@@ -1,3 +1,4 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useEffect } from "react";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -24,7 +25,7 @@ export function useDraftMirrorForHost(hostId: string | null): void {
   const readiness = useReactiveHostReadiness(client);
 
   useEffect(() => {
-    if (hostId === null) return;
+    if (hostId === null || hostId === POOL_HOST_ID) return;
     if (client === null || streamBinding === null) return;
     if (unarySupport !== true || !readiness.isReady) return;
     acquireDraftMirrorSession({

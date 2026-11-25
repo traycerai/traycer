@@ -1,3 +1,10 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { TeamEpicPersonalLine } from "@/components/chat/composer/team-epic-personal-line";
 import {
@@ -857,6 +864,19 @@ function ComposerSurface(props: {
   const { model, layout } = props;
   const tabHostId = useTabHostId();
   const stateLine = useContext(ChatStateLineContext);
+  const onPool = useServingPeerHostId() === POOL_HOST_ID;
+  const { currentEpicId } = model.composer;
+  const poolActions =
+    onPool && model.subagentView === null ? (
+      <PoolComposerActions
+        epicId={currentEpicId}
+        place={(hostId) => {
+          useSurfaceHostSelectionStore
+            .getState()
+            .setSelection(newConversationSurfaceKey(currentEpicId), hostId);
+        }}
+      />
+    ) : null;
   // Before the snapshot the pre-content body says the state line instead.
   if (!model.runtime.snapshotLoaded) {
     return null;
@@ -868,11 +888,18 @@ function ComposerSurface(props: {
           notice={stateLine.line}
           actions={stateLine.actions}
         />
+        {poolActions}
       </ComposerSlotShell>
     );
   }
   if (model.access.isViewer) {
-    return <ViewerComposerSurface model={model} layout={layout} />;
+    return (
+      <ViewerComposerSurface
+        model={model}
+        layout={layout}
+        poolActions={poolActions}
+      />
+    );
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
   // either: a stuck block can coexist with an answerable one, and the composer
@@ -955,6 +982,7 @@ function ComposerSurface(props: {
 function ViewerComposerSurface(props: {
   readonly model: ComposerSurfaceModel;
   readonly layout: ComposerSurfaceLayout;
+  readonly poolActions: ReactNode;
 }): ReactNode {
   const { model, layout } = props;
   if (model.subagentView !== null) {
@@ -982,6 +1010,7 @@ function ViewerComposerSurface(props: {
             </Button>
           }
         />
+        {props.poolActions}
         {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}

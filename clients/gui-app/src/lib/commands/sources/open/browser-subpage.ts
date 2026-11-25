@@ -1,3 +1,6 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { toast } from "sonner";
 import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
@@ -189,6 +192,13 @@ export function useBrowserOpenerItems(
   });
   const hostEntry = useHostDirectoryEntryForHostId(targetHostId);
   const query = usePaletteLiveQuery();
+  const onPool = useServingPeerHostId() === POOL_HOST_ID;
+  const noComputer = usePoolComputerUnavailable(targetHostId);
+  const createDisabled =
+    onPool &&
+    (noComputer ||
+      sessions.lifecycle !== "live" ||
+      sessions.hostId !== targetHostId);
 
   const directoryLabel = hostEntry?.label.trim() ?? "";
   const hostLabel =
@@ -205,6 +215,7 @@ export function useBrowserOpenerItems(
     statusBadge: hostLabel,
   };
   const openNewTab = (url: string): void => {
+    if (createDisabled) return;
     if (sessions.lifecycle !== "live" || sessions.hostId === null) {
       toast.error(browserSessionsRefusal(sessions));
       return;
@@ -248,8 +259,11 @@ export function useBrowserOpenerItems(
   });
   const actions = [
     changeHost,
-    newBrowser,
-    ...pastedUrlLeaves(query, hostLabel, openNewTab),
+    { ...newBrowser, disabled: createDisabled },
+    ...pastedUrlLeaves(query, hostLabel, openNewTab).map((item) => ({
+      ...item,
+      disabled: createDisabled,
+    })),
   ];
   const openTabs = sessions.items.flatMap((session) =>
     session.tabs.map((tab) => {
@@ -275,50 +289,65 @@ export function useBrowserOpenerItems(
         : { ...item, statusBadge: hostname };
     }),
   );
-  if (openTabs.length > 0) return [...actions, ...openTabs];
-  if (sessions.lifecycle === "unsupported") {
+  const rows =
+    openTabs.length > 0
+      ? openTabs
+      : [
+          browserInventoryFeedback({
+            lifecycle: sessions.lifecycle,
+            refusal: browserSessionsRefusal(sessions),
+            retry: sessions.retry,
+            inventoryReady: sessions.inventoryReady,
+            hostLabel,
+            noComputer,
+          }),
+        ];
+  return [...actions, ...rows];
+}
+
+function browserInventoryFeedback(input: {
+  readonly lifecycle: string;
+  readonly refusal: string;
+  readonly retry: () => void;
+  readonly inventoryReady: boolean;
+  readonly hostLabel: string;
+  readonly noComputer: boolean;
+}): CommandItem {
+  const { lifecycle, refusal, retry, inventoryReady, hostLabel, noComputer } =
+    input;
+  if (lifecycle === "unsupported") {
     // No retry leaf: nothing this app can do changes the host's answer, and
     // the "Loading…" leaf below would otherwise sit there forever.
-    return [
-      ...actions,
-      {
-        ...openerActionLeaf({
-          id: "open:browser:unsupported",
-          label: browserSessionsRefusal(sessions),
-          keywords: ["browser", "unsupported", "update", hostLabel],
-          run: () => undefined,
-        }),
-        disabled: true,
-      },
-    ];
-  }
-  if (sessions.lifecycle === "failed" || sessions.lifecycle === "closed") {
-    return [
-      ...actions,
-      {
-        ...openerActionLeaf({
-          id: "open:browser:retry",
-          label: "Retry loading open tabs",
-          keywords: ["browser", "retry", "reload", hostLabel],
-          run: sessions.retry,
-        }),
-        statusBadge: "Unavailable",
-      },
-    ];
-  }
-  const inventoryLabel = sessions.inventoryReady
-    ? "No open tabs"
-    : "Loading open tabs…";
-  return [
-    ...actions,
-    {
+    return {
       ...openerActionLeaf({
-        id: `open:browser:${sessions.inventoryReady ? "empty" : "loading"}`,
-        label: inventoryLabel,
-        keywords: ["browser", "tabs", hostLabel],
+        id: "open:browser:unsupported",
+        label: refusal,
+        keywords: ["browser", "unsupported", "update", hostLabel],
         run: () => undefined,
       }),
       disabled: true,
-    },
-  ];
+    };
+  }
+  if (lifecycle === "failed" || lifecycle === "closed") {
+    return {
+      ...openerActionLeaf({
+        id: "open:browser:retry",
+        label: "Retry loading open tabs",
+        keywords: ["browser", "retry", "reload", hostLabel],
+        run: retry,
+      }),
+      disabled: noComputer,
+      statusBadge: "Unavailable",
+    };
+  }
+  const inventoryLabel = inventoryReady ? "No open tabs" : "Loading open tabs…";
+  return {
+    ...openerActionLeaf({
+      id: `open:browser:${inventoryReady ? "empty" : "loading"}`,
+      label: inventoryLabel,
+      keywords: ["browser", "tabs", hostLabel],
+      run: () => undefined,
+    }),
+    disabled: true,
+  };
 }

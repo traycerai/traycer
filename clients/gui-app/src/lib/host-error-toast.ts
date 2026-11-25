@@ -448,10 +448,15 @@ export function classifySendRefusal(error: unknown): SendRefusal {
       ? { kind: "setting-up" }
       : { kind: "failed" };
   }
+  if (error.code === "FORBIDDEN") {
+    const message = teamPlanRequiredToastMessage(error.message);
+    return message === null
+      ? { kind: "failed" }
+      : { kind: "actionable", message };
+  }
   if (
     isTransportClassFailure(error) ||
     staleWriteOfHostError(error) !== null ||
-    error.code === "FORBIDDEN" ||
     (error.code === "UNAUTHORIZED" && hostRefusalOf(error)?.retryable === true)
   ) {
     return { kind: "failed" };
@@ -760,6 +765,12 @@ export const OWNER_ACCESS_DENIED_PHRASE = "does not have owner access";
  */
 export const TEAM_PLAN_REQUIRED_PHRASE = "requires a paid team plan";
 
+export function teamPlanRequiredToastMessage(message: string): string | null {
+  return message.includes(TEAM_PLAN_REQUIRED_PHRASE)
+    ? "This team needs the Sync plan before it can share tasks."
+    : null;
+}
+
 /**
  * What an `E_HOST_UNSUPPORTED` rejection says: the active host predates the
  * method. Exported so a surface that renders the verdict inline (the
@@ -788,10 +799,10 @@ function forbiddenToastMessage(message: string): string {
   if (message.includes(OWNER_ACCESS_DENIED_PHRASE)) {
     return "Only this task's owner can do that.";
   }
-  if (message.includes(TEAM_PLAN_REQUIRED_PHRASE)) {
-    return "This team needs the Sync plan before it can share tasks.";
-  }
-  return "You don't have permission to do that.";
+  return (
+    teamPlanRequiredToastMessage(message) ??
+    "You don't have permission to do that."
+  );
 }
 
 const AGENT_BUSY_BACKGROUND_MESSAGE =

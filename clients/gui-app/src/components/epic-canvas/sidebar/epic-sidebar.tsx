@@ -1,3 +1,7 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { useHostLeases } from "@/hooks/host/use-host-lease";
+import { readPoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 /**
@@ -259,6 +263,7 @@ import {
   SidebarBulkSelectionProvider,
   useSidebarBulkSelection,
   type SidebarBulkSelectionPanelId,
+  type SidebarBulkSelectionValue,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useUnreadArtifactReadTargets } from "@/components/epic-canvas/sidebar/epic-sidebar-panel-filters";
@@ -1633,6 +1638,16 @@ function SidebarBulkDeleteController(props: {
       closeDeleteDialog();
       return;
     }
+    if (
+      targets.some(
+        (target) =>
+          target.kind === "terminal-agent" &&
+          readPoolComputerUnavailable(
+            recordById.get(target.id)?.hostId ?? sessionHostId,
+          ),
+      )
+    )
+      return;
     targets.forEach((target) => {
       if (target.kind !== "terminal-agent") markArtifactSelfDeleted(target.id);
     });
@@ -2656,6 +2671,45 @@ function SidebarSelectedChatArchiveButton(props: {
     </TooltipWrapper>
   );
 }
+function useBulkDeleteUnavailable(
+  ids: readonly string[],
+  recordById: ReadonlyMap<string, EpicTreeRecord>,
+): boolean {
+  const onPool = useServingPeerHostId() === POOL_HOST_ID;
+  const sessionHostId = useEpicSessionHostId();
+  const tree = useEpicTreeIndex();
+  const chatsById = useChatsByIdForWriteRoute();
+  const leases = useHostLeases();
+  return (
+    onPool &&
+    sidebarBulkDeleteIds({
+      ids,
+      tree,
+      isAgentId: (id) => isAgentRecord(recordById.get(id)),
+    }).some((id) => {
+      const record = recordById.get(id);
+      if (record?.type === "chat") {
+        return (
+          resolveChatWriteRoute({
+            chatsById,
+            isChatRow: true,
+            nodeId: id,
+            sessionHostId,
+          }) === "unavailable"
+        );
+      }
+      if (record?.type !== "terminal-agent") return false;
+      const { hostId } = record;
+      return (
+        hostId === POOL_HOST_ID ||
+        !leases.some(
+          (lease) => lease.hostId === hostId && lease.status === "ready",
+        )
+      );
+    })
+  );
+}
+
 function SidebarBulkSelectionActions() {
   const placement = useColumnOverlayPlacement("row") ?? {
     side: undefined,
@@ -2673,6 +2727,10 @@ function SidebarBulkSelectionActions() {
   const recordById = useMemo(
     () => new Map(records.map((record) => [record.id, record])),
     [records],
+  );
+  const deleteUnavailable = useBulkDeleteUnavailable(
+    selection.selectedVisibleIds,
+    recordById,
   );
   const selectedArtifacts = selection.selectedVisibleIds.flatMap((id) => {
     const record = recordById.get(id);
@@ -2782,27 +2840,39 @@ function SidebarBulkSelectionActions() {
         canMutate={canMutate}
         action={chatArchive}
       />
-      <Button
-        type="button"
-        variant="destructive-ghost"
-        size="icon-sm"
-        aria-label={
-          selection.selectedCount > 0
-            ? `Delete ${selection.selectedCount} selected ${panelRowNoun(selection.panelId, selection.selectedCount)}`
-            : `Delete selected ${panelRowNoun(selection.panelId, 0)}`
-        }
-        data-testid={`epic-sidebar-delete-selected-${selection.panelId}`}
-        disabled={
-          selection.selectedCount === 0 ||
-          !canMutate ||
-          selection.deletePending ||
-          chatArchive.pending
-        }
-        onClick={selection.requestDeleteSelected}
-      >
-        <Trash2 className="size-4" />
-      </Button>
+      <SidebarBulkDeleteButton
+        selection={selection}
+        disabled={!canMutate || deleteUnavailable || chatArchive.pending}
+      />
     </div>
+  );
+}
+
+function SidebarBulkDeleteButton(props: {
+  readonly selection: SidebarBulkSelectionValue;
+  readonly disabled: boolean;
+}) {
+  const { selection } = props;
+  return (
+    <Button
+      type="button"
+      variant="destructive-ghost"
+      size="icon-sm"
+      aria-label={
+        selection.selectedCount > 0
+          ? `Delete ${selection.selectedCount} selected ${panelRowNoun(selection.panelId, selection.selectedCount)}`
+          : `Delete selected ${panelRowNoun(selection.panelId, 0)}`
+      }
+      data-testid={`epic-sidebar-delete-selected-${selection.panelId}`}
+      disabled={
+        selection.selectedCount === 0 ||
+        selection.deletePending ||
+        props.disabled
+      }
+      onClick={selection.requestDeleteSelected}
+    >
+      <Trash2 className="size-4" />
+    </Button>
   );
 }
 
