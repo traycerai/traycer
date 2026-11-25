@@ -9,7 +9,6 @@ import { UnaryDoor } from "./expired-host-token-unary-door";
 import { liveUnary, seams } from "./expired-host-token-seams";
 import { runDoctor } from "../../doctor/engine";
 import type { DoctorIssue } from "../../doctor/issues";
-import { hostTokenFailureCliError } from "../../internal/host-door-words";
 
 /**
  * How the gate ended a call, read through the doctor's real RPC probe, reached
@@ -57,8 +56,6 @@ vi.mock(
 vi.mock("../../../../shared/host-transport/whatwg-ws-factory", async () =>
   (await import("./expired-host-token-seams")).unaryFactoryModule(),
 );
-// The messenger seam: the error the call's messenger ends a request with is
-// kept as it left, to be compared with the one the call threw.
 vi.mock("../../manifest/host-install", () => ({
   readHostInstallRecord: () => ({
     version: "0.0.0",
@@ -145,10 +142,20 @@ type EndingKind =
   | "not-admitted"
   | "sandbox-frozen";
 
-const HOST_REFUSALS = [
-  "not-a-member",
-  "not-admitted",
-  "sandbox-frozen",
+/**
+ * The whole probe line each definite refusal prints, written out: the fixed
+ * prefix, then the refusal's own line. Not-admitted and sandbox-frozen have no
+ * line of their own, so their message ends at the prefix's trailing space;
+ * not-a-member's own line carries the one `traycer login` sentence the report
+ * may hold.
+ */
+const HOST_REFUSAL_LINES = [
+  [
+    "not-a-member",
+    "Could not complete an RPC handshake with the host: traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.",
+  ],
+  ["not-admitted", "Could not complete an RPC handshake with the host: "],
+  ["sandbox-frozen", "Could not complete an RPC handshake with the host: "],
 ] as const;
 
 /** `runDoctor`, with the mint answered as the ending requires. */
@@ -196,17 +203,15 @@ describe("the doctor's RPC probe, through runDoctor, ended by the gate", () => {
     });
   }, 60_000);
 
-  it.each(HOST_REFUSALS)(
+  it.each(HOST_REFUSAL_LINES)(
     "%s: the generic probe-failed issue with its own line, and no restart, no sign-in advice",
-    async (kind) => {
+    async (kind, message) => {
       const issues = await doctorEndedBy(kind);
-      const issue = probeIssueOf(issues);
-      const line = hostTokenFailureCliError({ kind }).message;
-      expect(issue).toEqual({
+      expect(probeIssueOf(issues)).toEqual({
         code: "PORT_UNREACHABLE",
         severity: "warning",
         title: "Host RPC probe failed",
-        message: `Could not complete an RPC handshake with the host: ${line}`,
+        message,
         fixAction: null,
         terminalCommand: null,
         details: { websocketUrl: seams.endpoint.websocketUrl, rpcCode: kind },
@@ -215,11 +220,6 @@ describe("the doctor's RPC probe, through runDoctor, ended by the gate", () => {
       for (const reported of issues) {
         expect(reported.fixAction).not.toBe("host-restart");
         expect(reported.terminalCommand ?? "").not.toContain("restart");
-      }
-      // `traycer login` and "Sign in again" appear only in not-a-member's own line.
-      if (kind !== "not-a-member") {
-        expect(JSON.stringify(issue)).not.toContain("traycer login");
-        expect(JSON.stringify(issue)).not.toContain("Sign in again");
       }
     },
     60_000,

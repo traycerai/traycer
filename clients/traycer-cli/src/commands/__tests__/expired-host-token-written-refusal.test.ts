@@ -26,7 +26,6 @@ import {
   hostRpcToCliError,
   hostRpcWroteNoRequest,
 } from "../../internal/host-rpc";
-import { STORED_CREDENTIAL_REJECTED_MESSAGE } from "../../internal/host-door-words";
 import { isRefusalAfterRejectedSignIn } from "../../internal/sign-in-rejection";
 import type { CliSignInHandle } from "../../internal/cli-host-tokens";
 
@@ -232,10 +231,14 @@ function expectSameObjectAsClient(thrown: unknown): void {
   expect(hostRpcWroteNoRequest(thrown)).toBe(false);
 }
 
+/** The stored-credential line, written out. */
+const STORED_CREDENTIAL_LINE =
+  "The stored credential was rejected. Run `traycer login` to re-authenticate.";
+
 function expectStoredCredentialLine(thrown: unknown): void {
   expect(isRefusalAfterRejectedSignIn(finalRefusalOf(thrown))).toBe(true);
   expect(hostRpcToCliError(thrown)).toMatchObject({
-    message: STORED_CREDENTIAL_REJECTED_MESSAGE,
+    message: STORED_CREDENTIAL_LINE,
     exitCode: 1,
   });
 }
@@ -303,8 +306,7 @@ describe("the bound of the written path's judgement", () => {
       expect(tookMs).toBeLessThan(2_000);
       expect(isRefusalAfterRejectedSignIn(finalRefusalOf(thrown))).toBe(false);
       const line = hostRpcToCliError(thrown) as { message: string };
-      expect(line.message).not.toBe(STORED_CREDENTIAL_REJECTED_MESSAGE);
-      expect(line.message).toContain("door refused: token-expired");
+      expect(line.message).toBe("door refused: token-expired");
       releaseRefreshes();
       expect(await refreshing).toBe("rejected");
     } finally {

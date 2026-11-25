@@ -254,11 +254,13 @@ afterEach(async () => {
 });
 
 /** The credentials refresh: each call is one rotation, and rotates the lease to the next sign-in. */
-function countingRefresh(): {
+interface CountingRefresh {
   readonly refresh: (lease: BearerLease) => Promise<SignInRotationResult>;
   readonly rotations: () => number;
   readonly rotatedTo: (rotation: number) => string;
-} {
+}
+
+function countingRefresh(): CountingRefresh {
   let rotations = 0;
   const rotatedTo = (rotation: number): string => `sign-in-rotated-${rotation}`;
   return {
@@ -275,6 +277,44 @@ function countingRefresh(): {
     rotations: () => rotations,
     rotatedTo,
   };
+}
+
+/**
+ * As `countingRefresh`, for a case whose comment says the rotation "saves B":
+ * the rotated sign-in is saved to the credentials file as the real rotation
+ * saves it, so the file holds what the lease holds. (`countingRefresh` alone
+ * rotates the lease and leaves the file untouched.)
+ */
+function countingRefreshSavingToFile(): CountingRefresh {
+  const counting = countingRefresh();
+  return {
+    ...counting,
+    refresh: async (lease) => {
+      const rotation = await counting.refresh(lease);
+      if (rotation.installed !== null)
+        await saveSignInToFile(rotation.installed);
+      return rotation;
+    },
+  };
+}
+
+/** Saves `token` as this case's person's sign-in in the credentials file. */
+async function saveSignInToFile(token: string): Promise<void> {
+  const store = createCliCredentialsStore();
+  try {
+    await store.signIn(
+      {
+        token,
+        refreshToken: `rt-${token}`,
+        savedAt: "2026-01-01T00:00:00.000Z",
+        user: { id: USER_ID, email: "user@example.test", name: "User" },
+      },
+      false,
+      null,
+    );
+  } finally {
+    store.dispose();
+  }
 }
 
 describe("a mint refusal's recovery refreshes only the sign-in it was refused for", () => {
@@ -895,7 +935,9 @@ describe("only a mint sent with the sign-in our rotation installed changes the j
   async function rotatedWithXHeld(): Promise<RotatedRig> {
     harness.hold = 2;
     const otherHostId = `${hostId.slice(0, -1)}f`;
-    const credentials = countingRefresh();
+    // The file holds sign-in A before the command starts, and each rotation saves its result.
+    await saveSignInToFile(SIGN_IN_A);
+    const credentials = countingRefreshSavingToFile();
     injected.rotate = credentials.refresh;
     const { lease, tokens } = await acquire(null);
     const x = tokens.hostBearerFor(hostId, true);

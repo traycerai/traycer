@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import {
   ANSWERS_AT_ONCE,
   STORED_SIGN_IN,
@@ -68,8 +69,6 @@ vi.mock(
 vi.mock("../../../../shared/host-transport/whatwg-ws-factory", async () =>
   (await import("./expired-host-token-seams")).unaryFactoryModule(),
 );
-// The messenger seam: the error the call's messenger ends a request with is
-// kept as it left, to be compared with the one the call threw.
 let world: World;
 let unary: UnaryDoor;
 
@@ -163,7 +162,9 @@ describe("no-sign-in does not end a call from a live handle (a measured fact)", 
       () => undefined,
       (error: unknown) => error,
     );
-    await vi.waitFor(() => expect(unary.opens.length).toBeGreaterThan(0));
+    // The call's first open is the held token, which the door will refuse once
+    // the person has signed out.
+    await unary.whenOpenedAs([world.expiredHeld]);
     await vi.waitFor(() =>
       expect(world.mint.requests.length).toBeGreaterThan(0),
     );
@@ -180,8 +181,13 @@ describe("no-sign-in does not end a call from a live handle (a measured fact)", 
     world.mint.respond("unavailable");
     refusal.settle();
     const thrown = await run;
-    // The call went on and presented the held sign-in to the door.
-    expect(unary.opens.map((open) => open.token)).toContain(STORED_SIGN_IN);
+    // The call went on and presented the held sign-in to the door: the
+    // expired token first, then the no-token probe, then the sign-in.
+    expect(unary.opens.map((open) => open.token)).toEqual([
+      world.expiredHeld,
+      NO_HOST_TOKEN_PROBE,
+      STORED_SIGN_IN,
+    ]);
     expect(hostRpcGateEndingOf(thrown)).toBeNull();
     expect((thrown as { message: string }).message).toBe(
       "door refused: not-admitted",

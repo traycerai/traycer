@@ -17,8 +17,7 @@ import { liveUnary } from "./expired-host-token-seams";
 import { buildTaskCreateCommand } from "../task-create";
 import { config } from "../../config";
 import { createOutput } from "../../runner/output";
-import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
-import { storedCredentialRejectedCliError } from "../../internal/host-door-words";
+import { CliError } from "../../runner/errors";
 import { cliTaskCreateKeysDir } from "../../store/paths";
 import {
   readTaskCreateKey,
@@ -168,8 +167,6 @@ function recordOfKey(): Promise<{ readonly kind: string }> {
 const createRequests = (): number =>
   unary.requests.filter((request) => request.method === EPIC_CREATE).length;
 
-const MAY_HAVE_BEEN_CREATED = /may have been created/;
-
 describe("task create, signed in as an account that is not this computer's owner", () => {
   // The invitation comes before the mint's answer is published: the person's
   // sign-in goes to the door, which refuses it `not_admitted`.
@@ -211,15 +208,12 @@ describe("task create, signed in as an account that is not this computer's owner
         NO_HOST_TOKEN_PROBE,
       ]);
       expect(unary.requests).toEqual([]);
-      expect(error.message).not.toMatch(MAY_HAVE_BEEN_CREATED);
       expect(error).toMatchObject({
-        code: CLI_ERROR_CODES.FORBIDDEN,
+        code: "E_FORBIDDEN",
         message: "",
         exitCode: 1,
       });
-      expect(printedLine(error)).toBe(
-        `error:  [code=${CLI_ERROR_CODES.FORBIDDEN}]`,
-      );
+      expect(printedLine(error)).toBe("error:  [code=E_FORBIDDEN]");
     } finally {
       person.dispose();
     }
@@ -236,8 +230,13 @@ interface Ending {
   readonly opens: readonly ("held" | "probe" | "sign-in")[];
 }
 
-const DOOR_REFUSED_SIGN_IN: Ending["code"] = CLI_ERROR_CODES.AUTH_REJECTED;
-const stored = storedCredentialRejectedCliError();
+const DOOR_REFUSED_SIGN_IN: Ending["code"] = "E_AUTH_REJECTED";
+/** The stored-credential line, written out. */
+const STORED_REJECTED: Pick<Ending, "code" | "message"> = {
+  code: "E_AUTH_REJECTED",
+  message:
+    "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+};
 
 function opensSeen(): readonly string[] {
   return unary.opens.map((open) =>
@@ -280,12 +279,12 @@ const NO_REQUEST_CASES: readonly {
   {
     scenario: "the probe alone",
     mint: "not-admitted",
-    ending: { code: CLI_ERROR_CODES.FORBIDDEN, message: "", opens: ["probe"] },
+    ending: { code: "E_FORBIDDEN", message: "", opens: ["probe"] },
   },
   {
     scenario: "the probe alone",
     mint: "sign-in-rejected",
-    ending: { code: stored.code, message: stored.message, opens: ["probe"] },
+    ending: { ...STORED_REJECTED, opens: ["probe"] },
   },
   ...(["not-admitted", "sign-in-rejected", "unavailable"] as const).map(
     (mint) => ({
@@ -302,7 +301,7 @@ const NO_REQUEST_CASES: readonly {
     scenario: "a redial",
     mint: "not-admitted",
     ending: {
-      code: CLI_ERROR_CODES.FORBIDDEN,
+      code: "E_FORBIDDEN",
       message: "",
       opens: ["held", "probe"],
     },
@@ -311,8 +310,7 @@ const NO_REQUEST_CASES: readonly {
     scenario: "a redial",
     mint: "sign-in-rejected",
     ending: {
-      code: stored.code,
-      message: stored.message,
+      ...STORED_REJECTED,
       opens: ["held", "probe"],
     },
   },
@@ -384,7 +382,6 @@ describe.each(NO_REQUEST_CASES)(
 
 function expectEnding(ended: Ended, ending: Ending): void {
   const error = errorOf(ended);
-  expect(error.message).not.toMatch(MAY_HAVE_BEEN_CREATED);
   expect(error).toMatchObject({
     code: ending.code,
     message: ending.message,

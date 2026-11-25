@@ -114,7 +114,7 @@ export class UnaryDoor {
   }
 
   /** Settles when the host has read the open of this index. */
-  whenOpened(index: number): Promise<void> {
+  private whenOpened(index: number): Promise<void> {
     return this.latch(index, this.opened).promise;
   }
 

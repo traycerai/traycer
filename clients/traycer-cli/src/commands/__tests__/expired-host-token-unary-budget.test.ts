@@ -223,9 +223,6 @@ describe("a create-like call with no cached grant, on this person's own computer
         NO_HOST_TOKEN_PROBE,
         FRESH_HOST_TOKEN,
       ]);
-      expect(unary.opens.map((open) => open.token)).not.toContain(
-        STORED_SIGN_IN,
-      );
       expect(botListRequests()).toBe(1);
     } finally {
       person.dispose();

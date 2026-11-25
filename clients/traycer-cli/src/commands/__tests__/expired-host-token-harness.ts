@@ -133,7 +133,11 @@ export type Reading =
   | "admit-then-expired"
   /** A refusal the client retries: the door says it may be asked again. */
   | "retryable"
-  /** A bearer no script names: refused at the bearer, never admitted by default. */
+  /**
+   * A bearer no script names: refused at the bearer, never admitted by
+   * default, when no explicit fixture script takes precedence (see
+   * `FakeHost.scriptFor`).
+   */
   | "unknown-bearer";
 
 /** What the door answers to a presented token, and when it answers. */
@@ -151,7 +155,11 @@ export const ANSWERS_AT_ONCE = (answer: Reading): DoorScript => ({
 /**
  * Every open a door refused because its bearer is one no script names, in the
  * order they came. `close` of a world fails the case when any is left: an open
- * the case did not script is a bearer it did not mean to present.
+ * the case did not script is a bearer it did not mean to present. This holds
+ * when no explicit fixture script takes precedence: the stream door's slow
+ * check and its open-index scripts (`openAt`) run first, and the legacy budget
+ * fixture (budgets.test.ts, "the first dial outlasts the limit") is one
+ * intentional index-driven admission.
  */
 export const unscriptedBearers: { door: "stream" | "unary"; token: unknown }[] =
   [];
@@ -268,7 +276,7 @@ export class FakeHost {
   }
 
   /** Settles when the host has read the open of this index. */
-  whenOpened(index: number): Promise<void> {
+  private whenOpened(index: number): Promise<void> {
     return this.latch(this.opened, index).promise;
   }
 
@@ -468,6 +476,12 @@ export class FakeHost {
     void answering.finally(() => this.pending.delete(answering));
   }
 
+  /**
+   * The script of an open. An open-index script (`openAt`) is explicit and
+   * takes precedence over the bearer's script; so does the slow check, which
+   * `readOpen` consults before this. Only when none applies is an unknown
+   * bearer refused.
+   */
   private scriptFor(index: number, token: unknown): DoorScript {
     const named = this.openAt.get(index);
     if (named !== undefined) return named;

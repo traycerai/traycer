@@ -462,8 +462,11 @@ export async function callHostRpcAtEndpoint<
  * had been written: an open frame at most. Only errors go in. The mark is
  * positive evidence on the marked exits alone. An error that left elsewhere,
  * such as a session that could not be acquired before the call's observer
- * existed, or a pre-send abort, is not marked: it says nothing either way, and
- * the caller keeps it as an unknown outcome, which is the safe reading.
+ * existed, or a pre-send abort, is not marked. An unmarked error is an unknown
+ * predicate result, not an outcome of the caller's: `hostRpcWroteNoRequest`
+ * returning false says nothing either way about whether a request was
+ * written. A caller may attest no dispatch by another route, as task create's
+ * own classifier does for a `HostRequestAbortedError` that never dispatched.
  */
 const wroteNoRequest = new WeakSet<object>();
 

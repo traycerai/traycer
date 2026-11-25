@@ -15,7 +15,7 @@ import { UnaryDoor } from "./expired-host-token-unary-door";
 import { liveUnary, seams } from "./expired-host-token-seams";
 import { buildTaskCreateCommand } from "../task-create";
 import { config } from "../../config";
-import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
+import { CliError } from "../../runner/errors";
 import {
   PLAIN_DISPATCH,
   callHostRpcAtResolvedEndpoint,
@@ -315,7 +315,7 @@ describe.each(AUTHORITIES)(
         async (ended) => {
           if (!("error" in ended)) expect.fail("the command completed");
           expect(ended.error).toMatchObject({
-            code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+            code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
             exitCode: 1,
           });
           expect(ended.error.message.startsWith(OWN_FAILURE_LINE)).toBe(true);
