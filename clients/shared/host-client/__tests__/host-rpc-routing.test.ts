@@ -439,21 +439,24 @@ describe("decideHostRpcDispatch", () => {
                   expected = { kind: "dispatch", entry: localEntry };
                   break;
                 case "addressed-peer":
-                  expected = targetMethods.has(method)
-                    ? target === null
-                      ? {
+                  expected =
+                    method === "host.status" ||
+                    method === "host.getRuntimeCapabilities" ||
+                    targetMethods.has(method)
+                      ? target === null
+                        ? {
+                            kind: "refuse",
+                            code: "RPC_ERROR",
+                            message:
+                              "Cannot call host RPC without an active host",
+                          }
+                        : { kind: "dispatch", entry: target }
+                      : {
                           kind: "refuse",
-                          code: "RPC_ERROR",
+                          code: "E_HOST_UNSUPPORTED",
                           message:
-                            "Cannot call host RPC without an active host",
-                        }
-                      : { kind: "dispatch", entry: target }
-                    : {
-                        kind: "refuse",
-                        code: "E_HOST_UNSUPPORTED",
-                        message:
-                          "The addressed peer does not serve this method",
-                      };
+                            "The addressed peer does not serve this method",
+                        };
                   break;
                 case "target-host-live-pool-at-rest":
                   expected =
@@ -531,6 +534,31 @@ describe("decideHostRpcDispatch", () => {
       ),
     ).toEqual({ kind: "dispatch", entry: poolEntry });
   });
+
+  it.each([
+    ["host.status", "pool build"],
+    ["host.getRuntimeCapabilities", "pool build"],
+    ["host.status", "no-pool build"],
+    ["host.getRuntimeCapabilities", "no-pool build"],
+  ] as const)(
+    "dispatches %s to its addressed peer under a stale manifest (%s)",
+    (method, build) => {
+      const tierPlan =
+        build === "pool build" ? POOL_PLAN : NO_POOL_HOST_RPC_TIER_PLAN;
+      expect(
+        decideHostRpcDispatch(
+          method,
+          "addressed-peer",
+          personalRemoteEntry,
+          new Set(),
+          tierPlan,
+          null,
+          NO_SERVING_PEER_DECISION,
+          null,
+        ),
+      ).toEqual({ kind: "dispatch", entry: personalRemoteEntry });
+    },
+  );
 
   it("dispatches every stream by its route and keeps account-wide stream keys on their answering peer", () => {
     for (const [method, route] of Object.entries(HOST_STREAM_RPC_ROUTES)) {

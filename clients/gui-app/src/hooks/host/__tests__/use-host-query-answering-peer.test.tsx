@@ -19,6 +19,7 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
 import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import { taskLight } from "@/lib/view-replica/__tests__/replica-fixtures";
 import {
+  getNegotiatedHostMethods,
   recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
@@ -42,7 +43,10 @@ import { historyReplicaService } from "@/lib/view-replica/history-replica";
 import { viewReplicaStore } from "@/lib/view-replica/view-replica-store";
 import { HistoryLocalContributionMount } from "@/providers/history-local-contribution-mount";
 import { __resetHistoryContributionsForTests } from "@/lib/history-composition/history-local-contribution";
-import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
+import {
+  cloudEpicTasksQueryKey,
+  LIST_CLOUD_TASKS_REQUEST,
+} from "@/lib/cloud-epic-tasks-query";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
@@ -557,6 +561,158 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
           teamPeer.hostId,
         ].sort(),
       );
+    } finally {
+      rendered.unmount();
+      client.dispose();
+      queryClient.clear();
+    }
+  });
+
+  it("drops a departed computer's row from the unavailable pool fallback", async () => {
+    const plan = settleProcessHostRpcTierPlan(poolEntry);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity, gcTime: Infinity },
+      },
+    });
+    let taskListRequests = 0;
+    let localHistoryRequests = 0;
+    let requestId = 0;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `departed-local-${++requestId}`,
+      handlers: {
+        "epic.listTasks": () => {
+          taskListRequests += 1;
+          throw new Error("pool task listing is unavailable");
+        },
+        "epic.localHistory.read": () => {
+          localHistoryRequests += 1;
+          return {
+            complete: true,
+            willComplete: true,
+            localHomeRows: [taskLight("personal-local-task", null)],
+            preservedRows: [],
+            tombstonedEpicIds: [],
+            localRows: "present",
+          } satisfies LocalHistoryReadResponse;
+        },
+      },
+    });
+    const hostById = new Map<string, HostDirectoryEntry>([
+      [poolEntry.hostId, poolEntry],
+      [mockRemoteHostEntry.hostId, mockRemoteHostEntry],
+    ]);
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => hostById.get(hostId) ?? null,
+      messenger,
+      routing: {
+        plan,
+        selectedHostId: () => mockRemoteHostEntry.hostId,
+        serving: () =>
+          readHostServingDecision((hostId) => hostById.get(hostId) ?? null),
+      },
+    });
+    clientRef.current = client;
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "test",
+        identity: {
+          userId: "viewer-1",
+          username: "Viewer",
+          providerHandle: "viewer",
+        },
+      }),
+    );
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "viewer-1", userName: "Viewer", email: "viewer@example.com" },
+        { userId: "viewer-1", username: "Viewer" },
+        [],
+      );
+    act(() => {
+      recordNegotiatedHostManifest(mockRemoteHostEntry.hostId, {
+        "epic.localHistory.read": { major: 1, minor: 0 },
+      });
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: mockRemoteHostEntry.hostId,
+        servingPeer: { kind: "computer", hostId: mockRemoteHostEntry.hostId },
+      });
+    });
+    const binding = Object.assign(Object.create(null), {
+      hostClient: client,
+    }) as HostRuntimeBinding<HostRpcRegistry>;
+    runtimeBindingRef.current = binding;
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <HostRuntimeContext.Provider value={binding}>
+        <QueryClientProvider client={queryClient}>
+          <HistoryLocalContributionMount />
+          {props.children}
+        </QueryClientProvider>
+      </HostRuntimeContext.Provider>
+    );
+    const rendered = renderHook(
+      () => useCloudEpicTasksQuery(undefined, { enabled: true }),
+      { wrapper: Wrapper },
+    );
+
+    try {
+      await waitFor(() => {
+        expect(rendered.result.current.hostId).toBe(POOL_HOST_ID);
+        expect(
+          rendered.result.current.tasks.map((task) => task.epic?.light?.id),
+        ).toEqual(["personal-local-task"]);
+        expect(rendered.result.current.completeness?.cloudPage).toBe(
+          "unavailable",
+        );
+        expect(localHistoryRequests).toBeGreaterThan(0);
+      });
+      expect(
+        getNegotiatedHostMethods(mockRemoteHostEntry.hostId)?.has(
+          "epic.listTasks",
+        ),
+      ).toBe(false);
+      expect(taskListRequests).toBe(1);
+      const poolQueryKey = cloudEpicTasksQueryKey(
+        POOL_HOST_ID,
+        "viewer-1",
+        LIST_CLOUD_TASKS_REQUEST,
+      );
+      const poolQuery = queryClient.getQueryCache().find({
+        queryKey: poolQueryKey,
+        exact: true,
+      });
+      expect(poolQuery).toBeDefined();
+      const rawPoolPage =
+        queryClient.getQueryData<ListTasksResponse>(poolQueryKey);
+      expect(rawPoolPage?.tasks).toEqual([]);
+      expect(rawPoolPage?.completeness?.cloudPage).toBe("unavailable");
+
+      act(() =>
+        useSelectionAuthorityStore.setState({
+          effectiveHostId: null,
+          servingPeer: { kind: "pool" },
+        }),
+      );
+      await waitFor(() => {
+        expect(rendered.result.current.hostId).toBe(POOL_HOST_ID);
+        expect(rendered.result.current.completeness?.cloudPage).toBe(
+          "unavailable",
+        );
+        expect(rendered.result.current.tasks).toEqual([]);
+      });
+      expect(taskListRequests).toBe(1);
+      expect(
+        queryClient.getQueryCache().find({
+          queryKey: poolQueryKey,
+          exact: true,
+        }),
+      ).toBe(poolQuery);
     } finally {
       rendered.unmount();
       client.dispose();

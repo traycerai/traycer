@@ -616,6 +616,9 @@ function OrganizationSubscription(props: {
   }, [poolBuild, accept, taskIds]);
   useEffect(() => {
     if (streamClient === null) return;
+    // A pool-free refresh yields to the previous frame through a transport
+    // gap. A concrete subscription starts a fresh baseline.
+    if (!poolBuild) lastFrame.current = null;
     let active = true;
     const session = streamClient.subscribe("organization.subscribe", {
       taskIds,
@@ -629,10 +632,10 @@ function OrganizationSubscription(props: {
     });
     return () => {
       active = false;
-      lastFrame.current = null;
+      if (poolBuild) lastFrame.current = null;
       session.close();
     };
-  }, [legacyClient, legacyAccept, streamClient, userId, taskIds]);
+  }, [legacyClient, legacyAccept, poolBuild, streamClient, userId, taskIds]);
   return null;
 }
 

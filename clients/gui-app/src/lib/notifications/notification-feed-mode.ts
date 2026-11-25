@@ -52,6 +52,13 @@ export const NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR = 1;
 export const NOTIFICATIONS_PARTITIONED_MARK_ALL_READ_MINOR = 1;
 export const NOTIFICATIONS_PARTITIONED_INDICATOR_STATE_MINOR = 1;
 
+/** The cloud feed's partitionSnapshot first appears at 1.2. */
+export function servesCloudNotificationPartition(
+  version: SchemaVersion | null,
+): boolean {
+  return version?.major === 1 && version.minor >= 2;
+}
+
 /**
  * Whether a negotiated UNARY version meets a floor on its own major line.
  *
@@ -335,8 +342,7 @@ export function useNotificationFeedModeFor(
    * in the summary. The host is already correct on its side and serves such a
    * peer the whole relay feed; this is the half that decides whether to ask.
    */
-  const hasCloudProjection =
-    cloudFeedVersion?.major === 1 && cloudFeedVersion.minor >= 2;
+  const hasCloudProjection = servesCloudNotificationPartition(cloudFeedVersion);
   const hasLocalProjection =
     localFeedVersion?.major === 1 && localFeedVersion.minor >= 2;
   const hasPartitionedList = meetsHostFloor(

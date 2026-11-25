@@ -93,10 +93,14 @@ export function useRoutedStreamClient(
   method: HostStreamRpcMethod,
   surfaceHostId: string | null,
   surfaceStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null,
-  options: {
-    readonly userId: string | null;
-    readonly computerScope: "app-serving-peer" | "surface-computer";
-  },
+  options: { readonly userId: string | null } & (
+    | { readonly computerScope: "app-serving-peer" }
+    | {
+        readonly computerScope: "surface-computer";
+        /** Whether this surface can use the computer's negotiated method. */
+        readonly surfaceSupportsMethod: boolean;
+      }
+  ),
 ): RoutedStreamClient {
   const binding = useHostBinding();
   const appServing = useAppServingDecision();
@@ -114,7 +118,9 @@ export function useRoutedStreamClient(
     options.computerScope === "surface-computer"
       ? {
           servingPeer: target,
-          servingPeerMethods: targetMethods,
+          servingPeerMethods: options.surfaceSupportsMethod
+            ? targetMethods
+            : null,
           servingPeerEnvironmentId: null,
         }
       : appServing;

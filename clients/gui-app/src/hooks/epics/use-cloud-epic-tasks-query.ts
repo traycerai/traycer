@@ -1009,12 +1009,7 @@ function projectHistoryPage(
     readonly cursorPage: boolean;
   },
 ): ListTasksResponse {
-  if (
-    input.hostId !== POOL_HOST_ID ||
-    page.completeness?.cloudPage === "unavailable"
-  ) {
-    return page;
-  }
+  if (input.hostId !== POOL_HOST_ID) return page;
   const { contribution, cursorPage, request } = input;
   const firstPagePlacement = hasOrganizationFilters(request.filters)
     ? "unprovable-filter"

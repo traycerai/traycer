@@ -304,10 +304,14 @@ export function decideHostRpcDispatch(
       }
       return dispatchToTarget(target);
     case "addressed-peer":
-      // The peer the requester names - for a task's calls, that task
-      // session's own peer - and only for a method it negotiated. Before its
-      // first handshake the session's own pre-send check decides.
-      if (targetMethods !== null && !targetMethods.has(method)) {
+      // The session floors can establish a fresh handshake when the cached
+      // manifest is stale. Task methods require the addressed peer's support.
+      if (
+        method !== "host.status" &&
+        method !== "host.getRuntimeCapabilities" &&
+        targetMethods !== null &&
+        !targetMethods.has(method)
+      ) {
         return {
           kind: "refuse",
           code: "E_HOST_UNSUPPORTED",

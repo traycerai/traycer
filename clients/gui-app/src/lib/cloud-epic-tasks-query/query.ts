@@ -73,6 +73,16 @@ import {
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 const PAGE_LIMIT = 20;
+const UNAVAILABLE_POOL_HISTORY_PAGE: ListTasksResponse = {
+  tasks: [],
+  hasMore: false,
+  completeness: {
+    cloudPage: "unavailable",
+    facets: "partial",
+    localRows: "none",
+    sort: "loaded-union",
+  },
+};
 // One first-page attempt may wait this long for a matching RequestContext.
 // This is deliberately not an end-to-end discovery deadline: the host's
 // cloud deadline starts only after this wait authorizes dispatch. The
@@ -233,13 +243,11 @@ interface FetchCloudEpicTasksFirstPageOptions {
  * Fetches one first page and admits it before exposing it to any Query writer.
  * This is the public first-page delivery API for History.
  *
- * The page is a composition: the serving tier's page (the server pool, in a
- * build with one) and the host's local contribution, read in parallel and
- * composed by `composeHistoryPage` - local homes win their ids, preserved
- * orphans fill gaps, tombstones apply. The replica tier keeps the serving
- * tier's settled page alone, stamped with when it was asked for: a cached
- * page has the host's contribution applied again when it paints, so a
- * deletion recorded since is honoured.
+ * Under a pool key this delivers the account outcome. The History view
+ * applies the current computer's contribution, including when the account
+ * page was unavailable. Under a computer key the read delivers the composed
+ * page. A last-known replica keeps the serving tier's settled page alone so
+ * the contribution, including any newer deletions, applies on paint.
  */
 export function fetchCloudEpicTasksFirstPageByHostId(
   hostId: string,
@@ -289,6 +297,7 @@ export function fetchCloudEpicTasksFirstPageByHostId(
         ) {
           throw poolResult.reason;
         }
+        if (hostId === POOL_HOST_ID) return UNAVAILABLE_POOL_HISTORY_PAGE;
         return admitCloudEpicTasksFirstPage(local, { hostId, userId });
       }
       const { response, answeringHostId } = poolResult.value;

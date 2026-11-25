@@ -53,6 +53,8 @@ interface PoolProviderHarness {
   addressableHostId: string | null;
   noComputer: boolean;
   teamServing: boolean;
+  localCloudFeedMinor: number;
+  cloudFeedUnavailable: boolean;
   readonly cloudArrivalCompletions: Array<Promise<void>>;
   readonly streams: Map<string, IHostStreamClient<HostStreamRpcRegistry>>;
 }
@@ -63,6 +65,8 @@ const harness = vi.hoisted<PoolProviderHarness>(() => ({
   addressableHostId: null,
   noComputer: false,
   teamServing: false,
+  localCloudFeedMinor: 2,
+  cloudFeedUnavailable: false,
   cloudArrivalCompletions: [],
   streams: new Map(),
 }));
@@ -125,8 +129,34 @@ vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: () => "supported",
   useStreamMethodSchemaVersion: () => ({ major: 1, minor: 2 }),
-  useStreamMethodSupportFor: () => "supported",
-  useStreamMethodSchemaVersionFor: () => ({ major: 1, minor: 2 }),
+  useStreamMethodSupportFor: (
+    client: IHostStreamClient<HostStreamRpcRegistry> | null,
+    method: string,
+  ) => {
+    const hostId = [...harness.streams].find(
+      ([, stream]) => stream === client,
+    )?.[0];
+    return method === "host.notifications.cloudFeed.subscribe" &&
+      harness.cloudFeedUnavailable &&
+      hostId !== undefined
+      ? "unsupported"
+      : "supported";
+  },
+  useStreamMethodSchemaVersionFor: (
+    client: IHostStreamClient<HostStreamRpcRegistry> | null,
+    method: string,
+  ) => {
+    const hostId = [...harness.streams].find(
+      ([, stream]) => stream === client,
+    )?.[0];
+    if (method !== "host.notifications.cloudFeed.subscribe") {
+      return { major: 1, minor: 2 };
+    }
+    if (hostId === mockLocalHostEntry.hostId) {
+      return { major: 1, minor: harness.localCloudFeedMinor };
+    }
+    return harness.cloudFeedUnavailable ? null : { major: 1, minor: 2 };
+  },
 }));
 
 vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
@@ -390,13 +420,16 @@ function cloudRow(
   };
 }
 
-function recordComputerNotificationsManifest(): void {
+function recordComputerNotificationsManifest(cloudFeedMinor: number): void {
   recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
     "host.notifications.list": { major: 2, minor: 2 },
     "host.notifications.markAllRead": { major: 1, minor: 1 },
     "host.notifications.indicatorState": { major: 1, minor: 1 },
     "host.notifications.clearAll": { major: 1, minor: 1 },
-    "host.notifications.cloudFeed.subscribe": { major: 1, minor: 2 },
+    "host.notifications.cloudFeed.subscribe": {
+      major: 1,
+      minor: cloudFeedMinor,
+    },
   });
 }
 
@@ -493,6 +526,9 @@ async function renderPoolNotificationsProvider(options: {
   readonly noComputer: boolean;
   readonly servingPeer: "pool" | "computer" | "remote" | null;
   readonly teamServing: boolean;
+  readonly localCloudFeedMinor?: number;
+  readonly cloudFeedUnavailable?: boolean;
+  readonly legacyLocalFloors?: boolean;
   readonly child: ReactNode;
   readonly waitForInitialOpen?: boolean;
 }): Promise<{
@@ -510,16 +546,24 @@ async function renderPoolNotificationsProvider(options: {
   harness.addressableHostId = options.addressableHostId ?? null;
   harness.noComputer = options.noComputer;
   harness.teamServing = options.teamServing;
+  harness.localCloudFeedMinor = options.localCloudFeedMinor ?? 2;
+  harness.cloudFeedUnavailable = options.cloudFeedUnavailable ?? false;
   harness.streams.clear();
   harness.streams.set(mockLocalHostEntry.hostId, serving);
   harness.streams.set(poolEntry.hostId, pool);
   harness.streams.set(REMOTE_PERSONAL_HOST_ID, remote);
-  if (options.servingPeer === "computer") {
+  if (options.legacyLocalFloors) {
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "host.notifications.feed.subscribe": { major: 1, minor: 1 },
+    });
+  } else if (options.servingPeer === "computer") {
     if (options.teamServing) recordTeamComputerManifest();
-    else recordComputerNotificationsManifest();
+    else recordComputerNotificationsManifest(harness.localCloudFeedMinor);
   }
   if (options.servingPeer === "remote") {
-    recordComputerNotificationsManifest();
+    if (!options.legacyLocalFloors) {
+      recordComputerNotificationsManifest(harness.localCloudFeedMinor);
+    }
     recordRemoteCloudFeedManifest();
   }
   if (options.servingPeer !== null) {
@@ -570,6 +614,8 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     harness.noComputer = false;
     harness.addressableHostId = null;
     harness.teamServing = false;
+    harness.localCloudFeedMinor = 2;
+    harness.cloudFeedUnavailable = false;
     harness.messenger = null;
     showNotificationMock.mockClear();
     stageNotificationPartitionFloors([mockLocalHostEntry.hostId]);
@@ -588,6 +634,8 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     harness.addressableHostId = null;
     harness.noComputer = false;
     harness.teamServing = false;
+    harness.localCloudFeedMinor = 2;
+    harness.cloudFeedUnavailable = false;
     harness.streams.clear();
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
@@ -719,7 +767,7 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     const delayedPoolDeliveryIndex = harness.cloudArrivalCompletions.length;
     act(() => {
       harness.noComputer = false;
-      recordComputerNotificationsManifest();
+      recordComputerNotificationsManifest(2);
       publishServingPeer("computer", 2);
       emitCloudSnapshot(originalPoolSession, 4, [delayedPoolRow]);
     });
@@ -837,8 +885,117 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     expect(pool.subscribes).toEqual([]);
   });
 
+  it.each([
+    { localCloudFeedMinor: 1, cloudPeer: "pool" },
+    { localCloudFeedMinor: 2, cloudPeer: "computer" },
+  ] as const)(
+    "keeps local notification lanes on the bell computer and routes the cloud feed to $cloudPeer when its cloud minor is $localCloudFeedMinor",
+    async ({ localCloudFeedMinor, cloudPeer }) => {
+      const { pool, remote, serving } = await renderPoolNotificationsProvider({
+        noComputer: false,
+        servingPeer: "remote",
+        teamServing: false,
+        localCloudFeedMinor,
+        child: <NotificationsBell />,
+      });
+
+      const expectedLocalMethods = [
+        "agent.activity.subscribe",
+        "host.notifications.feed.subscribe",
+        "notifications.subscribe",
+      ];
+      if (cloudPeer === "computer") {
+        expectedLocalMethods.push("host.notifications.cloudFeed.subscribe");
+      }
+      await waitFor(() => {
+        expect(serving.subscribes.map(({ method }) => method).sort()).toEqual(
+          expectedLocalMethods.sort(),
+        );
+        expect(
+          (cloudPeer === "pool" ? pool : serving).subscribes.filter(
+            ({ method }) => method === "host.notifications.cloudFeed.subscribe",
+          ),
+        ).toHaveLength(1);
+      });
+      expect(remote.subscribes).toEqual([]);
+      expect(
+        (cloudPeer === "pool" ? serving : pool).subscribes.filter(
+          ({ method }) => method === "host.notifications.cloudFeed.subscribe",
+        ),
+      ).toEqual([]);
+
+      const cloudClient = cloudPeer === "pool" ? pool : serving;
+      const cloudHostId =
+        cloudPeer === "pool" ? poolEntry.hostId : mockLocalHostEntry.hostId;
+      await viewReplicaStore.warm("user-a");
+      const replicaAddress = notificationFeedReplicaAddress(
+        "user-a",
+        cloudHostId,
+      );
+      if (replicaAddress === null) {
+        throw new Error("the selected cloud peer must have a replica address");
+      }
+      const row = cloudRow(`cloud-minor-${localCloudFeedMinor}`, 11);
+      const deliveryIndex = harness.cloudArrivalCompletions.length;
+      act(() =>
+        emitCloudSnapshot(
+          sessionFor(cloudClient, "host.notifications.cloudFeed.subscribe"),
+          1,
+          [row],
+        ),
+      );
+      await awaitProviderCloudArrival(deliveryIndex);
+      expect(
+        useCloudNotificationsStore.getState().rows[
+          cloudNotificationFeedId(row.entryId)
+        ],
+      ).toBeDefined();
+      await waitFor(() => {
+        expect(
+          viewReplicaStore
+            .read(notificationFeedReplicaService, replicaAddress)
+            ?.page.rows.map((storedRow) => storedRow.entryId),
+        ).toEqual([row.entryId]);
+      });
+    },
+  );
+
+  it("keeps the legacy local-only feed when partition floors and cloud feed support are missing", async () => {
+    const { pool, remote, serving } = await renderPoolNotificationsProvider({
+      noComputer: false,
+      servingPeer: "pool",
+      teamServing: false,
+      cloudFeedUnavailable: true,
+      legacyLocalFloors: true,
+      child: <NotificationsBell />,
+    });
+
+    const localLegacyMethods = [
+      "agent.activity.subscribe",
+      "host.notifications.feed.subscribe",
+      "notifications.subscribe",
+    ].sort();
+    await waitFor(() => {
+      expect(serving.subscribes.map(({ method }) => method).sort()).toEqual(
+        localLegacyMethods,
+      );
+    });
+    expect(pool.subscribes).toEqual([]);
+    expect(remote.subscribes).toEqual([]);
+
+    recordRemoteCloudFeedManifest();
+    act(() => publishServingPeer("remote", 2));
+    await waitFor(() => {
+      expect(serving.subscribes.map(({ method }) => method).sort()).toEqual(
+        localLegacyMethods,
+      );
+    });
+    expect(pool.subscribes).toEqual([]);
+    expect(remote.subscribes).toEqual([]);
+  });
+
   it("keeps every bell stream on the healthy local computer while the pool waits for another computer and after it serves", async () => {
-    recordComputerNotificationsManifest();
+    recordComputerNotificationsManifest(2);
     const { pool, remote, serving } = await renderPoolNotificationsProvider({
       addressableHostId: mockLocalHostEntry.hostId,
       noComputer: false,

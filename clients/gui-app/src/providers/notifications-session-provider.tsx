@@ -45,6 +45,7 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import {
+  servesCloudNotificationPartition,
   useHeldNotificationFeedMode,
   useNotificationFeedModeFor,
   type NotificationFeedMode,
@@ -123,7 +124,10 @@ import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory
 import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { HostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
-import { useRoutedStreamClient } from "@/hooks/host/use-pool-tier";
+import {
+  useRoutedStreamClient,
+  type RoutedStreamClient,
+} from "@/hooks/host/use-pool-tier";
 import { useViewReplicaPaint } from "@/lib/view-replica/view-replica-store";
 import {
   notificationFeedReplicaAddress,
@@ -169,26 +173,6 @@ function cloudFeedRecoveryHostId(
   return cloudFeedPeerHostId ?? streamHostId;
 }
 
-function hostIdOf(entry: HostDirectoryEntry | null): string | null {
-  return entry === null ? null : entry.hostId;
-}
-
-function useNotificationsCompositionPeer() {
-  const servingHostId = useServingPeerHostId();
-  const computerEntry = useNotificationsServingHostEntry();
-  const localEntry = useReactiveLocalHostEntry();
-  const servingHostEntry =
-    readProcessHostRpcTierPlan().pool === null ||
-    localEntry !== null ||
-    computerEntry?.hostId === servingHostId
-      ? computerEntry
-      : null;
-  return {
-    cloudOnly: servingHostId === POOL_HOST_ID && servingHostEntry === null,
-    servingHostEntry,
-  };
-}
-
 const POOL_CLOUD_LANE: HostNotificationsCloudLane = {
   serving: () => selectCloudLaneServing(useCloudNotificationsStore.getState()),
   subscribe: (listener) => useCloudNotificationsStore.subscribe(listener),
@@ -232,78 +216,31 @@ function upsertTargetsActiveEntity(
   return notificationEntityMatchesPresence(entity, activeEntity.entity);
 }
 
-/**
- * Mounted inside the app shell post-auth. Opens the notifications stream as
- * soon as the user is signed in and tears it down on sign-out / token
- * expiry. On sign-out - and on transitions between two distinct signed-in
- * users - the local notifications replica is reset so the incoming user
- * does not see the previous user's entries.
- *
- * On a shell that has a local host, notifications always come from that
- * host (the G8 decision) - never from whichever host happens to be active in
- * a composer/tab elsewhere in the app. A shell with no local host at all
- * falls back to the bound host, because otherwise nothing would ever serve
- * it; that choice lives entirely in `useNotificationsServingHostEntry()`,
- * which is also where the reasoning for the fallback's gate lives.
- *
- * Every stream here binds to that ONE serving host through a transient,
- * non-rebinding client (`useHostStreamClientBindingFor`), never through the
- * app-wide `useWsStreamClient()`. The cloud feed rides the same client: it
- * is reached THROUGH a host, so binding it anywhere else would reintroduce
- * exactly the active-host coupling the local-host rule exists to prevent.
- */
-export function NotificationsSessionProvider(
-  props: NotificationsSessionProviderProps,
-): ReactNode {
-  useEffect(() => installNotificationChimeAudioWarmup(), []);
-  const runnerHost = useRunnerHostOrNull();
-  // The shell's leave edge (the app backgrounded, the machine locked or
-  // asleep) withdraws this window's focus claim before the OS suspends it, so
-  // a turn that finishes after the person left still reaches their other
-  // devices; the resume edge restores it, unless the machine woke behind its
-  // lock screen. An audio interruption is not the person leaving.
-  useEffect(() => {
-    if (runnerHost === null) return undefined;
-    const suspended = runnerHost.onSystemSuspended((cause) => {
-      if (cause !== "interrupted") setAppSuspended(true);
-    });
-    const resumed = runnerHost.onSystemResumed((event) => {
-      if (!event.screenLocked) setAppSuspended(false);
-    });
-    return () => {
-      suspended.dispose();
-      resumed.dispose();
-      setAppSuspended(false);
-    };
-  }, [runnerHost]);
-  const hostClient = useHostClient();
-  const requestContextUserId = useRequestContextUserId(hostClient);
-  const { cloudOnly, servingHostEntry } = useNotificationsCompositionPeer();
+function useNotificationsBellComputer(
+  appServingHostId: string | null,
+): HostDirectoryEntry | null {
+  const computerEntry = useNotificationsServingHostEntry();
+  const localEntry = useReactiveLocalHostEntry();
+  return readProcessHostRpcTierPlan().pool === null ||
+    localEntry !== null ||
+    computerEntry?.hostId === appServingHostId
+    ? computerEntry
+    : null;
+}
+
+function useNotificationsFeedComposition(requestContextUserId: string | null) {
+  const appServingHostId = useServingPeerHostId();
+  const servingHostEntry = useNotificationsBellComputer(appServingHostId);
+  const bellHostId = servingHostEntry?.hostId ?? null;
+  const cloudOnly = appServingHostId === POOL_HOST_ID && bellHostId === null;
   const streamAuth = useStreamAuthRevalidator();
   const streamBinding = useHostStreamClientBindingFor(
     servingHostEntry,
     streamAuth,
   );
-  // A serving-host change reaches this component one commit before its
-  // transport does: `useHostStreamClientBindingFor` builds the replacement
-  // inside an effect, so the value rendered alongside the NEW serving entry
-  // is still the OUTGOING host's binding. Opening against it would stamp the
-  // new host's id onto the old host's transport - a frame arriving on the
-  // outgoing host would enter the replica, toast, and persist receipts under
-  // the incoming host's id.
-  //
-  // The proof of freshness has to be OWNERSHIP, not liveness. A released
-  // client is not necessarily a closed one: a remote client's `close()`
-  // drops this consumer's reference to a SHARED relay session that other
-  // references - or the keep-warm linger - keep open, and the released view
-  // still delegates `subscribe()` to it. So compare the binding's owner
-  // identity against the identity the current serving entry demands, and
-  // treat any mismatch as "no client yet". The live one arrives on the very
-  // next render.
-  //
-  // This guard stays in the OUTER shell, ahead of the negotiation below: the
-  // mode must be negotiated against the same settled client the streams are
-  // opened on, so a stale binding must not reach either.
+  // The binding effect can lag the selected entry by a render, and a
+  // released client can still reach a shared live session. Match ownership
+  // before using it for either negotiation or subscriptions.
   const servingOwnerIdentity = remoteAwareOwnerIdentityKey(
     servingHostEntry,
     requestContextUserId,
@@ -314,31 +251,28 @@ export function NotificationsSessionProvider(
     streamBinding.transportKey === servingOwnerIdentity
       ? streamBinding.client
       : null;
-  // Negotiated against the client the streams are actually opened on, not the
-  // app-wide active host - those differ whenever a tab is bound to a remote
-  // host, and reading the remote manifest here selected mixed mode from one
-  // host while consuming the other host's snapshots.
-  //
-  // The unary half is keyed by host id, and that id comes from the serving
-  // ENTRY rather than from the settled stream client. The entry is already the
-  // app's answer to "which host serves notifications", and it is the INCOMING
-  // host during the window where the binding still names the outgoing one - so
-  // reading it directly is what avoids the cross-host mismatch, not a further
-  // gate on the client. Coupling the two would also be wrong on its own terms:
-  // the mode drives the `home: "local"` partition selector on UNARY calls,
-  // which travel on the host client and do not need a stream to exist at all.
-  // A null entry yields a null id, which withholds mixed mode - the safe way
-  // for this to be unknown.
-  // The cloud feed is account-wide: in a build with a server pool it opens on
-  // the bell's own computer when it serves the feed for this person, and on
-  // the pool otherwise. The bell's computer also carries the host lanes.
+  // A whole-origin cloud schema cannot join a computer's local partition,
+  // even if the manifest advertises the method. Route that leg to the pool
+  // before deciding the mode, so recovery and replica paint follow the
+  // transport this composition can actually open on.
+  const computerCloudProjection = useStreamMethodSchemaVersionFor(
+    servingStreamClient,
+    "host.notifications.cloudFeed.subscribe",
+  );
+  const computerCloudSupport = useStreamMethodSupportFor(
+    servingStreamClient,
+    "host.notifications.cloudFeed.subscribe",
+  );
   const cloudFeed = useRoutedStreamClient(
     "host.notifications.cloudFeed.subscribe",
-    hostIdOf(servingHostEntry),
+    bellHostId,
     servingStreamClient,
     {
       userId: requestContextUserId,
       computerScope: "surface-computer",
+      surfaceSupportsMethod:
+        computerCloudSupport !== "unsupported" &&
+        servesCloudNotificationPartition(computerCloudProjection),
     },
   );
   const cloudFeedStreamClient = cloudFeed.client;
@@ -360,7 +294,7 @@ export function NotificationsSessionProvider(
   const negotiatedFeedMode = useNotificationFeedModeFor(
     servingStreamClient,
     cloudFeedStreamClient,
-    servingHostEntry?.hostId ?? null,
+    bellHostId,
     cachedCloudFeedVersion,
   );
   // Raw negotiation state, read beside the mode: `unknown` marks a client
@@ -392,8 +326,73 @@ export function NotificationsSessionProvider(
       // The hold is per serving host: a switch to another host settles to
       // that host's own negotiation instead of carrying the previous host's
       // mode.
-      servingHostEntry?.hostId ?? null,
+      bellHostId,
     );
+  return {
+    servingHostEntry,
+    servingStreamClient,
+    cloudFeed,
+    cloudOnly,
+    notificationFeedMode,
+    notificationFeedModeSettling,
+    replicaFeed,
+  };
+}
+
+/**
+ * Mounted inside the app shell post-auth. Opens the notifications stream as
+ * soon as the user is signed in and tears it down on sign-out / token
+ * expiry. On sign-out - and on transitions between two distinct signed-in
+ * users - the local notifications replica is reset so the incoming user
+ * does not see the previous user's entries.
+ *
+ * On a shell that has a local host, notifications always come from that
+ * host (the G8 decision) - never from whichever host happens to be active in
+ * a composer/tab elsewhere in the app. A shell with no local host at all
+ * falls back to the bound host, because otherwise nothing would ever serve
+ * it; that choice lives entirely in `useNotificationsServingHostEntry()`,
+ * which is also where the reasoning for the fallback's gate lives.
+ *
+ * The computer's lanes bind through its own transient client. The pool can
+ * carry the personal cloud partition when the bell computer cannot serve it
+ * and the computer has the local partition floors. While the pool serves
+ * without a bell computer, the pool's cloud feed opens alone.
+ */
+export function NotificationsSessionProvider(
+  props: NotificationsSessionProviderProps,
+): ReactNode {
+  useEffect(() => installNotificationChimeAudioWarmup(), []);
+  const runnerHost = useRunnerHostOrNull();
+  // The shell's leave edge (the app backgrounded, the machine locked or
+  // asleep) withdraws this window's focus claim before the OS suspends it, so
+  // a turn that finishes after the person left still reaches their other
+  // devices; the resume edge restores it, unless the machine woke behind its
+  // lock screen. An audio interruption is not the person leaving.
+  useEffect(() => {
+    if (runnerHost === null) return undefined;
+    const suspended = runnerHost.onSystemSuspended((cause) => {
+      if (cause !== "interrupted") setAppSuspended(true);
+    });
+    const resumed = runnerHost.onSystemResumed((event) => {
+      if (!event.screenLocked) setAppSuspended(false);
+    });
+    return () => {
+      suspended.dispose();
+      resumed.dispose();
+      setAppSuspended(false);
+    };
+  }, [runnerHost]);
+  const hostClient = useHostClient();
+  const requestContextUserId = useRequestContextUserId(hostClient);
+  const {
+    servingHostEntry,
+    servingStreamClient,
+    cloudFeed,
+    cloudOnly,
+    notificationFeedMode,
+    notificationFeedModeSettling,
+    replicaFeed,
+  } = useNotificationsFeedComposition(requestContextUserId);
   // The session body itself consumes the mode (through
   // `useMergedNotificationsActions`), and a component cannot read a context it
   // renders. So the outer shell owns the negotiation and the provider, and the
@@ -411,8 +410,7 @@ export function NotificationsSessionProvider(
           navigate={props.navigate}
           servingHostEntry={servingHostEntry}
           servingStreamClient={servingStreamClient}
-          cloudFeedStreamClient={cloudFeedStreamClient}
-          cloudFeedPeerHostId={cloudFeed.peerHostId}
+          cloudFeed={cloudFeed}
           cloudOnly={cloudOnly}
           notificationFeedMode={notificationFeedMode}
           replicaFeed={replicaFeed}
@@ -428,9 +426,7 @@ interface NotificationsSessionBodyProps extends NotificationsSessionProviderProp
   readonly servingHostEntry: HostDirectoryEntry | null;
   readonly servingStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
   /** See `useNotificationFeedModeFor`'s `cloudFeedClient`. */
-  readonly cloudFeedStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
-  /** The peer the cloud feed is opened on; `null` when its route refuses. */
-  readonly cloudFeedPeerHostId: string | null;
+  readonly cloudFeed: RoutedStreamClient;
   /** The pool serves the app and no computer serves the notifications. */
   readonly cloudOnly: boolean;
   readonly notificationFeedMode: NotificationFeedMode;
@@ -443,8 +439,8 @@ function NotificationsSessionBody(
 ): ReactNode {
   const servingHostEntry = props.servingHostEntry;
   const servingStreamClient = props.servingStreamClient;
-  const cloudFeedStreamClient = props.cloudFeedStreamClient;
-  const cloudFeedPeerHostId = props.cloudFeedPeerHostId;
+  const { client: cloudFeedStreamClient, peerHostId: cloudFeedPeerHostId } =
+    props.cloudFeed;
   const cloudOnly = props.cloudOnly;
   // Already HELD across a client rebuild's `unknown` beat by the shell, so it
   // is the same value the mode context publishes to every other consumer.
