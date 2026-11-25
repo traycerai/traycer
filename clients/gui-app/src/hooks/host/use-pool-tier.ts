@@ -89,6 +89,7 @@ export function useRoutedStreamClient(
 ): RoutedStreamClient {
   const binding = useHostBinding();
   const serving = useAppServingDecision();
+  const plan = readProcessHostRpcTierPlan();
   const target =
     surfaceHostId === null
       ? null
@@ -97,7 +98,7 @@ export function useRoutedStreamClient(
     method,
     target,
     target === null ? null : getNegotiatedHostMethods(target.hostId),
-    readProcessHostRpcTierPlan(),
+    plan,
     null,
     serving,
   );
@@ -105,9 +106,14 @@ export function useRoutedStreamClient(
   const onSurface = routed !== null && routed.hostId === surfaceHostId;
   const streamAuth = useStreamAuthRevalidator();
   const routedBinding = useHostStreamClientBindingFor(
-    onSurface ? null : routed,
+    plan.pool === null || onSurface ? null : routed,
     streamAuth,
   );
+  // A build with no pool keeps every stream on the surface's own client, as
+  // before the routes existed, whether or not its entry has resolved.
+  if (plan.pool === null) {
+    return { client: surfaceStreamClient, peerHostId: surfaceHostId };
+  }
   if (routed === null) return { client: null, peerHostId: null };
   if (onSurface) {
     return { client: surfaceStreamClient, peerHostId: routed.hostId };

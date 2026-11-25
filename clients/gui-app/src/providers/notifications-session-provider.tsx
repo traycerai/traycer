@@ -117,6 +117,10 @@ import { activationResultHandler } from "@/lib/notifications/notification-activa
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { useRoutedStreamClient } from "@/hooks/host/use-pool-tier";
 import { useViewReplicaPaint } from "@/lib/view-replica/view-replica-store";
 import {
@@ -139,6 +143,33 @@ function cloudLaneFromPeer(
   return cloudFeedPeerHostId === null || cloudFeedPeerHostId === streamHostId
     ? null
     : POOL_CLOUD_LANE;
+}
+
+/**
+ * Whether no computer serves this window's notifications while the pool
+ * serves the app: the bell is then the account's cloud feed alone (the
+ * session body's cloud-only composition). Never true in a build with no pool
+ * address, whose serving peer is never the pool.
+ */
+function useCloudOnlyNotifications(
+  servingHostEntry: HostDirectoryEntry | null,
+): boolean {
+  const servingPeerHostId = useServingPeerHostId();
+  return servingHostEntry === null && servingPeerHostId === POOL_HOST_ID;
+}
+
+/**
+ * The cloud-only composition has no host projection to negotiate: its mode is
+ * the cloud feed's once that feed is served, and `local` (nothing opens)
+ * before. Every other composition keeps the negotiated mode.
+ */
+function composeNotificationFeedMode(
+  cloudOnly: boolean,
+  cloudFeedSupport: StreamMethodSupport | null,
+  negotiated: NotificationFeedMode,
+): NotificationFeedMode {
+  if (!cloudOnly) return negotiated;
+  return cloudFeedSupport === "supported" ? "cloud" : "local";
 }
 
 /** The host whose sign-in a cloud feed's auth error recovers. */
@@ -305,6 +336,10 @@ export function NotificationsSessionProvider(
     hostClient.getRequestContextUserId(),
   );
   const cloudFeedStreamClient = cloudFeed.client;
+  // No computer serves this window's notifications while the pool serves the
+  // app: the bell is the account's cloud feed alone (the body's cloud-only
+  // composition). Never true in a build with no pool address.
+  const cloudOnly = useCloudOnlyNotifications(servingHostEntry);
   // The replica tier's copy of the cloud feed: painted by the body before
   // this session's first snapshot, and the version it was stored with
   // answers the mode's cloud-projection floor until the feed's own client
@@ -346,9 +381,14 @@ export function NotificationsSessionProvider(
     cloudFeedSupport === "unknown" && cachedCloudFeedVersion !== null
       ? "supported"
       : cloudFeedSupport;
+  const composedFeedMode = composeNotificationFeedMode(
+    cloudOnly,
+    heldCloudFeedSupport,
+    negotiatedFeedMode,
+  );
   const { mode: notificationFeedMode, settling: notificationFeedModeSettling } =
     useHeldNotificationFeedMode(
-      negotiatedFeedMode,
+      composedFeedMode,
       heldCloudFeedSupport,
       // The hold is per serving host: a switch to another host settles to
       // that host's own negotiation instead of carrying the previous host's
@@ -374,6 +414,7 @@ export function NotificationsSessionProvider(
           servingStreamClient={servingStreamClient}
           cloudFeedStreamClient={cloudFeedStreamClient}
           cloudFeedPeerHostId={cloudFeed.peerHostId}
+          cloudOnly={cloudOnly}
           notificationFeedMode={notificationFeedMode}
           replicaFeed={replicaFeed}
         >
@@ -391,6 +432,8 @@ interface NotificationsSessionBodyProps extends NotificationsSessionProviderProp
   readonly cloudFeedStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
   /** The peer the cloud feed is opened on; `null` when its route refuses. */
   readonly cloudFeedPeerHostId: string | null;
+  /** The pool serves the app and no computer serves the notifications. */
+  readonly cloudOnly: boolean;
   readonly notificationFeedMode: NotificationFeedMode;
   /** The replica tier's feed for this account, painted until a snapshot. */
   readonly replicaFeed: NotificationFeedReplicaPage | null;
@@ -403,6 +446,7 @@ function NotificationsSessionBody(
   const servingStreamClient = props.servingStreamClient;
   const cloudFeedStreamClient = props.cloudFeedStreamClient;
   const cloudFeedPeerHostId = props.cloudFeedPeerHostId;
+  const cloudOnly = props.cloudOnly;
   // Already HELD across a client rebuild's `unknown` beat by the shell, so it
   // is the same value the mode context publishes to every other consumer.
   const notificationFeedMode = props.notificationFeedMode;
@@ -1230,15 +1274,124 @@ function NotificationsSessionBody(
    * previously asserted the host selection itself - it had gone stale, and
    * the stale sentence was the stated reason for withholding the lane.
    */
+  // The cloud feed's lane: the account's feed, on the client it routes to.
+  // Shared by both compositions so each opens it the same way.
+  const openCloudFeedLane = useCallback(
+    (
+      reconnect: HostReconnectEngine,
+      cloudClient: IHostStreamClient<HostStreamRpcRegistry>,
+      accountId: string,
+      onAuthError: (() => void) | null,
+    ): void => {
+      openedCloudFeedClientRef.current = cloudClient;
+      // The account this feed opened under. Another window's sign-in
+      // projects a new user straight over this one, and this stream is
+      // torn down only by the effect that render runs: a frame delivered
+      // before then belongs to the account that left.
+      cloudDisposerRef.current = openCloudNotificationsStream(
+        reconnect,
+        cloudClient,
+        accountId,
+        onAuthError,
+        ({ rows, arrivals }) => {
+          const currentAccountId =
+            useAuthStore.getState().contextMetadata?.userId ?? null;
+          if (currentAccountId !== accountId) return;
+          const accepted = useCloudNotificationsStore.getState();
+          if (accepted.summary !== null && accepted.version !== null) {
+            rememberNotificationFeed({
+              accountId,
+              servingHostId,
+              page: {
+                rows,
+                summary: accepted.summary,
+                cloudFeedVersion: cloudClient.getMethodSchemaVersion(
+                  "host.notifications.cloudFeed.subscribe",
+                ),
+              },
+              version: accepted.version,
+            });
+          }
+          recordCompletions(
+            rows.map((row) => ({
+              entry: row.entry,
+              originHostId: row.originHostId,
+              semanticId: row.entryId,
+            })),
+          );
+          completeIndicatorsReask.schedule();
+          void displayCloudSnapshotArrivals(arrivals, {
+            showNotification,
+            playChime: playNotificationChime,
+            onToastClick: (row) => onToastClickRef.current(row),
+            notifies,
+          }).catch(() => {
+            // The feed remains authoritative if presentation fails.
+          });
+        },
+      );
+    },
+    [
+      servingHostId,
+      recordCompletions,
+      completeIndicatorsReask,
+      showNotification,
+      notifies,
+    ],
+  );
+
+  // THE CLOUD-ONLY COMPOSITION: the pool serves the app and no computer serves
+  // this window's notifications, so the account's cloud feed opens alone on
+  // the peer it routes to - no host lane, no host presence fallback, nothing a
+  // computer would answer. With a computer serving, `openForCurrentUser` runs
+  // exactly as before the pool.
+  const openCloudOnly = useCallback(
+    (settledFeedMode: NotificationFeedMode, cloudAuthorized: boolean): void => {
+      const openedAccountId =
+        useAuthStore.getState().contextMetadata?.userId ?? null;
+      if (
+        !cloudOnly ||
+        settledFeedMode !== "cloud" ||
+        !cloudAuthorized ||
+        openedAccountId === null ||
+        cloudFeedStreamClient === null ||
+        cloudFeedPeerHostId === null
+      ) {
+        return;
+      }
+      const peerConnection = acquireHostConnection(cloudFeedPeerHostId);
+      hostConnectionRef.current = peerConnection;
+      openedStreamClientRef.current = null;
+      openCloudFeedLane(
+        peerConnection.reconnect,
+        cloudFeedStreamClient,
+        openedAccountId,
+        signInRecoveryForStream(cloudFeedPeerHostId, onStreamAuthError),
+      );
+    },
+    [
+      cloudOnly,
+      cloudFeedStreamClient,
+      cloudFeedPeerHostId,
+      onStreamAuthError,
+      openCloudFeedLane,
+    ],
+  );
+
   const openForCurrentUser = useCallback(
     (settledFeedMode: NotificationFeedMode, cloudAuthorized: boolean): void => {
+      const openedAccountId =
+        useAuthStore.getState().contextMetadata?.userId ?? null;
+      if (servingHostId === null) {
+        openCloudOnly(settledFeedMode, cloudAuthorized);
+        return;
+      }
       if (
         getNotificationsStreamFactoryOverride() === null &&
         servingStreamClient === null
       ) {
         return;
       }
-      if (servingHostId === null) return;
       const streamHostId = servingHostId;
       // For a stream that presented the sign-in only: the serving host's lanes present a host-only
       // token.
@@ -1305,8 +1458,6 @@ function NotificationsSessionBody(
       // a cloud-lane problem left this machine's own notification lane shut
       // for the rest of the session. Machine notifications do not depend on
       // cloud access and must survive a cloud lane that cannot open.
-      const openedAccountId =
-        useAuthStore.getState().contextMetadata?.userId ?? null;
       if (
         settledFeedMode === "cloud" &&
         cloudAuthorized &&
@@ -1322,53 +1473,11 @@ function NotificationsSessionBody(
           createNotificationsStream,
           onAuthError,
         );
-        openedCloudFeedClientRef.current = cloudFeedStreamClient;
-        // The account this feed opened under. Another window's sign-in
-        // projects a new user straight over this one, and this stream is
-        // torn down only by the effect that render runs: a frame delivered
-        // before then belongs to the account that left.
-        cloudDisposerRef.current = openCloudNotificationsStream(
+        openCloudFeedLane(
           reconnect,
           cloudFeedStreamClient,
           openedAccountId,
           cloudFeedOnAuthError,
-          ({ rows, arrivals }) => {
-            const accountId =
-              useAuthStore.getState().contextMetadata?.userId ?? null;
-            if (accountId !== openedAccountId) return;
-            const accepted = useCloudNotificationsStore.getState();
-            if (accepted.summary !== null && accepted.version !== null) {
-              rememberNotificationFeed({
-                accountId,
-                servingHostId,
-                page: {
-                  rows,
-                  summary: accepted.summary,
-                  cloudFeedVersion:
-                    cloudFeedStreamClient.getMethodSchemaVersion(
-                      "host.notifications.cloudFeed.subscribe",
-                    ),
-                },
-                version: accepted.version,
-              });
-            }
-            recordCompletions(
-              rows.map((row) => ({
-                entry: row.entry,
-                originHostId: row.originHostId,
-                semanticId: row.entryId,
-              })),
-            );
-            completeIndicatorsReask.schedule();
-            void displayCloudSnapshotArrivals(arrivals, {
-              showNotification,
-              playChime: playNotificationChime,
-              onToastClick: (row) => onToastClickRef.current(row),
-              notifies,
-            }).catch(() => {
-              // The feed remains authoritative if presentation fails.
-            });
-          },
         );
       }
       // `upgrade-required` describes the CLOUD feed alone - this host speaks a
@@ -1442,9 +1551,8 @@ function NotificationsSessionBody(
       servingStreamClient,
       cloudFeedStreamClient,
       cloudFeedPeerHostId,
-      recordCompletions,
-      // The cloud snapshot re-asks every host holding a whole-origin answer.
-      completeIndicatorsReask,
+      openCloudOnly,
+      openCloudFeedLane,
       servingHostId,
       windowId,
       showNotification,
@@ -1479,6 +1587,42 @@ function NotificationsSessionBody(
       // `openActivityLane`, which owns the wake and is untouched here.
       openActivityLane,
     ],
+  );
+
+  // Two independent ways the replica goes stale across a serving-host move,
+  // each needing its own ref because neither sees the other's case:
+  //
+  //  - CLIENT SWAP (both sides non-null): the serving host respawned at a
+  //    fresh endpoint, so it is a NEW host process with new notification
+  //    state - the old rows must not survive into it.
+  //  - HOST SWITCH ACROSS A DISCONNECT (A -> null -> B): the disconnect
+  //    already nulled `previousStreamClientRef`, so the client comparison
+  //    sees nothing. `previousServingHostIdRef` is updated only on a non-null
+  //    host, so it still spans the gap (the cloud-only composition included).
+  //    A -> null -> A stays a reconnect (rows and cursors are preserved, the
+  //    re-landed snapshot refreshes them); A -> null -> B resets before B's
+  //    stream opens, or B's snapshot would land on A's stale rows for one
+  //    render.
+  const resetReplicaOnServingHostMove = useCallback(
+    (
+      priorStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null,
+    ): void => {
+      const priorServingHostId = previousServingHostIdRef.current;
+      if (servingHostId !== null) {
+        previousServingHostIdRef.current = servingHostId;
+      }
+      const clientSwapped =
+        priorStreamClient !== null && priorStreamClient !== servingStreamClient;
+      const hostSwitchedAcrossDisconnect =
+        priorServingHostId !== null && priorServingHostId !== servingHostId;
+      if (!clientSwapped && !hostSwitchedAcrossDisconnect) return;
+      tearDown();
+      // Across a switch the departed slice is the PRIOR host; a client swap
+      // keeps the same host id, so that slice is the one being replaced.
+      const departedHostId = priorServingHostId ?? servingHostId;
+      if (departedHostId !== null) resetHostReplica(departedHostId);
+    },
+    [servingHostId, servingStreamClient, tearDown, resetHostReplica],
   );
 
   // Auth identity transitions own the replica-reset responsibility: sign-out
@@ -1547,37 +1691,13 @@ function NotificationsSessionBody(
     // stream with no client at all, and gating on the client would make that
     // path unreachable. Client identity still matters below, for the respawn
     // case where both sides are non-null.
-    if (servingHostId === null) {
+    if (servingHostId === null && !cloudOnly) {
       tearDown();
       resetCloudRelayOwnership();
       markHostReplicaDisconnected();
       return;
     }
-    // Two independent ways the replica goes stale, and each needs its own ref
-    // because neither sees the other's case:
-    //
-    //  - CLIENT SWAP (both sides non-null): the serving host respawned at a
-    //    fresh endpoint, so it is a NEW host process with new notification
-    //    state - the old rows must not survive into it.
-    //  - HOST SWITCH ACROSS A DISCONNECT (A -> null -> B): the disconnect
-    //    already nulled `previousStreamClientRef`, so the client comparison
-    //    above sees nothing. `previousServingHostIdRef` is updated only on a
-    //    non-null host, so it still spans the gap. A -> null -> A stays a
-    //    reconnect (rows and cursors are preserved, the re-landed snapshot
-    //    refreshes them); A -> null -> B resets before B's stream opens, or
-    //    B's snapshot would land on A's stale rows for one render.
-    const priorServingHostId = previousServingHostIdRef.current;
-    previousServingHostIdRef.current = servingHostId;
-    const clientSwapped =
-      priorStreamClient !== null && priorStreamClient !== servingStreamClient;
-    const hostSwitchedAcrossDisconnect =
-      priorServingHostId !== null && priorServingHostId !== servingHostId;
-    if (clientSwapped || hostSwitchedAcrossDisconnect) {
-      tearDown();
-      // Across a switch the departed slice is the PRIOR host; a client swap
-      // keeps the same host id, so that slice is the one being replaced.
-      resetHostReplica(priorServingHostId ?? servingHostId);
-    }
+    resetReplicaOnServingHostMove(priorStreamClient);
     // The mode this pass DECIDES on. A rebuilt stream client reports every
     // method's support as `unknown` until its handshake lands, so the raw
     // negotiation reads `local` for a beat even when the same cloud-capable
@@ -1670,9 +1790,10 @@ function NotificationsSessionBody(
     userId,
     servingStreamClient,
     cloudFeedStreamClient,
+    cloudOnly,
     tearDown,
     settleCloudVerdictEdge,
-    resetHostReplica,
+    resetReplicaOnServingHostMove,
     resetHostProjection,
     resetCloudRelayOwnership,
     resetCloudRelaySession,
