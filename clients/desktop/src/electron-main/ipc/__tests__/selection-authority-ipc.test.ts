@@ -20,7 +20,10 @@ import {
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
-import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  SELECTION_AUTHORITY_CONTRACT_VERSION,
+  type HostLeaseSnapshot,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
   CredentialsMigrationOutcome,
@@ -635,7 +638,7 @@ async function attachOk(
 ): Promise<{ incarnationId: string; snapshot: Snapshot }> {
   const result = await handler(sender(webContentsId), {
     attachSeq,
-    callerContractVersion: 1,
+    callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
     liveSessions,
   });
   if (!isOkAttach(result)) {
@@ -1601,7 +1604,7 @@ describe("selection authority IPC binding", () => {
 
       const result = await handler(sender(101), {
         attachSeq: seq,
-        callerContractVersion: 1,
+        callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
         liveSessions: [],
       });
       expect(isOkAttach(result)).toBe(true);
@@ -1619,7 +1622,10 @@ describe("selection authority IPC binding", () => {
       const seq = invokeSyncWithSender(RunnerHostSync.selectionAttachSeq, 101);
 
       await expect(
-        handler(sender(101), { attachSeq: seq, callerContractVersion: 1 }),
+        handler(sender(101), {
+          attachSeq: seq,
+          callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
+        }),
       ).resolves.toEqual({
         ok: false,
         kind: "malformed-request",
@@ -1628,7 +1634,10 @@ describe("selection authority IPC binding", () => {
 
       // Replay with the SAME (now-consumed) seq, still malformed.
       await expect(
-        handler(sender(101), { attachSeq: seq, callerContractVersion: 1 }),
+        handler(sender(101), {
+          attachSeq: seq,
+          callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
+        }),
       ).resolves.toEqual({
         ok: false,
         kind: "malformed-request",
@@ -1641,7 +1650,7 @@ describe("selection authority IPC binding", () => {
       await expect(
         handler(sender(101), {
           attachSeq: seq,
-          callerContractVersion: 1,
+          callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
           liveSessions: [],
         }),
       ).resolves.toEqual({ ok: false, kind: "superseded" });
@@ -1660,7 +1669,9 @@ describe("selection authority IPC binding", () => {
       const result = await attachOk(handler, 101, seq, []);
 
       expect(typeof result.incarnationId).toBe("string");
-      expect(result.snapshot.contractVersion).toBe(1);
+      expect(result.snapshot.contractVersion).toBe(
+        SELECTION_AUTHORITY_CONTRACT_VERSION,
+      );
       expect(typeof result.snapshot.revision).toBe("number");
       expect(Array.isArray(result.snapshot.leases)).toBe(true);
 
@@ -1684,7 +1695,7 @@ describe("selection authority IPC binding", () => {
       ).resolves.toEqual({
         ok: false,
         kind: "version-mismatch",
-        authorityVersion: 1,
+        authorityVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
         callerVersion: 99,
       });
 

@@ -856,6 +856,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
         preferredHostId: hostB.hostId,
         targetHostId: hostB.hostId,
         effectiveHostId: hostB.hostId,
+        servingPeer: { kind: "computer", hostId: hostB.hostId },
+        noPeerPresentation: null,
         leases: [],
         selectionRevision: 1,
       });
@@ -875,6 +877,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
         preferredHostId: hostA.hostId,
         targetHostId: hostA.hostId,
         effectiveHostId: hostA.hostId,
+        servingPeer: { kind: "computer", hostId: hostA.hostId },
+        noPeerPresentation: null,
         leases: [],
         selectionRevision: 2,
       });
@@ -1030,6 +1034,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
         preferredHostId: hostB.hostId,
         targetHostId: hostB.hostId,
         effectiveHostId: hostB.hostId,
+        servingPeer: { kind: "computer", hostId: hostB.hostId },
+        noPeerPresentation: null,
         leases: [],
         selectionRevision: 1,
       });
@@ -1060,6 +1066,8 @@ describe("HostCompatibilityProvider startup consumers", () => {
         preferredHostId: hostA.hostId,
         targetHostId: hostA.hostId,
         effectiveHostId: hostA.hostId,
+        servingPeer: { kind: "computer", hostId: hostA.hostId },
+        noPeerPresentation: null,
         leases: [],
         selectionRevision: 2,
       });

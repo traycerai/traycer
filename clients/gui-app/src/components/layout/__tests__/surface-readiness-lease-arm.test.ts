@@ -53,6 +53,8 @@ function resolve(input: {
     directoryEntries: [undialableEntry("host-a")],
     hasLocalHost: true,
     hasMobileNoHost: false,
+    poolBuild: false,
+    servedByPool: false,
     hasReadySessionFor: () => false,
     leases: input.leases,
     authorityAttached: input.authorityAttached,

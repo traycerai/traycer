@@ -5,7 +5,7 @@ import {
   publishEnvironmentArmScope,
   type EnvironmentArmMethod,
 } from "@/hooks/environment/use-environment-arms";
-import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
+import { useRoutedStreamClient } from "@/hooks/host/use-pool-tier";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import {
   authorizesCloudCapability,
@@ -31,7 +31,14 @@ function PoolEnvironmentArmScope(): null {
   const viewerId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
-  const client = usePoolTierStreamClient(null, viewerId);
+  // The three arms share one route (`pool-only`), so one routed client
+  // carries all of them.
+  const client = useRoutedStreamClient(
+    "environment.chats.subscribe",
+    null,
+    null,
+    { userId: viewerId, computerScope: "app-serving-peer" },
+  ).client;
   const chats = useStreamMethodSupportFor(
     client,
     "environment.chats.subscribe",

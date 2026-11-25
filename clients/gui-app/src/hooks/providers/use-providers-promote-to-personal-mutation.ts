@@ -11,10 +11,7 @@ import {
   type McpPromoteIntentState,
 } from "@traycer-clients/shared/environment/mcp-promote-intent";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import type {
   HostRpcError,
   RequiredHostMethodVersion,
@@ -206,12 +203,7 @@ export function useProvidersPromoteToPersonal(
       for (const method of ["providers.list", "environment.status"] as const) {
         void queries.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(
-            hostRpcServingTierHostId(
-              method,
-              context.hostId,
-              readProcessHostRpcTierPlan(),
-              null,
-            ),
+            readServingTierHostId(method, context.hostId, null, null),
             method,
           ),
         });

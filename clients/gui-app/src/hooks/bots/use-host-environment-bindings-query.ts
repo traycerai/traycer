@@ -12,12 +12,19 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import {
-  resolveNamedHostClient,
-  resolvePoolTierHostClient,
-} from "@/lib/host/binding-host-client";
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+  type HostServingDecision,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { readAppServingDecision } from "@/lib/host/app-serving-decision";
+import {
+  readHostServingDecision,
+  useHostServingDecision,
+} from "@/lib/host/serving-decision";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
@@ -38,11 +45,9 @@ const EMPTY_PARAMS: EnvironmentHostReadRequest = {};
 const BINDING_STALE_MS = 30_000;
 
 /**
- * Whether this build reads a named host's binding from the server pool
- * (`environment.binding.read`) rather than asking that host for its own
- * (`environment.host.read`). A fact of the build, read from the frozen tier
- * plan and never from reachability: without a pool, a pool-only method goes
- * to the caller's host, and no host serves this one.
+ * Whether the build can read a named host's binding through the account-wide
+ * method. The serving computer or pool answers it according to negotiation.
+ * Without a pool the caller asks each named host for its own binding.
  */
 export function readsHostBindingsFromPool(): boolean {
   return readProcessHostRpcTierPlan().pool !== null;
@@ -50,16 +55,42 @@ export function readsHostBindingsFromPool(): boolean {
 
 /**
  * The cache entry every reader of `hostId`'s binding shares in this build,
- * which a bind writes through: the pool's answer for this viewer, or, without
- * a pool, the host's own answer under that host's scope.
+ * for the current answerer. Also used by imperative membership invalidation.
  */
 export function hostEnvironmentBindingQueryKey(
   hostId: string,
   viewerUserId: string,
 ): QueryKey {
-  if (readsHostBindingsFromPool()) {
-    return hostQueryKeys.environmentBindingForViewer(
+  return bindingKey(
+    hostId,
+    viewerUserId,
+    readsHostBindingsFromPool()
+      ? bindingReadAnswerer(readAppServingDecision())
+      : null,
+  );
+}
+
+function bindingReadAnswerer(serving: HostServingDecision): string {
+  return (
+    hostRpcServingTierHostId(
+      POOL_READ_METHOD,
       POOL_HOST_ID,
+      readProcessHostRpcTierPlan(),
+      null,
+      serving,
+      null,
+    ) ?? POOL_HOST_ID
+  );
+}
+
+function bindingKey(
+  hostId: string,
+  viewerUserId: string,
+  answerer: string | null,
+): QueryKey {
+  if (answerer !== null) {
+    return hostQueryKeys.environmentBindingForViewer(
+      answerer,
       hostId,
       viewerUserId,
     );
@@ -101,7 +132,7 @@ export interface HostEnvironmentBindings {
  * hosts run this environment?" (Tracy Bots) and Settings' host labels. One
  * query per host under {@link hostEnvironmentBindingQueryKey}, so the answer
  * coalesces with the Settings picker's read of the same host and takes its
- * bind. In a build with a pool every row is read from the pool, which needs
+ * bind. In a build with a pool each row is read by the account answerer, which needs
  * no connection to the host; without one each host is asked for its own,
  * resolved by name through the binding seam, never by borrowing the
  * subtree's ambient host identity.
@@ -127,6 +158,12 @@ export function useHostEnvironmentBindings(
     authorizesCloudCapability(state.status),
   );
   const fromPool = readsHostBindingsFromPool();
+  const resolveHost = useCallback(
+    (hostId: string) => binding?.hostClient.resolveHostById(hostId) ?? null,
+    [binding],
+  );
+  const serving = useHostServingDecision(resolveHost);
+  const accountAnswerer = fromPool ? bindingReadAnswerer(serving) : null;
   const connectable = useConnectableHostIds();
   const idsKey = hostIds.join("\n");
   const hostIdList = useMemo(
@@ -243,21 +280,31 @@ export function useHostEnvironmentBindings(
   );
   return useQueries({
     queries: hostIdList.map((hostId, index) =>
-      // `binding` only resolves the client, whose answer the key already
-      // names (the pool's for this viewer, or `hostId`'s own); adding it
-      // would refetch on binding identity drift alone. `fromPool` is fixed
-      // for the process.
+      // The key names the account answerer for this viewer or the named
+      // host's own read. Runtime binding identity can move without changing
+      // either cache scope.
       // eslint-disable-next-line @tanstack/query/exhaustive-deps
       queryOptions({
-        queryKey: hostEnvironmentBindingQueryKey(hostId, viewerUserId),
-        queryFn: ({ signal }): Promise<EnvironmentHostBinding> => {
-          if (fromPool) {
+        queryKey: bindingKey(hostId, viewerUserId, accountAnswerer),
+        queryFn: ({ queryKey, signal }): Promise<EnvironmentHostBinding> => {
+          if (accountAnswerer !== null) {
             return withHostQueryErrorBoundary(POOL_READ_METHOD, async () => {
               cloudVerdictPreflight(POOL_READ_METHOD)();
               if (binding === null) {
                 throw hostClientUnavailableError(POOL_READ_METHOD);
               }
-              const client = resolvePoolTierHostClient(binding.hostClient);
+              if (
+                bindingReadAnswerer(readHostServingDecision(resolveHost)) !==
+                accountAnswerer
+              ) {
+                void queryClient.cancelQueries(
+                  { queryKey, exact: true },
+                  { revert: true, silent: true },
+                );
+                throw new HostRequestControlFlowError("authority-superseded");
+              }
+              const client =
+                binding.hostClient.createRequesterForHostId(accountAnswerer);
               return client.requestWithSignal(
                 POOL_READ_METHOD,
                 { hostId },

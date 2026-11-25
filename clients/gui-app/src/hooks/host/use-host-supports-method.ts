@@ -9,23 +9,14 @@ import {
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  readServingTierHostId,
+  useAppServingDecision,
+} from "@/lib/host/app-serving-decision";
 
-/**
- * The host whose manifest answers for `method`: the pool for a pool-only
- * method in a build that has one, since that is where the call goes whichever
- * host the caller names.
- */
-function manifestHostIdFor(
-  hostId: string | null,
-  method: string,
-): string | null {
-  return hostRpcServingTierHostId(
-    method,
-    hostId,
-    readProcessHostRpcTierPlan(),
-    null,
-  );
-}
+export type HostCapabilityMethod =
+  | string
+  | { readonly method: string; readonly environmentId: string | null };
 
 /**
  * Whether `hostId` advertised `method` in its last handshake.
@@ -49,7 +40,7 @@ function manifestHostIdFor(
  */
 export function useHostSupportsMethod(
   hostId: string | null,
-  method: string,
+  method: HostCapabilityMethod,
 ): boolean {
   return useHostMethodSupport(hostId, method) === true;
 }
@@ -73,9 +64,23 @@ export function useHostSupportsMethod(
  */
 export function useHostMethodSupport(
   hostId: string | null,
-  method: string,
+  capability: HostCapabilityMethod,
 ): boolean | null {
-  const manifestHostId = manifestHostIdFor(hostId, method);
+  const { method, environmentId } =
+    typeof capability === "string"
+      ? { method: capability, environmentId: null }
+      : capability;
+  // The peer whose manifest answers for `method`: the one the call goes to
+  // whichever host the caller names - for an account-wide method, the
+  // serving computer when it answers it, else the pool.
+  const manifestHostId = hostRpcServingTierHostId(
+    method,
+    hostId,
+    readProcessHostRpcTierPlan(),
+    null,
+    useAppServingDecision(),
+    environmentId,
+  );
   return useSyncExternalStore(subscribeNegotiatedManifests, () => {
     if (manifestHostId === null) return null;
     const methods = getNegotiatedHostMethods(manifestHostId);
@@ -102,7 +107,7 @@ export function readHostMethodSchemaVersion(
   hostId: string | null,
   method: string,
 ): SchemaVersion | null {
-  const manifestHostId = manifestHostIdFor(hostId, method);
+  const manifestHostId = readServingTierHostId(method, hostId, null, null);
   if (manifestHostId === null) return null;
   return getNegotiatedHostMethodVersion(manifestHostId, method);
 }

@@ -41,6 +41,7 @@ import { isRecord } from "@/lib/editor/prosemirror-json";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notifications/app-local-notifications-store";
 import {
+  NO_SERVING_PEER_DECISION,
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
@@ -681,11 +682,25 @@ describe("provider API-key change Settings flow", () => {
     const hostId = mockLocalHostEntry.hostId;
     const plan = readProcessHostRpcTierPlan();
     const providersListKey = hostQueryKeys.methodScope(
-      hostRpcServingTierHostId("providers.list", hostId, plan, null),
+      hostRpcServingTierHostId(
+        "providers.list",
+        hostId,
+        plan,
+        null,
+        NO_SERVING_PEER_DECISION,
+        null,
+      ),
       "providers.list",
     );
     const environmentStatusKey = hostQueryKeys.methodScope(
-      hostRpcServingTierHostId("environment.status", hostId, plan, null),
+      hostRpcServingTierHostId(
+        "environment.status",
+        hostId,
+        plan,
+        null,
+        NO_SERVING_PEER_DECISION,
+        null,
+      ),
       "environment.status",
     );
     queryClient.setQueryData(providersListKey, { seeded: true });

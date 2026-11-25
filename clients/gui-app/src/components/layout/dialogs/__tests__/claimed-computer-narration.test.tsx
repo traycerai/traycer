@@ -197,6 +197,8 @@ function attachWindow(hostId: string): void {
     preferredHostId: null,
     targetHostId: hostId,
     effectiveHostId: hostId,
+    servingPeer: { kind: "computer", hostId },
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
   };

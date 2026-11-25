@@ -4,10 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import type { TeamComputerFailure } from "@traycer-clients/shared/host-client/team-computers";
 import { useHostBinding } from "@/lib/host";
 import {
@@ -121,12 +118,7 @@ export function useTeamComputerClaim(
       }
       void queryClient.invalidateQueries({
         queryKey: hostQueryKeys.methodScope(
-          hostRpcServingTierHostId(
-            "environment.status",
-            hostId,
-            readProcessHostRpcTierPlan(),
-            null,
-          ),
+          readServingTierHostId("environment.status", hostId, null, null),
           "environment.status",
         ),
       });

@@ -1,13 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
+  LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
   historySortForHost,
   listCloudTasksRequestForHistorySearch,
   negotiatedListTasksServesLocalFirst,
   negotiatedListTasksSortsByCreated,
-  registerCloudEpicTasksClient,
 } from "@/lib/cloud-epic-tasks-query";
+import {
+  readHistoryPagePeerId,
+  registerHistoryPrefetchPeer,
+} from "@/lib/cloud-epic-tasks-query/query";
 import {
   historySearchParamsSchema,
   parseHistorySearch,
@@ -40,9 +44,14 @@ export const Route = createFileRoute("/epics/")({
   loader: ({ context, deps }) => {
     const historyNowMs = Date.now();
     const client = context.getHostClient();
-    const hostId = client?.getActiveHostId() ?? null;
     const auth = context.getAuthSnapshot();
-    if (hostId === null || client === null) return { historyNowMs };
+    if (client === null) return { historyNowMs };
+    const listPeerId = readHistoryPagePeerId(
+      client,
+      client.getActiveHostId(),
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    if (listPeerId === null) return { historyNowMs };
     // SURFACE. `beforeLoad` above already admitted this session through
     // `requireSignedIn`, which is `admitsLocalPlane` - so an `unverified` user
     // IS on this route, and skipping the prefetch here handed them exactly the
@@ -59,7 +68,7 @@ export const Route = createFileRoute("/epics/")({
     // manifest that has not arrived yet answers `null` and skips - the
     // component fetches the moment the host says `1.6`.
     const listTasksVersion = getNegotiatedHostMethodVersion(
-      hostId,
+      listPeerId,
       "epic.listTasks",
     );
     if (
@@ -71,19 +80,20 @@ export const Route = createFileRoute("/epics/")({
     const userId = auth.contextMetadata?.userId ?? null;
     if (userId === null) return { historyNowMs };
     if (client.getRequestContextUserId() !== userId) return { historyNowMs };
-    registerCloudEpicTasksClient(hostId, client);
     // The sort `useHistoryQuery` will request on this host, so the prefetch
     // fills the key the component reads.
     const sort = historySortForHost(
       deps.historySearch.sort,
       negotiatedListTasksSortsByCreated(listTasksVersion),
     );
+    const request = listCloudTasksRequestForHistorySearch({
+      ...deps.historySearch,
+      sort,
+    });
+    const hostId = registerHistoryPrefetchPeer(client, request);
+    if (hostId === null) return { historyNowMs };
     void context.queryClient.prefetchQuery(
-      cloudEpicTasksFirstPageQueryOptions(
-        hostId,
-        userId,
-        listCloudTasksRequestForHistorySearch({ ...deps.historySearch, sort }),
-      ),
+      cloudEpicTasksFirstPageQueryOptions(hostId, userId, request),
     );
     return { historyNowMs };
   },

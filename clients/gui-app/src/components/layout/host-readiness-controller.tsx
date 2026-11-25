@@ -80,6 +80,9 @@ import {
 } from "@/stores/auth/auth-store";
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { defaultStageShape } from "@/lib/sandboxes/sandbox-stage-model";
@@ -104,6 +107,7 @@ export function HostReadinessControllerProvider(props: {
   // The authority's own verdicts, for the default-host readiness arm below.
   const leases = useHostLeases();
   const authorityAttached = useSelectionAuthorityAttached();
+  const servedByPool = useServingPeerHostId() === POOL_HOST_ID;
   // The app-wide client, resolved from that id. It used to be the spine, whose
   // answer came from the active slot; P4.2 deleted the slot, so the id-pinned
   // requester is what reports "the effective host, once its row exists".
@@ -212,6 +216,8 @@ export function HostReadinessControllerProvider(props: {
           hasMobileNoHost={
             binding !== null && binding.directory.getCardinality() === "zero"
           }
+          poolBuild={readProcessHostRpcTierPlan().pool !== null}
+          servedByPool={servedByPool}
           lifecycle={lifecycle}
           compatibility={compatibility}
           targetKind={targetKind}
@@ -242,6 +248,8 @@ function HostReadinessControllerContents(props: {
   readonly authorityAttached: boolean;
   readonly hasLocalHost: boolean;
   readonly hasMobileNoHost: boolean;
+  readonly poolBuild: boolean;
+  readonly servedByPool: boolean;
   readonly lifecycle: HostProvisioningLifecycle;
   readonly compatibility: HostCompatibility;
   readonly targetKind: HostTargetKind;
@@ -286,10 +294,16 @@ function HostReadinessControllerContents(props: {
         hasReadySessionFor: props.hasReadySessionFor,
         hasLocalHost: props.hasLocalHost,
         hasMobileNoHost: props.hasMobileNoHost,
+        poolBuild: props.poolBuild,
+        servedByPool: props.servedByPool,
         leases: props.leases,
         authorityAttached: props.authorityAttached,
       });
-      return scope === "default-host"
+      // The pool serving the app is ready whatever this machine's own host is
+      // doing: a desktop whose host is switched off, removed or failed to
+      // start is served like any app with no computer answering.
+      return scope === "default-host" &&
+        !(props.servedByPool && readiness.kind === "ready")
         ? projectDefaultHostReadiness({
             readiness,
             presentation: defaultHostPresentation,
@@ -309,6 +323,8 @@ function HostReadinessControllerContents(props: {
       props.hasReadySessionFor,
       props.hasLocalHost,
       props.hasMobileNoHost,
+      props.poolBuild,
+      props.servedByPool,
       props.leases,
       props.authorityAttached,
       props.requestContextUserId,

@@ -52,6 +52,13 @@ export const NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR = 1;
 export const NOTIFICATIONS_PARTITIONED_MARK_ALL_READ_MINOR = 1;
 export const NOTIFICATIONS_PARTITIONED_INDICATOR_STATE_MINOR = 1;
 
+/** The cloud feed's partitionSnapshot first appears at 1.2. */
+export function servesCloudNotificationPartition(
+  version: SchemaVersion | null,
+): boolean {
+  return version?.major === 1 && version.minor >= 2;
+}
+
 /**
  * Whether a negotiated UNARY version meets a floor on its own major line.
  *
@@ -261,9 +268,10 @@ export function useHeldNotificationFeedMode(
  * host `client` is bound to - passing the app-wide host here would gate a
  * remote host's lanes on the local host's capabilities.
  *
- * `cloudFeedClient` is the client the cloud feed is opened on: the server
- * pool's in a build that has one (the feed is a pool-only family), else
- * `client` itself. Only the cloud projection is read from it; the local
+ * `cloudFeedClient` is the client the cloud feed is opened on: in a build
+ * with a pool, the bell computer's when it serves the feed for this
+ * person and the pool's otherwise (the feed is account-wide), else `client`
+ * itself. Only the cloud projection is read from it; the local
  * projection and the four partitioned unary methods are the serving host's.
  *
  * `cachedCloudFeedVersion` is the version the cloud feed's serving tier had
@@ -334,8 +342,7 @@ export function useNotificationFeedModeFor(
    * in the summary. The host is already correct on its side and serves such a
    * peer the whole relay feed; this is the half that decides whether to ask.
    */
-  const hasCloudProjection =
-    cloudFeedVersion?.major === 1 && cloudFeedVersion.minor >= 2;
+  const hasCloudProjection = servesCloudNotificationPartition(cloudFeedVersion);
   const hasLocalProjection =
     localFeedVersion?.major === 1 && localFeedVersion.minor >= 2;
   const hasPartitionedList = meetsHostFloor(

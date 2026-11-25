@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NO_SERVING_PEER_DECISION } from "../host-rpc-routing";
 import { z } from "zod";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
@@ -201,6 +202,7 @@ function buildFanOutFixture(): FanOutFixture {
     invalidator,
     schedulingPolicy,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     // The REAL coordinator: `abortHostTransition` is what used to kill a
     // pinned surface's in-flight work, so a fake here would test nothing.
     requestCoordinator: null,

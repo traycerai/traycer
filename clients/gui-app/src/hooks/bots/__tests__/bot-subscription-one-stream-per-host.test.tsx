@@ -242,6 +242,8 @@ function pointWindowAtEffectiveHost(): void {
     preferredHostId: EFFECTIVE_HOST.hostId,
     targetHostId: EFFECTIVE_HOST.hostId,
     effectiveHostId: EFFECTIVE_HOST.hostId,
+    servingPeer: { kind: "computer", hostId: EFFECTIVE_HOST.hostId },
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
   });

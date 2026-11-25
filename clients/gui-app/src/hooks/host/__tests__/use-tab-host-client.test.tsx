@@ -1,17 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useArtifactVersionHistoryAvailable } from "@/hooks/epic/use-artifact-version-history-available";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 
 // Same harness as `use-host-client-for-host-id.test.ts`: the runtime's default
 // client is a real `HostClient` whose `findHostById` is the LIVE directory,
@@ -91,6 +98,20 @@ vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
   TabDraftMirrorMount: () => null,
 }));
 
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => ({}),
+}));
+
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({
+    hostId: "tab-host-b",
+    isReady: true,
+    hasRpcEndpoint: true,
+    canExecute: true,
+    requestContextUserId: "user-test",
+  }),
+}));
+
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 
@@ -100,17 +121,26 @@ const TAB_HOST: HostDirectoryEntry = {
   websocketUrl: "ws://127.0.0.1:59999/stream",
 };
 
+const APP_SERVING_HOST: HostDirectoryEntry = {
+  ...mockLocalHostEntry,
+  hostId: "app-serving-host",
+  websocketUrl: "ws://127.0.0.1:58888/stream",
+};
+
 function buildGlobalClient(
   listDirectory: () => readonly HostDirectoryEntry[],
+  messenger: MockHostMessenger<HostRpcRegistry> | undefined,
 ): HostClient<HostRpcRegistry> {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: {},
-    }),
+    messenger:
+      messenger ??
+      new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {},
+      }),
     findHostById: (hostId) =>
       listDirectory().find((entry) => entry.hostId === hostId) ?? null,
   });
@@ -151,13 +181,15 @@ describe("useTabHostClient", () => {
     cleanup();
     globalClientRef.value = null;
     directoryState.data = undefined;
+    resetNegotiatedManifests();
+    useSelectionAuthorityStore.getState().reset();
   });
 
   it("resolves on the FIRST render from the live directory, in the same paint as useHostClientForHostId, before the directory Query snapshot has data", () => {
-    globalClientRef.value = buildGlobalClient(() => [
-      mockLocalHostEntry,
-      TAB_HOST,
-    ]);
+    globalClientRef.value = buildGlobalClient(
+      () => [mockLocalHostEntry, TAB_HOST],
+      undefined,
+    );
     // First render: the Query snapshot is still `undefined`.
     directoryState.data = undefined;
     let renders = 0;
@@ -179,7 +211,10 @@ describe("useTabHostClient", () => {
   });
 
   it("agrees with useHostClientForHostId on an unresolved identity requester when the tab's host is nowhere in the directory", () => {
-    globalClientRef.value = buildGlobalClient(() => [mockLocalHostEntry]);
+    globalClientRef.value = buildGlobalClient(
+      () => [mockLocalHostEntry],
+      undefined,
+    );
     directoryState.data = [mockLocalHostEntry];
     const { result } = renderHook(() => useBothClients("host-nobody-knows"), {
       wrapper: tabWrapper("host-nobody-knows"),
@@ -192,7 +227,10 @@ describe("useTabHostClient", () => {
   });
 
   it("stays a pinned requester - never the mutable default client - even when the tab's host IS the app-wide default", () => {
-    const globalClient = buildGlobalClient(() => [mockLocalHostEntry]);
+    const globalClient = buildGlobalClient(
+      () => [mockLocalHostEntry],
+      undefined,
+    );
     globalClientRef.value = globalClient;
     directoryState.data = undefined;
     const { result } = renderHook(
@@ -210,10 +248,10 @@ describe("useTabHostClient", () => {
   });
 
   it("THROWS outside <TabHostProvider> instead of silently following the app-wide host", () => {
-    globalClientRef.value = buildGlobalClient(() => [
-      mockLocalHostEntry,
-      TAB_HOST,
-    ]);
+    globalClientRef.value = buildGlobalClient(
+      () => [mockLocalHostEntry, TAB_HOST],
+      undefined,
+    );
     directoryState.data = [mockLocalHostEntry, TAB_HOST];
 
     // The hook's header has always promised this ("Must be called inside
@@ -229,10 +267,10 @@ describe("useTabHostClient", () => {
   });
 
   it("keeps identity requesters with no authenticated request context so readiness owns the auth gate", () => {
-    const globalClient = buildGlobalClient(() => [
-      mockLocalHostEntry,
-      TAB_HOST,
-    ]);
+    const globalClient = buildGlobalClient(
+      () => [mockLocalHostEntry, TAB_HOST],
+      undefined,
+    );
     globalClient.setRequestContext(null);
     globalClientRef.value = globalClient;
     directoryState.data = [mockLocalHostEntry, TAB_HOST];
@@ -244,5 +282,103 @@ describe("useTabHostClient", () => {
     expect(result.current.byId).not.toBeNull();
     expect(result.current.tab?.getActiveHostId()).toBe(TAB_HOST.hostId);
     expect(result.current.byId?.getActiveHostId()).toBe(TAB_HOST.hostId);
+  });
+
+  it("uses the task tab's manifest and requester while the app is served by another computer", async () => {
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "artifact-list",
+      handlers: {
+        "epic.artifactVersions.list": () => ({
+          entries: [],
+          nextCursor: null,
+        }),
+      },
+    });
+    const directoryRows = [mockLocalHostEntry, TAB_HOST, APP_SERVING_HOST];
+    const globalClient = buildGlobalClient(() => directoryRows, messenger);
+    globalClientRef.value = globalClient;
+    directoryState.data = directoryRows;
+    globalClient.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-task-peer-test",
+      }),
+    );
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: APP_SERVING_HOST.hostId,
+      targetHostId: APP_SERVING_HOST.hostId,
+      effectiveHostId: APP_SERVING_HOST.hostId,
+      servingPeer: { kind: "computer", hostId: APP_SERVING_HOST.hostId },
+      noPeerPresentation: null,
+      leases: [
+        { hostId: APP_SERVING_HOST.hostId, status: "ready", dead: null },
+        { hostId: TAB_HOST.hostId, status: "ready", dead: null },
+      ],
+      selectionRevision: 1,
+    });
+    recordNegotiatedHostMethods(TAB_HOST.hostId, ["epic.getTaskContexts"]);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const { result } = renderHook(
+      () => {
+        const available = useArtifactVersionHistoryAvailable();
+        const query = useHostQuery({
+          client: useTabHostClient(),
+          method: "epic.artifactVersions.list",
+          params: {
+            epicId: "epic-task",
+            artifactId: "artifact-task",
+            cursor: null,
+            limit: 200,
+          },
+          cacheKeyIdentity: undefined,
+          options: { enabled: available, staleTime: Infinity },
+        });
+        return { available, query };
+      },
+      {
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            <TabHostProvider hostId={TAB_HOST.hostId}>
+              {children}
+            </TabHostProvider>
+          </QueryClientProvider>
+        ),
+      },
+    );
+
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      APP_SERVING_HOST.hostId,
+    );
+    expect(result.current.available).toBe(false);
+    expect(messenger.calls).toEqual([]);
+
+    act(() => {
+      recordNegotiatedHostMethods(TAB_HOST.hostId, [
+        "epic.artifactVersions.list",
+        "epic.artifactVersions.getBlob",
+      ]);
+    });
+    await waitFor(() => {
+      expect(result.current.query.data).toEqual({
+        entries: [],
+        nextCursor: null,
+      });
+    });
+
+    expect(result.current.available).toBe(true);
+    expect(
+      messenger.calls.map((call) => [
+        call.method,
+        call.authority.endpoint.hostId,
+      ]),
+    ).toEqual([["epic.artifactVersions.list", TAB_HOST.hostId]]);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      APP_SERVING_HOST.hostId,
+    );
   });
 });

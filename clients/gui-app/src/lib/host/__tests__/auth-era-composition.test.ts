@@ -16,6 +16,7 @@
  * generation accessor moving across a real rotation. A stamp can be right
  * while the request underneath it is wrong; that is precisely the bug.
  */
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AUTH_FETCH_MAX_ATTEMPTS,
@@ -316,6 +317,7 @@ function buildComposition(): Composition {
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
   });
   const composition = {

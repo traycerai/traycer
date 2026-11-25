@@ -193,6 +193,8 @@ function publishLease(status: "restarting-expected" | "connecting"): void {
     preferredHostId: "host-a",
     targetHostId: "host-a",
     effectiveHostId: "host-a",
+    servingPeer: { kind: "computer", hostId: "host-a" },
+    noPeerPresentation: null,
     leases: [lease],
     selectionRevision: 1,
   });

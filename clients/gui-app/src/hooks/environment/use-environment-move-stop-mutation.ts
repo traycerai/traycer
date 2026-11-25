@@ -1,8 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -27,12 +24,7 @@ export function useEnvironmentMoveStopMutation(
       if (!refreshProviders || hostId === null) return;
       void queryClient.invalidateQueries({
         queryKey: hostQueryKeys.methodScope(
-          hostRpcServingTierHostId(
-            "providers.list",
-            hostId,
-            readProcessHostRpcTierPlan(),
-            null,
-          ),
+          readServingTierHostId("providers.list", hostId, null, null),
           "providers.list",
         ),
       });

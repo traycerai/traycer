@@ -13,10 +13,7 @@ import {
 } from "@traycer-clients/shared/host-client/provider-api-key-change";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import { useHostClient, useAuthService } from "@/lib/host";
 import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
@@ -136,12 +133,7 @@ export function useProviderApiKeyChangeMutation<Variables>(
         for (const method of PROVIDER_INVALIDATIONS) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(
-              hostRpcServingTierHostId(
-                method,
-                context.hostId,
-                readProcessHostRpcTierPlan(),
-                null,
-              ),
+              readServingTierHostId(method, context.hostId, null, null),
               method,
             ),
           });
@@ -149,10 +141,10 @@ export function useProviderApiKeyChangeMutation<Variables>(
         if (error instanceof ProviderApiKeyEnvironmentChangedError) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(
-              hostRpcServingTierHostId(
+              readServingTierHostId(
                 "environment.status",
                 context.hostId,
-                readProcessHostRpcTierPlan(),
+                null,
                 null,
               ),
               "environment.status",

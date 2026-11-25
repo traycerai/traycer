@@ -382,6 +382,7 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
 }));
 vi.mock("@/lib/host/runtime", () => ({
+  useHostBinding: () => null,
   useHostClient: () => stubHostClient,
   // The create stamps `sentFromHostId` from the directory's local host at
   // submit - see `testState.getLocalHostId` for the default and the

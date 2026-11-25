@@ -4,8 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { EditorView } from "@uiw/react-codemirror";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  settleProcessHostRpcTierPlan,
+  type HostServingDecision,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { accountWideManifestFixtures } from "@traycer-clients/shared/test-fixtures/account-wide-manifest";
+import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -13,6 +19,8 @@ import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environmen
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { queryClient as appQueryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   negotiateMethodsOn,
   reachableHost,
@@ -27,6 +35,28 @@ import {
   teamHostBoundary,
 } from "./team-configuration-test-support";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+const servingFixture = vi.hoisted(() => ({
+  current: {
+    servingPeer: null,
+    servingPeerMethods: null,
+    servingPeerEnvironmentId: null,
+  } as HostServingDecision,
+}));
+
+vi.mock("@/lib/host/app-serving-decision", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/app-serving-decision")>();
+  return {
+    ...actual,
+    useAppServingDecision: () => servingFixture.current,
+  };
+});
+
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  getHostBindingSnapshot: () => teamHostBoundary.binding,
+}));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -52,7 +82,14 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
+  appQueryClient.clear();
+  useSelectionAuthorityStore.getState().reset();
   useSettingsEnvironmentPickStore.setState({ pick: null });
+  servingFixture.current = {
+    servingPeer: null,
+    servingPeerMethods: null,
+    servingPeerEnvironmentId: null,
+  };
 });
 
 const V10 = { major: 1, minor: 0 };
@@ -75,6 +112,9 @@ function handlers(options: {
   return {
     "environment.configuration.guide.get": options.guide,
     "environment.configuration.guide.set": () => ({ outcome: "set" as const }),
+    "environment.configuration.guide.reset": () => ({
+      outcome: "reset" as const,
+    }),
     "environment.host.list": () => ({ hosts: [...options.hosts] }),
     "environment.list": () => teamEnvironments,
   };
@@ -225,7 +265,7 @@ describe("TeamGuide on a build with a server pool and no host running the team",
     ).toEqual(new Set([POOL_HOST_ID]));
   });
 
-  it("offers the guide's editor with no host when the pool advertises the save", async () => {
+  it("uses the pool's set capability without offering reset when reset is absent", async () => {
     poolAdvertises(true);
     const harness = mountTeamPageOnPoolBuild(
       poolSource("editor"),
@@ -245,6 +285,9 @@ describe("TeamGuide on a build with a server pool and no host running the team",
         document.querySelector("[data-testid='team-guide-input']"),
       ).not.toBeNull();
     });
+    expect(
+      screen.getByTestId("team-guide-revert").hasAttribute("disabled"),
+    ).toBe(true);
     expect(screen.queryByText(/The guide needs a host/)).toBeNull();
     expect(
       screen.getAllByRole("heading", { name: "Agent selection guide" }),
@@ -254,6 +297,48 @@ describe("TeamGuide on a build with a server pool and no host running the team",
         "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
       ),
     ).toBeNull();
+  });
+
+  it("enables reset when a reset-capable serving computer takes over", async () => {
+    poolAdvertises(true);
+    const harness = mountTeamPageOnPoolBuild(
+      poolSource("editor"),
+      handlers({
+        hosts: [],
+        guide: () => ({
+          outcome: "ok" as const,
+          text: "Prefer sonnet",
+          revision: "rev-1",
+        }),
+      }),
+    );
+    const view = render(<TeamGuide />, { wrapper: harness.Wrapper });
+    const revert = await screen.findByTestId("team-guide-revert");
+    expect(revert.hasAttribute("disabled")).toBe(true);
+
+    const methods = [
+      "environment.configuration.guide.get",
+      "environment.configuration.guide.set",
+      "environment.configuration.guide.reset",
+    ] as const;
+    recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [...methods]);
+    servingFixture.current = {
+      servingPeer: mockLocalHostEntry,
+      servingPeerMethods: new Set(methods),
+      servingPeerEnvironmentId: null,
+    };
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+      servingPeer: { kind: "computer", hostId: mockLocalHostEntry.hostId },
+    });
+    view.rerender(<TeamGuide />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("team-guide-revert").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    view.unmount();
   });
 
   it("says the read failed, with Retry and no host pick, when the pool predates the guide read", async () => {
@@ -299,5 +384,57 @@ describe("TeamGuide on a build with a server pool and no host running the team",
           ?.textContent,
       ).toContain("Back");
     });
+  });
+});
+
+describe("TeamGuide when a team computer serves the configuration", () => {
+  it("offers the guide editor from the team peer's current manifest", async () => {
+    poolAdvertises(false);
+    const teamMethods = accountWideManifestFixtures().current;
+    expect(teamMethods.size).toBe(23);
+    recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [...teamMethods]);
+    servingFixture.current = {
+      servingPeer: {
+        ...mockLocalHostEntry,
+        owner: { kind: "team", id: "team-a", name: "Acme" },
+      },
+      servingPeerMethods: teamMethods,
+      servingPeerEnvironmentId: "env-a",
+    };
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+      servingPeer: { kind: "computer", hostId: mockLocalHostEntry.hostId },
+    });
+    appQueryClient.setQueryData(
+      hostQueryKeys.method<HostRpcRegistry, "environment.binding.read">(
+        POOL_HOST_ID,
+        "environment.binding.read",
+        { hostId: mockLocalHostEntry.hostId },
+      ),
+      {
+        hostId: mockLocalHostEntry.hostId,
+        environment: {
+          environmentId: "env-a",
+          ownerKind: "organization",
+          ownerId: "team-a",
+          roomId: "room-a",
+          label: "Acme",
+        },
+        explicit: true,
+        enrolledByUserId: "user-me",
+        canUnbind: false,
+      },
+    );
+    const harness = mountTeamPageOnPoolBuild(
+      poolSource("editor"),
+      handlers({
+        hosts: [reachableHost],
+        guide: () => ({ outcome: "unset" as const, revision: "rev-team" }),
+      }),
+    );
+    render(<TeamGuide />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("status");
+    expect(screen.getByRole("button", { name: "Write one" })).toBeTruthy();
   });
 });

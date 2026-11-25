@@ -1,8 +1,5 @@
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useCallback, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -112,12 +109,7 @@ export function SecretsPage(props: {
       void queryClient
         .invalidateQueries({
           queryKey: hostQueryKeys.methodScope(
-            hostRpcServingTierHostId(
-              method,
-              props.hostId,
-              readProcessHostRpcTierPlan(),
-              null,
-            ),
+            readServingTierHostId(method, props.hostId, null, null),
             method,
           ),
         })

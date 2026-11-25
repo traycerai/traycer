@@ -13,6 +13,8 @@ function seedLease(
     preferredHostId: "host-1",
     targetHostId: "host-1",
     effectiveHostId: "host-1",
+    servingPeer: { kind: "computer", hostId: "host-1" },
+    noPeerPresentation: null,
     leases: [{ hostId: "host-1", status, dead: null }],
     selectionRevision: 1,
   });
@@ -24,6 +26,8 @@ function seedDeadLease(): void {
     preferredHostId: "host-1",
     targetHostId: "host-1",
     effectiveHostId: "host-1",
+    servingPeer: { kind: "computer", hostId: "host-1" },
+    noPeerPresentation: null,
     leases: [{ hostId: "host-1", status: "dead", dead: { reason: "offline" } }],
     selectionRevision: 1,
   });
@@ -193,6 +197,8 @@ describe("useBoundedHostLoad", () => {
       preferredHostId: "host-other",
       targetHostId: "host-other",
       effectiveHostId: "host-other",
+      servingPeer: { kind: "computer", hostId: "host-other" },
+      noPeerPresentation: null,
       leases: [
         { hostId: "host-other", status: "ready", dead: null },
         {

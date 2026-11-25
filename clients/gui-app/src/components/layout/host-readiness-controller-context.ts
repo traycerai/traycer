@@ -413,10 +413,17 @@ function defaultHostReadiness(args: {
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
   readonly hasLocalHost: boolean;
   readonly hasMobileNoHost: boolean;
+  readonly poolBuild: boolean;
+  readonly servedByPool: boolean;
   readonly hasReadySessionFor: (hostId: string) => boolean;
   readonly leases: readonly HostLeaseSnapshot[];
   readonly authorityAttached: boolean;
 }): SurfaceReadiness {
+  // The pool serving the app makes it ready: it opens in its normal layout
+  // with no computer, and nothing below is a reason to hold it.
+  if (args.servedByPool && args.requestContextUserId !== null) {
+    return READY;
+  }
   const activeEntry = args.directoryEntries.find(
     (candidate) => candidate.hostId === args.activeHostId,
   );
@@ -430,7 +437,9 @@ function defaultHostReadiness(args: {
   ) {
     return READY;
   }
-  if (!args.hasLocalHost && args.hasMobileNoHost) {
+  // Never in a pool build: with no computer the pool serves, and when neither
+  // can, the window narrator's connecting and offline cards say so.
+  if (!args.poolBuild && !args.hasLocalHost && args.hasMobileNoHost) {
     return { kind: "mobile-no-host" };
   }
   // The authority's verdict, where it has one, decides which of the two
@@ -459,6 +468,10 @@ export function resolveSurfaceReadiness(args: {
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
   readonly hasLocalHost: boolean;
   readonly hasMobileNoHost: boolean;
+  /** Whether this build has a server pool address. */
+  readonly poolBuild: boolean;
+  /** Whether the authority's serving peer is the pool. */
+  readonly servedByPool: boolean;
   /**
    * Reactive per-host answer to `hasReadyRemoteSession`, threaded from the
    * provider's `useRemoteSessionsPollReadiness` subscription (see

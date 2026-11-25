@@ -47,7 +47,7 @@ const EMPTY_AD = new Uint8Array(0);
 export const emptyStreamRegistry: VersionedStreamRpcRegistry =
   defineVersionedStreamRpcRegistry({});
 
-type OpenDecision =
+export type OpenDecision =
   | { readonly kind: "ack" }
   | { readonly kind: "fatal"; readonly details: FatalErrorDetails };
 export class FakeSocket implements StreamWebSocketLike {
@@ -108,6 +108,12 @@ type FakeUnaryError = {
   readonly doorReason?: string;
 };
 
+export interface ObservedRemoteOpen {
+  readonly bearer: string;
+  readonly authz: unknown;
+  readonly clientIdentity: unknown;
+}
+
 export class FakeRelayHost {
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: FakeConnection[] = [];
@@ -117,6 +123,7 @@ export class FakeRelayHost {
   /** Raw: an absent field must read as a missing key, not a shape mismatch. */
   readonly openIdentities: unknown[] = [];
   readonly openAuthz: unknown[] = [];
+  readonly openDecisions: OpenDecision[] = [];
   readonly subscribeParams: unknown[] = [];
   readonly subscribeSchemaVersions: unknown[] = [];
   readonly subscribeStreamIds: number[] = [];
@@ -182,6 +189,9 @@ export class FakeRelayHost {
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
     kind: "ack",
   });
+  admitOpen:
+    | ((open: ObservedRemoteOpen, openIndex: number) => OpenDecision)
+    | null = null;
   pingCount = 0;
   /** False: the half-open socket an OS suspend leaves, for the wake-probe tests. */
   answerPings = true;
@@ -544,38 +554,46 @@ export class FakeRelayHost {
         : "";
     const grant = presentedGrant(message.json?.authz);
     const openIndex = this.openBearers.length;
+    const open: ObservedRemoteOpen = {
+      bearer,
+      authz: message.json?.authz,
+      clientIdentity: message.json?.clientIdentity,
+    };
     this.openBearers.push(bearer);
     this.openGrants.push(grant);
-    this.openIdentities.push(message.json?.clientIdentity);
-    this.openAuthz.push(message.json?.authz);
+    this.openIdentities.push(open.clientIdentity);
+    this.openAuthz.push(open.authz);
     if (this.stallOpens) {
       // The host decides on the token in `authz`.
-      this.stalledOpens.push({ connection, bearer: grant, openIndex });
+      this.stalledOpens.push({ connection, open, openIndex });
       return;
     }
-    await this.respondToOpen(connection, grant, openIndex);
+    await this.respondToOpen(connection, open, openIndex);
   }
 
   stallOpens = false;
   private readonly stalledOpens: Array<{
     connection: FakeConnection;
-    bearer: string;
+    open: ObservedRemoteOpen;
     openIndex: number;
   }> = [];
 
   async releaseStalledOpens(): Promise<void> {
     const stalled = this.stalledOpens.splice(0);
     for (const open of stalled) {
-      await this.respondToOpen(open.connection, open.bearer, open.openIndex);
+      await this.respondToOpen(open.connection, open.open, open.openIndex);
     }
   }
 
   private async respondToOpen(
     connection: FakeConnection,
-    bearer: string,
+    open: ObservedRemoteOpen,
     openIndex: number,
   ): Promise<void> {
-    const decision = this.decideOpen(bearer, openIndex);
+    const decision =
+      this.admitOpen?.(open, openIndex) ??
+      this.decideOpen(presentedGrant(open.authz), openIndex);
+    this.openDecisions.push(decision);
     if (decision.kind === "ack") {
       await this.sendMux(connection, {
         type: MuxFrameType.OPEN_ACK,

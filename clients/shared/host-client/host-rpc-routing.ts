@@ -16,10 +16,11 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * Which peer serves each RPC method: the routing rule as code.
  *
  * The rule (the user's ruling of 2026-10-20, amending "prefer the originating
- * host"): prefer the host that runs the target for host-local work, execution
- * and genuinely host-cached principal-scoped reads; the five account-wide
- * families always go to the server pool, independent of where the call came
- * from and of whether any host is reachable.
+ * host", and the connection order of 25 Nov 2026): prefer the host that runs
+ * the target for host-local work, execution and genuinely host-cached
+ * principal-scoped reads; the account-wide families go to the computer that
+ * serves the app when it negotiated the method and may answer it for this
+ * caller, and to the server pool otherwise.
  *
  * - `target-host` - the host that runs the target: the chat's host, the
  *   workspace's host, the terminal's host. Whatever host the caller's
@@ -33,20 +34,25 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   the person's own selected single-tenant host, whatever the caller's
  *   target is. Never a sandbox and never the pool, so audio and on-device
  *   models never leave the person's machines.
- * - `pool-only` - the account-wide families: History (`epic.listTasks`),
- *   the title a reference to a chat is drawn with (`epic.getChatTitle`),
- *   the notification cloud feed (`host.notifications.cloudFeed.*`),
- *   `environment.list` and `environment.binding.read`, `organization.*` and
- *   `autoPolicy.*`, a configuration's own cloud state (its records, secrets,
- *   members, host list, history and plans, and the skills and guide its room
- *   holds: what its Settings pages read and edit, so they work with no host
- *   running it; a member's running work, which only the computer running it
- *   can count, is the one members read that stays `target-host`), the
- *   environment arm (`environment.chats.subscribe`,
- *   `.plainTerminals.subscribe`, `.communicationGraph.subscribe`), which no
- *   host serves, and the chat serving witness (`chat.serving.subscribe`),
- *   the server's published fact. A pool-only call never has a host fallback
- *   arm: a refusal or an outage is the caller's error.
+ * - `account-wide` - the 56 account-wide methods a computer could answer:
+ *   History (`epic.listTasks`), the title a reference to a chat is drawn with
+ *   (`epic.getChatTitle`), the notification cloud feed
+ *   (`host.notifications.cloudFeed.*`), `environment.list` and
+ *   `environment.binding.read`, `organization.*` and `autoPolicy.*`, a
+ *   configuration's own cloud state (its records, secrets, members, host
+ *   list, history and plans, and the skills and guide its room holds: what
+ *   its Settings pages read and edit, so they work with no host running it; a
+ *   member's running work, which only the computer running it can count, is
+ *   the one members read that stays `target-host`). In a build with a pool,
+ *   the serving computer answers one when its negotiated manifest has it and
+ *   its authority covers the call ({@link accountWideAnswerer}), the pool
+ *   otherwise; before that computer's first handshake, the pool. A refusal
+ *   is the caller's error and is never replayed on the other peer.
+ * - `pool-only` - what no host serves: the environment arm
+ *   (`environment.chats.subscribe`, `.plainTerminals.subscribe`,
+ *   `.communicationGraph.subscribe`) and the chat serving witness
+ *   (`chat.serving.subscribe`), the server's published fact. Always the pool
+ *   in a build with one.
  * - `addressed-peer` - `host.status` and `host.getRuntimeCapabilities`: the
  *   session-level floor every peer genuinely serves, the pool included, so
  *   they go to whichever peer the requester names.
@@ -65,10 +71,11 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * carries a pool address or it does not (production until the pool's
  * production address is published, and every dev build without one). That is
  * read once, when the process builds its {@link HostRpcTierPlan}, and frozen:
- * a build with no pool serves the pool-only families from the caller's host,
- * as before this table existed, for the whole process life. Nothing at request
- * time - reachability, a refusal, an outage - ever moves a call between the
- * pool and a host.
+ * a build with no pool serves the account-wide and pool-only families from
+ * the caller's host, as before this table existed, for the whole process
+ * life. In a build with one, what moves an account-wide call between a
+ * computer and the pool is the serving peer and that peer's manifest, never a
+ * refusal or an outage of the call itself.
  *
  * Exhaustive over client-routable names by type and test. Legacy profile-sync
  * methods remain on the wire for released peers, with no client route.
@@ -77,6 +84,7 @@ export type HostRpcRoute =
   | "target-host"
   | "sender-host"
   | "selected-host"
+  | "account-wide"
   | "pool-only"
   | "addressed-peer"
   | "target-host-live-pool-at-rest";
@@ -148,18 +156,131 @@ export type HostRpcDispatchDecision =
     };
 
 /**
- * Where one unary call goes. `target` is the host the caller's requester
- * names; `selectedHost` is the person's selected host, for `selected-host`.
+ * What an account-wide dispatch reads at request time: the peer that serves
+ * the app (the selection authority's serving peer, resolved to its directory
+ * entry) and what that peer negotiated.
+ */
+export interface HostServingDecision {
+  /** The serving peer: a computer's entry, the pool's, or `null`. */
+  readonly servingPeer: HostDirectoryEntry | null;
+  /**
+   * The serving computer's negotiated methods from its last handshake, or
+   * `null` before its first one.
+   */
+  readonly servingPeerMethods: ReadonlySet<string> | null;
+  /**
+   * The environment a TEAM serving computer serves, or `null` when it is not
+   * known. A team computer acts on its own credential inside that environment
+   * only.
+   */
+  readonly servingPeerEnvironmentId: string | null;
+}
+
+/** No serving peer: every account-wide call of a pool build goes to the pool. */
+export const NO_SERVING_PEER_DECISION: HostServingDecision = Object.freeze({
+  servingPeer: null,
+  servingPeerMethods: null,
+  servingPeerEnvironmentId: null,
+});
+
+/**
+ * The account-wide methods a team computer serves, for the environment it
+ * serves only: its Guide and the Skills its room holds. Everything else
+ * account-wide is the member's own (their bell and cloud feed, organisation,
+ * auto-policy, the account-wide task list, unscoped lookups) and goes to the
+ * pool even when the team computer's manifest names it.
+ */
+const TEAM_COMPUTER_ENVIRONMENT_METHODS: ReadonlySet<string> = new Set([
+  "environment.configuration.guide.get",
+  "environment.configuration.guide.reset",
+  "environment.configuration.guide.set",
+  "environment.configuration.skills.list",
+  "environment.configuration.skills.remove",
+  "environment.configuration.skills.setPolicy",
+  "environment.configuration.skills.setProviders",
+  "environment.configuration.skills.upload",
+]);
+
+/** Whether a team owns this computer: a team host or a team's sandbox. */
+export function isTeamComputer(entry: HostDirectoryEntry): boolean {
+  return entry.owner?.kind === "team" || isTeamSandboxHostDirectoryEntry(entry);
+}
+
+/**
+ * The environment a call names, read from its params: the Guide and Skills
+ * requests carry `environmentId`. `null` for a call with none.
+ */
+export function callEnvironmentIdOf(params: unknown): string | null {
+  if (typeof params !== "object" || params === null) return null;
+  if (!("environmentId" in params)) return null;
+  const environmentId = params.environmentId;
+  return typeof environmentId === "string" && environmentId.length > 0
+    ? environmentId
+    : null;
+}
+
+/**
+ * Who answers an account-wide method in a build with a pool: the serving
+ * computer when its negotiated manifest has the method and its authority
+ * covers this caller and this request, the pool otherwise. The one predicate
+ * dispatch, stream dispatch, capability gates and query keys all read, so a
+ * surface's gate, its key and its call never disagree.
+ *
+ * A computer the person owns covers every method it negotiated. A team
+ * computer covers only {@link TEAM_COMPUTER_ENVIRONMENT_METHODS}, and only for
+ * a call naming the environment it serves.
+ */
+export function accountWideAnswerer(
+  method: string,
+  callEnvironmentId: string | null,
+  serving: HostServingDecision,
+): "computer" | "pool" {
+  const peer = serving.servingPeer;
+  if (peer === null || isPoolHostDirectoryEntry(peer)) return "pool";
+  if (serving.servingPeerMethods?.has(method) !== true) return "pool";
+  if (!isTeamComputer(peer)) return "computer";
+  return TEAM_COMPUTER_ENVIRONMENT_METHODS.has(method) &&
+    callEnvironmentId !== null &&
+    callEnvironmentId === serving.servingPeerEnvironmentId
+    ? "computer"
+    : "pool";
+}
+
+/**
+ * Where one unary call of `method` goes. `target` is the host the caller's
+ * requester names, or `null` for a requester bound to no host (the app served
+ * by the pool has no effective computer), and `targetMethods` what that peer
+ * negotiated (`null` before its first handshake); `selectedHost` is the
+ * person's selected host, for `selected-host`; `serving` and
+ * `callEnvironmentId` decide an `account-wide` call.
  */
 export function decideHostRpcDispatch(
+  method: string,
   route: HostRpcRoute,
-  target: HostDirectoryEntry,
+  target: HostDirectoryEntry | null,
+  targetMethods: ReadonlySet<string> | null,
   plan: HostRpcTierPlan,
   selectedHost: HostDirectoryEntry | null,
+  serving: HostServingDecision,
+  callEnvironmentId: string | null,
 ): HostRpcDispatchDecision {
   switch (route) {
+    case "account-wide": {
+      if (plan.pool === null) return dispatchToTarget(target);
+      const peer = serving.servingPeer;
+      return {
+        kind: "dispatch",
+        entry:
+          peer !== null &&
+          accountWideAnswerer(method, callEnvironmentId, serving) === "computer"
+            ? peer
+            : plan.pool,
+      };
+    }
     case "pool-only":
-      return { kind: "dispatch", entry: plan.pool ?? target };
+      return plan.pool === null
+        ? dispatchToTarget(target)
+        : { kind: "dispatch", entry: plan.pool };
     case "selected-host":
       // The selected-host rule exists so that a sandbox or the pool never
       // serves an input device.
@@ -174,36 +295,102 @@ export function decideHostRpcDispatch(
       return { kind: "dispatch", entry: selectedHost };
     case "target-host":
     case "sender-host":
-      if (isPoolHostDirectoryEntry(target)) {
+      if (target !== null && isPoolHostDirectoryEntry(target)) {
         return {
           kind: "refuse",
           code: "E_HOST_UNSUPPORTED",
           message: "The server pool does not serve this method",
         };
       }
-      return { kind: "dispatch", entry: target };
+      return dispatchToTarget(target);
     case "addressed-peer":
+      // The session floors can establish a fresh handshake when the cached
+      // manifest is stale. Task methods require the addressed peer's support.
+      if (
+        method !== "host.status" &&
+        method !== "host.getRuntimeCapabilities" &&
+        targetMethods !== null &&
+        !targetMethods.has(method)
+      ) {
+        return {
+          kind: "refuse",
+          code: "E_HOST_UNSUPPORTED",
+          message: "The addressed peer does not serve this method",
+        };
+      }
+      return dispatchToTarget(target);
     case "target-host-live-pool-at-rest":
-      return { kind: "dispatch", entry: target };
+      return dispatchToTarget(target);
   }
+}
+
+function dispatchToTarget(
+  target: HostDirectoryEntry | null,
+): HostRpcDispatchDecision {
+  if (target === null) {
+    return {
+      kind: "refuse",
+      code: "RPC_ERROR",
+      message: "Cannot call host RPC without an active host",
+    };
+  }
+  return { kind: "dispatch", entry: target };
+}
+
+/**
+ * Where one stream subscription of `method` goes: the same rule as a unary
+ * call, read from the stream table. Streams have no central dispatch of their
+ * own, so a surface resolves its stream client through this (`gui-app`'s
+ * `useRoutedStreamClient`) for every route that is not `target-host`. No
+ * account-wide stream names an environment, so a team computer serves none.
+ */
+export function decideHostStreamDispatch(
+  method: HostStreamRpcMethod,
+  target: HostDirectoryEntry | null,
+  targetMethods: ReadonlySet<string> | null,
+  plan: HostRpcTierPlan,
+  selectedHost: HostDirectoryEntry | null,
+  serving: HostServingDecision,
+): HostRpcDispatchDecision {
+  return decideHostRpcDispatch(
+    method,
+    HOST_STREAM_RPC_ROUTES[method],
+    target,
+    targetMethods,
+    plan,
+    selectedHost,
+    serving,
+    null,
+  );
 }
 
 /**
  * The host id that answers for `method` when a caller names `callerHostId`:
- * the serving tier. A pool-only answer is cached, and its capability read,
- * under the pool whichever host asked, so the key never flips; an
- * input-device answer under the person's selected host when the reader knows
- * it (`null` keeps the caller's). Follows the same frozen plan as dispatch.
+ * the serving tier, by the same rule dispatch applies. A capability read and a
+ * cache entry are filed under it, so a list's key names the peer that answers
+ * it and a move between peers is one refetch; within a session the answer is
+ * stable, since it moves only with the serving peer or that peer's manifest.
+ * An input-device answer is filed under the person's selected host when the
+ * reader knows it (`null` keeps the caller's).
  */
 export function hostRpcServingTierHostId(
   method: string,
   callerHostId: string | null,
   plan: HostRpcTierPlan,
   selectedHostId: string | null,
+  serving: HostServingDecision,
+  callEnvironmentId: string | null,
 ): string | null {
   const route = hostRpcRouteOf(method);
-  if (route === "pool-only" && plan.pool !== null) {
+  if (plan.pool !== null && route === "pool-only") {
     return POOL_HOST_ID;
+  }
+  if (plan.pool !== null && route === "account-wide") {
+    const peer = serving.servingPeer;
+    return peer !== null &&
+      accountWideAnswerer(method, callEnvironmentId, serving) === "computer"
+      ? peer.hostId
+      : POOL_HOST_ID;
   }
   if (route === "selected-host" && selectedHostId !== null) {
     return selectedHostId;
@@ -345,8 +532,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "autoJudge.get": "target-host",
   "autoJudge.listRecent": "target-host",
   "autoJudge.set": "target-host",
-  "autoPolicy.get": "pool-only",
-  "autoPolicy.set": "pool-only",
+  "autoPolicy.get": "account-wide",
+  "autoPolicy.set": "account-wide",
   "bot.claimAuthority": "target-host",
   "bot.conversation.list": "target-host",
   "bot.conversation.search": "target-host",
@@ -449,30 +636,30 @@ export const HOST_UNARY_RPC_ROUTES = {
   // A named host's binding from the account's records: Home's bot hosts, the
   // Settings host list and the host scope read every row's binding here,
   // without a connection to each host.
-  "environment.binding.read": "pool-only",
+  "environment.binding.read": "account-wide",
   // The configuration's room: its guide and skills, read and written with no
   // host running the configuration.
-  "environment.configuration.guide.get": "pool-only",
-  "environment.configuration.guide.reset": "pool-only",
-  "environment.configuration.guide.set": "pool-only",
+  "environment.configuration.guide.get": "account-wide",
+  "environment.configuration.guide.reset": "account-wide",
+  "environment.configuration.guide.set": "account-wide",
   // A configuration's cloud state, from the cloud: its records, secrets,
   // members, host list, history and plans. A configuration's pages read and
   // edit it with no host running that configuration. What is about one host
   // (its status, local overrides, setup, review, the move) stays on it.
-  "environment.configuration.items": "pool-only",
-  "environment.configuration.revision": "pool-only",
-  "environment.configuration.items.delete": "pool-only",
-  "environment.configuration.items.put": "pool-only",
-  "environment.configuration.mcpServers.delete": "pool-only",
-  "environment.configuration.mcpServers.list": "pool-only",
-  "environment.configuration.mcpServers.put": "pool-only",
-  "environment.configuration.mcpServers.setEnabled": "pool-only",
-  "environment.configuration.policy.put": "pool-only",
+  "environment.configuration.items": "account-wide",
+  "environment.configuration.revision": "account-wide",
+  "environment.configuration.items.delete": "account-wide",
+  "environment.configuration.items.put": "account-wide",
+  "environment.configuration.mcpServers.delete": "account-wide",
+  "environment.configuration.mcpServers.list": "account-wide",
+  "environment.configuration.mcpServers.put": "account-wide",
+  "environment.configuration.mcpServers.setEnabled": "account-wide",
+  "environment.configuration.policy.put": "account-wide",
   // An import fetches a skill's source and writes it, which only a host
   // serving the configuration does: the page sends it to its viewing host.
   "environment.configuration.skills.import": "target-host",
-  "environment.configuration.skills.list": "pool-only",
-  "environment.configuration.skills.remove": "pool-only",
+  "environment.configuration.skills.list": "account-wide",
+  "environment.configuration.skills.remove": "account-wide",
   // A built-in's restore writes this host build's skill files, which only a
   // host serving the configuration holds: the page sends it to its viewing
   // host.
@@ -480,35 +667,35 @@ export const HOST_UNARY_RPC_ROUTES = {
   // A search of the public skills directory, from the host the page reads
   // from: the directory answers no browser's cross-origin read.
   "environment.configuration.skills.search": "target-host",
-  "environment.configuration.skills.setPolicy": "pool-only",
-  "environment.configuration.skills.setProviders": "pool-only",
+  "environment.configuration.skills.setPolicy": "account-wide",
+  "environment.configuration.skills.setProviders": "account-wide",
   // What only the serving host knows of the skills (its build, its checks of
   // each skill's source), beside the pool's list: its viewing host.
   "environment.configuration.skills.state": "target-host",
   // A skill's update writes its upstream's files, which only a host serving
   // the configuration holds: the page sends it to its viewing host.
   "environment.configuration.skills.update": "target-host",
-  "environment.configuration.skills.upload": "pool-only",
-  "environment.history": "pool-only",
+  "environment.configuration.skills.upload": "account-wide",
+  "environment.history": "account-wide",
   "environment.host.bind": "target-host",
-  "environment.host.list": "pool-only",
+  "environment.host.list": "account-wide",
   // Host-local for good: its request names no host, and it answers "the
   // environment THIS host is bound to". The pool-served form is a separate
   // method naming the host (`environment.binding.read { hostId }`), which
   // the per-host-row readers use in a build with a pool.
   "environment.host.read": "target-host",
-  "environment.invitations.accept": "pool-only",
-  "environment.invitations.list": "pool-only",
-  "environment.list": "pool-only",
+  "environment.invitations.accept": "account-wide",
+  "environment.invitations.list": "account-wide",
+  "environment.list": "account-wide",
   "environment.localOverrides": "target-host",
-  "environment.members": "pool-only",
-  "environment.members.invite": "pool-only",
-  "environment.members.noticeSeen": "pool-only",
-  "environment.members.remove": "pool-only",
+  "environment.members": "account-wide",
+  "environment.members.invite": "account-wide",
+  "environment.members.noticeSeen": "account-wide",
+  "environment.members.remove": "account-wide",
   // Counted by the computer that runs them; the pool is never asked.
   "environment.members.removePreview": "target-host",
-  "environment.members.seats": "pool-only",
-  "environment.members.setRole": "pool-only",
+  "environment.members.seats": "account-wide",
+  "environment.members.setRole": "account-wide",
   "environment.move.accept": "target-host",
   "environment.move.outcome": "target-host",
   "environment.move.plan": "target-host",
@@ -517,24 +704,24 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.move.stop": "target-host",
   "environment.move.stopPreview": "target-host",
   "environment.notices": "target-host",
-  "environment.plans.list": "pool-only",
-  "environment.plans.unlink": "pool-only",
-  "environment.plans.unlinkPreview": "pool-only",
+  "environment.plans.list": "account-wide",
+  "environment.plans.unlink": "account-wide",
+  "environment.plans.unlinkPreview": "account-wide",
   "environment.previewLocalFacts": "target-host",
   "environment.proposals": "target-host",
   "environment.reachDiagnostics": "target-host",
   "environment.review": "target-host",
   "environment.review.heldApply": "target-host",
   "environment.review.record": "target-host",
-  "environment.secrets.consent": "pool-only",
-  "environment.secrets.create": "pool-only",
-  "environment.secrets.destroy": "pool-only",
-  "environment.secrets.list": "pool-only",
-  "environment.secrets.replaceValue": "pool-only",
-  "environment.secrets.rotation": "pool-only",
-  "environment.secrets.undo": "pool-only",
-  "environment.secrets.verify": "pool-only",
-  "environment.secrets.versions": "pool-only",
+  "environment.secrets.consent": "account-wide",
+  "environment.secrets.create": "account-wide",
+  "environment.secrets.destroy": "account-wide",
+  "environment.secrets.list": "account-wide",
+  "environment.secrets.replaceValue": "account-wide",
+  "environment.secrets.rotation": "account-wide",
+  "environment.secrets.undo": "account-wide",
+  "environment.secrets.verify": "account-wide",
+  "environment.secrets.versions": "account-wide",
   "environment.setMainBot": "target-host",
   "environment.setup.attempts": "target-host",
   "environment.setup.get": "target-host",
@@ -574,7 +761,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.finishArtifactImage": "target-host",
   "epic.getChatRunSettings": "target-host",
   "epic.getChatRunSettingsBatch": "target-host",
-  "epic.getChatTitle": "pool-only",
+  "epic.getChatTitle": "account-wide",
   "epic.getTaskContexts": "target-host",
   "epic.getWorkspaceContext": "target-host",
   "epic.grantAccess": "target-host",
@@ -591,7 +778,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   // History: the server pool's pages. What only a host knows - its
   // local-homed rows, preserved orphans and tombstones - comes from that
   // host's own `epic.localHistory.read`, and the app composes the two.
-  "epic.listTasks": "pool-only",
+  "epic.listTasks": "account-wide",
   "epic.listTuiAgents": "target-host",
   // The host's local History contribution, from the host that holds it.
   "epic.localHistory.read": "target-host",
@@ -657,11 +844,11 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.notificationHooks.status": "target-host",
   "host.notificationHooks.test": "target-host",
   "host.notifications.clearAll": "target-host",
-  "host.notifications.cloudFeed.clear": "pool-only",
-  "host.notifications.cloudFeed.clearAll": "pool-only",
-  "host.notifications.cloudFeed.markAllRead": "pool-only",
-  "host.notifications.cloudFeed.markRead": "pool-only",
-  "host.notifications.cloudFeed.resolve": "pool-only",
+  "host.notifications.cloudFeed.clear": "account-wide",
+  "host.notifications.cloudFeed.clearAll": "account-wide",
+  "host.notifications.cloudFeed.markAllRead": "account-wide",
+  "host.notifications.cloudFeed.markRead": "account-wide",
+  "host.notifications.cloudFeed.resolve": "account-wide",
   "host.notifications.getConfig": "target-host",
   "host.notifications.indicatorState": "target-host",
   "host.notifications.list": "target-host",
@@ -703,10 +890,10 @@ export const HOST_UNARY_RPC_ROUTES = {
   "managedCommand.view": "target-host",
   "mention.githubCatalog": "target-host",
   "mention.githubSearch": "target-host",
-  "organization.command": "pool-only",
-  "organization.history": "pool-only",
-  "organization.read": "pool-only",
-  "organization.refresh": "pool-only",
+  "organization.command": "account-wide",
+  "organization.history": "account-wide",
+  "organization.read": "account-wide",
+  "organization.refresh": "account-wide",
   "phase.migrateToEpic": "target-host",
   "portForward.cutLease": "target-host",
   "portForward.listForHost": "target-host",
@@ -870,7 +1057,7 @@ export const HOST_STREAM_RPC_ROUTES = {
   "host.chatRecords.subscribe": "target-host",
   "host.communicationGraph.subscribe": "target-host",
   "host.hostInventory.subscribe": "target-host",
-  "host.notifications.cloudFeed.subscribe": "pool-only",
+  "host.notifications.cloudFeed.subscribe": "account-wide",
   "host.notifications.feed.subscribe": "target-host",
   "host.notifications.subscribe": "target-host",
   "host.sandbox.egress.subscribe": "target-host",
@@ -879,7 +1066,7 @@ export const HOST_STREAM_RPC_ROUTES = {
   "managedCommand.subscribeOutput": "target-host",
   "migration.run": "target-host",
   "notifications.subscribe": "target-host",
-  "organization.subscribe": "pool-only",
+  "organization.subscribe": "account-wide",
   "pr.subscribeDetail": "target-host",
   "pr.subscribeListForEpic": "target-host",
   "providers.changed": "target-host",

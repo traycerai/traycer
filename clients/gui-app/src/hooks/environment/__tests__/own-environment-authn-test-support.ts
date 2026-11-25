@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { QueryClient } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
@@ -226,6 +227,7 @@ export function createOwnEnvironmentAuthRuntime(): OwnEnvironmentAuthRuntime {
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
   });
   const binding: HostRuntimeBinding<HostRpcRegistry> = {

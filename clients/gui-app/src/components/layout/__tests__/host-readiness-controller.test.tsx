@@ -19,8 +19,10 @@ import type {
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
+  gateBlocksApp,
   HostReadinessControllerContext,
   projectDefaultHostReadiness,
+  resolveSurfaceReadiness,
   type DefaultHostReadinessPresentation,
   type HostReadinessController,
 } from "@/components/layout/host-readiness-controller-context";
@@ -135,6 +137,36 @@ describe("projectDefaultHostReadiness", () => {
       ).toEqual({ kind: "ready" });
     });
   }
+});
+
+describe("pool readiness", () => {
+  it("lets a signed-in pool-served app mount instead of drawing a no-host card", () => {
+    const readiness = resolveSurfaceReadiness({
+      scope: "default-host",
+      tabHostId: null,
+      authStatus: "signed-in",
+      activeHostId: null,
+      requestContextUserId: "user-1",
+      directoryEntries: [],
+      hasLocalHost: false,
+      hasMobileNoHost: true,
+      poolBuild: true,
+      servedByPool: true,
+      hasReadySessionFor: () => false,
+      leases: [],
+      authorityAttached: true,
+    });
+
+    expect(readiness).toEqual({ kind: "ready" });
+    expect(
+      gateBlocksApp({
+        readiness,
+        hasBeenReady: false,
+        signedIn: true,
+        bypassed: false,
+      }),
+    ).toBe(false);
+  });
 });
 
 /**

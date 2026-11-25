@@ -16,6 +16,8 @@ import {
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostClaim } from "@/hooks/host/use-host-claim";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -57,6 +59,10 @@ export function useWindowNarration(): WindowNarrationReading {
     (state) => state.targetHostId,
   );
   const leases = useHostLeases();
+  const servedByPool = useServingPeerHostId() === POOL_HOST_ID;
+  const noPeerPresentation = useSelectionAuthorityStore(
+    (state) => state.noPeerPresentation,
+  );
   const updateCandidate = useHostDirectoryEntry(
     effectiveHostId ?? targetHostId,
   );
@@ -109,6 +115,7 @@ export function useWindowNarration(): WindowNarrationReading {
   return useMemo<WindowNarrationReading>(() => {
     if (
       attached &&
+      !servedByPool &&
       updateCandidate !== null &&
       hostDirectoryEntryNeedsUpdate(updateCandidate, MINIMUM_HOST_VERSION)
     ) {
@@ -140,6 +147,8 @@ export function useWindowNarration(): WindowNarrationReading {
       localHostId,
       doorState,
       hostClaim,
+      servedByPool,
+      noPeerPresentation,
     };
     return {
       narration: deriveWindowNarration(input),
@@ -156,6 +165,8 @@ export function useWindowNarration(): WindowNarrationReading {
     localHostId,
     doorState,
     hostClaim,
+    noPeerPresentation,
+    servedByPool,
     targetHostId,
     updateCandidate,
   ]);

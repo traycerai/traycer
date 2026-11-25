@@ -258,6 +258,8 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
       preferredHostId: mockLocalHostEntry.hostId,
       targetHostId: mockLocalHostEntry.hostId,
       effectiveHostId: mockLocalHostEntry.hostId,
+      servingPeer: { kind: "computer", hostId: mockLocalHostEntry.hostId },
+      noPeerPresentation: null,
       leases: [],
       selectionRevision: 1,
     });

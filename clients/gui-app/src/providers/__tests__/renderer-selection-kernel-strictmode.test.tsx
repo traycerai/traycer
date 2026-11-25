@@ -74,6 +74,7 @@ function buildAuthority(): TestAuthority {
     clock: createFakeAuthorityClock(0),
     newIncarnationId: createIncrementingIncarnationIds(),
     log: silentAuthorityLog,
+    poolConfigured: false,
   });
   const client = createInProcessSelectionAuthorityClient(
     engine,

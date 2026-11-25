@@ -18,9 +18,13 @@ import {
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import {
+  callEnvironmentIdOf,
+  hostRpcRouteOf,
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
+  type HostServingDecision,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import {
   HostRpcError,
   toHostRpcError,
@@ -38,6 +42,10 @@ import {
 } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import {
+  readServingTierHostId,
+  useAppServingDecision,
+} from "@/lib/host/app-serving-decision";
 import type { EnvironmentCloudSource } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   sendFollowedSave,
@@ -212,19 +220,38 @@ function useHostQueryEntry<
   Method extends keyof Registry & keyof HostRpcRegistry & string,
 >(
   args: HostQueryEntryArgs<Registry, Method>,
-): { readonly queryKey: QueryKey; readonly canExecute: boolean } {
+): {
+  readonly queryKey: QueryKey;
+  readonly servingHostId: string | null;
+  readonly canExecute: boolean;
+} {
   const readiness = useReactiveHostReadiness(args.client);
   const effectiveHostId = useEffectiveHostId();
+  const serving = useAppServingDecision();
   return {
-    queryKey: hostQueryEntryKey<Registry, Method>({
+    ...hostQueryEntry<Registry, Method>({
       hostId: readiness.hostId,
       effectiveHostId,
       method: args.method,
       params: args.params,
       cacheKeyIdentity: args.cacheKeyIdentity,
+      serving,
     }),
     canExecute: readiness.canExecute,
   };
+}
+
+interface HostQueryKeyInput<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+> {
+  readonly hostId: string | null;
+  readonly effectiveHostId: string | null;
+  readonly method: Method;
+  readonly params: RequestOfMethod<Registry, Method>;
+  readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
+  /** The app's serving decision this key is built under. */
+  readonly serving: HostServingDecision;
 }
 
 /**
@@ -235,32 +262,44 @@ function useHostQueryEntry<
 export function hostQueryEntryKey<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
->(input: {
-  readonly hostId: string | null;
-  readonly effectiveHostId: string | null;
-  readonly method: Method;
-  readonly params: RequestOfMethod<Registry, Method>;
-  readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
-}): QueryKey {
-  // Keyed by the tier that ANSWERS, not the host the caller named: the client
-  // routes a pool-only method to the pool and an input-device method to the
-  // selected host whatever requester carried it, so keying by the caller
-  // would file one answer under every host and miss the serving tier's
-  // recovery sweeps.
+>(input: HostQueryKeyInput<Registry, Method>): QueryKey {
+  return hostQueryEntry(input).queryKey;
+}
+
+function hostQueryEntry<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+>(
+  input: HostQueryKeyInput<Registry, Method>,
+): {
+  readonly servingHostId: string | null;
+  readonly queryKey: QueryKey;
+} {
+  // Keyed by the peer that ANSWERS, not the host the caller named: the client
+  // routes an account-wide method to the serving peer that answers it and an
+  // input-device method to the selected host whatever requester carried it,
+  // so keying by the caller would file one answer under every host and miss
+  // the serving tier's recovery sweeps. A move of the answering peer is one
+  // new key, so one refetch.
   const servingHostId = hostRpcServingTierHostId(
     input.method,
     input.hostId,
     readProcessHostRpcTierPlan(),
     input.effectiveHostId,
+    input.serving,
+    callEnvironmentIdOf(input.params),
   );
-  return [
-    ...queryKeys.hostMethod<Registry, Method>(
-      servingHostId,
-      input.method,
-      input.params,
-    ),
-    ...(input.cacheKeyIdentity ?? []),
-  ];
+  return {
+    servingHostId,
+    queryKey: [
+      ...queryKeys.hostMethod<Registry, Method>(
+        servingHostId,
+        input.method,
+        input.params,
+      ),
+      ...(input.cacheKeyIdentity ?? []),
+    ],
+  };
 }
 
 /**
@@ -336,12 +375,18 @@ export function useHostQueryWithResponseMap<
   const queryClient = useQueryClient();
   const conditionPollCoordinator =
     getConditionPollEpisodeCoordinator(queryClient);
-  const { queryKey, canExecute } = useHostQueryEntry<Registry, Method>({
+  const { queryKey, servingHostId, canExecute } = useHostQueryEntry<
+    Registry,
+    Method
+  >({
     client,
     method,
     params,
     cacheKeyIdentity: args.cacheKeyIdentity,
   });
+  const checkAnswerer =
+    readProcessHostRpcTierPlan().pool !== null &&
+    hostRpcRouteOf(method) === "account-wide";
   const baseOptions = args.options ?? {};
   const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
     baseOptions;
@@ -367,6 +412,22 @@ export function useHostQueryWithResponseMap<
           buildRequest === undefined ? params : buildRequest(params);
         const requirement = args.requiredHostMethodVersion?.() ?? null;
         const requestContext = args.captureRequestContext?.();
+        if (
+          checkAnswerer &&
+          readServingTierHostId(
+            method,
+            client.getActiveHostId(),
+            null,
+            payload,
+          ) !== servingHostId
+        ) {
+          // A queued retry can outlive its key's routing decision.
+          void queryClient.cancelQueries(
+            { queryKey, exact: true },
+            { revert: true, silent: true },
+          );
+          throw new HostRequestControlFlowError("authority-superseded");
+        }
         const responseTimeoutMs = args.responseTimeoutMs;
         let response: ResponseOfMethod<Registry, Method>;
         if (responseTimeoutMs !== undefined) {

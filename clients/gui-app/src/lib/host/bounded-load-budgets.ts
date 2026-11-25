@@ -32,8 +32,12 @@
  * The fall is a PRESENTATION change, not a death verdict - see
  * `HostReachability.basis`, which is what keeps a slow boot from firing a
  * persisted "terminal permanently closed" notification.
+ *
+ * Defined beside the selection authority, which times a window of a pool
+ * build that neither a computer nor the pool can serve against the same
+ * budget; re-exported here so the table stays the one place to read it.
  */
-export const HOST_STARTING_BUDGET_MS = 15_000;
+export { HOST_STARTING_BUDGET_MS } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 
 /**
  * How long tab content waits for its host's data before it stops spinning and
