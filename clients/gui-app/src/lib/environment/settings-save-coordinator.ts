@@ -204,6 +204,38 @@ interface RememberedSave {
   readonly moveWrittenRevision: number | null;
 }
 
+function findReceiptForSave(
+  proposals: EnvironmentProposalsResponse["proposals"],
+  id: string,
+  record: SettingsSaveMemoryRecord,
+): EnvironmentProposalsResponse["proposals"][number] | undefined {
+  const promoted = proposals.find(({ proposal, promotion }) => {
+    if (
+      promotion?.saveId !== id ||
+      proposal.proposalId !== id ||
+      proposal.hostId !== record.hostId
+    ) {
+      return false;
+    }
+    if (record.environmentId !== null) {
+      return receiptMatches(record, proposal);
+    }
+    const personal = record.personal ?? null;
+    return (
+      personal !== null &&
+      personal.item !== null &&
+      promotion.moveWrittenRevision !== undefined &&
+      proposal.environmentId === personal.environmentId &&
+      receiptMatchesItem(personal.item, proposal)
+    );
+  });
+  if (promoted !== undefined || record.environmentId === null) return promoted;
+  return proposals.find(
+    ({ proposal, promotion }) =>
+      promotion === undefined && receiptMatches(record, proposal),
+  );
+}
+
 function sortByReceipt(
   mine: ReadonlyArray<readonly [string, SettingsSaveMemoryRecord]>,
   proposals: EnvironmentProposalsResponse,
@@ -217,34 +249,7 @@ function sortByReceipt(
   const localSaveIds = new Set(proposals.localSaveIds);
   const proposed = new Map<string, RememberedSave[]>();
   for (const [id, record] of mine) {
-    const promoted = proposals.proposals.find(({ proposal, promotion }) => {
-      if (
-        promotion?.saveId !== id ||
-        proposal.proposalId !== id ||
-        proposal.hostId !== record.hostId
-      ) {
-        return false;
-      }
-      if (record.environmentId !== null) {
-        return receiptMatches(record, proposal);
-      }
-      const personal = record.personal ?? null;
-      return (
-        personal !== null &&
-        personal.item !== null &&
-        promotion.moveWrittenRevision !== undefined &&
-        proposal.environmentId === personal.environmentId &&
-        receiptMatchesItem(personal.item, proposal)
-      );
-    });
-    const row =
-      promoted ??
-      (record.environmentId === null
-        ? undefined
-        : proposals.proposals.find(
-            ({ proposal, promotion }) =>
-              promotion === undefined && receiptMatches(record, proposal),
-          ));
+    const row = findReceiptForSave(proposals.proposals, id, record);
     if (row === undefined) {
       // A save out when the read began may be recorded after this snapshot.
       if (
@@ -272,6 +277,25 @@ function sortByReceipt(
     }
   }
   return { forget, proposed };
+}
+
+type HoldAttemptResult = "applied" | "stays" | "decided";
+
+interface ApplyHoldOptions {
+  readonly cloud: EnvironmentCloud;
+  readonly save: RememberedSave;
+  readonly record: SettingsSaveMemoryRecord;
+  readonly holds: readonly HeldChangeForMatch[];
+  readonly mayApply: () => boolean;
+}
+
+interface ApplyProposedOptions {
+  readonly cloud: EnvironmentCloud;
+  readonly hostId: string;
+  readonly environmentId: string;
+  readonly saves: readonly RememberedSave[];
+  readonly mayAct: () => boolean;
+  readonly mayAdoptLocal: () => boolean;
 }
 
 export function createSettingsSaveCoordinator(
@@ -302,13 +326,13 @@ export function createSettingsSaveCoordinator(
     }
   };
 
-  const applyHold = async (
-    cloud: EnvironmentCloud,
-    save: RememberedSave,
-    record: SettingsSaveMemoryRecord,
-    holds: readonly HeldChangeForMatch[],
-    mayApply: () => boolean,
-  ): Promise<"applied" | "stays" | "decided"> => {
+  const applyHold = async ({
+    cloud,
+    save,
+    record,
+    holds,
+    mayApply,
+  }: ApplyHoldOptions): Promise<HoldAttemptResult> => {
     const { id, receipt, heldRevision, moveWrittenRevision } = save;
     const item =
       record.environmentId === null ? (record.personal?.item ?? null) : record;
@@ -454,14 +478,14 @@ export function createSettingsSaveCoordinator(
     if (cloud === null) return;
     for (const [environmentId, saves] of sorted.proposed) {
       if (
-        !(await applyProposed(
+        !(await applyProposed({
           cloud,
           hostId,
           environmentId,
           saves,
           mayAct,
           mayAdoptLocal,
-        ))
+        }))
       ) {
         return;
       }
@@ -473,14 +497,19 @@ export function createSettingsSaveCoordinator(
     );
   };
 
-  const applyProposed = async (
-    cloud: EnvironmentCloud,
-    hostId: string,
-    environmentId: string,
-    saves: readonly RememberedSave[],
-    mayAct: () => boolean,
-    mayAdoptLocal: () => boolean,
-  ): Promise<boolean> => {
+  const finishHoldAttempt = (id: string, result: HoldAttemptResult): void => {
+    if (result === "applied") appliedListeners.get(id)?.();
+    if (result !== "stays") forget(id);
+  };
+
+  const applyProposed = async ({
+    cloud,
+    hostId,
+    environmentId,
+    saves,
+    mayAct,
+    mayAdoptLocal,
+  }: ApplyProposedOptions): Promise<boolean> => {
     const host =
       mayAdoptLocal() && saves.some((save) => save.prebind)
         ? await readSettingsSaveHost(cloud, environmentId, hostId).catch(
@@ -515,11 +544,10 @@ export function createSettingsSaveCoordinator(
         forget(id);
         continue;
       }
-      const result = await applyHold(cloud, save, record, holds, mayApply);
+      const result = await applyHold({ cloud, save, record, holds, mayApply });
       if (!mayAct()) return false;
       if (!mayApply()) continue;
-      if (result === "applied") appliedListeners.get(id)?.();
-      if (result !== "stays") forget(id);
+      finishHoldAttempt(id, result);
     }
     return true;
   };

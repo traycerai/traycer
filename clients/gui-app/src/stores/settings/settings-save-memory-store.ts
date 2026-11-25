@@ -60,6 +60,13 @@ interface SettingsSaveMemoryState {
   readonly markAnswered: (id: string) => void;
 }
 
+function sameItemSlot(
+  a: RememberedSettingsItem,
+  b: RememberedSettingsItem,
+): boolean {
+  return a.kind === b.kind && a.key === b.key && a.os === b.os;
+}
+
 function sameItem(
   a: SettingsSaveMemoryRecord,
   b: SettingsSaveMemoryRecord,
@@ -73,9 +80,7 @@ function sameItem(
     bItem !== null &&
     aTarget?.environmentId === bTarget?.environmentId &&
     a.hostId === b.hostId &&
-    aItem.kind === bItem.kind &&
-    aItem.key === bItem.key &&
-    aItem.os === bItem.os
+    sameItemSlot(aItem, bItem)
   );
 }
 
