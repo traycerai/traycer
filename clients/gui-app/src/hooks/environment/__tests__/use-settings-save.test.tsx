@@ -1,5 +1,9 @@
 import "../../../../__tests__/test-browser-apis";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  matchQuery,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -22,11 +26,33 @@ import type {
   EnvironmentTransportAnswer,
   EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
-import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
-import { settingsSaveRequestId } from "@traycer/protocol/framework/settings-save-request-id";
-import type { EnvironmentProposalsResponse } from "@traycer/protocol/host/environment/settings-proposals";
+import {
+  authnHeldApplyConflictSchema,
+  authnItemWriteResponseSchema,
+  authnOperationReviewResponseSchema,
+  type AuthnItemRow,
+} from "@traycer-clients/shared/environment/authn-environment-schemas";
+import {
+  settingsSaveIdFromRequestId,
+  settingsSaveRequestId,
+} from "@traycer/protocol/framework/settings-save-request-id";
+import {
+  environmentProposalsV12,
+  type EnvironmentProposalsResponse,
+} from "@traycer/protocol/host/environment/settings-proposals";
+import { environmentStatusV13 } from "@traycer/protocol/host/environment-contracts";
+import {
+  environmentMoveOutcomeAnswerSchema,
+  environmentMoveStageResponseSchema,
+} from "@traycer/protocol/host/environment/move-contracts";
+import { z } from "zod";
 import type { HostListResponse } from "@traycer/protocol/host/host-status";
-import type { SetupScript } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentMoveAttemptOutcome,
+  SetupScript,
+} from "@traycer/protocol/host/environment-schemas";
+import { readSettingsItemRows } from "@traycer-clients/shared/environment/settings-save-target";
+import * as settingsSaveTarget from "@traycer-clients/shared/environment/settings-save-target";
 import type { ConfigShellGetResponseV11 } from "@traycer/protocol/host/config/index";
 import { hostRpcRegistry } from "@traycer/protocol/host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
@@ -65,8 +91,11 @@ import {
   useSettingsItemExists,
 } from "@/hooks/environment/use-settings-save";
 import { captureSettingsSaveOrigin } from "@/lib/environment/settings-save-origin";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
+import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environment-move-start-mutation";
 import { SettingsSaveCoordinatorProvider } from "@/providers/settings-save-coordinator-provider";
 import { useSettingsSaveCoordinator } from "@/providers/settings-save-coordinator-context";
+import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
 import { HostRuntimeContext, type HostRpcRegistry } from "@/lib/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
@@ -80,6 +109,7 @@ import {
   type EnvironmentClientFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import { settingsSaveMemoryKey } from "@/lib/persist";
+import { environmentQueryKeys } from "@/lib/query-keys";
 import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
   SETTINGS_SAVE_MEMORY_TTL_MS,
@@ -122,11 +152,34 @@ vi.mock(
     }),
   }),
 );
+const followUpCallbacks = vi.hoisted(() => ({
+  pending: null as Set<() => void> | null,
+}));
+vi.mock(
+  "@/lib/environment/settings-save-coordinator",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/lib/environment/settings-save-coordinator")
+      >();
+    return {
+      ...actual,
+      scheduleFollowUp: (run: () => void, delayMs: number) => {
+        const pending = followUpCallbacks.pending;
+        if (pending === null) return actual.scheduleFollowUp(run, delayMs);
+        pending.add(run);
+        return () => {
+          pending.delete(run);
+        };
+      },
+    };
+  },
+);
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
 }));
 const addressableHostMock = vi.hoisted((): { id: string } => ({
-  id: "host-a",
+  id: "00000000-0000-4000-8000-000000000100",
 }));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => addressableHostMock.id,
@@ -134,10 +187,25 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 
 const ACCOUNT_A = "account-a";
 const ACCOUNT_B = "account-b";
-const ENVIRONMENT_ID = "environment-a";
-const HOST_ID = "host-a";
+const ENVIRONMENT_ID = "env_01JA000000000000000000000A";
+const HOST_ID = "00000000-0000-4000-8000-000000000100";
 const OTHER_HOST_ID = "host-b";
 const SHARING_GENERATION = 4;
+const MOVE_ATTEMPT_ID = "00000000-0000-4000-8000-000000000101";
+const MOVE_ACCEPTANCE_ID = "00000000-0000-4000-8000-000000000102";
+const MOVE_PLAN_HASH = "a".repeat(64);
+const moveAcceptanceAnswer = z.strictObject({
+  acceptanceId: z.uuid(),
+  expiresAt: z.iso.datetime(),
+});
+const heldApplyRequest = z.strictObject({
+  revision: z.number().int().nonnegative(),
+  expectedLiveRevision: z.number().int().nonnegative().nullable(),
+  requiresSecrets: z.boolean().optional(),
+});
+const guardedHeldApplyRequest = heldApplyRequest.extend({
+  expectedSharingGeneration: z.number().int().nonnegative(),
+});
 const PROVIDER_ID = "codex";
 const ITEM_KEY = `${PROVIDER_ID}:CODEX_API_KEY`;
 const ROW_ORDER_KEY = "SAVE_ORDERING_CASE";
@@ -297,6 +365,26 @@ function renderManagedProfileDialog(
 }
 
 interface MutableAuthnState {
+  authnUnreachable: boolean;
+  acceptedMove: {
+    readonly identity: {
+      readonly kind: string;
+      readonly key: string;
+      readonly os: string;
+    };
+    readonly revision: number;
+  } | null;
+  move: EnvironmentMoveAttemptOutcome | null;
+  readonly computerVariables: Map<string, string | null>;
+  originSharingGeneration: number;
+  acceptedMoveReadGate: {
+    readonly entered: Deferred<void>;
+    readonly resume: Deferred<void>;
+  } | null;
+  rejectedGuardedApply: number;
+  applyReview:
+    | ((request: EnvironmentTransportRequest) => EnvironmentTransportAnswer)
+    | null;
   rows: readonly AuthnItemRow[];
   rowsByKind: Readonly<Record<string, readonly AuthnItemRow[]>>;
   rowsByKindAfterApply: Readonly<
@@ -362,8 +450,28 @@ function hostListAnswer(state: MutableAuthnState): EnvironmentTransportAnswer {
         ? [
             {
               hostId: HOST_ID,
+              environmentId: ENVIRONMENT_ID,
               sharingGeneration: SHARING_GENERATION,
+              enrolledByUserId: ACCOUNT_A,
+              boundAt: 1,
               hostPlatform: "darwin-arm64",
+              hostName: "Local host",
+              hostKind: "personal",
+              hostVersion: "1.5.4",
+              bindingGeneration: 1,
+              desiredRevision: 12,
+              receivedRevision: 12,
+              appliedRevision: 12,
+              reportedAt: 1,
+              online: true,
+              lastSeenAt: 1,
+              remoteAccess: { enabled: true, epoch: 0 },
+              setupStage: null,
+              purgePending: false,
+              minimumHostVersion: null,
+              localOverrides: [],
+              items: [],
+              setupAttempts: [],
             },
           ]
         : [],
@@ -424,6 +532,14 @@ function makeSaveHarness(overrides: {
 }): SaveHarness {
   const listeners = new Set<() => void>();
   const state: MutableAuthnState = {
+    authnUnreachable: false,
+    acceptedMove: null,
+    originSharingGeneration: SHARING_GENERATION,
+    acceptedMoveReadGate: null,
+    rejectedGuardedApply: 0,
+    move: null,
+    computerVariables: new Map(),
+    applyReview: null,
     rows: overrides.rows ?? [row("macos", "old-value", 3)],
     rowsByKind: overrides.rowsByKind ?? {},
     rowsByKindAfterApply: null,
@@ -480,6 +596,57 @@ function makeSaveHarness(overrides: {
     onOriginSignIn: () => true,
     transport: async (request) => {
       authnRequests.push(request);
+      if (state.authnUnreachable)
+        throw new Error("Authn transport unavailable");
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname ===
+          `/api/v3/hosts/${HOST_ID}/move-acceptances`
+      ) {
+        const accepted = moveAcceptanceAnswer.parse({
+          acceptanceId: MOVE_ACCEPTANCE_ID,
+          expiresAt: "2026-11-25T00:10:00.000Z",
+        });
+        return {
+          status: 201,
+          text: JSON.stringify(accepted),
+        };
+      }
+      if (
+        request.method === "GET" &&
+        new URL(request.url).pathname ===
+          `/api/v3/hosts/${HOST_ID}/move-acceptances/${MOVE_ACCEPTANCE_ID}`
+      ) {
+        const readGate = state.acceptedMoveReadGate;
+        if (readGate !== null) {
+          readGate.entered.resolve(undefined);
+          await readGate.resume.promise;
+        }
+        if (state.acceptedMove === null) return { status: 404, text: "" };
+        const { identity, revision } = state.acceptedMove;
+        return {
+          status: 200,
+          text: JSON.stringify({
+            state: "consumed",
+            acceptanceId: MOVE_ACCEPTANCE_ID,
+            consumedAt: "2026-11-25T00:01:00.000Z",
+            result: {
+              targetKind: "personal",
+              migration: {
+                acceptanceId: MOVE_ACCEPTANCE_ID,
+                migration: {
+                  revision,
+                  converged: [identity],
+                  displaced: [],
+                  differs: [],
+                  needsYou: [],
+                },
+                secrets: [],
+              },
+            },
+          }),
+        };
+      }
       if (request.url.endsWith("/api/v3/environments/me")) {
         return {
           status: 200,
@@ -497,7 +664,7 @@ function makeSaveHarness(overrides: {
       }
       if (request.method === "POST" && request.url.includes("/review/")) {
         state.reviewPostStarted.resolve(undefined);
-        return reviewApplyAnswer(state);
+        return state.applyReview?.(request) ?? reviewApplyAnswer(state);
       }
       throw new Error(`Unexpected authn route: ${request.method}`);
     },
@@ -539,10 +706,44 @@ function makeSaveHarness(overrides: {
       "environment.status": () => {
         hostRequests.push("environment.status");
         statusRequested.resolve(undefined);
-        return environmentStatusFixture({
-          principal: state.ownSettings ? null : { kind: "personal" },
+        return environmentStatusV13.responseSchema.parse(
+          environmentStatusFixture({
+            principal: state.ownSettings ? null : { kind: "personal" },
+            ...(state.ownSettings
+              ? { planes: { records: "local", broker: "local", room: "local" } }
+              : {}),
+            move: state.move,
+          }),
+        );
+      },
+      "environment.move.stage": ({ target, keyChoices }) => {
+        if (target.kind !== "personal")
+          throw new Error("Expected Personal Move");
+        return environmentMoveStageResponseSchema.parse({
+          evidence: {
+            attemptId: MOVE_ATTEMPT_ID,
+            planHash: MOVE_PLAN_HASH,
+            planRevision: 1,
+            hostVersion: "1.5.4",
+            itemCount: 1,
+            keyChoices,
+            sourceHostId: HOST_ID,
+            sharingGeneration: SHARING_GENERATION - 1,
+            targetKind: "personal",
+            environmentId: target.environmentId,
+            disclosureVersion: 1,
+          },
+          authorization: { manifestHash: "b".repeat(64) },
         });
       },
+      "environment.move.start": ({ attemptId, acceptanceId }) => {
+        state.move = { state: "running", attemptId, acceptanceId };
+        return environmentMoveOutcomeAnswerSchema.parse(state.move);
+      },
+      "environment.move.outcome": ({ attemptId }) =>
+        environmentMoveOutcomeAnswerSchema.parse(
+          state.move ?? { state: "not_found", attemptId },
+        ),
       "environment.host.read": () => {
         hostRequests.push("environment.host.read");
         return hostBinding;
@@ -585,10 +786,17 @@ function makeSaveHarness(overrides: {
       },
       "config.env.list": () => {
         hostRequests.push("config.env.list");
-        return { entries: [] };
+        return {
+          entries: [...state.computerVariables].map(([key, value]) => ({
+            key,
+            value,
+          })),
+        };
       },
       "config.env.set": (request) => {
         captureSave("config.env.set", request);
+        if (state.move !== null)
+          state.computerVariables.set(request.key, request.value);
         hostEvents.push("answer:config.env.set");
         return { key: request.key, value: request.value };
       },
@@ -630,8 +838,11 @@ function makeSaveHarness(overrides: {
     },
   });
   recordNegotiatedHostManifest(HOST_ID, {
-    "environment.status": { major: 1, minor: 1 },
+    "environment.status": { major: 1, minor: 3 },
     "environment.host.read": { major: 1, minor: 1 },
+    "environment.move.stage": { major: 1, minor: 0 },
+    "environment.move.start": { major: 1, minor: 0 },
+    "environment.move.outcome": { major: 1, minor: 0 },
     "providers.setEnvOverride": { major: 2, minor: 2 },
     "providers.deleteEnvOverride": { major: 2, minor: 1 },
     "environment.proposals": {
@@ -1136,6 +1347,428 @@ function requestBody(request: EnvironmentTransportRequest): unknown {
     : request.body;
 }
 
+function nextSaveMemoryBucket(name: string): Promise<void> {
+  return new Promise((resolve) => {
+    const unsubscribe = useSettingsSaveMemoryStore.subscribe(() => {
+      if (useSettingsSaveMemoryStore.persist.getOptions().name === name) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
+
+interface MountedOutageSave {
+  readonly result: {
+    readonly current: {
+      readonly editor: ShellConfigController;
+      readonly coordinator: SettingsSaveCoordinator | null;
+    };
+  };
+  readonly unmount: () => void;
+}
+
+async function startSettingsSaveDuringMove(
+  harness: SaveHarness,
+): Promise<MountedOutageSave> {
+  const mounted = renderHook(
+    () => ({
+      move: useEnvironmentMoveStartMutation(harness.client, null),
+      editor: useRpcShellConfigController({
+        enabled: true,
+        pickProgramFile: null,
+      }),
+      coordinator: useSettingsSaveCoordinator(),
+    }),
+    { wrapper: harness.wrapper },
+  );
+  const { result } = mounted;
+  await act(async () => harness.statusRequested);
+  await act(async () => {
+    const accepted = await result.current.move.mutateAsync({
+      hostId: HOST_ID,
+      target: { kind: "personal", environmentId: ENVIRONMENT_ID },
+      planHash: MOVE_PLAN_HASH,
+      keyChoices: [],
+      personal: { items: [], holdsSecrets: false },
+    });
+    expect(accepted).toMatchObject({
+      kind: "started",
+      outcome: { state: "running", acceptanceId: MOVE_ACCEPTANCE_ID },
+    });
+  });
+
+  return mounted;
+}
+
+async function exposeBindingBeforeOutagePress(
+  harness: SaveHarness,
+  scope: string,
+): Promise<void> {
+  if (scope !== "unbound") harness.state.hostListed = true;
+  if (scope !== "bound") return;
+  const requestedBase = deferred<void>();
+  const hostKeyPrefix = environmentQueryKeys
+    .settingsSaveHost(ENVIRONMENT_ID, HOST_ID, ACCOUNT_A, "")
+    .slice(0, -1);
+  const unsubscribe = harness.queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== "updated" || event.action.type !== "error") return;
+    if (matchQuery({ queryKey: hostKeyPrefix }, event.query)) {
+      requestedBase.resolve(undefined);
+    }
+  });
+  try {
+    harness.state.ownSettings = false;
+    await act(async () => {
+      await invalidateEnvironmentReads(harness.queryClient, [
+        "environment.status",
+      ]);
+    });
+    // Only the bound editor subscribes to this base read. Its error
+    // confirms the published binding reached the editor during the outage.
+    await requestedBase.promise;
+  } finally {
+    unsubscribe();
+  }
+}
+
+async function pressOutageSave(
+  harness: SaveHarness,
+  editor: ShellConfigController,
+  key: string,
+  scope: string,
+) {
+  const requestsBeforePress = harness.authnRequests.length;
+  await act(async () => {
+    await editor.setEnvAsync({ key, value: "V2" });
+  });
+  const [record] = harness.recordsAtSend;
+  const write = harness.hostCalls.find(
+    ({ method }) => method === "config.env.set",
+  );
+  if (write === undefined) throw new Error("Missing host save request");
+  const appSaveId = settingsSaveIdFromRequestId(write.requestId);
+  if (scope !== "bound") {
+    expect(record).toMatchObject({
+      environmentId: null,
+      editId: appSaveId,
+    });
+    expect(appSaveId).not.toBeNull();
+  }
+  const saveId = appSaveId ?? "00000000-0000-4000-8000-000000000104";
+  expect(harness.state.computerVariables.get(key)).toBe("V2");
+  expect(
+    harness.authnRequests
+      .slice(requestsBeforePress)
+      .some(({ url }) =>
+        scope === "bound"
+          ? url.endsWith("/hosts?include=binding")
+          : url.endsWith("/environments/me"),
+      ),
+  ).toBe(true);
+  expect(reviewApplyRequests(harness)).toEqual([]);
+
+  return { appSaveId, record, saveId };
+}
+
+interface OutageApplyFence {
+  readonly interruption: string;
+  readonly heldGeneration: number;
+}
+
+function readOutageApply(
+  request: EnvironmentTransportRequest,
+  state: MutableAuthnState,
+  { interruption, heldGeneration }: OutageApplyFence,
+):
+  | { readonly body: z.infer<typeof heldApplyRequest>; readonly conflict: null }
+  | { readonly body: null; readonly conflict: EnvironmentTransportAnswer } {
+  const submitted = requestBody(request);
+  const checked = guardedHeldApplyRequest.safeParse(submitted);
+  const body = checked.success
+    ? checked.data
+    : heldApplyRequest.parse(submitted);
+  if (checked.success) {
+    expect(checked.data.expectedSharingGeneration).toBe(heldGeneration);
+  }
+  if (checked.success && interruption === "old-authn") {
+    state.rejectedGuardedApply += 1;
+    return {
+      body: null,
+      conflict: {
+        status: 400,
+        text: JSON.stringify({
+          statusCode: 400,
+          error: "apply body is invalid",
+        }),
+      },
+    };
+  }
+  if (
+    checked.success &&
+    checked.data.expectedSharingGeneration !== state.originSharingGeneration
+  ) {
+    return {
+      body: null,
+      conflict: {
+        status: 409,
+        text: JSON.stringify(
+          authnHeldApplyConflictSchema.parse({ code: "superseded" }),
+        ),
+      },
+    };
+  }
+  return { body, conflict: null };
+}
+
+function exposeOutageHold(
+  harness: SaveHarness,
+  {
+    key,
+    currentRow,
+    saveId,
+    moveRevision,
+    receiptAcceptanceId,
+    heldId,
+    heldRevision,
+    interruption,
+  }: {
+    readonly key: string;
+    readonly currentRow: AuthnItemRow;
+    readonly saveId: string;
+    readonly moveRevision: number;
+    readonly receiptAcceptanceId: string | undefined;
+    readonly heldId: string;
+    readonly heldRevision: number;
+    readonly interruption: string;
+  },
+): void {
+  const address = { kind: "variable", key };
+  const [variable] = variableProposalForEdit(saveId, "put").proposals;
+  harness.state.proposals = environmentProposalsV12.responseSchema.parse({
+    proposals: [
+      {
+        ...variable,
+        proposal: { ...variable.proposal, os: "any" },
+        promotion: {
+          saveId,
+          heldRevision,
+          moveWrittenRevision: moveRevision,
+          ...(receiptAcceptanceId === undefined
+            ? {}
+            : { moveAcceptanceId: receiptAcceptanceId }),
+        },
+      },
+    ],
+  });
+  const heldValue = { value: harness.state.computerVariables.get(key) };
+  const held = {
+    ...address,
+    type: "held",
+    heldId,
+    revision: heldRevision,
+    os: "any",
+    hostId: HOST_ID,
+    sharingGeneration: SHARING_GENERATION,
+    hostName: "Local host",
+    heldAt: 2,
+    live: { value: currentRow.value, revision: currentRow.revision },
+    op: "put",
+    value: heldValue,
+  };
+  const reviewBody = {
+    review: {
+      hosts: [],
+      applied: [],
+      needsYou: [held],
+      staysOnOneHost: [],
+      unrecognisedUploaded: false,
+    },
+  };
+  authnOperationReviewResponseSchema.parse(reviewBody);
+  harness.state.reviewAnswer = {
+    status: 200,
+    text: JSON.stringify(reviewBody),
+  };
+  harness.state.applyReview = (request) => {
+    const { body, conflict } = readOutageApply(request, harness.state, {
+      interruption,
+      heldGeneration: held.sharingGeneration,
+    });
+    if (conflict !== null) return conflict;
+    const current = harness.state.rowsByKind.variable.find(
+      (item) =>
+        item.kind === held.kind && item.key === held.key && item.os === held.os,
+    );
+    if (
+      request.method !== "POST" ||
+      new URL(request.url).pathname !==
+        `/api/v3/environments/${ENVIRONMENT_ID}/review/held/${heldId}/apply` ||
+      body.revision !== held.revision ||
+      body.expectedLiveRevision !== (current?.revision ?? null)
+    ) {
+      return {
+        status: 409,
+        text: JSON.stringify(
+          authnHeldApplyConflictSchema.parse({
+            code: "revision_conflict",
+            current: current ?? null,
+          }),
+        ),
+      };
+    }
+    const revision = Math.max(held.revision, current?.revision ?? 0) + 1;
+    if (heldValue.value === undefined)
+      throw new Error("Expected a saved value");
+    const item = {
+      ...itemRow(address, "any", { value: heldValue.value }, revision),
+      writtenBy: {
+        source: "live",
+        hostId: HOST_ID,
+        hostName: "Local host",
+      },
+    };
+    harness.state.rowsByKind = { variable: [item] };
+    const cleared = { review: { ...reviewBody.review, needsYou: [] } };
+    authnOperationReviewResponseSchema.parse(cleared);
+    harness.state.reviewAnswer = {
+      status: 200,
+      text: JSON.stringify(cleared),
+    };
+    return {
+      status: 200,
+      text: JSON.stringify(
+        authnItemWriteResponseSchema.parse({
+          item,
+          replayed: false,
+          revision,
+        }),
+      ),
+    };
+  };
+}
+
+async function reconcileThroughProviderCleanup(
+  harness: SaveHarness,
+  mounted: MountedOutageSave,
+  coordinator: SettingsSaveCoordinator,
+): Promise<void> {
+  const gate = { entered: deferred<void>(), resume: deferred<void>() };
+  harness.state.acceptedMoveReadGate = gate;
+  const readHost = settingsSaveTarget.readSettingsSaveHost;
+  let proofReadArmed = false;
+  let stopped = false;
+  const observation = vi
+    .spyOn(settingsSaveTarget, "readSettingsSaveHost")
+    .mockImplementation(async (cloud, environmentId, hostId) => {
+      const host = await readHost(cloud, environmentId, hostId);
+      if (!proofReadArmed || host === null) return host;
+      return {
+        ...host,
+        get sharingGeneration() {
+          if (!stopped) {
+            // Run the real provider cleanup before the proof helper's caller resumes.
+            queueMicrotask(() => {
+              mounted.unmount();
+              stopped = true;
+            });
+          }
+          return host.sharingGeneration;
+        },
+      };
+    });
+  try {
+    const reconciliation = coordinator.reconcile(HOST_ID);
+    await gate.entered.promise;
+    proofReadArmed = true;
+    gate.resume.resolve(undefined);
+    await act(async () => reconciliation);
+    expect(reviewApplyRequests(harness)).toHaveLength(0);
+    expect(stopped).toBe(true);
+  } finally {
+    observation.mockRestore();
+  }
+}
+
+async function reconcileOutageSave(
+  harness: SaveHarness,
+  mounted: MountedOutageSave,
+  interruption: string,
+) {
+  let coordinator = mounted.result.current.coordinator;
+  if (interruption === "reopen") {
+    mounted.unmount();
+    useSettingsSaveMemoryStore.persist.setOptions({
+      name: settingsSaveMemoryKey(null),
+    });
+    await useSettingsSaveMemoryStore.persist.rehydrate();
+    const reopened = renderHook(() => useSettingsSaveCoordinator(), {
+      wrapper: harness.wrapper,
+    });
+    coordinator = reopened.result.current;
+  }
+  if (coordinator === null) throw new Error("Expected the save coordinator");
+  if (interruption === "sign-out" || interruption === "account-switch") {
+    const nextAccount = interruption === "account-switch" ? ACCOUNT_B : null;
+    const retired = nextSaveMemoryBucket(settingsSaveMemoryKey(nextAccount));
+    act(() => {
+      authIdentityGeneration += 1;
+      if (nextAccount === null) {
+        useAuthStore.setState(useAuthStore.getInitialState(), true);
+      } else {
+        setAccount(nextAccount);
+      }
+    });
+    await retired;
+    const reentered = nextSaveMemoryBucket(settingsSaveMemoryKey(ACCOUNT_A));
+    act(() => {
+      authIdentityGeneration += 1;
+      setAccount(ACCOUNT_A);
+    });
+    await reentered;
+  }
+  if (interruption === "provider-cleanup") {
+    await reconcileThroughProviderCleanup(harness, mounted, coordinator);
+  } else if (interruption === "stop") {
+    const gate = { entered: deferred<void>(), resume: deferred<void>() };
+    harness.state.acceptedMoveReadGate = gate;
+    const reconciliation = coordinator.reconcile(HOST_ID);
+    await gate.entered.promise;
+    harness.state.hostListed = false;
+    harness.state.originSharingGeneration += 1;
+    gate.resume.resolve(undefined);
+    await act(async () => reconciliation);
+  } else {
+    await act(async () => coordinator.reconcile(HOST_ID));
+  }
+
+  return coordinator;
+}
+
+async function checkOldAuthnRefusal(
+  harness: SaveHarness,
+  {
+    coordinator,
+    editor,
+    toastError,
+    followUps,
+  }: {
+    readonly coordinator: SettingsSaveCoordinator;
+    readonly editor: ShellConfigController;
+    readonly toastError: typeof toast.error;
+    readonly followUps: ReadonlySet<() => void>;
+  },
+): Promise<void> {
+  expect(harness.state.rejectedGuardedApply).toBe(1);
+  expect(reviewApplyRequests(harness)).toHaveLength(1);
+  expect(records()).toEqual([]);
+  expect(toastError).not.toHaveBeenCalled();
+  expect(editor.configError).toBeNull();
+  expect(followUps.size).toBe(0);
+  await act(async () => coordinator.reconcile(HOST_ID));
+  expect(reviewApplyRequests(harness)).toHaveLength(1);
+}
+
 async function signOutAndReenterSameAccount(): Promise<void> {
   act(() => {
     authIdentityGeneration += 1;
@@ -1253,6 +1886,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  followUpCallbacks.pending = null;
   for (const harness of activeHarnesses.splice(0)) harness.dispose();
   addressableHostMock.id = HOST_ID;
   vi.restoreAllMocks();
@@ -1359,6 +1993,211 @@ describe("settings-save callers", () => {
     expect(harness.saveRequests).toEqual(["providers.setEnvOverride"]);
     expect(records()).toEqual([]);
   });
+
+  it.each([
+    {
+      label: "the accepted Move's write before binding",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "none",
+    },
+    {
+      label: "the accepted Move's write with the binding published",
+      scope: "bound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "none",
+    },
+    {
+      label:
+        "the accepted Move's write while the bound host's editor still sees Local",
+      scope: "still-local",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "none",
+    },
+    {
+      label: "a later independent write with the same bytes",
+      scope: "unbound",
+      independent: true,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "none",
+    },
+    {
+      label: "a receipt from another acceptance",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ATTEMPT_ID,
+      interruption: "none",
+    },
+    {
+      label: "a receipt without an acceptance",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: undefined,
+      interruption: "none",
+    },
+    {
+      label: "a sign-out before recovery",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "sign-out",
+    },
+    {
+      label: "a direct account switch away and back",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "account-switch",
+    },
+    {
+      label: "a Stop during the consumed acceptance read",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "stop",
+    },
+    {
+      label: "provider cleanup between the final proof and Apply",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "provider-cleanup",
+    },
+    {
+      label: "an older authn with the strict original Apply body",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "old-authn",
+    },
+    {
+      label: "a reopen on the same sign-in",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "reopen",
+    },
+  ])(
+    "recovers or leaves an outage save in review with $label",
+    async ({ scope, independent, receiptAcceptanceId, interruption }) => {
+      const harness = makeSaveHarness({
+        ownSettings: true,
+        hostListed: false,
+        proposalMinor: 2,
+      });
+      const key = ROW_ORDER_KEY;
+      const address = { kind: "variable", key };
+      const moveRevision = 20;
+      const heldRevision = 22;
+      const heldId = "00000000-0000-4000-8000-000000000103";
+      harness.state.computerVariables.set(key, "V1");
+      const toastError = vi.spyOn(toast, "error");
+      const followUps = new Set<() => void>();
+      if (interruption === "old-authn") followUpCallbacks.pending = followUps;
+      const mounted = await startSettingsSaveDuringMove(harness);
+      const { result } = mounted;
+
+      // Authn has committed V1, but the host has not seen the binding.
+      const moveRow = {
+        ...itemRow(address, "any", { value: "V1" }, moveRevision),
+        writtenBy: {
+          source: "migration",
+          hostId: HOST_ID,
+          hostName: "Local host",
+        },
+      };
+      harness.state.rowsByKind = { variable: [moveRow] };
+      harness.state.acceptedMove = {
+        identity: { ...address, os: "any" },
+        revision: moveRevision,
+      };
+      harness.state.authnUnreachable = true;
+      const acceptedMove = {
+        attemptId: MOVE_ATTEMPT_ID,
+        acceptanceId: MOVE_ACCEPTANCE_ID,
+      };
+      harness.state.move = {
+        ...acceptedMove,
+        state: "retry",
+        cause: "timeout",
+      };
+      expect(
+        await harness.client.request("environment.move.outcome", {
+          attemptId: MOVE_ATTEMPT_ID,
+        }),
+      ).toEqual(harness.state.move);
+      await exposeBindingBeforeOutagePress(harness, scope);
+      const { appSaveId, record, saveId } = await pressOutageSave(
+        harness,
+        result.current.editor,
+        key,
+        scope,
+      );
+
+      // The same acceptance resumes and exposes the exact UUID and Move write.
+      harness.state.authnUnreachable = false;
+      harness.state.ownSettings = false;
+      harness.state.hostListed = true;
+      harness.state.move = { ...acceptedMove, state: "done" };
+      const currentRow = independent
+        ? {
+            ...moveRow,
+            revision: moveRevision + 1,
+            writtenBy: { source: "live", hostId: null, hostName: null },
+          }
+        : moveRow;
+      harness.state.rowsByKind = { variable: [currentRow] };
+      exposeOutageHold(harness, {
+        key,
+        currentRow,
+        saveId,
+        moveRevision,
+        receiptAcceptanceId,
+        heldId,
+        heldRevision,
+        interruption,
+      });
+      const coordinator = await reconcileOutageSave(
+        harness,
+        mounted,
+        interruption,
+      );
+
+      const signedIn = harness.environmentCloud();
+      const [personal, review] = await Promise.all([
+        readSettingsItemRows(signedIn, ENVIRONMENT_ID, "variable"),
+        environmentReview.readHeldChangesForMatch(signedIn, ENVIRONMENT_ID),
+      ]);
+      const applied =
+        (interruption === "none" || interruption === "reopen") &&
+        !independent &&
+        receiptAcceptanceId === MOVE_ACCEPTANCE_ID;
+      expect({
+        computer: harness.state.computerVariables.get(key),
+        correlatedSave: appSaveId !== null && record?.editId === appSaveId,
+        personal: personal.find((item) => item.key === key)?.value,
+        personalRevision: personal.find((item) => item.key === key)?.revision,
+        review: review.map((held) => held.heldId),
+      }).toEqual({
+        computer: "V2",
+        correlatedSave: true,
+        personal: { value: applied ? "V2" : "V1" },
+        personalRevision: applied ? heldRevision + 1 : currentRow.revision,
+        review: applied ? [] : [heldId],
+      });
+      if (interruption === "old-authn") {
+        await checkOldAuthnRefusal(harness, {
+          coordinator,
+          editor: result.current.editor,
+          toastError,
+          followUps,
+        });
+      }
+    },
+  );
 
   it("carries the original prebind UUID through reopen and uses the exact Move revision for an absent row", async () => {
     const harness = makeSaveHarness({

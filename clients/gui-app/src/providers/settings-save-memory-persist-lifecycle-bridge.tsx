@@ -24,6 +24,12 @@ export function SettingsSaveMemoryPersistLifecycleBridge(
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
 
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
+    if (transition.kind === "userSwitched") {
+      // This store reads localStorage synchronously. Include records written
+      // by another window before retargeting to the newly signed-in account.
+      void useSettingsSaveMemoryStore.persist.rehydrate();
+      useSettingsSaveMemoryStore.getState().retireUnansweredMoves();
+    }
     if (transition.kind === "signedIn" || transition.kind === "userSwitched") {
       const name = settingsSaveMemoryKey(transition.userId);
       retargetPersistedStore({
