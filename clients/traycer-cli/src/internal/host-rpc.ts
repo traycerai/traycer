@@ -8,6 +8,7 @@ import {
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import {
   requireCliHostSession,
+  type CliHostRefusal,
   type CliRefusalEnding,
   type CliRefusalEvidence,
   type SignInRejection,
@@ -458,7 +459,11 @@ export async function callHostRpcAtEndpoint<
 
 /**
  * The errors that left `requestAtEndpoint` while no request frame of the call
- * had been written: an open frame at most. Only errors go in.
+ * had been written: an open frame at most. Only errors go in. The mark is
+ * positive evidence on the marked exits alone. An error that left elsewhere,
+ * such as a session that could not be acquired before the call's observer
+ * existed, or a pre-send abort, is not marked: it says nothing either way, and
+ * the caller keeps it as an unknown outcome, which is the safe reading.
  */
 const wroteNoRequest = new WeakSet<object>();
 
@@ -477,6 +482,30 @@ function markWroteNoRequest<Failure>(error: Failure): Failure {
   return error;
 }
 
+/**
+ * How the gate ended a call, as strings only: the rejection object and every
+ * sign-in key stay with the gate. `failure` is the host refusal's kind, and
+ * `null` for a rejected sign-in.
+ */
+interface GateEnding {
+  readonly kind: "sign-in-rejected" | "refusal";
+  readonly failure: CliHostRefusal["kind"] | null;
+}
+
+/** The errors `blockedCallCliError` made, and how the gate ended each. */
+const gateEndings = new WeakMap<object, GateEnding>();
+
+/**
+ * How the gate ended the call that threw `error`, or `null` when `error` is
+ * not one the gate's ending made. The CliError a gate ending throws carries
+ * only its words; this is the typed ending behind them.
+ */
+export function hostRpcGateEndingOf(error: unknown): GateEnding | null {
+  return typeof error === "object" && error !== null
+    ? (gateEndings.get(error) ?? null)
+    : null;
+}
+
 /** A call the gate's ending stops, logged once. */
 function blockedCallCliError(
   method: string,
@@ -493,7 +522,14 @@ function blockedCallCliError(
         ending.kind === "sign-in-rejected" ? ending.kind : ending.failure.kind,
     },
   );
-  return refusalEndingCliError(ending);
+  const error = refusalEndingCliError(ending);
+  gateEndings.set(
+    error,
+    ending.kind === "sign-in-rejected"
+      ? { kind: "sign-in-rejected", failure: null }
+      : { kind: "refusal", failure: ending.failure.kind },
+  );
+  return error;
 }
 
 const CALLER_GAVE_UP: unique symbol = Symbol("caller-gave-up");
@@ -649,13 +685,13 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       // read starts after its deadline, and one under way replaces nothing.
       if (dispatch.signal?.aborted === true) throw err;
       // A request frame of this call was written: the host may have carried
-      // it out, and the call's failure leaves as the client produced it. The
-      // gate's refusal ends a call only when nothing was written.
-      if (requestWritten) throw err;
+      // it out. The call's error leaves as the client's own object, with only
+      // the gate's sign-in judgement added to it; the gate's refusal ends a
+      // call only when nothing was written.
       // The one judgement for this exit, and the exit in the same turn as it.
       // With no refusal reported, the gate's verdict on the stored sign-in
       // rides on the refusal thrown now, to its synchronous mapping.
-      if (ended.refusal === null) {
+      if (ended.refusal === null || requestWritten) {
         const refusal = finalRefusalOf(err);
         if (refusal instanceof HostRpcError) {
           const judged = await verdictBeforeCaller(
@@ -668,7 +704,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
             rejectionOfRefusal.set(refusal, judged.value);
           }
         }
-        throw markWroteNoRequest(err);
+        throw requestWritten ? err : markWroteNoRequest(err);
       }
       const judged = await verdictBeforeCaller(
         session.tokens.refusalEndingCommandNow(endpoint.hostId),

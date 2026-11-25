@@ -67,7 +67,7 @@ describe("worktree delete with a mint authn never answers", () => {
     prepareHostFor(WORKTREE_DELETE_BATCH, world);
     const startedAt = Date.now();
     const run = settle(WORKTREE_DELETE_BATCH.start(world));
-    await world.host.whenOpened(0);
+    await world.host.whenOpenedAs([world.expiredHeld]);
     const firstOpenAfterMs = Date.now() - startedAt;
     // The one mint before the dial is the only request until the host first answers.
     const requestsBeforeAnswer = world.mint.requests.length;

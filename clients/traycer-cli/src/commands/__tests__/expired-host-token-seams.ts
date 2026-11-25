@@ -190,7 +190,9 @@ export function pidMetadataModule<T extends object>(
 export const publishLag: {
   hold: Promise<void> | null;
   written: (() => void) | null;
-} = { hold: null, written: null };
+  /** Settles `hold`: the world's close calls it, so no await stays held. */
+  release: (() => void) | null;
+} = { hold: null, written: null, release: null };
 
 type HostTokenFileModule =
   typeof import("@traycer-clients/shared/auth/host-token-file");

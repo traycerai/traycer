@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { mayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   ANSWERS_AT_ONCE,
+  STORED_SIGN_IN,
   deferred,
   openWorld,
   personOf,
@@ -161,8 +163,11 @@ interface Authority {
   readonly name: string;
   /** A token past its end is held: the call's first open presents it. */
   readonly held: boolean;
-  /** The open (by index) the admission is gated on. */
-  readonly admittedOpen: number;
+  /**
+   * The bearer of every open the call makes up to the one the admission is
+   * gated on, in order: the last is that open's.
+   */
+  readonly bearers: (world: World) => readonly unknown[];
   arrange(door: UnaryDoor, admission: Promise<void>): void;
 }
 
@@ -175,7 +180,7 @@ const AUTHORITIES: readonly Authority[] = [
   {
     name: "the host token",
     held: true,
-    admittedOpen: 0,
+    bearers: (world) => [world.expiredHeld],
     arrange: (door, admission) => {
       door.expired = ADMITTED_AFTER(admission);
     },
@@ -183,7 +188,7 @@ const AUTHORITIES: readonly Authority[] = [
   {
     name: "the stored sign-in, after a released host's refusal of the token",
     held: true,
-    admittedOpen: 1,
+    bearers: (world) => [world.expiredHeld, STORED_SIGN_IN],
     arrange: (door, admission) => {
       door.expired = ANSWERS_AT_ONCE("released");
       door.signIn = ADMITTED_AFTER(admission);
@@ -192,7 +197,7 @@ const AUTHORITIES: readonly Authority[] = [
   {
     name: "the owner's sign-in, on the host's invitation",
     held: false,
-    admittedOpen: 1,
+    bearers: () => [NO_HOST_TOKEN_PROBE, STORED_SIGN_IN],
     arrange: (door, admission) => {
       door.signIn = ADMITTED_AFTER(admission);
     },
@@ -200,7 +205,7 @@ const AUTHORITIES: readonly Authority[] = [
   {
     name: "the stored sign-in, in released-host mode (the probe answered as a released host)",
     held: false,
-    admittedOpen: 1,
+    bearers: () => [NO_HOST_TOKEN_PROBE, STORED_SIGN_IN],
     arrange: (door, admission) => {
       door.probe = ANSWERS_AT_ONCE("released");
       door.signIn = ADMITTED_AFTER(admission);
@@ -221,6 +226,35 @@ async function whenMintRefusalReported(person: CliSignInHandle): Promise<void> {
 }
 
 /**
+ * The open the admission is gated on is the one this authority names: every
+ * open so far presented the bearers in order, and none more was made.
+ */
+async function expectAdmissionHeld(authority: Authority): Promise<void> {
+  const bearers = authority.bearers(world);
+  await unary.whenOpenedAs(bearers);
+  expect(unary.opens).toHaveLength(bearers.length);
+}
+
+/**
+ * The requests the host read are exactly these, and every one travelled on
+ * the socket of the open the admission was gated on.
+ */
+function expectRequestsOnAdmittedSocket(
+  authority: Authority,
+  methods: readonly string[],
+): void {
+  const admitted = authority.bearers(world).length - 1;
+  expect(unary.requests).toEqual(
+    methods.map((method) => ({ index: admitted, method })),
+  );
+}
+
+/** The host has read no request frame: the admission is still withheld. */
+function expectNoRequestYet(): void {
+  expect(unary.requests).toEqual([]);
+}
+
+/**
  * The call's open is admitted, its request frame written, and the transport
  * dropped: all while the mint's refusal has been reported to the process.
  */
@@ -238,11 +272,12 @@ async function writeThenDrop<Result>(
     return "drop";
   };
   const run = start();
-  await unary.whenOpened(authority.admittedOpen);
+  await expectAdmissionHeld(authority);
   const person = await personOf(world);
   try {
     world.mint.respond("sign-in-rejected");
     await whenMintRefusalReported(person);
+    expectNoRequestYet();
     admission.settle();
     await check(await run);
   } finally {
@@ -267,9 +302,7 @@ describe.each(AUTHORITIES)(
           expect(hostRpcWroteNoRequest(ended.error)).toBe(false);
           expect(ended.error).not.toBeInstanceOf(CliError);
           expect(mayHaveReachedHost(ended.error)).toBe(true);
-          expect(unary.requests.map((request) => request.method)).toEqual([
-            "bot.list",
-          ]);
+          expectRequestsOnAdmittedSocket(authority, ["bot.list"]);
         },
       );
     }, 20_000);
@@ -288,9 +321,7 @@ describe.each(AUTHORITIES)(
           expect(ended.error.message.startsWith(OWN_FAILURE_LINE)).toBe(true);
           expect(ended.error.message).toMatch(/ may have been created\. /);
           expect(await recordOfKey()).toMatchObject({ kind: "intent" });
-          expect(unary.requests.map((request) => request.method)).toEqual([
-            EPIC_CREATE,
-          ]);
+          expectRequestsOnAdmittedSocket(authority, [EPIC_CREATE]);
         },
       );
     }, 20_000);
@@ -300,7 +331,7 @@ describe.each(AUTHORITIES)(
 const OWNER_SIGN_IN = AUTHORITIES[2];
 
 describe("an admission that is no longer the current instance's", () => {
-  it("the host process is replaced after the open is admitted and before the request is read, then the transport drops: the outcome is unknown, the key's record is kept", async () => {
+  it("the host process is replaced after the request is read and before the transport drops (the open was admitted first): the outcome is unknown, the key's record is kept", async () => {
     await writeThenDrop(
       OWNER_SIGN_IN,
       runTaskCreate,
@@ -317,9 +348,7 @@ describe("an admission that is no longer the current instance's", () => {
         if (!("error" in ended)) expect.fail("the command completed");
         expect(ended.error.message.startsWith(OWN_FAILURE_LINE)).toBe(true);
         expect(await recordOfKey()).toMatchObject({ kind: "intent" });
-        expect(unary.requests.map((request) => request.method)).toEqual([
-          EPIC_CREATE,
-        ]);
+        expectRequestsOnAdmittedSocket(OWNER_SIGN_IN, [EPIC_CREATE]);
       },
     );
   }, 20_000);
@@ -371,19 +400,18 @@ describe("install's environment.move.start", () => {
       () => null,
       (error: unknown) => error,
     );
-    await unary.whenOpened(OWNER_SIGN_IN.admittedOpen);
+    await expectAdmissionHeld(OWNER_SIGN_IN);
     const person = await personOf(world);
     try {
       world.mint.respond("sign-in-rejected");
       await whenMintRefusalReported(person);
+      expectNoRequestYet();
       admission.settle();
       const error = await run;
       expect(error).not.toBeNull();
       // install-auth.ts reads `startReplyLost = mayHaveReachedHost(error)`.
       expect(mayHaveReachedHost(error)).toBe(true);
-      expect(unary.requests.map((request) => request.method)).toEqual([
-        "environment.move.start",
-      ]);
+      expectRequestsOnAdmittedSocket(OWNER_SIGN_IN, ["environment.move.start"]);
     } finally {
       person.dispose();
     }

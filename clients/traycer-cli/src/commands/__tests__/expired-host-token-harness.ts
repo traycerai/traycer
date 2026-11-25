@@ -132,7 +132,9 @@ export type Reading =
   /** The ack, and at once a `token_expired` close: the host admits, then cuts. */
   | "admit-then-expired"
   /** A refusal the client retries: the door says it may be asked again. */
-  | "retryable";
+  | "retryable"
+  /** A bearer no script names: refused at the bearer, never admitted by default. */
+  | "unknown-bearer";
 
 /** What the door answers to a presented token, and when it answers. */
 export interface DoorScript {
@@ -145,6 +147,14 @@ export const ANSWERS_AT_ONCE = (answer: Reading): DoorScript => ({
   answer,
   after: null,
 });
+
+/**
+ * Every open a door refused because its bearer is one no script names, in the
+ * order they came. `close` of a world fails the case when any is left: an open
+ * the case did not script is a bearer it did not mean to present.
+ */
+export const unscriptedBearers: { door: "stream" | "unary"; token: unknown }[] =
+  [];
 
 export interface Deferred {
   readonly promise: Promise<void>;
@@ -197,6 +207,10 @@ export class FakeHost {
   /** The answer to the held, expired token; by open index, else `expired`. */
   expired: DoorScript = ANSWERS_AT_ONCE("token-expired");
   readonly expiredAt = new Map<number, DoorScript>();
+  /** The answer to the host-only token the mint hands out (`FRESH_HOST_TOKEN`). */
+  fresh: DoorScript = ANSWERS_AT_ONCE("admit");
+  /** The answer to an open that presents the person's own stored sign-in. */
+  signIn: DoorScript = ANSWERS_AT_ONCE("admit");
   /** The answer to the open of this index, whatever token it presents. */
   readonly openAt = new Map<number, DoorScript>();
   /** The answer to the placeholder an open with no token presents. */
@@ -256,6 +270,18 @@ export class FakeHost {
   /** Settles when the host has read the open of this index. */
   whenOpened(index: number): Promise<void> {
     return this.latch(this.opened, index).promise;
+  }
+
+  /**
+   * Settles when the host has read the open of the last index of `bearers`,
+   * and asserts that the opens read so far presented exactly these bearers, in
+   * order: a wait for "the Nth open" that cannot be satisfied by another.
+   */
+  async whenOpenedAs(bearers: readonly unknown[]): Promise<void> {
+    await this.whenOpened(bearers.length - 1);
+    expect(
+      this.opens.slice(0, bearers.length).map((open) => open.token),
+    ).toEqual(bearers);
   }
 
   /** Settles when the host has sent its refusal on the socket of this index. */
@@ -450,7 +476,10 @@ export class FakeHost {
     if (token === NO_HOST_TOKEN_PROBE) {
       return ANSWERS_AT_ONCE(this.probe);
     }
-    return ANSWERS_AT_ONCE("admit");
+    if (token === FRESH_HOST_TOKEN) return this.fresh;
+    if (token === STORED_SIGN_IN) return this.signIn;
+    unscriptedBearers.push({ door: "stream", token });
+    return ANSWERS_AT_ONCE("unknown-bearer");
   }
 
   private servedManifest(manifest: unknown): ConnectionManifest {
@@ -508,6 +537,8 @@ interface MintRequest {
 export class MintEdge {
   readonly requests: MintRequest[] = [];
   refreshes = 0;
+  /** While set, a refresh of the sign-in is not answered until it settles. */
+  private refreshGate: Promise<void> | null = null;
   /** The token an `ok` answer carries; its end is signed in it. */
   issued: string = FRESH_HOST_TOKEN;
   private answer: MintAnswer | null = null;
@@ -530,6 +561,19 @@ export class MintEdge {
     setTimeout(() => this.respond(answer), ms);
   }
 
+  /**
+   * Refresh requests are not answered until the returned function is called
+   * (the world's close does not call it: the test does, in its `finally`).
+   */
+  holdRefreshes(): () => void {
+    const gate = deferred();
+    this.refreshGate = gate.promise;
+    return () => {
+      this.refreshGate = null;
+      gate.settle();
+    };
+  }
+
   /** The answer every later mint request gets at once is cleared: they wait again. */
   hold(): void {
     this.answer = null;
@@ -550,12 +594,19 @@ export class MintEdge {
           return this.mintRequest(init);
         if (url.pathname.endsWith("/auth/refresh")) {
           this.refreshes += 1;
-          return Promise.resolve(
+          const gate = this.refreshGate;
+          const refused = (): Response =>
             new Response(JSON.stringify({ statusCode: 401, error: "no" }), {
               status: 401,
               headers: { "content-type": "application/json" },
-            }),
-          );
+            });
+          if (gate === null) return Promise.resolve(refused());
+          return new Promise<Response>((resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+            void gate.then(() => resolve(refused()));
+          });
         }
         return Promise.reject(new Error(`unexpected fetch ${url.pathname}`));
       },
@@ -704,9 +755,12 @@ export async function openWorld(
     close: async () => {
       output.restore();
       live.door = null;
+      publishLag.release?.();
       publishLag.hold = null;
       publishLag.written = null;
+      publishLag.release = null;
       vi.unstubAllGlobals();
+      const unscripted = unscriptedBearers.splice(0);
       const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
       if (existsSync(lockPath)) {
         await vi.waitFor(() => expect(existsSync(lockPath)).toBe(false), {
@@ -723,6 +777,7 @@ export async function openWorld(
           maxRetries: 10,
           retryDelay: 100,
         });
+      expect(unscripted).toEqual([]);
     },
   };
   rpcCalls.length = 0;
@@ -747,6 +802,7 @@ export function holdPublication(): {
   const written = deferred();
   publishLag.hold = release.promise;
   publishLag.written = written.settle;
+  publishLag.release = release.settle;
   return { written: written.promise, release: release.settle };
 }
 

@@ -177,7 +177,7 @@ describe("task create, signed in as an account that is not this computer's owner
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = runTaskCreate(null);
-    await unary.whenOpened(0);
+    await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
     invitation.settle();
     const ended = await run;
     world.mint.respond("not-admitted");
@@ -200,7 +200,7 @@ describe("task create, signed in as an account that is not this computer's owner
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = runTaskCreate(null);
-    await unary.whenOpened(0);
+    await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
     const person = await personOf(world);
     try {
       world.mint.respond("not-admitted");
@@ -341,7 +341,10 @@ describe.each(NO_REQUEST_CASES)(
       const invitation = deferred();
       unary.probe = { answer: "owner-sign-in", after: invitation.promise };
       const run = runTaskCreate(KEY);
-      await unary.whenOpened(0);
+      // A redial's first open is the held token; the others' is the probe.
+      await unary.whenOpenedAs([
+        scenario === "a redial" ? world.expiredHeld : NO_HOST_TOKEN_PROBE,
+      ]);
       const person = await personOf(world);
       try {
         if (scenario === "the probe, then a refused sign-in") {

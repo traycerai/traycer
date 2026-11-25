@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type {
   WebSocketCloseEvent,
@@ -9,12 +10,15 @@ import type {
 import type { ConnectionManifest } from "@traycer/protocol/framework/ws-protocol";
 import {
   ANSWERS_AT_ONCE,
+  FRESH_HOST_TOKEN,
   STORED_SIGN_IN,
   deferred,
   readFrame,
   refusalFrame,
+  unscriptedBearers,
   type Deferred,
   type DoorScript,
+  type Reading,
   type MintEdge,
 } from "./expired-host-token-harness";
 
@@ -68,6 +72,8 @@ export class UnaryDoor {
   readonly expiredAt = new Map<number, DoorScript>();
   /** The answer to the placeholder an open with no token presents. */
   probe: DoorScript = ANSWERS_AT_ONCE("owner-sign-in");
+  /** The answer to the host-only token the mint hands out (`FRESH_HOST_TOKEN`). */
+  fresh: DoorScript = ANSWERS_AT_ONCE("admit");
   /** The answer to an open that presents the person's own sign-in. */
   signIn: DoorScript = ANSWERS_AT_ONCE("admit");
   /** What the host serves for a unary request. */
@@ -84,7 +90,7 @@ export class UnaryDoor {
   cutAfterRequest: (
     method: string,
     openIndex: number,
-  ) => "token-expired" | "drop" | null = () => null;
+  ) => Reading | "drop" | null = () => null;
   /** Answers of this method wait for `hold`: the request is on the wire, unanswered. */
   holdMethod: string | null = null;
   hold: Promise<void> | null = null;
@@ -110,6 +116,18 @@ export class UnaryDoor {
   /** Settles when the host has read the open of this index. */
   whenOpened(index: number): Promise<void> {
     return this.latch(index, this.opened).promise;
+  }
+
+  /**
+   * Settles when the host has read the open of the last index of `bearers`,
+   * and asserts that the opens read so far presented exactly these bearers, in
+   * order: a wait for "the Nth open" that cannot be satisfied by another.
+   */
+  async whenOpenedAs(bearers: readonly unknown[]): Promise<void> {
+    await this.whenOpened(bearers.length - 1);
+    expect(
+      this.opens.slice(0, bearers.length).map((open) => open.token),
+    ).toEqual(bearers);
   }
 
   /** Settles when the host has sent its refusal on the socket of this index. */
@@ -155,8 +173,8 @@ export class UnaryDoor {
       // Never inside the client's own `send`: a host answers a later turn.
       void (async (): Promise<void> => {
         await Promise.resolve();
-        if (cut === "token-expired") {
-          socket.fireMessage(refusalFrame("token-expired"));
+        if (cut !== null && cut !== "drop") {
+          socket.fireMessage(refusalFrame(cut));
           this.latch(socket.index, this.refused).settle();
           return;
         }
@@ -216,6 +234,8 @@ export class UnaryDoor {
       return this.expiredAt.get(index) ?? this.expired;
     if (token === NO_HOST_TOKEN_PROBE) return this.probe;
     if (token === STORED_SIGN_IN) return this.signIn;
-    return ANSWERS_AT_ONCE("admit");
+    if (token === FRESH_HOST_TOKEN) return this.fresh;
+    unscriptedBearers.push({ door: "unary", token });
+    return ANSWERS_AT_ONCE("unknown-bearer");
   }
 }

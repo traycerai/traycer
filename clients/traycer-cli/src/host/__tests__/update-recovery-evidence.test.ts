@@ -96,6 +96,8 @@ vi.mock("../pid-metadata", async () => {
 // not a new production hook.
 vi.mock("../../internal/host-rpc", () => ({
   callHostRpcAtEndpoint: mocks.callHostRpcMock,
+  // No call here is ended by the gate: the mocked call throws the host's own.
+  hostRpcGateEndingOf: () => null,
 }));
 
 // Imports must come AFTER the vi.mock calls so the mocked modules are in

@@ -128,7 +128,7 @@ describe("a unary call with a held token past its end", () => {
     unary.expired = ANSWERS_AT_ONCE("admit");
     const startedAt = Date.now();
     const run = callHostRpc("bot.list", {});
-    await unary.whenOpened(0);
+    await unary.whenOpenedAs([world.expiredHeld]);
     const wentAfterMs = Date.now() - startedAt;
     expect(wentAfterMs).toBeGreaterThanOrEqual(9_500);
     expect(wentAfterMs).toBeLessThanOrEqual(15_500);
@@ -211,7 +211,7 @@ describe("a create-like call with no cached grant, on this person's own computer
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = startCreateLikeCall();
-    await unary.whenOpened(0);
+    await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
     const person = await personOf(world);
     try {
       world.mint.respond("ok");
@@ -238,7 +238,7 @@ describe("a create-like call with no cached grant, on this person's own computer
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = startCreateLikeCall();
-    await unary.whenOpened(0);
+    await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
     const person = await personOf(world);
     try {
       world.mint.respond("ok");
@@ -248,7 +248,7 @@ describe("a create-like call with no cached grant, on this person's own computer
       expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN);
       expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(true);
       invitation.settle();
-      await unary.whenOpened(1);
+      await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE, STORED_SIGN_IN]);
       lag.release();
       expect(await run).toMatchObject({ ok: { bots: [] } });
       expect(unary.opens.map((open) => open.token)).toEqual([
