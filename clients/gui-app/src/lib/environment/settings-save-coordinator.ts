@@ -511,7 +511,6 @@ export function createSettingsSaveCoordinator(
         return answer;
       },
     };
-    if (unansweredMove !== null && !mayApply()) return "stays";
     try {
       const base = {
         heldId: hold.heldId,
