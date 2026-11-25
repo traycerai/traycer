@@ -1243,7 +1243,7 @@ describe("buildHostInstallCommand", () => {
 
     it.each(MINT_FAILURES)(
       "stops before anything is installed when $label at the token's mint",
-      async ({ answer, error }) => {
+      async ({ answer, error, mints }) => {
         const mintRequests = stubMintAnswer(answer);
         mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
         mocks.createServiceInstallLifecycleMock.mockReturnValue(
@@ -1254,7 +1254,7 @@ describe("buildHostInstallCommand", () => {
           buildHostInstallCommand(baseArgs({ team: "acme" }))(fakeCtx()),
         ).rejects.toMatchObject({ ...error, exitCode: 1 });
 
-        expect(mintRequests).toHaveLength(1);
+        expect(mintRequests).toHaveLength(mints);
         expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
         expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
         expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();

@@ -137,6 +137,27 @@ interface OpenedHostSession {
 const openedHostSessions = vi.hoisted(() => [] as OpenedHostSession[]);
 /** Set once a call asks the gate for the judgement of a refusal that may end it. */
 const gateEntry = vi.hoisted(() => ({ entered: false }));
+/**
+ * What a case does to the gate's two judgements: each runs `hold` first (when
+ * set), then answers `answer` (when set) instead of reading the store, and
+ * every ask is counted. `listeners` are the refusal listeners the call
+ * attached, so a case can report evidence of a refusal.
+ */
+const gateHooks = vi.hoisted(() => ({
+  refusalEnding: {
+    calls: 0,
+    hold: null as Promise<void> | null,
+    answer: undefined as object | null | undefined,
+    /** Runs as the answer is given. */
+    afterAnswer: null as (() => void) | null,
+  },
+  signInRejection: {
+    calls: 0,
+    hold: null as Promise<void> | null,
+    answer: undefined as object | null | undefined,
+  },
+  listeners: [] as ((evidence: never) => void)[],
+}));
 
 vi.mock("../agent-session-capability", async (importOriginal) => {
   const actual =
@@ -165,9 +186,35 @@ vi.mock("../cli-host-tokens", async (importOriginal) => {
         ...opened,
         tokens: {
           ...opened.tokens,
-          refusalEndingCommandNow: (hostId: string) => {
+          refusalEndingCommandNow: async (hostId: string) => {
             gateEntry.entered = true;
+            const hooks = gateHooks.refusalEnding;
+            hooks.calls += 1;
+            if (hooks.hold !== null) await hooks.hold;
+            if (hooks.answer !== undefined) {
+              hooks.afterAnswer?.();
+              return hooks.answer as never;
+            }
             return opened.tokens.refusalEndingCommandNow(hostId);
+          },
+          signInRejectionNow: async (
+            ...rejectionArgs: Parameters<
+              typeof opened.tokens.signInRejectionNow
+            >
+          ) => {
+            const hooks = gateHooks.signInRejection;
+            hooks.calls += 1;
+            if (hooks.hold !== null) await hooks.hold;
+            if (hooks.answer !== undefined) return hooks.answer as never;
+            return opened.tokens.signInRejectionNow(...rejectionArgs);
+          },
+          onRefusalEndingCommand: (
+            listener: Parameters<
+              typeof opened.tokens.onRefusalEndingCommand
+            >[0],
+          ) => {
+            gateHooks.listeners.push(listener);
+            return opened.tokens.onRefusalEndingCommand(listener);
           },
         },
       };
@@ -412,6 +459,13 @@ beforeEach(async () => {
   landed = null;
   readHold.current = null;
   gateEntry.entered = false;
+  for (const hooks of [gateHooks.refusalEnding, gateHooks.signInRejection]) {
+    hooks.calls = 0;
+    hooks.hold = null;
+    hooks.answer = undefined;
+  }
+  gateHooks.refusalEnding.afterAnswer = null;
+  gateHooks.listeners.length = 0;
   person = nextCasePerson();
   presentedHostTokens.length = 0;
   openedHostSessions.length = 0;
@@ -894,7 +948,7 @@ describe("callHostRpc", () => {
     expect(requestMock).not.toHaveBeenCalled();
   });
 
-  it("fails with the call's own wire error, not a rejected credential, when a sibling saves a sign-in after the refusal of the stored one was reported", async () => {
+  it("fails with the call's own wire error, not a rejected credential, when a sibling saves a sign-in during the pre-work gate's read", async () => {
     await holdRanOutHostToken();
     fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
     rotateMock.mockResolvedValue({
@@ -903,59 +957,84 @@ describe("callHostRpc", () => {
       rejection: null,
       diskPressure: null,
     });
-    // The call is on the wire while the mint is refused and its refresh is
-    // refused; once that is reported a sibling saves its own sign-in, and only
-    // then does the call fail, with an error unrelated to any credential.
-    requestMock.mockImplementation(async () => {
-      const session = openedHostSessions[0];
-      if (session === undefined) throw new Error("no host session was opened");
-      await new Promise<void>((resolve) => {
-        session.tokens.onRefusalEndingCommand(resolve);
-      });
-      landed = {
-        token: "sibling-sign-in",
-        refreshToken: "sibling-sign-in-refresh",
-        savedAt: "2026-01-01T00:00:01.000Z",
-        user: { id: person.userId, email: "a@b.c", name: "A" },
-      };
-      throw new HostTransportFailureError({
+    // The mint is refused and so is its refresh, and the call asks the gate
+    // before any request is written. A sibling saves its own sign-in in the
+    // gate's adopting read, the first store read it makes: the gate adopts
+    // that sign-in and ends nothing, so the call is written, and then fails
+    // with an error unrelated to any credential.
+    let readReached = (): void => undefined;
+    const gateRead = new Promise<void>((resolve) => {
+      readReached = resolve;
+    });
+    let release = (): void => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    readHold.current = { reached: readReached, release: released };
+    requestMock.mockRejectedValue(
+      new HostTransportFailureError({
         code: "RPC_ERROR",
         message: "WebSocket frame timed out after 15000ms",
         requestId: "r1",
         method: METHOD,
         fatalDetails: null,
-      });
-    });
-
-    await expect(
-      toAgentCliError(
-        callHostRpcAtEndpoint(
-          METHOD,
-          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
-          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
-        ),
+      }),
+    );
+    const settled = toAgentCliError(
+      callHostRpcAtEndpoint(
+        METHOD,
+        { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+        { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
       ),
-    ).rejects.toMatchObject({
+    ).then(
+      () => {
+        throw new Error("the call was expected to fail");
+      },
+      (error: unknown) => error,
+    );
+    await gateRead;
+    landed = {
+      token: "sibling-sign-in",
+      refreshToken: "sibling-sign-in-refresh",
+      savedAt: "2026-01-01T00:00:01.000Z",
+      user: { id: person.userId, email: "a@b.c", name: "A" },
+    };
+    release();
+
+    expect(await settled).toMatchObject({
       code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
     });
+    expect(requestMock).toHaveBeenCalledTimes(1);
   });
 
   describe("a door refusal after a refused mint and a refused sign-in refresh", () => {
     /**
      * The call is on the wire on a host token that has run out; the mint
      * beside it is refused on the stored sign-in A and so is its refresh, and
-     * that is reported to the call. The request then fails with the door's
-     * refusal. With `duringGateRead`, a sibling's sign-in B is saved while
-     * the gate's adopting read, the first store read once the call asks the gate, is held.
+     * that is reported to the call. Without a sibling's save the pre-work
+     * gate ends the call before any request is written. With `duringGateRead`,
+     * a sibling's sign-in B is saved while the gate's adopting read, the first
+     * store read once the call asks the gate, is held: the gate adopts B,
+     * ends nothing, and the request, written, fails with the door's refusal.
      */
     async function failedByDoorRefusal(duringGateRead: boolean): Promise<{
       readonly error: unknown;
       readonly storedWhenReleased: string | undefined;
     }> {
       await holdRanOutHostToken();
-      // authn refuses every mint on A: the messenger's retry of the door refusal mints again.
-      fetchMock.mockImplementation(
-        async () => new Response("", { status: 401 }),
+      // authn refuses every mint on A: the messenger's retry of the door
+      // refusal mints again, on the sibling's B when it saved one, which
+      // authn takes.
+      fetchMock.mockImplementation(async () =>
+        landed === null
+          ? new Response("", { status: 401 })
+          : new Response(
+              JSON.stringify({
+                session_grant: "sibling-host-token",
+                session_grant_expires_in: 3600,
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
       );
       rotateMock.mockResolvedValue({
         outcome: "refresh-rejected-credential",
@@ -971,20 +1050,11 @@ describe("callHostRpc", () => {
       const released = new Promise<void>((resolve) => {
         release = resolve;
       });
-      let reported = false;
+      // The pre-work gate's adopting read is the first store read once the
+      // call asks the gate; a sibling's save lands in it.
+      if (duringGateRead)
+        readHold.current = { reached: readReached, release: released };
       requestMock.mockImplementation(async () => {
-        // The messenger retries a door refusal once: only the first request waits for the report.
-        if (!reported) {
-          reported = true;
-          const session = openedHostSessions[0];
-          if (session === undefined)
-            throw new Error("no host session was opened");
-          await new Promise<void>((resolve) => {
-            session.tokens.onRefusalEndingCommand(resolve);
-          });
-          if (duringGateRead)
-            readHold.current = { reached: readReached, release: released };
-        }
         throw fatalDoorError({
           code: "UNAUTHORIZED",
           doorReason: "token_expired",
@@ -1028,6 +1098,8 @@ describe("callHostRpc", () => {
         code: CLI_ERROR_CODES.AUTH_REJECTED,
         message: "host refused the token",
       });
+      // The gate adopted the sibling's sign-in and ended nothing: the call was written.
+      expect(requestMock).toHaveBeenCalled();
     });
 
     it("ends with the stored-credential line when no sibling saved a sign-in and the one stored is still refused", async () => {
@@ -1038,6 +1110,8 @@ describe("callHostRpc", () => {
         message:
           "The stored credential was rejected. Run `traycer login` to re-authenticate.",
       });
+      // Ended by the gate before any request was written.
+      expect(requestMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1703,6 +1777,415 @@ describe("callHostRpc", () => {
 });
 
 const COMMANDS_DIR = join(__dirname, "..", "..", "commands");
+
+describe("the pre-work gate's budget", () => {
+  const BUDGET_MS = 300;
+
+  /**
+   * A held token that ran out, a mint refused with 401, and the gate's adopting
+   * read of the store held past the call's budget. The hold is a test seam for
+   * ordering, not a production wait: in production the adopting read takes no
+   * lock (`adoptStoredSignIn` -> `read()`, two lock-free file reads), so it
+   * lands at once. What the call does must not depend on when it lands.
+   */
+  async function callWithTheGateReadHeldPastTheBudget(held: boolean): Promise<{
+    readonly error: unknown;
+    readonly requestsBeforeTheReadLanded: number;
+  }> {
+    let release = (): void => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    if (held)
+      readHold.current = { reached: () => undefined, release: released };
+    requestMock.mockResolvedValue({ agents: [] });
+    const settled = callHostRpcAtResolvedEndpoint(
+      METHOD,
+      { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+      { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+      {
+        token: person.signIn,
+        authnBaseUrl: "https://authn.test",
+        userId: person.userId,
+      },
+      {
+        responseTimeoutMs: BUDGET_MS,
+        requiredHostMethodVersion: null,
+        signal: null,
+        failFast: false,
+        reauthenticate: "always",
+        idempotencyKey: null,
+      },
+    ).then(
+      (): { readonly error: unknown } => ({ error: null }),
+      (error: unknown): { readonly error: unknown } => ({ error }),
+    );
+    // The read stays held until the budget has passed, then lands late.
+    await new Promise((resolve) => setTimeout(resolve, BUDGET_MS + 200));
+    const requestsBeforeTheReadLanded = requestMock.mock.calls.length;
+    release();
+    return { ...(await settled), requestsBeforeTheReadLanded };
+  }
+
+  /** How many times the blocked-call ending was logged (once per ending). */
+  function blockedCallsLogged(): number {
+    return [
+      loggerMock.debug,
+      loggerMock.info,
+      loggerMock.warn,
+      loggerMock.error,
+    ].reduce(
+      (count, log) =>
+        count +
+        log.mock.calls.filter(
+          (logged) => logged[0] === "Host RPC blocked: no host-only token",
+        ).length,
+      0,
+    );
+  }
+
+  it.each([
+    ["held past the call's budget", true],
+    ["landing in time", false],
+  ] as const)(
+    "ends E_AUTH_REJECTED with the login line and writes no request when a failed mint's gate read is %s: the same ending either way, logged once",
+    async (_when, held) => {
+      await holdRanOutHostToken();
+      // The mint is refused and so is its refresh.
+      fetchMock.mockResolvedValue(new Response("", { status: 401 }));
+      rotateMock.mockResolvedValue({
+        outcome: "refresh-rejected-credential",
+        credentials: null,
+        rejection: null,
+        diskPressure: null,
+      });
+
+      const outcome = await callWithTheGateReadHeldPastTheBudget(held);
+
+      expect(outcome.error).toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message:
+          "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+      });
+      // Nothing was written before the read landed, and nothing after it.
+      expect(outcome.requestsBeforeTheReadLanded).toBe(0);
+      expect(requestMock).not.toHaveBeenCalled();
+      expect(blockedCallsLogged()).toBe(1);
+    },
+  );
+
+  it("writes the request once and completes, with no login line, when the same mint's refresh succeeds and the gate read is held past the call's budget", async () => {
+    await holdRanOutHostToken();
+    // The first mint is refused; the sign-in's refresh succeeds, and the mint
+    // asked again with the refreshed sign-in is answered.
+    fetchMock
+      .mockResolvedValueOnce(new Response("", { status: 401 }))
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            session_grant: "host-token-2",
+            session_grant_expires_in: 3600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    rotateMock.mockResolvedValue({
+      outcome: "applied",
+      credentials: {
+        token: "tok-2",
+        refreshToken: "tok-2-refresh",
+        savedAt: "2026-01-01T00:00:00.000Z",
+        user: { id: person.userId, email: "a@b.c", name: "A" },
+      },
+      rejection: null,
+      diskPressure: "clear",
+    });
+
+    const outcome = await callWithTheGateReadHeldPastTheBudget(true);
+
+    expect(outcome.error).toBeNull();
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(blockedCallsLogged()).toBe(0);
+  });
+});
+
+describe("a caller that has given up", () => {
+  // The call's own ending when its caller gives up: the client's abort error.
+  const ABORT_ENDING = { name: "HostRequestAbortedError" };
+  const BUDGET_MS = 7_777;
+
+  /** The host refuses the held token with a typed `token_expired`. */
+  function expiredRefusal(): HostRpcError {
+    return new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "expired",
+      requestId: "r1",
+      method: METHOD,
+      fatalDetails: {
+        code: "UNAUTHORIZED",
+        reason: "expired",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        doorReason: "token_expired",
+      },
+    });
+  }
+
+  async function holdValidHostToken(): Promise<void> {
+    await createHostTokenFilePersistence({
+      environment: config.environment,
+      lockWaitMs: 1_000,
+      lockPollIntervalMs: 10,
+    }).update((table) => {
+      const users = new Map(table);
+      users.set(
+        person.userId,
+        new Map([
+          [
+            "d1",
+            { token: "held-host-token", expiresAtMs: Date.now() + 60_000 },
+          ],
+        ]),
+      );
+      return users;
+    });
+  }
+
+  /** The mint is refused and so is the sign-in's refresh: the gate would end the call. */
+  function mintFailsForTheSignIn(): void {
+    fetchMock.mockResolvedValue(new Response("", { status: 401 }));
+    rotateMock.mockResolvedValue({
+      outcome: "refresh-rejected-credential",
+      credentials: null,
+      rejection: null,
+      diskPressure: null,
+    });
+  }
+
+  function call(signal: AbortSignal | null, budgetMs: number | null) {
+    return callHostRpcAtResolvedEndpoint(
+      METHOD,
+      { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+      { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+      {
+        token: person.signIn,
+        authnBaseUrl: "https://authn.test",
+        userId: person.userId,
+      },
+      {
+        responseTimeoutMs: budgetMs,
+        requiredHostMethodVersion: null,
+        signal,
+        failFast: false,
+        reauthenticate: "always",
+        idempotencyKey: null,
+      },
+    ).then(
+      (): { readonly error: unknown } => ({ error: null }),
+      (error: unknown): { readonly error: unknown } => ({ error }),
+    );
+  }
+
+  /** Settles with `null` when `settled` has not settled within `ms`. */
+  async function within<T>(settled: Promise<T>, ms: number): Promise<T | null> {
+    return Promise.race([
+      settled,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+    ]);
+  }
+
+  function heldGate(): { readonly release: () => void } {
+    let release = (): void => undefined;
+    gateHooks.refusalEnding.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { release };
+  }
+
+  const NOT_A_MEMBER = {
+    kind: "host-refusal",
+    failure: { kind: "not-a-member" },
+  } as const;
+
+  it("an abort during the pre-work verdict ends the call at once with the caller's own abort; a verdict arriving later changes nothing", async () => {
+    await holdRanOutHostToken();
+    mintFailsForTheSignIn();
+    const gate = heldGate();
+    gateHooks.refusalEnding.answer = NOT_A_MEMBER;
+    requestMock.mockImplementation(
+      async (_m: string, _p: unknown, sent: { signal?: AbortSignal }) => {
+        sent.signal?.throwIfAborted();
+        throw new Error("the request was written");
+      },
+    );
+    const caller = new AbortController();
+
+    const settled = call(caller.signal, null);
+    await vi.waitFor(() =>
+      expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
+    );
+    caller.abort();
+    const outcome = await within(settled, 1_000);
+
+    expect(outcome).not.toBeNull();
+    expect(outcome?.error).toMatchObject(ABORT_ENDING);
+    expect(requestMock).not.toHaveBeenCalled();
+    // The verdict that lands after the abort replaces nothing.
+    gate.release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(outcome?.error).toMatchObject(ABORT_ENDING);
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("an abort during the exit's sign-in rejection read ends the call at once with the call's own error; a later answer changes nothing", async () => {
+    await holdValidHostToken();
+    const refusal = expiredRefusal();
+    requestMock.mockRejectedValue(refusal);
+    let release = (): void => undefined;
+    gateHooks.signInRejection.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const caller = new AbortController();
+
+    const settled = call(caller.signal, null);
+    await vi.waitFor(() =>
+      expect(gateHooks.signInRejection.calls).toBeGreaterThan(0),
+    );
+    caller.abort();
+    const outcome = await within(settled, 1_000);
+
+    expect(outcome).not.toBeNull();
+    expect(outcome?.error).not.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+    });
+    expect(String((outcome?.error as Error).message)).not.toContain(
+      "traycer login",
+    );
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(String((outcome?.error as Error).message)).not.toContain(
+      "traycer login",
+    );
+  });
+
+  it("an abort during the exit's refusal-ending read ends the call at once with the call's own error; a later verdict changes nothing", async () => {
+    await holdValidHostToken();
+    const refusal = expiredRefusal();
+    // The refusal is reported as evidence while the request fails.
+    requestMock.mockImplementation(async () => {
+      for (const listener of gateHooks.listeners)
+        listener({ hostId: "d1" } as never);
+      throw refusal;
+    });
+    const gate = heldGate();
+    gateHooks.refusalEnding.answer = NOT_A_MEMBER;
+    const caller = new AbortController();
+
+    const settled = call(caller.signal, null);
+    await vi.waitFor(() =>
+      expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
+    );
+    caller.abort();
+    const outcome = await within(settled, 1_000);
+
+    expect(outcome).not.toBeNull();
+    expect(outcome?.error).toBe(refusal);
+    gate.release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(outcome?.error).toBe(refusal);
+  });
+
+  it("leaves no timer pending after an abort wins the pre-work race", async () => {
+    await holdRanOutHostToken();
+    mintFailsForTheSignIn();
+    heldGate();
+    requestMock.mockImplementation(
+      async (_m: string, _p: unknown, sent: { signal?: AbortSignal }) => {
+        sent.signal?.throwIfAborted();
+        throw new Error("the request was written");
+      },
+    );
+    const started: unknown[] = [];
+    const cleared = new Set<unknown>();
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((
+        handler: Parameters<typeof setTimeout>[0],
+        ms: number | undefined,
+        ...rest: unknown[]
+      ) => {
+        const id = realSetTimeout(handler, ms, ...rest);
+        // The budget is the only timer asked for this many milliseconds.
+        if (ms === BUDGET_MS) started.push(id);
+        return id;
+      }) as typeof setTimeout);
+    const clearTimeoutSpy = vi
+      .spyOn(globalThis, "clearTimeout")
+      .mockImplementation(((id: Parameters<typeof clearTimeout>[0]) => {
+        cleared.add(id);
+        realClearTimeout(id);
+      }) as typeof clearTimeout);
+    try {
+      const caller = new AbortController();
+      const settled = call(caller.signal, BUDGET_MS);
+      await vi.waitFor(() =>
+        expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
+      );
+      caller.abort();
+      await within(settled, 1_000);
+      expect(started.length).toBeGreaterThan(0);
+      expect(started.filter((id) => !cleared.has(id))).toEqual([]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("a verdict that settled before the abort wins: the call ends with the gate's ending, and nothing is written", async () => {
+    await holdRanOutHostToken();
+    mintFailsForTheSignIn();
+    gateHooks.refusalEnding.answer = NOT_A_MEMBER;
+    requestMock.mockImplementation(
+      async (_m: string, _p: unknown, sent: { signal?: AbortSignal }) => {
+        sent.signal?.throwIfAborted();
+        throw new Error("the request was written");
+      },
+    );
+    const caller = new AbortController();
+    // The caller gives up just after the verdict was given.
+    gateHooks.refusalEnding.afterAnswer = () => {
+      setTimeout(() => caller.abort(), 0);
+    };
+
+    const outcome = await within(call(caller.signal, null), 2_000);
+
+    expect(outcome?.error).toMatchObject({
+      code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
+    });
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("an abort that came first wins: a caller already aborted when the mint fails never enters the gate, and ends with its own abort", async () => {
+    await holdRanOutHostToken();
+    mintFailsForTheSignIn();
+    gateHooks.refusalEnding.answer = NOT_A_MEMBER;
+    requestMock.mockImplementation(
+      async (_m: string, _p: unknown, sent: { signal?: AbortSignal }) => {
+        sent.signal?.throwIfAborted();
+        throw new Error("the request was written");
+      },
+    );
+    const caller = new AbortController();
+    caller.abort();
+
+    const outcome = await within(call(caller.signal, null), 2_000);
+
+    expect(outcome?.error).toMatchObject(ABORT_ENDING);
+    expect(gateHooks.refusalEnding.calls).toBe(0);
+  });
+});
 
 describe("callHostRpcAtResolvedEndpoint", () => {
   it("sends on the endpoint and sign-in it is handed, with the dispatch's key and floor", async () => {

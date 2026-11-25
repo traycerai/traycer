@@ -511,7 +511,7 @@ async function openStream(session: CliHostSession): Promise<void> {
     registry: hostStreamRpcRegistry,
     hostId: HOST_ID,
     endpoint: () => ENDPOINT,
-    bearer: session.tokens.streamBearer(HOST_ID),
+    bearer: session.tokens.localStreamCredential(HOST_ID).bearer,
     releasedSignOn: session.releasedSignOn,
     userId: USER_ID,
     auth: {
@@ -731,10 +731,11 @@ describe("CLI local doors while authn cannot mint", () => {
 
   it("reports no host-only token, never the rejected line, when authn refuses the sign-in and the refresh cannot reach authn", async () => {
     harness.state.mode = "sign-in-rejected";
+    // No token is held, so the call waits for the one mint before it dials.
+    // authn refuses the sign-in and the refresh cannot reach authn, so the
+    // sign-in is not judged: the gate ends the call, before any dial, with the
+    // line that names the missing token.
     const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
-    const probe = await socketAt(0);
-    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
-    probe.fireFrame(namedProbeRefusal());
     const error = await toAgentCliError(pending).then(
       () => null,
       (caught: unknown) => caught,
@@ -744,7 +745,7 @@ describe("CLI local doors while authn cannot mint", () => {
       message: "No host-only token is held for this host",
     });
     expect(error).not.toMatchObject({ code: CLI_ERROR_CODES.AUTH_REJECTED });
-    expect(harness.sockets).toHaveLength(1);
+    expect(harness.sockets).toHaveLength(0);
     expect(harness.state.table.get(USER_ID)?.has(HOST_ID) ?? false).toBe(false);
   });
 
@@ -906,7 +907,8 @@ describe("CLI local doors while authn cannot mint", () => {
 describe("CLI local doors while authn takes the mint and never answers it", () => {
   // The mint's own request deadline: past it the mint answers `unavailable`.
   const MINT_BUDGET_MS = 10_000;
-  const FIRST_OPEN = "the first socket opens at once with the probe";
+  const FIRST_OPEN =
+    "the first socket opens with the probe once the one mint has failed";
   const THREE_HOSTS = [
     {
       host: "a released host",
@@ -953,7 +955,11 @@ describe("CLI local doors while authn takes the mint and never answers it", () =
         (error: unknown) => ({ value: null, error }),
       );
 
+      // No token is held: the call waits for the one mint, and no socket is
+      // opened until it has failed.
       await vi.advanceTimersByTimeAsync(0);
+      expect(harness.sockets).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(MINT_BUDGET_MS + 500);
       expect(harness.sockets).toHaveLength(1);
       const first = await socketAt(0);
       expect((await readOpen(first)).token).toBe(NO_HOST_TOKEN_PROBE);
@@ -990,6 +996,14 @@ describe("CLI local doors while authn takes the mint and never answers it", () =
     async ({ refusal, sendsSignIn }) => {
       const opened = await openCliHostSession(auth(), HOST_ID, false, null);
       if (opened.kind !== "ok") throw new Error("session did not open");
+      // The one-shot stream waits for the one mint before it dials.
+      const prepared = opened.session.tokens
+        .localStreamCredential(HOST_ID)
+        .prepare();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.sockets).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(MINT_BUDGET_MS + 500);
+      await prepared;
       await openStream(opened.session);
 
       await vi.advanceTimersByTimeAsync(0);
@@ -1012,12 +1026,14 @@ describe("CLI local doors while authn takes the mint and never answers it", () =
     },
   );
 
-  it("unary: opens a held token that ran out at once, with the mint unanswered", async () => {
+  it("unary: waits for the mint before it opens a held token that ran out, then opens it", async () => {
     const expired = expiredJwt(Date.now());
     hold(expired);
     const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
 
     await vi.advanceTimersByTimeAsync(0);
+    expect(harness.sockets).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(MINT_BUDGET_MS + 500);
     expect(harness.sockets).toHaveLength(1);
     const socket = await socketAt(0);
     const open = await readOpen(socket);
@@ -1027,13 +1043,27 @@ describe("CLI local doors while authn takes the mint and never answers it", () =
     expect(harness.state.hostRowReads).toEqual([]);
   });
 
-  it("stream: opens a held token that ran out at once, with the mint unanswered", async () => {
+  it("stream: a one-shot stream holds a token that ran out until the mint has failed, then opens it", async () => {
     const expired = expiredJwt(Date.now());
     hold(expired);
     const opened = await openCliHostSession(auth(), HOST_ID, false, null);
     if (opened.kind !== "ok") throw new Error("session did not open");
+    // The one-shot stream renews before it dials: it waits for the mint, which
+    // authn never answers, until the mint's own deadline.
+    let prepared = false;
+    void opened.session.tokens
+      .localStreamCredential(HOST_ID)
+      .prepare()
+      .then(() => {
+        prepared = true;
+      });
+    await vi.advanceTimersByTimeAsync(MINT_BUDGET_MS - 1_000);
+    expect(prepared).toBe(false);
+    expect(harness.sockets).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(prepared).toBe(true);
+    // The mint failed: the held token goes.
     await openStream(opened.session);
-
     await vi.advanceTimersByTimeAsync(0);
     expect(harness.sockets).toHaveLength(1);
     const socket = await socketAt(0);

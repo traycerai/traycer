@@ -242,6 +242,10 @@ const BUDGET_STARTS_BEFORE_FIRST_ASK_MS = 3;
 const GIVE_ENDS_MS = GIVE_BUDGET_MS - BUDGET_STARTS_BEFORE_FIRST_ASK_MS;
 /** A held mint's own fetch times out here. */
 const MINT_TIMEOUT_MS = 10_000;
+/** One readiness try's own budget: `min(2000, remaining)`. */
+const TRY_BUDGET_MS = 2_000;
+/** The good-side give's completion at 45829027 (mint answered 3 s after it is asked), measured with this fixture on that tree, from the first readiness ask. */
+const BASE_GOOD_COMPLETION_MS = 18_057;
 const TRANSFER_LINE =
   "The team transfer could not be confirmed. Check this computer in the app before trying again.";
 
@@ -258,6 +262,18 @@ const personalBinding = {
   explicit: false,
   enrolledByUserId: null,
   canUnbind: false,
+};
+
+const teamBinding = {
+  ...personalBinding,
+  environment: {
+    environmentId: TARGET_ENVIRONMENT_ID,
+    ownerKind: "organization",
+    ownerId: TEAM_ID,
+    roomId: "room-team",
+    label: "acme",
+  },
+  explicit: true,
 };
 
 function signInWithAcme() {
@@ -372,6 +388,10 @@ let abortTimeoutRequests: number[];
 /** The fake time each readiness try asked the host for its status. */
 let statusAskedAtMs: number[];
 let refuseStatusFromMs: number | null;
+/** When set, authn answers every host-only token mint `ok` after this many ms, instead of never. */
+let mintAnswersAfterMs: number | null;
+/** A mint was answered: the host then reports the team's binding. */
+let mintAnswered: boolean;
 let startedAtMs: number;
 let credentialsRoot: string;
 
@@ -425,6 +445,19 @@ function stubAuthn(tokenLifetimeSeconds: number): void {
         { once: true },
       );
       held.push(mint);
+      if (mintAnswersAfterMs !== null) {
+        return new Promise<Response>((resolve) => {
+          setTimeout(() => {
+            mintAnswered = true;
+            resolve(
+              jsonResponse(200, {
+                session_grant: "host-token-fresh",
+                session_grant_expires_in: 3600,
+              }),
+            );
+          }, mintAnswersAfterMs ?? 0);
+        });
+      }
       return new Promise<Response>(() => undefined);
     }),
   );
@@ -462,7 +495,7 @@ function answerHost(): void {
           move: null,
         });
       case "environment.host.read":
-        return personalBinding;
+        return mintAnswered ? teamBinding : personalBinding;
       case "environment.previewLocalFacts":
         return { activeTurns: 0, terminals: 0 };
       default:
@@ -526,6 +559,14 @@ function expectNoTryAwaitedAMint(): void {
   expect(Math.max(...gaps)).toBeLessThan(10_000);
 }
 
+/** Each of a try's two calls (status, binding) waits at most its own budget: two tries are never more than the poll's 2 s plus both budgets apart. */
+function expectNoTryWaitedPastItsBudget(): void {
+  const gaps = statusAskedAtMs
+    .slice(1)
+    .map((at, index) => at - (statusAskedAtMs[index] ?? at));
+  expect(Math.max(...gaps)).toBeLessThanOrEqual(2_006 + 2 * TRY_BUDGET_MS + 10);
+}
+
 /** The give's budget runs from its first readiness ask; the scripted socket's own hops come before it. */
 function pollStartMs(): number {
   const first = statusAskedAtMs[0];
@@ -568,6 +609,8 @@ beforeEach(async () => {
   abortTimeoutRequests = [];
   statusAskedAtMs = [];
   refuseStatusFromMs = null;
+  mintAnswersAfterMs = null;
+  mintAnswered = false;
   credentialsRoot = mkdtempSync(join(tmpdir(), "team-give-deadline-"));
   mocks.credentialsPath = join(credentialsRoot, "cli", "credentials");
   mocks.hostTokenTable = new Map();
@@ -655,27 +698,30 @@ describe("the team give's readiness poll", () => {
     expect(tokenTableSnapshot()).toBe(run.tokensAfterFirstCall);
   });
 
-  it("holds one mint in flight at a time after the expiry, each started by the first try after the previous one's 10 s timeout", async () => {
+  it("holds one mint in flight at a time after the expiry, each started by the first try after the previous one's timeout, and no try waits longer than its own budget", async () => {
     // The token expires after 14 s. The first try after it, at 14042 ms, starts a
-    // mint at its dial (14039); every later try joins the flight until its own 10 s
-    // timeout, and the first try after that timeout starts the next one.
+    // mint at its dial (14039). A try now waits up to its own budget (min(2 s,
+    // what is left)) for the mint in flight, so the first try after a 10 s
+    // timeout comes up to 2 s later than at 45829027 (12 s apart, not 10 s):
+    // the next mint starts at 26042, then at 38045. A fourth would start after
+    // the give's end.
     stubAuthn(14);
 
     const run = await runGive();
 
     expectTransferLine(run);
     expectNoTryAwaitedAMint();
+    expectNoTryWaitedPastItsBudget();
     expect(run.endedAtMs - pollStartMs()).toBe(GIVE_ENDS_MS);
     expect(held.map((mint) => mint.startedAtMs - pollStartMs())).toEqual([
-      14_039, 24_069, 34_099, 44_129,
+      14_039, 26_042, 38_045,
     ]);
-    // The first three end at their own 10 s timeout; the last, 868 ms before its
-    // timeout, is cancelled by the give's end.
+    // The first two end at their own 10 s timeout; the last, before its own,
+    // is cancelled by the give's end.
     expect(held.map((mint) => (mint.abortedAtMs ?? 0) - pollStartMs())).toEqual(
-      [24_039, 34_069, 44_099, GIVE_ENDS_MS],
+      [24_039, 36_042, GIVE_ENDS_MS],
     );
     expect(held.map((mint) => mint.reason)).toEqual([
-      expect.objectContaining({ name: "TimeoutError" }),
       expect.objectContaining({ name: "TimeoutError" }),
       expect.objectContaining({ name: "TimeoutError" }),
       expect.objectContaining({ name: "AbortError" }),
@@ -683,6 +729,36 @@ describe("the team give's readiness poll", () => {
     expectOneMintInFlightAtATime();
     expectNoMintInFlightAfterTheGive();
     expect(tokenTableSnapshot()).toBe(run.tokensAfterFirstCall);
+  });
+
+  it("completes when the sign-in service answers the mint inside the window: no try waits past its budget, and it ends no later than the base's completion plus one try's budget", async () => {
+    // The token expires after 14 s; authn answers the mint 3 s after it is asked.
+    stubAuthn(14);
+    mintAnswersAfterMs = 3_000;
+    const ownership = (owner: object) => ({
+      kind: "ok" as const,
+      host: {
+        hostId: HOST_ID,
+        owner,
+        kind: "personal" as const,
+        remoteAccess: false,
+      },
+    });
+    mocks.readHostOwnershipMock.mockReset();
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(ownership({ kind: "user", id: USER_ID }))
+      .mockResolvedValue(
+        ownership({ kind: "team", id: TEAM_ID, name: "Acme" }),
+      );
+
+    const run = await runGive();
+
+    expect(run.outcome).toEqual({ status: "resolved" });
+    expectNoTryAwaitedAMint();
+    expect(held).toHaveLength(1);
+    expect(run.endedAtMs - pollStartMs()).toBeLessThanOrEqual(
+      BASE_GOOD_COMPLETION_MS + TRY_BUDGET_MS,
+    );
   });
 
   it("cancels the recovery's fresh-token mint with the try when the host refuses the call near the deadline", async () => {

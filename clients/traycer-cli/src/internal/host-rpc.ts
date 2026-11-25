@@ -8,6 +8,7 @@ import {
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import {
   requireCliHostSession,
+  type CliRefusalEnding,
   type CliRefusalEvidence,
   type SignInRejection,
 } from "./cli-host-tokens";
@@ -454,6 +455,70 @@ export async function callHostRpcAtEndpoint<
   );
 }
 
+/** A call the gate's ending stops, logged once. */
+function blockedCallCliError(
+  method: string,
+  endpoint: HostTransportEndpoint,
+  ending: CliRefusalEnding,
+): CliError {
+  createCliLogger(config.environment).warn(
+    "Host RPC blocked: no host-only token",
+    {
+      environment: config.environment,
+      method,
+      hostId: endpoint.hostId,
+      mintOutcome:
+        ending.kind === "sign-in-rejected" ? ending.kind : ending.failure.kind,
+    },
+  );
+  return refusalEndingCliError(ending);
+}
+
+const CALLER_GAVE_UP: unique symbol = Symbol("caller-gave-up");
+const BUDGET_SPENT: unique symbol = Symbol("budget-spent");
+
+/**
+ * The one wait on the gate's verdict in this file. `work`'s answer, unless
+ * the caller's `signal` aborts (`aborted`) or `budgetMs` passes (`spent`)
+ * first. A verdict already settled always wins: `work` is raced as it is, so
+ * its answer is queued before a later abort's. Its timer and listener end
+ * whichever comes first, and an answer arriving later replaces nothing.
+ */
+async function verdictBeforeCaller<V>(
+  work: Promise<V>,
+  signal: AbortSignal | null,
+  budgetMs: number | null,
+): Promise<
+  | { readonly kind: "answer"; readonly value: V }
+  | { readonly kind: "aborted" }
+  | { readonly kind: "spent" }
+> {
+  let stop = (): void => undefined;
+  const ended = new Promise<typeof CALLER_GAVE_UP | typeof BUDGET_SPENT>(
+    (resolve) => {
+      const onAbort = (): void => resolve(CALLER_GAVE_UP);
+      const timer =
+        budgetMs === null
+          ? null
+          : setTimeout(() => resolve(BUDGET_SPENT), budgetMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      stop = () => {
+        if (timer !== null) clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      if (signal?.aborted === true) onAbort();
+    },
+  );
+  try {
+    const first = await Promise.race([work, ended]);
+    if (first === CALLER_GAVE_UP) return { kind: "aborted" };
+    if (first === BUDGET_SPENT) return { kind: "spent" };
+    return { kind: "answer", value: first };
+  } finally {
+    stop();
+  }
+}
+
 async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   method: Method,
   params: RequestOfMethod<HostRpcRegistry, Method>,
@@ -467,66 +532,104 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     endpoint.hostId,
     dispatch.signal,
   );
-  // The call dials at once and the mint runs beside it. A refusal that may
-  // end the command is kept as evidence only: unless the call was answered
-  // anyway, the gate decides what ends it.
+  // A refusal that may end the command is kept as evidence only: unless the
+  // call was answered anyway, the gate decides what ends it.
   const ended: { refusal: CliRefusalEvidence | null } = { refusal: null };
   const stopRefusals = session.tokens.onRefusalEndingCommand((evidence) => {
     if (evidence.hostId === endpoint.hostId) ended.refusal ??= evidence;
   });
   try {
-    return await requestWithHostToken(
-      method,
-      params,
-      endpoint,
-      session.bearer,
-      session.tokens.unaryRecovery(endpoint.hostId),
-      {
-        releasedSignOn: session.releasedSignOn,
-        hostBearerFor: (waitForMint) =>
-          session.tokens.hostBearerFor(endpoint.hostId, waitForMint),
-        // The unary door names no process: the one current as the fence lets
-        // the admission through.
-        admitted: () =>
-          session.tokens.admitted(
-            processReleasedHosts.currentInstance(endpoint.hostId),
-          ),
-      },
-      retryPolicy,
-      dispatch,
-    );
-  } catch (err) {
-    // The one judgement for this exit, and the exit in the same turn as it.
-    // With no refusal reported, the gate's verdict on the stored sign-in rides
-    // on the refusal thrown now, to its synchronous mapping.
-    if (ended.refusal === null) {
-      const refusal = finalRefusalOf(err);
-      if (refusal instanceof HostRpcError) {
-        const rejection = await session.tokens.signInRejectionNow(null);
-        if (rejection !== null) {
-          markRefusalAfterRejectedSignIn(refusal);
-          rejectionOfRefusal.set(refusal, rejection);
-        }
+    // With no usable token held, the call waits for the mint first, within
+    // its own response budget: a held token past its end is refused by a
+    // host that can reach authn. A refusal that mint met and the gate says
+    // ends the command ends it here, before any request is written. A call
+    // that would spend its budget waiting goes with what is held, as it
+    // always did; a best-effort call made while the person waits to leave
+    // (`failFast`) goes at once, the mint running beside it.
+    // One race covers the mint and the gate's verdict on it; the clock is
+    // read first after it, and past the budget the call goes with what is
+    // held.
+    const minted = session.tokens.mintBeforeWork(endpoint.hostId);
+    const budgetMs = dispatch.responseTimeoutMs ?? FRAME_TIMEOUT_MS;
+    const budgetEndsAt = Date.now() + budgetMs;
+    // Never rejects: a verdict that fails is no verdict. An aborted caller
+    // enters no gate, even on a mint failure its abort caused.
+    const verdict = async (): Promise<CliRefusalEnding | null> => {
+      try {
+        const answer = await minted;
+        if (answer === null || answer.kind !== "failed") return null;
+        if (dispatch.signal?.aborted === true) return null;
+        return await session.tokens.refusalEndingCommandNow(endpoint.hostId);
+      } catch {
+        return null;
       }
-      throw err;
-    }
-    const ending = await session.tokens.refusalEndingCommandNow(
-      endpoint.hostId,
-    );
-    if (ending === null) throw err;
-    createCliLogger(config.environment).warn(
-      "Host RPC blocked: no host-only token",
-      {
-        environment: config.environment,
+    };
+    // A caller that gives up meanwhile goes to the request, which ends at
+    // once with its own abort.
+    const judged = dispatch.failFast
+      ? null
+      : await verdictBeforeCaller(verdict(), dispatch.signal, budgetMs);
+    const ending = judged?.kind === "answer" ? judged.value : null;
+    if (ending !== null && Date.now() < budgetEndsAt)
+      throw blockedCallCliError(method, endpoint, ending);
+    // That mint is the one the call's first open would have started.
+    let firstOpen = true;
+    try {
+      return await requestWithHostToken(
         method,
-        hostId: endpoint.hostId,
-        mintOutcome:
-          ending.kind === "sign-in-rejected"
-            ? ending.kind
-            : ending.failure.kind,
-      },
-    );
-    throw refusalEndingCliError(ending);
+        params,
+        endpoint,
+        session.bearer,
+        session.tokens.unaryRecovery(endpoint.hostId),
+        {
+          releasedSignOn: session.releasedSignOn,
+          // Every later open with no usable token starts the mint through the
+          // one starter, as every bearer read did before.
+          hostBearerFor: (waitForMint) => {
+            if (!firstOpen) void session.tokens.mintBeforeWork(endpoint.hostId);
+            firstOpen = false;
+            return session.tokens.hostBearerFor(endpoint.hostId, waitForMint);
+          },
+          // The unary door names no process: the one current as the fence lets
+          // the admission through.
+          admitted: () =>
+            session.tokens.admitted(
+              processReleasedHosts.currentInstance(endpoint.hostId),
+            ),
+        },
+        retryPolicy,
+        dispatch,
+      );
+    } catch (err) {
+      // A caller that has given up gets its own ending at once: no verdict
+      // read starts after its deadline, and one under way replaces nothing.
+      if (dispatch.signal?.aborted === true) throw err;
+      // The one judgement for this exit, and the exit in the same turn as it.
+      // With no refusal reported, the gate's verdict on the stored sign-in
+      // rides on the refusal thrown now, to its synchronous mapping.
+      if (ended.refusal === null) {
+        const refusal = finalRefusalOf(err);
+        if (refusal instanceof HostRpcError) {
+          const judged = await verdictBeforeCaller(
+            session.tokens.signInRejectionNow(null),
+            dispatch.signal,
+            null,
+          );
+          if (judged.kind === "answer" && judged.value !== null) {
+            markRefusalAfterRejectedSignIn(refusal);
+            rejectionOfRefusal.set(refusal, judged.value);
+          }
+        }
+        throw err;
+      }
+      const judged = await verdictBeforeCaller(
+        session.tokens.refusalEndingCommandNow(endpoint.hostId),
+        dispatch.signal,
+        null,
+      );
+      if (judged.kind !== "answer" || judged.value === null) throw err;
+      throw blockedCallCliError(method, endpoint, judged.value);
+    }
   } finally {
     stopRefusals();
     session.dispose();

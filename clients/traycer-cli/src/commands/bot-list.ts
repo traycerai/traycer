@@ -1,9 +1,14 @@
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
-import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
+import {
+  readHostOwnershipViaHttp,
+  type HostOwnershipResult,
+} from "@traycer-clients/shared/host-client/host-ownership";
 import { CliError, cliError, CLI_ERROR_CODES } from "../runner/errors";
 import {
+  BOT_SNAPSHOT_DEADLINE_MS,
+  botReadTimedOutError,
   listBots,
-  openLocalStreamClient,
+  withLocalBotStream,
   readBotSnapshot,
   type BotSnapshot,
 } from "../internal/bot-host";
@@ -11,11 +16,12 @@ import { resolveHostAuth } from "../internal/host-auth";
 import {
   HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
   signedOutCliError,
-  storedCredentialRejectedCliError,
 } from "../internal/host-door-words";
 import type { CommandFn } from "../runner/runner";
 import {
+  askWithStoredSignIn,
   readSignInEnvironments,
+  type SignedInEnvironments,
   type SignInEnvironment,
 } from "../internal/sign-in-environments";
 
@@ -55,54 +61,102 @@ export interface BotListGroup {
 export function buildBotListCommand(): CommandFn {
   return async () => {
     const [signedIn, bots] = await Promise.all([
-      readSignInEnvironments(),
+      readSignInEnvironments(ownershipUnconfirmedCliError),
       listBots(),
     ]);
-    const { client, endpoint } = await openLocalStreamClient();
+    // Read on the first dial only: a second dial after a refused expired
+    // token reads the bots again, not this computer's environments.
+    let read: {
+      readonly environments: readonly SignInEnvironment[];
+      readonly hostId: string;
+    } | null = null;
+    const failedRows = (known: {
+      readonly environments: readonly SignInEnvironment[];
+      readonly hostId: string;
+    }): {
+      readonly listedOn: readonly SignInEnvironment[];
+      readonly settled: readonly PromiseSettledResult<BotListRow | null>[];
+    } => ({
+      listedOn: known.environments,
+      settled: bots.map((bot): PromiseSettledResult<BotListRow | null> => ({
+        status: "fulfilled",
+        value: toRow(bot, null, true, known.hostId),
+      })),
+    });
     // Every read settles (each has its own deadline) before the client
     // closes, so no subscription outlives the command.
-    let environments: readonly SignInEnvironment[];
-    let settled: readonly PromiseSettledResult<BotListRow | null>[];
-    try {
-      environments = await environmentsOnThisComputer(
-        signedIn,
-        endpoint.hostId,
-      );
-      settled = await Promise.allSettled(
-        bots.map(async (bot): Promise<BotListRow | null> => {
-          let snapshot: BotSnapshot | null;
-          try {
-            snapshot = await readBotSnapshot(client, bot.botId);
-          } catch (error) {
-            // A host without bots fails the whole command with one line; any
-            // other failure is this bot's alone.
-            if (
-              error instanceof CliError &&
-              error.code === CLI_ERROR_CODES.HOST_UNSUPPORTED
-            ) {
-              throw error;
-            }
-            return toRow(bot, null, true, endpoint.hostId);
-          }
-          // Deleted between the list and the read: not a bot any more.
-          if (snapshot === null) return null;
-          return toRow(
-            snapshot.bot,
-            snapshot.openRequestCount,
-            false,
+    const { listedOn, settled } = await withLocalBotStream(
+      // The stream's sign-in is the list's person's, checked before any mint.
+      { userId: signedIn.userId, notConfirmed: ownershipUnconfirmedCliError },
+      {
+        span: { kind: "from-first-dial", ms: BOT_SNAPSHOT_DEADLINE_MS },
+        // Each read ended at its deadline: every bot is a failed row.
+        ended: () => {
+          const known = read;
+          if (known === null) return Promise.reject(botReadTimedOutError());
+          return Promise.resolve(failedRows(known));
+        },
+      },
+      // A refusal that ends the command fails every read, as it does met
+      // during them: every bot is a failed row.
+      async (_ending, endpoint) =>
+        failedRows({
+          environments: await environmentsOnThisComputer(
+            signedIn,
             endpoint.hostId,
-          );
+          ),
+          hostId: endpoint.hostId,
         }),
-      );
-    } finally {
-      client.close("bot-list-settled");
-    }
+      async (client, endpoint, dial) => {
+        try {
+          const known = read ?? {
+            environments: await environmentsOnThisComputer(
+              signedIn,
+              endpoint.hostId,
+            ),
+            hostId: endpoint.hostId,
+          };
+          read = known;
+          return {
+            listedOn: known.environments,
+            settled: await Promise.allSettled(
+              bots.map(async (bot): Promise<BotListRow | null> => {
+                let snapshot: BotSnapshot | null;
+                try {
+                  snapshot = await readBotSnapshot(client, bot.botId, dial);
+                } catch (error) {
+                  // A host without bots fails the whole command with one line;
+                  // any other failure is this bot's alone.
+                  if (
+                    error instanceof CliError &&
+                    error.code === CLI_ERROR_CODES.HOST_UNSUPPORTED
+                  ) {
+                    throw error;
+                  }
+                  return toRow(bot, null, true, endpoint.hostId);
+                }
+                // Deleted between the list and the read: not a bot any more.
+                if (snapshot === null) return null;
+                return toRow(
+                  snapshot.bot,
+                  snapshot.openRequestCount,
+                  false,
+                  endpoint.hostId,
+                );
+              }),
+            ),
+          };
+        } finally {
+          client.close("bot-list-settled");
+        }
+      },
+    );
     const rows = settled.map((result) => {
       if (result.status === "rejected") throw result.reason;
       return result.value;
     });
     const listed = rows.filter((row): row is BotListRow => row !== null);
-    const groups = groupByEnvironment(environments, listed, bots);
+    const groups = groupByEnvironment(listedOn, listed, bots);
     return {
       data: { environments: groups },
       human: renderBotList(groups),
@@ -118,26 +172,42 @@ export function buildBotListCommand(): CommandFn {
  * one authn's host directory has no row for, all of them.
  */
 async function environmentsOnThisComputer(
-  signedIn: readonly SignInEnvironment[],
+  signedIn: SignedInEnvironments,
   hostId: string,
 ): Promise<readonly SignInEnvironment[]> {
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
-  const directory = await readHostOwnershipViaHttp(
-    auth.authnBaseUrl,
-    auth.token,
-    hostId,
+  // The directory refused the sign-in it was sent, or refused the person (a
+  // 403 reads the same, folded in the shared reader). Either way, sign-in
+  // advice comes only from authn refusing the stored sign-in.
+  const read = await askWithStoredSignIn(
+    signedIn.userId,
+    auth,
+    (token) => readHostOwnershipViaHttp(auth.authnBaseUrl, token, hostId),
+    {
+      refusedAgain: ownershipUnconfirmedCliError,
+      notConfirmed: ownershipUnconfirmedCliError,
+    },
   );
+  return environmentsOf(signedIn.environments, read);
+}
+
+function ownershipUnconfirmedCliError(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+    message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+    details: null,
+    exitCode: 1,
+  });
+}
+
+function environmentsOf(
+  signedIn: readonly SignInEnvironment[],
+  directory: Exclude<HostOwnershipResult, { readonly kind: "unauthorized" }>,
+): readonly SignInEnvironment[] {
   switch (directory.kind) {
-    case "unauthorized":
-      throw storedCredentialRejectedCliError();
     case "network-error":
-      throw cliError({
-        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-        message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
-        details: null,
-        exitCode: 1,
-      });
+      throw ownershipUnconfirmedCliError();
     case "not-found":
       return signedIn;
     case "ok": {

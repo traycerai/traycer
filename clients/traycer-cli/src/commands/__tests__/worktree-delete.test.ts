@@ -56,7 +56,7 @@ type FakeSession = {
 };
 
 type CapturedStreamOptions = {
-  readonly bearer: () => OpenFrameBearerSource | null;
+  readonly bearer: (hostId: string) => OpenFrameBearerSource | null;
   readonly releasedSignOn: { readonly signIn: BearerSourceProvider } | null;
   readonly door: StreamDoorObserver | undefined;
 };
@@ -369,12 +369,10 @@ describe("buildWorktreeDeleteCommand input validation", () => {
     expect(session.params).toMatchObject({
       targets: [{ worktreePath: "/wt/feature ", scripts: null }],
     });
-    // The first ask has no token to present and starts the mint beside it.
-    expect(hoisted.state.bearer?.()).toBeNull();
-    await vi.waitFor(() =>
-      expect(hoisted.state.bearer?.()?.getBearerToken()).toBe(
-        "delete-host-only-token",
-      ),
+    // No token was held, so the command waited for the one mint before it
+    // dialed, and the first ask presents the token it bought.
+    expect(hoisted.state.bearer?.("host-1")?.getBearerToken()).toBe(
+      "delete-host-only-token",
     );
     session.frameHandler?.({
       kind: "target.complete",

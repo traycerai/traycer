@@ -48,7 +48,7 @@ vi.mock("../../logger", () => ({
 const hoisted = vi.hoisted(() => ({
   callHostRpc: vi.fn(),
   resolveEndpoint: vi.fn(),
-  openLocalStreamClient: vi.fn(),
+  withLocalBotStream: vi.fn(),
   resolveHostAuth: vi.fn(),
   validateIdentity: vi.fn(),
   readHostOwnership: vi.fn(),
@@ -117,7 +117,7 @@ vi.mock("../../internal/bot-host", async () => {
   const actual = await vi.importActual<
     typeof import("../../internal/bot-host")
   >("../../internal/bot-host");
-  return { ...actual, openLocalStreamClient: hoisted.openLocalStreamClient };
+  return { ...actual, withLocalBotStream: hoisted.withLocalBotStream };
 });
 
 const ENDPOINT = {
@@ -231,10 +231,27 @@ function stage(input: {
       "bot.list": () => ({ bots: input.bots, mainBotIds: null }),
     }),
   );
-  hoisted.openLocalStreamClient.mockResolvedValue({
-    client: input.client,
-    endpoint: ENDPOINT,
-  });
+  hoisted.withLocalBotStream.mockImplementation(
+    (
+      _person: unknown,
+      _limit: unknown,
+      _refused: unknown,
+      read: (
+        client: unknown,
+        endpoint: unknown,
+        dial: {
+          readonly onAdmitted: (listener: () => void) => void;
+          readonly endsAt: number;
+          readonly redial: boolean;
+        },
+      ) => Promise<unknown>,
+    ) =>
+      read(input.client, ENDPOINT, {
+        onAdmitted: () => undefined,
+        endsAt: 0,
+        redial: false,
+      }),
+  );
 }
 
 function snapshotAnswers(
@@ -447,6 +464,16 @@ describe("bot list", () => {
     hoisted.validateIdentity
       .mockResolvedValueOnce({ kind: "rejected" })
       .mockResolvedValueOnce({ kind: "rejected" });
+    // The refresh saved its sign-in: at the ending the store holds the very
+    // sign-in authn refused, the one sign-in advice is given for.
+    hoisted.resolveHostAuth.mockImplementation(async () => ({
+      token:
+        hoisted.validateIdentity.mock.calls.length >= 2
+          ? "refreshed-bearer"
+          : "sign-in-bearer",
+      authnBaseUrl: "https://authn.test",
+      userId: "user-1",
+    }));
 
     await expect(runList()).rejects.toMatchObject({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
@@ -767,14 +794,17 @@ describe("bot list", () => {
       expect(hoisted.readHostOwnership).toHaveBeenCalledTimes(1);
     });
 
-    it("reports the stored credential rejected when authn refuses the directory read", async () => {
+    // F6: the directory read refusing a sign-in authn itself takes is not the
+    // sign-in's fault (a 403 reads the same as a 401). Sign-in advice comes
+    // only from authn refusing the stored sign-in after its one refresh; that
+    // case is `expired-host-token-ownership-sign-in.test.ts` (c).
+    it("reports the ownership as unconfirmed when the directory refuses a sign-in authn takes", async () => {
       stageThreeEnvironments();
       hoisted.readHostOwnership.mockResolvedValue({ kind: "unauthorized" });
 
       await expect(runList()).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.AUTH_REJECTED,
-        message:
-          "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: "This computer's ownership could not be confirmed. Try again.",
         exitCode: 1,
       });
     });
@@ -827,7 +857,7 @@ describe("bot list", () => {
           "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.",
         exitCode: 1,
       });
-      expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+      expect(hoisted.withLocalBotStream).not.toHaveBeenCalled();
     });
   });
 
@@ -1110,7 +1140,7 @@ describe("bot list on a host without bots", () => {
     await expectUpdateMessage(runList());
 
     // The bot RPC failed first: no stream client was ever opened.
-    expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+    expect(hoisted.withLocalBotStream).not.toHaveBeenCalled();
   });
 
   it("rejects with the update message when bot.subscribe closes as incompatible for that method", async () => {

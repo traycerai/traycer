@@ -447,7 +447,7 @@ async function signInMonitorCredential(
   return {
     presented: "host-token",
     userId: lease.identity.userId,
-    bearer: (hostId) => hostTokens.streamBearer(hostId),
+    bearer: (hostId) => hostTokens.streamBearerForOwnRecovery(hostId),
     // Wanted for as long as the command runs: the tokens' own session check
     // covers its end.
     recover: (hostId, details) =>

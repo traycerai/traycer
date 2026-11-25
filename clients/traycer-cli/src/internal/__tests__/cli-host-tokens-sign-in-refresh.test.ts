@@ -330,8 +330,9 @@ describe("a mint refusal's recovery belongs to the session that started it", () 
     // A command whose signal outlives the call, as a give's budget does.
     const commandSignal = new AbortController();
     const { tokens, dispose } = await acquire(commandSignal.signal);
-    // The call asks without waiting; its mint is sent and held.
-    await tokens.hostBearerFor(hostId, false);
+    // The call's work starts its one mint before the work, and does not wait
+    // for it here; the mint is sent and held.
+    void tokens.mintBeforeWork(hostId);
     await vi.waitFor(() => expect(harness.mints).toHaveLength(1));
     // The session ends. The mint's own signal is the command's, so it stays in flight.
     dispose();

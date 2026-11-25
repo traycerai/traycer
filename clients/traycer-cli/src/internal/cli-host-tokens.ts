@@ -385,11 +385,32 @@ export type CliHostBearer =
   | { readonly kind: "ok"; readonly bearer: OpenFrameBearerSource }
   | { readonly kind: "failed"; readonly failure: CliHostTokenFailure };
 
+/** See {@link CliHostTokens.localStreamCredential}. */
+export interface LocalStreamCredential {
+  /** {@link CliHostTokens.mintBeforeWork} for this host. */
+  readonly prepare: () => Promise<CliHostBearer | null>;
+  /**
+   * A usable token the host has not refused, or a held one of any age while
+   * authn has not answered and the host has not refused it; else `null`, and
+   * the transport probes. It starts no mint: `runLocalStream` starts one
+   * through {@link prepare}.
+   */
+  readonly bearer: BearerSourceProvider;
+  /**
+   * The one answer, on the dial after the host refused a token as expired, to
+   * "which host-only token may this dial present": a usable one the host has
+   * not refused, else none, and the transport probes. The shared transport
+   * marks the exact token each refused open presented.
+   */
+  readonly redialBearer: BearerSourceProvider;
+}
+
 /**
  * The only credential this CLI presents to a host. Kept in `host-tokens` beside the
  * credentials file, under its lock, shared with the desktop. authn is asked only when
  * none is held or it ran out, at `traycer login`, and once after a sign-in refresh.
- * No dial waits for a mint authn has not answered. One instance per person per
+ * A one-shot command with no usable token waits for that mint before its work
+ * ({@link mintBeforeWork}); no other dial waits for one. One instance per person per
  * process, reached through a handle (see {@link acquireCliSignIn}).
  */
 export interface CliHostTokens {
@@ -401,9 +422,10 @@ export interface CliHostTokens {
    * `WsRpcClientOptions.hostBearerFor` for `hostId`: a usable token the host
    * has not refused, at once.
    * With `waitForMint` false, a held one of any age while authn has not
-   * answered, else `null` (the call probes), at once, with the mint in the
-   * background. With `true` (asked only after a current host named its reason
-   * for the probe), only a token the awaited mint bought.
+   * answered, else `null` (the call probes), at once; it starts no mint (the
+   * call starts one through {@link mintBeforeWork}). With
+   * `true` (asked only after a current host named its reason for the probe),
+   * only a token the awaited mint bought.
    */
   hostBearerFor(
     hostId: string,
@@ -411,6 +433,15 @@ export interface CliHostTokens {
   ): Promise<OpenFrameBearerSource | null>;
   /** One lease per host, reading the held token on every frame: empty while none is held. */
   lease(hostId: string): OpenFrameBearerSource;
+  /**
+   * Before a one-shot command's work: with no usable token held (none, past
+   * its end, or refused), one mint and its settled answer, the one running or
+   * else a new one, bounded by that mint's own timeouts; `null` at once
+   * otherwise. Whatever it answers, the work then presents what the token
+   * rules give: the fresh token, else the held one while authn has not
+   * answered, else none.
+   */
+  mintBeforeWork(hostId: string): Promise<CliHostBearer | null>;
   /** Unary recovery for calls to `hostId`, read from the host's refusal. */
   unaryRecovery(hostId: string): RefusalAwareAuthRevalidator;
   /** Recovery of a stream's refused token; {@link admitted} resets its bounds. */
@@ -424,11 +455,21 @@ export interface CliHostTokens {
    */
   admitted(instance: HostInstance): DoorAdmissionRelease;
   /**
-   * A usable token the host has not refused, or a held one of any age while
-   * authn has not answered and the host has not refused it; else `null`, and
-   * the transport probes. Every other ask starts a mint in the background.
+   * A local stream's credential for `hostId`. A held token past its end is
+   * admitted by a host that cannot reach authn and refused `token_expired` by
+   * one that can, so its bearer is never handed out without the recovery of
+   * that refusal: only `runLocalStream` (local-stream.ts) reads it, and a
+   * source scan holds every other caller off.
    */
-  streamBearer(hostId: string): BearerSourceProvider;
+  localStreamCredential(hostId: string): LocalStreamCredential;
+  /**
+   * For a stream that recovers a refused token itself (`traycer monitor`,
+   * credential provisioning; a source scan keeps it to those two): a usable
+   * token the host has not refused, or a held one of any age while authn has
+   * not answered and the host has not refused it; else `null`, and the
+   * transport probes. Every other ask starts a mint in the background.
+   */
+  streamBearerForOwnRecovery(hostId: string): BearerSourceProvider;
   /**
    * Tells `listener` the evidence of every mint refusal this handle's asks
    * met that may end the command, until the returned stop is called. It is
@@ -1401,11 +1442,11 @@ function createPersonTokens(
         return answer(owner.hostId, asked.outcome);
       };
 
-      // One background mint per host process at a time for this handle, for
-      // the stream and the unary asks alike; nothing that dials awaits it,
-      // and a replacement never joins its predecessor's. Fresh while the host
-      // has refused the held token: a mint that is not would hand that token
-      // back.
+      // One mint per host process at a time for this handle, for the stream
+      // and the unary asks alike; a replacement never joins its predecessor's.
+      // Only a one-shot command's work (`mintBeforeWork`) and a host that named
+      // its reason for the probe await it. Fresh while the host has refused
+      // the held token: a mint that is not would hand that token back.
       const minting = new WeakMap<HostInstance, Promise<CliHostBearer>>();
       const mintInBackground = (hostId: string): Promise<CliHostBearer> => {
         const owner = hosts.currentInstance(hostId);
@@ -1428,6 +1469,9 @@ function createPersonTokens(
         return started;
       };
 
+      const mintBeforeWork = (hostId: string): Promise<CliHostBearer | null> =>
+        presentsAsIs(hostId) ? Promise.resolve(null) : mintInBackground(hostId);
+
       // The handle's own: a unary call's recovery starts no rotation once its
       // handle has ended.
       const sessionWanted = (): boolean => !handle.stop.aborted;
@@ -1441,12 +1485,14 @@ function createPersonTokens(
             true,
             askSignal(handle, signal),
           ),
+        mintBeforeWork,
         hostBearerFor: async (hostId, waitForMint) => {
           if (presentsAsIs(hostId)) return leaseOf(hostId);
-          const minted = mintInBackground(hostId);
           if (!waitForMint)
             return presentsHeld(hostId) ? leaseOf(hostId) : null;
-          return (await minted).kind === "ok" ? leaseOf(hostId) : null;
+          return (await mintInBackground(hostId)).kind === "ok"
+            ? leaseOf(hostId)
+            : null;
         },
         unaryRecovery: (hostId) => {
           const recovery = streamRecovery(hostId);
@@ -1484,7 +1530,16 @@ function createPersonTokens(
             admittedOpen.set(owner, (admittedOpen.get(owner) ?? 1) - 1);
           };
         },
-        streamBearer: (hostId) => {
+        localStreamCredential: (hostId) => {
+          const hostLease = leaseOf(hostId);
+          return {
+            prepare: () => mintBeforeWork(hostId),
+            bearer: () =>
+              presentsAsIs(hostId) || presentsHeld(hostId) ? hostLease : null,
+            redialBearer: () => (presentsAsIs(hostId) ? hostLease : null),
+          };
+        },
+        streamBearerForOwnRecovery: (hostId) => {
           let provider = streamBearers.get(hostId);
           if (provider === undefined) {
             const hostLease = leaseOf(hostId);

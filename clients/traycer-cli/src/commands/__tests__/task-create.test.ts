@@ -821,7 +821,13 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(retry.code).toBe(CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN);
     expect(socketRequest).toHaveBeenCalledTimes(1);
     // No mint by construction: only the dial asks for a host-only token, and the socket client is the test's stub that never dials.
-    expect(fetchMock).not.toHaveBeenCalled();
+    // The pre-work mint (a held token missing or past its end is renewed
+    // before the call) is the only request authn sees: no sign-in refresh.
+    expect(
+      fetchMock.mock.calls.every(([url]) =>
+        String(url).endsWith("/session-grant"),
+      ),
+    ).toBe(true);
     expect(storeRotate).not.toHaveBeenCalled();
   });
 
@@ -926,7 +932,13 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(error.message).toContain(path);
     expect(socketRequest).toHaveBeenCalledTimes(1);
     // No mint by construction: only the dial asks for a host-only token, and the socket client is the test's stub that never dials.
-    expect(fetchMock).not.toHaveBeenCalled();
+    // The pre-work mint (a held token missing or past its end is renewed
+    // before the call) is the only request authn sees: no sign-in refresh.
+    expect(
+      fetchMock.mock.calls.every(([url]) =>
+        String(url).endsWith("/session-grant"),
+      ),
+    ).toBe(true);
     expect(storeRotate).not.toHaveBeenCalled();
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;

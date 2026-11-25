@@ -8,6 +8,7 @@ import {
   requireCliHostSession,
   type CliHostSession,
 } from "../internal/cli-host-tokens";
+import { runLocalStream, type LocalStreamDial } from "../internal/local-stream";
 import {
   hostDoorRefusalCliError,
   refusalEndingCliError,
@@ -29,11 +30,12 @@ import type {
   WorktreeDeleteBatchPhase,
   WorktreeDeleteDeclinedKind,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { StreamSignInVerdict } from "@traycer/protocol/host-transport/stream-session";
 import { readLeaseBearer } from "../../../shared/auth/bearer-source";
 import { hostSignInKey } from "../../../shared/auth/host-token-source";
-import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
+import type { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../../shared/host-transport/worktree-delete-batch-stream-client";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
@@ -57,8 +59,11 @@ import { clientCompatibilityRecoveryHint } from "../host/compat-recovery";
 // worktree, so the ping/pong keepalive must outlast a quiet teardown. A fatal
 // close ends the command - unlike the monitor there is no forever-reconnect
 // loop and no auth-refresh recovery (`auth: null`); a short-lived delete runs
-// on the host-only token it holds, or the probe with none. The one exception
-// is a sign-in verdict the gate withdraws (`deleteWithHostToken`).
+// on the host-only token it holds, minted first when none usable is held
+// (`runLocalStream`), or the probe with none. The exceptions come before any
+// open is admitted: a sign-in verdict the gate withdraws
+// (`deleteWithHostToken`), and a held token refused as expired
+// (`runLocalStream`).
 const OPEN_ACK_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 60_000;
@@ -195,7 +200,7 @@ async function deleteWithHostToken(
 }
 
 /** One dial of the delete; `null` when a withdrawn sign-in verdict asks for another. */
-async function deleteOnStoredSignIn(
+function deleteOnStoredSignIn(
   worktreePath: string,
   ctx: CommandContext,
   endpoint: HostTransportEndpoint,
@@ -206,62 +211,86 @@ async function deleteOnStoredSignIn(
   const lease = session.signInLease;
   const tokens = session.tokens;
   const hostId = endpoint.hostId;
-  let admitted = false;
-  const ended: { error: CliError | null } = { error: null };
-  const client = new WsStreamClient<HostStreamRpcRegistry>({
-    registry: hostStreamRpcRegistry,
+  return runLocalStream({
+    tokens,
     // The host this endpoint already resolves to. Safe even where `endpoint` is
     // re-resolved later in the run: the seed is consulted only before this
     // client's first handshake, which is while this id is still the current
     // one, and the latch closes it for good after that.
-    hostId: endpoint.hostId,
-    endpoint: () => endpoint,
-    // The held host-only token at once, or the probe with none: the mint
-    // runs in the background.
-    bearer: (selectedHostId) => tokens.streamBearer(selectedHostId)(),
-    releasedSignOn: session.releasedSignOn,
-    userId: session.bearer.identity.userId,
-    auth: null,
-    // An admitted open fences off a `not-admitted` of a mint begun before it,
-    // or ended while it stays admitted.
-    door: {
-      refused: () => undefined,
-      admitted: (instance) => {
-        admitted = true;
-        return tokens.admitted(instance);
-      },
+    hostId,
+    options: {
+      registry: hostStreamRpcRegistry,
+      endpoint: () => endpoint,
+      releasedSignOn: session.releasedSignOn,
+      userId: session.bearer.identity.userId,
+      clock: null,
+      // Provisioning rides along here too. It used to be opted out because a
+      // one-shot command must not interrupt with an email-OTP challenge; now that
+      // the mint is silent there is nothing to interrupt, and only a host that
+      // reports `missing` triggers it - a host that already holds a credential is
+      // left alone.
+      hostCredentialMint: createCliHostCredentialMintFlow({
+        authnBaseUrl,
+        // Read through the lease each time rather than capturing `auth.token`: a
+        // rotation during the delete must not leave the mint on a dead bearer.
+        bearer: () => readLeaseBearer(lease),
+        diag: (message) => relayStatus(ctx, message),
+        signal: null,
+        unavailableNote:
+          "continuing without a host credential — it will stop working when this connection ends.",
+        onUnauthorized: null,
+      }),
+      // Provisioning here is opportunistic; adoption is never verified.
+      onHostCredentialState: null,
+      // The CLI has no selection authority to feed: it holds no lease
+      // state and never fails a window over.
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: createWhatwgStreamWebSocketFactory(),
+      dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+      openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
+      pingIntervalMs: PING_INTERVAL_MS,
+      pongTimeoutMs: PONG_TIMEOUT_MS,
+      initialBackoffMs: INITIAL_BACKOFF_MS,
+      maxBackoffMs: MAX_BACKOFF_MS,
+      clientIdentity: CLI_CLIENT_IDENTITY,
     },
-    clock: null,
-    // Provisioning rides along here too. It used to be opted out because a
-    // one-shot command must not interrupt with an email-OTP challenge; now that
-    // the mint is silent there is nothing to interrupt, and only a host that
-    // reports `missing` triggers it - a host that already holds a credential is
-    // left alone.
-    hostCredentialMint: createCliHostCredentialMintFlow({
-      authnBaseUrl,
-      // Read through the lease each time rather than capturing `auth.token`: a
-      // rotation during the delete must not leave the mint on a dead bearer.
-      bearer: () => readLeaseBearer(lease),
-      diag: (message) => relayStatus(ctx, message),
-      signal: null,
-      unavailableNote:
-        "continuing without a host credential — it will stop working when this connection ends.",
-      onUnauthorized: null,
-    }),
-    // Provisioning here is opportunistic; adoption is never verified.
-    onHostCredentialState: null,
-    // The CLI has no selection authority to feed: it holds no lease
-    // state and never fails a window over.
-    evidence: NO_TRANSPORT_EVIDENCE,
-    webSocketFactory: createWhatwgStreamWebSocketFactory(),
-    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-    openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
-    pingIntervalMs: PING_INTERVAL_MS,
-    pongTimeoutMs: PONG_TIMEOUT_MS,
-    initialBackoffMs: INITIAL_BACKOFF_MS,
-    maxBackoffMs: MAX_BACKOFF_MS,
-    clientIdentity: CLI_CLIENT_IDENTITY,
+    // The command's pre-open limit, from the first dial: past it, nothing new
+    // is started, and the dial ends as a wait before the first open does.
+    limit: {
+      span: { kind: "from-first-dial", ms: FRAME_TIMEOUT_MS },
+      ended: (refusal) => Promise.reject(preOpenWaitExpiredCliError(refusal)),
+    },
+    refused: (ending) => Promise.reject(refusalEndingCliError(ending)),
+    run: (client, dial) =>
+      deleteOnClient(worktreePath, ctx, client, dial, hostId, session, judged),
   });
+}
+
+/** The delete on one dial's client: the batch command, else the legacy stream. */
+async function deleteOnClient(
+  worktreePath: string,
+  ctx: CommandContext,
+  client: WsStreamClient<HostStreamRpcRegistry>,
+  dial: LocalStreamDial,
+  hostId: string,
+  session: CliHostSession,
+  judged: Set<string>,
+): Promise<WorktreeDeleteOutcome | null> {
+  const lease = session.signInLease;
+  const tokens = session.tokens;
+  let admitted = false;
+  // Once an open is admitted the delete may be running: the gate's line and
+  // a withdrawn verdict no longer end it or dial it again.
+  dial.onAdmitted(() => {
+    admitted = true;
+  });
+  const ended: { error: CliError | null } = { error: null };
+  // After an admitted open the delete may be running: the host-only token's
+  // end says nothing about it, nor about the sign-in.
+  const fatalClose = (details: FatalErrorDetails): CliError =>
+    admitted && readDoorReason(details.doorReason) === "token_expired"
+      ? streamDroppedCliError()
+      : fatalCloseToCliError(details);
 
   // A mint refusal that ends the command ends it with the gate's line, decided
   // in the same turn as the close, while the host has admitted no open of it.
@@ -302,6 +331,8 @@ async function deleteOnStoredSignIn(
       ctx,
       client,
       judgeClose,
+      fatalClose,
+      dial.redial ? dial.endsAt : null,
     );
     if (ended.error !== null) throw ended.error;
     if (attempt.kind === "redial") {
@@ -315,13 +346,20 @@ async function deleteOnStoredSignIn(
     }
     // The batch probe's open was admitted, but that host has no batch method
     // and ran nothing. The legacy stream dials its own open, and only that
-    // open's admission can have started its delete.
+    // open's admission can have started its delete. On a second dial, a limit
+    // that has passed starts no delete; the first keeps its own timers.
     admitted = false;
+    if (dial.redial && Date.now() >= dial.endsAt) {
+      client.close("worktree-delete-settled");
+      throw preOpenWaitExpiredCliError(null);
+    }
     const deleted = await runLegacyDeleteStream(
       worktreePath,
       ctx,
       client,
       judgeClose,
+      fatalClose,
+      dial.redial ? dial.endsAt : null,
     )
       .catch((error: unknown) => {
         throw ended.error ?? error;
@@ -345,10 +383,12 @@ async function deleteOnStoredSignIn(
  * nothing can be sent twice, and it is waited out for at most the CLI's
  * response deadline; past it, `expired` ends the command with the last retry
  * cause, or as a drop when there was none. After the first `open` nothing is
- * waited out.
+ * waited out. A second dial after a refused expired token is bounded from its
+ * start by the end of the command's limit (`endsAt`).
  */
 function preOpenCredentialWait(
   expired: (lastRetryCause: FatalErrorDetails | null) => void,
+  endsAt: number | null,
 ): {
   /** Every status the stream reports, so the first `open` is seen. */
   readonly saw: (status: StreamConnectionStatus) => void;
@@ -361,7 +401,13 @@ function preOpenCredentialWait(
 } {
   let opened = false;
   let lastRetryCause: FatalErrorDetails | null = null;
-  let bound: NodeJS.Timeout | null = null;
+  let bound: NodeJS.Timeout | null =
+    endsAt === null
+      ? null
+      : setTimeout(
+          () => expired(lastRetryCause),
+          Math.max(0, endsAt - Date.now()),
+        );
   const end = (): void => {
     if (bound !== null) clearTimeout(bound);
     bound = null;
@@ -435,6 +481,8 @@ function runDeleteCommand(
   ctx: CommandContext,
   client: WsStreamClient<HostStreamRpcRegistry>,
   judgeClose: CloseVerdictJudge,
+  fatalClose: (details: FatalErrorDetails) => CliError,
+  endsAt: number | null,
 ): Promise<DeleteAttempt> {
   return new Promise<DeleteAttempt>((resolve) => {
     let settled = false;
@@ -448,13 +496,15 @@ function runDeleteCommand(
       holder.command?.close();
       resolve(attempt);
     };
-    const preOpen = preOpenCredentialWait((lastRetryCause) =>
-      finish({
-        kind: "settled",
-        deleted: false,
-        declined: null,
-        error: preOpenWaitExpiredCliError(lastRetryCause),
-      }),
+    const preOpen = preOpenCredentialWait(
+      (lastRetryCause) =>
+        finish({
+          kind: "settled",
+          deleted: false,
+          declined: null,
+          error: preOpenWaitExpiredCliError(lastRetryCause),
+        }),
+      endsAt,
     );
     const command = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
@@ -553,7 +603,7 @@ function runDeleteCommand(
               kind: "settled",
               deleted: false,
               declined: null,
-              error: fatalCloseToCliError(reason.details),
+              error: fatalClose(reason.details),
             });
             return;
           }
@@ -585,6 +635,8 @@ async function runLegacyDeleteStream(
   ctx: CommandContext,
   client: WsStreamClient<HostStreamRpcRegistry>,
   judgeClose: CloseVerdictJudge,
+  fatalClose: (details: FatalErrorDetails) => CliError,
+  endsAt: number | null,
 ): Promise<boolean | "redial"> {
   return new Promise<boolean | "redial">((resolve, reject) => {
     let settled = false;
@@ -601,8 +653,10 @@ async function runLegacyDeleteStream(
       session.close();
       act();
     };
-    const preOpen = preOpenCredentialWait((lastRetryCause) =>
-      finish(() => reject(preOpenWaitExpiredCliError(lastRetryCause))),
+    const preOpen = preOpenCredentialWait(
+      (lastRetryCause) =>
+        finish(() => reject(preOpenWaitExpiredCliError(lastRetryCause))),
+      endsAt,
     );
     session.onServerFrame((envelope) => {
       // The CANONICAL v1.3 frame, not a frozen earlier schema. v1.1 added
@@ -689,7 +743,7 @@ async function runLegacyDeleteStream(
             );
             return;
           }
-          finish(() => reject(fatalCloseToCliError(reason.details)));
+          finish(() => reject(fatalClose(reason.details)));
           return;
         }
         // `reconnecting`, or a non-fatal `closed` that isn't our own

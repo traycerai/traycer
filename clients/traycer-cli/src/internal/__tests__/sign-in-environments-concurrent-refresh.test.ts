@@ -10,6 +10,7 @@ import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rp
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 import { listBots } from "../bot-host";
+import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 import { readSignInEnvironments } from "../sign-in-environments";
 import { completeCredentialsReserve } from "./credentials-reserve-test-support";
 import { createCliCredentialsStore } from "../../store/credentials-store";
@@ -220,7 +221,14 @@ afterEach(async () => {
 describe("the concurrent pair of `traycer bot list`", () => {
   it("asks authn for one refresh of the refused sign-in, and both calls answer on the sign-in it produced", async () => {
     const [environments, bots] = await Promise.allSettled([
-      readSignInEnvironments(),
+      readSignInEnvironments(() =>
+        cliError({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: "",
+          details: null,
+          exitCode: 1,
+        }),
+      ).then((read) => read.environments),
       listBots(),
     ]);
 
@@ -239,7 +247,14 @@ describe("the concurrent pair of `traycer bot list`", () => {
     authn.refreshAnswer = "refused";
 
     const [environments, bots] = await Promise.allSettled([
-      readSignInEnvironments(),
+      readSignInEnvironments(() =>
+        cliError({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: "",
+          details: null,
+          exitCode: 1,
+        }),
+      ).then((read) => read.environments),
       listBots(),
     ]);
 

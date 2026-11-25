@@ -464,7 +464,7 @@ export async function provisionInstalledHostCredential(
       // `null` while no host-only token can be presented for the host the
       // socket was selected for: the stream then probes while authn has not
       // answered. Never the token of whatever `endpoint` names by then.
-      bearer: (hostId) => tokens.streamBearer(hostId)(),
+      bearer: (hostId) => tokens.streamBearerForOwnRecovery(hostId)(),
       userId: lease.identity.userId,
       releasedSignOn,
       auth: streamAuth,

@@ -10,8 +10,8 @@ import { nameReason } from "../../internal/__tests__/released-memory-test-suppor
 import { FRAME_TIMEOUT_MS } from "../../internal/host-rpc";
 import {
   BOT_SNAPSHOT_DEADLINE_MS,
-  openLocalStreamClient,
   readBotSnapshot,
+  withLocalBotStream,
 } from "../../internal/bot-host";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { buildWorktreeDeleteCommand } from "../worktree-delete";
@@ -33,6 +33,25 @@ import { nextCasePerson } from "../../internal/__tests__/case-person-test-suppor
 import { completeCredentialsReserve } from "../../internal/__tests__/credentials-reserve-test-support";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { Environment } from "../../runner/environment";
+import type { LocalStreamLimit } from "../../internal/local-stream";
+import type { CliRefusalEnding } from "../../internal/cli-host-tokens";
+import { refusalEndingCliError } from "../../internal/host-door-words";
+
+/** The dial a first read is made on: no redial, no admission watch. */
+const FIRST_DIAL = {
+  onAdmitted: (): void => undefined,
+  endsAt: 0,
+  redial: false,
+} as const;
+
+/** A bot read with no limit of its own: the tests end it themselves. */
+const NO_LIMIT: LocalStreamLimit<never> = {
+  span: { kind: "from-first-dial", ms: 3_600_000 },
+  ended: () => Promise.reject(new Error("no limit was expected")),
+};
+/** A refusal the gate ends the read on ends it with the gate's own line, as every bot command does. */
+const NO_REFUSAL = (ending: CliRefusalEnding): Promise<never> =>
+  Promise.reject(refusalEndingCliError(ending));
 
 /**
  * Each command here runs its real code over the real stream client, against a
@@ -199,14 +218,20 @@ vi.mock("../../internal/sign-in-environments", async (importOriginal) => {
     >();
   return {
     ...actual,
-    readSignInEnvironments: async () => [
-      {
-        environmentId: "env-personal",
-        ownerKind: "organization" as const,
-        ownerId: "owner-personal",
-        label: "Personal",
-      },
-    ],
+    // The person the command acts as is the stored sign-in's user.
+    readSignInEnvironments: async () => ({
+      userId:
+        (await (await import("../../internal/host-auth")).resolveHostAuth())
+          ?.userId ?? USER_ID,
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "organization" as const,
+          ownerId: "owner-personal",
+          label: "Personal",
+        },
+      ],
+    }),
   };
 });
 
@@ -352,7 +377,15 @@ beforeEach(() => {
   harness.state.beforePostCloseSignInRead = null;
   harness.state.hostTokenTable = new Map();
   harness.state.refresh = "network-error";
-  harness.state.grantResponse = () => new Promise<Response>(() => undefined);
+  // The mint is awaited before the work now, so by default authn answers
+  // `unavailable` at once; a case that needs a mint nobody answers sets its own.
+  harness.state.grantResponse = () =>
+    Promise.resolve(
+      new Response(JSON.stringify({ message: "offline" }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      }),
+    );
   // A named reason is remembered per computer for the whole process.
   hostCount += 1;
   harness.state.hostId = `22222222-2222-4222-8222-${String(hostCount).padStart(12, "0")}`;
@@ -380,7 +413,37 @@ beforeEach(() => {
   );
 });
 
+// A bot read's client, held open as the test drives it; the stream ends with
+// the test.
+const heldBotStreams: { release: () => void; ended: Promise<unknown> }[] = [];
+
+function openLocalStreamClient(): Promise<{
+  client: Parameters<Parameters<typeof withLocalBotStream>[3]>[0];
+}> {
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return new Promise((resolve, reject) => {
+    const ended = withLocalBotStream(
+      null,
+      NO_LIMIT,
+      NO_REFUSAL,
+      async (client) => {
+        resolve({ client });
+        await held;
+      },
+    );
+    heldBotStreams.push({ release, ended });
+    ended.catch(reject);
+  });
+}
+
 afterEach(async () => {
+  for (const held of heldBotStreams.splice(0)) {
+    held.release();
+    await held.ended.catch(() => undefined);
+  }
   harness.state.onSocketCreated = null;
   harness.state.credentialsPath = "";
   harness.state.beforePostCloseSignInRead = null;
@@ -712,36 +775,56 @@ function notAdmittedRefusal(): Record<string, unknown> {
 /** A mint authn takes and has not answered: the test answers it when it chooses. */
 interface HeldMint {
   readonly answer: (response: Response) => void;
-  readonly requested: () => boolean;
-}
-
-function holdMint(): HeldMint {
-  const held: {
-    resolve: (response: Response) => void;
-    asked: boolean;
-  } = { resolve: () => undefined, asked: false };
-  harness.state.grantResponse = () =>
-    new Promise<Response>((resolve) => {
-      held.asked = true;
-      held.resolve = resolve;
-    });
-  return {
-    answer: (response) => held.resolve(response),
-    requested: () => held.asked,
-  };
+  /** Grant requests authn has taken, the one before the dial included. */
+  readonly requests: () => number;
 }
 
 /**
- * No token is held and the mint is pending. The probe gets `owner_sign_in`,
- * and the invited sign-in's OPEN is written: this resolves with that socket,
- * before any `openAck` or refusal of it.
+ * The mint awaited before the dial is answered `unavailable` at once, so the
+ * dial goes on with nothing to present. Every later grant request is held: it
+ * is the mint a read starts after the host's first answer.
+ *
+ * Before c1-v5 the first bearer read started the one mint, and a test held it
+ * to land its 404 after the invited sign-in's OPEN. The mint is awaited before
+ * the dial now, and the invited OPEN reads no bearer, so no mint is out across
+ * that OPEN: the 404 can only land on the mint a later read starts.
  */
-async function writeInvitedSignInOpen(mint: HeldMint): Promise<Socket> {
+function holdLaterMint(): HeldMint {
+  const held: {
+    resolve: (response: Response) => void;
+    requests: number;
+  } = { resolve: () => undefined, requests: 0 };
+  harness.state.grantResponse = () => {
+    held.requests += 1;
+    if (held.requests === 1)
+      return Promise.resolve(
+        new Response(JSON.stringify({ message: "offline" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    return new Promise<Response>((resolve) => {
+      held.resolve = resolve;
+    });
+  };
+  return {
+    answer: (response) => held.resolve(response),
+    requests: () => held.requests,
+  };
+}
+
+const MINT_HAS_NO_ROW = (): Response => new Response("no row", { status: 404 });
+
+/**
+ * No token is held. The probe gets `owner_sign_in`, and the invited sign-in's
+ * OPEN is written: this resolves with that socket, before any `openAck` or
+ * refusal of it.
+ */
+async function writeInvitedSignInOpen(): Promise<Socket> {
   const probe = await socketAt(0);
   probe.fireOpen();
   await vi.advanceTimersByTimeAsync(0);
   expect(openToken(probe)).toBe(NO_HOST_TOKEN_PROBE);
-  await vi.waitFor(() => expect(mint.requested()).toBe(true), WAIT);
   probe.fireFrame(ownerSignInRefusal());
   const invited = await socketAt(1);
   invited.fireOpen();
@@ -749,8 +832,6 @@ async function writeInvitedSignInOpen(mint: HeldMint): Promise<Socket> {
   expect(openToken(invited)).toBe(SIGN_IN);
   return invited;
 }
-
-const MINT_HAS_NO_ROW = (): Response => new Response("no row", { status: 404 });
 
 describe("traycer worktree delete against a released computer", () => {
   const TARGET_COMPLETE = {
@@ -998,7 +1079,7 @@ describe("traycer worktree delete against a released computer", () => {
 describe("a bot read against a released computer", () => {
   it("waits out the stream finding its credential and reads the bot", async () => {
     const { client } = await openLocalStreamClient();
-    const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
+    const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
 
     await refuseProbeBare(0);
     const subscribe = await admitSignIn(1);
@@ -1015,7 +1096,7 @@ describe("a bot read against a released computer", () => {
 
   it("still fails at once on a drop after the stream opened", async () => {
     const { client } = await openLocalStreamClient();
-    const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
+    const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
 
     await refuseProbeBare(0);
     await admitSignIn(1);
@@ -1035,15 +1116,19 @@ describe("a bot read against a released computer", () => {
           status: 403,
         }),
       );
-    const { client } = await openLocalStreamClient();
-    const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
+    // The mint is awaited before the work: the gate ends the read with the
+    // mint's line before any stream is dialed.
+    const opened = openLocalStreamClient().then(
+      () => null,
+      (caught: unknown) => caught,
+    );
 
     await vi.advanceTimersByTimeAsync(0);
 
-    expect((await settled).error).toMatchObject({
+    expect(await opened).toMatchObject({
       code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
     });
-    client.close("test complete");
+    expect(harness.sockets).toHaveLength(0);
   });
 });
 
@@ -1055,16 +1140,16 @@ describe("a mint's not-admitted against a current personal host's invited sign-i
     hasBinaryPayload: false,
   };
 
-  it("lets the delete go on when the mint's 404 lands after the invited OPEN and before its ack", async () => {
-    const mint = holdMint();
+  it("lets the delete go on when the invited sign-in is admitted and no mint is out across its OPEN", async () => {
+    const mint = holdLaterMint();
     const settled = settledOf(
       buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(makeCtx()),
     );
-    await writeInvitedSignInOpen(mint);
+    await writeInvitedSignInOpen();
 
-    mint.answer(MINT_HAS_NO_ROW());
     await vi.advanceTimersByTimeAsync(0);
     await stillWaiting(settled);
+    expect(mint.requests()).toBe(1);
     const subscribe = await admitSignIn(1);
     expect(subscribe.method).toBe("worktree.deleteBatchByPath");
     (await socketAt(1)).fireFrame(TARGET_COMPLETE);
@@ -1077,15 +1162,15 @@ describe("a mint's not-admitted against a current personal host's invited sign-i
     });
   });
 
-  it("lets the bot read go on when the mint's 404 lands after the invited OPEN and before its ack", async () => {
-    const mint = holdMint();
+  it("lets the bot read go on when the invited sign-in is admitted and no mint is out across its OPEN", async () => {
+    const mint = holdLaterMint();
     const { client } = await openLocalStreamClient();
-    const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
-    await writeInvitedSignInOpen(mint);
+    const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
+    await writeInvitedSignInOpen();
 
-    mint.answer(MINT_HAS_NO_ROW());
     await vi.advanceTimersByTimeAsync(0);
     await stillWaiting(settled);
+    expect(mint.requests()).toBe(1);
     const subscribe = await admitSignIn(1);
     expect(subscribe.method).toBe("bot.subscribe");
     (await socketAt(1)).fireFrame(
@@ -1098,15 +1183,16 @@ describe("a mint's not-admitted against a current personal host's invited sign-i
     client.close("test complete");
   });
 
-  it("ends the delete with the mint's line when the invited sign-in is refused and then the 404 lands", async () => {
-    const mint = holdMint();
+  it("ends the delete with the mint's line when the invited sign-in is refused and then the later mint's 404 lands", async () => {
+    const mint = holdLaterMint();
     const settled = settledOf(
       buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(makeCtx()),
     );
-    const invited = await writeInvitedSignInOpen(mint);
+    const invited = await writeInvitedSignInOpen();
 
     invited.fireFrame(notAdmittedRefusal());
     await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
     mint.answer(MINT_HAS_NO_ROW());
 
     expect((await settled).error).toMatchObject({
@@ -1114,14 +1200,15 @@ describe("a mint's not-admitted against a current personal host's invited sign-i
     });
   });
 
-  it("ends the bot read with the mint's line when the invited sign-in is refused and then the 404 lands", async () => {
-    const mint = holdMint();
+  it("ends the bot read with the mint's line when the invited sign-in is refused and then the later mint's 404 lands", async () => {
+    const mint = holdLaterMint();
     const { client } = await openLocalStreamClient();
-    const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
-    const invited = await writeInvitedSignInOpen(mint);
+    const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
+    const invited = await writeInvitedSignInOpen();
 
     invited.fireFrame(notAdmittedRefusal());
     await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
     mint.answer(MINT_HAS_NO_ROW());
 
     expect((await settled).error).toMatchObject({
@@ -1218,24 +1305,28 @@ describe("a bot post's reply wait against a released computer", () => {
           status: 403,
         }),
       );
-    const { client, settled } = await startWait();
+    // Ended by the gate before any stream is dialed.
+    const opened = openLocalStreamClient().then(
+      () => null,
+      (caught: unknown) => caught,
+    );
 
     await vi.advanceTimersByTimeAsync(0);
 
-    expect((await settled).error).toMatchObject({
+    expect(await opened).toMatchObject({
       code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
     });
-    client.close("test complete");
+    expect(harness.sockets).toHaveLength(0);
   });
 
-  it("gets the answer when the mint's 404 lands after the invited OPEN and before its ack", async () => {
-    const mint = holdMint();
+  it("gets the answer when the invited sign-in is admitted and no mint is out across its OPEN", async () => {
+    const mint = holdLaterMint();
     const { client, settled } = await startWait();
-    await writeInvitedSignInOpen(mint);
+    await writeInvitedSignInOpen();
 
-    mint.answer(MINT_HAS_NO_ROW());
     await vi.advanceTimersByTimeAsync(0);
     await stillWaiting(settled);
+    expect(mint.requests()).toBe(1);
     const subscribe = await admitSignIn(1);
     expect(subscribe.method).toBe("chat.subscribe");
     (await socketAt(1)).fireFrame(answeredSnapshot());
@@ -1244,13 +1335,14 @@ describe("a bot post's reply wait against a released computer", () => {
     client.close("test complete");
   });
 
-  it("ends with the mint's line when the invited sign-in is refused and then the 404 lands", async () => {
-    const mint = holdMint();
+  it("ends with the mint's line when the invited sign-in is refused and then the later mint's 404 lands", async () => {
+    const mint = holdLaterMint();
     const { client, settled } = await startWait();
-    const invited = await writeInvitedSignInOpen(mint);
+    const invited = await writeInvitedSignInOpen();
 
     invited.fireFrame(notAdmittedRefusal());
     await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
     mint.answer(MINT_HAS_NO_ROW());
 
     expect((await settled).error).toMatchObject({
@@ -1333,7 +1425,7 @@ describe("a one-shot command against a team host that cannot yet check membershi
 
   it("reads the bot once the next reconnect is admitted", async () => {
     const { client } = await openLocalStreamClient();
-    const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
+    const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
 
     await refuseOpenWith(
       0,
@@ -1398,7 +1490,7 @@ describe("a one-shot command against a team host that cannot yet check membershi
 
   it("ends the bot read with the team-membership sentence when its deadline passes while the host still cannot check", async () => {
     const { client } = await openLocalStreamClient();
-    const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
+    const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
 
     await refuseEveryOpenFor(
       BOT_SNAPSHOT_DEADLINE_MS - 2_000,
@@ -1444,7 +1536,7 @@ describe("a one-shot command against a team host that cannot yet check membershi
     "ends the bot read at once with the team-membership line on a non-retryable TEAM_MEMBERSHIP_REQUIRED naming %s",
     async (doorReason) => {
       const { client } = await openLocalStreamClient();
-      const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
+      const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
 
       await refuseOpenWith(
         0,
@@ -1565,7 +1657,7 @@ describe("a released host that refuses the person's valid sign-in bare", () => {
     "ends the bot read with the host's reason: %s",
     async (reason) => {
       const { client } = await openLocalStreamClient();
-      const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
+      const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
 
       await refuseEveryOpenBare(reason, settled);
 
@@ -1599,7 +1691,7 @@ describe("a released host that refuses the person's valid sign-in bare", () => {
     holdUsableHostToken();
     nameReason(harness.state.hostId);
     const { client } = await openLocalStreamClient();
-    const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
+    const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
 
     await refuseOpenWith(0, releasedRefusalWith("released-host-token-refusal"));
 
