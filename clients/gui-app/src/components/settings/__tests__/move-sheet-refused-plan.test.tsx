@@ -595,6 +595,7 @@ function sourceRefusal(method: "plan" | "stage", code: string): HostRpcError {
 function mountLocalSourceSheet(
   planFailure: HostRpcError | null,
   queryClient: QueryClient,
+  servesRetry: boolean | undefined,
 ): Harness {
   queryClient.setQueryData(
     environmentQueryKeys.personalForMove("user-me"),
@@ -605,7 +606,7 @@ function mountLocalSourceSheet(
       plan: STALE_PLAN,
       planFailure,
       status: awaitingConsentStatus(),
-      servesRetry: false,
+      servesRetry: servesRetry === true,
     },
     queryClient,
     true,
@@ -665,6 +666,7 @@ describe("<MoveSheet /> with unread computer settings", () => {
     const harness = mountLocalSourceSheet(
       sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
       createAppQueryClient(),
+      undefined,
     );
     await settle();
 
@@ -682,6 +684,7 @@ describe("<MoveSheet /> with unread computer settings", () => {
     const harness = mountLocalSourceSheet(
       sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
       shortLivedQueryClient(),
+      undefined,
     );
     await settle();
     expect(acceptIsDisabled()).toBe(true);
@@ -700,8 +703,107 @@ describe("<MoveSheet /> with unread computer settings", () => {
     expect(acceptIsDisabled()).toBe(false);
   });
 
+  it("keeps the source refusal when cancellation restores an earlier successful plan", async () => {
+    const harness = mountLocalSourceSheet(
+      sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
+      shortLivedQueryClient(),
+      undefined,
+    );
+    await settle();
+    harness.computer.planFailure = null;
+    harness.computer.plan = FRESH_PLAN;
+    await rereadPlan(harness);
+    expect(acceptIsDisabled()).toBe(true);
+
+    const entered = Promise.withResolvers<QueryKey>();
+    const finishCancelledRead = harness.holdNextPlanRead();
+    const reads = harness.planReads();
+    const unsubscribe = harness.queryClient
+      .getQueryCache()
+      .subscribe((event) => {
+        if (event.type !== "updated" || event.action.type !== "fetch") return;
+        const key: unknown = event.query.queryKey;
+        if (isMovePlanKey(key)) entered.resolve(key);
+      });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      const queryKey = await entered.promise;
+      await settle();
+      expect(harness.planReads()).toBe(reads + 1);
+      await act(async () => {
+        await harness.queryClient.cancelQueries({ queryKey, exact: true });
+        finishCancelledRead();
+      });
+    } finally {
+      unsubscribe();
+    }
+    await settle();
+
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    await retryLocalPlan(harness, "success");
+    expect(acceptIsDisabled()).toBe(false);
+  });
+
+  it("keeps the source refusal when the setup Retry's own plan fails", async () => {
+    const harness = mountLocalSourceSheet(
+      sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
+      shortLivedQueryClient(),
+      true,
+    );
+    await settle();
+    harness.computer.status = stoppedStatus();
+    await deliverNextStatusRead();
+
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(harness.retries()).toBe(1);
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+
+    const failed = Promise.withResolvers<void>();
+    const unsubscribe = harness.queryClient
+      .getQueryCache()
+      .subscribe((event) => {
+        if (
+          event.type === "updated" &&
+          event.action.type === "error" &&
+          isMovePlanKey(event.query.queryKey)
+        ) {
+          failed.resolve();
+        }
+      });
+    try {
+      harness.computer.planFailure = planRefusal(
+        "RPC_ERROR",
+        "The computer took too long to answer.",
+      );
+      harness.computer.status = awaitingConsentStatus();
+      await deliverNextStatusRead();
+      await failed.promise;
+    } finally {
+      unsubscribe();
+    }
+    await settle();
+    expect(acceptIsDisabled()).toBe(true);
+
+    harness.computer.planFailure = null;
+    harness.computer.plan = FRESH_PLAN;
+    await rereadPlan(harness);
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    await retryLocalPlan(harness, "success");
+    expect(acceptIsDisabled()).toBe(false);
+  });
+
   it("keeps the generic stage failure when the same message comes without the source refusal code", async () => {
-    const harness = mountLocalSourceSheet(null, shortLivedQueryClient());
+    const harness = mountLocalSourceSheet(
+      null,
+      shortLivedQueryClient(),
+      undefined,
+    );
     await settle();
     expect(acceptIsDisabled()).toBe(false);
 
@@ -714,7 +816,11 @@ describe("<MoveSheet /> with unread computer settings", () => {
   });
 
   it("refuses the press before any acceptance POST and enables Move only after Retry reads the plan", async () => {
-    const harness = mountLocalSourceSheet(null, shortLivedQueryClient());
+    const harness = mountLocalSourceSheet(
+      null,
+      shortLivedQueryClient(),
+      undefined,
+    );
     await settle();
     expect(acceptIsDisabled()).toBe(false);
 
