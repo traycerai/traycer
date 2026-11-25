@@ -178,29 +178,58 @@ function choiceOutcome(
   return { outcome: "applied" };
 }
 
+interface HeldApplyBase {
+  readonly heldId: string;
+  readonly revision: number;
+  readonly expectedLiveRevision: number | null;
+}
+
 /** Of two windows applying one hold, one writes it; the other gets a replay of that write or `gone`. */
-export async function applyHeldChange(
+export function applyHeldChange(
   cloud: EnvironmentCloud,
   environmentId: string,
-  hold: {
-    readonly heldId: string;
-    readonly revision: number;
-    readonly expectedLiveRevision: number | null;
-  },
+  hold: HeldApplyBase,
 ): Promise<ReviewChoiceOutcome> {
-  return choiceOutcome(
-    await sendReview(
-      cloud,
-      "POST",
-      heldPath(environmentId, hold.heldId, "apply"),
-      {
-        revision: hold.revision,
-        expectedLiveRevision: hold.expectedLiveRevision,
-      },
-      REVIEW_OFFLINE_MESSAGE,
-    ),
-    "approve",
+  return applyHeld(cloud, environmentId, hold, null);
+}
+
+/** Recovery requires the same sharing arrangement when the transaction admits the write. */
+export function applyHeldChangeInGeneration(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  hold: HeldApplyBase,
+  expectedSharingGeneration: number,
+): Promise<ReviewChoiceOutcome> {
+  return applyHeld(cloud, environmentId, hold, expectedSharingGeneration);
+}
+
+async function applyHeld(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  hold: HeldApplyBase,
+  expectedSharingGeneration: number | null,
+): Promise<ReviewChoiceOutcome> {
+  const answer = await sendReview(
+    cloud,
+    "POST",
+    heldPath(environmentId, hold.heldId, "apply"),
+    {
+      revision: hold.revision,
+      expectedLiveRevision: hold.expectedLiveRevision,
+      ...(expectedSharingGeneration === null
+        ? {}
+        : { expectedSharingGeneration }),
+    },
+    REVIEW_OFFLINE_MESSAGE,
   );
+  if (
+    expectedSharingGeneration !== null &&
+    (answer.status === 400 || answer.status === 409)
+  ) {
+    // A strict older service refuses the extra field before touching the hold.
+    return { outcome: "conflict" };
+  }
+  return choiceOutcome(answer, "approve");
 }
 
 export async function applyReviewChoice(
