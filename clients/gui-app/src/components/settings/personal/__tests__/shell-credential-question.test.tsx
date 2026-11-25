@@ -163,12 +163,18 @@ afterEach(() => {
 interface EnvSetCall {
   readonly key: string;
   readonly value: string | null;
+  readonly executableWriteGrant: string | null;
+}
+
+interface EnvSetResult {
+  readonly key: string;
+  readonly value: string | null;
 }
 
 interface Rendered {
   readonly cli: MockTraycerCli;
   readonly runnerHost: MockRunnerHost;
-  readonly set: Mock<(request: EnvSetCall) => Promise<EnvSetCall>>;
+  readonly set: Mock<(request: EnvSetCall) => Promise<EnvSetResult>>;
   readonly statusCalls: () => number;
   /** `config.env.localOverride.clear`, answered as saved. */
   readonly clear: Mock<
@@ -201,7 +207,7 @@ function renderShellPage(
   const cli = new MockTraycerCli();
   cli.shellConfig = { path: "/bin/zsh", args: ["-i", "-l"], synthesised: true };
   cli.envOverrides = [...options.existingVariables];
-  const set = vi.fn(async (request: EnvSetCall): Promise<EnvSetCall> => {
+  const set = vi.fn(async (request: EnvSetCall): Promise<EnvSetResult> => {
     await cli.envOverrideSet(request);
     return { key: request.key, value: request.value };
   });
@@ -427,6 +433,7 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "API_TOKEN",
       value: API_KEY_VALUE,
+      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("credential-choice-dialog")).toBeNull();
@@ -442,6 +449,7 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "NOTES",
       value: API_KEY_VALUE,
+      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -455,6 +463,7 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "debug",
+      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -477,6 +486,7 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(set).toHaveBeenCalledWith({
       key: "EDITOR",
       value: API_KEY_VALUE,
+      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
@@ -758,6 +768,7 @@ describe("a variable this computer keeps its own value for", () => {
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "error",
+      executableWriteGrant: null,
     });
     expect(clear).not.toHaveBeenCalled();
 
@@ -789,6 +800,7 @@ describe("a variable this computer keeps its own value for", () => {
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: API_KEY_VALUE,
+      executableWriteGrant: null,
     });
     await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
     expect(clear).toHaveBeenCalledWith({
@@ -857,6 +869,7 @@ describe("a variable name a cloud secret declares on Personal", () => {
     expect(set).toHaveBeenCalledWith({
       key: NAME,
       value: "ordinary-value",
+      executableWriteGrant: null,
     });
     expect(
       (await screen.findByLabelText<HTMLInputElement>(`Value for ${NAME}`))

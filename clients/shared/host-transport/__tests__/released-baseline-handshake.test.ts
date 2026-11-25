@@ -68,13 +68,18 @@ function loadBaselines(): { label: string; surfacePath: string }[] {
   if (surfacesDir === undefined || surfacesDir.length === 0) {
     return [];
   }
-  return readdirSync(surfacesDir)
+  const found = readdirSync(surfacesDir)
     .filter((name) => name.endsWith(".json"))
     .sort()
     .map((name) => ({
       label: name.replace(/\.json$/, ""),
       surfacePath: join(surfacesDir, name),
     }));
+  // A named directory with no surface is a broken gate, never a skip.
+  if (found.length === 0) {
+    throw new Error(`No released surface in ${surfacesDir}`);
+  }
+  return found;
 }
 
 const baselines = loadBaselines();
