@@ -1,7 +1,7 @@
+import { toast } from "sonner";
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
-import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   transitionPendingSend,
   UNKNOWN_PENDING_SEND_FACTS,
@@ -26,7 +26,7 @@ import {
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { Plus, XIcon } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -246,12 +246,19 @@ import {
 } from "@/stores/composer/composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+} from "@/lib/drafts/draft-authority-session";
+import { draftStorageRefusalPresentation } from "@/lib/drafts/draft-storage-refusal";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import {
   createEmptyNewConversationContent,
+  flushCanonicalTaskDraft,
+  projectCanonicalTaskDeletion,
   useNewConversationModalStore,
   type NewConversationModalSeed,
 } from "@/stores/epics/new-conversation-modal-store";
@@ -279,6 +286,7 @@ import {
   anyHostHasStagedWorktreeIntent,
   newConversationModalStagingKey,
   readStagedWorktreeIntent,
+  stagedWorktreeIntentRevision,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
@@ -1282,10 +1290,20 @@ export function NewConversationModalBody(props: {
   const openTerminalInstead = useCallback((): void => {
     const surfaceKey = newConversationSurfaceKey(epicId);
     const staged = readStagedSandbox(surfaceKey);
-    if (staged === null) return;
+    if (staged === null || staged.returnedDraft !== undefined) return;
+    const actor = captureDraftAuthorityActor();
+    if (actor === null) return;
     const settings = pickedRunSettings(toolbarStore.getState());
-    handStagedSandbox(surfaceKey, staged, () => {
-      const handed = handPendingSandboxSend({
+    const revision =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]?.revision ?? 0;
+    const stillCurrent = (): boolean =>
+      draftAuthorityActorIsCurrent(actor) &&
+      readStagedSandbox(surfaceKey) === staged &&
+      (useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]?.revision ?? 0) === revision;
+    void handStagedSandbox(surfaceKey, staged, async () => {
+      if (!stillCurrent()) return;
+      const handed = await handPendingSandboxSend({
+        actor,
         fromSurfaceKey: surfaceKey,
         epicId,
         request: { kind: "terminal" },
@@ -1295,8 +1313,11 @@ export function NewConversationModalBody(props: {
         epicConfirmed: true,
         now: Date.now(),
       });
-      if (handed !== null) onSubmitted();
-    });
+      if (
+        handed !== null && draftAuthorityActorIsCurrent(actor) &&
+        (useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]?.revision ?? 0) === revision
+      ) onSubmitted();
+    }, stillCurrent);
   }, [epicId, handStagedSandbox, onSubmitted, toolbarStore]);
   const sandboxStaging = useInTaskSandboxStagingSurface(
     epicId,
@@ -1982,11 +2003,13 @@ export function NewConversationModalBody(props: {
       captured: JsonContent,
     ): Promise<void> => {
       if (stagedSubmitAttempt.current !== null) return Promise.resolve();
+      const actor = captureDraftAuthorityActor();
+      if (actor === null) return Promise.resolve();
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
-      const account = signedInUserId();
       const settings = pickedRunSettings(toolbarStore.getState());
       const settingsKey = JSON.stringify(settings);
+      const intentRevision = stagedWorktreeIntentRevision(stagingKey);
       const revision =
         useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
           ?.revision ?? 0;
@@ -1995,11 +2018,11 @@ export function NewConversationModalBody(props: {
       // before anything is created or woken; the draft and the chip stay.
       return stagedSignInCheck
         .beforeSend(staged)
-        .then((signedOut) => {
+        .then(async (signedOut) => {
           if (
             stagedSubmitAttempt.current !== attempt ||
             readStagedSandbox(stagedKey) !== staged ||
-            signedInUserId() !== account ||
+            !draftAuthorityActorIsCurrent(actor) ||
             JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
               settingsKey ||
             (useNewConversationModalStore.getState().draftPatchesByEpicId[
@@ -2016,9 +2039,29 @@ export function NewConversationModalBody(props: {
             captured,
             pickerStore.getState().knownSlashCommands,
           );
-          handStagedSandbox(stagedKey, staged, () => {
-            const handed = handPendingSandboxSend({
+          const source = await flushCanonicalTaskDraft(epicId);
+          const stillCurrent = (): boolean =>
+            stagedSubmitAttempt.current === attempt &&
+            readStagedSandbox(stagedKey) === staged &&
+            draftAuthorityActorIsCurrent(actor) &&
+            (useNewConversationModalStore.getState().draftPatchesByEpicId[
+              epicId
+            ]?.revision ?? 0) === revision;
+          if (!stillCurrent()) return;
+          if (source.kind === "unavailable") {
+            const presentation = draftStorageRefusalPresentation(
+              staged.returnedDraft === undefined ? "staged-send" : "restored-send",
+            );
+            if (presentation.kind === "composer-failure")
+              toast.error(presentation.title, { description: presentation.description });
+          }
+          if (source.kind !== "committed") return;
+          await handStagedSandbox(stagedKey, staged, async () => {
+            if (!stillCurrent()) return;
+            const handed = await handPendingSandboxSend({
               fromSurfaceKey: stagedKey,
+              actor,
+              source: source.draft,
               epicId,
               // The pane this modal was opened for, as the ordinary create takes it.
               request: { kind: "chat", parentId, placement },
@@ -2028,8 +2071,25 @@ export function NewConversationModalBody(props: {
               epicConfirmed: true,
               now: Date.now(),
             });
-            if (handed !== null) cleanupAfterSubmit();
-          });
+            if (handed === null || !draftAuthorityActorIsCurrent(actor)) return;
+            const consumed = handed.consumed;
+            if (consumed !== null) {
+              if (
+                consumed.kind === "tombstone" &&
+                consumed.operationId === handed.id &&
+                consumed.draft.slot.kind === "task" &&
+                consumed.draft.slot.id === epicId &&
+                consumed.draft.occurrence === source.draft.occurrence &&
+                stagedWorktreeIntentRevision(stagingKey) === intentRevision
+              ) {
+                useWorktreeIntentStagingStore.getState().clear(stagingKey);
+              }
+              await projectCanonicalTaskDeletion(consumed);
+            }
+            if (stagedSubmitAttempt.current !== attempt || !draftAuthorityActorIsCurrent(actor)) return;
+            const latest = useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+            if (latest === undefined || latest.revision === revision) onSubmitted();
+          }, stillCurrent);
           return;
         })
         .finally(() => {
@@ -2037,15 +2097,16 @@ export function NewConversationModalBody(props: {
         });
     },
     [
-      cleanupAfterSubmit,
       epicId,
       handStagedSandbox,
+      onSubmitted,
       parentId,
       pickerStore,
       placement,
       raiseSendRefusal,
       refuseStagedCapture,
       stagedSignInCheck,
+      stagingKey,
       toolbarStore,
     ],
   );
@@ -2075,6 +2136,13 @@ export function NewConversationModalBody(props: {
    * verbatim. The await below exists only for a hash-only node, and everything
    * it changes about ordering is confined to the branch that has one.
    */
+  const hasReturnedTarget = useCallback((): boolean => {
+    const actor = captureDraftAuthorityActor();
+    return hostId === null && actor !== null &&
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+        ?.returnedSandbox?.userId === actor.accountId;
+  }, [epicId, hostId]);
+
   const handleSubmit = useCallback((): void => {
     // THE ATTEMPT COUNT BELONGS TO ONE PRESS OF SEND, so it is reset here
     // rather than on the way out.
@@ -2135,6 +2203,7 @@ export function NewConversationModalBody(props: {
       void submitStagedSandbox(stagedKey, staged, editorContent);
       return;
     }
+    if (staged?.returnedDraft !== undefined || (staged === null && hasReturnedTarget())) return;
 
     // This host's own gate, after the stage's: a staged sandbox is not this
     // host, and the send runs on it under its own.
@@ -2434,6 +2503,7 @@ export function NewConversationModalBody(props: {
   }, [
     canSubmit,
     epicId,
+    hasReturnedTarget,
     raiseHostNotice,
     raiseSendRefusal,
     resolvedHostId,
@@ -2553,12 +2623,12 @@ export function NewConversationModalBody(props: {
   );
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
-      if (!canMutate || !workspaceCanStart) return;
+      if (!canMutate || !workspaceCanStart || hasReturnedTarget()) return;
       // A staged sandbox takes the Start as it takes a send.
       if (stagedSend.intercept("terminal", launch)) return;
       dispatchStartTerminal(launch);
     },
-    [canMutate, dispatchStartTerminal, stagedSend, workspaceCanStart],
+    [canMutate, dispatchStartTerminal, hasReturnedTarget, stagedSend, workspaceCanStart],
   );
   // A layout effect, so the staged handoff's effect (a passive one, declared
   // earlier) reads this render's resubmit, not the last one's. Only a terminal
@@ -2703,8 +2773,9 @@ function useStagedTaskAttachment(input: {
   readonly handStagedSandbox: (
     surfaceKey: string,
     staged: StagedSandbox,
-    hand: () => void,
-  ) => void;
+    hand: () => Promise<void>,
+    canIssue: (() => boolean) | undefined,
+  ) => Promise<void>;
 } {
   const { epicId } = input;
   const taskHostTeamId = useHostOwnerTeamId(
@@ -2720,14 +2791,19 @@ function useStagedTaskAttachment(input: {
   // A team's sandbox can serve this task only after the person's own host
   // attached it. Keep the stage and draft until that step succeeds.
   const handStagedSandbox = useCallback(
-    (surfaceKey: string, staged: StagedSandbox, hand: () => void): void => {
-      if (stageAttachmentRef.current !== null) return;
+    async (
+      surfaceKey: string,
+      staged: StagedSandbox,
+      hand: () => Promise<void>,
+      canIssue: (() => boolean) | undefined,
+    ) => {
+      if (stageAttachmentRef.current !== null || canIssue?.() === false) return;
       const configuration = staged.target.configuration;
       if (
         configuration.kind !== "team" ||
         configuration.teamId === taskHostTeamId
       ) {
-        hand();
+        await hand().catch(() => undefined);
         return;
       }
       if (attachClient === null) {
@@ -2743,7 +2819,7 @@ function useStagedTaskAttachment(input: {
             ?.revision ?? 0,
       );
       const stillCurrent = (): boolean =>
-        transitionPendingSend(
+        canIssue?.() !== false && transitionPendingSend(
           { kind: "chat", phase: "staged", blocker: "none" },
           "handoff",
           {
@@ -2755,17 +2831,23 @@ function useStagedTaskAttachment(input: {
             stageCurrent: readStagedSandbox(surfaceKey) === staged,
           },
         ).effects.includes("handoff");
+      const attachmentHostId = attachClient.getActiveHostId();
       stageAttachmentRef.current = staged;
-      void attachEnvironmentAsync({
+      await attachEnvironmentAsync({
         epicId,
         teamId: configuration.teamId,
         operation,
+        ...(canIssue === undefined ? {} : {
+          mayIssue: (hostId: string): boolean =>
+            hostId === attachmentHostId && stillCurrent(),
+        }),
       })
         .then(() => {
-          if (stillCurrent()) hand();
+          if (stillCurrent()) return hand();
         })
         .catch((error: unknown) => {
-          if (isAttachEnvironmentUnsupported(error) && stillCurrent()) hand();
+          if (isAttachEnvironmentUnsupported(error) && stillCurrent())
+            return hand().catch(() => undefined);
         })
         .finally(() => {
           if (stageAttachmentRef.current === staged) {

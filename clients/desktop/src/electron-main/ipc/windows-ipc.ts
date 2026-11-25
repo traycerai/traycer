@@ -7,7 +7,10 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
+import { parseWindowDraftMove } from "../../ipc-contracts/window-state-parsers";
 import type {
+  MoveWindowDraftReferenceRequest,
+  MoveWindowDraftReferenceResult,
   OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   PerWindowEpicViewTab,
@@ -21,7 +24,15 @@ import {
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
+type DraftDestinationStatus = "presented" | "unavailable" | "retired";
+
+interface DraftDestinationLoad {
+  readonly request: MoveWindowDraftReferenceRequest;
+  attempt: Promise<DraftDestinationStatus> | null;
+}
+
 export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
+  const destinationLoads = new Map<string, DraftDestinationLoad>();
   bridge.handleInvoke(RunnerHostInvoke.workspaceFoldersPick, async () => {
     const result = await dialog.showOpenDialog({
       properties: ["openDirectory", "multiSelections", "createDirectory"],
@@ -45,9 +56,19 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.windowsRequestFocus,
-    (_event, windowId: unknown) => {
+    async (_event, windowId: unknown) => {
       assertString(windowId, "windows.requestFocus");
-      bridge.windowRegistry.focusById(windowId);
+      const pending = destinationLoads.get(windowId);
+      if (pending !== undefined) {
+        await presentDraftDestination(
+          bridge,
+          destinationLoads,
+          windowId,
+          pending.request,
+        );
+      } else {
+        bridge.windowRegistry.focusById(windowId);
+      }
     },
   );
 
@@ -98,6 +119,45 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
+  bridge.handleInvoke(
+    RunnerHostInvoke.windowsMoveDraftReference,
+    async (event, value: unknown): Promise<MoveWindowDraftReferenceResult> => {
+      const request = parseWindowDraftMove(value);
+      const sourceWindowId = bridge.resolveSenderWindowId(event);
+      if (request === null || sourceWindowId === null) {
+        return { result: "conflict" };
+      }
+      const { perWindowState, windowRegistry } = bridge;
+      const { createWithId, loadById } = windowRegistry;
+      if (
+        perWindowState.moveDraftReference === undefined ||
+        createWithId === undefined ||
+        loadById === undefined
+      ) {
+        return { result: "unavailable" };
+      }
+
+      const route = buildDraftInitialRoute(request.ref.slotId);
+      const result = await perWindowState.moveDraftReference(
+        sourceWindowId,
+        request,
+        route,
+      );
+      if (result.result === "moved") {
+        const presentation = await presentDraftDestination(
+          bridge,
+          destinationLoads,
+          result.destinationWindowId,
+          request,
+        );
+        if (presentation === "unavailable") {
+          return { ...result, destinationLoadFailed: true };
+        }
+      }
+      return result;
+    },
+  );
+
   bridge.handleSync(
     RunnerHostSync.authnBaseUrl,
     () => bridge.options.authnBaseUrl,
@@ -143,6 +203,7 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
       // (`reconcileRestoredWindows`), so releasing it here is safe for restore
       // and keeps live-session ownership consistent with the closed window.
       bridge.ownership.releaseWindow(windowId);
+      destinationLoads.delete(windowId);
       if (!preserveClosedSnapshots) {
         bridge.perWindowState.clear(windowId);
       }
@@ -231,45 +292,28 @@ async function openEpicInNewWindow(
   try {
     destinationWindowId = await bridge.windowRegistry.create({
       initialRoute: buildEpicInitialRoute(epicId, movedTabId),
-      beforeLoad: (windowId) => {
+      beforeLoad: async (windowId) => {
         destination.windowId = windowId;
         if (currentOwner === sourceWindowId) {
           bridge.ownership.transfer(movedTabId, sourceWindowId, windowId);
         } else {
           bridge.ownership.claim(movedTabId, epicId, windowId);
         }
-        // `IpcPerWindowState.update` is allowed to be synchronous, so it is
-        // invoked inside the `then` callback. Passed directly as the
-        // `Promise.resolve(...)` argument it runs before `.catch` is attached,
-        // and a synchronous throw would escape this handler and abort
-        // `beforeLoad` - failing the whole move over a persistence warning.
-        void Promise.resolve()
-          .then(() =>
-            bridge.perWindowState.update(windowId, {
-              epicTabs: [destinationTab],
-              activeTabId: movedTabId,
-              tabStripLayout: movedTabLayout(
-                sourceSnapshot.tabStripLayout,
-                "epic",
-                movedTabId,
-              ),
-              canvasByTabId:
-                destinationCanvas === undefined
-                  ? {}
-                  : { [movedTabId]: destinationCanvas },
-              landingDrafts: [],
-              activeLandingDraftId: null,
-            }),
-          )
-          .catch((error: unknown) => {
-            log.warn(
-              "[windows-ipc] destination move state persistence failed",
-              {
-                windowId,
-                error,
-              },
-            );
-          });
+        await bridge.perWindowState.update(windowId, {
+          epicTabs: [destinationTab],
+          activeTabId: movedTabId,
+          tabStripLayout: movedTabLayout(
+            sourceSnapshot.tabStripLayout,
+            "epic",
+            movedTabId,
+          ),
+          canvasByTabId:
+            destinationCanvas === undefined
+              ? {}
+              : { [movedTabId]: destinationCanvas },
+          landingDrafts: [],
+          activeLandingDraftId: null,
+        });
       },
     });
   } catch (err) {
@@ -283,9 +327,8 @@ async function openEpicInNewWindow(
     throw err;
   }
 
-  // Deferred for the same reason as the destination write above: the move has
-  // already succeeded here, so a synchronous throw from a synchronous `update`
-  // implementation must not reject the completed move.
+  // The destination has loaded. A source cleanup failure must not reject the
+  // already-presented move.
   void Promise.resolve()
     .then(() =>
       bridge.perWindowState.update(sourceWindowId, {
@@ -305,9 +348,8 @@ async function openEpicInNewWindow(
 }
 
 /**
- * Move a landing DRAFT into its own window. Structurally the epic move minus
- * ownership: a draft's whole substance is its per-window record (content is
- * hash-only editor JSON), so the move IS the relocation of that record - the
+ * Move a draft on the legacy per-window payload path. Its record (content is
+ * hash-only editor JSON) still lives in the window snapshot. The
  * destination is seeded with it in `beforeLoad`, before its renderer loads.
  * The draft's image BYTES do not travel here: they live in a per-window
  * IndexedDB partition the main process cannot reach, so the renderer stages
@@ -335,32 +377,20 @@ async function openDraftInNewWindow(
   try {
     destinationWindowId = await bridge.windowRegistry.create({
       initialRoute: buildDraftInitialRoute(draftId),
-      beforeLoad: (windowId) => {
+      beforeLoad: async (windowId) => {
         destination.windowId = windowId;
-        // Deferred like the epic move's destination write: a synchronous
-        // `update` implementation throwing must not abort `beforeLoad` and
-        // fail the whole move over a persistence warning.
-        void Promise.resolve()
-          .then(() =>
-            bridge.perWindowState.update(windowId, {
-              epicTabs: [],
-              activeTabId: null,
-              canvasByTabId: {},
-              landingDrafts: [movedDraft],
-              activeLandingDraftId: draftId,
-              tabStripLayout: movedTabLayout(
-                sourceSnapshot.tabStripLayout,
-                "draft",
-                draftId,
-              ),
-            }),
-          )
-          .catch((error: unknown) => {
-            log.warn(
-              "[windows-ipc] destination draft-move state persistence failed",
-              { windowId, error },
-            );
-          });
+        await bridge.perWindowState.update(windowId, {
+          epicTabs: [],
+          activeTabId: null,
+          canvasByTabId: {},
+          landingDrafts: [movedDraft],
+          activeLandingDraftId: draftId,
+          tabStripLayout: movedTabLayout(
+            sourceSnapshot.tabStripLayout,
+            "draft",
+            draftId,
+          ),
+        });
       },
     });
   } catch (err) {
@@ -403,6 +433,90 @@ async function openDraftInNewWindow(
     });
   bridge.windowRegistry.focusById(destinationWindowId);
   return { result: "moved", windowId: destinationWindowId };
+}
+
+async function presentDraftDestination(
+  bridge: RunnerIpcBridge,
+  destinationLoads: Map<string, DraftDestinationLoad>,
+  windowId: string,
+  request: MoveWindowDraftReferenceRequest,
+): Promise<DraftDestinationStatus> {
+  const stillOwnsReference = (): boolean =>
+    destinationOwnsMove(bridge, windowId, request);
+  if (!stillOwnsReference()) {
+    destinationLoads.delete(windowId);
+    return "retired";
+  }
+
+  const { windowRegistry } = bridge;
+  const pending = destinationLoads.get(windowId);
+  const registered = windowRegistry.getRecordById(windowId) !== null;
+  const focus = (): DraftDestinationStatus => {
+    if (!stillOwnsReference()) return "retired";
+    if (!windowRegistry.focusById(windowId)) return "unavailable";
+    bridge.safeSendToWindow(
+      windowId,
+      RunnerHostEvent.perWindowStateChange,
+      bridge.perWindowState.get(windowId),
+    );
+    return "presented";
+  };
+  if (pending === undefined && registered) return focus();
+  const inFlight = pending?.attempt ?? null;
+  if (inFlight !== null) return inFlight;
+
+  const { createWithId, loadById } = windowRegistry;
+  if (createWithId === undefined || loadById === undefined) return "unavailable";
+  const load: DraftDestinationLoad = pending ?? { request, attempt: null };
+  const attempt = Promise.resolve().then(async (): Promise<DraftDestinationStatus> => {
+    if (!stillOwnsReference()) {
+      destinationLoads.delete(windowId);
+      return "retired";
+    }
+    try {
+      if (!registered) {
+        createWithId.call(windowRegistry, {
+          windowId,
+          initialRoute: buildDraftInitialRoute(request.ref.slotId),
+          beforeLoad: null,
+        });
+      }
+      await loadById.call(windowRegistry, windowId);
+    } catch (error) {
+      log.warn("[windows-ipc] committed draft destination failed to load", {
+        windowId,
+        error,
+      });
+      if (!stillOwnsReference() || destinationLoads.get(windowId) !== load) {
+        return "retired";
+      }
+      load.attempt = null;
+      return "unavailable";
+    }
+    const result = focus();
+    if (result === "unavailable" && destinationLoads.get(windowId) === load) {
+      load.attempt = null;
+    } else {
+      destinationLoads.delete(windowId);
+    }
+    return result;
+  });
+  load.attempt = attempt;
+  destinationLoads.set(windowId, load);
+  return attempt;
+}
+
+function destinationOwnsMove(
+  bridge: RunnerIpcBridge,
+  windowId: string,
+  request: MoveWindowDraftReferenceRequest,
+): boolean {
+  return bridge.perWindowState.get(windowId).draftTopology?.references.some(
+    (ref) =>
+      ref.slotId === request.ref.slotId &&
+      ref.occurrenceId === request.ref.occurrenceId &&
+      ref.moveToken === request.moveToken,
+  ) === true;
 }
 
 async function rollbackFailedEpicMove(

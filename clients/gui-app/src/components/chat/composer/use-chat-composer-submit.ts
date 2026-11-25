@@ -13,7 +13,21 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import { useChatStore } from "@/stores/composer/chat-store";
-import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
+import {
+  captureDirectSendChatDraft,
+  captureNativeChatCanvasAssets,
+  consumeAcceptedDirectSend,
+  projectCanonicalChatDeletion,
+  readComposerDraftSnapshot,
+} from "@/stores/composer/composer-draft-store";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+} from "@/lib/drafts/draft-authority-session";
+import {
+  protectedChatCanvasCaptureIsCurrent,
+  readProtectedChatCanvasImages,
+} from "@/lib/drafts/protected-chat-canvas-images";
 import { toast } from "sonner";
 
 import { appLogger } from "@/lib/logger";
@@ -140,6 +154,7 @@ interface UseChatComposerSubmitArgs {
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean | Promise<boolean>)
     | null;
+  readonly onAcceptedPresentation?: (revision: number) => void;
   /**
    * Handles a prompt that leads with `/btw` / `/side`
    * (`lib/chats/side-chat-command.ts`): fork the chat and ask the remainder
@@ -200,6 +215,7 @@ interface PendingSteerConflict {
   readonly contentText: string;
   readonly attachments: ReadonlyArray<Attachment>;
   readonly restore: ChatSendRestore;
+  readonly protectedCanvasCurrent: (() => boolean) | null;
   readonly settings: ChatRunSettings;
   readonly changed: ReadonlyArray<string>;
   // The turnId this consent was DISPLAYED for. The composer persists across turn
@@ -248,6 +264,7 @@ export function useChatComposerSubmit(
     imagesUnsupported,
     attachmentPreparationPending,
     onSubmitMessage,
+    onAcceptedPresentation,
     onSideChat,
     targetHostId,
     queueEditTargetId,
@@ -399,11 +416,68 @@ export function useChatComposerSubmit(
     clearChatComposerDraft({ taskId, pickerStore, editorRef });
   }, [editorRef, pickerStore, taskId]);
 
+  const acceptedPresentationRevision = useRef<number | null>(null);
+  const directPending = useRef(new Set<number>());
   const finalizeSend = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
+      const editor = editorRef.current;
+      const generation = editor?.draftGeneration();
+      const actor = captureDraftAuthorityActor();
+      const sentRevision = readComposerDraftSnapshot(taskId).revision;
+      const acceptance = { protected: false };
+      const presentAcceptedDraft = (): void => {
+        if (
+          editor === null ||
+          editorRef.current !== editor ||
+          editor.draftGeneration() !== generation ||
+          readComposerDraftSnapshot(taskId).revision !== sentRevision
+        )
+          return;
+        acceptedPresentationRevision.current = sentRevision;
+        clearChatComposerDraft({ taskId, pickerStore, editorRef, presentationOnly: true });
+        onAcceptedPresentation?.(sentRevision);
+      };
+      const onOutboxCustody = (): void => {
+        acceptance.protected = true;
+        presentAcceptedDraft();
+      };
+      const onDirectDispatch = () => {
+        acceptance.protected = true;
+        if (actor !== null && !draftAuthorityActorIsCurrent(actor)) return null;
+        const currentDraft = () => readComposerDraftSnapshot(taskId);
+        const samePresentation = () =>
+          editor !== null &&
+          editorRef.current === editor &&
+          editor.draftGeneration() === generation &&
+          currentDraft().revision === sentRevision;
+        const live = currentDraft();
+        const matchesPayload =
+          samePresentation() &&
+          JSON.stringify(editor?.getJSON()) === JSON.stringify(input.restore.content) &&
+          JSON.stringify(live.browserAnnotations) ===
+            JSON.stringify(input.restore.browserAnnotations);
+        const capture = actor !== null && matchesPayload
+          ? captureDirectSendChatDraft(taskId, targetHostId, actor)
+          : null;
+        if (matchesPayload) directPending.current.add(sentRevision);
+        return (actionId: string | null): void => {
+          if (matchesPayload) directPending.current.delete(sentRevision);
+          if (actionId === null || (actor !== null && !draftAuthorityActorIsCurrent(actor)))
+            return;
+          if (matchesPayload) presentAcceptedDraft();
+          if (actor !== null && capture !== null) {
+            void consumeAcceptedDirectSend({ actor, actionId, capture })
+              .then((result) => {
+                if (result.kind === "committed" || result.kind === "replayed")
+                  return projectCanonicalChatDeletion(result.receipt);
+              })
+              .catch(() => undefined);
+          }
+        };
+      };
       const accepted =
         onSubmitMessage !== null
-          ? onSubmitMessage(input)
+          ? onSubmitMessage({ ...input, onDirectDispatch, onOutboxCustody })
           : (appendMessage(taskId, {
               role: "user",
               content: input.content,
@@ -414,7 +488,7 @@ export function useChatComposerSubmit(
             true);
       if (accepted === false) return false;
       if (accepted === true) {
-        clearAcceptedDraft();
+        if (!acceptance.protected) clearAcceptedDraft();
         return true;
       }
       // Deferred behind the tile's consent dialog. The text stays in place
@@ -428,15 +502,23 @@ export function useChatComposerSubmit(
       // mirror can replace it meanwhile; `revision` moves on every real
       // change (see `DraftState.revision`), and a newer draft is not the
       // sent text, so it stays.
-      const sentRevision = readComposerDraftSnapshot(taskId).revision;
       void accepted.then((confirmed) => {
-        if (!confirmed) return;
+        if (!confirmed || acceptance.protected) return;
         if (readComposerDraftSnapshot(taskId).revision !== sentRevision) return;
         clearAcceptedDraft();
       });
       return true;
     },
-    [appendMessage, clearAcceptedDraft, onSubmitMessage, taskId],
+    [
+      appendMessage,
+      clearAcceptedDraft,
+      editorRef,
+      onAcceptedPresentation,
+      onSubmitMessage,
+      pickerStore,
+      targetHostId,
+      taskId,
+    ],
   );
 
   // The conditions that block a live submit, shared verbatim between the live
@@ -526,7 +608,12 @@ export function useChatComposerSubmit(
         // editor finishes initializing from that same stale initial content.
         if (editor === null || !editor.isReady()) return null;
         if (annotationPrepFlight.current) return null;
-        const { annotationRecords } = readDraftSidecars(taskId);
+        const revision = readComposerDraftSnapshot(taskId).revision;
+        if (directPending.current.has(revision)) return null;
+        const { annotationRecords } = readDraftSidecars(
+          taskId,
+          acceptedPresentationRevision.current,
+        );
         const editorContent = editor.getJSON();
         const contentText =
           extractPlainTextFromComposerJSONContent(editorContent);
@@ -562,6 +649,7 @@ export function useChatComposerSubmit(
       const submitPreparedDraft = (
         annotationImages: ReadonlyArray<AnnotationImageAtom>,
         draftImageBase64ByHash: ReadonlyMap<string, string>,
+        protectedCanvasCurrent: (() => boolean) | null,
       ): void => {
         // LIVE, not the `submitBlocked` this render built. Every call below
         // reaches here after an awaited image read, and a workspace that became
@@ -608,7 +696,7 @@ export function useChatComposerSubmit(
         // therefore describes the records read back on this line, which is what
         // lets `appendImageAttachmentAtoms` pair each record with its crop.
         const { annotationRecords: liveAnnotationRecords } =
-          readDraftSidecars(taskId);
+          readDraftSidecars(taskId, acceptedPresentationRevision.current);
         const settings = buildChatRunSettings({
           selection: toolbar.selection,
           permission: toolbar.permission,
@@ -747,6 +835,7 @@ export function useChatComposerSubmit(
           const decision = decideSteerSettings(originTurn, settings);
           if (decision.kind === "interrupt_restart") {
             setPendingConflict({
+              protectedCanvasCurrent,
               content: submittedContent,
               contentText: liveContentText,
               attachments,
@@ -863,9 +952,18 @@ export function useChatComposerSubmit(
         // and the NEXT unrelated submit that needs a re-entry is silently
         // refused one.
         submitReentryAttempt.current = 0;
-        submitPreparedDraft([], NO_DRAFT_IMAGE_BYTES);
+        submitPreparedDraft([], NO_DRAFT_IMAGE_BYTES, null);
         return;
       }
+
+      const actor = captureDraftAuthorityActor();
+      const native = annotationRecords.some((record) => record.source.kind === "canvas")
+        ? captureNativeChatCanvasAssets(taskId, actor)
+        : { kind: "ordinary" as const };
+      if (native.kind === "protected-held") return;
+      const protectedCanvasCurrent = native.kind === "protected"
+        ? (): boolean => actor !== null && protectedChatCanvasCaptureIsCurrent(actor, native)
+        : null;
 
       annotationPrepFlight.current = true;
       setAnnotationPreparationPending(true);
@@ -889,10 +987,17 @@ export function useChatComposerSubmit(
           // `Promise.all` the image leg could finish while this one was still
           // pending, and an image added during the remaining wait was never
           // attempted - the loop had already stopped looking.
-          const annotationImages =
-            annotationRecords.length === 0
+          const rooted = native.kind === "protected" && actor !== null
+            ? await readProtectedChatCanvasImages(actor, native)
+            : null;
+          if (actor !== null && !draftAuthorityActorIsCurrent(actor)) return;
+          let annotationImages: ReadonlyArray<AnnotationImageAtom> | null = null;
+          if (native.kind !== "protected" || rooted !== null) {
+            annotationImages = annotationRecords.length === 0
               ? EMPTY_ANNOTATION_IMAGES
-              : await resolveAnnotationImageAtoms(annotationRecords);
+              : await resolveAnnotationImageAtoms(annotationRecords, rooted ?? undefined);
+          }
+          if (actor !== null && !draftAuthorityActorIsCurrent(actor)) return;
           if (annotationImages === null) {
             reportableErrorToast(
               "Couldn't attach the annotation image.",
@@ -978,7 +1083,8 @@ export function useChatComposerSubmit(
                 }
                 return;
               }
-              submitPreparedDraft(annotationImages, draftImageBase64ByHash);
+              if (protectedCanvasCurrent?.() === false) return;
+              submitPreparedDraft(annotationImages, draftImageBase64ByHash, protectedCanvasCurrent);
             },
           });
         },
@@ -1108,7 +1214,7 @@ export function useChatComposerSubmit(
       // deferred confirm too. If any holds now, the consent cannot be honored -
       // dismiss the dialog (the composer text is kept, so the user can retry once it
       // clears) rather than pushing the send through the guards.
-      if (submitBlocked()) {
+      if (submitBlocked() || pendingConflict.protectedCanvasCurrent?.() === false) {
         noteRefusedSubmit("after-confirmation");
         setPendingConflict(null);
         return;
@@ -1314,9 +1420,16 @@ interface ComposerDraftSidecars {
  * The draft's non-document sidecar array, read live. Both the pre-flight read
  * and the post-async finalize go through here so they can never diverge.
  */
-function readDraftSidecars(taskId: string): ComposerDraftSidecars {
+function readDraftSidecars(
+  taskId: string,
+  acceptedRevision: number | null,
+): ComposerDraftSidecars {
   const draft = readComposerDraftSnapshot(taskId);
-  return { annotationRecords: draft.browserAnnotations };
+  return {
+    annotationRecords: draft.revision === acceptedRevision
+      ? []
+      : draft.browserAnnotations,
+  };
 }
 
 function isEmptyComposerSubmit(input: {

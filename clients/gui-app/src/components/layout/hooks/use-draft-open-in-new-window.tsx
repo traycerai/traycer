@@ -10,11 +10,28 @@ import {
   stageDraftImageHandoff,
 } from "@/lib/composer/landing-image-move";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
-import type { DesktopWindowsBridge } from "@/lib/windows/types";
-import { isRefGroupedInLayout } from "@/components/layout/hooks/use-epic-open-in-new-window";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import {
+  currentDesktopDraftTopology,
+  refreshDesktopDraftTopology,
+  sameDesktopDraftReference,
+  toDesktopLandingDraftReference,
+  usesDesktopDraftTopology,
+} from "@/lib/windows/desktop-draft-topology";
+import type {
+  DesktopMoveWindowDraftReferenceRequest,
+  DesktopWindowsBridge,
+} from "@/lib/windows/types";
+import { isRefGroupedInLayout } from "@/components/layout/hooks/use-epic-open-in-new-window";
+import {
+  flushCanonicalLandingDraft,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import {
+  draftRuntimeRegistry,
+  type DraftRuntime,
+} from "@/stores/home/draft-runtime-registry";
+import {
+  drainDesktopTabsPersistence,
   flushDesktopTabsPersistence,
   hasPendingDesktopTabsWrite,
 } from "@/stores/tabs/desktop-tabs-persistence";
@@ -45,42 +62,140 @@ const INGEST_SETTLE_TIMEOUT_MS = 5_000;
  * move's own liveness check refuses it a moment later, and that refusal states
  * the real reason.
  */
-function whenDraftImagesSettled(draftId: string): Promise<boolean> {
+function whenDraftImagesSettled(
+  draftId: string,
+  runtime: DraftRuntime | null,
+): Promise<boolean> {
   const settled = (): boolean => {
     const draft = useLandingDraftStore
       .getState()
       .drafts.find((candidate) => candidate.id === draftId);
-    return draft === undefined || !draftHasIngestingImages(draft.content);
+    const content = runtime?.store.getState().content ?? draft?.content;
+    return draft === undefined ||
+      content === undefined ||
+      !draftHasIngestingImages(content);
   };
   if (settled()) return Promise.resolve(true);
   return new Promise<boolean>((resolve) => {
-    let unsubscribe = (): void => undefined;
-    const timer = window.setTimeout(() => {
-      unsubscribe();
-      resolve(false);
-    }, INGEST_SETTLE_TIMEOUT_MS);
-    unsubscribe = useLandingDraftStore.subscribe(() => {
-      if (!settled()) return;
+    const finish = (ready: boolean): void => {
       clearTimeout(timer);
-      unsubscribe();
-      resolve(true);
-    });
+      unsubscribeDraft();
+      unsubscribeEditor?.();
+      resolve(ready);
+    };
+    const check = (): void => {
+      if (settled()) finish(true);
+    };
+    const unsubscribeDraft = useLandingDraftStore.subscribe(check);
+    const unsubscribeEditor = runtime?.store.subscribe(check);
+    const timer = window.setTimeout(() => finish(false), INGEST_SETTLE_TIMEOUT_MS);
   });
 }
 
-/**
- * Move a landing DRAFT into its own window - the epic move flow minus what a
- * draft does not have (no ownership registry, no cloud sync, so no
- * unsynced-edits dialog). A draft's substance is per-window local state, so
- * the move is: flush that state so the main process's snapshot is current,
- * wait out any attachment mid-ingest, stage the image bytes for
- * cross-partition handoff, relocate the per-window record via the move IPC,
- * then remove the local copy.
- *
- * `requestOpenDraftInNewWindow` is capability-probed: an older desktop shell
- * without the IPC silently no-ops, the same degradation contract as
- * `perWindowState.clear`.
- */
+interface ReferenceMove {
+  request: DesktopMoveWindowDraftReferenceRequest | null;
+  running: boolean;
+}
+
+const referenceMoves = new WeakMap<
+  DesktopWindowsBridge,
+  Map<string, ReferenceMove>
+>();
+
+async function prepareReferenceMove(
+  bridge: DesktopWindowsBridge,
+  draftId: string,
+): Promise<DesktopMoveWindowDraftReferenceRequest | null> {
+  const topology = currentDesktopDraftTopology(bridge);
+  const source = topology?.references.find((ref) => ref.slotId === draftId);
+  const perWindowState = bridge.perWindowState;
+  const flushTopology = perWindowState.flushDraftTopology?.bind(perWindowState);
+  if (
+    topology === undefined ||
+    source === undefined ||
+    flushTopology === undefined
+  ) {
+    return null;
+  }
+
+  const tab: TabRef = { kind: "draft", id: draftId };
+  const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
+  runtime?.flush();
+  if (!(await whenDraftImagesSettled(draftId, runtime))) return null;
+  const editorState = runtime?.store.getState();
+  const flushed = await flushCanonicalLandingDraft(draftId);
+  if (flushed.kind !== "committed") return null;
+  const ref = toDesktopLandingDraftReference(flushed.draft);
+  if (!sameDesktopDraftReference(ref, source)) return null;
+
+  tabCommandCoordinator.separateBeforeMove(tab);
+  await drainDesktopTabsPersistence();
+  await flushActiveDesktopPerWindowProjection();
+  const moveToken = crypto.randomUUID();
+  const handoff = { draftId, moveToken };
+  try {
+    await stageDraftImageHandoff(handoff, flushed.manifest.digests);
+    const ready = await flushTopology(ref);
+    if (
+      ready.result === "ready" &&
+      ready.revision === topology.revision &&
+      !isTabStructurallyLocked(tab) &&
+      !isRefGroupedInLayout(tab) &&
+      runtime?.store.getState() === editorState
+    ) {
+      return { moveToken, ref, expectedSourceTopologyRevision: ready.revision };
+    }
+  } catch (error) {
+    await discardDraftImageHandoff(handoff);
+    throw error;
+  }
+  await discardDraftImageHandoff(handoff);
+  return null;
+}
+
+async function moveDraftReference(
+  bridge: DesktopWindowsBridge,
+  draftId: string,
+): Promise<boolean> {
+  const invoke = bridge.moveDraftReference?.bind(bridge);
+  if (invoke === undefined) return false;
+  let moves = referenceMoves.get(bridge);
+  if (moves === undefined) {
+    moves = new Map();
+    referenceMoves.set(bridge, moves);
+  }
+  const move = moves.get(draftId) ?? { request: null, running: false };
+  if (move.running) return false;
+  moves.set(draftId, move);
+  move.running = true;
+  try {
+    move.request ??= await prepareReferenceMove(bridge, draftId);
+    if (move.request === null) return false;
+    const request = move.request;
+    // Resolve a lost reply with the original intent, even if the source view
+    // has since received the committed move's topology event.
+    const result = await invoke(request).catch(() => invoke(request));
+    move.request = null;
+    if (result.result !== "moved") {
+      await discardDraftImageHandoff({ draftId, moveToken: request.moveToken });
+      return false;
+    }
+    if (result.destinationLoadFailed === true) {
+      await bridge.requestFocus(result.destinationWindowId);
+    }
+    await refreshDesktopDraftTopology(bridge);
+    const current = currentDesktopDraftTopology(bridge);
+    return (
+      current !== undefined &&
+      current.revision >= result.sourceTopologyRevision &&
+      !current.references.some((ref) => ref.slotId === draftId)
+    );
+  } finally {
+    move.running = false;
+    if (move.request === null) moves.delete(draftId);
+  }
+}
+
 export function useDraftOpenInNewWindowFlow(
   bridge: DesktopWindowsBridge | null,
 ): DraftNewWindowFlow {
@@ -91,9 +206,28 @@ export function useDraftOpenInNewWindowFlow(
     (request: DraftNewWindowRequest) => {
       // Bound at the probe: the capability check and the eventual call must
       // name the same function, and binding keeps the bridge's `this`.
-      const requestMove = bridge?.requestOpenDraftInNewWindow?.bind(bridge);
-      if (bridge === null || requestMove === undefined) return;
+      if (bridge === null) return;
       const draftId = request.draftId;
+      if (usesDesktopDraftTopology(bridge)) {
+        void moveDraftReference(bridge, draftId)
+          .then((removed) => {
+            if (
+              removed &&
+              router.state.location.pathname === draftPathname(draftId)
+            ) {
+              void navigate(LANDING_ROUTE);
+            }
+          })
+          .catch((error: unknown) => {
+            appLogger.warn("[windows] draft reference move failed", {
+              draftId,
+              error: describeLogError(error),
+            });
+          });
+        return;
+      }
+      const requestMove = bridge.requestOpenDraftInNewWindow?.bind(bridge);
+      if (requestMove === undefined) return;
       const ref: TabRef = { kind: "draft", id: draftId };
       // Set the instant the move is confirmed, so the failure handler can tell
       // "the bytes are still ours to clean up" from "the destination owns them
@@ -106,7 +240,7 @@ export function useDraftOpenInNewWindowFlow(
         draftRuntimeRegistry.flush(draftId);
         // Step 2: wait out any attachment still ingesting. Before the tab is
         // separated, so a barrier that times out leaves the strip untouched.
-        if (!(await whenDraftImagesSettled(draftId))) return;
+        if (!(await whenDraftImagesSettled(draftId, null))) return;
         // Step 3: a grouped draft cannot be handed over still paired -
         // separate first, and let step 5's revalidation catch a refused
         // separation, exactly as the epic move does.

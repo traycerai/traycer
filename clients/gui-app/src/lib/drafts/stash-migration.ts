@@ -28,14 +28,19 @@ import type { LandingImageBudgetReservation } from "@/lib/composer/landing-image
 import { landingDraftsReady } from "@/lib/composer/landing-image-gc";
 import { importImagesIntoLanding } from "@/lib/composer/landing-image-import";
 import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
-import { mintDraftId } from "@/lib/drafts/draft-ids";
-import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
+import { v5 as uuidv5 } from "uuid";
+import { draftAuthorityIntentDigest } from "@/lib/drafts/draft-authority";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+} from "@/lib/drafts/draft-authority-session";
+import type { DraftAuthorityActor } from "@/lib/drafts/draft-authority-types";
 import { isJsonContent, isRecord } from "@/lib/editor/prosemirror-json";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
-  useLandingDraftStore,
+  installCanonicalLandingDraft,
 } from "@/stores/home/landing-draft-store";
 
 // Schema copied from `lib/composer/prompt-stash-repository.ts`, the writer
@@ -289,17 +294,23 @@ const conversionsInFlight = new Map<string, Promise<StashConversionOutcome>>();
 export function convertStashEntry(
   input: StashConversionInput,
 ): Promise<StashConversionOutcome> {
-  const joined = conversionsInFlight.get(input.stashId);
+  const actor = captureDraftAuthorityActor();
+  if (actor === null || !input.stillCurrent()) {
+    return Promise.resolve({ status: "abandoned" });
+  }
+  const key = JSON.stringify([actor.accountId, actor.sessionGeneration, input.stashId]);
+  const joined = conversionsInFlight.get(key);
   if (joined !== undefined) return joined;
-  const running = runStashConversion(input);
-  conversionsInFlight.set(input.stashId, running);
+  const running = runStashConversion(input, actor);
+  conversionsInFlight.set(key, running);
   return running.finally(() => {
-    conversionsInFlight.delete(input.stashId);
+    conversionsInFlight.delete(key);
   });
 }
 
 async function runStashConversion(
   input: StashConversionInput,
+  actor: DraftAuthorityActor,
 ): Promise<StashConversionOutcome> {
   const alreadyConverted = convertedDraftIdFor(input.stashId);
   if (alreadyConverted !== null) {
@@ -327,17 +338,24 @@ async function runStashConversion(
     }
   }
   try {
-    // Re-checked after the image reads: a peer window may have converted this
-    // same id into the shared map while they were in flight.
+    if (!input.stillCurrent() || !draftAuthorityActorIsCurrent(actor)) {
+      return { status: "abandoned" };
+    }
     const raced = convertedDraftIdFor(input.stashId);
     if (raced !== null) return { status: "already-converted", draftId: raced };
-    // SYNCHRONOUS with the install below, with no await between them. Every
-    // await above this line - the blob reads, the `putImage` writes, and this
-    // function's own suspension for an entry with no images at all - is a
-    // window in which the account could have changed.
-    if (!input.stillCurrent()) return { status: "abandoned" };
-    const draftId = mintDraftId();
-    useLandingDraftStore.getState().installLandingDraft({
+
+    const draftId = uuidv5(
+      JSON.stringify(["converted-stash", actor.accountId, input.stashId]),
+      uuidv5.URL,
+    );
+    const digest = await draftAuthorityIntentDigest({
+      content: input.content,
+      blobHashes: input.blobHashes,
+    });
+    if (!input.stillCurrent() || !draftAuthorityActorIsCurrent(actor)) {
+      return { status: "abandoned" };
+    }
+    const saved = await installCanonicalLandingDraft({
       id: draftId,
       content,
       selection: null,
@@ -350,20 +368,14 @@ async function runStashConversion(
       closed: true,
       returnedSandbox: null,
       namedHostId: null,
-      // The stash entry stays until the receipt below, written once saved.
       durability: "saved",
-    });
-    // `installLandingDraft` only reaches the store. On desktop the row is
-    // persisted by the per-window projection, which debounces 100ms and is
-    // the ONLY writer there (localStorage persistence is off while the
-    // bridge is installed), so recording the receipt before that write lands
-    // would let a renderer exit leave the map saying "done" with nothing on
-    // disk. Browser mode has no bridge and resolves immediately.
-    //
-    // A rejected flush throws out of here with the map unwritten and the
-    // source untouched: the in-memory row still rides the next projection,
-    // and the worst case is one duplicate on the next launch, never a loss.
-    await flushActiveDesktopPerWindowProjection();
+    }, actor, { kind: "stash", id: input.stashId, digest });
+    if (saved.kind !== "committed" && saved.kind !== "replayed") {
+      return { status: "abandoned" };
+    }
+    if (!input.stillCurrent() || !draftAuthorityActorIsCurrent(actor)) {
+      return { status: "abandoned" };
+    }
     rememberConverted(input.stashId, draftId);
     return { status: "converted", draftId };
   } finally {

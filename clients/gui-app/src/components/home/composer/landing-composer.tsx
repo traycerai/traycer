@@ -1,7 +1,11 @@
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
-import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+  subscribeToDraftAuthoritySessionChanges,
+} from "@/lib/drafts/draft-authority-session";
 import {
   useCallback,
   useEffect,
@@ -11,6 +15,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { browserDraftOpenStore } from "@/lib/drafts/volatile-browser-draft-open";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
@@ -18,7 +23,30 @@ import { useShallow } from "zustand/react/shallow";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
+import { toast } from "sonner";
+import { draftStorageRefusalPresentation } from "@/lib/drafts/draft-storage-refusal";
+import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
+import { ExpandedComposerImage } from "@/components/chat/composer/attachments/image-attachment-chip";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
+import {
+  subscribeToDraftAuthorityChanges,
+  writeDraftAuthority,
+} from "@/lib/drafts/draft-authority";
+import {
+  decodeBrowserDraftRecoveryPayload,
+  listBrowserDraftRecoveryRows,
+  readExactBrowserDraftRecovery,
+  resubmitBrowserDraftRecovery,
+  type BrowserDraftRecoveryEditor,
+  type BrowserDraftRecoveryResubmit,
+  type BrowserDraftRecoveryRow,
+  type DraftsRecoveryRoute,
+} from "@/lib/drafts/browser-draft-recovery";
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
@@ -29,7 +57,10 @@ import {
 import { useDraftFirstImageFetcher } from "@/lib/attachments/use-draft-image-fetcher";
 import { markLandingEditorMounted } from "@/lib/composer/landing-image-gc";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
-import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import {
+  ComposerPromptEditor,
+  type ComposerPromptEditorHandle,
+} from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
@@ -89,6 +120,7 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import {
+  flushCanonicalLandingDraft,
   isOpenLandingDraft,
   landingRowIsForeign,
   useLandingDraftNamedHostId,
@@ -147,7 +179,10 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { useSignedOutTerminalDefaultAccount } from "@/hooks/providers/use-signed-out-terminal-default-account";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
-import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  isBrowserDraftRecoveryRuntime,
+  pickedRunSettings,
+} from "@/lib/sandboxes/pending-sandbox-send";
 import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-send-handoff";
 import {
   landingDraftSurfaceKey,
@@ -546,6 +581,8 @@ export function LandingComposer(props: LandingComposerProps) {
   // re-pointed: they also cost two live mutation subscriptions for an answer
   // they could not give.
   const actions = useLandingComposerActions(submitTarget);
+  const { route: draftRecovery, editor: recoveryEditor, close: closeRecovery } =
+    useLandingBrowserRecovery(activityEnabled, actions.submitRecoveredDraft);
   const isSubmitting = runtimeState.isSubmitting || actions.isPending;
   const mutationsDisabled = isSubmitting;
 
@@ -1007,9 +1044,10 @@ export function LandingComposer(props: LandingComposerProps) {
   const submitStagedSandbox = useCallback(
     (staged: StagedSandbox): Promise<boolean> => {
       if (stagedSubmitAttempt.current !== null) return Promise.resolve(false);
+      const actor = captureDraftAuthorityActor();
+      if (actor === null) return Promise.resolve(false);
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
-      const account = signedInUserId();
       const settings = pickedRunSettings(toolbarStore.getState());
       const settingsKey = JSON.stringify(settings);
       const generation = captureComposerSubmitGeneration(
@@ -1022,7 +1060,7 @@ export function LandingComposer(props: LandingComposerProps) {
       const stillCurrent = (): boolean =>
         stagedSubmitAttempt.current === attempt &&
         readStagedSandbox(composerSurfaceKey) === staged &&
-        signedInUserId() === account &&
+        draftAuthorityActorIsCurrent(actor) &&
         JSON.stringify(pickedRunSettings(toolbarStore.getState())) ===
           settingsKey &&
         generation.stillCurrent();
@@ -1051,24 +1089,39 @@ export function LandingComposer(props: LandingComposerProps) {
             stagedSend.intercept(text, null);
             return false;
           }
-          const refusal = actions.startTaskOnStagedSandbox({
-            draftId: draftId ?? createdUnboundDraftIdRef.current,
+          const sourceId = draftId ?? createdUnboundDraftIdRef.current;
+          if (sourceId === null) return false;
+          const source = await flushCanonicalLandingDraft(sourceId);
+          if (!stillCurrent()) return false;
+          if (source.kind === "unavailable") {
+            const presentation = draftStorageRefusalPresentation(
+              staged.returnedDraft === undefined ? "staged-send" : "restored-send",
+            );
+            if (presentation.kind === "composer-failure")
+              toast.error(presentation.title, { description: presentation.description });
+          }
+          if (source.kind !== "committed") return false;
+          const refusal = await actions.startTaskOnStagedSandbox({
+            draftId: sourceId,
             owner: resolvedOwner,
             sandboxTeamId:
               staged.target.configuration.kind === "team"
                 ? staged.target.configuration.teamId
                 : null,
             text,
-            hand: (epicId) =>
-              handLandingSandboxSend({
-                fromSurfaceKey: composerSurfaceKey,
-                epicId,
-                content,
-                text,
-                settings,
-                now: Date.now(),
-              }),
+            hand: (epicId, epicPrerequisite) => handLandingSandboxSend({
+              fromSurfaceKey: composerSurfaceKey,
+              actor,
+              source: source.draft,
+              epicId,
+              epicPrerequisite,
+              content,
+              text,
+              settings,
+              now: Date.now(),
+            }),
           });
+          if (refusal === false) return false;
           raiseHostNotice(
             refusal === null
               ? null
@@ -1101,6 +1154,14 @@ export function LandingComposer(props: LandingComposerProps) {
     ],
   );
 
+  const hasReturnedTarget = useCallback((): boolean => {
+    const actor = captureDraftAuthorityActor();
+    if (draftId === null || actor === null) return false;
+    return useLandingDraftStore.getState().drafts.some(
+      (row) => row.id === draftId && row.returnedSandbox?.userId === actor.accountId,
+    );
+  }, [draftId]);
+
   /** Whether the submit went ahead. */
   const handleSubmit = useCallback((): boolean | Promise<boolean> => {
     if (!canSubmit) return false;
@@ -1112,6 +1173,7 @@ export function LandingComposer(props: LandingComposerProps) {
     if (staged !== null && staged.phase !== "handoff") {
       return submitStagedSandbox(staged);
     }
+    if (staged?.returnedDraft !== undefined || (staged === null && hasReturnedTarget())) return false;
     // An agent that cannot run on this sandbox is refused at Send, with the
     // configuration's Providers; the draft and the chip stay as they were.
     if (sandboxAgentGate.notice !== null) {
@@ -1162,6 +1224,7 @@ export function LandingComposer(props: LandingComposerProps) {
     actions,
     canSubmit,
     draftId,
+    hasReturnedTarget,
     owner,
     pickerStore,
     composerSurfaceKey,
@@ -1210,12 +1273,16 @@ export function LandingComposer(props: LandingComposerProps) {
       if (assembledFor !== null && assembledFor !== resolvedHostId) {
         return false;
       }
+      // A returned target can take an explicit Send through durable custody.
+      // Standalone Start uses a different grant.
+      if (hasReturnedTarget()) return false;
       // A staged sandbox takes the Start as it takes a send.
       if (stagedSend.intercept("terminal", launch)) return false;
       return dispatchStartTerminal(launch);
     },
     [
       dispatchStartTerminal,
+      hasReturnedTarget,
       isSubmitting,
       resolvedHostId,
       stagedSend,
@@ -1368,7 +1435,8 @@ export function LandingComposer(props: LandingComposerProps) {
             editorRef={editorRef}
             // The rail is no longer chat-mode-only, so the Cmd+S owner is
             // the surface being edited, whichever composer mode it is in.
-            active={activityEnabled}
+            active={activityEnabled && recoveryEditor === null}
+            recovery={draftRecovery}
           />
         }
         attachmentsStrip={
@@ -1396,7 +1464,218 @@ export function LandingComposer(props: LandingComposerProps) {
         onDocumentChange={handleDocumentChange}
         onSelectionChange={handleSelectionChange}
       />
+      {recoveryEditor === null ? null : (
+        <LandingRecoveryDraftDialog
+          key={recoveryEditor.submission.draft.version}
+          editor={recoveryEditor}
+          close={closeRecovery}
+        />
+      )}
     </ComposerStagedSurfaceKeyProvider>
+  );
+}
+
+function useLandingBrowserRecovery(
+  active: boolean,
+  onResubmit: BrowserDraftRecoveryResubmit,
+): {
+  readonly route: DraftsRecoveryRoute | undefined;
+  readonly editor: BrowserDraftRecoveryEditor | null;
+  readonly close: () => void;
+} {
+  const [actor, setActor] = useState(captureDraftAuthorityActor);
+  const [rows, setRows] = useState<ReadonlyArray<BrowserDraftRecoveryRow>>([]);
+  const [editor, setEditor] = useState<BrowserDraftRecoveryEditor | null>(null);
+  const request = useStore(browserDraftOpenStore, (state) => state.request);
+  const submitRef = useRef(onResubmit);
+  const available = active && isBrowserDraftRecoveryRuntime();
+  useLayoutEffect(() => {
+    submitRef.current = onResubmit;
+  }, [onResubmit]);
+  useEffect(() => {
+    if (!available) return;
+    const onSession = (): void => {
+      setActor(captureDraftAuthorityActor());
+      setRows([]);
+      setEditor(null);
+    };
+    const unsubscribe = subscribeToDraftAuthoritySessionChanges(onSession);
+    onSession();
+    return unsubscribe;
+  }, [available]);
+
+  useEffect(() => {
+    if (!available || actor === null) return;
+    let readGeneration = 0;
+    const refresh = (): void => {
+      const generation = ++readGeneration;
+      void listBrowserDraftRecoveryRows(actor).then((current) => {
+        if (generation !== readGeneration || !draftAuthorityActorIsCurrent(actor))
+          return;
+        setRows(current ?? []);
+      });
+    };
+    const stop = subscribeToDraftAuthorityChanges((slot) => {
+      if (slot.kind === "landing") refresh();
+    });
+    refresh();
+    return () => {
+      ++readGeneration;
+      stop();
+    };
+  }, [actor, available]);
+
+  useEffect(() => {
+    if (!available || request === null || !draftAuthorityActorIsCurrent(request.actor))
+      return;
+    let mounted = true;
+    void readExactBrowserDraftRecovery(request.actor, request.draft).then((read) => {
+      if (!mounted || browserDraftOpenStore.getState().request !== request ||
+          !draftAuthorityActorIsCurrent(request.actor)) return;
+      browserDraftOpenStore.setState({ request: null });
+      if (read.kind !== "live") return;
+      setEditor({
+        submission: read.submission,
+        onResubmit: () => resubmitBrowserDraftRecovery(
+          read.submission,
+          (input) => submitRef.current(input),
+        ),
+      });
+      request.onOpened();
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [available, request]);
+
+  const close = (): void => setEditor(null);
+  if (!available || actor === null || !draftAuthorityActorIsCurrent(actor))
+    return { route: undefined, editor: null, close };
+  return {
+    route: {
+      actor,
+      rows,
+      onOpen: (opened) => setEditor(opened),
+      onResubmit: (input) => submitRef.current(input),
+      onDelete: (draft) => {
+        if (!draftAuthorityActorIsCurrent(actor)) return;
+        const id = uuidv5(JSON.stringify([
+          "browser-recovery-delete", actor.accountId, actor.sessionGeneration, draft,
+        ]), uuidv5.URL);
+        void writeDraftAuthority({
+          operation: { id, actor },
+          expected: { kind: "current", draft },
+          mutation: { kind: "delete", retirements: [] },
+        }).then((result) => {
+          if (!draftAuthorityActorIsCurrent(actor) ||
+              (result.kind !== "committed" && result.kind !== "replayed") ||
+              result.receipt.kind !== "tombstone") return;
+          setRows((current) => current.filter((row) =>
+            row.recovery.reference.version !== draft.version));
+        }).catch(() => undefined);
+      },
+    },
+    editor: editor !== null && draftAuthorityActorIsCurrent(editor.submission.actor)
+      ? editor
+      : null,
+    close,
+  };
+}
+
+const ignoreRecoveryEditorEvent = (): void => undefined;
+const noRecoverySessionUrl = (): null => null;
+
+function LandingRecoveryDraftDialog(props: {
+  readonly editor: BrowserDraftRecoveryEditor;
+  readonly close: () => void;
+}): ReactNode {
+  const { submission } = props.editor;
+  const { actor, bytes, draft, payload } = submission;
+  const [pickerStore] = useState(createComposerPickerStore);
+  const [sending, setSending] = useState(false);
+  const [held, setHeld] = useState(false);
+  const busy = useRef(false);
+  const decoded = decodeBrowserDraftRecoveryPayload(payload.content, payload.browserAnnotations);
+  const fetcher: ScopedImageBytesFetcher = useMemo(() => ({
+    scopeKey: JSON.stringify(["browser-draft-recovery", actor.accountId, actor.sessionGeneration, draft]),
+    fetch: async (digest, signal) => {
+      const blob = bytes.get(digest);
+      if (blob === undefined || !draftAuthorityActorIsCurrent(actor))
+        throw new Error("Draft image is unavailable");
+      const data = new Uint8Array(await blob.arrayBuffer());
+      signal.throwIfAborted();
+      if (!draftAuthorityActorIsCurrent(actor)) throw new Error("Draft image is unavailable");
+      return { bytes: data, mediaType: sniffImageMimeType(data) ?? blob.type };
+    },
+  }), [actor, bytes, draft]);
+  if (decoded === null) return null;
+  const send = (): void => {
+    if (busy.current || !draftAuthorityActorIsCurrent(actor)) return;
+    busy.current = true;
+    setSending(true);
+    setHeld(false);
+    void props.editor.onResubmit().then((result) => {
+      if (!draftAuthorityActorIsCurrent(actor)) return;
+      if (result.kind === "accepted") props.close();
+      else setHeld(true);
+    }, () => setHeld(true)).finally(() => {
+      busy.current = false;
+      setSending(false);
+    });
+  };
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) props.close(); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Draft</DialogTitle></DialogHeader>
+        <div className="max-h-[50vh] space-y-2 overflow-auto">
+          <ComposerPromptEditor
+            initialContent={decoded.content}
+            initialSelection={null}
+            pickerStore={pickerStore}
+            placeholder=""
+            editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
+            stabilizeImageAttachmentCaret={false}
+            isActive
+            disabled
+            slashProviderId={null}
+            hasPastedImageBytes={null}
+            ingestPastedComposerImages={null}
+            onDocumentChange={ignoreRecoveryEditorEvent}
+            onSelectionChange={ignoreRecoveryEditorEvent}
+            onSubmit={ignoreRecoveryEditorEvent}
+            onPaste={ignoreRecoveryEditorEvent}
+            onDragOver={ignoreRecoveryEditorEvent}
+            onDrop={ignoreRecoveryEditorEvent}
+            onKeyDown={undefined}
+            interceptKeyDown={null}
+            onFocus={ignoreRecoveryEditorEvent}
+            onBlur={ignoreRecoveryEditorEvent}
+            onEditorReady={null}
+          />
+          {collectImageAtoms(decoded.content).map((atom) => (
+            <ExpandedComposerImage
+              key={atom.id}
+              atom={atom}
+              fetcher={fetcher}
+              sessionObjectUrl={noRecoverySessionUrl}
+            />
+          ))}
+          {decoded.browserAnnotations.map((record) => (
+            <BrowserAnnotationCard
+              key={record.annotationId}
+              record={record}
+              onRemove={null}
+              imageFetcher={fetcher}
+              sessionObjectUrl={noRecoverySessionUrl}
+            />
+          ))}
+        </div>
+        {held ? <p role="status">Couldn't send this draft.</p> : null}
+        <DialogFooter>
+          <Button onClick={send} disabled={sending}>Send</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

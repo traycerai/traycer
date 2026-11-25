@@ -1,3 +1,6 @@
+import "fake-indexeddb/auto";
+
+import { Blob as NodeBlob } from "node:buffer";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
@@ -6,6 +9,15 @@ import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -25,10 +37,15 @@ import {
   selectHasActiveInitialChatHandoffForEpic,
   useInitialChatHandoffStore,
 } from "@/stores/epics/initial-chat-handoff-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  flushCanonicalLandingDraft,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import * as landingDraftStoreModule from "@/stores/home/landing-draft-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabItemId, type SplitStripItem } from "@/stores/tabs/layout";
@@ -43,12 +60,49 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
+import { type ReactNode, useMemo, useRef, useState } from "react";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
+import {
+  listBrowserDraftRecoveryRows,
+  readExactBrowserDraftRecovery,
+  type BrowserDraftRecoveryEditor,
+  type BrowserDraftRecoveryRow,
+  type BrowserDraftRecoverySubmitResult,
+  type DraftsRecoveryRoute,
+} from "@/lib/drafts/browser-draft-recovery";
+import { captureDraftAuthorityActor } from "@/lib/drafts/draft-authority-session";
+import * as draftAuthorityModule from "@/lib/drafts/draft-authority";
+import {
+  readDraftAuthorityEditReceipt,
+  readDraftAuthoritySlot,
+  writeDraftAuthority,
+} from "@/lib/drafts/draft-authority";
+import { runDraftAuthorityTransaction } from "@/lib/drafts/draft-authority-db";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityPayload,
+  DraftAuthorityVersion,
+} from "@/lib/drafts/draft-authority-types";
+import {
+  encodeBase64,
+  webCryptoSha256Hex,
+} from "@traycer-clients/shared/cloud-chat/bytes";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
@@ -101,6 +155,17 @@ const landingMocks = vi.hoisted(() => ({
     version: "0.0.0-test",
     transportDialability: "dialable",
   })),
+}));
+
+vi.mock("@/hooks/drafts/use-draft-inventory", () => ({
+  useDraftInventory: () => [],
+}));
+vi.mock("@/hooks/drafts/use-draft-inventory-actions", () => ({
+  useDraftInventoryActions: () => ({
+    openRow: vi.fn(),
+    copyRow: vi.fn(),
+    deleteRow: vi.fn(),
+  }),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -367,6 +432,720 @@ function setGlobalWorkspaceFolders(input: {
 }
 
 describe("useLandingComposerActions", () => {
+  describe("accepted direct Landing drafts", () => {
+    let stopScopedTabSourceReconciliation: (() => void) | null = null;
+
+    afterEach(() => {
+      stopScopedTabSourceReconciliation?.();
+      stopScopedTabSourceReconciliation = null;
+      __getChatSessionRegistryForTests().disposeAll();
+    });
+
+    function installScopedTabSourceReconciliation(): () => void {
+      // Mirror the production tab-sync source edges, but bind only for these
+      // scoped proof cases and always return their unsubscribe callbacks.
+      const stopCanvas = useEpicCanvasStore.subscribe((next, previous) => {
+        if (next.openTabOrder !== previous.openTabOrder || next.tabsById !== previous.tabsById) {
+          tabCommandCoordinator.reconcileFromSourceStores();
+        }
+      });
+      const stopDrafts = useLandingDraftStore.subscribe((next, previous) => {
+        if (next.drafts !== previous.drafts) {
+          tabCommandCoordinator.reconcileFromSourceStores();
+        }
+      });
+      const stopTracy = useTracySurfaceStore.subscribe((next, previous) => {
+        if (next.open !== previous.open) {
+          tabCommandCoordinator.reconcileFromSourceStores();
+        }
+      });
+      return () => {
+        stopCanvas();
+        stopDrafts();
+        stopTracy();
+      };
+    }
+
+    const acceptedSettings: ChatRunSettings = {
+      ultracode: false,
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+
+    function seedAcceptedSession(input: {
+      readonly epicId: string;
+      readonly chatId: string;
+    }): {
+      readonly handle: ChatSessionStoreHandle;
+      readonly callbacks: ChatStreamCallbacks;
+      readonly sent: Array<unknown>;
+    } {
+      const callbackHolder: { current: ChatStreamCallbacks | null } = {
+        current: null,
+      };
+      const sent: Array<unknown> = [];
+      const handle = __getChatSessionRegistryForTests().acquire(
+        {
+          epicId: input.epicId,
+          chatId: input.chatId,
+          hostId: TEST_HOST_ID,
+          scopeKey: `landing-accepted:${input.epicId}:${input.chatId}`,
+        },
+        () =>
+          createChatSessionStore({
+            environment: CHAT_STORE_TEST_ENVIRONMENT,
+            hostId: TEST_HOST_ID,
+            epicId: input.epicId,
+            chatId: input.chatId,
+            userId: "user-landing",
+            onAuthError: null,
+            onProviderAuthError: null,
+            wakeTransport: null,
+            streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+            streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+              callbackHolder.current = nextCallbacks;
+              return {
+                sendAction: (frame) => sent.push(frame),
+                sameTurnSteeringProtocolSupported: () => true,
+                draftBlobBridgeSupported: () => true,
+                requestTranscriptRange: () => undefined,
+                requestResnapshot: () => undefined,
+                close: () => undefined,
+              };
+            },
+          }),
+      );
+      const callbacks = callbackHolder.current;
+      if (callbacks === null) throw new Error("expected chat stream callbacks");
+      callbacks.onConnectionStatus("open", null, null, null);
+      callbacks.onSnapshot({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: input.epicId,
+        chatId: input.chatId,
+        snapshot: {
+          chat: {
+            id: input.chatId,
+            parentId: null,
+            userId: "user-landing",
+            hostId: TEST_HOST_ID,
+            title: "Host Chat",
+            createdAt: 1,
+            updatedAt: 1,
+            isTitleEditedByUser: false,
+            settings: acceptedSettings,
+            activeSessionChain: null,
+            claudePendingWakes: [],
+            messages: [],
+            events: [],
+            archivedAt: null,
+            pinnedUserProviderHandle: null,
+            lastDeliveredRolesDigest: null,
+          },
+          access: { role: "owner", ownerUserId: "user-landing", canAct: true },
+          queue: { status: "idle", items: [] },
+          runStatus: "idle",
+          activeTurn: null,
+          pendingApprovals: [],
+          pendingInterviews: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          pendingFileEditApprovals: [],
+          accumulatedFileChanges: [],
+          managedCommands: [],
+          heldUpdates: [],
+          portForwards: [],
+        },
+      });
+      return { handle, callbacks, sent };
+    }
+
+    function initialMessageIds(): {
+      readonly epicId: string;
+      readonly chatId: string;
+      readonly clientActionId: string;
+      readonly messageId: string;
+    } {
+      const payload = landingMocks.request.mock.calls.find(
+        ([method]) => method === "epic.create",
+      )?.[1];
+      if (!isRecord(payload) || !isRecord(payload.chat) ||
+        !isRecord(payload.chat.initialMessage)) {
+        throw new Error("expected the seeded initial message in epic.create");
+      }
+      const { clientActionId, messageId } = payload.chat.initialMessage;
+      const epicId = epicIdFromCreateEpicPayload(payload);
+      const chatId = foldedChatIdFromCreateEpicPayload(payload);
+      if (typeof clientActionId !== "string" || typeof messageId !== "string" ||
+        epicId === null || chatId === null) {
+        throw new Error("expected exact epic, chat and seeded action ids");
+      }
+      return { epicId, chatId, clientActionId, messageId };
+    }
+
+    async function seedLandingAuthorityDraft(
+      draftId: string,
+      content: JsonContent,
+    ): Promise<string> {
+      useLandingDraftStore.getState().createDraftWithId(draftId, null);
+      useLandingDraftStore.getState().setDraftContent(draftId, content, null);
+      const flushed = await flushCanonicalLandingDraft(draftId);
+      if (flushed.kind !== "committed") {
+        throw new Error(`expected canonical Landing draft write, got ${flushed.kind}`);
+      }
+      const current = await readDraftAuthoritySlot({ kind: "landing", id: draftId });
+      if (current.kind !== "current" || current.record.kind !== "live") {
+        throw new Error("expected an ordinary live Landing authority row");
+      }
+      expect(current.record.returnAccountId).toBeNull();
+      return current.record.draft.version;
+    }
+
+    function focusDraftTab(draftId: string): void {
+      const ref = { kind: "draft" as const, id: draftId };
+      const id = tabItemId(ref);
+      useTabsStore.setState({
+        items: [{ kind: "tab", id, ref }],
+        activeItemId: id,
+        systemTabs: { history: null, settings: null },
+        stripOrder: [ref],
+      });
+    }
+
+    function submitDraft(draftId: string) {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+      });
+      const rendered = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+      act(() => {
+        rendered.result.current.submit({
+          draftId,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
+          settled: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+      return { queryClient, rendered };
+    }
+
+    function sendSeededAction(input: {
+      readonly epicId: string;
+      readonly chatId: string;
+      readonly clientActionId: string;
+      readonly messageId: string;
+    }) {
+      const session = seedAcceptedSession(input);
+      const sent = session.handle.store.getState().sendSeededUserMessage({
+        messageId: input.messageId,
+        clientActionId: input.clientActionId,
+        content: jsonContentForPrompt(SUBMITTED_PROMPT),
+        sender: { type: "user", userId: "user-landing" },
+        settings: acceptedSettings,
+        worktreeIntent: null,
+      });
+      expect(sent).not.toBeNull();
+      expect(session.sent.at(-1)).toMatchObject({
+        kind: "send",
+        messageId: input.messageId,
+        clientActionId: input.clientActionId,
+      });
+      return session;
+    }
+
+    function acceptSeededAction(
+      session: ReturnType<typeof sendSeededAction>,
+      input: {
+        readonly epicId: string;
+      readonly chatId: string;
+      readonly clientActionId: string;
+    },
+    ): void {
+      session.callbacks.onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: input.epicId,
+        chatId: input.chatId,
+        clientActionId: input.clientActionId,
+        action: "send",
+        status: "accepted",
+        reason: null,
+        code: null,
+        token: null,
+        backgroundStopTaskIds: [],
+      });
+    }
+
+    async function readAcceptedEditReceipt(operationId: string) {
+      const result = await runDraftAuthorityTransaction(
+        ["receipts"],
+        "readonly",
+        ({ receipts }) => readDraftAuthorityEditReceipt(receipts, operationId),
+      );
+      if (result.kind !== "complete") {
+        throw new Error("could not read the accepted Landing edit receipt");
+      }
+      return result.value ?? null;
+    }
+
+    function confirmSeededActionMessageAccepted(
+      session: ReturnType<typeof sendSeededAction>,
+      input: {
+        readonly epicId: string;
+        readonly chatId: string;
+        readonly messageId: string;
+      },
+    ): void {
+      session.callbacks.onMessageAccepted({
+        kind: "messageAccepted",
+        hasBinaryPayload: false,
+        epicId: input.epicId,
+        chatId: input.chatId,
+        message: {
+          role: "user",
+          messageId: input.messageId,
+          sender: { type: "user", userId: "user-landing" },
+          message: {
+            kind: "user",
+            content: jsonContentForPrompt(SUBMITTED_PROMPT),
+            browserAnnotations: [],
+          },
+          timestamp: 4,
+          sessionAnchor: null,
+        },
+      });
+    }
+
+    it("keeps an ownerless source until its exact seeded ACK, then replaces its alias from the receipt", async () => {
+      stopScopedTabSourceReconciliation = installScopedTabSourceReconciliation();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 3 },
+      });
+      const draftId = "landing-accepted-current";
+      const sourceVersion = await seedLandingAuthorityDraft(
+        draftId,
+        jsonContentForPrompt(SUBMITTED_PROMPT),
+      );
+      focusDraftTab(draftId);
+      const existence = deferred<"exists" | "absent" | "unknown">();
+      const ambiguousDrop = new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before next frame",
+        requestId: "landing-create-drop",
+        method: "epic.create",
+        fatalDetails: null,
+      });
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? Promise.reject(ambiguousDrop) : Promise.resolve({}),
+      );
+      pollMocks.pollEpicExistence.mockReturnValue(existence.promise);
+
+      const { queryClient } = submitDraft(draftId);
+      await waitFor(() => expect(pollMocks.pollEpicExistence).toHaveBeenCalled());
+      existence.resolve("exists");
+      await waitFor(() => expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1));
+      const identity = initialMessageIds();
+      const earlyTabId = useEpicCanvasStore.getState().openTabOrder[0];
+      if (earlyTabId === undefined) throw new Error("expected the early task tab");
+      expect(useEpicCanvasStore.getState().tabsById[earlyTabId]?.epicId).toBe(identity.epicId);
+      const earlyRef = { kind: "epic" as const, id: earlyTabId };
+      expect(useTabsStore.getState().items).toContainEqual(
+        expect.objectContaining({
+          kind: "tab",
+          ref: { kind: "epic", id: earlyTabId },
+        }),
+      );
+      const session = sendSeededAction(identity);
+
+      const beforeAck = await readDraftAuthoritySlot({ kind: "landing", id: draftId });
+      expect(beforeAck).toMatchObject({
+        kind: "current",
+        record: { kind: "live", draft: { version: sourceVersion }, returnAccountId: null },
+      });
+      expect(useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)).toBe(true);
+      expect(useTabsStore.getState().items[0]).toMatchObject({ ref: { kind: "draft", id: draftId } });
+
+      acceptSeededAction(session, {
+        ...identity,
+        clientActionId: `${identity.clientActionId}-unrelated`,
+      });
+      expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+        kind: "current",
+        record: { kind: "live", draft: { version: sourceVersion } },
+      });
+
+      acceptSeededAction(session, identity);
+      expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+        confirmedByHost: false,
+      });
+      expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+        kind: "current",
+        record: { kind: "live", draft: { version: sourceVersion } },
+      });
+      expect(await readAcceptedEditReceipt(identity.clientActionId)).toBeNull();
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "tab",
+        ref: { kind: "draft", id: draftId },
+      });
+
+      const replaceSpy = vi.spyOn(tabCommandCoordinator, "replaceConsumedDraftWithEpic");
+      try {
+        confirmSeededActionMessageAccepted(session, identity);
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: true,
+        });
+        await waitFor(async () => {
+          expect(await readAcceptedEditReceipt(identity.clientActionId)).toMatchObject({
+            operationId: identity.clientActionId,
+            kind: "tombstone",
+            draft: { slot: { kind: "landing", id: draftId } },
+          });
+        });
+        await waitFor(() => {
+          expect(replaceSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+              draftId,
+              epicId: identity.epicId,
+              epicTabId: earlyTabId,
+              consumed: expect.objectContaining({
+                operationId: identity.clientActionId,
+                kind: "tombstone",
+                draft: expect.objectContaining({
+                  slot: expect.objectContaining({ kind: "landing", id: draftId }),
+                }),
+              }),
+              requireOpenEpicTab: true,
+            }),
+          );
+        });
+        expect(replaceSpy.mock.results.at(-1)?.value).toEqual(earlyRef);
+        expect(session.sent).toHaveLength(1);
+        await waitFor(async () => {
+          expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+            kind: "current",
+            record: { kind: "tombstone", draft: { slot: { kind: "landing", id: draftId } } },
+          });
+        });
+        await waitFor(() => {
+          expect(useTabsStore.getState().items[0]).toMatchObject({
+            kind: "tab",
+            ref: { kind: "epic", id: earlyTabId },
+          });
+        });
+        const finalItems = useTabsStore.getState().items;
+        expect(finalItems.filter((item) => item.kind === "tab" && item.ref.kind === "epic")).toHaveLength(1);
+        expect(finalItems.some((item) => item.kind === "tab" && item.ref.kind === "draft" && item.ref.id === draftId)).toBe(false);
+        expect(useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)).toBe(false);
+        expect(landingMocks.request.mock.calls.filter(([method]) => method === "epic.create")).toHaveLength(1);
+      } finally {
+        replaceSpy.mockRestore();
+        queryClient.clear();
+      }
+    });
+
+    it("preserves a newer canonical edit and its Landing alias when the old seeded ACK arrives", async () => {
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 3 },
+      });
+      const draftId = "landing-accepted-newer-edit";
+      const original = jsonContentForPrompt(SUBMITTED_PROMPT);
+      const newer = jsonContentForPrompt("typed after submit");
+      const sourceVersion = await seedLandingAuthorityDraft(draftId, original);
+      focusDraftTab(draftId);
+      const existence = deferred<"exists" | "absent" | "unknown">();
+      const ambiguousDrop = new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before next frame",
+        requestId: "landing-create-drop-newer",
+        method: "epic.create",
+        fatalDetails: null,
+      });
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? Promise.reject(ambiguousDrop) : Promise.resolve({}),
+      );
+      pollMocks.pollEpicExistence.mockReturnValue(existence.promise);
+
+      const { queryClient } = submitDraft(draftId);
+      await waitFor(() => expect(pollMocks.pollEpicExistence).toHaveBeenCalled());
+      useLandingDraftStore.getState().setDraftContent(draftId, newer, null);
+      const newerFlush = await flushCanonicalLandingDraft(draftId);
+      expect(newerFlush.kind).toBe("committed");
+      const newerSlot = await readDraftAuthoritySlot({ kind: "landing", id: draftId });
+      if (newerSlot.kind !== "current" || newerSlot.record.kind !== "live") {
+        throw new Error("expected the newer Landing version to remain current");
+      }
+      const newerVersion = newerSlot.record.draft.version;
+      expect(newerVersion).not.toEqual(sourceVersion);
+      existence.resolve("exists");
+      await waitFor(() => expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1));
+      const identity = initialMessageIds();
+      const session = sendSeededAction(identity);
+      const originalConsume = draftAuthorityModule.consumeAcceptedDirectLandingSend;
+      type ConsumeResult = Awaited<ReturnType<typeof draftAuthorityModule.consumeAcceptedDirectLandingSend>>;
+      type ConsumeOutcome =
+        | { readonly kind: "fulfilled"; readonly result: ConsumeResult }
+        | { readonly kind: "rejected"; readonly error: unknown };
+      const consumeFinished = deferred<ConsumeOutcome>();
+      const consumeSpy = vi.spyOn(draftAuthorityModule, "consumeAcceptedDirectLandingSend").mockImplementation(async (input) => {
+        try {
+          const result = await originalConsume(input);
+          if (input.actionId === identity.clientActionId) {
+            consumeFinished.resolve({ kind: "fulfilled", result });
+          }
+          return result;
+        } catch (error) {
+          if (input.actionId === identity.clientActionId) {
+            consumeFinished.resolve({ kind: "rejected", error });
+          }
+          throw error;
+        }
+      });
+      try {
+        acceptSeededAction(session, identity);
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: false,
+        });
+        expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+          kind: "current",
+          record: { kind: "live", draft: { version: newerVersion }, payload: { content: newer } },
+        });
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toBeNull();
+        expect(useTabsStore.getState().items[0]).toMatchObject({
+          kind: "tab",
+          ref: { kind: "draft", id: draftId },
+        });
+
+        confirmSeededActionMessageAccepted(session, identity);
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: true,
+        });
+        const consumeOutcome = await consumeFinished.promise;
+        expect(consumeOutcome.kind).toBe("fulfilled");
+        if (consumeOutcome.kind !== "fulfilled") {
+          throw new Error("accepted Landing consume rejected before its CAS result");
+        }
+        const consumeResult = consumeOutcome.result;
+        expect(consumeSpy).toHaveBeenCalledTimes(1);
+        const consumeInput = consumeSpy.mock.calls[0]?.[0];
+        expect(consumeInput).toMatchObject({
+          actionId: identity.clientActionId,
+          predecessor: { version: sourceVersion },
+        });
+        expect(consumeResult).toMatchObject({
+          kind: "conflict",
+          current: {
+            kind: "live",
+            draft: { version: newerVersion },
+            payload: { content: newer },
+          },
+        });
+        if (consumeResult.kind !== "conflict") {
+          throw new Error("expected the accepted stale Landing action to conflict");
+        }
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toBeNull();
+        expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+          kind: "current",
+          record: { kind: "live", draft: { version: newerVersion }, payload: { content: newer } },
+        });
+        expect(useLandingDraftStore.getState().drafts).toContainEqual(
+          expect.objectContaining({ id: draftId, content: newer }),
+        );
+        expect(useTabsStore.getState().items[0]).toMatchObject({
+          kind: "tab",
+          ref: { kind: "draft", id: draftId },
+        });
+        expect(landingMocks.request.mock.calls.filter(([method]) => method === "epic.create")).toHaveLength(1);
+      } finally {
+        consumeSpy.mockRestore();
+        queryClient.clear();
+      }
+    });
+
+    it("keeps a closed fallback task closed when its exact seeded ACK settles late", async () => {
+      stopScopedTabSourceReconciliation = installScopedTabSourceReconciliation();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 3 },
+      });
+      const draftId = "landing-late-close";
+      const sourceVersion = await seedLandingAuthorityDraft(draftId, jsonContentForPrompt(SUBMITTED_PROMPT));
+      focusDraftTab(draftId);
+      const existence = deferred<"exists" | "absent" | "unknown">();
+      const ambiguousDrop = new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before next frame",
+        requestId: "landing-late-close-drop",
+        method: "epic.create",
+        fatalDetails: null,
+      });
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? Promise.reject(ambiguousDrop) : Promise.resolve({}),
+      );
+      pollMocks.pollEpicExistence.mockReturnValue(existence.promise);
+
+      const { queryClient } = submitDraft(draftId);
+      await waitFor(() => expect(pollMocks.pollEpicExistence).toHaveBeenCalled());
+      existence.resolve("exists");
+      await waitFor(() => expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1));
+      const identity = initialMessageIds();
+      const session = sendSeededAction(identity);
+      const earlyTabId = useEpicCanvasStore.getState().openTabOrder[0];
+      if (earlyTabId === undefined) throw new Error("expected the early task tab");
+
+      const earlyRef = { kind: "epic" as const, id: earlyTabId };
+      expect(useEpicCanvasStore.getState().tabsById[earlyTabId]?.epicId).toBe(identity.epicId);
+      await waitFor(() => expect(useTabsStore.getState().stripOrder).toContainEqual(earlyRef));
+
+      const originalProject = landingDraftStoreModule.projectCanonicalLandingDeletion;
+      const projectionRelease = deferred<void>();
+      let projectionEntered = false;
+      const projectionSpy = vi
+        .spyOn(landingDraftStoreModule, "projectCanonicalLandingDeletion")
+        .mockImplementation(async (receipt) => {
+          projectionEntered = true;
+          await projectionRelease.promise;
+          await originalProject(receipt);
+        });
+      const replaceSpy = vi.spyOn(tabCommandCoordinator, "replaceConsumedDraftWithEpic");
+      try {
+        acceptSeededAction(session, identity);
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: false,
+        });
+        expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+          kind: "current",
+          record: { kind: "live", draft: { version: sourceVersion } },
+        });
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toBeNull();
+        expect(projectionEntered).toBe(false);
+
+        confirmSeededActionMessageAccepted(session, identity);
+        expect(session.handle.store.getState().acceptedActions[identity.clientActionId]).toMatchObject({
+          confirmedByHost: true,
+        });
+        await waitFor(() => expect(projectionEntered).toBe(true));
+        expect(await readAcceptedEditReceipt(identity.clientActionId)).toMatchObject({
+          operationId: identity.clientActionId,
+          kind: "tombstone",
+        });
+        useEpicCanvasStore.getState().closeTab(earlyTabId);
+        expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(earlyTabId);
+        await waitFor(() => expect(useTabsStore.getState().stripOrder).not.toContainEqual(earlyRef));
+        projectionRelease.resolve(undefined);
+        await waitFor(() => expect(replaceSpy).toHaveBeenCalled());
+        expect(replaceSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ requireOpenEpicTab: true }),
+        );
+        expect(replaceSpy.mock.results.at(-1)?.value).toBeNull();
+      } finally {
+        projectionRelease.resolve(undefined);
+        projectionSpy.mockRestore();
+        replaceSpy.mockRestore();
+        queryClient.clear();
+      }
+
+      expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(earlyTabId);
+      expect(landingMocks.request.mock.calls.filter(([method]) => method === "epic.create")).toHaveLength(1);
+    });
+
+    it("preserves B focus when a prepared D/B pair collapses during immediate accepted Send", async () => {
+      stopScopedTabSourceReconciliation = installScopedTabSourceReconciliation();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 3 },
+      });
+      const draftId = "landing-paired-focus";
+      await seedLandingAuthorityDraft(draftId, jsonContentForPrompt(SUBMITTED_PROMPT));
+      const draftRef = { kind: "draft" as const, id: draftId };
+      const neighborRef = { kind: "epic" as const, id: "landing-neighbor-tab" };
+      useEpicCanvasStore.getState().openEpicTabWithId(
+        neighborRef.id,
+        "landing-neighbor-epic",
+        "Neighbor task",
+      );
+      useTabsStore.setState({
+        items: [
+          { kind: "tab", id: tabItemId(draftRef), ref: draftRef },
+          { kind: "tab", id: tabItemId(neighborRef), ref: neighborRef },
+        ],
+        activeItemId: tabItemId(draftRef),
+        systemTabs: { history: null, settings: null },
+        stripOrder: [draftRef, neighborRef],
+      });
+
+      const createResponse = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createResponse.promise : Promise.resolve({}),
+      );
+      const { queryClient } = submitDraft(draftId);
+      await waitFor(() =>
+        expect(landingMocks.request.mock.calls.some(([method]) => method === "epic.create")).toBe(true),
+      );
+      const identity = initialMessageIds();
+
+      // Pair D with B and focus B after submit. Removing D collapses the pair
+      // to the same single-B layout that an unpaired D/B strip would produce.
+      expect(
+        tabCommandCoordinator.pairTabs({
+          left: draftRef,
+          right: neighborRef,
+          splitId: "landing-pair-focus",
+          leftRatio: 0.5,
+          focusedRef: neighborRef,
+        }),
+      ).toBe(true);
+      const replaceSpy = vi.spyOn(tabCommandCoordinator, "replaceConsumedDraftWithEpic");
+      try {
+        createResponse.resolve({ roomInfo: null, initialTurnStarted: true });
+
+        await waitFor(async () => {
+          expect(await readAcceptedEditReceipt(identity.clientActionId)).toMatchObject({
+            operationId: identity.clientActionId,
+            kind: "tombstone",
+            draft: { slot: { kind: "landing", id: draftId } },
+          });
+          const strip = useTabsStore.getState();
+          const taskTabId = useEpicCanvasStore.getState().openTabOrder.find(
+            (tabId) => useEpicCanvasStore.getState().tabsById[tabId]?.epicId === identity.epicId,
+          );
+          expect(taskTabId).toBeDefined();
+          expect(strip.stripOrder).toContainEqual(neighborRef);
+          expect(strip.stripOrder).not.toContainEqual(draftRef);
+          expect(strip.activeItemId).toBe(tabItemId(neighborRef));
+          expect(strip.items.find((item) => item.id === strip.activeItemId)).toMatchObject({
+            kind: "tab",
+            ref: neighborRef,
+          });
+          expect(landingMocks.navigate).not.toHaveBeenCalled();
+          if (taskTabId === undefined) return;
+          const acceptedTaskRef = { kind: "epic" as const, id: taskTabId };
+          expect(taskTabId).not.toBe(identity.epicId);
+          expect(useEpicCanvasStore.getState().tabsById[taskTabId]?.epicId).toBe(identity.epicId);
+          expect(strip.stripOrder).toContainEqual(acceptedTaskRef);
+          expect(strip.stripOrder).not.toContainEqual({ kind: "epic", id: identity.epicId });
+          expect(await readDraftAuthoritySlot({ kind: "landing", id: draftId })).toMatchObject({
+            kind: "current",
+            record: { kind: "tombstone", draft: { slot: { kind: "landing", id: draftId } } },
+          });
+          expect(useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)).toBe(false);
+        });
+        await waitFor(() => expect(replaceSpy).toHaveBeenCalled());
+        expect(replaceSpy.mock.results.at(-1)?.value).toBeNull();
+        expect(landingMocks.request.mock.calls.filter(([method]) => method === "epic.create")).toHaveLength(1);
+      } finally {
+        replaceSpy.mockRestore();
+        queryClient.clear();
+      }
+    });
+  });
   beforeEach(() => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
@@ -1376,6 +2155,197 @@ describe("useLandingComposerActions", () => {
 
     landingMocks.getActiveHostId.mockReturnValue(TEST_HOST_ID);
     queryClient.clear();
+  });
+
+  it("resubmits the visible annotation-only Drafts row with rooted crop bytes under one authority claim", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    let claimsAtDispatch: readonly unknown[] | null = null;
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 5 },
+    });
+    landingMocks.request.mockImplementation(async (method) => {
+      if (method === "epic.create") {
+        claimsAtDispatch = await readRecoveryIssueRows();
+      }
+      return { roomInfo: null, initialTurnStarted: true };
+    });
+    const restoreBlob = stubNodeBlob();
+    let fixture: BrowserDraftRecoveryFixture;
+    try {
+      fixture = await seedBrowserDraftRecoveryFixture();
+    } catch (error) {
+      try {
+        queryClient.clear();
+      } finally {
+        restoreBlob();
+      }
+      throw error;
+    }
+
+    try {
+      const { editor } = await openRecoveryDraft(fixture, queryClient);
+      expect(editor.submission.draft).toEqual(fixture.draft);
+      expect(editor.submission.payload.content).toEqual({ type: "doc" });
+      expect(editor.submission.payload.browserAnnotations).toEqual([
+        fixture.annotation,
+      ]);
+      expect(editor.submission.manifest).toEqual(fixture.manifest);
+      expect([...editor.submission.bytes.keys()]).toEqual([fixture.digest]);
+      expect(editor.submission.bytes.get(fixture.digest)?.size).toBe(
+        fixture.bytes.byteLength,
+      );
+
+      let outcome: BrowserDraftRecoverySubmitResult | undefined;
+      await act(async () => {
+        outcome = await editor.onResubmit();
+      });
+      expect(outcome?.kind).toBe("accepted");
+
+      const createCalls = landingMocks.request.mock.calls.filter(
+        ([method]) => method === "epic.create",
+      );
+      expect(createCalls).toHaveLength(1);
+      const createCall = createCalls[0];
+      if (createCall === undefined) {
+        throw new Error("expected the shared composer to issue epic.create");
+      }
+      const hostPayload = createCall[1];
+      if (!isRecord(hostPayload) || !isRecord(hostPayload.chat)) {
+        throw new Error("epic.create carried no chat");
+      }
+      const initialMessage = hostPayload.chat.initialMessage;
+      if (!isRecord(initialMessage)) {
+        throw new Error("epic.create carried no initialMessage");
+      }
+      expect(initialMessage.browserAnnotations).toEqual([fixture.annotation]);
+
+      const crops = allImageAttrsFromEpicCreatePayload(hostPayload);
+      expect(crops).toHaveLength(1);
+      expect(crops[0]).toEqual(
+        expect.objectContaining({
+          b64content: encodeBase64(fixture.bytes),
+          fileName: fixture.annotation.imageFileName,
+          hash: fixture.digest,
+          mimeType: "image/png",
+          size: fixture.bytes.byteLength,
+        }),
+      );
+
+      const claimedIssues = issueRowsForDraft(
+        claimsAtDispatch ?? [],
+        fixture.draft,
+      );
+      expect(claimedIssues).toHaveLength(1);
+      const issue = claimedIssues[0];
+      if (issue === undefined || !isRecord(issue.receipt)) {
+        throw new Error("epic.create had no matching authority issue");
+      }
+      expect(issue.state).toBe("issuing");
+      const effect = issue.receipt.effect;
+      if (!isRecord(effect) || !isRecord(effect.payload)) {
+        throw new Error("authority issue carried no send payload");
+      }
+      expect(effect.payload.manifest).toEqual(fixture.manifest);
+      expect(landingMocks.dispatchOptions).toHaveLength(1);
+      expect(landingMocks.dispatchOptions[0]?.method).toBe("epic.create");
+      const dispatchOptions = landingMocks.dispatchOptions[0]?.options;
+      if (!isRecord(dispatchOptions)) {
+        throw new Error("epic.create had no narrowed dispatch options");
+      }
+      expect(dispatchOptions.requiredHostMethodVersion).toEqual({
+        major: 1,
+        minor: 5,
+      });
+    } finally {
+      try {
+        cleanup();
+      } finally {
+        try {
+          await retireBrowserDraftRecoveryFixture(fixture);
+        } finally {
+          try {
+            queryClient.clear();
+          } finally {
+            restoreBlob();
+          }
+        }
+      }
+    }
+  });
+
+  it("refuses a replaced recovery version after opening its Drafts row without claiming or dispatching", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 5 },
+    });
+    const restoreBlob = stubNodeBlob();
+    let fixture: BrowserDraftRecoveryFixture;
+    try {
+      fixture = await seedBrowserDraftRecoveryFixture();
+    } catch (error) {
+      try {
+        queryClient.clear();
+      } finally {
+        restoreBlob();
+      }
+      throw error;
+    }
+
+    try {
+      const { editor } = await openRecoveryDraft(fixture, queryClient);
+      const replacement = await writeDraftAuthority({
+        operation: {
+          id: `recovery-edit-${fixture.draft.slot.id}`,
+          actor: fixture.actor,
+        },
+        expected: { kind: "current", draft: fixture.draft },
+        mutation: {
+          kind: "edit",
+          payload: fixture.payload,
+          manifest: fixture.manifest,
+          returnAccountId: fixture.actor.accountId,
+        },
+      });
+      if (replacement.kind !== "committed") {
+        throw new Error("expected the authority replacement to commit");
+      }
+      expect(replacement.receipt.draft.version).not.toBe(
+        fixture.draft.version,
+      );
+
+      let outcome: BrowserDraftRecoverySubmitResult | undefined;
+      await act(async () => {
+        outcome = await editor.onResubmit();
+      });
+      expect(outcome?.kind).toBe("stale");
+      expect(
+        landingMocks.request.mock.calls.filter(
+          ([method]) => method === "epic.create",
+        ),
+      ).toHaveLength(0);
+      expect(landingMocks.dispatchOptions).toHaveLength(0);
+      expect(
+        issueRowsForDraft(await readRecoveryIssueRows(), fixture.draft),
+      ).toHaveLength(0);
+    } finally {
+      try {
+        cleanup();
+      } finally {
+        try {
+          await retireBrowserDraftRecoveryFixture(fixture);
+        } finally {
+          try {
+            queryClient.clear();
+          } finally {
+            restoreBlob();
+          }
+        }
+      }
+    }
   });
 
   it("awaits IndexedDB for a restored (session-cold) image before sending", async () => {
@@ -4599,6 +5569,282 @@ describe("useLandingComposerActions", () => {
     });
   });
 });
+
+interface BrowserDraftRecoveryFixture {
+  readonly actor: DraftAuthorityActor;
+  readonly draft: DraftAuthorityVersion;
+  readonly payload: DraftAuthorityPayload;
+  readonly manifest: { readonly digests: readonly string[] };
+  readonly annotation: BrowserAnnotationRecord;
+  readonly digest: string;
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly row: BrowserDraftRecoveryRow;
+  readonly rows: ReadonlyArray<BrowserDraftRecoveryRow>;
+}
+
+function stubNodeBlob(): () => void {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "Blob");
+  Object.defineProperty(globalThis, "Blob", {
+    configurable: true,
+    enumerable: previous?.enumerable ?? true,
+    value: NodeBlob,
+    writable: true,
+  });
+  return () => {
+    if (previous === undefined) {
+      Reflect.deleteProperty(globalThis, "Blob");
+    } else {
+      Object.defineProperty(globalThis, "Blob", previous);
+    }
+  };
+}
+
+async function seedBrowserDraftRecoveryFixture(): Promise<BrowserDraftRecoveryFixture> {
+  const actor = captureDraftAuthorityActor();
+  if (actor === null) throw new Error("expected an active draft authority actor");
+
+  const suffix = crypto.randomUUID();
+  const stub = createStubBrowserAnnotationPayloadFor({
+    annotationId: `recovery-annotation-${suffix}`,
+    tabId: `recovery-tab-${suffix}`,
+    sessionId: `recovery-session-${suffix}`,
+    comment: "Please review this browser capture",
+  });
+  const bytes = stub.png;
+  const digest = await webCryptoSha256Hex(bytes);
+  const annotation: BrowserAnnotationRecord = {
+    kind: "browser-annotation",
+    annotationId: stub.payload.annotationId,
+    tabId: stub.payload.tabId,
+    sessionId: stub.payload.sessionId,
+    origin: stub.payload.origin,
+    pageUrl: stub.payload.pageUrl,
+    pageTitle: stub.payload.pageTitle,
+    source: {
+      kind: "browser",
+      tabId: stub.payload.tabId,
+      sessionId: stub.payload.sessionId,
+      origin: stub.payload.origin,
+      pageUrl: stub.payload.pageUrl,
+      pageTitle: stub.payload.pageTitle,
+    },
+    capturedAt: stub.payload.capturedAt,
+    comment: stub.payload.comment,
+    counts: stub.payload.counts,
+    elements: stub.payload.elements,
+    imageFileName: `browser-annotation-${stub.payload.annotationId}.png`,
+    imageHash: digest,
+    droppedElementCount: stub.payload.droppedElementCount,
+  };
+  const payload: DraftAuthorityPayload = {
+    content: { type: "doc" },
+    browserAnnotations: [annotation],
+    settings: {
+      ultracode: false,
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    },
+  };
+  const manifest = { digests: [digest] } as const;
+  const slot = {
+    kind: "landing" as const,
+    id: `recovery-draft-${suffix}`,
+  };
+  const draft: DraftAuthorityVersion = {
+    slot,
+    occurrence: `recovery-occurrence-${suffix}`,
+    version: `recovery-version-${suffix}`,
+  };
+  const blob = new Blob([bytes], { type: "image/png" });
+  const seeded = await runDraftAuthorityTransaction(
+    ["drafts", "recovery"],
+    "readwrite",
+    async ({ drafts, recovery }) => {
+      const residentBytes = await recovery.budget.read("resident-bytes");
+      await drafts.write(["landing", slot.id], {
+        kind: "live",
+        draft,
+        payload,
+        manifest,
+        returnAccountId: actor.accountId,
+        recoveryAccountId: actor.accountId,
+      });
+      await recovery.blobs.write([actor.accountId, digest], blob);
+      await recovery.refs.write([actor.accountId, digest], {
+        count: 1,
+        byteLength: blob.size,
+      });
+      await recovery.budget.write(
+        "resident-bytes",
+        (typeof residentBytes === "number" ? residentBytes : 0) + blob.size,
+      );
+    },
+  );
+  if (seeded.kind !== "complete") {
+    throw new Error("could not seed the browser recovery fixture");
+  }
+
+  const rows = await listBrowserDraftRecoveryRows(actor);
+  const row = rows?.find((candidate) => candidate.id === slot.id);
+  if (rows === null || row === undefined) {
+    throw new Error("the seeded browser recovery row was not listed");
+  }
+  const fixture = {
+    actor,
+    draft,
+    payload,
+    manifest,
+    annotation,
+    digest,
+    bytes,
+    row,
+    rows,
+  };
+  try {
+    const exact = await readExactBrowserDraftRecovery(actor, draft);
+    if (exact.kind !== "live") {
+      throw new Error("the seeded exact browser recovery was not live");
+    }
+    expect(exact.submission.draft).toEqual(draft);
+    expect([...exact.submission.bytes.keys()]).toEqual([digest]);
+    const residentBlob = exact.submission.bytes.get(digest);
+    if (!(residentBlob instanceof NodeBlob)) {
+      throw new Error("the exact recovery root did not round-trip as a Node Blob");
+    }
+    expect(new Uint8Array(await residentBlob.arrayBuffer())).toEqual(bytes);
+    return fixture;
+  } catch (error) {
+    await retireBrowserDraftRecoveryFixture(fixture);
+    throw error;
+  }
+}
+
+async function openRecoveryDraft(
+  fixture: BrowserDraftRecoveryFixture,
+  queryClient: QueryClient,
+): Promise<{ readonly editor: BrowserDraftRecoveryEditor }> {
+  let openedEditor: BrowserDraftRecoveryEditor | undefined;
+  render(
+    <RecoveryDraftsControlHarness
+      actor={fixture.actor}
+      rows={fixture.rows}
+      onOpen={(editor) => {
+        openedEditor = editor;
+      }}
+    />,
+    { wrapper: queryClientWrapper(queryClient) },
+  );
+  const trigger = await screen.findByRole("button", { name: /drafts/i });
+  await act(async () => {
+    fireEvent.click(trigger);
+  });
+  let row: HTMLElement | null = null;
+  await waitFor(() => {
+    row = document.querySelector<HTMLElement>(
+      `[data-draft-row-id="${fixture.row.id}"]`,
+    );
+    expect(row).not.toBeNull();
+  });
+  if (row === null) throw new Error("the recovery Drafts row did not render");
+
+  await act(async () => {
+    fireEvent.click(row);
+  });
+  await waitFor(() => {
+    expect(openedEditor).toBeDefined();
+  });
+  if (openedEditor === undefined) {
+    throw new Error("the recovery Drafts row did not open");
+  }
+  return { editor: openedEditor };
+}
+
+function RecoveryDraftsControlHarness(props: {
+  readonly actor: DraftAuthorityActor;
+  readonly rows: ReadonlyArray<BrowserDraftRecoveryRow>;
+  readonly onOpen: (editor: BrowserDraftRecoveryEditor) => void;
+}) {
+  const actions = useLandingComposerActions(useTestPlacementTarget());
+  const [pickerStore] = useState(createComposerPickerStore);
+  const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const recovery = useMemo<DraftsRecoveryRoute>(
+    () => ({
+      actor: props.actor,
+      rows: props.rows,
+      onOpen: (editor) => props.onOpen(editor),
+      onResubmit: actions.submitRecoveredDraft,
+      onDelete: () => undefined,
+    }),
+    [actions.submitRecoveredDraft, props.actor, props.onOpen, props.rows],
+  );
+  return (
+    <ComposerDraftsControl
+      scope={{ surface: "landing", activeDraftId: null }}
+      hostId={TEST_HOST_ID}
+      pickerStore={pickerStore}
+      editorRef={editorRef}
+      active
+      recovery={recovery}
+    />
+  );
+}
+
+async function readRecoveryIssueRows(): Promise<readonly unknown[]> {
+  const result = await runDraftAuthorityTransaction(
+    ["claims"],
+    "readonly",
+    ({ claims }) =>
+      claims.readAll(IDBKeyRange.bound(["issue"], ["issue", []])),
+  );
+  if (result.kind !== "complete") {
+    throw new Error("could not read the recovery issue claims");
+  }
+  return result.value;
+}
+
+function issueRowsForDraft(
+  rows: readonly unknown[],
+  draft: DraftAuthorityVersion,
+): ReadonlyArray<Readonly<Record<string, unknown>>> {
+  return rows.filter((row): row is Readonly<Record<string, unknown>> => {
+    if (!isRecord(row) || !isRecord(row.receipt)) return false;
+    const source = row.receipt.source;
+    if (
+      !isRecord(source) ||
+      source.kind !== "restored-draft" ||
+      !isRecord(source.draft) ||
+      !isRecord(source.draft.slot)
+    ) {
+      return false;
+    }
+    return (
+      source.draft.slot.kind === draft.slot.kind &&
+      source.draft.slot.id === draft.slot.id &&
+      source.draft.occurrence === draft.occurrence &&
+      source.draft.version === draft.version
+    );
+  });
+}
+
+async function retireBrowserDraftRecoveryFixture(
+  fixture: BrowserDraftRecoveryFixture,
+): Promise<void> {
+  const current = await readDraftAuthoritySlot(fixture.draft.slot);
+  if (current.kind !== "current" || current.record.kind !== "live") return;
+  await writeDraftAuthority({
+    operation: {
+      id: `recovery-cleanup-${fixture.draft.slot.id}`,
+      actor: fixture.actor,
+    },
+    expected: { kind: "current", draft: current.record.draft },
+    mutation: { kind: "delete", retirements: [] },
+  });
+}
 
 function queryClientWrapper(
   queryClient: QueryClient,

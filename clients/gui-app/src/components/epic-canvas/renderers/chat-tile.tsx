@@ -1,3 +1,4 @@
+import { BrowserSandboxCancelScopeProvider } from "@/lib/sandboxes/browser-sandbox-cancel-composer";
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
 import { ComposerDropPane } from "@/components/chat/composer/composer-drop-pane";
@@ -20,6 +21,7 @@ import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-detai
 import { Button } from "@/components/ui/button";
 import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
+import { subscribeToDraftAuthoritySessionChanges } from "@/lib/drafts/draft-authority-session";
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { SandboxReadyLineForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { queueWithDrainingPrompts } from "@/stores/chats/chat-send-state";
@@ -196,6 +198,7 @@ import {
   type ChatSessionState,
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
+  type SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
 import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
 import { queueItemsInFlight } from "@/stores/chats/queue-edit-custody";
@@ -462,6 +465,39 @@ interface CompactChatState {
   locked: boolean;
   lockTimeoutId: number | null;
   cancelPromotion: (() => void) | null;
+}
+
+function observeDirectChatSend(
+  handle: ChatSessionStoreHandle,
+  sent: SentChatMessageAction,
+  complete: (actionId: string | null) => void,
+): void {
+  const { clientActionId, messageId } = sent;
+  const update = (state: ChatSessionState): void => {
+    const acceptedActions: Readonly<Partial<ChatSessionState["acceptedActions"]>> =
+      state.acceptedActions;
+    const pendingActions: Readonly<Partial<ChatSessionState["pendingActions"]>> =
+      state.pendingActions;
+    const accepted = acceptedActions[clientActionId];
+    const pending = pendingActions[clientActionId];
+    const confirmed =
+      accepted?.confirmedByHost === true ||
+      pending?.messageConfirmedByHost === true ||
+      state.messages.some(
+        (message) => message.role === "user" && message.messageId === messageId,
+      );
+    if (!confirmed && (accepted !== undefined || pending !== undefined)) return;
+    unsubscribe();
+    stopSession();
+    complete(confirmed ? clientActionId : null);
+  };
+  const unsubscribe = handle.store.subscribe(update);
+  const stopSession = subscribeToDraftAuthoritySessionChanges(() => {
+    unsubscribe();
+    stopSession();
+    complete(null);
+  });
+  update(handle.store.getState());
 }
 
 interface ChatTileProps {
@@ -871,38 +907,40 @@ function ChatTileForChat(props: ChatTileProps) {
         chat={servingKey}
         sandboxSays={sandbox.line !== null}
       />
-      <PendingSandboxSendForChat
-        epicId={epicId}
-        chatId={node.id}
-        tabId={viewTabId}
-      />
-      <SandboxReadyLineForChat chatId={node.id} />
-      <TombstonedProfileProvider
-        {...tombstonedProfileListProps(providersList.data)}
-        hostId={tabHostId}
-      >
-        <ChatSandboxLineContext value={sandbox.line !== null}>
-          <ChatStateLineContext value={stateLine}>
-            <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
-              <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
-                <ChatTileSessionView
-                  handle={handle}
-                  node={node}
-                  viewTabId={viewTabId}
-                  tileId={props.tileId}
-                  isActive={isActive}
-                  currentEpicId={epicId}
-                  restingSandbox={wakeOf(sandbox)}
-                  evictedSend={evictedSend}
-                  readOnlyNotice={sandboxAvailability.readOnlyNotice}
-                  isLiveSession
-                  preContent={preContentFrame}
-                />
-              </ChatLoadAutofocusContext>
-            </PaneActivationFocusIntentContext>
-          </ChatStateLineContext>
-        </ChatSandboxLineContext>
-      </TombstonedProfileProvider>
+      <BrowserSandboxCancelScopeProvider>
+        <PendingSandboxSendForChat
+          epicId={epicId}
+          chatId={node.id}
+          tabId={viewTabId}
+        />
+        <SandboxReadyLineForChat chatId={node.id} />
+        <TombstonedProfileProvider
+          {...tombstonedProfileListProps(providersList.data)}
+          hostId={tabHostId}
+        >
+          <ChatSandboxLineContext value={sandbox.line !== null}>
+            <ChatStateLineContext value={stateLine}>
+              <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
+                <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
+                  <ChatTileSessionView
+                    handle={handle}
+                    node={node}
+                    viewTabId={viewTabId}
+                    tileId={props.tileId}
+                    isActive={isActive}
+                    currentEpicId={epicId}
+                    restingSandbox={wakeOf(sandbox)}
+                    evictedSend={evictedSend}
+                    readOnlyNotice={sandboxAvailability.readOnlyNotice}
+                    isLiveSession
+                    preContent={preContentFrame}
+                  />
+                </ChatLoadAutofocusContext>
+              </PaneActivationFocusIntentContext>
+            </ChatStateLineContext>
+          </ChatSandboxLineContext>
+        </TombstonedProfileProvider>
+      </BrowserSandboxCancelScopeProvider>
       <ChatSandboxFooter line={sandbox.line} />
     </div>
   );
@@ -3430,6 +3468,8 @@ function useChatTileSessionViewModel(
           content: input.content,
         },
       );
+      const confirmDirectSend = input.onDirectDispatch?.();
+      if (confirmDirectSend === null) return false;
       const sent = chatActions.sendMessage({
         content: input.content,
         sender,
@@ -3438,7 +3478,12 @@ function useChatTileSessionViewModel(
         deliveryPolicy: input.deliveryPolicy,
         restore: input.restore,
       });
-      if (sent === null) return false;
+      if (sent === null) {
+        confirmDirectSend?.(null);
+        return false;
+      }
+      if (confirmDirectSend !== undefined)
+        observeDirectChatSend(handle, sent, confirmDirectSend);
       if (shouldMarkTitlePending) {
         useEpicCanvasStore
           .getState()
@@ -3449,7 +3494,7 @@ function useChatTileSessionViewModel(
     [
       canAct,
       chatActions,
-      handle.store,
+      handle,
       node.id,
       node.name,
       profile,
@@ -3555,7 +3600,10 @@ function useChatTileSessionViewModel(
         submit: input,
         dispatch: (message) => {
           if (onOriginSignIn !== null && !onOriginSignIn()) return false;
-          const accepted = dispatchUserSend(message);
+          const { onDirectDispatch: _onDirectDispatch, ...parked } = message;
+          const accepted = dispatchUserSend(
+            onOriginSignIn === null ? message : parked,
+          );
           // Transfer custody and report at dispatch, before a consent promise
           // continuation or the next parked send can run.
           onDispatch?.(accepted);

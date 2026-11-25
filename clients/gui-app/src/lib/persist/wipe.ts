@@ -38,6 +38,10 @@ import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persiste
 import { appLogger, describeLogError } from "@/lib/logger";
 import { FILE_EDIT_RECOVERY_DB_SUFFIX } from "@/lib/workspace/file-edit-recovery-store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
+import {
+  DRAFT_AUTHORITY_DB_NAME,
+  retireDraftAuthorityStorage,
+} from "@/lib/drafts/draft-authority-db";
 import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
 import {
   TRANSCRIPT_IMAGE_DB_SUFFIX,
@@ -166,6 +170,7 @@ async function deleteRendererDatabases(): Promise<void> {
   const enumerated = await enumeratedRendererDatabaseNames(factory);
   const names = new Set(enumerated);
   names.add(STASH_DB_NAME);
+  names.add(DRAFT_AUTHORITY_DB_NAME);
   names.add(persistKey("tab-recovery"));
   names.add(CANVAS_BROWSER_DB_NAME);
   names.add(APPEARANCE_DB_NAME);
@@ -193,7 +198,8 @@ async function deleteRendererDatabases(): Promise<void> {
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
         if (
           name === persistKey("tab-recovery") ||
-          name === CANVAS_BROWSER_DB_NAME
+          name === CANVAS_BROWSER_DB_NAME ||
+          name === DRAFT_AUTHORITY_DB_NAME
         )
           throw error;
         failedCount += 1;
@@ -258,6 +264,7 @@ export async function clearAllPersistedStores(args: {
   // The bot boxes write their drafts after a pause in typing, and on the
   // reload's pagehide: neither may land after the sweep.
   stopBotBoxDraftWrites();
+  retireDraftAuthorityStorage();
 
   // 2. Blanket-prefix sweep across BOTH storages.
   const localStorageCount = sweepStorage(window.localStorage);

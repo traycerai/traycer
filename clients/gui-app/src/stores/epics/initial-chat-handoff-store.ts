@@ -30,6 +30,7 @@ export interface InitialChatHandoff {
   readonly epicId: string;
   readonly chatId: string | null;
   readonly status: InitialChatHandoffStatus;
+  readonly awaitingLandingCreateResponse?: true;
   readonly content: JsonContent;
   readonly settings: ChatRunSettings;
   /**
@@ -71,11 +72,22 @@ export interface RegisterInitialChatHandoffInput extends InitialChatHandoffScope
   readonly messageId: string;
   readonly clientActionId: string;
   readonly createdAt: number;
+  readonly awaitingLandingCreateResponse?: true;
+}
+
+interface LandingCreateHandoffIdentity extends InitialChatHandoffScope {
+  readonly chatId: string;
+  readonly clientActionId: string;
+  readonly messageId: string;
 }
 
 interface InitialChatHandoffStore {
   readonly handoffs: Readonly<Record<string, InitialChatHandoff>>;
   register: (input: RegisterInitialChatHandoffInput) => void;
+  settleLandingCreateResponse: (
+    identity: LandingCreateHandoffIdentity,
+    outcome: "started" | "fallback" | "observe-only",
+  ) => void;
   markChatCreated: (scope: InitialChatHandoffScope, chatId: string) => boolean;
   markWaitingChat: (scope: InitialChatHandoffScope) => boolean;
   markSending: (
@@ -249,6 +261,9 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
               epicId: input.epicId,
               chatId: input.chatId,
               status: "pending",
+              ...(input.awaitingLandingCreateResponse === true
+                ? { awaitingLandingCreateResponse: true as const }
+                : {}),
               content: input.content,
               settings: input.settings,
               worktreeIntent: input.worktreeIntent,
@@ -261,6 +276,34 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
             },
           },
         }));
+      },
+      settleLandingCreateResponse: (identity, outcome) => {
+        set((state) => {
+          const key = initialChatHandoffKey(identity);
+          const handoff = state.handoffs[key];
+          if (
+            !Object.hasOwn(state.handoffs, key) ||
+            handoff.awaitingLandingCreateResponse !== true ||
+            handoff.hostId !== identity.hostId ||
+            handoff.chatId !== identity.chatId ||
+            handoff.clientActionId !== identity.clientActionId ||
+            handoff.messageId !== identity.messageId
+          ) {
+            return state;
+          }
+          const handoffs = { ...state.handoffs };
+          if (outcome === "observe-only") {
+            delete handoffs[key];
+          } else {
+            const { awaitingLandingCreateResponse: _awaiting, ...admitted } = handoff;
+            handoffs[key] = {
+              ...admitted,
+              status: outcome === "started" ? "sending" : "pending",
+              updatedAt: Date.now(),
+            };
+          }
+          return { handoffs };
+        });
       },
       markChatCreated: (scope, chatId) =>
         updateHandoff(set, scope, (handoff) => {
@@ -316,12 +359,15 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
           };
         }),
       markFailed: (scope, reason) =>
-        updateHandoff(set, scope, (handoff) => ({
-          ...handoff,
-          status: "failed",
-          failureReason: reason,
-          updatedAt: Date.now(),
-        })),
+        updateHandoff(set, scope, (handoff) => {
+          const { awaitingLandingCreateResponse: _awaiting, ...settled } = handoff;
+          return {
+            ...settled,
+            status: "failed",
+            failureReason: reason,
+            updatedAt: Date.now(),
+          };
+        }),
       markFailedByAction: (scope, chatId, clientActionId, reason) =>
         updateHandoff(set, scope, (handoff) => {
           if (handoff.chatId !== chatId) return null;
@@ -371,10 +417,14 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
       // conversion inside a synchronous localStorage hydration.
       partialize: (state) => ({
         handoffs: Object.fromEntries(
-          Object.entries(state.handoffs).map(([key, handoff]) => [
-            key,
-            { ...handoff, content: stripBase64ImageNodes(handoff.content) },
-          ]),
+          Object.entries(state.handoffs)
+            // The original draft still owns this message until the create
+            // resolves. A reload cannot grant a fallback send to its seed.
+            .filter(([, handoff]) => handoff.awaitingLandingCreateResponse !== true)
+            .map(([key, handoff]) => [
+              key,
+              { ...handoff, content: stripBase64ImageNodes(handoff.content) },
+            ]),
         ),
       }),
     },
@@ -408,7 +458,9 @@ export function selectInitialChatHandoff(
   scope: InitialChatHandoffScope,
 ): InitialChatHandoff | null {
   const key = initialChatHandoffKey(scope);
-  return Object.hasOwn(state.handoffs, key) ? state.handoffs[key] : null;
+  if (!Object.hasOwn(state.handoffs, key)) return null;
+  const handoff = state.handoffs[key];
+  return handoff.awaitingLandingCreateResponse === true ? null : handoff;
 }
 
 /**
@@ -423,7 +475,9 @@ export function selectHasActiveInitialChatHandoffForEpic(
   epicId: string,
 ): boolean {
   return Object.values(state.handoffs).some(
-    (handoff) => handoff.epicId === epicId && handoff.status !== "failed",
+    (handoff) =>
+      handoff.epicId === epicId && handoff.status !== "failed" &&
+      handoff.awaitingLandingCreateResponse !== true,
   );
 }
 

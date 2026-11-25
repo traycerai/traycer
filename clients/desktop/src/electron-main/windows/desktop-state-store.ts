@@ -1,17 +1,29 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { traycerDataRoot } from "@traycer/protocol/config/data-root";
 import { config } from "../../config";
 import type {
+  FlushWindowDraftTopologyResult,
+  LandingDraftReference,
+  MoveWindowDraftReferenceRequest,
+  MoveWindowDraftReferenceResult,
   OwnershipEntry,
   PerWindowSnapshot,
+  UpdateWindowDraftReferencesRequest,
+  WindowDraftMoveReceipt,
+  WindowDraftTopologyResult,
 } from "../../ipc-contracts/window-types";
 import {
   parseJsonRecord,
   parseJsonValue,
   parseLandingDrafts,
+  parseWindowDraftMove,
+  parseWindowDraftTopology,
+  parseWindowTopologyRevision,
 } from "../../ipc-contracts/window-state-parsers";
 import { environmentSubdir } from "../host/host-paths";
+import { movedTabLayout } from "./moved-tab-layout";
 
 const DESKTOP_STATE_VERSION = 2;
 
@@ -46,6 +58,18 @@ interface DesktopStatePayload {
   readonly version: number;
   readonly windows: Readonly<Record<string, PerWindowSnapshot>>;
   readonly ownership: readonly OwnershipEntry[];
+  readonly draftMoves: readonly PersistedDraftMove[];
+}
+
+interface PersistedDraftMove {
+  readonly sourceWindowId: string;
+  readonly request: MoveWindowDraftReferenceRequest;
+  readonly receipt: WindowDraftMoveReceipt;
+}
+
+interface DesktopStateChange<Result> {
+  readonly next: DesktopStatePayload | null;
+  readonly result: Result;
 }
 
 export function resolveDesktopStateFilePath(): string {
@@ -68,6 +92,7 @@ export class DesktopStateStore {
     version: DESKTOP_STATE_VERSION,
     windows: {},
     ownership: [],
+    draftMoves: [],
   };
   private writeChain: Promise<void> = Promise.resolve();
   private latestWrite: Promise<void> = Promise.resolve();
@@ -131,7 +156,7 @@ export class DesktopStateStore {
     );
     const nextOwnership = ownershipFromWindowSnapshots(repairedWindows.windows);
     const nextPayload = {
-      version: DESKTOP_STATE_VERSION,
+      ...this.payload,
       windows: repairedWindows.windows,
       ownership: nextOwnership,
     };
@@ -143,7 +168,10 @@ export class DesktopStateStore {
       JSON.stringify(this.payload) !== JSON.stringify(nextPayload);
     if (changed) {
       this.payload = nextPayload;
-      void this.scheduleWrite().catch(() => undefined);
+      void this.queueWrite(() => ({
+        next: nextPayload,
+        result: undefined,
+      })).catch(() => undefined);
     }
 
     return {
@@ -157,52 +185,213 @@ export class DesktopStateStore {
     };
   }
 
-  setWindowSnapshot(
+  async setWindowSnapshot(
     windowId: string,
-    snapshot: PerWindowSnapshot,
-  ): Promise<void> {
-    this.payload = {
-      ...this.payload,
-      windows: { ...this.payload.windows, [windowId]: snapshot },
-    };
-    return this.scheduleWrite();
+    snapshot:
+      | PerWindowSnapshot
+      | ((current: PerWindowSnapshot) => PerWindowSnapshot),
+  ): Promise<PerWindowSnapshot> {
+    return this.queueWrite((current) => {
+      const next =
+        typeof snapshot === "function"
+          ? snapshot(current.windows[windowId] ?? emptyPerWindowSnapshot())
+          : snapshot;
+      return {
+        next: { ...current, windows: { ...current.windows, [windowId]: next } },
+        result: next,
+      };
+    });
   }
 
-  deleteWindowSnapshot(windowId: string): void {
-    const windows: Record<string, PerWindowSnapshot> = {
-      ...this.payload.windows,
-    };
-    delete windows[windowId];
-    this.payload = { ...this.payload, windows };
-    void this.scheduleWrite().catch(() => undefined);
+  async flushDraftTopology(
+    windowId: string,
+    ref: LandingDraftReference,
+  ): Promise<FlushWindowDraftTopologyResult> {
+    await this.writeChain;
+    const topology = this.payload.windows[windowId]?.draftTopology;
+    if (topology?.references.some((entry) => sameDraftReference(entry, ref))) {
+      return { result: "ready", revision: topology.revision };
+    }
+    return { result: "conflict" };
+  }
+
+  async updateDraftReferences(
+    windowId: string,
+    request: UpdateWindowDraftReferencesRequest,
+  ): Promise<WindowDraftTopologyResult> {
+    return this.queueWrite<WindowDraftTopologyResult>((current) => {
+      const window = current.windows[windowId] ?? emptyPerWindowSnapshot();
+      const topology = window.draftTopology;
+      const conflict = { next: null, result: { result: "conflict" } } as const;
+      if ((topology?.revision ?? null) !== request.expectedTopologyRevision) {
+        return conflict;
+      }
+
+      const references = new Map(
+        topology?.references.map((ref) => [ref.slotId, ref]),
+      );
+      for (const edit of request.edits) {
+        const previous = references.get(edit.ref.slotId);
+        if (edit.kind === "detach") {
+          if (previous === undefined || !sameDraftReference(previous, edit.ref)) {
+            return conflict;
+          }
+          references.delete(edit.ref.slotId);
+        } else if (previous === undefined) {
+          references.set(edit.ref.slotId, { ...edit.ref, moveToken: null });
+        } else if (!sameDraftReference(previous, edit.ref)) {
+          return conflict;
+        }
+      }
+
+      const { activeDraftId } = request;
+      if (activeDraftId !== null && !references.has(activeDraftId)) return conflict;
+      const revision = (topology?.revision ?? 0) + 1;
+      const nextWindow: PerWindowSnapshot = {
+        ...window,
+        revision: (window.revision ?? 0) + 1,
+        draftTopology: {
+          revision,
+          references: [...references.values()],
+          activeDraftId,
+        },
+        landingDrafts: [],
+        activeLandingDraftId: null,
+      };
+      return {
+        next: {
+          ...current,
+          windows: { ...current.windows, [windowId]: nextWindow },
+        },
+        result: { result: "committed", revision },
+      };
+    });
+  }
+
+  async moveDraftReference(
+    sourceWindowId: string,
+    request: MoveWindowDraftReferenceRequest,
+    destinationRoute: string,
+  ): Promise<MoveWindowDraftReferenceResult> {
+    return this.queueWrite<MoveWindowDraftReferenceResult>((current) => {
+      const { moveToken, ref, expectedSourceTopologyRevision } = request;
+      const conflict = { next: null, result: { result: "conflict" } } as const;
+      const previous = current.draftMoves.find(
+        (move) =>
+          move.sourceWindowId === sourceWindowId &&
+          move.request.moveToken === moveToken,
+      );
+      if (previous !== undefined) {
+        if (
+          !sameDraftReference(previous.request.ref, ref) ||
+          previous.request.expectedSourceTopologyRevision !==
+            expectedSourceTopologyRevision
+        ) {
+          return conflict;
+        }
+        return {
+          next: null,
+          result: { result: "moved", replayed: true, ...previous.receipt },
+        };
+      }
+
+      const source = current.windows[sourceWindowId];
+      const topology = source?.draftTopology;
+      if (
+        source === undefined ||
+        topology?.revision !== expectedSourceTopologyRevision ||
+        !topology.references.some((entry) => sameDraftReference(entry, ref))
+      ) {
+        return conflict;
+      }
+
+      const destinationWindowId = randomUUID();
+      const receipt: WindowDraftMoveReceipt = {
+        destinationWindowId,
+        sourceTopologyRevision: topology.revision + 1,
+        destinationTopologyRevision: 1,
+      };
+      const sourceAfter: PerWindowSnapshot = {
+        ...source,
+        revision: (source.revision ?? 0) + 1,
+        activeRoute:
+          source.activeRoute === destinationRoute
+            ? null
+            : (source.activeRoute ?? null),
+        draftTopology: {
+          revision: receipt.sourceTopologyRevision,
+          references: topology.references.filter(
+            (entry) => !sameDraftReference(entry, ref),
+          ),
+          activeDraftId:
+            topology.activeDraftId === ref.slotId ? null : topology.activeDraftId,
+        },
+      };
+      const destination: PerWindowSnapshot = {
+        ...emptyPerWindowSnapshot(),
+        revision: 1,
+        draftTopology: {
+          revision: receipt.destinationTopologyRevision,
+          references: [{ ...ref, moveToken }],
+          activeDraftId: ref.slotId,
+        },
+        tabStripLayout: movedTabLayout(source.tabStripLayout, "draft", ref.slotId),
+        activeRoute: destinationRoute,
+      };
+      return {
+        next: {
+          ...current,
+          windows: {
+            ...current.windows,
+            [sourceWindowId]: sourceAfter,
+            [destinationWindowId]: destination,
+          },
+          draftMoves: [...current.draftMoves, { sourceWindowId, request, receipt }],
+        },
+        result: { result: "moved", replayed: false, ...receipt },
+      };
+    });
+  }
+
+  async deleteWindowSnapshot(windowId: string): Promise<void> {
+    await this.queueWrite((current) => {
+      const windows = { ...current.windows };
+      delete windows[windowId];
+      return { next: { ...current, windows }, result: undefined };
+    });
   }
 
   setOwnershipEntries(entries: readonly OwnershipEntry[]): void {
-    this.payload = { ...this.payload, ownership: entries };
-    void this.scheduleWrite().catch(() => undefined);
+    void this.queueWrite((current) => ({
+      next: { ...current, ownership: entries },
+      result: undefined,
+    })).catch(() => undefined);
   }
 
   async flush(): Promise<void> {
     await this.latestWrite;
   }
 
-  private scheduleWrite(): Promise<void> {
-    const write = this.writeChain.then(() => this.persistWithRetry());
-    // A failed acknowledgement must reject its caller, but it must not poison
-    // later writes. The recovery chain is private; `write` remains the exact
-    // durable result returned to the renderer that authored this revision.
-    this.writeChain = write.catch(() => undefined);
-    this.latestWrite = write;
+  private queueWrite<Result>(
+    change: (current: DesktopStatePayload) => DesktopStateChange<Result>,
+  ): Promise<Result> {
+    // Compute each pending file image from the last successful rename.
+    const write = this.writeChain.then(async () => {
+      const { next, result } = change(this.payload);
+      if (next !== null) {
+        await this.persistWithRetry(next);
+        this.payload = next;
+      }
+      return result;
+    });
+    this.latestWrite = write.then(() => undefined);
+    this.writeChain = this.latestWrite.catch(() => undefined);
     return write;
   }
 
-  // Persist policy: one immediate retry, then propagate the terminal failure.
-  // The renderer's layout acknowledgement is a move barrier, so it can only
-  // resolve after a durable write. The private write chain above still recovers
-  // for a later healthy write.
-  private async persistWithRetry(): Promise<void> {
+  private async persistWithRetry(payload: DesktopStatePayload): Promise<void> {
     try {
-      await this.persist();
+      await this.persist(payload);
       return;
     } catch (err) {
       this.logger.warn("[desktop-state] persist failed - retrying once", {
@@ -210,7 +399,7 @@ export class DesktopStateStore {
       });
     }
     try {
-      await this.persist();
+      await this.persist(payload);
     } catch (err) {
       this.logger.error("[desktop-state] persist retry failed", {
         err,
@@ -220,15 +409,76 @@ export class DesktopStateStore {
     }
   }
 
-  private async persist(): Promise<void> {
+  private async persist(payload: DesktopStatePayload): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.payload, null, 2), {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await rename(tmp, this.filePath);
+    const tmp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(tmp, JSON.stringify(payload, null, 2), {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await rename(tmp, this.filePath);
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
+}
+
+function sameDraftReference(
+  left: LandingDraftReference,
+  right: LandingDraftReference,
+): boolean {
+  return left.slotId === right.slotId && left.occurrenceId === right.occurrenceId;
+}
+
+function parseDraftMoves(value: unknown): readonly PersistedDraftMove[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry: unknown) => {
+    if (entry === null || typeof entry !== "object") return [];
+    const move = entry as Record<string, unknown>;
+    if (
+      typeof move.sourceWindowId !== "string" ||
+      move.sourceWindowId.length === 0
+    ) {
+      return [];
+    }
+    const request = parseWindowDraftMove(move.request);
+    if (
+      request === null ||
+      move.receipt === null ||
+      typeof move.receipt !== "object"
+    ) {
+      return [];
+    }
+    const receipt = move.receipt as Record<string, unknown>;
+    const { destinationWindowId } = receipt;
+    const sourceTopologyRevision = parseWindowTopologyRevision(
+      receipt.sourceTopologyRevision,
+    );
+    const destinationTopologyRevision = parseWindowTopologyRevision(
+      receipt.destinationTopologyRevision,
+    );
+    if (
+      typeof destinationWindowId !== "string" ||
+      destinationWindowId.length === 0 ||
+      sourceTopologyRevision === null ||
+      destinationTopologyRevision === null
+    ) {
+      return [];
+    }
+    return [
+      {
+        sourceWindowId: move.sourceWindowId,
+        request,
+        receipt: {
+          destinationWindowId,
+          sourceTopologyRevision,
+          destinationTopologyRevision,
+        },
+      },
+    ];
+  });
 }
 
 function parseDesktopStatePayload(value: unknown): DesktopStatePayload {
@@ -237,6 +487,7 @@ function parseDesktopStatePayload(value: unknown): DesktopStatePayload {
       version: DESKTOP_STATE_VERSION,
       windows: {},
       ownership: [],
+      draftMoves: [],
     };
   }
 
@@ -245,6 +496,7 @@ function parseDesktopStatePayload(value: unknown): DesktopStatePayload {
     version: DESKTOP_STATE_VERSION,
     windows: parseWindowSnapshots(obj.windows),
     ownership: parseOwnershipEntries(obj.ownership),
+    draftMoves: parseDraftMoves(obj.draftMoves),
   };
 }
 
@@ -291,7 +543,9 @@ function parsePerWindowSnapshot(value: unknown): PerWindowSnapshot {
     return emptyPerWindowSnapshot();
   }
   const obj = value as Record<string, unknown>;
-  const landingDrafts = parseLandingDrafts(obj.landingDrafts);
+  const draftTopology = parseWindowDraftTopology(obj.draftTopology);
+  const landingDrafts =
+    draftTopology === undefined ? parseLandingDrafts(obj.landingDrafts) : [];
   const activeLandingDraftId =
     typeof obj.activeLandingDraftId === "string"
       ? obj.activeLandingDraftId
@@ -306,8 +560,9 @@ function parsePerWindowSnapshot(value: unknown): PerWindowSnapshot {
     epicTabs: parseEpicTabs(obj.epicTabs),
     activeTabId: typeof obj.activeTabId === "string" ? obj.activeTabId : null,
     canvasByTabId: parseJsonRecord(obj.canvasByTabId),
+    ...(draftTopology === undefined ? {} : { draftTopology }),
     landingDrafts,
-    activeLandingDraftId,
+    activeLandingDraftId: draftTopology === undefined ? activeLandingDraftId : null,
     tabStripLayout: parseJsonValue(obj.tabStripLayout) ?? null,
     activeRoute: typeof obj.activeRoute === "string" ? obj.activeRoute : null,
   };

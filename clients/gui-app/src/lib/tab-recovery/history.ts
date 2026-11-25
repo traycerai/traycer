@@ -49,6 +49,11 @@ const headerSchema = z.discriminatedUnion("kind", [
     kind: z.literal("draft"),
     draftId: z.string(),
     hostId: z.string().nullable(),
+    draftReference: z
+      .object({ slotId: z.string().min(1), occurrence: z.string().min(1) })
+      .nullable()
+      .optional()
+      .catch(null),
     index: z.number().int().nonnegative(),
     placement: closedHeaderPlacementSchema.optional().catch(undefined),
   }),
@@ -74,6 +79,11 @@ export type ClosedHeaderTab =
       readonly kind: "draft";
       readonly draftId: string;
       readonly hostId: string | null;
+      /** Old journals omit the witness. Null keeps a malformed witness held. */
+      readonly draftReference?: {
+        readonly slotId: string;
+        readonly occurrence: string;
+      } | null;
       readonly index: number;
       readonly placement?: ClosedHeaderPlacement;
     };

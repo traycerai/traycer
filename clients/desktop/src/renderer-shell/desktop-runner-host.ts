@@ -171,6 +171,7 @@ import type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxGetFetchResult,
   TraycerModelsFetchResult,
   SandboxCostsFetchResult,
   SandboxLifecycleVerbFetchResult,
@@ -237,7 +238,11 @@ import type {
   DesktopAuthSessionSnapshot,
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
+  FlushWindowDraftTopologyResult,
+  LandingDraftReference,
   MenuCommandPayload,
+  MoveWindowDraftReferenceRequest,
+  MoveWindowDraftReferenceResult,
   OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   OwnershipClaimResult,
@@ -250,6 +255,8 @@ import type {
   SupportLogTailResult,
   SupportRevealLogResult,
   SupportSnapshot,
+  UpdateWindowDraftReferencesRequest,
+  WindowDraftTopologyResult,
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
@@ -303,6 +310,10 @@ export interface DesktopPreloadBridge {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxGetFetchResult>;
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   saveAutoPolicy(
     bearerToken: string,
@@ -927,6 +938,9 @@ export interface DesktopWindowsBridge {
   requestOpenDraftInNewWindow(
     draftId: string,
   ): Promise<OpenDraftInNewWindowResult>;
+  moveDraftReference?(
+    request: MoveWindowDraftReferenceRequest,
+  ): Promise<MoveWindowDraftReferenceResult>;
   ownership: {
     snapshot(): Promise<readonly OwnershipEntry[]>;
     claim(tabId: string, epicId: string): Promise<OwnershipClaimResult>;
@@ -942,6 +956,12 @@ export interface DesktopWindowsBridge {
       patch: PerWindowStatePatch,
     ): Promise<PerWindowStateUpdateAcknowledgement | void>;
     clear(): Promise<void>;
+    flushDraftTopology?(
+      ref: LandingDraftReference,
+    ): Promise<FlushWindowDraftTopologyResult>;
+    updateDraftReferences?(
+      request: UpdateWindowDraftReferencesRequest,
+    ): Promise<WindowDraftTopologyResult>;
     onChange(handler: (snapshot: PerWindowSnapshot) => void): {
       dispose: () => void;
     };
@@ -1397,6 +1417,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     hostId: string,
   ): Promise<DeregisterHostFetchResult> {
     return this.bridge.deregisterHostFromAccount(bearerToken, hostId);
+  }
+
+  getSandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxGetFetchResult> {
+    return this.bridge.getSandbox(bearerToken, sandboxId);
   }
 
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {

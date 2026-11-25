@@ -1,4 +1,6 @@
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
+import { v4 as uuidv4 } from "uuid";
+import { startPendingSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import { stageProviderForShape } from "@/lib/sandboxes/sandbox-stage-model";
 import { sandboxReadinessContext } from "@/lib/sandboxes/sandbox-readiness";
 import {
@@ -13,11 +15,10 @@ import type {
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
-  SANDBOX_REFUSAL_CODE_NOT_FOUND,
-  SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   type SandboxCreateRequest,
+  type SandboxListResponse,
   type SandboxSummary,
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
@@ -27,9 +28,13 @@ import {
   pendingSandboxStageObservation,
   recordPendingSandboxStageCreated,
   markPendingSandboxStageRowSeen,
+  usePendingSandboxSendStore,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
-import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import {
+  sandboxRetryAfterRefusal,
+  sandboxRetryCreate,
+} from "@/lib/sandboxes/sandbox-create-key";
 import {
   sandboxListQueryOptions,
   sandboxListReadSentAt,
@@ -45,9 +50,20 @@ import {
   sandboxQueryKeys,
 } from "@/lib/query-keys";
 import {
-  settledForStartingAccount,
-  signedInUserId,
-} from "@/lib/sandboxes/sandbox-account-fence";
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+} from "@/lib/drafts/draft-authority-session";
+import type { DraftAuthorityActor } from "@/lib/drafts/draft-authority-types";
+import {
+  settleDraftAuthorityEffect,
+  type DraftAuthorityEffectIntent,
+  type DraftAuthorityIssueReceipt,
+  type DraftAuthoritySetupAttempt,
+} from "@/lib/drafts/draft-authority-pending";
+import {
+  claimPendingSandboxOutboxEffect,
+  verifyPendingSandboxOutboxGrant,
+} from "@/lib/sandboxes/pending-sandbox-authority";
 import {
   sandboxSettingsFailed,
   sandboxSettingsReady,
@@ -57,8 +73,21 @@ import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/enviro
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
+  cancelSandboxWakeReads,
+  knownSandboxRowCurrent,
+  knownSandboxRowQueryOptions,
+  readSandboxRetryCreate,
+  sandboxListObservationId,
+  sandboxRowDestroySettled,
+} from "@/lib/sandboxes/sandbox-row-read";
+import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
+import { pendingStageAttemptCurrent } from "@/lib/sandboxes/pending-stage-storage";
+import {
   handoffOwnerLive,
+  PENDING_SEND_SURFACE_PREFIX,
   readStagedSandbox,
+  saveStagedCreateRequest,
+  stagedCreateAttemptKey,
   useStagedSandboxStore,
   type StagedSandbox,
   type StagedSandboxFailure,
@@ -104,16 +133,56 @@ export interface StagedSandboxRunDeps {
   readonly sleep: (ms: number) => Promise<void>;
 }
 
-/**
- * Each surface's live run in this window, by the `clientRequestId` it
- * drives: a repeat of that send joins it, and a new send replaces it (the
- * old run sees it is no longer current and stops).
- */
-const running = new Map<string, string>();
+interface StagedRunIdentity {
+  readonly surfaceKey: string;
+  readonly clientRequestId: string;
+  readonly createKey: string;
+  readonly attemptId: string | undefined;
+  readonly attemptRetryId: string | undefined;
+  readonly actor: DraftAuthorityActor;
+  readonly userId: string;
+  readonly retryRefusedCreate: boolean;
+}
+
+/** A repeat joins its attempt, and a newer attempt supersedes an old run. */
+const running = new Map<string, StagedRunIdentity>();
+
+function stageMatchesRun(
+  stage: StagedSandbox,
+  run: StagedRunIdentity,
+): boolean {
+  return (
+    stage.clientRequestId === run.clientRequestId &&
+    stage.attemptId === run.attemptId &&
+    stage.attemptRetryId === run.attemptRetryId &&
+    stagedCreateAttemptKey(stage) === run.createKey
+  );
+}
+
+function pendingStageMatchesStorage(
+  surfaceKey: string,
+  stage: StagedSandbox,
+): boolean {
+  return (
+    !surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX) ||
+    pendingStageAttemptCurrent(
+      surfaceKey,
+      stage.clientRequestId,
+      stagedCreateAttemptKey(stage),
+      stage.attemptId,
+    )
+  );
+}
 
 /** Whether a run in this window is driving the surface's stage. */
 export function stagedRunActive(surfaceKey: string): boolean {
-  return running.has(surfaceKey);
+  const run = running.get(surfaceKey);
+  const stage = readStagedSandbox(surfaceKey);
+  return (
+    run !== undefined &&
+    draftAuthorityActorIsCurrent(run.actor) &&
+    (stage === null || stageMatchesRun(stage, run))
+  );
 }
 
 /**
@@ -123,34 +192,28 @@ export function stagedRunActive(surfaceKey: string): boolean {
  * task driver delivers it, or a composer-owned action resubmits there.
  *
  * Owned by the store, not by a component: the composer may unmount, and the
- * stage, its idempotency key and the draft outlive it. An action on a stage
- * that may have an accepted create behind it reuses the key, so the server
- * answers with the row it already made. Retry creation after a terminal
- * sandbox failure mints a new one; a wake failure keeps the sandbox and key.
+ * stage and the draft outlive it. A re-drive repeats the last create key;
+ * an explicit Retry can name the failed row it answers.
  */
 export async function runStagedSandbox(
   surfaceKey: string,
-  fresh: boolean,
   request: StagedRunRequest,
   deps: StagedSandboxRunDeps,
 ): Promise<void> {
+  const actor = captureDraftAuthorityActor();
   const stage = readStagedSandbox(surfaceKey);
   if (
+    actor === null ||
+    actor.accountId !== deps.userId ||
+    !draftAuthorityActorIsCurrent(actor) ||
     stage === null ||
+    (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX) && stage.returnedDraft !== undefined) ||
     stage.phase === "handoff" ||
+    !pendingStageMatchesStorage(surfaceKey, stage) ||
     !pendingSandboxStageRunAllowed(surfaceKey)
   )
     return;
-  // A wake failure still names a usable sandbox, even when the original
-  // pick was New. No retry of that wake may replace the sandbox or its key.
-  const retryingWake =
-    stage.failure?.kind === "failed" && stage.failure.code === "wake";
-  const freshCreate = fresh && !retryingWake;
-  if (
-    !freshCreate &&
-    stage.clientRequestId !== null &&
-    running.get(surfaceKey) === stage.clientRequestId
-  ) {
+  if (stagedRunActive(surfaceKey)) {
     // The run this key drives is still on its way: a repeat joins it, and a
     // send after Cancel takes it up again (it is current once more), rather
     // than a second run racing it on the same key. Its step and times stay
@@ -162,18 +225,52 @@ export async function runStagedSandbox(
   }
   const clientRequestId = useStagedSandboxStore
     .getState()
-    .begin(surfaceKey, freshCreate, deps.now(), request.resume);
+    .begin(surfaceKey, deps.now(), request);
   if (clientRequestId === null) return;
-  running.set(surfaceKey, clientRequestId);
+  const active = readStagedSandbox(surfaceKey);
+  if (active?.clientRequestId !== clientRequestId) return;
+  const attempt: StagedRunIdentity = {
+    surfaceKey,
+    clientRequestId,
+    createKey: active.lastCreateKey ?? clientRequestId,
+    attemptId: active.attemptId,
+    attemptRetryId: active.attemptRetryId,
+    actor,
+    userId: actor.accountId,
+    retryRefusedCreate:
+      (request.retryRequestId !== undefined || !request.resume) &&
+      (stage.failure?.rowlessCreateRefusal !== undefined ||
+        stage.failure?.kind === "refused"),
+  };
+  running.set(surfaceKey, attempt);
   try {
+    let retryCreate = active.lastRetryCreate;
+    const retryRow = active.createRetryRow;
+    if (retryRow !== undefined && retryCreate === undefined) {
+      const resolved = await readSandboxRetryCreate(
+        deps.auth,
+        retryRow.sandboxId,
+        attempt.userId,
+      );
+      if (!stillCurrent(attempt)) return;
+      if (resolved === null) {
+        fail(surfaceKey, retryRow.failure);
+        return;
+      }
+      retryCreate = resolved;
+    }
     await drivePreparedRun(
-      { surfaceKey, clientRequestId, ...request },
+      {
+        ...request,
+        ...attempt,
+        retryCreate,
+      },
       stage,
-      freshCreate,
+      sandboxAlreadyMade(active, request.resume),
       deps,
     );
   } finally {
-    if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
+    if (running.get(surfaceKey) === attempt) running.delete(surfaceKey);
   }
 }
 
@@ -181,14 +278,14 @@ export async function runStagedSandbox(
 async function drivePreparedRun(
   run: Omit<StagedRun, "environmentId">,
   stage: StagedSandbox,
-  fresh: boolean,
+  made: StartedSandbox | null,
   deps: StagedSandboxRunDeps,
 ): Promise<void> {
   const { surfaceKey, clientRequestId } = run;
-  const prepared = await prepareRun(run, stage, fresh, deps);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return;
+  const prepared = await prepareRun(run, stage, made, deps);
+  if (!stillCurrent(run)) return;
   if (prepared === null) {
-    fail(surfaceKey, { kind: "unavailable", freshCreateKey: false });
+    fail(surfaceKey, { kind: "unavailable" });
     return;
   }
   const started = await startStagedRun(
@@ -196,14 +293,21 @@ async function drivePreparedRun(
       surfaceKey,
       clientRequestId,
       resume: run.resume,
+      createKey: run.createKey,
+      attemptId: run.attemptId,
+      attemptRetryId: run.attemptRetryId,
+      actor: run.actor,
+      userId: run.userId,
+      retryRefusedCreate: run.retryRefusedCreate,
+      retryCreate: run.retryCreate,
       taskId: run.taskId,
       environmentId: prepared.environmentId,
     },
     stage,
-    fresh,
+    made,
     deps,
   );
-  if (started === null) return;
+  if (started === null || !stillCurrent(run)) return;
   let budgetFrom = prepared.startedAt;
   if (
     stage.target.kind === "new" &&
@@ -216,7 +320,7 @@ async function drivePreparedRun(
     });
   }
   await settle(
-    { surfaceKey, clientRequestId, started, deps },
+    { ...run, started, deps },
     stage.target.kind === "existing" ? deps.now() : budgetFrom,
     prepared.budgetMs,
   );
@@ -234,7 +338,7 @@ interface PreparedRun extends PreparedCreate {
 async function prepareRun(
   run: Omit<StagedRun, "environmentId">,
   stage: StagedSandbox,
-  fresh: boolean,
+  made: StartedSandbox | null,
   deps: StagedSandboxRunDeps,
 ): Promise<PreparedRun | null> {
   if (stage.target.kind === "existing") {
@@ -244,16 +348,15 @@ async function prepareRun(
       startedAt: deps.now(),
     };
   }
-  const attempt = fresh ? null : (stage.createAttempt ?? null);
+  const attempt = readStagedSandbox(run.surfaceKey)?.createAttempt ?? null;
   const prepared =
-    sandboxAlreadyMade(stage, fresh, run.resume) === null
-      ? await prepareCreate(stage.target, deps, attempt?.budgetMs ?? null)
+    made === null
+      ? await prepareCreate(stage.target, deps, attempt?.budgetMs ?? null, run)
       : {
           environmentId: null,
           budgetMs: attempt?.budgetMs ?? STAGED_CREATE_BUDGET_MS,
         };
-  if (prepared === null || !stillCurrent(run.surfaceKey, run.clientRequestId))
-    return null;
+  if (prepared === null || !stillCurrent(run)) return null;
   const startedAt = run.resume
     ? (attempt?.startedAt ?? stage.startedAt ?? deps.now())
     : deps.now();
@@ -267,11 +370,23 @@ async function prepareCreate(
   target: Extract<StagedSandboxTarget, { kind: "new" }>,
   deps: StagedSandboxRunDeps,
   retainedBudgetMs: number | null,
+  run: Omit<StagedRun, "environmentId">,
 ): Promise<PreparedCreate | null> {
-  const environmentId = await environmentIdFor(target, deps);
+  const { retryCreate } = run;
+  const environmentId =
+    retryCreate === undefined
+      ? await environmentIdFor(target, deps)
+      : retryCreate.environmentId;
   if (environmentId === undefined) return null;
+  if (!stillCurrent(run)) return null;
   if (retainedBudgetMs !== null)
     return { environmentId, budgetMs: retainedBudgetMs };
+  if (retryCreate?.region === null)
+    return { environmentId, budgetMs: STAGED_CREATE_BUDGET_MS };
+  const shape =
+    retryCreate?.region === undefined
+      ? target.shape
+      : { ...retryCreate, region: retryCreate.region };
   let timer: number | null = null;
   const catalogue = await Promise.race([
     deps.queryClient.fetchQuery(
@@ -279,7 +394,7 @@ async function prepareCreate(
         deps.auth,
         deps.userId,
         true,
-        sandboxReadinessContext(environmentId, target.shape),
+        sandboxReadinessContext(environmentId, shape),
       ),
     ),
     new Promise<null>((resolve) => {
@@ -294,7 +409,7 @@ async function prepareCreate(
       if (timer !== null) window.clearTimeout(timer);
     });
   const entry =
-    catalogue === null ? null : stageProviderForShape(catalogue, target.shape);
+    catalogue === null ? null : stageProviderForShape(catalogue, shape);
   return {
     environmentId,
     budgetMs: Math.max(STAGED_CREATE_BUDGET_MS, entry?.createBudgetMs ?? 0),
@@ -302,19 +417,15 @@ async function prepareCreate(
 }
 
 /**
- * The new sandbox this key already made, if any. It is read, never created
- * again: a repeat or a resume after a reload waits on that row, and a row
- * that failed or is gone stops the wait rather than naming the key a second
- * time. So is an existing sandbox on a resumed run: it is read for what it
- * is now, never woken for a reload.
+ * Uses the row already recorded for this attempt. Beginning a retry under
+ * a different key clears that row. A resumed wake reads the existing row
+ * without issuing a new wake.
  */
 function sandboxAlreadyMade(
   stage: StagedSandbox,
-  fresh: boolean,
   resume: boolean,
 ): StartedSandbox | null {
   if (
-    fresh ||
     (stage.target.kind !== "new" && !resume) ||
     stage.createdSandboxId === null ||
     stage.createdHostId === null
@@ -336,21 +447,72 @@ function stagedWakeGesture(stage: StagedSandbox): SandboxVerbGesture {
     : "send";
 }
 
+function stagePendingSend(surfaceKey: string) {
+  if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return null;
+  const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
+  return usePendingSandboxSendStore.getState().sends[id] ?? null;
+}
+
 /** Reports a wake only for the current run, preserving its original action. */
 async function wakeCurrentStage(
-  surfaceKey: string,
-  clientRequestId: string,
-  hostId: string,
+  run: StagedRunIdentity,
+  started: StartedSandbox,
   deps: StagedSandboxRunDeps,
 ): Promise<boolean> {
+  const { surfaceKey, attemptId, attemptRetryId } = run;
   const stage = readStagedSandbox(surfaceKey);
-  if (stage === null || !stillCurrent(surfaceKey, clientRequestId))
-    return false;
+  if (stage === null || !stillCurrent(run)) return false;
   report(surfaceKey, "booting", deps.now());
-  const boundary = holdPendingSandboxStageObservation(surfaceKey);
-  if (boundary === null) return false;
-  const answered = await deps.wake(hostId, stagedWakeGesture(stage));
-  if (!stillCurrent(surfaceKey, clientRequestId)) return false;
+  const observationId = uuidv4();
+  const boundary = holdPendingSandboxStageObservation(
+    surfaceKey,
+    attemptId,
+    attemptRetryId,
+    observationId,
+  );
+  if (boundary === null || !stillCurrent(run)) return false;
+  const gesture = stagedWakeGesture(stage);
+  const send = stagePendingSend(surfaceKey);
+  let claim: DraftAuthorityIssueReceipt | null = null;
+  if (send !== null) {
+    claim = await claimPendingSandboxOutboxEffect({
+      actor: run.actor,
+      send,
+      operationId: `${send.id}:${run.attemptId ?? run.createKey}:setup-wake`,
+      effect: {
+        kind: "wake",
+        phase: "setup",
+        identity: started.sandboxId,
+        payload: { ...started, gesture },
+      },
+      setupAttempt: attemptId === undefined
+        ? undefined
+        : { attemptId, observationGeneration: boundary },
+      canIssue: () => stillCurrent(run),
+    });
+    if (claim === null || !stillCurrent(run)) return false;
+    if (claim.setupAttempt !== undefined)
+      useStagedSandboxStore.getState().report(surfaceKey, {
+        authoritySetupAttempt: claim.setupAttempt,
+      });
+  }
+  if (!stillCurrent(run)) return false;
+  const issuedClaim = claim;
+  const answered =
+    issuedClaim === null
+      ? await deps.wake(started.hostId, gesture)
+      : await startPendingSandboxWake(
+          deps.queryClient,
+          { auth: deps.auth, directory: deps.directory },
+          started.hostId,
+          gesture,
+          {
+            sandboxId: started.sandboxId,
+            verify: () => verifyPendingSandboxOutboxGrant(run.actor, issuedClaim),
+            isCurrent: () => stillCurrent(run),
+          },
+        );
+  if (!stillCurrent(run)) return false;
   const awake =
     answered === true ||
     (typeof answered === "object" && answered?.kind === "awake");
@@ -360,20 +522,67 @@ async function wakeCurrentStage(
     {
       kind: "wake-result",
       requestedAt: boundary,
+      observationId,
     },
   );
   // A newer request owns settlement. Supersession is not a failed wake.
   if (observed === "unknown") return false;
+  if (claim !== null) {
+    let outcome: "accepted" | "refused" | "uncertain" = "uncertain";
+    if (awake) outcome = "accepted";
+    else if (
+      typeof answered === "object" &&
+      (answered?.kind === "credit-gate" || answered?.kind === "refused")
+    )
+      outcome = "refused";
+    const settled = await settleDraftAuthorityEffect({
+      actor: run.actor,
+      claim,
+      outcome,
+      ...(awake ? { acceptance: started } : {}),
+    });
+    if (settled.kind !== "committed" && settled.kind !== "replayed")
+      return false;
+  }
+  if (!stillCurrent(run)) return false;
   if (!awake) {
     fail(surfaceKey, stagedWakeFailure(answered));
     return false;
   }
-  // A list read still on its way predates the wake: the wait must not join
-  // it, or its old row reads as a rest.
-  await deps.queryClient.cancelQueries({
-    queryKey: sandboxListQueryOptions(deps.auth, deps.userId, true).queryKey,
-  });
-  return true;
+  // Reads started during the wake can still describe the resting row.
+  const knownRow = stageKnownRowQueryOptions(
+    { ...run, started, deps },
+    undefined,
+  );
+  const completed = holdPendingSandboxStageObservation(
+    surfaceKey,
+    attemptId,
+    attemptRetryId,
+    uuidv4(),
+  );
+  if (!stillCurrent(run)) return false;
+  await cancelSandboxWakeReads(
+    deps.queryClient,
+    deps.auth,
+    deps.userId,
+    knownRow.queryKey,
+  );
+  if (!stillCurrent(run)) return false;
+  if (completed !== null) return true;
+  if (
+    pendingSandboxStageObservation(surfaceKey, "awake", {
+      kind: "wake-result",
+      requestedAt: boundary,
+      observationId,
+    }) !== "unknown"
+  ) {
+    try {
+      fail(surfaceKey, { kind: "failed", code: "wake", step: "booting" });
+    } catch {
+      // The current stage can offer Retry while storage is unavailable.
+    }
+  }
+  return false;
 }
 
 function stagedWakeFailure(
@@ -393,12 +602,21 @@ function stagedWakeFailure(
 }
 
 /** Whether the run is still the one the stage holds (not cancelled or retried). */
-function stillCurrent(surfaceKey: string, clientRequestId: string): boolean {
+function stillCurrent(run: StagedRunIdentity): boolean {
+  const { surfaceKey } = run;
   const stage = readStagedSandbox(surfaceKey);
+  if (
+    stage?.failure?.kind === "failed" &&
+    (stage.failure.sandboxId === stage.createdSandboxId ||
+      stage.failure.code === "credit-gate")
+  )
+    return false;
   return (
+    draftAuthorityActorIsCurrent(run.actor) &&
     stage !== null &&
     stage.phase === "creating" &&
-    stage.clientRequestId === clientRequestId &&
+    stageMatchesRun(stage, run) &&
+    pendingStageMatchesStorage(surfaceKey, stage) &&
     pendingSandboxStageRunAllowed(surfaceKey)
   );
 }
@@ -426,12 +644,17 @@ export interface StagedRunRequest {
    * a send, Keep waiting or Retry, which start the wait again.
    */
   readonly resume: boolean;
+  /** The press's chosen key; a re-drive keeps the stage's last attempted key. */
+  readonly createKey: string | null;
+  readonly retryCreate?: SandboxCreateRequest;
+  readonly observedCreateKey?: string | null;
+  readonly observedAttemptId?: string | null;
+  readonly retryRequestId?: string;
 }
 
 /** Which run a step belongs to, and what its create adds. */
-interface StagedRun extends StagedRunRequest {
-  readonly surfaceKey: string;
-  readonly clientRequestId: string;
+interface StagedRun
+  extends Omit<StagedRunRequest, "createKey">, StagedRunIdentity {
   readonly environmentId: string | null;
 }
 
@@ -439,11 +662,13 @@ interface StagedRun extends StagedRunRequest {
 async function startStagedRun(
   run: StagedRun,
   stage: StagedSandbox,
-  fresh: boolean,
+  made: StartedSandbox | null,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const made = sandboxAlreadyMade(stage, fresh, run.resume);
-  if (made === null) return startTarget(run, stage.target, deps);
+  if (made === null)
+    return stage.target.kind === "existing"
+      ? startExistingTarget(run, stage.target, deps)
+      : startCreateTarget(run, stage.target, deps);
   if (
     stage.target.kind === "new" &&
     !recordPendingSandboxStageCreated(run.surfaceKey, made.sandboxId)
@@ -452,49 +677,43 @@ async function startStagedRun(
   if (
     stage.failure?.kind === "failed" &&
     stage.failure.code === "wake" &&
-    !(await wakeCurrentStage(
-      run.surfaceKey,
-      run.clientRequestId,
-      made.hostId,
-      deps,
-    ))
+    !(await wakeCurrentStage(run, made, deps))
   ) {
     return null;
   }
   return made;
 }
 
-async function startTarget(
+async function startExistingTarget(
   run: StagedRun,
-  target: StagedSandboxTarget,
+  target: Extract<StagedSandboxTarget, { kind: "existing" }>,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const { surfaceKey, clientRequestId, taskId, environmentId } = run;
-  if (target.kind === "existing") {
-    useStagedSandboxStore.getState().report(surfaceKey, {
-      createdSandboxId: target.sandboxId,
-      createdHostId: target.hostId,
-      step: "booting",
-      stepAt: deps.now(),
-    });
-    if (
-      !(await wakeCurrentStage(
-        surfaceKey,
-        clientRequestId,
-        target.hostId,
-        deps,
-      ))
-    ) {
-      return null;
-    }
-    return { sandboxId: target.sandboxId, hostId: target.hostId };
-  }
+  const { surfaceKey } = run;
+  useStagedSandboxStore.getState().report(surfaceKey, {
+    createdSandboxId: target.sandboxId,
+    createdHostId: target.hostId,
+    step: "booting",
+    stepAt: deps.now(),
+  });
+  const started = { sandboxId: target.sandboxId, hostId: target.hostId };
+  return (await wakeCurrentStage(run, started, deps)) ? started : null;
+}
+
+async function startCreateTarget(
+  run: StagedRun,
+  target: Extract<StagedSandboxTarget, { kind: "new" }>,
+  deps: StagedSandboxRunDeps,
+): Promise<StartedSandbox | null> {
+  const { surfaceKey, taskId, environmentId, createKey } = run;
   // Give an older persisted blank stage one name, retained across retries.
   const name = stagedSandboxName(target.name);
   if (name !== target.name) {
     useStagedSandboxStore.getState().setTarget(surfaceKey, { ...target, name });
   }
-  const request: SandboxCreateRequest = {
+  if (!stillCurrent(run)) return null;
+  // Older stages without a saved retry payload rebuild the POST from their pick.
+  const request: SandboxCreateRequest = run.retryCreate ?? {
     os: target.shape.os,
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
@@ -512,33 +731,130 @@ async function startTarget(
     // The task that owns the run. A pending landing send already created it
     // on its placement host; a landing terminal ask may have no task yet.
     createdByTaskId: taskId,
-    clientRequestId,
+    clientRequestId: createKey,
   };
-  if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
-  const result = await createSandbox(request, deps);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return null;
+  const boundary = holdPendingSandboxStageObservation(
+    surfaceKey,
+    run.attemptId,
+    run.attemptRetryId,
+    run.attemptRetryId,
+  );
+  if (boundary === null) return null;
+  const setupAttempt = run.attemptId === undefined
+    ? undefined
+    : { attemptId: run.attemptId, observationGeneration: boundary };
+  const answer = await createSandbox(run, request, setupAttempt, deps);
+  if (answer === null || !stillCurrent(run)) return null;
+  const { result, claim } = answer;
+  const started = recordStageCreateAnswer(run, result, {
+    teamName:
+      target.configuration.kind === "team"
+        ? target.configuration.teamName
+        : null,
+    now: deps.now(),
+  });
+  if (claim !== null) {
+    const stage = readStagedSandbox(surfaceKey);
+    const accepted =
+      result.kind === "ok" &&
+      (stage?.createdSandboxId === result.accepted.sandboxId ||
+        stage?.failure?.sandboxId === result.accepted.sandboxId);
+    let outcome: "accepted" | "refused" | "uncertain" = "uncertain";
+    if (accepted) outcome = "accepted";
+    else if (result.kind === "refused") outcome = "refused";
+    if (draftAuthorityActorIsCurrent(run.actor))
+      await settleDraftAuthorityEffect({
+        actor: run.actor,
+        claim,
+        outcome,
+        ...(accepted
+          ? {
+              acceptance: {
+                sandboxId: result.accepted.sandboxId,
+                hostId: result.accepted.hostId,
+              },
+            }
+          : {}),
+      });
+  }
+  return started;
+}
+
+function recordStageCreateAnswer(
+  run: StagedRunIdentity,
+  result: SandboxCreateFetchResult,
+  context: { readonly teamName: string | null; readonly now: number },
+): StartedSandbox | null {
+  const { surfaceKey } = run;
   if (result.kind !== "ok") {
-    fail(
-      surfaceKey,
-      createFailure(
-        result,
-        target.configuration.kind === "team"
-          ? target.configuration.teamName
-          : null,
-      ),
-    );
+    const retryCreate = sandboxRetryAfterRefusal(result);
+    const failure = createFailure(result, context.teamName);
+    const beforeReservation = createRefusedBeforeReservation(result);
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      failure: {
+        ...failure,
+        ...(retryCreate === null
+          ? {}
+          : { retryCreate, retryRowVerified: true }),
+        ...(beforeReservation
+          ? {
+              rowlessCreateRefusal: {
+                createKey: run.createKey,
+                attemptId: run.attemptId,
+              },
+            }
+          : {}),
+      },
+      ...(beforeReservation ? { createAttempt: null } : {}),
+    });
     return null;
   }
-  const { sandboxId, hostId } = result.accepted;
+  const { sandboxId, hostId, sandbox } = result.accepted;
+  const creditRefusal =
+    result.joined === true ? stagedCreditRefusal(sandbox) : null;
+  if (creditRefusal !== null) {
+    fail(surfaceKey, creditRefusal);
+    return null;
+  }
   if (!recordPendingSandboxStageCreated(surfaceKey, sandboxId)) return null;
   useStagedSandboxStore.getState().report(surfaceKey, {
     createdSandboxId: sandboxId,
     createdHostId: hostId,
-    rateLimit: result.accepted.sandbox.rateLimit ?? null,
+    rateLimit: sandbox.rateLimit ?? null,
     step: "booting",
-    stepAt: deps.now(),
+    stepAt: context.now,
   });
+  if (sandbox.state === "failed" || sandbox.state === "destroyed") {
+    if (
+      presentAcceptedSandboxSetupFailure(surfaceKey, sandboxId, sandbox) ||
+      surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)
+    )
+      return null;
+    const verdict = settleVerdict(sandbox);
+    if (verdict?.kind === "failure")
+      fail(surfaceKey, {
+        ...verdict.failure,
+        retryCreate: sandboxRetryCreate(sandbox),
+      });
+    return null;
+  }
   return { sandboxId, hostId };
+}
+
+/** These exact refusals settle without reserving a row under the attempted key. */
+function createRefusedBeforeReservation(
+  failure: SandboxControlFailure,
+): boolean {
+  return (
+    failure.kind === "refused" &&
+    failure.sandboxId === undefined &&
+    failure.sandbox === undefined &&
+    failure.uncertainCreateRow !== true &&
+    ((failure.status === 400 &&
+      failure.code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) ||
+      (failure.status === 503 &&
+        failure.code === SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE))
+  );
 }
 
 /**
@@ -565,6 +881,11 @@ async function environmentIdFor(
     : undefined;
 }
 
+interface StagedCreateAnswer {
+  readonly result: SandboxCreateFetchResult;
+  readonly claim: DraftAuthorityIssueReceipt | null;
+}
+
 /**
  * The create, as the app's create mutation runs it (`useSandboxCreate`):
  * keyed, and refreshing the directory and the lists once it settles, a
@@ -574,18 +895,70 @@ async function environmentIdFor(
  * could not be confirmed, so the line stops instead of waiting forever.
  */
 function createSandbox(
+  run: StagedRunIdentity,
   request: SandboxCreateRequest,
+  setupAttempt: DraftAuthoritySetupAttempt | undefined,
   deps: StagedSandboxRunDeps,
-): Promise<SandboxCreateFetchResult> {
+): Promise<StagedCreateAnswer | null> {
   const { auth, directory, queryClient } = deps;
-  const context = { userId: signedInUserId() };
-  const observer = new QueryMutationObserver<SandboxCreateFetchResult>(
+  const observer = new QueryMutationObserver<StagedCreateAnswer | null>(
     queryClient,
     {
-      mutationKey: sandboxMutationKeys.create(deps.userId),
-      mutationFn: () => auth.createSandbox(request),
-      onSettled: (result) => {
-        if (!settledForStartingAccount(context)) return;
+      mutationKey: sandboxMutationKeys.create(run.userId),
+      // TanStack can suspend on onMutate. Commit the body at the fenced POST.
+      mutationFn: async () => {
+        if (!stillCurrent(run)) return null;
+        if (!saveStagedCreateRequest(run.surfaceKey, request)) {
+          reportCreateSaveFailure(run);
+          return null;
+        }
+        if (!stillCurrent(run)) return null;
+        const send = stagePendingSend(run.surfaceKey);
+        const effect: DraftAuthorityEffectIntent = {
+          kind: "create",
+          phase: "setup",
+          identity: run.createKey,
+          payload: { request },
+        };
+        let claim: DraftAuthorityIssueReceipt | null = null;
+        if (send !== null) {
+          claim = await claimPendingSandboxOutboxEffect({
+            actor: run.actor,
+            send,
+            operationId: `${send.id}:setup-create:${request.clientRequestId}`,
+            effect,
+            retryRefusedSetupCreate: run.retryRefusedCreate,
+            setupAttempt,
+            canIssue: () => stillCurrent(run),
+          });
+          if (claim === null || !stillCurrent(run)) return null;
+          if (claim.setupAttempt !== undefined)
+            useStagedSandboxStore.getState().report(run.surfaceKey, {
+              authoritySetupAttempt: claim.setupAttempt,
+            });
+        }
+        if (
+          !stillCurrent(run) ||
+          (claim !== null && !(await verifyPendingSandboxOutboxGrant(run.actor, claim))) ||
+          !stillCurrent(run)
+        )
+          return null;
+        try {
+          return { result: await auth.createSandbox(request), claim };
+        } catch (error: unknown) {
+          return {
+            result: {
+              kind: "network-error",
+              detail: error instanceof Error ? error.message : String(error),
+            },
+            claim,
+          };
+        }
+      },
+      onSettled: (answer) => {
+        if (answer === null || !draftAuthorityActorIsCurrent(run.actor))
+          return;
+        const result = answer?.result;
         void directory.refresh();
         void queryClient.invalidateQueries({
           queryKey: authQueryKeys.registeredHostsAll(),
@@ -607,36 +980,41 @@ function createSandbox(
   const unsubscribe = observer.subscribe(() => undefined);
   return observer
     .mutate()
-    .catch((error: unknown): SandboxCreateFetchResult => ({
-      kind: "network-error",
-      detail: error instanceof Error ? error.message : String(error),
+    .catch((error: unknown): StagedCreateAnswer => ({
+      result: {
+        kind: "network-error",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      claim: null,
     }))
     .finally(unsubscribe);
 }
 
-/** A create failure's line and the verdict to persist with it. */
-export function createFailure(
-  failure: SandboxControlFailure,
-  teamName: string | null,
-): StagedSandboxFailure {
-  return {
-    ...createFailureForLine(failure, teamName),
-    freshCreateKey: createAnswerNeedsFreshKey(failure),
-  };
+function reportCreateSaveFailure(run: StagedRunIdentity): void {
+  if (!stillCurrent(run)) return;
+  try {
+    fail(run.surfaceKey, { kind: "unavailable" });
+  } catch {
+    // The stage still shows the retry in memory even if storage is unavailable.
+  }
 }
 
-function createFailureForLine(
+/** A create failure as shown on the stage's line. */
+export function createFailure(
   failure: SandboxControlFailure,
   teamName: string | null,
 ): StagedSandboxFailure {
   if (failure.kind === "refused") {
     if (failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT) {
+      const named =
+        failure.sandboxId === undefined ? {} : { sandboxId: failure.sandboxId };
       return failure.reason === "unverified"
-        ? { kind: "unverified" }
+        ? { kind: "unverified", ...named }
         : {
             kind: "credits",
             shortfallMc: failure.shortfallMc,
             creditSource: failure.creditSource ?? null,
+            ...named,
           };
     }
     if (failure.code === SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED) {
@@ -650,45 +1028,13 @@ function createFailureForLine(
   return {
     kind: "refused",
     message: sandboxCreateFailureMessage(failure, teamName),
+    ...(failure.kind === "refused" && failure.sandboxId !== undefined
+      ? { sandboxId: failure.sandboxId }
+      : {}),
   };
 }
 
-/** These create replies follow replay and report a refusal or a failed row. */
-function createAnswerNeedsFreshKey(failure: SandboxControlFailure): boolean {
-  if (failure.kind !== "refused") return false;
-  switch (failure.code) {
-    case SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT:
-      return failure.status === 402;
-    case SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED:
-      return failure.status === 400;
-    case SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE:
-      return failure.status === 503;
-    case SANDBOX_REFUSAL_CODE_NOT_FOUND:
-      // The GUI sends a person's create with no creating host. The route's
-      // earlier sandbox_not_found requires an inaccessible creating sandbox.
-      return failure.status === 404;
-    case SANDBOX_REFUSAL_CODE_PROVIDER_FAILED:
-      return failure.status === 502;
-    default:
-      return false;
-  }
-}
-
-/**
- * A failed row's Retry and team setup use the same create answer verdict as
- * a stage. Any other error keeps the key available to rejoin an earlier create.
- */
-export function createErrorNeedsFreshKey(error: Error): boolean {
-  return (
-    error instanceof SandboxCreateError &&
-    error.failure !== null &&
-    createAnswerNeedsFreshKey(error.failure)
-  );
-}
-
-interface SandboxSettlement {
-  readonly surfaceKey: string;
-  readonly clientRequestId: string;
+interface SandboxSettlement extends StagedRunIdentity {
   readonly started: StartedSandbox;
   readonly deps: StagedSandboxRunDeps;
 }
@@ -702,16 +1048,17 @@ async function settle(
   budgetFrom: number,
   budgetMs: number,
 ): Promise<void> {
-  const { surfaceKey, clientRequestId, started, deps } = input;
+  const { surfaceKey, deps } = input;
   const deadline = budgetFrom + budgetMs;
   while (deps.now() < deadline) {
-    if (!stillCurrent(surfaceKey, clientRequestId)) return;
-    const row = await readRow(deps, started.sandboxId, surfaceKey);
-    if (!stillCurrent(surfaceKey, clientRequestId)) return;
-    if ((await settleRow(input, row)) === "finished") return;
+    if (!stillCurrent(input)) return;
+    const observed = await observeStageRow(input);
+    if (!stillCurrent(input)) return;
+    if (observed !== null && (await settleRow(input, observed)) === "finished")
+      return;
     await deps.sleep(POLL_INTERVAL_MS);
   }
-  if (!stillCurrent(surfaceKey, clientRequestId)) return;
+  if (!stillCurrent(input)) return;
   fail(surfaceKey, {
     kind: "timed-out",
     step: readStagedSandbox(surfaceKey)?.step ?? "booting",
@@ -721,14 +1068,15 @@ async function settle(
 /** Applies one fresh lifecycle answer, waking retained sandboxes before handoff. */
 async function settleRow(
   input: SandboxSettlement,
-  row: SandboxSummary | null | undefined,
+  observed: StagedRowObservation,
 ): Promise<"waiting" | "finished"> {
-  const { surfaceKey, clientRequestId, started, deps } = input;
-  if (row !== undefined) {
-    useStagedSandboxStore
-      .getState()
-      .report(surfaceKey, { rateLimit: row?.rateLimit ?? null });
-  }
+  const { surfaceKey, started, deps } = input;
+  const row = readCurrentStageRow(input, observed);
+  if (!stillCurrent(input)) return "finished";
+  if (row === undefined) return "waiting";
+  useStagedSandboxStore
+    .getState()
+    .report(surfaceKey, { rateLimit: row?.rateLimit ?? null });
   if (row?.state === "suspended" || row?.state === "stopped") {
     // A run wakes once, for the person's action that started it: only at
     // `creating` has it not woken anything yet, which is how Cancel retains
@@ -740,18 +1088,27 @@ async function settleRow(
       fail(surfaceKey, { kind: "rested" });
       return "finished";
     }
-    const awake = await wakeCurrentStage(
-      surfaceKey,
-      clientRequestId,
-      started.hostId,
-      deps,
-    );
+    const awake = await wakeCurrentStage(input, started, deps);
     return awake ? "waiting" : "finished";
   }
-  const verdict = row === undefined ? null : settleVerdict(row);
+  if (presentAcceptedSandboxSetupFailure(surfaceKey, started.sandboxId, row))
+    return "finished";
+  const verdict = settleVerdict(row);
   if (verdict === null) return "waiting";
   if (verdict.kind === "failure") {
-    fail(surfaceKey, verdict.failure);
+    const failure = verdict.failure;
+    if (failure.kind !== "failed") {
+      fail(surfaceKey, failure);
+    } else if (
+      row !== null &&
+      !surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)
+    ) {
+      fail(surfaceKey, {
+        ...failure,
+        sandboxId: started.sandboxId,
+        retryCreate: sandboxRetryCreate(row),
+      });
+    }
     return "finished";
   }
   report(surfaceKey, "applying", deps.now());
@@ -759,17 +1116,24 @@ async function settleRow(
   if (dialableHostEndpoint(deps.directory.findById(started.hostId)) === null) {
     return "waiting";
   }
-  return settleSettings(input);
+  return settleSettings(input, observed);
 }
 
 /** A connected host must prove configuration delivery before its message is handed off. */
 async function settleSettings(
   input: SandboxSettlement,
+  observed: StagedRowObservation,
 ): Promise<"waiting" | "finished"> {
-  const { surfaceKey, clientRequestId, started, deps } = input;
+  const { surfaceKey, started, deps } = input;
   const settings = await deps.readSettings(started.hostId);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return "finished";
+  if (!stillCurrent(input)) return "finished";
   if (settings === null) return "waiting";
+  const row = readCurrentStageRow(input, observed);
+  if (!stillCurrent(input)) return "finished";
+  if (row === undefined) return "waiting";
+  if (presentAcceptedSandboxSetupFailure(surfaceKey, started.sandboxId, row))
+    return "finished";
+  if (settleVerdict(row)?.kind !== "awake") return "waiting";
   if (settings !== "unsupported" && sandboxSettingsFailed(settings.items)) {
     fail(surfaceKey, {
       kind: "settings",
@@ -787,30 +1151,122 @@ async function settleSettings(
   )
     return "waiting";
   report(surfaceKey, "delivering", deps.now());
-  handOff(surfaceKey, started.hostId);
+  handOff(input);
   return "finished";
 }
 
-/**
- * One read of the sandbox's row: the row, `null` when the list answered
- * without it (it is gone), or `undefined` when the read failed, which says
- * nothing about the sandbox.
- */
-async function readRow(
-  deps: StagedSandboxRunDeps,
+interface StagedRowObservation {
+  readonly row: SandboxSummary | null;
+  readonly observation: PendingSandboxObservation;
+  readonly list: SandboxListResponse | null | undefined;
+}
+
+function stageList(
+  input: SandboxSettlement,
+): SandboxListResponse | null | undefined {
+  const { auth, userId, queryClient } = input.deps;
+  return queryClient.getQueryData(sandboxQueryKeys.list(auth, userId));
+}
+
+function listedStageRow(
+  list: SandboxListResponse | null | undefined,
   sandboxId: string,
-  surfaceKey: string,
-): Promise<SandboxSummary | null | undefined> {
-  // The list query every surface reads, read fresh: the Sandboxes page and
-  // the pickers see the new row as the wait does.
+): StagedRowObservation | null {
+  const row = list?.sandboxes.find((item) => item.id === sandboxId);
+  if (row === undefined) return null;
+  return {
+    row,
+    list,
+    observation: {
+      kind: "list",
+      sentAt: sandboxListReadSentAt(list),
+      mountedAt: 0,
+    },
+  };
+}
+
+/** A list omission is a reason to read the known row, not proof it ended. */
+async function observeStageRow(
+  input: SandboxSettlement,
+): Promise<StagedRowObservation | null> {
+  const {
+    deps,
+    started: { sandboxId, hostId },
+  } = input;
   const response = await deps.queryClient
     .fetchQuery({
       ...sandboxListQueryOptions(deps.auth, deps.userId, true),
       staleTime: 0,
     })
     .catch(() => undefined);
-  if (response === undefined || response === null) return undefined;
-  const row = response.sandboxes.find((item) => item.id === sandboxId) ?? null;
+  if (!stillCurrent(input)) return null;
+  const listed = listedStageRow(response, sandboxId);
+  if (listed !== null) return listed;
+  const omission = sandboxListObservationId(stageList(input));
+  const answer = await deps.queryClient
+    .fetchQuery({
+      ...stageKnownRowQueryOptions(input, omission),
+      staleTime: 0,
+    })
+    .catch(() => null);
+  if (answer === null || !stillCurrent(input)) return null;
+  const list = stageList(input);
+  const { read } = answer;
+  if (!knownSandboxRowCurrent(answer, sandboxListObservationId(list), hostId))
+    return listedStageRow(list, sandboxId);
+  if (read === null) return null;
+  return {
+    row: read.row,
+    list,
+    observation: {
+      kind: "by-id",
+      sandboxId,
+      sentAt: read.sentAt,
+      mountedAt: 0,
+    },
+  };
+}
+
+function stageKnownRowQueryOptions(
+  input: SandboxSettlement,
+  omission: number | undefined,
+) {
+  const { surfaceKey, userId, deps, started, clientRequestId, attemptId } =
+    input;
+  const sendId = surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)
+    ? surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length)
+    : undefined;
+  const send =
+    sendId === undefined
+      ? undefined
+      : usePendingSandboxSendStore.getState().sends[sendId];
+  return knownSandboxRowQueryOptions({
+    auth: deps.auth,
+    userId,
+    sandboxId: started.sandboxId,
+    hostId: started.hostId,
+    sendId,
+    stageId: clientRequestId,
+    attemptId,
+    observationRequestedAt: send?.observationRequestedAt,
+    observationRetryId: send?.observationRetryId,
+    stopRequestedAt: send?.stopRequestedAt,
+    omission,
+  });
+}
+
+function readCurrentStageRow(
+  input: SandboxSettlement,
+  prior: StagedRowObservation,
+): SandboxSummary | null | undefined {
+  const {
+    surfaceKey,
+    started: { sandboxId, hostId },
+  } = input;
+  const observed = latestStageRow(input, prior);
+  if (observed === null) return undefined;
+  const { row, observation } = observed;
+  if (row !== null && row.hostId !== hostId) return undefined;
   let host: "awake" | "ended" | "resting" | "waking" = "waking";
   if (
     row === null ||
@@ -822,12 +1278,6 @@ async function readRow(
   else if (row.state === "awake") host = "awake";
   else if (row.state === "stopped" || row.state === "suspended")
     host = "resting";
-  const observation = {
-    kind: "list",
-    sentAt: sandboxListReadSentAt(response),
-    mountedAt: 0,
-    missingSandboxId: row === null ? sandboxId : undefined,
-  } as const;
   if (
     row !== null &&
     !markPendingSandboxStageRowSeen(surfaceKey, sandboxId, observation)
@@ -839,9 +1289,81 @@ async function readRow(
     : row;
 }
 
+function latestStageRow(
+  input: SandboxSettlement,
+  prior: StagedRowObservation,
+): StagedRowObservation | null {
+  const list = stageList(input);
+  if (prior.list === list) return prior;
+  const { sandboxId, hostId } = input.started;
+  if (
+    prior.observation.kind === "by-id" &&
+    sandboxRowDestroySettled(prior.row, hostId)
+  )
+    return prior;
+  return listedStageRow(list, sandboxId);
+}
+
 type SettleVerdict =
   | { readonly kind: "awake" }
   | { readonly kind: "failure"; readonly failure: StagedSandboxFailure };
+
+/** An omitted credit-gate row has the same outcome when replayed or read. */
+export function stagedCreditRefusal(
+  row: SandboxSummary | null,
+): StagedSandboxFailure | null {
+  if (row?.state !== "destroyed" || row.failureCode !== "credit-gate")
+    return null;
+  return {
+    kind: "failed",
+    code: "credit-gate",
+    step: "booting",
+    sandboxId: row.id,
+    retryCreate: sandboxRetryCreate(row),
+  };
+}
+
+/** Classifies an admitted exact row before the send transfers to its dispatcher. */
+export function acceptedSandboxSetupFailure(
+  sandboxId: string,
+  row: SandboxSummary | null,
+): StagedSandboxFailure | null {
+  if (row === null)
+    return {
+      kind: "failed",
+      code: "gone",
+      step: "booting",
+      sandboxId,
+      acceptedRowNotFound: true,
+    };
+  if (row.id !== sandboxId) return null;
+  if (row.state === "failed")
+    return {
+      kind: "failed",
+      code: row.failureCode ?? row.state,
+      step: "booting",
+      sandboxId,
+      retryCreate: sandboxRetryCreate(row),
+    };
+  return stagedCreditRefusal(row);
+}
+
+function presentAcceptedSandboxSetupFailure(
+  surfaceKey: string,
+  sandboxId: string,
+  row: SandboxSummary | null,
+): boolean {
+  const failure = acceptedSandboxSetupFailure(sandboxId, row);
+  if (failure === null) return false;
+  const stage = readStagedSandbox(surfaceKey);
+  if (stage?.createdSandboxId === sandboxId)
+    useStagedSandboxStore.getState().presentSetupFailure(
+      surfaceKey,
+      stage,
+      failure,
+    );
+  return true;
+}
 
 /** What a row says about the wait, or `null` while it is on its way. */
 export function settleVerdict(
@@ -853,6 +1375,8 @@ export function settleVerdict(
       failure: { kind: "failed", code: "gone", step: "booting" },
     };
   }
+  const refusal = stagedCreditRefusal(row);
+  if (refusal !== null) return { kind: "failure", failure: refusal };
   switch (row.state) {
     case "failed":
     case "destroying":
@@ -895,16 +1419,18 @@ export function settleVerdict(
  * sending draft is gone (its modal's tab or its start page closed meanwhile)
  * with no other send claiming it since.
  */
-function handOff(surfaceKey: string, hostId: string): void {
+function handOff(input: SandboxSettlement): void {
+  const { surfaceKey, started: { hostId } } = input;
+  if (!stillCurrent(input)) return;
   useSurfaceHostSelectionStore.getState().setSelection(surfaceKey, hostId);
   const stage = readStagedSandbox(surfaceKey);
+  if (!stillCurrent(input)) return;
   if (
     stage !== null &&
     (!stage.sendTaken || !handoffOwnerLive(surfaceKey, stage.ownerId))
   ) {
-    if (stage.openTerminal) {
+    if (stage.openTerminal)
       useLandingPanelStore.getState().requestTerminal(surfaceKey, hostId);
-    }
     useStagedSandboxStore.getState().clear(surfaceKey);
     return;
   }

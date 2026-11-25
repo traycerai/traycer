@@ -22,6 +22,7 @@ import {
   openNewChatDraftRow,
   type DraftRowDeleteOutcome,
 } from "@/lib/drafts/draft-inventory-actions";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
@@ -125,44 +126,49 @@ export function useDraftInventoryActions(
   );
 
   const deleteRow = useCallback(
-    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
-      const outcome = deleteDraftRow(row, {
+    (row: DraftInventoryRow, input: AnalyticsDraftInput): void => {
+      void deleteDraftRow(row, {
         surfaceHostId: hostId,
         surfaceClient,
         ownerClient:
           row.kind === "landing"
             ? surfaceClient
             : resolveNamedHostClient(binding, row.ownerHostId),
-      });
-      if (!outcome.deleted) return;
-      const undo = outcome.undo;
-      const draft_kind = draftKind(row);
-      Analytics.getInstance().track(AnalyticsEvent.DraftDeleted, {
-        surface,
-        draft_kind,
-        input,
-        undo_offered: undo !== null,
-        draft_age: draftAge(row.lastTouchedAt),
-      });
-      if (undo === null) {
-        toast("Deleted");
-        return;
-      }
-      toast("Deleted", {
-        duration: UNDO_TOAST_MS,
-        action: {
-          label: "Undo",
-          onClick: () => {
-            if (!undo()) {
-              toast("Undo skipped. You typed something new here.");
-              return;
-            }
-            Analytics.getInstance().track(AnalyticsEvent.DraftDeleteUndone, {
-              surface,
-              draft_kind,
-            });
+      }).then((outcome) => {
+        if (!outcome.deleted) return;
+        const undo = outcome.undo;
+        const draft_kind = draftKind(row);
+        Analytics.getInstance().track(AnalyticsEvent.DraftDeleted, {
+          surface,
+          draft_kind,
+          input,
+          undo_offered: undo !== null,
+          draft_age: draftAge(row.lastTouchedAt),
+        });
+        if (undo === null) {
+          toast("Deleted");
+          return;
+        }
+        toast("Deleted", {
+          duration: UNDO_TOAST_MS,
+          action: {
+            label: "Undo",
+            onClick: () => {
+              if (!undo()) {
+                toast("Undo skipped. You typed something new here.");
+                return;
+              }
+              Analytics.getInstance().track(AnalyticsEvent.DraftDeleteUndone, {
+                surface,
+                draft_kind,
+              });
+            },
           },
-        },
+        });
+      }).catch((error: unknown) => {
+        appLogger.warn("[drafts] inventory deletion failed", {
+          error: describeLogError(error),
+        });
       });
     },
     [binding, hostId, surfaceClient, surface],
@@ -193,7 +199,7 @@ function deleteDraftRow(
     readonly surfaceClient: HostClient<HostRpcRegistry> | null;
     readonly ownerClient: HostClient<HostRpcRegistry> | null;
   },
-): DraftRowDeleteOutcome {
+): Promise<DraftRowDeleteOutcome> {
   const { surfaceHostId, surfaceClient, ownerClient } = context;
   if (row.kind === "landing") {
     // Re-read the row: the list is a memoised projection, and the routing
@@ -201,7 +207,10 @@ function deleteDraftRow(
     const draft = useLandingDraftStore
       .getState()
       .drafts.find((entry) => entry.id === row.id);
-    if (draft === undefined) return { deleted: false };
+    if (draft === undefined || draft.content !== row.content ||
+      draft.lastTouchedAt !== row.lastTouchedAt || draft.ownerHostId !== row.ownerHostId) {
+      return Promise.resolve({ deleted: false });
+    }
     return deleteLandingDraftRow(draft, surfaceHostId, surfaceClient);
   }
   if (row.kind === "chat") {
@@ -211,12 +220,20 @@ function deleteDraftRow(
         draftId: row.id,
         ownerHostId: row.ownerHostId,
         foreign: row.foreign,
+        content: row.content,
+        lastTouchedAt: row.lastTouchedAt,
       },
       ownerClient,
     );
   }
   return deleteNewChatDraftRow(
-    { epicId: row.epicId, draftId: row.id, ownerHostId: row.ownerHostId },
+    {
+      epicId: row.epicId,
+      draftId: row.id,
+      ownerHostId: row.ownerHostId,
+      content: row.content,
+      lastTouchedAt: row.lastTouchedAt,
+    },
     ownerClient,
   );
 }

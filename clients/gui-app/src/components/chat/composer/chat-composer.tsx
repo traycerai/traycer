@@ -115,9 +115,16 @@ import type { SandboxAgentRemedies } from "@/lib/sandboxes/sandbox-agent-refusal
 import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
+import {
+  captureDraftAuthorityActor,
+  subscribeToDraftAuthoritySessionChanges,
+} from "@/lib/drafts/draft-authority-session";
+import { registerPendingCanvasReturnAdmission } from "@/lib/sandboxes/pending-canvas-return-admission";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { ChatComposerAttachmentsStrip } from "./chat-composer-attachments-strip";
+import { useBrowserSandboxCancelInstall } from "./use-browser-sandbox-cancel-install";
 import { ChatComposerEditorSlot } from "./chat-composer-editor-slot";
 import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
@@ -346,6 +353,8 @@ export interface ChatComposerSubmitInput {
    * restart confirmation; a settings difference alone never stands for one.
    */
   readonly restartConfirmed: boolean;
+  readonly onDirectDispatch?: () => ((confirmedActionId: string | null) => void) | null;
+  readonly onOutboxCustody?: () => void;
 }
 
 /** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */
@@ -582,6 +591,26 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
+  const admissionAccount = useAuthStore((state) =>
+    state.status === "signed-in" ? (state.contextMetadata?.userId ?? null) : null,
+  );
+  useEffect(() => {
+    if (!isActive || admissionAccount === null) return;
+    let unregister: (() => void) | null = null;
+    const bindCurrentSession = (): void => {
+      unregister?.();
+      const actor = captureDraftAuthorityActor();
+      unregister = actor !== null && actor.accountId === admissionAccount
+        ? registerPendingCanvasReturnAdmission(actor, taskId, tabHostId)
+        : null;
+    };
+    const unsubscribe = subscribeToDraftAuthoritySessionChanges(bindCurrentSession);
+    bindCurrentSession();
+    return () => {
+      unsubscribe();
+      unregister?.();
+    };
+  }, [admissionAccount, isActive, tabHostId, taskId]);
   // The client for reads about the host this chat's turns RUN on: the tab's
   // own, except for a resting sandbox's chat, whose tab host only serves its
   // published copy and whose sandbox answers nothing until it wakes. Its
@@ -670,6 +699,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const paneFocused = usePaneFocused();
   const tabSelected = useTabBodySelected();
   const focused = chatComposerFocused(isActive, paneFocused, tabSelected);
+  const browserCancel = useBrowserSandboxCancelInstall({
+    active: focused && editingQueueItemId === null,
+    chatId: taskId,
+    hostId: tabHostId,
+    editorRef,
+  });
+  const { permitsOrdinaryWrites } = browserCancel;
   useEffect(() => {
     if (focused) return;
     pickerStore.getState().close();
@@ -690,12 +726,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const chatTitle = useMaybeEpicStore(selectChatTitle, null);
   const epicTitle = useRegisteredEpicTitle(currentEpicId);
 
+  const [acceptedPresentationRevision, setAcceptedPresentationRevision] =
+    useState<number | null>(null);
   const {
     initialContent,
     initialSelection,
     draftContent,
     draftHasText,
     draftHasImages,
+    acceptedPresentationHidden,
     handleDocumentChange,
     handleSelectionChange,
   } = useChatComposerDraft({
@@ -706,6 +745,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorReadyTick,
     chatTitle,
     epicTitle,
+    acceptedPresentationRevision,
   });
   const draftHasFiles = useMemo(
     () => containsFileAttachments(draftContent),
@@ -783,10 +823,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const handleUserInput = useCallback(
     (wasEmpty: boolean) => {
-      if (wasEmpty && !draftHasText && !draftHasImages)
+      if (permitsOrdinaryWrites() && wasEmpty && !draftHasText && !draftHasImages)
         requestPrestart(settingsFromDerived(toolbarStore.getState()));
     },
-    [requestPrestart, toolbarStore, draftHasText, draftHasImages],
+    [requestPrestart, toolbarStore, draftHasText, draftHasImages, permitsOrdinaryWrites],
   );
   useEffect(() => {
     const onUserSettingsChange = (settings: ChatRunSettings) => {
@@ -1026,6 +1066,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       getDraftBlobBridgeSupported,
       getQueuedSteerRestartConfirmationSupported,
       onSubmitMessage: submitWithGuide,
+      onAcceptedPresentation: setAcceptedPresentationRevision,
       onSideChat,
       targetHostId: tabHostId,
       // The queued prompt this composer is pointed at, which is also what the
@@ -1068,19 +1109,20 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
 
   const removeImage = useCallback((id: string) => {
+    if (!permitsOrdinaryWrites()) return;
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
       kind: "image",
       surface: "chat",
     });
     editorRef.current?.removeImageAttachmentById(id);
-  }, []);
+  }, [permitsOrdinaryWrites]);
 
   // Accepting the suggestion (the "Accept suggested reply" key, → unless
   // rebound, or a rightward swipe on touch) FILLS and focuses - it never sends.
   const fillSuggestedPrompt = useCallback(
     (suggestion: string): boolean =>
-      fillComposerWithSuggestion(editorRef.current, suggestion),
-    [],
+      permitsOrdinaryWrites() && fillComposerWithSuggestion(editorRef.current, suggestion),
+    [permitsOrdinaryWrites],
   );
   const offeredSuggestion =
     suggestedPrompt !== undefined &&
@@ -1117,10 +1159,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // refuses outright leaves the draft where the user is looking at it.
   const handleSubmitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
+      if (!permitsOrdinaryWrites()) return;
       submitDraft(source);
       if (canSubmit) setComposerExpanded(false);
     },
-    [canSubmit, setComposerExpanded, submitDraft],
+    [canSubmit, permitsOrdinaryWrites, setComposerExpanded, submitDraft],
   );
   const handleSubmitFromButton = useCallback((): void => {
     handleSubmitDraft("enter");
@@ -1231,87 +1274,100 @@ function ChatComposerImpl(props: ChatComposerProps) {
           {topSlot}
           <div className="relative flex flex-col gap-3">
             <ComposerTileIdProvider tileId={taskId}>
-              <ComposerAttachmentDropZone
-                viewTabId={viewTabId}
-                hostId={tabHostId}
-                editorRef={editorRef}
-              >
-                <ComposerShell
-                  pickerStore={pickerStore}
-                  onDragOver={frameDrop.onDragOver}
-                  onDrop={frameDrop.onDrop}
-                  onDragEnter={frameDrop.onDragEnter}
-                  onDragLeave={frameDrop.onDragLeave}
-                  dragOverlayVariant={frameDrop.overlayVariant}
-                  utilityRail={null}
-                  expansion={composerExpansion}
-                  attachmentsStrip={
-                    <ChatComposerAttachmentsStrip
-                      taskId={taskId}
-                      content={draftContent}
-                      editingQueueItemId={editingQueueItemId}
-                      onCancelQueueEdit={onCancelQueueEdit}
-                      onRemoveImage={removeImage}
-                    />
-                  }
-                  editor={
-                    <ChatComposerEditorSlot
-                      ref={editorRef}
-                      pickerStore={pickerStore}
-                      initialContent={initialContent}
-                      initialSelection={initialSelection}
-                      slashProviderId={harnessId}
-                      hasPastedImageBytes={hasPastedImageBytes}
-                      ingestPastedComposerImages={ingestPastedComposerImages}
-                      isActive={focused}
-                      disabled={false}
-                      onDocumentChange={handleDocumentChangeNotingEdit}
-                      onUserInput={handleUserInput}
-                      onSelectionChange={handleSelectionChange}
-                      onSubmit={handleSubmitDraft}
-                      steerHintActive={steerHintActive}
-                      suggestedPrompt={offeredSuggestion}
-                      onAcceptSuggestion={fillSuggestedPrompt}
-                      onPaste={onPaste}
-                      onDragOver={onDragOver}
-                      onDrop={onDrop}
-                      onEditorReady={handleEditorReady}
-                      onFocus={handleComposerFocus}
-                    />
-                  }
-                  toolbar={
-                    <ChatComposerToolbarSlot
-                      store={toolbarStore}
-                      onAttachImages={attachImageFiles}
-                      onAttachFiles={attachFiles}
-                      canSubmit={canSubmit}
-                      attachmentPending={attachmentPending}
-                      onSubmit={handleSubmitFromButton}
-                      activeTurnStatus={activeTurnStatus}
-                      stopDisabled={stopDisabled}
-                      onStopTurn={onStopTurn}
-                      composerDisabledHint={sendBlockedHint}
-                      dictation={dictationControl}
-                      dictationPreparing={dictationPreparing}
-                      settingsLocked={false}
-                      createProfileHostId={tabHostId}
-                      runTargetHostId={tabHostId}
-                      terminalLoginSurface={terminalLoginSurface}
-                      autoPermissionModeProtocolSupported={
-                        autoPermissionModeProtocolSupported
-                      }
-                    />
-                  }
-                />
-              </ComposerAttachmentDropZone>
-              {workspaceControls !== null ? (
-                <div
-                  hidden={focusLayout ? shortKeyboard : false}
-                  className="contents"
+              <div className="contents" inert={browserCancel.preview !== null}>
+                <ComposerAttachmentDropZone
+                  viewTabId={viewTabId}
+                  hostId={tabHostId}
+                  editorRef={editorRef}
                 >
-                  <ComposerWorkspaceRow workspaceControls={workspaceControls} />
-                </div>
-              ) : null}
+                  <ComposerShell
+                    pickerStore={pickerStore}
+                    onDragOver={frameDrop.onDragOver}
+                    onDrop={frameDrop.onDrop}
+                    onDragEnter={frameDrop.onDragEnter}
+                    onDragLeave={frameDrop.onDragLeave}
+                    dragOverlayVariant={frameDrop.overlayVariant}
+                    utilityRail={null}
+                    expansion={composerExpansion}
+                    attachmentsStrip={
+                      <ChatComposerAttachmentsStrip
+                        taskId={taskId}
+                        content={draftContent}
+                        hideAnnotations={acceptedPresentationHidden}
+                        activeCanvasPreview={isActive}
+                        {...(browserCancel.preview === null ? {} : {
+                          cancelPreview: browserCancel.preview,
+                          cancelCardsRef: browserCancel.cardsRef,
+                        })}
+                        editingQueueItemId={editingQueueItemId}
+                        onCancelQueueEdit={onCancelQueueEdit}
+                        onRemoveImage={removeImage}
+                      />
+                    }
+                    editor={
+                      <ChatComposerEditorSlot
+                        ref={editorRef}
+                        pickerStore={pickerStore}
+                        initialContent={initialContent}
+                        initialSelection={initialSelection}
+                        slashProviderId={harnessId}
+                        hasPastedImageBytes={hasPastedImageBytes}
+                        ingestPastedComposerImages={ingestPastedComposerImages}
+                        isActive={focused}
+                        disabled={browserCancel.preview !== null}
+                        onDocumentChange={(content, selection) => {
+                          if (permitsOrdinaryWrites())
+                            handleDocumentChangeNotingEdit(content, selection);
+                        }}
+                        onUserInput={handleUserInput}
+                        onSelectionChange={(selection) => {
+                          if (permitsOrdinaryWrites()) handleSelectionChange(selection);
+                        }}
+                        onSubmit={handleSubmitDraft}
+                        steerHintActive={steerHintActive}
+                        suggestedPrompt={offeredSuggestion}
+                        onAcceptSuggestion={fillSuggestedPrompt}
+                        onPaste={onPaste}
+                        onDragOver={onDragOver}
+                        onDrop={onDrop}
+                        onEditorReady={handleEditorReady}
+                        onFocus={handleComposerFocus}
+                      />
+                    }
+                    toolbar={
+                      <ChatComposerToolbarSlot
+                        store={toolbarStore}
+                        onAttachImages={attachImageFiles}
+                        onAttachFiles={attachFiles}
+                        canSubmit={canSubmit && browserCancel.preview === null}
+                        attachmentPending={attachmentPending}
+                        onSubmit={handleSubmitFromButton}
+                        activeTurnStatus={activeTurnStatus}
+                        stopDisabled={stopDisabled}
+                        onStopTurn={onStopTurn}
+                        composerDisabledHint={sendBlockedHint}
+                        dictation={dictationControl}
+                        dictationPreparing={dictationPreparing}
+                        settingsLocked={false}
+                        createProfileHostId={tabHostId}
+                        runTargetHostId={tabHostId}
+                        terminalLoginSurface={terminalLoginSurface}
+                        autoPermissionModeProtocolSupported={
+                          autoPermissionModeProtocolSupported
+                        }
+                      />
+                    }
+                  />
+                </ComposerAttachmentDropZone>
+                {workspaceControls !== null ? (
+                  <div
+                    hidden={focusLayout ? shortKeyboard : false}
+                    className="contents"
+                  >
+                    <ComposerWorkspaceRow workspaceControls={workspaceControls} />
+                  </div>
+                ) : null}
+              </div>
             </ComposerTileIdProvider>
           </div>
           {unsupportedImagesMessage === null ? null : (

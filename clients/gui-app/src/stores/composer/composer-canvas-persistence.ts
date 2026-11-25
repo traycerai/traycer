@@ -9,6 +9,8 @@ import {
   composerCanvasAnnotationsKeyPrefix,
 } from "@/lib/persist";
 
+import type { DraftAuthorityCanvasScope } from "@/lib/drafts/draft-authority-sidecar";
+
 type CanvasAnnotationsByChat = Partial<
   Record<string, ReadonlyArray<CanvasAnnotationRecord>>
 >;
@@ -26,22 +28,27 @@ function canvasAnnotations(
   );
 }
 
+export function desktopComposerCanvasScope(): DraftAuthorityCanvasScope | null {
+  const runnerHost: unknown = Reflect.get(globalThis, "runnerHost");
+  const windows: unknown = isRecord(runnerHost) ? runnerHost.windows : null;
+  return isRecord(windows) &&
+    typeof windows.windowId === "string" &&
+    windows.windowId.length > 0
+    ? { kind: "desktop-window", id: windows.windowId }
+    : null;
+}
+
 function windowStorage(): {
   readonly storage: Storage;
   readonly key: string;
 } | null {
   if (typeof window === "undefined") return null;
   try {
-    const runnerHost: unknown = Reflect.get(globalThis, "runnerHost");
-    const windows: unknown = isRecord(runnerHost) ? runnerHost.windows : null;
-    if (
-      isRecord(windows) &&
-      typeof windows.windowId === "string" &&
-      windows.windowId.length > 0
-    ) {
+    const scope = desktopComposerCanvasScope();
+    if (scope !== null) {
       return {
         storage: window.localStorage,
-        key: composerCanvasAnnotationsKey(windows.windowId),
+        key: composerCanvasAnnotationsKey(scope.id),
       };
     }
     // A web tab has no shell window identity. Its session storage survives a

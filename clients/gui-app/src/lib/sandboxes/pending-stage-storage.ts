@@ -1,4 +1,5 @@
 import type { StateStorage } from "zustand/middleware";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import { v4 as uuidv4 } from "uuid";
 import {
   recordMapStorageKey,
@@ -9,11 +10,24 @@ import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 
 import type { PendingStageRetryAction } from "./pending-sandbox-send-transition";
 
+export interface PendingStagePress {
+  readonly createKey: string | null;
+  readonly retryCreate?: SandboxCreateRequest;
+  /** The attempt visible when the person chose Retry. */
+  readonly observedCreateKey?: string | null;
+  readonly observedAttemptId?: string | null;
+}
+
 export interface PendingStageRetryRequest {
   readonly action?: PendingStageRetryAction;
   readonly id: string;
   readonly userId: string | null;
   readonly clientRequestId: string | null;
+  readonly createKey?: string | null;
+  readonly retryCreate?: SandboxCreateRequest;
+  /** Missing in mailbox entries written before attempt scope was recorded. */
+  readonly observedCreateKey?: string | null;
+  readonly observedAttemptId?: string | null;
 }
 
 export interface PendingDispatchRetryRequest {
@@ -21,9 +35,31 @@ export interface PendingDispatchRetryRequest {
   readonly userId: string | null;
   readonly chatId: string;
   readonly hostId: string;
+  readonly observedOutboxGeneration?: number;
 }
 
 const RETRY_REGISTER_PREFIX = "retry-request:";
+const STAGE_RETRY_SLOT_PREFIX = "retry-request:stage:";
+
+function stageRetrySlot(
+  surfaceKey: string,
+  observedCreateKey: string | null | undefined,
+  requestId: string,
+): string {
+  return `${STAGE_RETRY_SLOT_PREFIX}${JSON.stringify([surfaceKey, observedCreateKey, requestId])}`;
+}
+
+function stageRetrySurface(slot: string): string | null {
+  if (!slot.startsWith(STAGE_RETRY_SLOT_PREFIX)) return null;
+  try {
+    const identity: unknown = parse(slot.slice(STAGE_RETRY_SLOT_PREFIX.length));
+    return Array.isArray(identity) && typeof identity[0] === "string"
+      ? identity[0]
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -33,8 +69,162 @@ function parse(value: string | null): unknown {
   return value === null ? null : JSON.parse(value);
 }
 
-function retryFor(stage: Record<string, unknown>, value: unknown): boolean {
-  return record(value) && value.clientRequestId === stage.clientRequestId;
+/** The stage's record is the commit point for a mailbox action. */
+export function readPendingStageRecord(
+  surfaceKey: string,
+): Readonly<Record<string, unknown>> | null {
+  try {
+    const stage = parse(
+      localStorage.getItem(
+        recordMapStorageKey(
+          persistKey(STORE_KEYS.stagedSandboxSend),
+          surfaceKey,
+        ),
+      ),
+    );
+    return record(stage) ? stage : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A reserved send ID can name only one initial stage projection. */
+export function preparePendingStageRecord(
+  surfaceKey: string,
+  expectedRecord: string,
+): boolean {
+  const key = recordMapStorageKey(
+    persistKey(STORE_KEYS.stagedSandboxSend),
+    surfaceKey,
+  );
+  try {
+    if (localStorage.getItem(key) === null)
+      localStorage.setItem(key, expectedRecord);
+    return localStorage.getItem(key) === expectedRecord;
+  } catch {
+    return false;
+  }
+}
+
+export function abortPendingStageRecord(
+  surfaceKey: string,
+  expectedRecord: string,
+): boolean {
+  const key = recordMapStorageKey(
+    persistKey(STORE_KEYS.stagedSandboxSend),
+    surfaceKey,
+  );
+  try {
+    if (localStorage.getItem(key) !== expectedRecord) return false;
+    localStorage.setItem(key, "null");
+    return localStorage.getItem(key) === "null";
+  } catch {
+    return false;
+  }
+}
+
+export function readPendingStageAttempt(
+  surfaceKey: string,
+  stageId: string | null,
+  createKey: string | null,
+  attemptId: string | undefined,
+): Readonly<Record<string, unknown>> | null {
+  const stage = readPendingStageRecord(surfaceKey);
+  return stage !== null &&
+    stage.clientRequestId === stageId &&
+    (stage.lastCreateKey ?? stage.clientRequestId) === createKey &&
+    stage.attemptId === attemptId
+    ? stage
+    : null;
+}
+
+export function pendingStageAttemptCurrent(
+  surfaceKey: string,
+  stageId: string | null,
+  createKey: string | null,
+  attemptId: string | undefined,
+): boolean {
+  return (
+    readPendingStageAttempt(surfaceKey, stageId, createKey, attemptId) !== null
+  );
+}
+
+function stageRetryCandidate(
+  name: string,
+  stage: Record<string, unknown>,
+  entries: ReadonlyArray<readonly [string, unknown]>,
+): unknown {
+  const currentKey = stage.lastCreateKey ?? stage.clientRequestId;
+  let current: unknown;
+  let stale: unknown;
+  for (const [slot, value] of entries) {
+    if (!record(value) || value.clientRequestId !== stage.clientRequestId)
+      continue;
+    if (value.id === stage.retryHandledId) {
+      // A crash after the stage commit can leave the published request behind.
+      if (!removeAcknowledgedSlot(name, slot, value.id)) return undefined;
+      continue;
+    }
+    if (
+      value.observedCreateKey === currentKey &&
+      (value.observedAttemptId ?? null) === (stage.attemptId ?? null)
+    )
+      current ??= value;
+    else stale ??= value;
+  }
+  return current ?? stale;
+}
+
+function removeAcknowledgedSlot(
+  name: string,
+  slot: string,
+  requestId: unknown,
+): boolean {
+  const storageKey = recordMapStorageKey(name, slot);
+  try {
+    const saved = parse(localStorage.getItem(storageKey));
+    if (record(saved) && saved.id === requestId)
+      localStorage.removeItem(storageKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function removeAcknowledgedStageRetry(
+  surfaceKey: string,
+  retry: PendingStageRetryRequest,
+): void {
+  const name = persistKey(STORE_KEYS.stagedSandboxSend);
+  removeAcknowledgedSlot(
+    name,
+    stageRetrySlot(surfaceKey, retry.observedCreateKey, retry.id),
+    retry.id,
+  );
+  removeAcknowledgedSlot(
+    name,
+    `${RETRY_REGISTER_PREFIX}${surfaceKey}`,
+    retry.id,
+  );
+}
+
+function stageRetrySlots(
+  name: string,
+  records: Record<string, unknown>,
+): Map<string, Array<readonly [string, unknown]>> {
+  const bySurface = new Map<string, Array<readonly [string, unknown]>>();
+  for (const [slot, value] of Object.entries(records)) {
+    const surface = stageRetrySurface(slot);
+    if (surface === null || !record(value)) continue;
+    if (localStorage.getItem(recordMapStorageKey(name, surface)) === "null") {
+      removeAcknowledgedSlot(name, slot, value.id);
+      continue;
+    }
+    const entries = bySurface.get(surface) ?? [];
+    entries.push([slot, value]);
+    bySurface.set(surface, entries);
+  }
+  return bySurface;
 }
 
 /**
@@ -45,9 +235,11 @@ function retryFor(stage: Record<string, unknown>, value: unknown): boolean {
  */
 function createPendingRetryStorage(
   field: "bySurface" | "sends",
-  matches: (item: Record<string, unknown>, retry: unknown) => boolean,
 ): StateStorage<void> {
-  const storage = createRecordMapStorage(field);
+  const stageMailbox = field === "bySurface";
+  const storage = createRecordMapStorage(
+    stageMailbox ? { field, separatePrefix: RETRY_REGISTER_PREFIX } : field,
+  );
   return {
     getItem: (name) => {
       const snapshot: unknown = parse(storage.getItem(name));
@@ -59,12 +251,22 @@ function createPendingRetryStorage(
         return null;
       const stages: Record<string, unknown> = {};
       const records = snapshot.state[field];
+      const stageSlots = stageMailbox ? stageRetrySlots(name, records) : null;
       for (const [key, stage] of Object.entries(records)) {
         if (key.startsWith(RETRY_REGISTER_PREFIX) || !record(stage)) continue;
-        const retry = records[`${RETRY_REGISTER_PREFIX}${key}`];
-        stages[key] = matches(stage, retry)
-          ? { ...stage, retryRequest: retry }
-          : stage;
+        const legacySlot = `${RETRY_REGISTER_PREFIX}${key}`;
+        const legacy = records[legacySlot];
+        let retry: unknown;
+        if (stageSlots !== null) {
+          retry = stageRetryCandidate(name, stage, [
+            ...(stageSlots.get(key) ?? []),
+            [legacySlot, legacy],
+          ]);
+        } else if (dispatchRetryFor(stage, legacy)) {
+          retry = legacy;
+        }
+        stages[key] =
+          retry === undefined ? stage : { ...stage, retryRequest: retry };
       }
       return JSON.stringify({
         ...snapshot,
@@ -84,11 +286,12 @@ function createPendingRetryStorage(
         if (!record(stage)) continue;
         const { retryRequest: _request, ...progress } = stage;
         records[key] = progress;
+        if (stageMailbox) continue;
         const registerId = `${RETRY_REGISTER_PREFIX}${key}`;
         const retry: unknown = parse(
           localStorage.getItem(recordMapStorageKey(name, registerId)),
         );
-        if (matches(stage, retry)) records[registerId] = retry;
+        if (dispatchRetryFor(stage, retry)) records[registerId] = retry;
       }
       storage.setItem(
         name,
@@ -103,12 +306,12 @@ function createPendingRetryStorage(
 }
 
 export function createPendingStageStorage(): StateStorage<void> {
-  return createPendingRetryStorage("bySurface", retryFor);
+  return createPendingRetryStorage("bySurface");
 }
 
 /** Pending claims keep their mailbox separate from receipt/progress writes too. */
 export function createPendingSendStorage(): StateStorage<void> {
-  return createPendingRetryStorage("sends", dispatchRetryFor);
+  return createPendingRetryStorage("sends");
 }
 
 function dispatchRetryFor(
@@ -124,7 +327,8 @@ function dispatchRetryFor(
     record(dispatch) &&
     record(dispatch.input) &&
     dispatch.input.chatId === value.chatId &&
-    dispatch.input.hostId === value.hostId
+    dispatch.input.hostId === value.hostId &&
+    value.observedOutboxGeneration === send.outboxGeneration
   );
 }
 
@@ -134,6 +338,7 @@ export function requestPendingDispatchRetry(input: {
   readonly userId: string | null;
   readonly chatId: string;
   readonly hostId: string;
+  readonly observedOutboxGeneration?: number;
 }): string | null {
   const name = persistKey(STORE_KEYS.pendingSandboxSend);
   const recordKey = recordMapStorageKey(name, input.id);
@@ -157,14 +362,16 @@ export function requestPendingDispatchRetry(input: {
 }
 
 /** A same-account UI request writes no stage progress and performs no host work. */
-export function requestPendingStageRetry(input: {
-  readonly name: string;
-  readonly surfaceKey: string;
-  readonly userId: string | null;
-  readonly clientRequestId: string | null;
-  readonly sendId: string;
-  readonly action: PendingStageRetryAction;
-}): string | null {
+export function requestPendingStageRetry(
+  input: PendingStagePress & {
+    readonly name: string;
+    readonly surfaceKey: string;
+    readonly userId: string | null;
+    readonly clientRequestId: string | null;
+    readonly sendId: string;
+    readonly action: PendingStageRetryAction;
+  },
+): string | null {
   const { name, surfaceKey, userId, clientRequestId, sendId } = input;
   try {
     const send: unknown = parse(
@@ -191,10 +398,16 @@ export function requestPendingStageRetry(input: {
       action: input.action,
       userId,
       clientRequestId,
+      createKey: input.createKey,
+      observedCreateKey: input.observedCreateKey,
+      observedAttemptId: input.observedAttemptId,
+      ...(input.retryCreate === undefined
+        ? {}
+        : { retryCreate: input.retryCreate }),
     };
     const key = recordMapStorageKey(
       name,
-      `${RETRY_REGISTER_PREFIX}${surfaceKey}`,
+      stageRetrySlot(surfaceKey, request.observedCreateKey, request.id),
     );
     localStorage.setItem(key, JSON.stringify(request));
     return request.id;

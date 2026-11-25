@@ -93,6 +93,7 @@ export const RunnerHostInvoke = {
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
   listSandboxes: "runnerHost:sandboxes:list",
+  getSandbox: "runnerHost:sandboxes:get",
   // The environment directory (`/api/environments`), same reason.
   listEnvironments: "runnerHost:environments:list",
   // The account's auto-approve policy (`/api/traycer/auto-policy`), same reason.
@@ -215,6 +216,7 @@ export const RunnerHostInvoke = {
     "runnerHost:windows:requestOpenEpicInNewWindow",
   windowsRequestOpenDraftInNewWindow:
     "runnerHost:windows:requestOpenDraftInNewWindow",
+  windowsMoveDraftReference: "runnerHost:windows:moveDraftReference",
   ownershipSnapshot: "runnerHost:windows:ownership:snapshot",
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",
@@ -226,6 +228,8 @@ export const RunnerHostInvoke = {
   perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
   perWindowStateClear: "runnerHost:windows:perWindowState:clear",
+  perWindowStateFlushDraftTopology: "runnerHost:windows:perWindowState:flushDraftTopology",
+  perWindowStateUpdateDraftReferences: "runnerHost:windows:perWindowState:updateDraftReferences",
   authSessionGet: "runnerHost:windows:authSession:get",
   authSessionSet: "runnerHost:windows:authSession:set",
   authSessionRestoreLocal: "runnerHost:windows:authSession:restoreLocal",

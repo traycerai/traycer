@@ -75,6 +75,21 @@ import {
 } from "@/lib/analytics";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 
+type EpicCreateRequest = RequestOfMethod<HostRpcRegistry, "epic.create">;
+
+const exactTaskCreateRequests = new WeakSet<EpicCreateRequest>();
+
+export function requireExactEpicCreateTask(request: EpicCreateRequest): void {
+  exactTaskCreateRequests.add(request);
+}
+
+export function epicCreateTaskMatches(
+  task: TaskLight | null | undefined,
+  epicId: string,
+): boolean {
+  return task === null || task === undefined || task.epic?.light?.id === epicId;
+}
+
 interface CreateEpicMutationContext {
   readonly hostId: string | null;
   readonly userId: string | null;
@@ -230,6 +245,12 @@ export function useEpicCreateForClient(
             blocker: `refused:${response.refusal.kind}`,
           });
           reportEpicCreateRefusal(response.refusal, ctx.hostId);
+          return;
+        }
+        if (
+          exactTaskCreateRequests.has(variables) &&
+          !epicCreateTaskMatches(response.task, variables.epic.id)
+        ) {
           return;
         }
         Analytics.getInstance().track(AnalyticsEvent.TaskCreated, {

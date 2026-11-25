@@ -3,6 +3,15 @@ import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/p
 export const EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_COLS = 80;
 export const EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_ROWS = 24;
 
+export interface PendingTerminalCreateIssue {
+  readonly verify: () => Promise<boolean>;
+  readonly isCurrent: () => boolean;
+  readonly isActorCurrent: () => boolean;
+  readonly accepted: () => void;
+  readonly uncertain: () => void;
+  readonly denied: () => void;
+}
+
 export interface EpicTerminalDurableCreateRequest {
   readonly hostId: string;
   readonly terminalId: string;
@@ -10,6 +19,7 @@ export interface EpicTerminalDurableCreateRequest {
   readonly cwd: string;
   readonly cols: number;
   readonly rows: number;
+  readonly pendingIssue?: PendingTerminalCreateIssue;
 }
 
 export type EpicTerminalDurableCreateStatus =
@@ -178,19 +188,37 @@ export function requestEpicTerminalDurableCreate(args: {
   const generation = job.generation;
   job.status = "in-flight";
   job.error = null;
+  const pending = job.request.pendingIssue;
   const inflight = Promise.resolve()
     .then(async () => {
+      if (
+        pending !== undefined &&
+        (job.request.cwd.length === 0 ||
+          !(await pending.verify().catch(() => false)) ||
+          !pending.isCurrent())
+      )
+        return { kind: "denied" as const };
       try {
         await args.create();
-        return { ok: true as const, error: null };
+        return { kind: "answered" as const, ok: true as const, error: null };
       } catch (error: unknown) {
-        return { ok: false as const, error: resolveCreateError(error) };
+        return {
+          kind: "answered" as const,
+          ok: false as const,
+          error: resolveCreateError(error),
+        };
       }
     })
     .then(async (outcome) => {
       if (
         !isCompletingAttempt(jobsByLifetimeKey.get(key), inflight, generation)
       ) {
+        return;
+      }
+      if (outcome.kind === "denied") {
+        jobsByLifetimeKey.delete(key);
+        notify();
+        pending?.denied();
         return;
       }
       let snapshot: EpicTerminalDurableCreateListSnapshot | undefined;
@@ -206,6 +234,11 @@ export function requestEpicTerminalDurableCreate(args: {
           return;
         }
       }
+      if (pending !== undefined && !pending.isActorCurrent()) {
+        jobsByLifetimeKey.delete(key);
+        notify();
+        return;
+      }
       if (snapshot !== undefined) {
         args.onCommit?.(snapshot);
       }
@@ -217,6 +250,7 @@ export function requestEpicTerminalDurableCreate(args: {
       if (outcome.ok || discovered) {
         jobsByLifetimeKey.delete(key);
         notify();
+        pending?.accepted();
         args.onSuccess();
         return;
       }
@@ -228,6 +262,7 @@ export function requestEpicTerminalDurableCreate(args: {
       current.error = outcome.error;
       current.inflight = null;
       notify();
+      pending?.uncertain();
       args.onFailure?.(outcome.error);
       throw outcome.error;
     });

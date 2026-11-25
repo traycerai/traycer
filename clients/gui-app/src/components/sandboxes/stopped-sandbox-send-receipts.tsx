@@ -1,3 +1,4 @@
+import { openRetainedLandingDraft } from "@/lib/drafts/open-landing-draft";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import {
   use,
@@ -9,6 +10,8 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
+import { captureDraftAuthorityActor } from "@/lib/drafts/draft-authority-session";
+import { requestBrowserDraftOpen } from "@/lib/drafts/volatile-browser-draft-open";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sandbox-state-line";
@@ -328,6 +331,9 @@ function ReturnedSendReceipt(props: {
       : null,
   );
   const returnedDraftId = receipt.returned.draftId;
+  const recovery = receipt.returned.kind === "landing-draft"
+    ? receipt.returned.recovery
+    : undefined;
   const savedDraftPresent = useLandingDraftStore((state) =>
     state.drafts.some((draft) => draft.id === returnedDraftId),
   );
@@ -357,7 +363,7 @@ function ReturnedSendReceipt(props: {
     !returnedMessagePresent(
       receipt.returned,
       taskDraftId,
-      savedDraftPresent,
+      savedDraftPresent || recovery !== undefined,
       chatDraftRevision,
     ) ||
     Object.values(sends).some(
@@ -387,11 +393,31 @@ function ReturnedSendReceipt(props: {
   const openDraft = useCallback((): void => {
     if ((useAuthStore.getState().profile?.userId ?? null) !== receipt.userId)
       return;
-    dismissReceipt(receipt.id);
+    if (recovery !== undefined) {
+      const actor = captureDraftAuthorityActor();
+      if (actor === null || actor.accountId !== receipt.userId || router === null) return;
+      requestBrowserDraftOpen(
+        actor,
+        recovery,
+        router.navigateHome,
+        () => dismissReceipt(receipt.id),
+      );
+      return;
+    }
     if (receipt.returned.kind === "landing-draft") {
-      useLandingDraftStore.getState().openDraft(receipt.returned.draftId);
-      router?.navigateToTabIntent(draftTabIntent(receipt.returned.draftId));
-    } else if (receipt.returned.kind === "task" && props.tabId !== null) {
+      const { draftId } = receipt.returned;
+      openRetainedLandingDraft({
+        draftId,
+        isCurrent: () => useStoppedSandboxSendReceiptStore.getState().receipts[receipt.id] === receipt,
+        activate: () => {
+          dismissReceipt(receipt.id);
+          router?.navigateToTabIntent(draftTabIntent(draftId));
+        },
+      });
+      return;
+    }
+    dismissReceipt(receipt.id);
+    if (receipt.returned.kind === "task" && props.tabId !== null) {
       useNewConversationModalOpenStore.getState().open({
         epicId: receipt.epicId,
         tabId: props.tabId,
@@ -400,7 +426,7 @@ function ReturnedSendReceipt(props: {
         hostId: null,
       });
     }
-  }, [receipt, router, props.tabId]);
+  }, [receipt, recovery, router, props.tabId]);
   const content = useMemo(
     () => (
       <div

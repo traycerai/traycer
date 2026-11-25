@@ -17,7 +17,10 @@ import {
   SandboxSetupLine,
   type SandboxSetupLineFacts,
 } from "@/components/composer/sandbox-setup-line";
-import { openStagedShapeSheet } from "@/components/composer/use-sandbox-staging";
+import {
+  openStagedShapeSheet,
+  stagedShapeChangeAction,
+} from "@/components/composer/use-sandbox-staging";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
@@ -66,7 +69,8 @@ import {
   handoffOwnerLive,
   holdHandoffOwner,
   readStagedSandbox,
-  stagedCreateNeedsFreshKey,
+  stagedFailedSandboxId,
+  stagedRetryKey,
   stagedSandboxRested,
   useStagedSandbox,
   useStagedSandboxStore,
@@ -111,7 +115,6 @@ export interface StagedSandboxSend {
 /** Starts phase 1 of a surface's stage: its create or wake, then the wait. */
 export type StagedSandboxRunner = (
   surfaceKey: string,
-  fresh: boolean,
   request: StagedRunRequest,
 ) => void;
 
@@ -122,9 +125,9 @@ export type StagedSandboxRunner = (
 export function useStagedSandboxRunner(): StagedSandboxRunner {
   const deps = useStagedSandboxRunDeps();
   return useCallback(
-    (surfaceKey, fresh, request) => {
-      if (deps === null) return;
-      void runStagedSandbox(surfaceKey, fresh, request, deps);
+    (surfaceKey, request) => {
+      if (deps === null || readStagedSandbox(surfaceKey)?.returnedDraft !== undefined) return;
+      void runStagedSandbox(surfaceKey, request, deps);
     },
     [deps],
   );
@@ -202,7 +205,7 @@ export type StagedTerminalAsk =
  * stage is marked to open a folderless terminal on its sandbox once it is
  * awake, and its create or wake starts when none is running. A run that
  * stopped short starts again as the line's Retry or Keep waiting would, under
- * the key the stage's rule names. A sandbox that is up with settings that did
+ * the same stage key. A sandbox that is up with settings that did
  * not apply is awake: its terminal opens there now. While a stage holds the
  * surface the ask never falls through to the host the surface falls back to;
  * only a stage in its handoff (the surface is already on the sandbox) leaves
@@ -210,9 +213,10 @@ export type StagedTerminalAsk =
  */
 export function startStagedTerminal(
   surfaceKey: string,
-  start: (fresh: boolean) => void,
+  start: (createKey: string | null) => void,
 ): StagedTerminalAsk {
   const current = readStagedSandbox(surfaceKey);
+  if (current?.returnedDraft !== undefined) return { kind: "taken" };
   if (current === null || current.phase === "handoff") {
     return { kind: "not-taken" };
   }
@@ -221,7 +225,7 @@ export function startStagedTerminal(
   }
   useStagedSandboxStore.getState().report(surfaceKey, { openTerminal: true });
   if (current.phase === "staged" || current.failure !== null) {
-    start(stagedCreateNeedsFreshKey(current));
+    start(current.failure === null ? null : stagedRetryKey(current));
   }
   return { kind: "taken" };
 }
@@ -237,10 +241,11 @@ export function openLandingStagedTerminal(
   surfaceKey: string,
   runner: StagedSandboxRunner,
 ): StagedTerminalAsk {
-  const ask = startStagedTerminal(surfaceKey, (fresh) =>
-    runner(surfaceKey, fresh, {
+  const ask = startStagedTerminal(surfaceKey, (createKey) =>
+    runner(surfaceKey, {
       taskId: null,
       resume: false,
+      createKey,
     }),
   );
   if (ask.kind === "awake") {
@@ -304,11 +309,12 @@ export function useStagedSandboxSend(input: {
   const runner = useStagedSandboxRunner();
 
   const run = useCallback(
-    (fresh: boolean): void => {
+    (createKey: string | null): void => {
       if (surfaceKey === null) return;
-      runner(surfaceKey, fresh, {
+      runner(surfaceKey, {
         taskId,
         resume: false,
+        createKey,
       });
     },
     [runner, surfaceKey, taskId],
@@ -319,7 +325,7 @@ export function useStagedSandboxSend(input: {
   // stage carrying a terminal ask and no send keeps to the terminal, and one
   // with nothing to resubmit ends on the awake sandbox, the surface pinned.
   const runFromLine = useCallback(
-    (fresh: boolean): void => {
+    (createKey: string | null): void => {
       if (surfaceKey === null) return;
       const current = readStagedSandbox(surfaceKey);
       if (current !== null && !handoffOwnerLive(surfaceKey, current.ownerId)) {
@@ -328,7 +334,7 @@ export function useStagedSandboxSend(input: {
           sendTaken: current.sendTaken || (claimsSend && !current.openTerminal),
         });
       }
-      run(fresh);
+      run(createKey);
     },
     [claimsSend, ownerId, run, surfaceKey],
   );
@@ -352,7 +358,7 @@ export function useStagedSandboxSend(input: {
     surfaceKey,
     stage?.createdHostId ?? null,
     terminal,
-    runFromLine,
+    () => runFromLine(null),
   );
 
   const intercept = useCallback(
@@ -363,6 +369,7 @@ export function useStagedSandboxSend(input: {
       if (surfaceKey === null) return false;
       const current = readStagedSandbox(surfaceKey);
       if (current === null) return false;
+      if (current.returnedDraft !== undefined) return true;
       if (current.phase === "handoff") {
         // The resubmit on the new host was refused: this send is the
         // person's own, on the host the surface is already pinned to.
@@ -377,10 +384,9 @@ export function useStagedSandboxSend(input: {
       // it is busy. A boot with no send (a terminal ask started it, or the
       // draft that sent is gone) is handed off with this one.
       if (current.phase === "staged" || current.failure !== null) {
-        useStagedSandboxStore
-          .getState()
-          .report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
-        run(stagedCreateNeedsFreshKey(current));
+        const store = useStagedSandboxStore.getState();
+        store.report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
+        run(current.failure === null ? null : stagedRetryKey(current));
       } else if (!current.sendTaken) {
         useStagedSandboxStore
           .getState()
@@ -399,7 +405,7 @@ export function useStagedSandboxSend(input: {
     stagedSandboxRested(stage, facts?.sandboxResting ?? false);
   useEffect(() => {
     if (surfaceKey !== null && rested)
-      useStagedSandboxStore.getState().cancel(surfaceKey);
+      useStagedSandboxStore.getState().cancel(surfaceKey, false);
   }, [rested, surfaceKey]);
 
   const stop = useCallback((): void => {
@@ -422,18 +428,21 @@ export function useStagedSandboxSend(input: {
           name={stage.target.name}
           facts={facts}
           actions={{
-            onKeepWaiting: () => runFromLine(false),
-            onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
+            onKeepWaiting: () => runFromLine(null),
+            onCancel: () =>
+              useStagedSandboxStore.getState().cancel(surfaceKey, true),
             onChooseAnotherHost: () =>
               useStagedSandboxStore.getState().clear(surfaceKey),
             chooseAnotherHostLabel,
-            onRetryCreation: () => runFromLine(true),
-            onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
+            onRetryCreation: () => runFromLine(stagedRetryKey(stage)),
+            onRetry: () => runFromLine(stagedRetryKey(stage)),
             onSendAgain,
-            onChangeShape: () => {
-              useStagedSandboxStore.getState().cancel(surfaceKey);
-              openStagedShapeSheet(surfaceKey);
-            },
+            onChangeShape: stagedShapeChangeAction(surfaceKey, stage, () => {
+              useStagedSandboxStore
+                .getState()
+                .cancel(surfaceKey, stagedFailedSandboxId(stage) !== null);
+              openStagedShapeSheet(surfaceKey, stage.failure?.kind === "shape");
+            }),
             onRetryApplying: newHost.onRetryApplying,
             onRepairSetup: newHost.onRepairSetup,
             repairSetupPending: newHost.repairSetupPending,
@@ -702,7 +711,8 @@ export function useStagedSandboxHandoff(input: {
     0,
   );
   const handoff =
-    stage !== null && stage.phase === "handoff" && stage.ownerId === ownerId
+    stage !== null && stage.returnedDraft === undefined &&
+    stage.phase === "handoff" && stage.ownerId === ownerId
       ? stage
       : null;
   const preparedHostId = handoff?.createdHostId ?? null;
@@ -813,7 +823,7 @@ export function useNewHostActions(
   surfaceKey: string | null,
   createdHostId: string | null,
   terminal: StagedSandboxTerminal | null,
-  run: (fresh: boolean) => void,
+  run: () => void,
 ): {
   readonly onRetryApplying: (() => void) | null;
   readonly onRepairSetup: (() => void) | null;
@@ -867,7 +877,7 @@ export function useNewHostActions(
                 ) {
                   return;
                 }
-                run(false);
+                run();
               },
             },
           );
@@ -876,6 +886,10 @@ export function useNewHostActions(
     onOpenTerminal:
       terminal === null || terminalTarget === null
         ? null
-        : (provenance) => terminal.open(terminalTarget, provenance),
+        : (provenance) => {
+            if (surfaceKey !== null && readStagedSandbox(surfaceKey)?.returnedDraft !== undefined)
+              return;
+            terminal.open(terminalTarget, provenance);
+          },
   };
 }

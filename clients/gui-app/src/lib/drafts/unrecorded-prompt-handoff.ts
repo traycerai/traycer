@@ -90,11 +90,22 @@ import {
 import { sha256Hex } from "@/lib/composer/landing-image-store";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
+import { draftAuthorityIntentDigest } from "@/lib/drafts/draft-authority";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+} from "@/lib/drafts/draft-authority-session";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityInstallSource,
+} from "@/lib/drafts/draft-authority-types";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import { withAppWordsAfterReason } from "@/lib/chats/rejected-frame-reason";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
+  installCanonicalLandingDraft,
+  type InstallLandingDraftInput,
   useLandingDraftStore,
   type LandingDraftDurability,
 } from "@/stores/home/landing-draft-store";
@@ -230,6 +241,12 @@ export async function buildUnrecordedPromptHandoff(args: {
    */
   readonly durability: LandingDraftDurability;
 }): Promise<PromptHandoffOutcome> {
+  const saved = args.durability === "saved"
+    ? await prepareSavedHandoff(args)
+    : null;
+  if (args.durability === "saved" && saved === null) {
+    return { draftId: null, readsSettled: Promise.resolve() };
+  }
   // Started BEFORE the race and held afterwards, whichever leg wins. The race
   // bounds how long the handoff waits; it does not cancel anything, so this
   // promise is the only remaining owner of whatever the import allocates.
@@ -257,7 +274,7 @@ export async function buildUnrecordedPromptHandoff(args: {
       });
       // Awaited INSIDE the try on purpose: a rejection from the text-only path
       // must reach the catch below, not escape to the caller.
-      const draftId = await installTextOnly({ ...args, cause: "timed-out" });
+      const draftId = await installTextOnly({ ...args, cause: "timed-out" }, saved);
       return { draftId, readsSettled };
     }
     if (raced.kind === "failed") throw raced.error;
@@ -265,11 +282,11 @@ export async function buildUnrecordedPromptHandoff(args: {
     // images are the only loss, so it takes the same text-only install rather
     // than throwing.
     if (raced.kind === "refused") {
-      const draftId = await installTextOnly({ ...args, cause: "capacity" });
+      const draftId = await installTextOnly({ ...args, cause: "capacity" }, saved);
       return { draftId, readsSettled: Promise.resolve() };
     }
     try {
-      const draftId = installHandoffDraft({
+      const draftId = await installHandoffDraft({
         recovery: args.recovery,
         content: raced.result.content,
         stillCurrent: args.stillCurrent,
@@ -291,7 +308,7 @@ export async function buildUnrecordedPromptHandoff(args: {
           // stated instead.
           droppedAnnotations: args.browserAnnotations.length,
         }),
-      });
+      }, saved);
       return { draftId, readsSettled: Promise.resolve() };
     } finally {
       // Always: an install that threw must not pin the reservation for the
@@ -299,7 +316,7 @@ export async function buildUnrecordedPromptHandoff(args: {
       raced.result.reservation.release();
     }
   } catch (error: unknown) {
-    const draftId = await installTextOnly({ ...args, cause: causeOf(error) });
+    const draftId = await installTextOnly({ ...args, cause: causeOf(error) }, saved);
     // The import either settled (that is how we got here) or has already had
     // its reservation released by the `finally` above.
     return { draftId, readsSettled: Promise.resolve() };
@@ -445,79 +462,74 @@ export interface TextOnlyPromptHandoffInput {
   readonly durability: LandingDraftDurability;
 }
 
-export function buildTextOnlyPromptHandoff(
+interface SavedHandoff {
+  readonly actor: DraftAuthorityActor;
+  readonly source: DraftAuthorityInstallSource;
+}
+
+async function prepareSavedHandoff(args: Pick<
+  TextOnlyPromptHandoffInput,
+  "recovery" | "content" | "browserAnnotations" | "reason" | "returnedSandbox" | "stillCurrent"
+>): Promise<SavedHandoff | null> {
+  const actor = captureDraftAuthorityActor();
+  if (actor === null || args.recovery === undefined || !args.stillCurrent()) {
+    return null;
+  }
+  const digest = await draftAuthorityIntentDigest({
+    content: args.content,
+    annotations: args.browserAnnotations,
+    reason: args.reason,
+    returnedSandbox: args.returnedSandbox,
+    settings: args.recovery.settings,
+  });
+  return args.stillCurrent() && draftAuthorityActorIsCurrent(actor)
+    ? {
+        actor,
+        source: { kind: "prompt-handoff", id: args.recovery.draftId, digest },
+      }
+    : null;
+}
+
+export async function buildTextOnlyPromptHandoff(
   args: TextOnlyPromptHandoffInput,
 ): Promise<PromptHandoffOutcome> {
-  // Reads NOTHING, so its settlement is immediate - the caller's image roots
-  // are free the moment this returns.
-  return installTextOnly(args).then((draftId) => ({
-    draftId,
-    readsSettled: Promise.resolve(),
-  }));
+  const saved = args.durability === "saved" ? await prepareSavedHandoff(args) : null;
+  const draftId = await installTextOnly(args, saved);
+  return { draftId, readsSettled: Promise.resolve() };
 }
 
-/**
- * The bare install, for the callers inside this module that already know what
- * to say about the reads they started.
- *
- * `installHandoffDraft` is synchronous, so nothing here is genuinely awaited -
- * the `try`/`catch` exists so a throw from `installLandingDraft` reaches the
- * caller as a rejection instead of unwinding synchronously through it.
- */
 function installTextOnly(
   args: TextOnlyPromptHandoffInput,
+  saved: SavedHandoff | null,
 ): Promise<string | null> {
   const stripped = withoutImageAttachments(args.content);
-  try {
-    return Promise.resolve(
-      installHandoffDraft({
-        recovery: args.recovery,
-        content: stripped.content,
-        stillCurrent: args.stillCurrent,
-        returnedSandbox: args.returnedSandbox,
-        durability: args.durability,
-        qualification: teardownQualification({
-          reason: args.reason,
-          reasonIsRemovedProfile: args.reasonIsRemovedProfile,
-          droppedImages: stripped.dropped,
-          droppedImageCause: args.cause,
-          // EVERY record, not a subset: this path carries no images at all,
-          // so there is nothing for a record to name.
-          droppedAnnotations: args.browserAnnotations.length,
-        }),
-      }),
-    );
-  } catch (error: unknown) {
-    return Promise.reject(
-      error instanceof Error ? error : new Error(String(error)),
-    );
-  }
+  return installHandoffDraft({
+    recovery: args.recovery,
+    content: stripped.content,
+    stillCurrent: args.stillCurrent,
+    returnedSandbox: args.returnedSandbox,
+    durability: args.durability,
+    qualification: teardownQualification({
+      reason: args.reason,
+      reasonIsRemovedProfile: args.reasonIsRemovedProfile,
+      droppedImages: stripped.dropped,
+      droppedImageCause: args.cause,
+      droppedAnnotations: args.browserAnnotations.length,
+    }),
+  }, saved);
 }
 
-/**
- * The install itself: a closed start-page draft, timestamped now so it sorts
- * to the top of the Drafts list the user will go looking in.
- *
- * The same shape `stash-migration.ts` installs a converted entry with, and for
- * the same reason - a put-away row with no workspace and this window's global
- * run settings is what a draft with no surface behind it is.
- */
-function installHandoffDraft(args: {
+async function installHandoffDraft(args: {
   readonly recovery: PromptHandoffRecovery | undefined;
   readonly content: JsonContent;
   readonly qualification: string;
   readonly stillCurrent: () => boolean;
   readonly returnedSandbox: ReturnedSandbox | null;
   readonly durability: LandingDraftDurability;
-}): string | null {
-  // SYNCHRONOUS with the install, with no await between them. The fence is
-  // about WHO this text belongs to, and the image reads above it are long
-  // enough for a sign-out to land: installing then would file the outgoing
-  // account's private prompt in the incoming account's drafts list, and root
-  // its images in that account's partition.
+}, saved: SavedHandoff | null): Promise<string | null> {
   if (!args.stillCurrent()) return null;
   const draftId = args.recovery?.draftId ?? mintDraftId();
-  const installed = useLandingDraftStore.getState().installLandingDraft({
+  const input: InstallLandingDraftInput = {
     id: draftId,
     content: appendPromptQualification(args.content, args.qualification),
     selection: null,
@@ -535,17 +547,18 @@ function installHandoffDraft(args: {
     // machine; resending it starts a task wherever the composer points.
     namedHostId: null,
     durability: args.durability,
-  });
-  if (installed) return draftId;
-  // An existing row under this id counts as the install when it is one the
-  // caller can rely on. In memory, any row is. Saved, only a recovery id's:
-  // that id is the same on every attempt, so its row may be one an earlier
-  // attempt of this recovery installed, and that row is saved, because a
-  // saved install takes back any row storage refused before it throws. A
-  // minted id was never offered before; a false for it installed nothing.
-  const reusable =
-    args.durability === "in-memory" || args.recovery !== undefined;
-  return reusable &&
+  };
+  if (args.durability === "saved") {
+    if (saved === null || !draftAuthorityActorIsCurrent(saved.actor)) return null;
+    const installed = await installCanonicalLandingDraft(input, saved.actor, saved.source);
+    return args.stillCurrent() && draftAuthorityActorIsCurrent(saved.actor) &&
+      (installed.kind === "committed" || installed.kind === "replayed")
+      ? draftId
+      : null;
+  }
+
+  const installed = useLandingDraftStore.getState().installLandingDraft(input);
+  return installed ||
     useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)
     ? draftId
     : null;

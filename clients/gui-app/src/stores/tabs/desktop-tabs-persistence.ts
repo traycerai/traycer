@@ -47,6 +47,7 @@ const DEBOUNCE_MS = 100;
 interface DesktopTabsPersistenceController {
   setActiveRoute(route: string): void;
   flush(): Promise<DesktopPerWindowStateUpdateAcknowledgement>;
+  drain(): Promise<void>;
   canApplySnapshot(snapshot: DesktopPerWindowSnapshot): boolean;
   commitAppliedSnapshot(snapshot: DesktopPerWindowSnapshot): void;
   hasPending(): boolean;
@@ -88,23 +89,62 @@ export function configureDesktopTabsAuthority(supported: boolean): void {
   setTabsLocalPersistenceEnabled(!supported);
 }
 
+export function hydrateInitialDesktopTabs(
+  snapshot: DesktopPerWindowSnapshot,
+  compatible: boolean,
+  legacyHistoryRoute: string | null,
+): DesktopTabsHydration {
+  return applyDesktopTabsHydration(snapshot, compatible, legacyHistoryRoute, true);
+}
+
 export function hydrateDesktopTabs(
   snapshot: DesktopPerWindowSnapshot,
   compatible: boolean,
   legacyHistoryRoute: string | null,
 ): DesktopTabsHydration {
-  // Desktop always chooses a per-window snapshot layout or per-window legacy
-  // reconstruction. A browser-local v1 marker is never allowed to select
-  // focus after either desktop authority path wins.
+  return applyDesktopTabsHydration(snapshot, compatible, legacyHistoryRoute, false);
+}
+
+function applyDesktopTabsHydration(
+  snapshot: DesktopPerWindowSnapshot,
+  compatible: boolean,
+  legacyHistoryRoute: string | null,
+  initial: boolean,
+): DesktopTabsHydration {
   discardLegacyTabsSourceActiveSelection();
-  const layout =
+  const sources = desktopTabSourceRefs(snapshot);
+  let layout =
     compatible && hasPersistedV2Layout(snapshot.tabStripLayout)
       ? sanitizeDesktopLayout(
           migrateTabsPersistedState(snapshot.tabStripLayout),
+          sources,
         )
-      : legacyDesktopLayout(snapshot, legacyHistoryRoute);
+      : legacyDesktopLayout(snapshot, legacyHistoryRoute, sources);
+  let activeRoute = snapshot.activeRoute ?? null;
+
+  if (initial && snapshot.draftTopology !== undefined) {
+    // An alias can be durable before the renderer's layout debounce runs.
+    const unplaced = sources.filter(
+      (ref) => ref.kind === "draft" && findStripItemForRef(layout, ref) === null,
+    );
+    if (unplaced.length > 0) {
+      const withDrafts = unplaced.reduce(createLayoutItem, layout);
+      layout = {
+        ...withDrafts,
+        activeItemId: layout.activeItemId,
+        activationHistory: layout.activationHistory,
+      };
+      const activeDraftId = snapshot.draftTopology.activeDraftId;
+      const selected = unplaced.find((ref) => ref.id === activeDraftId);
+      if (selected !== undefined) {
+        layout = focusLayoutRef(layout, selected);
+        activeRoute = routeForRef(layout, selected);
+      }
+    }
+  }
+
   tabCommandCoordinator.restoreHydratedLayout(layout);
-  const restoredRoute = restoreRoute(layout, snapshot.activeRoute ?? null);
+  const restoredRoute = restoreRoute(layout, activeRoute);
   pendingRestoredRoute = restoredRoute;
   return { route: restoredRoute, revision: snapshot.revision ?? 0 };
 }
@@ -167,8 +207,7 @@ export function hasPendingDesktopTabsWrite(): boolean {
  * the caller after it has drained its pending debounce.
  */
 export function drainDesktopTabsPersistence(): Promise<void> {
-  if (activeController === null) return Promise.resolve();
-  return activeController.flush().then(() => undefined);
+  return activeController?.drain() ?? Promise.resolve();
 }
 
 export function shouldApplyDesktopTabsSnapshot(
@@ -313,6 +352,8 @@ function createDesktopTabsPersistenceController(
       schedule();
     },
     flush,
+    drain: () =>
+      latestSequence === 0 ? Promise.resolve() : flush().then(() => undefined),
     canApplySnapshot: (snapshot) =>
       (snapshot.revision ?? 0) > revisionFloor &&
       latestSequence === acknowledgedSequence,
@@ -388,10 +429,20 @@ function currentLayout(): PersistedTabStripLayout {
   };
 }
 
+function desktopTabSourceRefs(
+  snapshot: DesktopPerWindowSnapshot,
+): readonly TabRef[] {
+  const sources = tabSourceRefs();
+  if (snapshot.draftTopology === undefined) return sources;
+  const attached = new Set(snapshot.draftTopology.references.map((ref) => ref.slotId));
+  return sources.filter((ref) => ref.kind !== "draft" || attached.has(ref.id));
+}
+
 function sanitizeDesktopLayout(
   persisted: PersistedTabStripLayout,
+  sources: readonly TabRef[],
 ): PersistedTabStripLayout {
-  const sourceKeys = new Set(tabSourceRefs().map(refKey));
+  const sourceKeys = new Set(sources.map(refKey));
   const missing = flattenLayoutRefs(persisted).filter(
     (ref) => isSourceBackedTabKind(ref.kind) && !sourceKeys.has(refKey(ref)),
   );
@@ -452,13 +503,14 @@ function survivingActiveItemId(
 function legacyDesktopLayout(
   snapshot: DesktopPerWindowSnapshot,
   historyRoute: string | null,
+  sources: readonly TabRef[],
 ): PersistedTabStripLayout {
   const systemTabs = legacySystemTabs(historyRoute);
-  const layout = tabSourceRefs().reduce(createLayoutItem, {
+  const layout = sources.reduce(createLayoutItem, {
     ...emptyTabStripLayout(),
     systemTabs,
   });
-  const activeRef = legacyActiveRef(snapshot, historyRoute, systemTabs);
+  const activeRef = legacyActiveRef(snapshot, historyRoute, systemTabs, sources);
   return activeRef === null ? layout : focusLayoutRef(layout, activeRef);
 }
 
@@ -496,26 +548,30 @@ function legacyActiveRef(
   snapshot: DesktopPerWindowSnapshot,
   historyRoute: string | null,
   systemTabs: PersistedTabStripLayout["systemTabs"],
+  sources: readonly TabRef[],
 ): TabRef | null {
   const restoredRef = routeRef(routePath(historyRoute));
-  if (restoredRef !== null && refIsRestorable(restoredRef, systemTabs)) {
+  if (restoredRef !== null && refIsRestorable(restoredRef, systemTabs, sources)) {
     return restoredRef;
   }
   if (
     snapshot.activeTabId !== null &&
-    tabSourceRefs().some(
+    sources.some(
       (ref) => ref.kind === "epic" && ref.id === snapshot.activeTabId,
     )
   ) {
     return { kind: "epic", id: snapshot.activeTabId };
   }
+  const activeDraftId = snapshot.draftTopology === undefined
+    ? snapshot.activeLandingDraftId
+    : snapshot.draftTopology.activeDraftId;
   if (
-    snapshot.activeLandingDraftId !== null &&
-    tabSourceRefs().some(
-      (ref) => ref.kind === "draft" && ref.id === snapshot.activeLandingDraftId,
+    activeDraftId !== null &&
+    sources.some(
+      (ref) => ref.kind === "draft" && ref.id === activeDraftId,
     )
   ) {
-    return { kind: "draft", id: snapshot.activeLandingDraftId };
+    return { kind: "draft", id: activeDraftId };
   }
   return null;
 }
@@ -561,12 +617,13 @@ function refIsInLayout(layout: PersistedTabStripLayout, ref: TabRef): boolean {
 function refIsRestorable(
   ref: TabRef,
   systemTabs: PersistedTabStripLayout["systemTabs"],
+  sources: readonly TabRef[],
 ): boolean {
   if (ref.kind === "sample-workspace") return false;
   if (ref.kind === "history" || ref.kind === "settings") {
     return systemTabs[ref.kind] !== null;
   }
-  return tabSourceRefs().some((source) => refKey(source) === refKey(ref));
+  return sources.some((source) => refKey(source) === refKey(ref));
 }
 
 function routeBackingRef(item: StripItem): TabRef | null {

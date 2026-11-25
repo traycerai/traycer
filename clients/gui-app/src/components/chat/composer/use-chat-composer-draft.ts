@@ -9,6 +9,7 @@ import {
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
+  EMPTY_COMPOSER_DRAFT,
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
@@ -28,6 +29,7 @@ interface UseChatComposerDraftArgs {
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   /** Bumped by the owner when `ComposerPromptEditor` fires `onEditorReady`. */
   readonly editorReadyTick: number;
+  readonly acceptedPresentationRevision?: number | null;
   /**
    * Display snapshots recorded on this chat's draft row so the drafts list
    * can name it once this composer is gone (the titles come from the
@@ -50,11 +52,20 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     (state) => state.setSelection,
   );
   const [initialDraft] = useState(() => readComposerDraftSnapshot(args.chatId));
-  const initialContent = initialDraft.content;
-  const initialSelection = initialDraft.selection;
-
-  const draftContent = useComposerDraftStore(
-    (state) => state.drafts[args.chatId]?.content ?? initialContent,
+  const acceptedPresentationHidden = useComposerDraftStore((state) => {
+    const revision = args.acceptedPresentationRevision;
+    const draft = state.drafts[args.chatId];
+    return revision !== null && revision !== undefined &&
+      (draft === undefined || draft.revision === revision);
+  });
+  const initialContent = acceptedPresentationHidden
+    ? EMPTY_COMPOSER_DRAFT.content
+    : initialDraft.content;
+  const initialSelection = acceptedPresentationHidden ? null : initialDraft.selection;
+  const draftContent = useComposerDraftStore((state) =>
+    acceptedPresentationHidden
+      ? EMPTY_COMPOSER_DRAFT.content
+      : (state.drafts[args.chatId]?.content ?? initialContent),
   );
   const draftResetEpoch = useComposerDraftStore(
     (state) => state.drafts[args.chatId]?.resetEpoch ?? 0,
@@ -65,7 +76,9 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     [draftContent],
   );
   const draftAnnotationCount = useComposerDraftStore(
-    (state) => state.drafts[args.chatId]?.browserAnnotations.length ?? 0,
+    (state) => acceptedPresentationHidden
+      ? 0
+      : (state.drafts[args.chatId]?.browserAnnotations.length ?? 0),
   );
   const draftHasImages = useMemo(
     () => containsImageAtoms(draftContent) || draftAnnotationCount > 0,
@@ -106,10 +119,16 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     const editor = args.editorRef.current;
     if (editor === null || !editor.isReady()) return;
     const draft = useComposerDraftStore.getState().drafts[args.chatId];
-    if (draft === undefined) return;
+    if (draft === undefined || acceptedPresentationHidden) return;
     editor.syncContent(draft.content, draft.selection);
     appliedResetEpochRef.current = draft.resetEpoch;
-  }, [args.editorRef, args.chatId, args.editorReadyTick, draftResetEpoch]);
+  }, [
+    acceptedPresentationHidden,
+    args.editorRef,
+    args.chatId,
+    args.editorReadyTick,
+    draftResetEpoch,
+  ]);
 
   const bindTarget = useComposerDraftStore((state) => state.bindTarget);
   useEffect(() => {
@@ -148,6 +167,7 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     draftContent,
     draftHasText,
     draftHasImages,
+    acceptedPresentationHidden,
     handleDocumentChange,
     handleSelectionChange,
   };

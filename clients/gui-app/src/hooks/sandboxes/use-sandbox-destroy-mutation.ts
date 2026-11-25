@@ -1,3 +1,5 @@
+import { captureDraftAuthorityActor } from "@/lib/drafts/draft-authority-session";
+import { capturePendingSandboxDestroy } from "@/lib/sandboxes/pending-sandbox-authority";
 import {
   useMutation,
   useQueryClient,
@@ -138,13 +140,24 @@ export function sandboxDestroyMutationOptions(
           actor: { userId: viewer, displayName: null },
         });
       }
+      const actor = captureDraftAuthorityActor();
+      const notifySettled = actor === null
+        ? undefined
+        : capturePendingSandboxDestroy({
+            actor,
+            hostId: target.hostId,
+            sandboxId,
+          });
       const result = await binding.auth.destroySandbox(
         sandboxId,
         request !== undefined,
       );
       // Ordinary Destroy is idempotent on a 404. A guarded batch cannot tell
       // an already destroyed row from lost authority, so it records a skip.
-      if (result.kind === "ok") return result.settled;
+      if (result.kind === "ok") {
+        if (result.settled) notifySettled?.();
+        return result.settled;
+      }
       if (
         result.kind === "refused" &&
         result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND &&

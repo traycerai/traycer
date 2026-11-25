@@ -15,6 +15,7 @@ import {
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
@@ -45,7 +46,12 @@ import type {
   DesktopPerWindowSnapshot,
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  createBrowserLandingDraftStorage,
+  readLegacyBrowserLandingDrafts,
+} from "@/lib/persist/browser-landing-draft-storage";
 import {
   completeLandingDraftDelete,
   isLandingDraftRetirementKey,
@@ -65,17 +71,34 @@ import {
   markLandingDraftsAuthoritativeNonEmpty,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
-import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-budget";
+import {
+  registerExtraImageRootSource,
+  registerExtraImageSizeSource,
+  registerLandingDraftRootSource,
+} from "@/lib/composer/landing-image-budget";
+import { landingImagePartition } from "@/lib/composer/landing-image-store";
+import {
+  holdPendingIngestImageHash,
+  mintPendingIngestHolderId,
+  releasePendingIngestImageHashes,
+} from "@/lib/composer/pending-ingest-image-roots";
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
   parseReturnedSandbox,
+  returnedSandboxCreateMatches,
+  returnedStageMatchesDraft,
   returnedSandboxToJson,
+  returnedSandboxWithCreate,
   sameStoredReturnedSandbox,
   storeReturnedSandbox,
+  updateReturnedSandboxRestore,
+  type ReturnedSandboxDraft,
+  type ReturnedCreateCommit,
   type ReturnedSandbox,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
+import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 import {
   landingPlacementHostId,
   notifyDraftLocalDelete,
@@ -85,6 +108,44 @@ import {
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
+
+import {
+  admitDraftAuthorityLandingHistory,
+  importDraftAuthorityRetainedLanding,
+  importDraftAuthoritySlot,
+  listDraftAuthoritySlots,
+  readDraftAuthorityLandingRetentions,
+  readDraftAuthorityLegacyLandingHistory,
+  readDraftAuthoritySlot,
+  readDraftAuthoritySlots,
+  retainDraftAuthorityLandingHistory,
+  sameDraftAuthoritySlot,
+  subscribeToDraftAuthorityChanges,
+  verifyDurableLandingImageBytes,
+  writeDraftAuthority,
+  type DraftAuthorityLandingRetentionRow,
+} from "@/lib/drafts/draft-authority";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityOptionalActorIsCurrent,
+  subscribeToDraftAuthoritySessionChanges,
+} from "@/lib/drafts/draft-authority-session";
+import { getDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
+import { DraftAuthorityProjection } from "@/lib/drafts/draft-authority-projection";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityEditReceipt,
+  DraftAuthorityInstallSource,
+  DraftAuthorityLandingFlush,
+  DraftAuthorityLandingRead,
+  DraftAuthorityManifest,
+  DraftAuthorityMutationResult,
+  DraftAuthorityPayload,
+  DraftAuthorityRecord,
+  DraftAuthorityReference,
+  DraftAuthoritySlot,
+  DraftAuthorityVersion,
+} from "@/lib/drafts/draft-authority-types";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -182,13 +243,7 @@ export interface LandingDraftWorkspaceSnapshot {
   readonly primaryPath: string | null;
 }
 
-/**
- * What an install must be to count, when storage refuses its row. `"saved"`:
- * the row is taken back out and the install throws - for a caller that keeps
- * a saved source to retry from until the row is saved. `"in-memory"`: the row
- * stays, readable until the window closes, and the install throws - for a
- * caller whose source is already gone, so that row is the last copy there is.
- */
+/** Distinguishes a durable replacement from the editor's last in-memory copy. */
 export type LandingDraftDurability = "saved" | "in-memory";
 
 /** The row {@link LandingDraftStoreState.installLandingDraft} writes. */
@@ -257,19 +312,7 @@ interface LandingDraftStoreState {
    * `nextId` already exists.
    */
   forkDraft: (sourceId: string, nextId: string) => boolean;
-  /**
-   * Insert a start-task row for `id` carrying the given snapshot verbatim,
-   * dirty (so the mirror adopts and publishes it) and unadopted, WITHOUT
-   * touching `activeDraftId` - the stash migration installs many rows at
-   * once and Undo restores one the user is not looking at, so neither may
-   * hijack the composer. False when `id` is retired or already present.
-   * Throws when storage refuses the row; `durability` says whether the row
-   * stays in memory.
-   *
-   * Deliberately not `createDraftWithId` + `closeDraft`: that pair sets and
-   * then clears the active draft, and fires an image reconcile between the
-   * empty content and the real content.
-   */
+  /** Inserts an in-memory recovery draft without changing the active editor. */
   installLandingDraft: (input: InstallLandingDraftInput) => boolean;
   /**
    * Put a start-task draft away. A non-empty draft is retained (`closed:
@@ -365,15 +408,13 @@ let hasAppliedDesktopProjection = false;
  */
 const imageAdoptionAttemptedDraftIds = new Set<string>();
 
+const browserLandingStorage = createBrowserLandingDraftStorage();
 const landingDraftStorage: StateStorage = {
-  getItem: (name) => window.localStorage.getItem(name),
+  getItem: (name) => browserLandingStorage.getItem(name),
   setItem: (name, value) => {
-    if (!localPersistenceEnabled) return;
-    window.localStorage.setItem(name, value);
+    if (localPersistenceEnabled) browserLandingStorage.setItem(name, value);
   },
-  removeItem: (name) => {
-    window.localStorage.removeItem(name);
-  },
+  removeItem: (name) => browserLandingStorage.removeItem(name),
 };
 function setLandingDraftLocalPersistenceEnabled(enabled: boolean): void {
   localPersistenceEnabled = enabled;
@@ -384,6 +425,11 @@ export function setLandingDraftDesktopProjectionBridge(
 ): void {
   desktopProjectionBridge = bridge;
   hasAppliedDesktopProjection = false;
+  canonicalDesktopAliases = null;
+  usesCanonicalLandingProjection = false;
+  desktopLandingImportGeneration += 1;
+  retainedClosedLandingDrafts.clear();
+  invalidateLandingRetentions();
   imageAdoptionAttemptedDraftIds.clear();
   setLandingDraftLocalPersistenceEnabled(bridge === null);
 }
@@ -391,7 +437,8 @@ export function setLandingDraftDesktopProjectionBridge(
 export function applyLandingDraftDesktopProjection(
   snapshot: DesktopPerWindowSnapshot,
 ): void {
-  const drafts = uniqueLandingDrafts(readProjectedDrafts(snapshot));
+  if (usesCanonicalLandingProjection) return;
+  const drafts = uniqueLandingDrafts(readProjectedDrafts(snapshot, "renderer"));
   const activeDraftId = readProjectedActiveDraftId(snapshot, drafts);
   const currentState = useLandingDraftStore.getState();
   // [B1] Empty-inbound clobber guard. The FIRST desktop projection is always
@@ -466,6 +513,7 @@ export function applyLandingDraftDesktopProjection(
 
 function readProjectedDrafts(
   snapshot: DesktopPerWindowSnapshot,
+  source: "renderer" | "migration",
 ): ReadonlyArray<LandingDraftTab> {
   return snapshot.landingDrafts.flatMap((draft) => {
     // T6: the desktop payload now carries real rich content (hash-only image
@@ -478,11 +526,16 @@ function readProjectedDrafts(
         id: draft.id,
         content,
         selection: parseLandingDraftSelection(draft.selection),
-        lastTouchedAt: parseLandingDraftLastTouchedAt(draft.lastTouchedAt),
+        lastTouchedAt: parseLandingDraftLastTouchedAt(
+          draft.lastTouchedAt,
+          source === "migration" ? 0 : undefined,
+        ),
         settings: parseChatRunSettings(draft.settings),
         composerMode: parseComposerMode(draft.composerMode),
         workspace: parseLandingDraftWorkspaceSnapshot(draft.workspace),
-        ...mirrorFieldsFromExisting(draft.id),
+        ...(source === "migration"
+          ? freshLandingMirrorState()
+          : mirrorFieldsFromExisting(draft.id)),
         closed: draft.closed === true,
         returnedSandbox: parseReturnedSandbox(draft.returnedSandbox),
         accountFollowsDefault: draft.accountFollowsDefault === true,
@@ -528,10 +581,13 @@ function parseLandingDraftSelection(value: unknown): DraftSelection | null {
   return { from, to };
 }
 
-function parseLandingDraftLastTouchedAt(value: unknown): number {
+function parseLandingDraftLastTouchedAt(
+  value: unknown,
+  fallback: number | undefined,
+): number {
   return typeof value === "number" && Number.isFinite(value)
     ? value
-    : Date.now();
+    : (fallback ?? Date.now());
 }
 
 function readProjectedActiveDraftId(
@@ -571,7 +627,10 @@ function parsePersistedLandingDrafts(
           id,
           content,
           selection: parseLandingDraftSelection(raw.selection),
-          lastTouchedAt: parseLandingDraftLastTouchedAt(raw.lastTouchedAt),
+          lastTouchedAt: parseLandingDraftLastTouchedAt(
+            raw.lastTouchedAt,
+            undefined,
+          ),
           settings: parseChatRunSettings(raw.settings),
           composerMode: parsePersistedComposerMode(raw.composerMode),
           workspace: parseLandingDraftWorkspaceSnapshot(raw.workspace),
@@ -732,6 +791,23 @@ function newestDraft(drafts: ReadonlyArray<LandingDraftTab>): string | null {
   return newest === null ? null : newest.id;
 }
 
+function seedLandingDraft(id: string, settings: ChatRunSettings | null): LandingDraftTab {
+  const hostId = readComposerHostIdSnapshot();
+  return {
+    id,
+    content: EMPTY_LANDING_DRAFT_CONTENT,
+    selection: null,
+    lastTouchedAt: Date.now(),
+    settings: copyChatRunSettings(
+      settings ?? useComposerRunSettingsStore.getState().getGlobalRunSettings(hostId),
+    ),
+    composerMode: useSettingsStore.getState().composerMode,
+    workspace: readLandingDraftWorkspaceSnapshotForHost(hostId),
+    ...freshLandingMirrorState(),
+    accountFollowsDefault: settings === null,
+  };
+}
+
 export const useLandingDraftStore = create<LandingDraftStoreState>()(
   persist(
     (set, get) => ({
@@ -748,26 +824,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       createDraftWithId: (id, settings) => {
         if (landingDraftIsRetired(id)) return id;
         if (get().drafts.some((draft) => draft.id === id)) return id;
-        // Workspace and default settings belong to the same placement host,
-        // including drafts created through the tab strip or a split pane.
-        const hostId = readComposerHostIdSnapshot();
-        const next: LandingDraftTab = {
-          id,
-          content: EMPTY_LANDING_DRAFT_CONTENT,
-          selection: null,
-          lastTouchedAt: Date.now(),
-          settings: copyChatRunSettings(
-            settings ??
-              useComposerRunSettingsStore
-                .getState()
-                .getGlobalRunSettings(hostId),
-          ),
-          // Seed from the global last-used mode; the draft owns it from here.
-          composerMode: useSettingsStore.getState().composerMode,
-          workspace: readLandingDraftWorkspaceSnapshotForHost(hostId),
-          ...freshLandingMirrorState(),
-          accountFollowsDefault: settings === null,
-        };
+        const next = seedLandingDraft(id, settings);
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
           activeDraftId: next.id,
@@ -845,49 +902,13 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       installLandingDraft: (input) => {
+        if (input.durability === "saved") {
+          throw new Error("Saved Landing draft installs require an authority acknowledgement");
+        }
         if (landingDraftIsRetired(input.id)) return false;
         if (get().drafts.some((draft) => draft.id === input.id)) return false;
-        const next: LandingDraftTab = {
-          id: input.id,
-          content: input.content,
-          selection: input.selection,
-          lastTouchedAt: input.lastTouchedAt,
-          settings: copyChatRunSettings(input.settings),
-          composerMode: input.composerMode,
-          workspace: input.workspace,
-          ...freshLandingMirrorState(),
-          // A fresh row with content is dirty by definition: the mirror
-          // adopts and publishes it on the next sweep.
-          generation: 1,
-          closed: input.closed,
-          returnedSandbox:
-            input.returnedSandbox === null
-              ? null
-              : storeReturnedSandbox(input.returnedSandbox),
-          namedHostId: input.namedHostId,
-        };
-        const before = get().drafts;
-        try {
-          // Partial set: `activeDraftId` is deliberately left where it is.
-          set((state) => ({
-            drafts: [...uniqueLandingDrafts(state.drafts), next],
-          }));
-        } catch (error: unknown) {
-          // persist sets memory first, then writes storage, and a refused
-          // write throws out of `set` with the row already in memory. For a
-          // saved install, take it back out: a row only memory holds is gone
-          // on reload, and a caller that saw it would end the only copy that
-          // is saved.
-          if (input.durability === "saved") {
-            try {
-              set({ drafts: before });
-            } catch {
-              // Storage still holds the snapshot from before the refused
-              // write.
-            }
-          }
-          throw error;
-        }
+        const next = landingDraftFromInstall(input);
+        set((state) => ({ drafts: [...uniqueLandingDrafts(state.drafts), next] }));
         notifyDraftLocalEdit(input.id);
         scheduleLandingImageReconcile();
         return true;
@@ -895,6 +916,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
 
       closeDraft: (id) => {
         if (!get().drafts.some((d) => d.id === id)) return;
+        if (canonicalDesktopAliases !== null) {
+          if (get().activeDraftId === id) set({ activeDraftId: null });
+          return;
+        }
         // Flush pending runtime writes first so emptiness is judged on the
         // canonical document, not a still-debounced keystroke.
         draftRuntimeRegistry.close(id);
@@ -939,11 +964,11 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       deleteDraft: (id) => {
-        destroyLandingDraft(get, set, id, true);
+        void deleteLandingAuthorityDraft(id, () => destroyLandingDraft(get, set, id, true));
       },
 
       applyHostDelete: (id) => {
-        destroyLandingDraft(get, set, id, false);
+        void deleteLandingAuthorityDraft(id, () => destroyLandingDraft(get, set, id, false));
       },
 
       openDraft: (id) => {
@@ -1189,14 +1214,6 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       // document one node shorter than the one those positions were measured
       // in.
       partialize: (state) => ({
-        drafts: state.drafts.map((draft) => ({
-          ...draft,
-          settings:
-            draft.settings === null
-              ? null
-              : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
-          ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
-        })),
         activeDraftId: state.activeDraftId,
         resumeDraftId: state.resumeDraftId,
       }),
@@ -1227,6 +1244,798 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
   ),
 );
 
+const landingAuthority = new DraftAuthorityProjection(landingAuthorityMetadata);
+let applyingAuthorityProjection = false;
+let canonicalDesktopAliases: readonly DraftAuthorityReference[] | null = null;
+let usesCanonicalLandingProjection = false;
+let desktopLandingImportGeneration = 0;
+
+interface LandingRetentionView {
+  readonly windowId: string;
+  readonly rows: readonly DraftAuthorityLandingRetentionRow[];
+  readonly hashes: readonly string[];
+  readonly declaredSizes: ReadonlyMap<string, number>;
+}
+
+interface UnpublishedLandingRetention {
+  readonly windowId: string;
+  readonly draft: DraftAuthorityVersion;
+  readonly manifest: DraftAuthorityManifest | null;
+}
+
+let landingRetentionGeneration = 0;
+let landingRetentionReady = false;
+let landingRetentions: LandingRetentionView | null = null;
+let landingRetentionRead: Promise<void> | null = null;
+const retainedClosedLandingDrafts = new Map<string, DraftAuthorityVersion>();
+const unpublishedLandingRetentionHolds = new Map<string, UnpublishedLandingRetention>();
+
+function currentLandingRetentionWindow(): string | null {
+  const windowId = getDesktopEpicOwnershipBridge()?.windowId;
+  return windowId !== undefined && windowId.length > 0 && landingImagePartition() === windowId
+    ? windowId
+    : null;
+}
+
+function nativeLandingProjectionPending(): boolean {
+  return !hasAppliedDesktopProjection &&
+    (getDesktopEpicOwnershipBridge() !== null || landingImagePartition() !== "default");
+}
+
+function invalidateLandingRetentions(): void {
+  landingRetentionGeneration += 1;
+  landingRetentionReady = false;
+  landingRetentionRead = null;
+}
+
+function currentLandingRetentions(): LandingRetentionView | null {
+  return landingRetentionReady && landingRetentions?.windowId === currentLandingRetentionWindow()
+    ? landingRetentions
+    : null;
+}
+
+async function loadLandingRetentions(windowId: string, generation: number): Promise<void> {
+  const isCurrent = (): boolean => generation === landingRetentionGeneration &&
+    currentLandingRetentionWindow() === windowId;
+  try {
+    const result = await readDraftAuthorityLandingRetentions();
+    if (!isCurrent() || result.kind !== "current") return;
+    const hashes = new Set<string>();
+    const declaredSizes = new Map<string, number>();
+    const rowsBySlot = new Map<string, DraftAuthorityLandingRetentionRow>();
+    for (const row of result.rows) {
+      const { record, rootedDigests } = row;
+      const { slot } = record.draft;
+      const { content, id } = record.payload;
+      if (slot.kind !== "landing" || id !== slot.id ||
+        !isLandingDraftDocContent(content) || rowsBySlot.has(slot.id) ||
+        !sameLandingDigests(draftImageHashes(content), record.manifest.digests)) {
+        return;
+      }
+      rowsBySlot.set(slot.id, row);
+      const manifest = new Set(record.manifest.digests);
+      const rooted = new Set(rootedDigests);
+      for (const digest of rooted) {
+        if (!manifest.has(digest)) return;
+        hashes.add(digest);
+      }
+      for (const atom of collectImageAtoms(content)) {
+        if (atom.hash !== null && rooted.has(atom.hash) && atom.size !== null) {
+          declaredSizes.set(atom.hash, Math.max(declaredSizes.get(atom.hash) ?? 0, atom.size));
+        }
+      }
+    }
+
+    const mustAccountFor = new Map<string, DraftAuthorityVersion[]>();
+    const previousRows = landingRetentions?.windowId === windowId ? landingRetentions.rows : [];
+    for (const { record } of previousRows) mustAccountFor.set(record.draft.slot.id, [record.draft]);
+    const publishedHolds: string[] = [];
+    for (const [holderId, pending] of unpublishedLandingRetentionHolds) {
+      if (pending.windowId !== windowId) continue;
+      const { draft, manifest } = pending;
+      const row = rowsBySlot.get(draft.slot.id);
+      if (row !== undefined && manifest !== null && sameLandingVersion(draft, row.record.draft) &&
+        !sameLandingDigests(manifest.digests, row.rootedDigests)) {
+        return;
+      }
+      const prior = mustAccountFor.get(draft.slot.id) ?? [];
+      mustAccountFor.set(draft.slot.id, [...prior, draft]);
+      publishedHolds.push(holderId);
+    }
+    for (const [id, drafts] of mustAccountFor) {
+      const row = rowsBySlot.get(id);
+      if (row !== undefined) continue;
+      // A receipt can disappear from the scoped view on a tombstone or
+      // replacement. An unexplained omission cannot release custody.
+      const current = await readDraftAuthoritySlot(landingAuthoritySlot(id));
+      if (!isCurrent() || current.kind !== "current") return;
+      const { record } = current;
+      if (record.kind === "live" &&
+        drafts.some((draft) => sameLandingOccurrence(draft, record.draft))) return;
+    }
+    if (!isCurrent()) return;
+    landingRetentions = { windowId, rows: result.rows, hashes: [...hashes], declaredSizes };
+    landingRetentionReady = true;
+    for (const holderId of publishedHolds) {
+      unpublishedLandingRetentionHolds.delete(holderId);
+      releasePendingIngestImageHashes(holderId);
+    }
+    scheduleLandingImageReconcile();
+  } catch (error: unknown) {
+    appLogger.warn("[landing-draft] retained roots could not be read", {
+      error: describeLogError(error),
+    });
+  } finally {
+    if (isCurrent()) landingRetentionRead = null;
+  }
+}
+
+async function refreshLandingRetentions(): Promise<LandingRetentionView | null> {
+  const bridge = getDesktopEpicOwnershipBridge();
+  const windowId = currentLandingRetentionWindow();
+  if (windowId === null) return null;
+  while (bridge === getDesktopEpicOwnershipBridge() && currentLandingRetentionWindow() === windowId) {
+    const current = currentLandingRetentions();
+    if (current !== null) return current;
+    const generation = landingRetentionGeneration;
+    landingRetentionRead ??= loadLandingRetentions(windowId, generation);
+    await landingRetentionRead;
+    if (generation === landingRetentionGeneration) return currentLandingRetentions();
+  }
+  return null;
+}
+
+function sameLandingOccurrence(a: DraftAuthorityReference, b: DraftAuthorityReference): boolean {
+  return sameDraftAuthoritySlot(a.slot, b.slot) && a.occurrence === b.occurrence;
+}
+
+function sameLandingVersion(a: DraftAuthorityVersion, b: DraftAuthorityVersion): boolean {
+  return sameLandingOccurrence(a, b) && a.version === b.version;
+}
+
+function sameLandingDigests(expected: readonly string[], actual: readonly string[]): boolean {
+  const digests = new Set(actual);
+  return expected.length === digests.size && expected.every((digest) => digests.has(digest));
+}
+
+function holdLandingImages(label: string, digests: readonly string[]): string {
+  const holderId = mintPendingIngestHolderId(label);
+  for (const digest of digests) holdPendingIngestImageHash(holderId, digest);
+  return holderId;
+}
+
+async function publishLandingRetention(
+  holderId: string,
+  pending: UnpublishedLandingRetention,
+): Promise<LandingRetentionView | null> {
+  // A durable commit owns these bytes even if its initiating gesture has gone stale.
+  // A failed refresh leaves the actual ingest hold in place until a scoped read succeeds.
+  unpublishedLandingRetentionHolds.set(holderId, pending);
+  invalidateLandingRetentions();
+  if (currentLandingRetentionWindow() !== pending.windowId) return null;
+  const view = await refreshLandingRetentions();
+  if (view === null || currentLandingRetentions() !== view) return null;
+  syncRetainedClosedLandingDrafts(view);
+  return view;
+}
+
+function landingAuthoritySlot(id: string): DraftAuthoritySlot {
+  return { kind: "landing", id };
+}
+
+function landingDraftFromInstall(input: InstallLandingDraftInput): LandingDraftTab {
+  return {
+    id: input.id,
+    content: input.content,
+    selection: input.selection,
+    lastTouchedAt: input.lastTouchedAt,
+    settings: copyChatRunSettings(input.settings),
+    composerMode: input.composerMode,
+    workspace: input.workspace,
+    ...freshLandingMirrorState(),
+    generation: 1,
+    closed: input.closed,
+    returnedSandbox: input.returnedSandbox === null
+      ? null
+      : storeReturnedSandbox(input.returnedSandbox),
+    namedHostId: input.namedHostId,
+  };
+}
+
+export async function installCanonicalLandingDraft(
+  input: InstallLandingDraftInput,
+  actor: DraftAuthorityActor,
+  source: DraftAuthorityInstallSource,
+): Promise<DraftAuthorityMutationResult<DraftAuthorityEditReceipt, DraftAuthorityRecord>> {
+  if (input.durability !== "saved") return { kind: "invalid" };
+  const slot = landingAuthoritySlot(input.id);
+  const legacyRetired = landingDraftIsRetired(input.id);
+  if (legacyRetired) {
+    return { kind: "conflict", current: null };
+  }
+  const draft = landingDraftFromInstall(input);
+  const payload = landingAuthorityPayload(draft);
+  const result = await writeDraftAuthority({
+    operation: { id: `install-landing:${actor.accountId}:${source.kind}:${source.id}`, actor },
+    installSource: source,
+    expected: { kind: "absent", slot },
+    mutation: {
+      kind: "replace",
+      occurrence: input.id,
+      payload,
+      ...landingAuthorityMetadata(payload),
+    },
+  });
+  if (result.kind === "committed") {
+    await refreshLandingAuthoritySlot(slot, result.receipt.draft);
+    notifyDraftLocalEdit(slot.id);
+  }
+  return result;
+}
+
+function landingAuthorityPayload(draft: LandingDraftTab): DraftAuthorityPayload {
+  return {
+    ...draft,
+    settings: draft.settings === null
+      ? null
+      : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
+    ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
+  };
+}
+
+function landingAuthorityMetadata(payload: DraftAuthorityPayload): {
+  readonly manifest: { readonly digests: readonly string[] };
+  readonly returnAccountId: string | null;
+} {
+  const content = payload.content;
+  return {
+    manifest: {
+      digests: isLandingDraftDocContent(content)
+        ? draftImageHashes(content)
+        : [],
+    },
+    returnAccountId: parseReturnedSandbox(payload.returnedSandbox)?.userId ?? null,
+  };
+}
+
+async function importLegacyLandingDraft(draft: LandingDraftTab): Promise<
+  DraftAuthorityReference | null | "unavailable"
+> {
+  const reference = { slot: landingAuthoritySlot(draft.id), occurrence: draft.id };
+  const version = { ...reference, version: uuidv4() };
+  const payload = landingAuthorityPayload(draft);
+  const result = await importDraftAuthoritySlot(
+    landingDraftIsRetired(draft.id)
+      ? { kind: "tombstone", draft: version }
+      : { kind: "live", draft: version, payload, recoveryAccountId: null, ...landingAuthorityMetadata(payload) },
+  );
+  if (result.kind !== "current") return "unavailable";
+  if (
+    result.record.kind === "tombstone" ||
+    result.record.draft.occurrence !== reference.occurrence
+  ) {
+    return null;
+  }
+  return reference;
+}
+
+export function captureCanonicalLandingDraft(draftId: string): DraftAuthorityVersion | null {
+  return landingAuthority.current(draftId);
+}
+
+export async function projectCanonicalLandingDeletion(
+  receipt: DraftAuthorityEditReceipt,
+): Promise<void> {
+  if (receipt.kind !== "tombstone" || receipt.draft.slot.kind !== "landing") return;
+  const slot = receipt.draft.slot;
+  const result = await readDraftAuthoritySlot(slot);
+  if (result.kind !== "current" || result.record.kind !== "tombstone" ||
+    result.record.draft.version !== receipt.draft.version || landingAuthority.busy(slot.id)) {
+    return;
+  }
+  draftRuntimeRegistry.close(slot.id);
+  pruneRecoveryDraft(slot.id);
+  await refreshLandingAuthoritySlot(slot, undefined);
+  scheduleLandingImageReconcile();
+}
+
+export async function flushCanonicalLandingDraft(
+  draftId: string,
+): Promise<DraftAuthorityLandingFlush> {
+  return landingAuthority.flush(landingAuthoritySlot(draftId));
+}
+
+export async function retainCanonicalLandingHistoryDraft(input: {
+  readonly draft: DraftAuthorityVersion;
+  readonly isCurrent: () => boolean;
+}): Promise<
+  | { readonly kind: "retained"; readonly manifest: DraftAuthorityManifest }
+  | { readonly kind: "conflict" | "unavailable" }
+> {
+  const { draft, isCurrent } = input;
+  const windowId = currentLandingRetentionWindow();
+  if (windowId === null) return { kind: "unavailable" };
+  const actor = captureDraftAuthorityActor();
+  const stillCurrent = (): boolean => currentLandingRetentionWindow() === windowId &&
+    draftAuthorityOptionalActorIsCurrent(actor) && !landingAuthority.busy(draft.slot.id) && isCurrent();
+  if (!stillCurrent()) return { kind: "conflict" };
+  const first = await readCanonicalLandingDraft(draft);
+  if (first.kind === "unavailable") return { kind: "unavailable" };
+  if (first.kind !== "live" || !sameLandingVersion(draft, first.draft) || !stillCurrent()) {
+    return { kind: "conflict" };
+  }
+
+  const holderId = holdLandingImages("Landing History close", first.manifest.digests);
+  let retained = false;
+  try {
+    const result = await retainDraftAuthorityLandingHistory({ draft, isCurrent: stillCurrent });
+    if (result.kind !== "retained") return result;
+    retained = true;
+    const view = await publishLandingRetention(holderId, {
+      windowId, draft, manifest: result.manifest,
+    });
+    if (view === null || currentLandingRetentions() !== view) return { kind: "unavailable" };
+    if (!stillCurrent() || !view.rows.some(({ record, rootedDigests }) =>
+      sameLandingVersion(draft, record.draft) && sameLandingDigests(result.manifest.digests, rootedDigests))) {
+      return { kind: "conflict" };
+    }
+    return result;
+  } finally {
+    if (!retained) releasePendingIngestImageHashes(holderId);
+  }
+}
+
+export async function readLegacyCanonicalLandingHistory(input: {
+  readonly draftId: string;
+  readonly actor: DraftAuthorityActor | null;
+  readonly isCurrent: () => boolean;
+}): Promise<
+  | { readonly kind: "live"; readonly draft: DraftAuthorityVersion }
+  | { readonly kind: "absent" | "retired" | "unverifiable" | "unavailable" }
+> {
+  const { draftId, actor, isCurrent } = input;
+  const windowId = currentLandingRetentionWindow();
+  const stillCurrent = (): boolean => windowId !== null && currentLandingRetentionWindow() === windowId &&
+    draftAuthorityOptionalActorIsCurrent(actor) && isCurrent();
+  if (!stillCurrent()) return { kind: "unavailable" };
+  if (landingDraftIsRetired(draftId)) return { kind: "retired" };
+  const result = await readDraftAuthorityLegacyLandingHistory({ draftId, actor, isCurrent: stillCurrent });
+  if (!stillCurrent()) return { kind: "unavailable" };
+  return landingDraftIsRetired(draftId) ? { kind: "retired" } : result;
+}
+
+export async function reserveCanonicalLandingDraft(
+  draftId: string,
+  settings: ChatRunSettings | null,
+): Promise<DraftAuthorityLandingFlush> {
+  if (draftId.length === 0 || landingDraftIsRetired(draftId) ||
+    useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)) {
+    return { kind: "conflict" };
+  }
+  const actor = captureDraftAuthorityActor();
+  const slot = landingAuthoritySlot(draftId);
+  const payload = landingAuthorityPayload({ ...seedLandingDraft(draftId, settings), closed: true });
+  const metadata = landingAuthorityMetadata(payload);
+  const result = await writeDraftAuthority({
+    operation: { id: `reserve-landing:${draftId}`, actor },
+    expected: { kind: "absent", slot },
+    mutation: { kind: "replace", occurrence: draftId, payload, ...metadata },
+  });
+  if (!draftAuthorityOptionalActorIsCurrent(actor)) return { kind: "conflict" };
+  if (result.kind === "committed" || result.kind === "replayed") {
+    return { kind: "committed", draft: result.receipt.draft, manifest: metadata.manifest };
+  }
+  return result.kind === "conflict" || result.kind === "denied" || result.kind === "invalid"
+    ? { kind: "conflict" }
+    : { kind: "unavailable" };
+}
+
+export async function readCanonicalLandingDraft(
+  reference: DraftAuthorityReference,
+): Promise<DraftAuthorityLandingRead<LandingDraftTab>> {
+  if (reference.slot.kind !== "landing") return { kind: "missing" };
+  const result = await readDraftAuthoritySlot(reference.slot);
+  if (result.kind !== "current") return result;
+  return resolveCanonicalLandingRecord(reference, result.record);
+}
+
+function resolveCanonicalLandingRecord(
+  reference: DraftAuthorityReference,
+  record: DraftAuthorityRecord | null,
+): DraftAuthorityLandingRead<LandingDraftTab> {
+  if (record === null) return { kind: "missing" };
+  if (record.draft.occurrence !== reference.occurrence) {
+    return { kind: "replaced" };
+  }
+  if (record.kind === "tombstone") return { kind: "tombstoned" };
+  if (!canReadLandingRecord(record)) return { kind: "missing" };
+  const [payload] = parsePersistedLandingDrafts([record.payload]);
+  if (payload === undefined || payload.id !== reference.slot.id) {
+    return { kind: "unavailable" };
+  }
+  return {
+    kind: "live",
+    draft: record.draft,
+    payload,
+    manifest: record.manifest,
+  };
+}
+
+function canReadLandingRecord(record: Extract<DraftAuthorityRecord, { kind: "live" }>): boolean {
+  return record.recoveryAccountId === null &&
+    (record.returnAccountId === null ||
+      record.returnAccountId === captureDraftAuthorityActor()?.accountId);
+}
+
+interface CanonicalLandingAliases {
+  readonly references: readonly DraftAuthorityReference[];
+  readonly activeDraftId: string | null;
+}
+
+export async function importCanonicalLandingDraftProjection(
+  snapshot: DesktopPerWindowSnapshot,
+): Promise<
+  | ({ readonly kind: "committed" } & CanonicalLandingAliases)
+  | { readonly kind: "unavailable" }
+> {
+  if (canonicalDesktopAliases !== null) return { kind: "unavailable" };
+  usesCanonicalLandingProjection = true;
+  const windowId = currentLandingRetentionWindow();
+  if (windowId === null) return { kind: "unavailable" };
+  const bridge = getDesktopEpicOwnershipBridge();
+  const generation = ++desktopLandingImportGeneration;
+  const actor = captureDraftAuthorityActor();
+  const isCurrent = (): boolean => generation === desktopLandingImportGeneration &&
+    bridge === getDesktopEpicOwnershipBridge() && windowId === currentLandingRetentionWindow() &&
+    draftAuthorityOptionalActorIsCurrent(actor);
+
+  const senderDrafts = readProjectedDrafts(snapshot, "migration").filter(
+    (draft) => !landingDraftIsRetired(draft.id),
+  );
+  const senderRows = snapshot.landingDrafts.filter((draft) => !landingDraftIsRetired(draft.id));
+  if (senderDrafts.length !== senderRows.length ||
+    new Set(senderDrafts.map((draft) => draft.id)).size !== senderDrafts.length) {
+    return { kind: "unavailable" };
+  }
+
+  const references: DraftAuthorityVersion[] = [];
+  const openHolds: string[] = [];
+  try {
+    for (const draft of senderDrafts) {
+      if (!isCurrent()) return { kind: "unavailable" };
+      const slot = landingAuthoritySlot(draft.id);
+      const payload = landingAuthorityPayload(draft);
+      const record: DraftAuthorityRecord = {
+        kind: "live",
+        draft: { slot, occurrence: draft.id, version: uuidv4() },
+        payload,
+        recoveryAccountId: null,
+        ...landingAuthorityMetadata(payload),
+      };
+      if (draft.closed) {
+        const holderId = holdLandingImages("legacy closed Landing", record.manifest.digests);
+        let committed = false;
+        try {
+          const result = await importDraftAuthorityRetainedLanding({ record, isCurrent });
+          if (result.kind !== "committed") return { kind: "unavailable" };
+          committed = true;
+          // A replay can acknowledge a newer edit. The scoped receipt read is
+          // the proof of which of its current digests this window holds.
+          if (await publishLandingRetention(holderId, {
+            windowId, draft: result.draft, manifest: null,
+          }) === null) {
+            return { kind: "unavailable" };
+          }
+        } finally {
+          if (!committed) releasePendingIngestImageHashes(holderId);
+        }
+        continue;
+      }
+
+      const imported = await importDraftAuthoritySlot(record);
+      if (imported.kind !== "current" || !isCurrent()) return { kind: "unavailable" };
+      const open = resolveCanonicalLandingRecord(record.draft, imported.record);
+      if (open.kind === "tombstoned" || open.kind === "replaced") continue;
+      if (open.kind !== "live") return { kind: "unavailable" };
+      openHolds.push(holdLandingImages("legacy open Landing", open.manifest.digests));
+      await adoptDraftImageHandoff(draft.id, open.manifest.digests);
+      if (!(await verifyDurableLandingImageBytes(open.manifest.digests)) || !isCurrent()) {
+        return { kind: "unavailable" };
+      }
+      references.push(open.draft);
+    }
+    const view = await refreshLandingRetentions();
+    const records = await readDraftAuthoritySlots(references.map(({ slot }) => slot));
+    if (view === null || currentLandingRetentions() !== view || records === null || !isCurrent() ||
+      !references.every((reference, index) => {
+        const record = records[index];
+        return record?.kind === "live" && sameLandingVersion(reference, record.draft);
+      })) {
+      return { kind: "unavailable" };
+    }
+    const active = snapshot.activeLandingDraftId;
+    return {
+      kind: "committed",
+      references: references.map(({ slot, occurrence }) => ({ slot, occurrence })),
+      activeDraftId: references.some(({ slot }) => slot.id === active) ? active : null,
+    };
+  } finally {
+    // Cold native GC remains blocked until the alias projection also lands.
+    for (const holderId of openHolds) releasePendingIngestImageHashes(holderId);
+  }
+}
+
+function projectRetainedClosedLandingDrafts(
+  view: LandingRetentionView,
+  aliases: readonly DraftAuthorityReference[],
+  drafts: Map<string, LandingDraftTab>,
+): void {
+  const previous = useLandingDraftStore.getState().drafts;
+  const next = new Map<string, DraftAuthorityVersion>();
+  for (const { record, rootedDigests } of view.rows) {
+    const { draft } = record;
+    const { id } = draft.slot;
+    if (aliases.some((alias) => sameLandingOccurrence(alias, draft))) continue;
+    // Same-occurrence edits can add images whose bytes belong to another
+    // window. The proved subset still roots bytes here while Drafts waits
+    // for custody of the complete current version.
+    if (!sameLandingDigests(record.manifest.digests, rootedDigests)) {
+      if (drafts.get(id)?.closed === true) drafts.delete(id);
+      continue;
+    }
+    const saved = resolveCanonicalLandingRecord(draft, record);
+    if (saved.kind !== "live") continue;
+    const known = retainedClosedLandingDrafts.get(id);
+    const buffer = known !== undefined && sameLandingOccurrence(known, draft)
+      ? previous.find((row) => row.id === id && row.closed)
+      : undefined;
+    if (buffer !== undefined && known !== undefined &&
+      (landingAuthority.busy(id) || sameLandingVersion(known, draft))) {
+      drafts.set(id, buffer);
+      next.set(id, known);
+      continue;
+    }
+    landingAuthority.observe(draft);
+    drafts.set(id, saved.payload.closed ? saved.payload : { ...saved.payload, closed: true });
+    next.set(id, draft);
+  }
+  retainedClosedLandingDrafts.clear();
+  for (const [id, draft] of next) retainedClosedLandingDrafts.set(id, draft);
+}
+
+function syncRetainedClosedLandingDrafts(view: LandingRetentionView): void {
+  if (canonicalDesktopAliases === null) return;
+  const state = useLandingDraftStore.getState();
+  const drafts = new Map(
+    state.drafts.filter((draft) => !retainedClosedLandingDrafts.has(draft.id))
+      .map((draft) => [draft.id, draft]),
+  );
+  projectRetainedClosedLandingDrafts(view, canonicalDesktopAliases, drafts);
+  const projected = [...drafts.values()];
+  if (projected.length !== state.drafts.length ||
+    projected.some((draft, index) => draft !== state.drafts[index])) {
+    applyLandingAuthorityProjection(projected, state.activeDraftId);
+  }
+}
+
+export async function applyCanonicalLandingDraftAliases(
+  aliases: CanonicalLandingAliases,
+  isCurrent: () => boolean,
+): Promise<{ readonly kind: "applied" | "stale" | "unavailable" }> {
+  usesCanonicalLandingProjection = true;
+  const view = await refreshLandingRetentions();
+  const records = await readDraftAuthoritySlots(
+    aliases.references.map((reference) => reference.slot),
+  );
+  if (!isCurrent()) return { kind: "stale" };
+  if (view === null || currentLandingRetentions() !== view || records === null) {
+    return { kind: "unavailable" };
+  }
+
+  const previous = useLandingDraftStore.getState().drafts;
+  const drafts = new Map(
+    previous
+      .filter((draft) => canonicalDesktopAliases !== null &&
+        draft.closed && !retainedClosedLandingDrafts.has(draft.id))
+      .map((draft) => [draft.id, draft]),
+  );
+  const attachedDrafts: DraftAuthorityVersion[] = [];
+  for (const [index, reference] of aliases.references.entries()) {
+    const record = records[index] ?? null;
+    const retained = view.rows.find(({ record: row }) => sameLandingOccurrence(reference, row.draft));
+    if (retained !== undefined && (record === null || !sameLandingVersion(retained.record.draft, record.draft))) {
+      return { kind: "unavailable" };
+    }
+    const result = resolveCanonicalLandingRecord(reference, record);
+    if (result.kind === "unavailable") return { kind: "unavailable" };
+    if (result.kind !== "live") continue;
+    const acknowledged = canonicalDesktopAliases?.some(
+      (alias) => sameLandingOccurrence(alias, reference),
+    );
+    const buffer = acknowledged && landingAuthority.busy(reference.slot.id)
+      ? previous.find((draft) => draft.id === reference.slot.id && !draft.closed)
+      : undefined;
+    if (buffer === undefined) attachedDrafts.push(result.draft);
+    const attached = buffer ?? result.payload;
+    drafts.set(reference.slot.id, attached.closed ? { ...attached, closed: false } : attached);
+  }
+  for (const draft of attachedDrafts) landingAuthority.observe(draft);
+  projectRetainedClosedLandingDrafts(view, aliases.references, drafts);
+  canonicalDesktopAliases = aliases.references;
+  applyLandingAuthorityProjection([...drafts.values()], aliases.activeDraftId);
+  return { kind: "applied" };
+}
+
+function applyLandingAuthorityProjection(
+  drafts: readonly LandingDraftTab[],
+  activeDraftId: string | null,
+): void {
+  applyingAuthorityProjection = true;
+  try {
+    useLandingDraftStore.setState({
+      drafts,
+      activeDraftId: parsePersistedActiveDraftId(activeDraftId, drafts),
+    });
+  } finally {
+    applyingAuthorityProjection = false;
+  }
+  if (drafts.length > 0) markLandingDraftsAuthoritativeNonEmpty();
+  markLandingDraftsReady();
+}
+
+async function refreshLandingAuthoritySlot(
+  slot: DraftAuthoritySlot,
+  installed: DraftAuthorityVersion | undefined,
+): Promise<void> {
+  if (slot.kind !== "landing") return;
+  const view = usesCanonicalLandingProjection ? await refreshLandingRetentions() : null;
+  if (usesCanonicalLandingProjection) {
+    const aliases = canonicalDesktopAliases;
+    if (view === null || currentLandingRetentions() !== view || aliases === null) return;
+    syncRetainedClosedLandingDrafts(view);
+    const retained = view.rows.find(({ record }) => record.draft.slot.id === slot.id);
+    if (retained !== undefined &&
+      !aliases.some((alias) => sameLandingOccurrence(alias, retained.record.draft))) return;
+  } else if (nativeLandingProjectionPending()) {
+    return;
+  }
+  if (landingAuthority.busy(slot.id)) return;
+  const result = await readDraftAuthoritySlot(slot);
+  if (landingAuthority.busy(slot.id) || result.kind !== "current" ||
+    (usesCanonicalLandingProjection && (view === null || currentLandingRetentions() !== view))) return;
+
+  const { record } = result;
+  const state = useLandingDraftStore.getState();
+  const before = state.drafts.find((draft) => draft.id === slot.id);
+  const visible = record.kind === "live" && canReadLandingRecord(record);
+  const [saved] = visible ? parsePersistedLandingDrafts([record.payload]) : [];
+  if (visible && saved?.id !== slot.id) return;
+  const attached = canonicalDesktopAliases?.some(
+    (reference) => sameLandingOccurrence(reference, record.draft),
+  );
+  const draft = attached && saved?.closed ? { ...saved, closed: false } : saved;
+  const canProject = canonicalDesktopAliases === null || attached === true ||
+    (draft?.closed === true && (before?.closed === true ||
+      (installed !== undefined && sameLandingVersion(installed, record.draft))));
+  if (!canProject && before === undefined) return;
+  landingAuthority.observe(record.draft);
+  applyLandingAuthorityProjection(
+    !canProject || draft === undefined
+      ? state.drafts.filter((item) => item.id !== slot.id)
+      : before === undefined
+        ? [...state.drafts, draft]
+        : state.drafts.map((item) => (item.id === slot.id ? draft : item)),
+    state.activeDraftId,
+  );
+}
+
+subscribeToDraftAuthorityChanges((slot) => {
+  if (slot.kind !== "landing") return;
+  if (usesCanonicalLandingProjection) {
+    const windowId = currentLandingRetentionWindow();
+    const lastView = landingRetentions;
+    // Only local retention wrappers can add a receipt for this window.
+    // Their acknowledgments invalidate the view even for a previously unknown slot.
+    if (lastView === null || lastView.windowId !== windowId ||
+      lastView.rows.some(({ record }) => sameDraftAuthoritySlot(slot, record.draft.slot)) ||
+      [...unpublishedLandingRetentionHolds.values()].some((pending) =>
+        pending.windowId === windowId && sameDraftAuthoritySlot(slot, pending.draft.slot))) {
+      invalidateLandingRetentions();
+    }
+  }
+  void refreshLandingAuthoritySlot(slot, undefined);
+});
+
+subscribeToDraftAuthoritySessionChanges(() => {
+  // Visibility follows the active account. Byte custody follows the receipt.
+  const view = currentLandingRetentions();
+  if (view !== null) {
+    syncRetainedClosedLandingDrafts(view);
+    return;
+  }
+  if (canonicalDesktopAliases === null || landingRetentions === null) return;
+  const hidden = new Set(
+    landingRetentions.rows.flatMap(({ record }) =>
+      canReadLandingRecord(record) ? [] : [record.draft.slot.id],
+    ),
+  );
+  const state = useLandingDraftStore.getState();
+  const visible = state.drafts.filter((draft) =>
+    !retainedClosedLandingDrafts.has(draft.id) || !hidden.has(draft.id),
+  );
+  if (visible.length !== state.drafts.length) {
+    applyLandingAuthorityProjection(visible, state.activeDraftId);
+  }
+});
+
+useLandingDraftStore.subscribe((state, previous) => {
+  if (applyingAuthorityProjection || applyingDesktopProjection) return;
+  if (state.drafts === previous.drafts) return;
+  for (const draft of state.drafts) {
+    const before = previous.drafts.find((candidate) => candidate.id === draft.id);
+    if (before === draft) continue;
+    landingAuthority.queue({
+      slot: landingAuthoritySlot(draft.id),
+      before: before === undefined ? null : landingAuthorityPayload(before),
+      after: landingAuthorityPayload(draft),
+      newOccurrence: draft.id,
+    });
+  }
+});
+
+async function hydrateBrowserLandingAuthority(): Promise<void> {
+  const legacy = readLegacyBrowserLandingDrafts(LANDING_DRAFT_PERSIST_KEY);
+  for (const [id, raw] of legacy) {
+    if (raw === null) {
+      await importDraftAuthoritySlot({
+        kind: "tombstone",
+        draft: { slot: landingAuthoritySlot(id), occurrence: id, version: uuidv4() },
+      });
+      continue;
+    }
+    const [draft] = parsePersistedLandingDrafts([raw]);
+    if (draft !== undefined) await importLegacyLandingDraft(draft);
+  }
+  const records = await listDraftAuthoritySlots("landing");
+  if (records === null || desktopProjectionBridge !== null) return;
+  const state = useLandingDraftStore.getState();
+  const drafts = new Map<string, LandingDraftTab>();
+  for (const record of records) {
+    const id = record.draft.slot.id;
+    if (landingAuthority.busy(id)) continue;
+    landingAuthority.observe(record.draft);
+    if (record.kind === "tombstone") continue;
+    const [draft] = parsePersistedLandingDrafts([record.payload]);
+    if (draft?.id === id) drafts.set(id, draft);
+  }
+  for (const draft of state.drafts) {
+    if (landingAuthority.busy(draft.id)) drafts.set(draft.id, draft);
+  }
+  applyLandingAuthorityProjection([...drafts.values()], state.activeDraftId);
+}
+
+if (typeof window !== "undefined" && !nativeLandingProjectionPending()) {
+  landingAuthority.waitForHydration(hydrateBrowserLandingAuthority().catch((error: unknown) => {
+    appLogger.warn("[landing-draft] authority hydration failed", {
+      error: describeLogError(error),
+    });
+  }));
+}
+
+async function deleteLandingAuthorityDraft(
+  id: string,
+  removeProjection: () => void,
+): Promise<void> {
+  const acknowledged = await flushCanonicalLandingDraft(id);
+  if (acknowledged.kind !== "committed") return;
+  const outcome = await writeDraftAuthority({
+    operation: { id: uuidv4(), actor: null },
+    expected: { kind: "current", draft: acknowledged.draft },
+    mutation: { kind: "delete", retirements: [] },
+  });
+  if (outcome.kind === "committed") removeProjection();
+}
+
 // The registry intentionally has no import back into this persisted source.
 // Wiring it after store construction keeps the renderer-local runtime free of
 // store module cycles and makes recovery hydrate only this window's drafts.
@@ -1254,7 +2063,30 @@ draftRuntimeRegistry.configure({
 // close a store → gc → budget → store cycle), so it reads drafts through
 // this registration instead.
 registerLandingDraftRootSource({
-  drafts: () => useLandingDraftStore.getState().drafts,
+  drafts: () => useLandingDraftStore.getState().drafts.filter(
+    (draft) => !draft.closed || !retainedClosedLandingDrafts.has(draft.id),
+  ),
+});
+registerExtraImageRootSource({
+  hashes: () => {
+    if (!usesCanonicalLandingProjection && !nativeLandingProjectionPending()) return [];
+    const view = currentLandingRetentions();
+    if (view === null || canonicalDesktopAliases === null) {
+      if (canonicalDesktopAliases !== null) {
+        void refreshLandingRetentions().then((next) => {
+          if (next !== null && currentLandingRetentions() === next) {
+            syncRetainedClosedLandingDrafts(next);
+          }
+        });
+      }
+      throw new Error("The native Landing draft roots are not ready.");
+    }
+    return view.hashes;
+  },
+});
+const emptyLandingRetentionSizes: ReadonlyMap<string, number> = new Map();
+registerExtraImageSizeSource({
+  declaredSizes: () => currentLandingRetentions()?.declaredSizes ?? emptyLandingRetentionSizes,
 });
 /**
  * Render-stable projection of the active draft for the landing-page shell
@@ -1375,15 +2207,57 @@ function uniqueLandingDrafts(
 // `applyingDesktopProjection` flag, and main suppresses the echo of a window's
 // own update, so no inbound loop results.
 function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
-  if (desktopProjectionBridge === null) return;
+  if (desktopProjectionBridge === null || canonicalDesktopAliases !== null) return;
   void desktopProjectionBridge.update({
     landingDrafts: state.drafts.map(projectLandingDraftForDesktop),
     activeLandingDraftId: state.activeDraftId,
   });
 }
 
+export function returnedLandingStageCurrent(
+  origin: Extract<ReturnedSandboxDraft, { kind: "landing" }>,
+  stage: StagedSandbox,
+): boolean {
+  const { draftId, userId } = origin;
+  if (signedInUserId() !== userId) return false;
+  const live = useLandingDraftStore
+    .getState()
+    .drafts.find((item) => item.id === draftId);
+  return landingAuthority.knows(draftId) &&
+    returnedStageMatchesDraft(live?.returnedSandbox ?? null, origin, stage);
+}
+
+export async function saveReturnedLandingCreateRequest(
+  surfaceKey: string,
+  origin: Extract<ReturnedSandboxDraft, { kind: "landing" }>,
+  request: SandboxCreateRequest,
+): Promise<ReturnedCreateCommit> {
+  const { draftId, userId } = origin;
+  if (signedInUserId() !== userId) return "stale";
+  const state = useLandingDraftStore.getState();
+  const draft = state.drafts.find((item) => item.id === draftId);
+  const stored = draft?.returnedSandbox ?? null;
+  const next = returnedSandboxWithCreate(stored, origin, request);
+  if (next === null) return "stale";
+
+  updateReturnedSandboxRestore(surfaceKey, next);
+  if (!sameStoredReturnedSandbox(stored, next)) {
+    state.setDraftReturnedSandbox(draftId, next);
+  }
+  const committed = await flushCanonicalLandingDraft(draftId);
+  if (signedInUserId() !== userId || committed.kind === "conflict") return "stale";
+  if (committed.kind !== "committed") return "failed";
+  const saved = await readCanonicalLandingDraft(committed.draft);
+  if (signedInUserId() !== userId) return "stale";
+  return saved.kind === "live" &&
+    saved.draft.version === committed.draft.version &&
+    returnedSandboxCreateMatches(saved.payload.returnedSandbox, origin, request)
+    ? "saved"
+    : "failed";
+}
+
 useLandingDraftStore.subscribe((state) => {
-  if (desktopProjectionBridge === null || applyingDesktopProjection) return;
+  if (desktopProjectionBridge === null || applyingDesktopProjection || applyingAuthorityProjection) return;
   projectLandingDraftsToDesktop(state);
 });
 
@@ -2101,23 +2975,24 @@ export function landingDraftRememberSynced(
  * placement-based routing in `destroyLandingDraft` does not apply). The
  * receipt names that host; the coordinator routes the delete there.
  */
-export function deleteLandingDraftOnHost(
+export async function deleteLandingDraftOnHost(
   draftId: string,
   hostId: string,
-): void {
-  const { drafts, activeDraftId } = useLandingDraftStore.getState();
-  const closing = drafts.find((d) => d.id === draftId);
-  if (closing === undefined) return;
-  retireLandingDraft(draftId, hostId);
-  pruneRecoveryDraft(draftId);
-  draftRuntimeRegistry.close(draftId);
-  // Routed while the row still exists; the receipt names the host.
-  notifyDraftLocalDelete(draftId);
-  useLandingDraftStore.setState({
-    drafts: drafts.filter((d) => d.id !== draftId),
-    activeDraftId: activeDraftId === draftId ? null : activeDraftId,
+): Promise<DraftAuthorityEditReceipt | null> {
+  const actor = captureDraftAuthorityActor();
+  const draft = captureCanonicalLandingDraft(draftId);
+  if (actor === null || draft === null) return null;
+  const outcome = await writeDraftAuthority({
+    operation: { id: uuidv4(), actor },
+    expected: { kind: "current", draft },
+    mutation: {
+      kind: "delete",
+      retirements: [{ accountId: actor.accountId, hostId, draftId, kind: "delete" }],
+    },
   });
-  scheduleLandingImageReconcile();
+  if (outcome.kind !== "committed" && outcome.kind !== "replayed") return null;
+  await projectCanonicalLandingDeletion(outcome.receipt);
+  return outcome.receipt;
 }
 
 /**
@@ -2218,6 +3093,98 @@ function echoedRunSettings(
   return runSettingsFromDraftEcho(runSettings, existing?.settings ?? null);
 }
 
+function landingDraftFromHostDocument(
+  document: Extract<DraftDocument, { kind: "landing" }>,
+  content: JsonContent,
+  existing: LandingDraftTab | undefined,
+): LandingDraftTab {
+  return {
+    id: document.draftId,
+    content,
+    selection: document.portable.selection,
+    lastTouchedAt: document.lastTouchedAt,
+    settings: echoedRunSettings(document.portable.runSettings, existing),
+    composerMode: document.portable.composerMode,
+    workspace:
+      document.workspace === null
+        ? emptyLandingDraftWorkspaceSnapshot()
+        : document.workspace,
+    adoption: { state: "adopted", hostId: document.adoption.hostId },
+    hostRevision: document.revision,
+    generation: existing?.generation ?? 0,
+    syncedGeneration: existing?.generation ?? 0,
+    ownerHostId: document.ownerHostId,
+    origin: document.origin,
+    // A host document's `supersedes` is the HOST's debt (a re-mint), already
+    // on the cloud; this device sends nothing for it. Re-keying an open tab
+    // onto the successor is the coordinator's job before the apply.
+    supersedes: null,
+    publication: document.publication,
+    confirmedHostBlobHashes: existing?.confirmedHostBlobHashes ?? [],
+    closed: incomingClosedState(
+      document.origin,
+      document.portable.closed,
+      existing,
+    ),
+    returnedSandbox: keptReturnedSandbox(existing),
+    accountFollowsDefault: keptAccountFollowsDefault(existing, document),
+    namedHostId: keptNamedHostId(existing),
+  };
+}
+
+export async function admitCanonicalLandingHistoryDraft(input: {
+  readonly actor: DraftAuthorityActor | null;
+  readonly hostId: string;
+  readonly draftId: string;
+  readonly document: Extract<DraftDocument, { kind: "landing" }>;
+  readonly content: JsonContent;
+  readonly verifiedHashes: readonly string[];
+  readonly isCurrent: () => boolean;
+}): Promise<DraftAuthorityLandingFlush> {
+  const { actor, hostId, draftId, document, content, verifiedHashes, isCurrent } = input;
+  const windowId = currentLandingRetentionWindow();
+  if (windowId === null) return { kind: "unavailable" };
+  const gestureIsCurrent = (): boolean => currentLandingRetentionWindow() === windowId &&
+    draftAuthorityOptionalActorIsCurrent(actor) && !landingDraftIsRetired(draftId) && isCurrent();
+  const stillAbsent = (): boolean => gestureIsCurrent() && !landingAuthority.busy(draftId) &&
+    !useLandingDraftStore.getState().drafts.some((row) => row.id === draftId);
+  if (hostId.length === 0 || document.draftId !== draftId ||
+    (document.adoption.hostId !== hostId && document.ownerHostId !== hostId) || !stillAbsent()) {
+    return { kind: "conflict" };
+  }
+  const digests = draftImageHashes(content);
+  if (!sameLandingDigests(digests, verifiedHashes) ||
+    !sameLandingDigests(digests, document.portable.blobHashes) ||
+    collectImageAtoms(content).some((atom) => atom.hash === null)) {
+    return { kind: "conflict" };
+  }
+
+  const projected = landingDraftFromHostDocument(document, content, undefined);
+  const payload = landingAuthorityPayload({ ...projected, closed: true, confirmedHostBlobHashes: digests });
+  // The caller's hold covers staging. This hold also covers recovery from an
+  // unreadable post-commit root view after the caller has released its batch.
+  const holderId = holdLandingImages("host Landing History", digests);
+  let committed = false;
+  try {
+    const result = await admitDraftAuthorityLandingHistory({
+      actor, draftId, payload, manifest: { digests }, isCurrent: stillAbsent,
+    });
+    if (result.kind !== "committed") return result;
+    committed = true;
+    const view = await publishLandingRetention(holderId, {
+      windowId, draft: result.draft, manifest: result.manifest,
+    });
+    if (view === null || currentLandingRetentions() !== view) return { kind: "unavailable" };
+    if (!gestureIsCurrent() || !view.rows.some(({ record, rootedDigests }) =>
+      sameLandingVersion(result.draft, record.draft) && sameLandingDigests(result.manifest.digests, rootedDigests))) {
+      return { kind: "conflict" };
+    }
+    return result;
+  } finally {
+    if (!committed) releasePendingIngestImageHashes(holderId);
+  }
+}
+
 /**
  * Applies a landing document to the store. Returns whether the row was
  * mutated by it: a retired id, or an older document from the row's current
@@ -2259,38 +3226,7 @@ export function applyLandingHostDocument(
     );
     return true;
   }
-  const next: LandingDraftTab = {
-    id: document.draftId,
-    content,
-    selection: document.portable.selection,
-    lastTouchedAt: document.lastTouchedAt,
-    settings: echoedRunSettings(document.portable.runSettings, existing),
-    composerMode: document.portable.composerMode,
-    workspace:
-      document.workspace === null
-        ? emptyLandingDraftWorkspaceSnapshot()
-        : document.workspace,
-    adoption: { state: "adopted", hostId: document.adoption.hostId },
-    hostRevision: document.revision,
-    generation: existing?.generation ?? 0,
-    syncedGeneration: existing?.generation ?? 0,
-    ownerHostId: document.ownerHostId,
-    origin: document.origin,
-    // A host document's `supersedes` is the HOST's debt (a re-mint), already
-    // on the cloud; this device sends nothing for it. Re-keying an open tab
-    // onto the successor is the coordinator's job before the apply.
-    supersedes: null,
-    publication: document.publication,
-    confirmedHostBlobHashes: existing?.confirmedHostBlobHashes ?? [],
-    closed: incomingClosedState(
-      document.origin,
-      document.portable.closed,
-      existing,
-    ),
-    returnedSandbox: keptReturnedSandbox(existing),
-    accountFollowsDefault: keptAccountFollowsDefault(existing, document),
-    namedHostId: keptNamedHostId(existing),
-  };
+  const next = landingDraftFromHostDocument(document, content, existing);
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);
     const drafts = evictAdoptedLandingMirrors([...without, next]);
