@@ -9,6 +9,7 @@ import {
   providerCliStateSchema,
   providerMutationCliStateSchemaV21,
   providersListResponseSchema,
+  providersListResponseSchemaV1013,
   providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV103Preimage,
   providersListResponseSchemaV104Preimage,
@@ -210,7 +211,8 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     });
     // 10.10 froze when the profile-sync keys opened 10.11, so its response is
     // the preimage. 10.11 froze when the sign-in offer opened 10.12. 10.12
-    // froze when key-record environment opened 10.13; 10.13 names the live response.
+    // froze when key-record environment opened 10.13. The locally kept
+    // provider-key marker froze 10.13 when it opened 10.14.
     expect(
       hostRpcRegistry["providers.list"][10].versions[10].contract,
     ).toMatchObject({
@@ -228,7 +230,7 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     });
     expect(
       hostRpcRegistry["providers.list"][10].versions[13].contract,
-    ).toMatchObject({ responseSchema: providersListResponseSchema });
+    ).toMatchObject({ responseSchema: providersListResponseSchemaV1013 });
   });
 
   it("upgrades a 10.1 response by filling macosRequirement: null on every provider", () => {

@@ -2820,11 +2820,8 @@ export const providersListResponseSchemaV1012Preimage = lazySchema(() =>
     offersSignIns: z.boolean().optional(),
   }),
 );
-/**
- * Canonical `providers.list` response. Classic callers receive `native: null`;
- * a native query carries its list/discover result or typed error there.
- */
-export const providersListResponseSchema = lazySchema(() =>
+/** The 10.13 response, before the locally kept provider-key marker. */
+export const providersListResponseSchemaV1013 = lazySchema(() =>
   providersListResponseSchemaV1012Preimage.extend({
     providers: z.array(
       providerCliStateSchema.extend({
@@ -2834,24 +2831,27 @@ export const providersListResponseSchema = lazySchema(() =>
     ),
   }),
 );
-export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
-
 /** This host sends a positive marker for a provider whose key it keeps locally. */
 export const providerCliStateSchemaV1014 = lazySchema(() =>
-  providersListResponseSchema.shape.providers.element.extend({
+  providersListResponseSchemaV1013.shape.providers.element.extend({
     apiKeyKeptLocally: z.literal(true).optional(),
   }),
 );
 export type ProviderCliStateV1014 = z.infer<typeof providerCliStateSchemaV1014>;
 
-export const providersListResponseSchemaV1014 = lazySchema(() =>
-  providersListResponseSchema.extend({
+/**
+ * Canonical `providers.list` response. Classic callers receive `native: null`;
+ * a native query carries its list/discover result or typed error there.
+ */
+export const providersListResponseSchema = lazySchema(() =>
+  providersListResponseSchemaV1013.extend({
     providers: z.array(providerCliStateSchemaV1014),
   }),
 );
-export type ProvidersListResponseV1014 = z.infer<
-  typeof providersListResponseSchemaV1014
->;
+export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+export const providersListResponseSchemaV1014 = providersListResponseSchema;
+export type ProvidersListResponseV1014 = ProvidersListResponse;
 
 /**
  * Frozen `providers.list@10.7` response: the live envelope over the 10.7 row

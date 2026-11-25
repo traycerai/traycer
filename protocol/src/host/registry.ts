@@ -1686,7 +1686,7 @@ import {
   // shape.
   providersListRequestSchema,
   providersListResponseSchema,
-  providersListResponseSchemaV1014,
+  providersListResponseSchemaV1013,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
   providersListResponseSchemaV102Preimage,
@@ -3386,7 +3386,7 @@ export const providersListV1013 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 13 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  responseSchema: providersListResponseSchemaV1013,
 });
 export const providersListUpgradeV1012ToV1013 = defineUpgradePath<
   typeof providersListV1012,
@@ -3408,7 +3408,7 @@ const providersListV1014 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 14 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchemaV1014,
+  responseSchema: providersListResponseSchema,
 });
 
 const providersListUpgradeV1013ToV1014 = defineUpgradePath<

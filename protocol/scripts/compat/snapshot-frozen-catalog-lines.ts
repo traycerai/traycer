@@ -59,7 +59,7 @@ import {
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
-  providersListResponseSchema,
+  providersListResponseSchemaV1013,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
   providersListResponseSchemaV102Preimage,
@@ -253,10 +253,11 @@ const FIXTURES = {
   "providers.list@10.11": dump(providersListResponseSchemaV1011Preimage),
   // 10.12 froze when the key-record environment fact opened 10.13.
   "providers.list@10.12": dump(providersListResponseSchemaV1012Preimage),
-  // The head line. It dumps LIVE, so the next attempt to grow the provider
-  // state goes red on this line.
-  "providers.list@10.13": dump(providersListResponseSchema),
-  "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
+  // 10.13 froze when the locally kept provider-key marker opened 10.14.
+  "providers.list@10.13": dump(providersListResponseSchemaV1013),
+  "providers.usePackVersion@1.0": dump(
+    providersUsePackVersionResponseSchemaV10,
+  ),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
@@ -291,7 +292,9 @@ const FIXTURES = {
   "epic.getChatRunSettingsBatch@2.0": dump(
     getChatRunSettingsBatchResponseSchema,
   ),
-  "epic.getChatRunSettingsBatch@2.1": dump(getChatRunSettingsBatchResponseSchemaV21),
+  "epic.getChatRunSettingsBatch@2.1": dump(
+    getChatRunSettingsBatchResponseSchemaV21,
+  ),
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
   // This row DOES get regenerated when a provider id is added, and it is the
   // one row here where that is the right answer rather than the forbidden one.
