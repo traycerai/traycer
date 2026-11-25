@@ -1907,6 +1907,68 @@ describe("the pre-work gate's budget", () => {
     expect(requestMock).toHaveBeenCalledTimes(1);
     expect(blockedCallsLogged()).toBe(0);
   });
+
+  it("goes with what is held, ends with no blocked-call ending and logs none, when a host refusal arrives after the clock passed the budget and the budget timer has not fired", async () => {
+    await holdRanOutHostToken();
+    // Authn did not answer the mint, so the held token is presentable; the
+    // gate's verdict on that failed mint is a refusal that ends the command.
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    gateHooks.refusalEnding.answer = {
+      kind: "host-refusal",
+      failure: { kind: "not-a-member" },
+    };
+    const gate = (() => {
+      let release = (): void => undefined;
+      gateHooks.refusalEnding.hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { release };
+    })();
+    requestMock.mockResolvedValue({ agents: [] });
+    // Only the clock is under the test's hand: no timer runs unless it is told to.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const settled = callHostRpcAtResolvedEndpoint(
+        METHOD,
+        { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+        { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        {
+          token: person.signIn,
+          authnBaseUrl: "https://authn.test",
+          userId: person.userId,
+        },
+        {
+          responseTimeoutMs: BUDGET_MS,
+          requiredHostMethodVersion: null,
+          signal: null,
+          failFast: false,
+          reauthenticate: "always",
+          idempotencyKey: null,
+        },
+      ).then(
+        (): { readonly error: unknown } => ({ error: null }),
+        (error: unknown): { readonly error: unknown } => ({ error }),
+      );
+      // The verdict is held once the call asks for it. Waiting for that is a
+      // yield to the real event loop (`setImmediate` is not faked), not a sleep.
+      while (gateHooks.refusalEnding.calls === 0)
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(requestMock).not.toHaveBeenCalled();
+      // The clock passes the call's budget; its timer has not fired.
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      vi.setSystemTime(Date.now() + BUDGET_MS + 1);
+      gate.release();
+      const outcome = await settled;
+
+      // The call went with what it held, and the clock decided it.
+      expect(outcome.error).toBeNull();
+      expect(presentedHostTokens).toEqual(["ran-out"]);
+      expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(blockedCallsLogged()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("a caller that has given up", () => {
