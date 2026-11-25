@@ -614,6 +614,8 @@ describe("<HostReadyGate />", () => {
           preferredHostId: null,
           targetHostId: "local-host",
           effectiveHostId: "local-host",
+          servingPeer: { kind: "computer", hostId: "local-host" },
+          noPeerPresentation: null,
           leases: [
             {
               hostId: "local-host",
@@ -653,6 +655,8 @@ describe("<HostReadyGate />", () => {
           preferredHostId: null,
           targetHostId: null,
           effectiveHostId: null,
+          servingPeer: null,
+          noPeerPresentation: null,
           leases: [],
           selectionRevision: 1,
         });
@@ -674,6 +678,8 @@ describe("<HostReadyGate />", () => {
             preferredHostId: null,
             targetHostId: null,
             effectiveHostId: null,
+            servingPeer: null,
+            noPeerPresentation: null,
             leases: [],
             selectionRevision: revision,
           });
@@ -1075,6 +1081,8 @@ describe("<HostReadyGate />", () => {
         preferredHostId: null,
         targetHostId: "local-host",
         effectiveHostId: null,
+        servingPeer: null,
+        noPeerPresentation: null,
         leases: [DEAD_LOCAL_LEASE],
         selectionRevision: 1,
       };

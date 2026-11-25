@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
+import { useRoutedStreamClient } from "@/hooks/host/use-pool-tier";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
@@ -21,10 +21,12 @@ export function ChatServingWitnessProvider(props: {
   const [witness] = useState(() => new PoolChatServingWitness());
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const binding = useSurfaceHostStreamBinding(null);
-  const streamClient = usePoolTierStreamClient(
+  const streamClient = useRoutedStreamClient(
+    "chat.serving.subscribe",
+    binding?.hostId ?? null,
     binding?.wsStreamClient ?? null,
     userId,
-  );
+  ).client;
   const hasPool = readProcessHostRpcTierPlan().pool !== null;
   const poolStreamClient = hasPool ? streamClient : null;
   const support = useStreamMethodSupportFor(

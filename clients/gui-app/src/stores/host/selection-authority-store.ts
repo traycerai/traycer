@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type {
+  HostLeaseSnapshot,
+  NoPeerPresentation,
+  ServingPeer,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 
 /**
@@ -33,6 +37,12 @@ export interface SelectionAuthorityStoreState {
   /** Preferred, or the local host when preferred is null (M5), or null. */
   readonly targetHostId: string | null;
   readonly effectiveHostId: string | null;
+  /**
+   * The peer that serves the app's account-wide work: the effective computer,
+   * or the server pool when no computer can serve (see `ServingPeer`).
+   */
+  readonly servingPeer: ServingPeer | null;
+  readonly noPeerPresentation: NoPeerPresentation | null;
   readonly leases: readonly HostLeaseSnapshot[];
   readonly applyKernelSnapshot: (snapshot: SelectionKernelSnapshot) => void;
   /** Back to detached. The bridge calls this on unmount; tests reuse it. */
@@ -44,6 +54,8 @@ const DETACHED = {
   preferredHostId: null,
   targetHostId: null,
   effectiveHostId: null,
+  servingPeer: null,
+  noPeerPresentation: null,
   leases: [] as readonly HostLeaseSnapshot[],
 };
 
@@ -56,6 +68,8 @@ export const useSelectionAuthorityStore =
         preferredHostId: snapshot.preferredHostId,
         targetHostId: snapshot.targetHostId,
         effectiveHostId: snapshot.effectiveHostId,
+        servingPeer: snapshot.servingPeer,
+        noPeerPresentation: snapshot.noPeerPresentation,
         leases: snapshot.leases,
       });
     },
@@ -77,4 +91,9 @@ export const useSelectionAuthorityStore =
  */
 export function readEffectiveHostIdSnapshot(): string | null {
   return useSelectionAuthorityStore.getState().effectiveHostId;
+}
+
+/** The serving peer for a caller with no render to hang a hook on. */
+export function readServingPeerSnapshot(): ServingPeer | null {
+  return useSelectionAuthorityStore.getState().servingPeer;
 }

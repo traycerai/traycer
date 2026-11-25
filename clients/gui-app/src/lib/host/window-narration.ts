@@ -4,6 +4,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-door-state";
 import type {
   HostLeaseSnapshot,
+  NoPeerPresentation,
   SelectionIncompatibility,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
@@ -228,6 +229,20 @@ export interface WindowNarrationInput {
   /** The effective host, else the target. */
   readonly doorState?: HostDoorState | null;
   readonly hostClaim?: HostClaimFacts | null;
+  /**
+   * Whether the authority's serving peer is the server pool. The pool serving
+   * the window is service: nothing below narrates over it, a refused or
+   * unreachable computer included. Absent in a build with no pool address.
+   */
+  readonly servedByPool?: boolean;
+  /**
+   * The authority's card for a window of a pool build that neither a
+   * computer nor the pool can serve (see `NoPeerPresentation`): today's
+   * connecting card, then today's offline card once its budget has run out.
+   * Absent or `null` outside that state, where the arms below narrate as they
+   * always have.
+   */
+  readonly noPeerPresentation?: NoPeerPresentation | null;
   /**
    * Whether this window's selection kernel has published a snapshot.
    *
@@ -555,6 +570,45 @@ function verdictVariant(
 }
 
 /**
+ * What a pool build's serving peer says before the arms below, or `null` to
+ * leave the window to them: the pool serving the window is service, ahead of
+ * every cover, and a window neither peer can serve wears the authority's card
+ * once a door cover (which keeps its precedence) has had its say.
+ */
+function poolBuildNarration(
+  input: WindowNarrationInput,
+  hasDoorCover: boolean,
+): WindowNarrationState | null {
+  if (input.servedByPool === true) return { kind: "silent" };
+  const noPeer = input.noPeerPresentation ?? null;
+  if (noPeer === null || hasDoorCover) return null;
+  return noPeerNarration(input, noPeer);
+}
+
+/**
+ * A pool build's window that neither peer can serve. A version fix the fleet
+ * scan names keeps today's precedence; otherwise the existing connecting card,
+ * then the existing offline card at the authority's deadline, while both peers
+ * keep retrying behind it.
+ */
+function noPeerNarration(
+  input: WindowNarrationInput,
+  noPeer: NoPeerPresentation,
+): WindowNarrationState {
+  const scanned = deriveNoHostVariant(input.leases, input.targetHostId);
+  if (scanned.kind !== "offline") {
+    return { kind: "narrating", cause: "no-usable-host", variant: scanned };
+  }
+  return noPeer === "connecting"
+    ? { kind: "narrating", cause: "cold-start", variant: { kind: "offline" } }
+    : {
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: verdictVariant(scanned, input.discoveryFailed),
+      };
+}
+
+/**
  * The whole window-narrator verdict.
  *
  * Note there is no dismissal input, and that is the design: visibility is
@@ -567,6 +621,8 @@ export function deriveWindowNarration(
 ): WindowNarrationState {
   if (!input.attached) return { kind: "silent" };
   const doorCover = doorStateCover(input);
+  const pooled = poolBuildNarration(input, doorCover !== null);
+  if (pooled !== null) return pooled;
   if (doorCover !== null) return { kind: "narrating", ...doorCover };
   // NOBODY HAS ASKED YET, so nothing may report a verdict. An ∅ derived from a
   // fleet no attempt has concluded for is indistinguishable from an ∅ derived

@@ -32,9 +32,10 @@ export interface ViewReplicaAddress {
   /** The logical service: the RPC method that answers the page. */
   readonly service: string;
   /**
-   * The tier that answers (`hostRpcServingTierHostId`): the pool's id for a
-   * pool-only family in a build with a pool, else the host's. Never a pool
-   * instance, and never flips with reachability.
+   * The peer that answers (`hostRpcServingTierHostId`): for an account-wide
+   * family in a build with a pool, the serving computer when it answers it
+   * and the pool's id otherwise, else the host's. Never a pool instance, and
+   * moves only with the serving peer, never with a call's reachability.
    */
   readonly servingTier: string;
   /** The request, canonically serialized ({@link viewReplicaRequestScope}). */

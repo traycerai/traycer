@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createHostTokenSource,
@@ -353,6 +354,8 @@ function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
     preferredHostId: null,
     targetHostId: null,
     effectiveHostId: null,
+    servingPeer: null,
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
     ...overrides,
@@ -535,6 +538,7 @@ async function createModalHostRuntimeFixture(
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
   });
   const fixture: ModalHostRuntimeFixture = {
     auth,

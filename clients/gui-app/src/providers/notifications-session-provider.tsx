@@ -117,8 +117,7 @@ import { activationResultHandler } from "@/lib/notifications/notification-activa
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
-import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
-import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useRoutedStreamClient } from "@/hooks/host/use-pool-tier";
 import { useViewReplicaPaint } from "@/lib/view-replica/view-replica-store";
 import {
   notificationFeedReplicaAddress,
@@ -127,20 +126,31 @@ import {
   type NotificationFeedReplicaPage,
 } from "@/lib/view-replica/notification-feed-replica";
 
-/** The pool's in a build with a server pool, else the serving host's. */
-function cloudFeedHostId(servingHostId: string): string {
-  return readProcessHostRpcTierPlan().pool?.hostId ?? servingHostId;
+/**
+ * The cloud lane another peer serves (the pool), as the serving host's local
+ * feed hears of it: delivering once that feed's snapshot has landed and while
+ * it stays connected. When the serving host serves the cloud feed itself it
+ * observes the lane, so nothing is reported. Read when the stream opens.
+ */
+function cloudLaneFromPeer(
+  cloudFeedPeerHostId: string | null,
+  streamHostId: string,
+): HostNotificationsCloudLane | null {
+  return cloudFeedPeerHostId === null || cloudFeedPeerHostId === streamHostId
+    ? null
+    : POOL_CLOUD_LANE;
 }
 
-/**
- * The cloud lane a build with a server pool reads from the pool, as the
- * serving host's local feed hears of it: delivering once the pool feed's
- * snapshot has landed and while it stays connected. Without a pool the host
- * serves that lane itself and observes it, so nothing is reported. Read when
- * the stream opens: the tier plan settles before any surface renders.
- */
-function poolCloudLane(): HostNotificationsCloudLane | null {
-  return readProcessHostRpcTierPlan().pool === null ? null : POOL_CLOUD_LANE;
+/** The host whose sign-in a cloud feed's auth error recovers. */
+function cloudFeedRecoveryHostId(
+  cloudFeedPeerHostId: string | null,
+  streamHostId: string,
+): string {
+  return cloudFeedPeerHostId ?? streamHostId;
+}
+
+function hostIdOf(entry: HostDirectoryEntry | null): string | null {
+  return entry === null ? null : entry.hostId;
 }
 
 const POOL_CLOUD_LANE: HostNotificationsCloudLane = {
@@ -283,14 +293,18 @@ export function NotificationsSessionProvider(
   // which travel on the host client and do not need a stream to exist at all.
   // A null entry yields a null id, which withholds mixed mode - the safe way
   // for this to be unknown.
-  // The cloud feed is a pool-only family: in a build with a server pool it is
-  // opened on the pool's client, independent of the serving host; without
-  // one it rides the serving host's client as before. The serving host keeps
-  // its own lane either way, and the host-side presence fallback behind it.
-  const cloudFeedStreamClient = usePoolTierStreamClient(
+  // The cloud feed is account-wide: in a build with a server pool it opens on
+  // the serving computer when that computer serves it for this person, and on
+  // the pool otherwise; without one it rides the serving host's client as
+  // before. The serving host keeps its own lane either way, and the host-side
+  // presence fallback behind it.
+  const cloudFeed = useRoutedStreamClient(
+    "host.notifications.cloudFeed.subscribe",
+    hostIdOf(servingHostEntry),
     servingStreamClient,
     hostClient.getRequestContextUserId(),
   );
+  const cloudFeedStreamClient = cloudFeed.client;
   // The replica tier's copy of the cloud feed: painted by the body before
   // this session's first snapshot, and the version it was stored with
   // answers the mode's cloud-projection floor until the feed's own client
@@ -359,6 +373,7 @@ export function NotificationsSessionProvider(
           servingHostEntry={servingHostEntry}
           servingStreamClient={servingStreamClient}
           cloudFeedStreamClient={cloudFeedStreamClient}
+          cloudFeedPeerHostId={cloudFeed.peerHostId}
           notificationFeedMode={notificationFeedMode}
           replicaFeed={replicaFeed}
         >
@@ -374,6 +389,8 @@ interface NotificationsSessionBodyProps extends NotificationsSessionProviderProp
   readonly servingStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
   /** See `useNotificationFeedModeFor`'s `cloudFeedClient`. */
   readonly cloudFeedStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
+  /** The peer the cloud feed is opened on; `null` when its route refuses. */
+  readonly cloudFeedPeerHostId: string | null;
   readonly notificationFeedMode: NotificationFeedMode;
   /** The replica tier's feed for this account, painted until a snapshot. */
   readonly replicaFeed: NotificationFeedReplicaPage | null;
@@ -385,6 +402,7 @@ function NotificationsSessionBody(
   const servingHostEntry = props.servingHostEntry;
   const servingStreamClient = props.servingStreamClient;
   const cloudFeedStreamClient = props.cloudFeedStreamClient;
+  const cloudFeedPeerHostId = props.cloudFeedPeerHostId;
   // Already HELD across a client rebuild's `unknown` beat by the shell, so it
   // is the same value the mode context publishes to every other consumer.
   const notificationFeedMode = props.notificationFeedMode;
@@ -1229,7 +1247,7 @@ function NotificationsSessionBody(
         onStreamAuthError,
       );
       const cloudFeedOnAuthError = signInRecoveryForStream(
-        cloudFeedHostId(streamHostId),
+        cloudFeedRecoveryHostId(cloudFeedPeerHostId, streamHostId),
         onStreamAuthError,
       );
       // ONE reconnect policy for this host, handed to every stream opened
@@ -1415,7 +1433,7 @@ function NotificationsSessionBody(
             onPresenceChanged: (frame) =>
               onPresenceChanged(frame, streamHostId),
             onStreamOpened: onHostStreamOpened,
-            cloudLane: poolCloudLane(),
+            cloudLane: cloudLaneFromPeer(cloudFeedPeerHostId, streamHostId),
           },
         );
       }
@@ -1423,6 +1441,7 @@ function NotificationsSessionBody(
     [
       servingStreamClient,
       cloudFeedStreamClient,
+      cloudFeedPeerHostId,
       recordCompletions,
       // The cloud snapshot re-asks every host holding a whole-origin answer.
       completeIndicatorsReask,

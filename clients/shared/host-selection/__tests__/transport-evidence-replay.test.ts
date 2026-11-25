@@ -78,6 +78,7 @@ function buildFixture(): Fixture {
     clock,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: silentAuthorityLog,
+    poolConfigured: false,
   });
   const clients: RotatingSelectionAuthorityClient[] = [];
   const kernels: SelectionEvidenceKernel[] = [];

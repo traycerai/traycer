@@ -3,6 +3,7 @@ import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { readAppServingDecision } from "@/lib/host/app-serving-decision";
 import { hostQueryEntryKey, useHostQuery } from "@/hooks/host/use-host-query";
 
 const EMPTY_PARAMS = {};
@@ -40,5 +41,6 @@ export function botListEntryKey(
     method: "bot.list",
     params: EMPTY_PARAMS,
     cacheKeyIdentity: undefined,
+    serving: readAppServingDecision(),
   });
 }

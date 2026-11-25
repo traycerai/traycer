@@ -1,3 +1,4 @@
+import { poolSessionPresence } from "@traycer-clients/shared/host-transport/remote/pool-session-presence";
 import { TransportEvidenceRelay } from "@traycer-clients/shared/host-selection/transport-evidence";
 
 /**
@@ -21,3 +22,7 @@ import { TransportEvidenceRelay } from "@traycer-clients/shared/host-selection/t
  * correct answer for a transport that dials before the authority has attached.
  */
 export const transportEvidenceRelay = new TransportEvidenceRelay();
+
+// The pool's sessions report through the same relay, at the same scope: the
+// authority derives the serving peer from them.
+poolSessionPresence.bindReporter(transportEvidenceRelay);

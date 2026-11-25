@@ -261,9 +261,10 @@ export function useHeldNotificationFeedMode(
  * host `client` is bound to - passing the app-wide host here would gate a
  * remote host's lanes on the local host's capabilities.
  *
- * `cloudFeedClient` is the client the cloud feed is opened on: the server
- * pool's in a build that has one (the feed is a pool-only family), else
- * `client` itself. Only the cloud projection is read from it; the local
+ * `cloudFeedClient` is the client the cloud feed is opened on: in a build
+ * with a pool, the serving computer's when it serves the feed for this
+ * person and the pool's otherwise (the feed is account-wide), else `client`
+ * itself. Only the cloud projection is read from it; the local
  * projection and the four partitioned unary methods are the serving host's.
  *
  * `cachedCloudFeedVersion` is the version the cloud feed's serving tier had

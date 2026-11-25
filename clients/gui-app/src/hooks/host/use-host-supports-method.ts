@@ -9,23 +9,10 @@ import {
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
-
-/**
- * The host whose manifest answers for `method`: the pool for a pool-only
- * method in a build that has one, since that is where the call goes whichever
- * host the caller names.
- */
-function manifestHostIdFor(
-  hostId: string | null,
-  method: string,
-): string | null {
-  return hostRpcServingTierHostId(
-    method,
-    hostId,
-    readProcessHostRpcTierPlan(),
-    null,
-  );
-}
+import {
+  readServingTierHostId,
+  useAppServingDecision,
+} from "@/lib/host/app-serving-decision";
 
 /**
  * Whether `hostId` advertised `method` in its last handshake.
@@ -75,7 +62,17 @@ export function useHostMethodSupport(
   hostId: string | null,
   method: string,
 ): boolean | null {
-  const manifestHostId = manifestHostIdFor(hostId, method);
+  // The peer whose manifest answers for `method`: the one the call goes to
+  // whichever host the caller names - for an account-wide method, the
+  // serving computer when it answers it, else the pool.
+  const manifestHostId = hostRpcServingTierHostId(
+    method,
+    hostId,
+    readProcessHostRpcTierPlan(),
+    null,
+    useAppServingDecision(),
+    null,
+  );
   return useSyncExternalStore(subscribeNegotiatedManifests, () => {
     if (manifestHostId === null) return null;
     const methods = getNegotiatedHostMethods(manifestHostId);
@@ -102,7 +99,7 @@ export function readHostMethodSchemaVersion(
   hostId: string | null,
   method: string,
 ): SchemaVersion | null {
-  const manifestHostId = manifestHostIdFor(hostId, method);
+  const manifestHostId = readServingTierHostId(method, hostId, null, null);
   if (manifestHostId === null) return null;
   return getNegotiatedHostMethodVersion(manifestHostId, method);
 }

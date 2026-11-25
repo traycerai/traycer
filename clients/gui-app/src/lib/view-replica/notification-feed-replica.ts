@@ -6,10 +6,7 @@ import {
   type HostNotificationsCloudFeedRowV18,
   type HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import {
   clientStreamCanonicalVersion,
   viewReplicaRequestScope,
@@ -88,12 +85,7 @@ export function notificationFeedReplicaAddress(
   accountId: string,
   servingHostId: string | null,
 ): ViewReplicaAddress | null {
-  const servingTier = hostRpcServingTierHostId(
-    SERVICE,
-    servingHostId,
-    readProcessHostRpcTierPlan(),
-    null,
-  );
+  const servingTier = readServingTierHostId(SERVICE, servingHostId, null, null);
   if (servingTier === null) return null;
   return {
     accountId,

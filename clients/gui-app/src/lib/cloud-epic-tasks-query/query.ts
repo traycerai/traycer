@@ -12,10 +12,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import type {
   ListTasksRequest,
   ListTasksResponse,
@@ -717,10 +714,10 @@ function fetchOrganizationHistory(
 ): Promise<ListTasksResponse> {
   // The tier that serves `organization.history` (the pool, in a build with
   // one), whose manifest is the one that says whether it is there.
-  const servingHostId = hostRpcServingTierHostId(
+  const servingHostId = readServingTierHostId(
     "organization.history",
     client.getActiveHostId(),
-    readProcessHostRpcTierPlan(),
+    null,
     null,
   );
   if (

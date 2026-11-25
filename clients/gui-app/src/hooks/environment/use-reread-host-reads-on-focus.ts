@@ -1,8 +1,4 @@
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-  type HostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import { useQueryClient, type Query } from "@tanstack/react-query";
 import { useEffect } from "react";
 import {
@@ -30,16 +26,12 @@ const UNPOLLED: ReadonlySet<string> = new Set(
  * environment list, the review list, the notices), cached under authn's
  * scope where the pool's answer was before those reads moved.
  */
-function rereadsOnFocus(
-  query: Query,
-  hostId: string,
-  plan: HostRpcTierPlan,
-): boolean {
-  const [scope, host, method] = query.queryKey;
+function rereadsOnFocus(query: Query, hostId: string): boolean {
+  const [scope, host, method, params] = query.queryKey;
   if (scope !== "host" || typeof method !== "string") return false;
   if (
     host !== ENVIRONMENT_CLOUD_QUERY_SCOPE &&
-    host !== hostRpcServingTierHostId(method, hostId, plan, null)
+    host !== readServingTierHostId(method, hostId, null, params)
   )
     return false;
   if (DELTA_FED.has(method)) return true;
@@ -60,10 +52,9 @@ export function useRereadHostReadsOnFocus(hostId: string | null): void {
   const queryClient = useQueryClient();
   useEffect(() => {
     if (hostId === null) return undefined;
-    const plan = readProcessHostRpcTierPlan();
     const listener = (): void => {
       void queryClient.invalidateQueries({
-        predicate: (query) => rereadsOnFocus(query, hostId, plan),
+        predicate: (query) => rereadsOnFocus(query, hostId),
       });
       void invalidateEnvironmentReads(queryClient, SECRET_READS);
     };

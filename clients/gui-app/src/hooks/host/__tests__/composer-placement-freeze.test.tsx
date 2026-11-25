@@ -168,6 +168,8 @@ describe("composer placement freezes its submit client", () => {
       preferredHostId: "host-a",
       targetHostId: "host-a",
       effectiveHostId: "host-b",
+      servingPeer: { kind: "computer", hostId: "host-b" },
+      noPeerPresentation: null,
       leases: [
         { hostId: "host-a", status: "dead", dead: { reason: "offline" } },
         { hostId: "host-b", status: "ready", dead: null },

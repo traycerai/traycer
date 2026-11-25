@@ -413,6 +413,8 @@ function renderTabOnTheWindowsComputer(): void {
       preferredHostId: null,
       targetHostId: TAB_HOST_ID,
       effectiveHostId: TAB_HOST_ID,
+      servingPeer: { kind: "computer", hostId: TAB_HOST_ID },
+      noPeerPresentation: null,
       leases: [{ hostId: TAB_HOST_ID, status: "ready", dead: null }],
       selectionRevision: 1,
     });

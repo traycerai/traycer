@@ -40,9 +40,11 @@
  * refusals/timeouts across THE APP's attempts, and any live session for a
  * host suppresses that accumulation entirely.
  */
+import { POOL_HOST_ID } from "../host-client/host-directory";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   leaseEquals,
+  servingPeerEquals,
   type ActivateResult,
   type AuthorityIdentitySource,
   type HostFleetSnapshot,
@@ -52,6 +54,7 @@ import {
   type LiveSessionAnnouncement,
   type LocalHostEnsurePort,
   type LocalHostOutageSignal,
+  type NoPeerPresentation,
   type SelectionAttachRequest,
   type SelectionAttachResult,
   type SelectionAuthorityEngine,
@@ -64,6 +67,7 @@ import {
   type SelectionRevisioned,
   type SelectionSubscription,
   type SelectionTransportKind,
+  type ServingPeer,
 } from "./selection-authority-contract";
 
 /**
@@ -294,6 +298,16 @@ export const LOCAL_ENSURE_IN_FLIGHT_CEILING_MS =
 export const EFFECTIVE_HOST_POST_SESSION_CEILING_MS = 90_000;
 
 /**
+ * The host-starting presentation budget: how long a starting peer is shown as
+ * connecting before the unreachable presentation. Tiles read it for a host
+ * that is starting; the engine reads it for a window of a pool build that
+ * neither a computer nor the pool can serve, where it times the connecting
+ * card before the offline one. A presentation budget, never a death verdict:
+ * both peers keep retrying behind the card.
+ */
+export const HOST_STARTING_BUDGET_MS = 15_000;
+
+/**
  * The engine's own clock and timer source (mechanism 7: "authority deadlines
  * come from its own ceilings, never renderer or host clocks"). A composition
  * input, not wire surface - tests inject a fake.
@@ -431,6 +445,12 @@ export interface SelectionAuthorityEngineOptions {
   readonly clock: AuthorityClock;
   readonly newIncarnationId: () => string;
   readonly log: AuthorityLog;
+  /**
+   * Whether this build has a server pool address. A fact of the build: with
+   * none, the serving peer is the effective computer or nothing, exactly the
+   * selection every build had before the pool.
+   */
+  readonly poolConfigured: boolean;
 }
 
 /** One live transport session as the authority holds it. */
@@ -607,13 +627,25 @@ interface SelectionState {
    */
   readonly targetHostId: string | null;
   readonly effectiveHostId: string | null;
+  readonly servingPeer: ServingPeer | null;
+  readonly noPeerPresentation: NoPeerPresentation | null;
 }
 
 const EMPTY_SELECTION: SelectionState = {
   preferredHostId: null,
   targetHostId: null,
   effectiveHostId: null,
+  servingPeer: null,
+  noPeerPresentation: null,
 };
+
+/** The serving half of a derivation pass. */
+interface ServingState {
+  readonly servingPeer: ServingPeer | null;
+  readonly noPeerPresentation: NoPeerPresentation | null;
+}
+
+const POOL_SERVING_PEER: ServingPeer = { kind: "pool" };
 
 /**
  * Generation sentinel for "the engine has not adopted an identity yet". Below
@@ -647,7 +679,9 @@ function selectionEquals(a: SelectionState, b: SelectionState): boolean {
   return (
     a.preferredHostId === b.preferredHostId &&
     a.targetHostId === b.targetHostId &&
-    a.effectiveHostId === b.effectiveHostId
+    a.effectiveHostId === b.effectiveHostId &&
+    servingPeerEquals(a.servingPeer, b.servingPeer) &&
+    a.noPeerPresentation === b.noPeerPresentation
   );
 }
 
@@ -870,6 +904,50 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   private localProofGeneration = 0;
   private cancelDeadlineTimer: (() => void) | null = null;
   private scheduledDeadline: number | null = null;
+  /**
+   * Whether a computer has served this identity: been the serving peer with a
+   * `ready` lease. Until then the open pool serves while the effective remote
+   * computer is unproven, and that computer takes over on its first `ready`
+   * proof. Scoped to the identity; the transition puts it back.
+   */
+  private servedByComputer = false;
+  /**
+   * Whether the pool took over after a computer had served and was given up
+   * on. From there the app returns to a computer only once its lease has been
+   * `ready` continuously for {@link FAILOVER_CANDIDATE_STABILITY_MS}.
+   */
+  private poolAfterLoss = false;
+  /**
+   * The return clock: since when the effective computer's lease has been
+   * `ready` without a break while the pool serves after a loss. Its own clock,
+   * separate from {@link usableSince}, which counts `connecting` as usable: a
+   * break in `ready`, a different effective computer or a new identity
+   * discards it.
+   */
+  private returnReady: { hostId: string; since: number } | null = null;
+  /**
+   * When the current no-peer episode's connecting card gives way to the
+   * offline card, or null while a peer serves or a hold is waiting. Fixed at
+   * the episode's first pass, so a retry, a repeated refusal or another
+   * pending handshake never restarts it.
+   */
+  private noPeerOfflineAt: number | null = null;
+  /**
+   * The end of an announced pool restart's hold, or null. The first receipt
+   * of a pool tombstone opens one episode of {@link RESTART_INTENT_EPISODE_MS}
+   * (the pool's own drain rule in `pool-session-presence.ts`); a pool session
+   * opening again ends it early.
+   */
+  private poolRestartHoldUntil: number | null = null;
+  private readonly seenPoolTombstoneIds = new Set<string>();
+  /**
+   * Whether the local computer's ensure has failed or expired since it last
+   * served. Its in-flight ensure holds the pool back only until then: a local
+   * computer that is switched off or failed to start gets no extra wait, and
+   * the ensure the cooldown's lapse requests again must not hold the pool a
+   * second time.
+   */
+  private localEnsureGaveUp = false;
 
   private readonly selectionListeners = new Set<
     (event: SelectionRevisioned<SelectionChange>) => void
@@ -1184,6 +1262,8 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       preferredHostId: this.selection.preferredHostId,
       targetHostId: this.selection.targetHostId,
       effectiveHostId: this.selection.effectiveHostId,
+      servingPeer: this.selection.servingPeer,
+      noPeerPresentation: this.selection.noPeerPresentation,
       leases: this.leases,
     };
   }
@@ -1265,6 +1345,10 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
         hostId: announcement.hostId,
         transportKind: announcement.transportKind,
       });
+      if (announcement.hostId === POOL_HOST_ID) {
+        this.poolRestartHoldUntil = null;
+        continue;
+      }
       this.observeSession(
         attachment,
         announcement.hostId,
@@ -1472,7 +1556,10 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     report: Extract<SelectionEvidenceReport, { kind: "dial" }>,
   ): void {
     const hostId = report.hostId;
-    if (this.dropsAsOutsideFleet(hostId, report.kind)) {
+    if (
+      hostId === POOL_HOST_ID ||
+      this.dropsAsOutsideFleet(hostId, report.kind)
+    ) {
       this.recordDialDisposition(report, "dropped-outside-fleet");
       return;
     }
@@ -1632,6 +1719,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       hostId: report.hostId,
       transportKind: report.transportKind,
     });
+    if (report.hostId === POOL_HOST_ID) {
+      // The pool is no host: its session is the serving-peer input and holds
+      // no lease, so it never reaches the host evidence below. A session that
+      // opens again ends an announced drain early.
+      this.poolRestartHoldUntil = null;
+      return;
+    }
     this.observeSession(attachment, report.hostId, report.sessionId);
     this.onHostProvedAlive(report.hostId);
   }
@@ -1640,6 +1734,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     attachment: AttachmentRecord,
     report: Extract<SelectionEvidenceReport, { kind: "compat" }>,
   ): void {
+    if (report.hostId === POOL_HOST_ID) return;
     if (this.dropsAsOutsideFleet(report.hostId, report.kind)) return;
     const rank =
       report.probedOnSessionId === null
@@ -1721,6 +1816,15 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   private ingestRestartIntent(
     report: Extract<SelectionEvidenceReport, { kind: "restart-intent" }>,
   ): void {
+    if (report.hostId === POOL_HOST_ID) {
+      // An announced pool drain: one fixed episode per tombstone, never
+      // extended by a duplicate, the same rule a host's restart follows.
+      if (this.seenPoolTombstoneIds.has(report.tombstoneId)) return;
+      this.seenPoolTombstoneIds.add(report.tombstoneId);
+      this.poolRestartHoldUntil =
+        this.options.clock.now() + RESTART_INTENT_EPISODE_MS;
+      return;
+    }
     if (this.dropsAsOutsideFleet(report.hostId, report.kind)) return;
     // FIRST receipt anchors ONE fixed episode; every duplicate - another
     // window observing the same tombstone, a liveness-plane replay - is
@@ -1992,6 +2096,16 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // The engine's damping state describes the OUTGOING account's hosts.
     this.usableSince.clear();
     this.pendingDampingDeadline = null;
+    // The serving peer's history belongs to the outgoing identity too: the
+    // incoming one has not been served by a computer, and nothing it sees is
+    // a return to one.
+    this.servedByComputer = false;
+    this.poolAfterLoss = false;
+    this.returnReady = null;
+    this.noPeerOfflineAt = null;
+    this.poolRestartHoldUntil = null;
+    this.seenPoolTombstoneIds.clear();
+    this.localEnsureGaveUp = false;
     this.localEnsureFailedUntil = null;
     this.localEnsureRetryHoldUntil = null;
     // Retire the outgoing account's in-flight ensure so the incoming identity
@@ -2068,17 +2182,187 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       leases,
       now,
     );
+    const effectiveHostId = this.applyDamping(
+      desired,
+      targetHostId,
+      leases,
+      cause,
+      now,
+    );
     return {
       preferredHostId,
       targetHostId,
-      effectiveHostId: this.applyDamping(
-        desired,
-        targetHostId,
-        leases,
-        cause,
-        now,
-      ),
+      effectiveHostId,
+      ...this.deriveServing(effectiveHostId, targetHostId, leases, now),
     };
+  }
+
+  /**
+   * The serving peer, derived on top of the computer decision and never
+   * feeding back into it: which computer is effective, and when the engine
+   * gives up on one, stay exactly what `deriveDesiredEffective` and
+   * `applyDamping` answered. Read before this pass's selection is committed,
+   * so `coldStartArmApplies` sees the same incumbent derivation just saw.
+   *
+   * With a pool address, in order:
+   *
+   *  - The effective computer with a `ready` lease serves, unless the pool
+   *    took over after a loss and that computer has not yet been `ready` for
+   *    {@link FAILOVER_CANDIDATE_STABILITY_MS} without a break. At app start
+   *    there is no such wait: the first `ready` proof moves the app.
+   *  - While the pool serves after a loss, it keeps serving until that return.
+   *  - A computer an existing hold is waiting on keeps today's presentation:
+   *    a `restarting-expected` incumbent, and the local computer while it is
+   *    `connecting` (its in-flight ensure) unless its ensure has already
+   *    failed or expired. The pool never comes before them.
+   *  - Before a computer has served, an effective remote that has not proved
+   *    itself yields to the open pool; once one has served, the effective
+   *    computer is today's answer until derivation gives it up.
+   *  - With no effective computer, once discovery has concluded and no
+   *    cold-start hold is waiting, the open pool serves.
+   *
+   * Anything else is a window neither peer can serve, timed by
+   * {@link noPeerPresentation}.
+   */
+  private deriveServing(
+    effectiveHostId: string | null,
+    targetHostId: string | null,
+    leases: readonly HostLeaseSnapshot[],
+    now: number,
+  ): ServingState {
+    if (!this.options.poolConfigured) {
+      return {
+        servingPeer:
+          effectiveHostId === null
+            ? null
+            : { kind: "computer", hostId: effectiveHostId },
+        noPeerPresentation: null,
+      };
+    }
+    const localHostId = this.fleet.localHostId;
+    if (
+      localHostId !== null &&
+      this.leaseFor(localHostId, leases)?.status === "ready"
+    ) {
+      this.localEnsureGaveUp = false;
+    } else if (this.localEnsureFailedUntil !== null) {
+      this.localEnsureGaveUp = true;
+    }
+    const poolOpen = this.hasLiveSession(POOL_HOST_ID);
+    const choice = this.choosePeer(
+      effectiveHostId,
+      targetHostId,
+      leases,
+      poolOpen,
+      now,
+    );
+    if (choice !== "no-peer") {
+      this.noPeerOfflineAt = null;
+      return { servingPeer: choice, noPeerPresentation: null };
+    }
+    return {
+      servingPeer: null,
+      noPeerPresentation: this.noPeerPresentation(now),
+    };
+  }
+
+  /**
+   * One pass's serving answer: a peer, `null` while an existing hold or
+   * discovery is still being waited on (today's presentation), or `no-peer`
+   * when neither peer can serve and the window's clock runs.
+   */
+  private choosePeer(
+    effectiveHostId: string | null,
+    targetHostId: string | null,
+    leases: readonly HostLeaseSnapshot[],
+    poolOpen: boolean,
+    now: number,
+  ): ServingPeer | null | "no-peer" {
+    if (effectiveHostId === null) {
+      this.returnReady = null;
+      if (
+        !this.hasFleetAnswer ||
+        this.coldStartTargetHeld(targetHostId, leases, now)
+      ) {
+        return null;
+      }
+      if (!poolOpen) return "no-peer";
+      if (this.servedByComputer) this.poolAfterLoss = true;
+      return POOL_SERVING_PEER;
+    }
+    const computer: ServingPeer = { kind: "computer", hostId: effectiveHostId };
+    const status = this.leaseFor(effectiveHostId, leases)?.status ?? null;
+    if (status === "ready") {
+      if (
+        this.poolAfterLoss &&
+        poolOpen &&
+        !this.returnCredited(effectiveHostId, now)
+      ) {
+        return POOL_SERVING_PEER;
+      }
+      this.returnReady = null;
+      this.poolAfterLoss = false;
+      this.servedByComputer = true;
+      return computer;
+    }
+    this.returnReady = null;
+    if (this.poolAfterLoss && poolOpen) return POOL_SERVING_PEER;
+    const held =
+      status === "restarting-expected" ||
+      (status === "connecting" &&
+        effectiveHostId === this.fleet.localHostId &&
+        !this.localEnsureGaveUp);
+    if (held) return computer;
+    if (this.servedByComputer && !this.poolAfterLoss) return computer;
+    return poolOpen && this.hasFleetAnswer ? POOL_SERVING_PEER : "no-peer";
+  }
+
+  /**
+   * Whether the effective computer has been `ready` for the whole return
+   * window, starting its clock on the first `ready` pass. A different
+   * computer starts a clock of its own.
+   */
+  private returnCredited(hostId: string, now: number): boolean {
+    const mark = this.returnReady;
+    const since = mark !== null && mark.hostId === hostId ? mark.since : now;
+    this.returnReady = { hostId, since };
+    return now >= since + FAILOVER_CANDIDATE_STABILITY_MS;
+  }
+
+  /**
+   * Whether ∅ is the cold-start hold waiting on a restarting local target:
+   * the same premise `deriveDesiredEffective` held for, asked without
+   * re-arming the hold.
+   */
+  private coldStartTargetHeld(
+    targetHostId: string | null,
+    leases: readonly HostLeaseSnapshot[],
+    now: number,
+  ): boolean {
+    const hold = this.coldStartHold;
+    return (
+      hold !== null &&
+      targetHostId !== null &&
+      hold.hostId === targetHostId &&
+      targetHostId === this.fleet.localHostId &&
+      this.leaseFor(targetHostId, leases)?.status === "restarting-expected" &&
+      this.coldStartArmApplies(null) &&
+      now < hold.startedAt + COLD_START_LOCAL_RESTART_HOLD_CEILING_MS
+    );
+  }
+
+  /**
+   * The no-peer episode's card, fixing its deadline on the episode's first
+   * pass: an announced pool restart's own hold when one is open, the
+   * host-starting presentation budget otherwise.
+   */
+  private noPeerPresentation(now: number): NoPeerPresentation {
+    if (this.noPeerOfflineAt === null) {
+      const hold = this.poolRestartHoldUntil;
+      this.noPeerOfflineAt =
+        hold !== null && now < hold ? hold : now + HOST_STARTING_BUDGET_MS;
+    }
+    return now < this.noPeerOfflineAt ? "connecting" : "offline";
   }
 
   /**
@@ -3041,6 +3325,16 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
         consider(lostAt + EFFECTIVE_HOST_POST_SESSION_CEILING_MS);
       }
     }
+    // The serving peer moves on time too: a computer that stays `ready`
+    // returns the app from the pool at the end of its window, and a window
+    // neither peer serves turns to the offline card at its deadline, with no
+    // report to wake either.
+    const returnReady = this.returnReady;
+    if (returnReady !== null) {
+      consider(returnReady.since + FAILOVER_CANDIDATE_STABILITY_MS);
+    }
+    const noPeerOfflineAt = this.noPeerOfflineAt;
+    if (noPeerOfflineAt !== null) consider(noPeerOfflineAt);
     return earliest;
   }
 
@@ -3148,6 +3442,8 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
             targetHostId: selection.targetHostId,
             effectiveHostId: selection.effectiveHostId,
             previousEffectiveHostId,
+            servingPeer: selection.servingPeer,
+            noPeerPresentation: selection.noPeerPresentation,
             cause: resolveCause(cause, selection),
           },
         },

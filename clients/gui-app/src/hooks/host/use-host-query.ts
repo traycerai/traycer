@@ -18,8 +18,10 @@ import {
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import {
+  callEnvironmentIdOf,
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
+  type HostServingDecision,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   HostRpcError,
@@ -38,6 +40,7 @@ import {
 } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useAppServingDecision } from "@/lib/host/app-serving-decision";
 import type { EnvironmentCloudSource } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   sendFollowedSave,
@@ -215,6 +218,7 @@ function useHostQueryEntry<
 ): { readonly queryKey: QueryKey; readonly canExecute: boolean } {
   const readiness = useReactiveHostReadiness(args.client);
   const effectiveHostId = useEffectiveHostId();
+  const serving = useAppServingDecision();
   return {
     queryKey: hostQueryEntryKey<Registry, Method>({
       hostId: readiness.hostId,
@@ -222,6 +226,7 @@ function useHostQueryEntry<
       method: args.method,
       params: args.params,
       cacheKeyIdentity: args.cacheKeyIdentity,
+      serving,
     }),
     canExecute: readiness.canExecute,
   };
@@ -241,17 +246,22 @@ export function hostQueryEntryKey<
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
   readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
+  /** The app's serving decision this key is built under. */
+  readonly serving: HostServingDecision;
 }): QueryKey {
-  // Keyed by the tier that ANSWERS, not the host the caller named: the client
-  // routes a pool-only method to the pool and an input-device method to the
-  // selected host whatever requester carried it, so keying by the caller
-  // would file one answer under every host and miss the serving tier's
-  // recovery sweeps.
+  // Keyed by the peer that ANSWERS, not the host the caller named: the client
+  // routes an account-wide method to the serving peer that answers it and an
+  // input-device method to the selected host whatever requester carried it,
+  // so keying by the caller would file one answer under every host and miss
+  // the serving tier's recovery sweeps. A move of the answering peer is one
+  // new key, so one refetch.
   const servingHostId = hostRpcServingTierHostId(
     input.method,
     input.hostId,
     readProcessHostRpcTierPlan(),
     input.effectiveHostId,
+    input.serving,
+    callEnvironmentIdOf(input.params),
   );
   return [
     ...queryKeys.hostMethod<Registry, Method>(

@@ -6,6 +6,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { subscribeNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useAppServingDecision } from "@/lib/host/app-serving-decision";
 import {
   readNegotiatedMethodVersion,
   type NegotiatedMethodVersion,
@@ -41,18 +42,21 @@ export function useHostNegotiatedMethodVersion(
     },
     [client],
   );
+  const serving = useAppServingDecision();
   const getSnapshot = useCallback((): NegotiatedMethodVersion => {
-    // The serving tier's manifest: the pool's for a pool-only method in a
-    // build that has one, wherever the client points.
+    // The answering peer's manifest: for an account-wide method, the serving
+    // computer when it answers it, else the pool, wherever the client points.
     const hostId = hostRpcServingTierHostId(
       method,
       client?.getActiveHostId() ?? null,
       readProcessHostRpcTierPlan(),
       null,
+      serving,
+      null,
     );
     if (hostId === null) return null;
     return readNegotiatedMethodVersion(hostId, method);
-  }, [client, method]);
+  }, [client, method, serving]);
 
   return useSyncExternalStore(subscribe, getSnapshot);
 }

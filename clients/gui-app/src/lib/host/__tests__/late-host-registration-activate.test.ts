@@ -75,6 +75,7 @@ function buildWorld() {
     clock: createFakeAuthorityClock(0),
     newIncarnationId: () => "incarnation-1",
     log: { debug: () => undefined, warn: () => undefined },
+    poolConfigured: false,
   });
 
   // The shell's half: republish the membership it can see. A real shell reads

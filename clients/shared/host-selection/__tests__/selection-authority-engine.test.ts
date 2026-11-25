@@ -1449,6 +1449,7 @@ describe("SelectionAuthorityEngineImpl - local outage signal", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     await Promise.resolve();
     expect(findLease(engine.snapshot().leases, "local-1")?.status).toBe(
@@ -1512,6 +1513,7 @@ describe("SelectionAuthorityEngineImpl - local outage signal", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     // Derivation wants the local host and it has never been dialed, so D14's
     // one sanctioned process action fires and stays outstanding.
@@ -1728,6 +1730,7 @@ describe("SelectionAuthorityEngineImpl - identity transitions", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const { events } = recordEngineEvents(engine);
 
@@ -1833,6 +1836,7 @@ describe("SelectionAuthorityEngineImpl - identity transitions", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const { events } = recordEngineEvents(engine);
 
@@ -2123,6 +2127,7 @@ describe("SelectionAuthorityEngineImpl - listener isolation", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
 
     let secondCalled = 0;
@@ -2332,6 +2337,7 @@ describe("SelectionAuthorityEngineImpl - A4: identity transition keeps an active
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     await Promise.resolve();
 
@@ -3708,6 +3714,7 @@ describe("SelectionAuthorityEngineImpl - P1.3 F14 clear on identity adopt (H)", 
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: store,
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const { events } = recordEngineEvents(engine);
     fleet.publish(1, input.bFleet.localHostId, input.bFleet.hosts);
@@ -5209,6 +5216,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const { events } = recordEngineEvents(engine);
     return {

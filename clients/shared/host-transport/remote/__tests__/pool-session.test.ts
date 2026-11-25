@@ -420,20 +420,20 @@ class RecordingPoolEvidence implements RemoteSessionEvidence<"pool-direct"> {
 
   sessionEstablished(
     hostId: string,
-    _sessionId: string,
+    sessionId: string,
     _transportKind: "pool-direct",
   ): void {
     this.log.push("established");
-    this.presence.sessionEstablished(hostId);
+    this.presence.sessionEstablished(hostId, sessionId);
   }
 
   sessionLost(
-    _hostId: string,
-    _sessionId: string,
+    hostId: string,
+    sessionId: string,
     _transportKind: "pool-direct",
   ): void {
     this.log.push("lost");
-    this.presence.sessionLost();
+    this.presence.sessionLost(hostId, sessionId);
   }
 
   reportDialSuccess(
@@ -466,10 +466,10 @@ class RecordingPoolEvidence implements RemoteSessionEvidence<"pool-direct"> {
   reportRestartIntent(
     hostId: string,
     tombstoneId: string,
-    _expiresAt: number | null,
+    expiresAt: number | null,
   ): void {
     this.log.push(`restartIntent:${tombstoneId}`);
-    this.presence.reportRestartIntent(hostId, tombstoneId);
+    this.presence.reportRestartIntent(hostId, tombstoneId, expiresAt);
   }
 }
 
@@ -772,12 +772,12 @@ describe("PoolSessionPresence", () => {
       notifications += 1;
     });
 
-    presence.reportRestartIntent("pool", "t1");
+    presence.reportRestartIntent("pool", "t1", null);
     expect(presence.isRestartExpected("pool")).toBe(true);
     expect(notifications).toBe(1);
 
     vi.advanceTimersByTime(RESTART_INTENT_EPISODE_MS / 2);
-    presence.reportRestartIntent("pool", "t1");
+    presence.reportRestartIntent("pool", "t1", null);
     expect(notifications).toBe(1);
 
     vi.advanceTimersByTime(RESTART_INTENT_EPISODE_MS / 2 - 1);
@@ -790,13 +790,13 @@ describe("PoolSessionPresence", () => {
   it("ends the hold when a session is established, and neither a refused nor an indeterminate dial ends it", () => {
     vi.useFakeTimers();
     const presence = new PoolSessionPresence(() => Date.now());
-    presence.reportRestartIntent("pool", "t1");
+    presence.reportRestartIntent("pool", "t1", null);
 
     presence.reportDialRefusal();
     presence.reportDialIndeterminate();
     expect(presence.isRestartExpected("pool")).toBe(true);
 
-    presence.sessionEstablished("pool");
+    presence.sessionEstablished("pool", "s1");
     expect(presence.isRestartExpected("pool")).toBe(false);
   });
 });

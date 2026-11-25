@@ -188,6 +188,7 @@ export function createTestAuthority(input: {
     clock: input.clock,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: input.log ?? silentAuthorityLog,
+    poolConfigured: false,
   });
   const { events, subscriptions } = recordEngineEvents(engine);
   return {

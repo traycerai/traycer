@@ -852,6 +852,8 @@ describe("<SandboxTileStateFrame /> on a computer that refuses this account", ()
       preferredHostId: hostId,
       targetHostId: hostId,
       effectiveHostId: hostId,
+      servingPeer: { kind: "computer", hostId },
+      noPeerPresentation: null,
       leases: [{ hostId, status: "ready", dead: null }],
       selectionRevision: 1,
     });

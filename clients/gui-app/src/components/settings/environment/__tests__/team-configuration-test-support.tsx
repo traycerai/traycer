@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { vi } from "vitest";
@@ -1094,6 +1095,7 @@ function buildTeamAuthRuntime(queryClient: QueryClient): TeamAuthRuntime {
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
   });
   const binding: HostRuntimeBinding<HostRpcRegistry> = {
@@ -1498,6 +1500,7 @@ function buildLegacyTeamPage(
     requestCoordinator: null,
     connectionRegistry: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     onHostTokenRenewal: () => undefined,
   });
   const spine = runtime.hostClient;
@@ -1653,6 +1656,7 @@ function assembleTeamPage(
     requestCoordinator: null,
     connectionRegistry: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     onHostTokenRenewal: () => undefined,
   });
   activeTeamPageRuntimes.push({ runtime, directory, auth: null });

@@ -55,6 +55,7 @@ import { createSessionRetirementSweep } from "@/lib/host/session-retirement";
 import { buildHostKeyRotationSweep } from "@/lib/host/host-key-rotation-sweep";
 import { buildRuntimeChangeScopeHandler } from "@/lib/host/runtime-change-scope";
 import { appLogger } from "@/lib/logger";
+import { readHostServingDecision } from "@/lib/host/serving-decision";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { authQueryKeys } from "@/lib/query-keys";
 import { refreshHostListOnSandboxFrozen } from "@/lib/sandboxes/sandbox-frozen-terminal";
@@ -426,6 +427,10 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         // input devices are served by (`selected-host` in the routing table).
         selectedHostId: () =>
           useSelectionAuthorityStore.getState().effectiveHostId,
+        // Where an account-wide call goes: the serving peer when it negotiated
+        // the method and may answer it for this caller, the pool otherwise.
+        servingDecision: () =>
+          readHostServingDecision((hostId) => directory.findById(hostId)),
         // The window's connection-registry wiring.
         // Both halves are READ PORTS: the registry keeps no copy of a row or
         // a lease, so there is still exactly one directory and exactly one

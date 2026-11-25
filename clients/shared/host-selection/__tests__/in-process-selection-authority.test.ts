@@ -42,6 +42,7 @@ describe("in-process selection authority - end to end over a real engine", () =>
       clock,
       newIncarnationId: createIncrementingIncarnationIds(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
 
     // The in-process adapter uses ONE constant reporter id: a second client
@@ -110,6 +111,7 @@ describe("in-process selection authority - end to end over a real engine", () =>
       clock,
       newIncarnationId: createIncrementingIncarnationIds(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const client = createInProcessSelectionAuthorityClient(
       engine,

@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -368,6 +369,7 @@ async function createHarness(
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => HOST_ID,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
   });
   runtime.hostClient.setRequestContext(

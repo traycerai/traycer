@@ -209,6 +209,8 @@ describe("useHostClientForHostId", () => {
       preferredHostId: TARGET_B.hostId,
       targetHostId: TARGET_B.hostId,
       effectiveHostId: TARGET_B.hostId,
+      servingPeer: { kind: "computer", hostId: TARGET_B.hostId },
+      noPeerPresentation: null,
       leases: [],
       selectionRevision: 1,
     });

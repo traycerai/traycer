@@ -151,8 +151,13 @@ import {
 // this module owns is the kind of split import that goes stale.
 export type { ClientCompatibilityRequirement };
 
-/** Major version of this contract. Additive-only within a major. */
-export const SELECTION_AUTHORITY_CONTRACT_VERSION = 1;
+/**
+ * Major version of this contract. Additive-only within a major. Version 2
+ * adds the serving peer to the selection slice: a renderer of version 1 reads
+ * `effectiveHostId` as the peer that serves it, which a pool build no longer
+ * guarantees.
+ */
+export const SELECTION_AUTHORITY_CONTRACT_VERSION = 2;
 
 /**
  * The epoch-rejection detail, or `null` when it is absent or malformed.
@@ -189,11 +194,19 @@ function isSafeCount(value: unknown): value is number {
  * aggregation never branches on it. `"unknown"` is the parser's mapping for
  * members added by a newer same-major peer.
  */
-export type SelectionTransportKind = "local-ws" | "remote-relay" | "unknown";
+export type SelectionTransportKind =
+  | "local-ws"
+  | "remote-relay"
+  | "pool-direct"
+  | "unknown";
 
 /** Wire mapping for {@link SelectionTransportKind}; unknown → "unknown". */
 export function parseTransportKind(value: unknown): SelectionTransportKind {
-  return value === "local-ws" || value === "remote-relay" ? value : "unknown";
+  return value === "local-ws" ||
+    value === "remote-relay" ||
+    value === "pool-direct"
+    ? value
+    : "unknown";
 }
 
 /**
@@ -704,6 +717,59 @@ export type SelectionChangeCause =
   | "fleet-shift";
 
 /**
+ * The peer that serves the app's account-wide work: the effective computer, or
+ * the server pool when the build has a pool address and no computer can serve.
+ * `effectiveHostId` keeps meaning a computer, so the pool never reaches a
+ * picker, a pin, composer placement or Activate.
+ */
+export type ServingPeer =
+  | { readonly kind: "computer"; readonly hostId: string }
+  | { readonly kind: "pool" };
+
+/**
+ * What a window of a pool build shows while neither a computer nor the pool
+ * can serve it: the connecting card until the host-starting presentation
+ * budget (or an announced pool restart's hold) runs out, then the offline
+ * card. `null` whenever a peer serves, while an existing computer startup or
+ * restart hold is waiting, before discovery has concluded, and always in a
+ * build with no pool address.
+ */
+export type NoPeerPresentation = "connecting" | "offline";
+
+export function servingPeerEquals(
+  a: ServingPeer | null,
+  b: ServingPeer | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.kind === "pool" || b.kind === "pool") return a.kind === b.kind;
+  return a.hostId === b.hostId;
+}
+
+/**
+ * Raw-boundary parser for {@link ServingPeer}. Malformed → the effective
+ * computer, or null with none: the reading every build had before the pool.
+ */
+function parseServingPeer(
+  raw: unknown,
+  effectiveHostId: string | null,
+): ServingPeer | null {
+  if (isRecord(raw)) {
+    if (raw["kind"] === "pool") return { kind: "pool" };
+    if (raw["kind"] === "computer" && typeof raw["hostId"] === "string") {
+      return { kind: "computer", hostId: raw["hostId"] };
+    }
+  }
+  return effectiveHostId === null
+    ? null
+    : { kind: "computer", hostId: effectiveHostId };
+}
+
+/** Raw-boundary parser for {@link NoPeerPresentation}; unknown → null. */
+function parseNoPeerPresentation(raw: unknown): NoPeerPresentation | null {
+  return raw === "connecting" || raw === "offline" ? raw : null;
+}
+
+/**
  * THE selection event (authority → windows): one composite, revisioned,
  * self-contained snapshot of the whole selection tuple. One event kind
  * means one high-water mark orders everything - no sibling event at the
@@ -733,6 +799,8 @@ export interface SelectionChange {
   effectiveHostId: string | null;
   /** The previous effective host, for re-point bookkeeping. */
   previousEffectiveHostId: string | null;
+  servingPeer: ServingPeer | null;
+  noPeerPresentation: NoPeerPresentation | null;
   cause: SelectionChangeCause;
 }
 
@@ -770,6 +838,8 @@ export function parseSelectionChange(raw: unknown): SelectionChange | null {
     targetHostId,
     effectiveHostId,
     previousEffectiveHostId,
+    servingPeer: parseServingPeer(record["servingPeer"], effectiveHostId),
+    noPeerPresentation: parseNoPeerPresentation(record["noPeerPresentation"]),
     cause: safeCause,
   };
 }
@@ -836,6 +906,8 @@ export interface SelectionAuthoritySnapshot {
   preferredHostId: string | null;
   targetHostId: string | null;
   effectiveHostId: string | null;
+  servingPeer: ServingPeer | null;
+  noPeerPresentation: NoPeerPresentation | null;
   leases: readonly HostLeaseSnapshot[];
 }
 
@@ -948,6 +1020,10 @@ export function parseSelectionAttachResult(
         preferredHostId,
         targetHostId,
         effectiveHostId,
+        servingPeer: parseServingPeer(snapshot["servingPeer"], effectiveHostId),
+        noPeerPresentation: parseNoPeerPresentation(
+          snapshot["noPeerPresentation"],
+        ),
         leases,
       },
     };

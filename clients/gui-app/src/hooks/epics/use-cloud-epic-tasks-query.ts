@@ -5,6 +5,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
+import { useAnsweringHostClient } from "@/hooks/host/use-pool-tier";
 import {
   hashKey,
   queryOptions,
@@ -271,7 +272,10 @@ export function useCloudEpicTasksQuery(
   request: ListCloudTasksRequest | undefined,
   options: { readonly enabled: boolean },
 ): CloudEpicTasksQueryResult {
-  return useCloudEpicTasksQueryForClient(useHostClient(), request, options);
+  // History is account-wide: read through the peer that answers it, so its
+  // keys and replica name that peer and the pool serves it with no computer.
+  const client = useAnsweringHostClient(useHostClient(), "epic.listTasks");
+  return useCloudEpicTasksQueryForClient(client, request, options);
 }
 
 /**

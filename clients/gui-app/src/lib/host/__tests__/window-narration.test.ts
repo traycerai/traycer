@@ -1042,6 +1042,10 @@ function renderWindowNarrationHook(serving: boolean) {
       preferredHostId: WINDOW_NARRATION_HOST_ID,
       targetHostId: WINDOW_NARRATION_HOST_ID,
       effectiveHostId: serving ? WINDOW_NARRATION_HOST_ID : null,
+      servingPeer: serving
+        ? { kind: "computer", hostId: WINDOW_NARRATION_HOST_ID }
+        : null,
+      noPeerPresentation: null,
       leases: [
         {
           hostId: WINDOW_NARRATION_HOST_ID,

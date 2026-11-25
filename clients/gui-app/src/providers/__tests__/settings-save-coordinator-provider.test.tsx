@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import "../../../__tests__/test-browser-apis";
 import { act, cleanup, render } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
@@ -154,6 +155,7 @@ function makeBindingHarness(connected: boolean): BindingHarness {
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => HOST_ID,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
     onHostTokenRenewal: () => undefined,
   });

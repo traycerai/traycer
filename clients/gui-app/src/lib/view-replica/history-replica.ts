@@ -3,10 +3,7 @@ import {
   type ListTaskLight,
   type ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import {
   clientUnaryCanonicalVersion,
   viewReplicaRequestScope,
@@ -103,12 +100,7 @@ export function historyReplicaAddress(
   request: ListCloudTasksRequest,
 ): ViewReplicaAddress | null {
   if (request.filters !== null) return null;
-  const servingTier = hostRpcServingTierHostId(
-    SERVICE,
-    hostId,
-    readProcessHostRpcTierPlan(),
-    null,
-  );
+  const servingTier = readServingTierHostId(SERVICE, hostId, null, null);
   if (servingTier === null) return null;
   return {
     accountId,

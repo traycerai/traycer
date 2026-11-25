@@ -37,7 +37,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import {
   usePoolTierHostClient,
-  usePoolTierStreamClient,
+  useRoutedStreamClient,
 } from "@/hooks/host/use-pool-tier";
 import {
   authorizesCloudCapability,
@@ -90,10 +90,12 @@ export function OrganizationProvider({
   // pool build those are different hosts: commands and frames would go to the
   // pool while a refused draft intent waited on a recovery from somewhere
   // else, and the recovery that actually concerns it would never arrive.
-  const streamClient = usePoolTierStreamClient(
+  const streamClient = useRoutedStreamClient(
+    "organization.subscribe",
+    binding?.hostId ?? null,
     binding?.wsStreamClient ?? null,
     userId,
-  );
+  ).client;
   const accountUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
@@ -528,10 +530,12 @@ function OrganizationSubscription(props: {
 }) {
   const client = usePoolTierHostClient(useHostClient());
   const binding = useSurfaceHostStreamBinding(null);
-  const streamClient = usePoolTierStreamClient(
+  const streamClient = useRoutedStreamClient(
+    "organization.subscribe",
+    binding?.hostId ?? null,
     binding?.wsStreamClient ?? null,
     props.userId,
-  );
+  ).client;
   const { taskIds, accept } = props;
   const receivedFrame = useRef(false);
   const refresh = useHostQuery({

@@ -53,6 +53,7 @@ import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type HostLeaseSnapshot,
   type LiveSessionAnnouncement,
+  type NoPeerPresentation,
   type SelectionAttachResult,
   type SelectionAuthorityClient,
   type SelectionAuthoritySnapshot,
@@ -60,6 +61,7 @@ import {
   type SelectionIncompatibility,
   type SelectionSubscription,
   type SelectionTransportKind,
+  type ServingPeer,
 } from "./selection-authority-contract";
 import {
   RESTART_INTENT_EPISODE_MS,
@@ -91,6 +93,9 @@ export interface SelectionKernelSnapshot {
    */
   readonly targetHostId: string | null;
   readonly effectiveHostId: string | null;
+  /** Part of the selection slice; see `ServingPeer`. */
+  readonly servingPeer: ServingPeer | null;
+  readonly noPeerPresentation: NoPeerPresentation | null;
   readonly leases: readonly HostLeaseSnapshot[];
   /**
    * The authority revision this window's SELECTION slice reflects, or -1 while
@@ -108,6 +113,8 @@ const DETACHED_SNAPSHOT: SelectionKernelSnapshot = {
   preferredHostId: null,
   targetHostId: null,
   effectiveHostId: null,
+  servingPeer: null,
+  noPeerPresentation: null,
   leases: [],
   selectionRevision: -1,
 };
@@ -539,6 +546,8 @@ export class SelectionEvidenceKernel implements TransportEvidenceReporter {
       preferredHostId: change.preferredHostId,
       targetHostId: change.targetHostId,
       effectiveHostId: change.effectiveHostId,
+      servingPeer: change.servingPeer,
+      noPeerPresentation: change.noPeerPresentation,
       leases: this.current.leases,
       selectionRevision: revision,
     });
@@ -577,6 +586,12 @@ export class SelectionEvidenceKernel implements TransportEvidenceReporter {
       effectiveHostId: selectionIsFresher
         ? snapshot.effectiveHostId
         : this.current.effectiveHostId,
+      servingPeer: selectionIsFresher
+        ? snapshot.servingPeer
+        : this.current.servingPeer,
+      noPeerPresentation: selectionIsFresher
+        ? snapshot.noPeerPresentation
+        : this.current.noPeerPresentation,
       leases: leasesAreFresher ? snapshot.leases : this.current.leases,
       selectionRevision: this.appliedSelectionRevision,
     });
