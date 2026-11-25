@@ -69,6 +69,7 @@ interface SettingsSaveMemoryState {
   /** Forgets every earlier save of the same item on the same host. */
   readonly remember: (record: SettingsSaveMemoryRecord) => string;
   readonly forget: (id: string) => void;
+  readonly retireUnansweredMoves: () => void;
   readonly noteUnanswered: (id: string, holdRevision: number) => void;
   readonly markSent: (id: string) => void;
   readonly markAnswered: (id: string) => void;
@@ -164,6 +165,16 @@ export const useSettingsSaveMemoryStore = create<SettingsSaveMemoryState>()(
           const { [id]: _forgotten, ...records } = state.records;
           return { records };
         }),
+      retireUnansweredMoves: () =>
+        set((state) => ({
+          records: Object.fromEntries(
+            Object.entries(state.records).filter(([, record]) => {
+              if (record.environmentId !== null) return true;
+              const personal = record.personal;
+              return personal == null || !("acceptanceId" in personal);
+            }),
+          ),
+        })),
       noteUnanswered: (id, holdRevision) =>
         set((state) => {
           const record = settingsSaveMemoryRecord(state.records, id);

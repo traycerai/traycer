@@ -6,6 +6,7 @@ import {
 } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   applyHeldChange,
+  applyHeldChangeInGeneration,
   readHeldChangesForMatch,
   settingValueDigest,
   type HeldChangeForMatch,
@@ -387,20 +388,29 @@ export function createSettingsSaveCoordinator(
         hold.liveRevision !== moveWrittenRevision
       )
         return "decided";
-      let verified: boolean;
       try {
-        verified = await verifiesUnansweredMove(
+        if (
+          !(await verifiesUnansweredMove(
+            cloud,
+            receipt,
+            unansweredMove,
+            moveWrittenRevision,
+            hostOs,
+          ))
+        )
+          return "decided";
+        if (!mayApply()) return "stays";
+        const currentHost = await readSettingsSaveHost(
           cloud,
-          receipt,
-          unansweredMove,
-          moveWrittenRevision,
-          hostOs,
+          receipt.environmentId,
+          receipt.hostId,
         );
+        if (!mayApply()) return "stays";
+        if (currentHost?.sharingGeneration !== receipt.sharingGeneration)
+          return "decided";
       } catch {
         return "stays";
       }
-      if (!verified) return "decided";
-      if (!mayApply()) return "stays";
     }
     // An answered absence can also use the durable revision of this Move's write.
     const expectedLiveRevision =
@@ -423,15 +433,20 @@ export function createSettingsSaveCoordinator(
       },
     };
     try {
-      const { outcome } = await applyHeldChange(
-        watched,
-        receipt.environmentId,
-        {
-          heldId: hold.heldId,
-          revision: hold.revision,
-          expectedLiveRevision,
-        },
-      );
+      const base = {
+        heldId: hold.heldId,
+        revision: hold.revision,
+        expectedLiveRevision,
+      };
+      const { outcome } =
+        unansweredMove === null
+          ? await applyHeldChange(watched, receipt.environmentId, base)
+          : await applyHeldChangeInGeneration(
+              watched,
+              receipt.environmentId,
+              base,
+              receipt.sharingGeneration,
+            );
       // A conflict, gone or forbidden decides this hold for this save too.
       return outcome === "applied" ? "applied" : "decided";
     } catch {
