@@ -1,24 +1,38 @@
 import { sandboxReadinessLine } from "@/lib/sandboxes/sandbox-readiness";
 import { READY_SENTENCE } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import {
+  AUTO_SIZING_RUNGS,
+  autoSizingAlternateRegion,
+  autoSizingCatalogue,
+  autoSizingCatalogueWithRegions,
+  autoSizingListedNoRatesCatalogue,
+  autoSizingScalarNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { describe, expect, it } from "vitest";
 import {
   consequenceClauses,
+  configurationShapeOptions,
   type ConsequenceClause,
   consequencesShownSubject,
   defaultStageShape,
   priceClause,
   configurationStageShape,
   rememberedOrConfigurationStageShape,
+  stageGrowth,
+  stageNeedsCredits,
   stagePrice,
+  stageQuotedSize,
   stageShapeDefaults,
   stageProviderForShape,
   stageSmallestShape,
   type ConsequencesInput,
+  type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   sandboxCatalogueSchema,
   type SandboxCatalogue,
   type SandboxCataloguePricing,
+  type SandboxCatalogueRegion,
   type SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
 
@@ -33,6 +47,7 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 2,
       exact: true,
+      offer: null,
     },
     needsCredits: false,
     billingStarted: false,
@@ -67,6 +82,7 @@ describe("priceClause", () => {
             suspendedMcPerHour: 4,
             stoppedMcPerHour: 2,
             exact: false,
+            offer: null,
           },
         }),
       ).text,
@@ -92,6 +108,7 @@ describe("priceClause", () => {
           suspendedMcPerHour: 4,
           stoppedMcPerHour: 2,
           exact: false,
+          offer: null,
         },
         needsCredits: true,
         shortfallMc: 210,
@@ -109,6 +126,7 @@ describe("priceClause", () => {
             suspendedMcPerHour: 4,
             stoppedMcPerHour: 2,
             exact: false,
+            offer: null,
           },
           needsCredits: true,
           shortfallMc: 210,
@@ -273,6 +291,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 15,
       stoppedMcPerHour: 13,
       exact: true,
+      offer: null,
     });
   });
 
@@ -300,6 +319,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 3,
       exact: true,
+      offer: null,
     });
     // ceil((136.2 + 4 × 16.2) × 1.25) = ceil(251.25)
     expect(
@@ -314,6 +334,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 15,
       stoppedMcPerHour: 14,
       exact: true,
+      offer: null,
     });
   });
 
@@ -343,6 +364,7 @@ describe("stagePrice", () => {
         suspendedMcPerHour: suspended,
         stoppedMcPerHour: stopped,
         exact: true,
+        offer: null,
       });
     },
   );
@@ -382,6 +404,7 @@ describe("stagePrice", () => {
         suspendedMcPerHour: rates.suspended,
         stoppedMcPerHour: 13,
         exact: true,
+        offer: null,
       });
     },
   );
@@ -396,6 +419,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 2,
       exact: true,
+      offer: null,
     });
   });
 
@@ -405,6 +429,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 2,
       exact: false,
+      offer: null,
     });
   });
 });
@@ -443,6 +468,7 @@ describe("stageProviderForShape", () => {
       suspendedMcPerHour: 15,
       stoppedMcPerHour: 13,
       exact: true,
+      offer: null,
     });
   });
 });
@@ -527,6 +553,7 @@ describe("listed shapes", () => {
       suspendedMcPerHour: 6,
       stoppedMcPerHour: 2,
       exact: true,
+      offer: null,
     });
   });
 
@@ -538,6 +565,7 @@ describe("listed shapes", () => {
       suspendedMcPerHour: 5,
       stoppedMcPerHour: 1,
       exact: true,
+      offer: null,
     });
   });
 
@@ -565,6 +593,7 @@ describe("listed shapes", () => {
       suspendedMcPerHour: 6,
       stoppedMcPerHour: 2,
       exact: true,
+      offer: null,
     });
     expect(stageSmallestShape(parsed, STAGED)).toEqual({
       isStaged: true,
@@ -580,6 +609,7 @@ describe("listed shapes", () => {
       suspendedMcPerHour: 24,
       stoppedMcPerHour: 20,
       exact: true,
+      offer: null,
     });
     expect(stageSmallestShape(legacy, STAGED)).toEqual({
       isStaged: true,
@@ -735,6 +765,734 @@ const SERVED_LAUNCH_FORM = {
   digest: "a".repeat(64),
 };
 
+describe("growing Linux starting sizes", () => {
+  const catalogue = autoSizingCatalogue();
+
+  function catalogueWithRegion(
+    region: SandboxCatalogueRegion,
+  ): SandboxCatalogue {
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    return {
+      ...base,
+      providers: [{ ...provider, regions: [region] }],
+    };
+  }
+
+  function size(cpus: number, memoryGb: number, diskGb: number) {
+    return sizeInRegion(cpus, memoryGb, diskGb, "us-east");
+  }
+
+  function sizeInRegion(
+    cpus: number,
+    memoryGb: number,
+    diskGb: number,
+    region: string,
+  ) {
+    return {
+      os: "linux" as const,
+      cpus,
+      memoryMb: memoryGb * 1024,
+      diskMb: diskGb * 1024,
+      region,
+    };
+  }
+
+  it("resolves legacy defaults to the growing rung's disk and keeps its periods", () => {
+    expect(
+      configurationStageShape(catalogue, {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 20_480,
+        idleMinutes: 30,
+        restingMinutes: null,
+      }),
+    ).toMatchObject({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4_096,
+      diskMb: 51_200,
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: null,
+    });
+
+    // A fixed ladder lists its disk as part of the shape: a default at a
+    // disk it does not list is no longer offered, and falls back.
+    const [provider] = catalogue.providers;
+    const fixed: SandboxCatalogue = {
+      providers: [
+        {
+          ...provider,
+          shapes: AUTO_SIZING_RUNGS.map((rung) => ({
+            cpus: rung.cpus,
+            memoryMb: rung.memoryMb,
+            diskMb: rung.diskMb,
+            default: rung.default,
+          })),
+        },
+      ],
+    };
+    expect(
+      configurationStageShape(fixed, {
+        os: "linux",
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 20_480,
+        idleMinutes: 30,
+        restingMinutes: null,
+      }),
+    ).toMatchObject({ cpus: 2, memoryMb: 4_096, diskMb: 51_200 });
+  });
+
+  it("falls back to the catalogue default when saved defaults name an unoffered OS", () => {
+    expect(
+      configurationStageShape(catalogue, {
+        os: "windows",
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 40_960,
+        idleMinutes: 45,
+        restingMinutes: null,
+      }),
+    ).toEqual({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4_096,
+      diskMb: 51_200,
+      region: "us-east",
+      idleMinutes: 45,
+      destroyAfterRestingMinutes: null,
+    });
+  });
+
+  it("uses the first listed disk when growing rungs share a saved start", () => {
+    const [provider] = catalogue.providers;
+    const shapes = provider.shapes;
+    if (shapes === null) {
+      throw new Error("Expected listed growing sizes");
+    }
+    const first = shapes[0];
+    const repeated = {
+      ...first,
+      diskMb: 80 * 1024,
+      default: false,
+    };
+    const duplicated = {
+      ...catalogue,
+      providers: [{ ...provider, shapes: [first, repeated] }],
+    };
+
+    expect(
+      configurationStageShape(duplicated, {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 80 * 1024,
+        idleMinutes: 30,
+        restingMinutes: null,
+      }),
+    ).toEqual({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4_096,
+      diskMb: 50 * 1024,
+      region: "us-east",
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: null,
+    });
+  });
+
+  it("keeps a remembered growing start at its chosen disk", () => {
+    const remembered: StageShape = {
+      ...size(4, 8, 30),
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 10_080,
+    };
+    expect(
+      rememberedOrConfigurationStageShape(catalogue, remembered, null),
+    ).toBe(remembered);
+  });
+
+  it.each([
+    [2, 4, 135],
+    [4, 8, 263],
+    [8, 16, 518],
+    [8, 32, 726],
+    [16, 32, 1_028],
+    [16, 64, 1_444],
+  ])(
+    "prices the %i/%i start and its 16/64 ceiling at 50 GB",
+    (cpus, memory, start) => {
+      expect(stagePrice(catalogue, size(cpus, memory, 50))).toMatchObject({
+        awakeMcPerHour: start,
+        suspendedMcPerHour: 7,
+        stoppedMcPerHour: 7,
+        exact: true,
+        offer: { startAwakeMc: start, ceilingAwakeMc: 1_444 },
+      });
+    },
+  );
+
+  it("uses the selected or rung disk for prices and matches the smallest start", () => {
+    const thirtyGb = size(4, 8, 30);
+    expect(stagePrice(catalogue, thirtyGb)).toMatchObject({
+      awakeMcPerHour: 261,
+      offer: { startAwakeMc: 261, ceilingAwakeMc: 1_442 },
+    });
+    expect(stagePrice(catalogue, size(2, 4, 200))?.offer).toEqual({
+      startAwakeMc: 156,
+      ceilingAwakeMc: 1_465,
+    });
+    expect(stagePrice(catalogue, { ...size(2, 4, 50), diskMb: null })).toEqual({
+      awakeMcPerHour: 135,
+      suspendedMcPerHour: 7,
+      stoppedMcPerHour: 7,
+      exact: true,
+      offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+    });
+    // A disk must be whole GB within the bounds to be priced.
+    expect(stagePrice(catalogue, size(2, 4, 30.5))).toBeNull();
+    expect(stageSmallestShape(catalogue, size(4, 8, 30))).toEqual({
+      isStaged: false,
+      awakeMcPerHour: 133,
+    });
+    expect(stageSmallestShape(catalogue, size(2, 4, 30))).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 133,
+    });
+  });
+
+  it("does not mark a growing shape staged when only one dimension matches the minimum", () => {
+    const [provider] = catalogue.providers;
+    const shapes = provider.shapes;
+    if (shapes === null) {
+      throw new Error("Expected listed growing sizes");
+    }
+    const minimum = shapes[0];
+    const siblings = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            minimum,
+            { ...minimum, memoryMb: 8 * 1024, default: false },
+            { ...minimum, cpus: 4, default: false },
+          ],
+        },
+      ],
+    };
+
+    expect(stageSmallestShape(siblings, size(2, 8, 50))?.isStaged).toBe(false);
+    expect(stageSmallestShape(siblings, size(4, 4, 50))?.isStaged).toBe(false);
+  });
+
+  it("applies the pricing multiplier to compute and storage", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const rates = region.pricing;
+    if (rates === null) throw new Error("Expected auto-sizing unit rates");
+    const doubled = catalogueWithRegion({
+      ...region,
+      pricing: { ...rates, multiplier: 2 },
+      fromPriceMcPerHour: { awakeMc: 270, suspendedMc: 14, stoppedMc: 14 },
+    });
+
+    expect(stagePrice(doubled, size(4, 8, 30))).toEqual({
+      awakeMcPerHour: 520,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 9,
+      exact: true,
+      offer: { startAwakeMc: 520, ceilingAwakeMc: 2_883 },
+    });
+  });
+
+  it("uses the region's varied unit rates for a growing start and ceiling", () => {
+    const [provider] = catalogue.providers;
+    const [east] = provider.regions;
+    const varied = autoSizingCatalogueWithRegions([
+      east,
+      autoSizingAlternateRegion(),
+    ]);
+
+    expect(stagePrice(varied, sizeInRegion(4, 8, 30, "us-west"))).toEqual({
+      awakeMcPerHour: 286,
+      suspendedMcPerHour: 6,
+      stoppedMcPerHour: 6,
+      exact: true,
+      offer: { startAwakeMc: 286, ceilingAwakeMc: 1_606 },
+    });
+  });
+
+  it("selects the Linux provider when a Windows provider is listed first", () => {
+    const [linux] = catalogue.providers;
+    const [region] = linux.regions;
+    const windows = {
+      ...linux,
+      provider: "windows-test",
+      os: ["windows"] as const,
+      shapes: null,
+      regions: [
+        {
+          ...region,
+          pricing: null,
+          shapePrices: [],
+          fromPriceMcPerHour: {
+            awakeMc: 900,
+            suspendedMc: 90,
+            stoppedMc: 90,
+          },
+        },
+      ],
+    };
+    const mixed: SandboxCatalogue = {
+      ...catalogue,
+      providers: [windows, linux],
+    };
+
+    expect(stagePrice(mixed, size(4, 8, 50))).toMatchObject({
+      awakeMcPerHour: 263,
+      offer: { startAwakeMc: 263, ceilingAwakeMc: 1_444 },
+    });
+  });
+
+  it("prices growing starts at changed provider disk bounds", () => {
+    const [provider] = catalogue.providers;
+    const bounded: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shape: {
+            ...provider.shape,
+            diskMinMb: 20 * 1024,
+            diskMaxMb: 100 * 1024,
+          },
+        },
+      ],
+    };
+
+    expect(stagePrice(bounded, size(2, 4, 20))).toMatchObject({
+      awakeMcPerHour: 131,
+      suspendedMcPerHour: 3,
+      stoppedMcPerHour: 3,
+    });
+    expect(stagePrice(bounded, size(2, 4, 100))).toMatchObject({
+      awakeMcPerHour: 142,
+      suspendedMcPerHour: 14,
+      stoppedMcPerHour: 14,
+    });
+    expect(stagePrice(bounded, size(2, 4, 19))).toBeNull();
+    expect(stagePrice(bounded, size(2, 4, 101))).toBeNull();
+  });
+
+  it("uses the served offer at its listed disk and rates at an unlisted disk", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const offer = { startAwakeMc: 140, ceilingAwakeMc: 1_500 };
+    const listedPrice = {
+      awakeMc: 140,
+      suspendedMc: 9,
+      stoppedMc: 8,
+      offer,
+    };
+    const served = catalogueWithRegion({
+      ...region,
+      shapePrices: [
+        {
+          cpus: 2,
+          memoryMb: 4_096,
+          diskMb: 51_200,
+          priceMcPerHour: listedPrice,
+        },
+      ],
+    });
+
+    expect(stagePrice(served, size(2, 4, 50))).toEqual({
+      awakeMcPerHour: 140,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 8,
+      exact: true,
+      offer,
+    });
+    expect(stagePrice(served, size(2, 4, 30))).toEqual({
+      awakeMcPerHour: 133,
+      suspendedMcPerHour: 5,
+      stoppedMcPerHour: 5,
+      exact: true,
+      offer: { startAwakeMc: 133, ceilingAwakeMc: 1_442 },
+    });
+  });
+
+  it("matches a fixed sibling at its named disk regardless of rung order", () => {
+    for (const growingFirst of [true, false]) {
+      const [provider] = catalogue.providers;
+      const growing = AUTO_SIZING_RUNGS[0];
+      const fixed = {
+        cpus: growing.cpus,
+        memoryMb: growing.memoryMb,
+        diskMb: 80 * 1024,
+        default: false,
+      };
+      const rungs = growingFirst ? [growing, fixed] : [fixed, growing];
+      const [region] = provider.regions;
+      const offered: SandboxCatalogue = {
+        ...catalogue,
+        providers: [
+          {
+            ...provider,
+            shapes: rungs,
+            regions: [
+              {
+                ...region,
+                shapePrices: [
+                  {
+                    cpus: fixed.cpus,
+                    memoryMb: fixed.memoryMb,
+                    diskMb: fixed.diskMb,
+                    priceMcPerHour: {
+                      awakeMc: 222,
+                      suspendedMc: 11,
+                      stoppedMc: 3,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(stageGrowth(offered, size(2, 4, 80))).toBeNull();
+      expect(
+        configurationStageShape(offered, {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4_096,
+          diskMb: 80 * 1024,
+          idleMinutes: 30,
+          restingMinutes: null,
+        })?.diskMb,
+      ).toBe(80 * 1024);
+      expect(stagePrice(offered, size(2, 4, 80))).toEqual({
+        awakeMcPerHour: 222,
+        suspendedMcPerHour: 11,
+        stoppedMcPerHour: 3,
+        exact: true,
+        offer: null,
+      });
+    }
+  });
+
+  it("keeps a listed scalar price without inventing a range from rates", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const listed = catalogueWithRegion({
+      ...region,
+      shapePrices: [
+        {
+          cpus: 2,
+          memoryMb: 4_096,
+          diskMb: 50 * 1024,
+          priceMcPerHour: { awakeMc: 140, suspendedMc: 9, stoppedMc: 8 },
+        },
+      ],
+    });
+    const price = stagePrice(listed, size(2, 4, 50));
+
+    expect(price).toEqual({
+      awakeMcPerHour: 140,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 8,
+      exact: true,
+      offer: null,
+    });
+    expect(stageNeedsCredits(137, price)).toBe(true);
+  });
+
+  it("uses one scalar exact price when the growing start is also its cap", () => {
+    const [region] = catalogue.providers[0].regions;
+    const capped = catalogueWithRegion({
+      ...region,
+      shapePrices: [
+        {
+          cpus: 16,
+          memoryMb: 64 * 1024,
+          diskMb: 50 * 1024,
+          priceMcPerHour: { awakeMc: 1_200, suspendedMc: 7, stoppedMc: 7 },
+        },
+      ],
+    });
+
+    expect(stagePrice(capped, size(16, 64, 50))).toEqual({
+      awakeMcPerHour: 1_200,
+      suspendedMcPerHour: 7,
+      stoppedMcPerHour: 7,
+      exact: true,
+      offer: null,
+    });
+  });
+
+  it("uses the from price for a fixed rung above a growing no-rates minimum", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const noRates: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            AUTO_SIZING_RUNGS[0],
+            {
+              cpus: 4,
+              memoryMb: 8 * 1024,
+              diskMb: 80 * 1024,
+              default: false,
+            },
+          ],
+          regions: [
+            {
+              ...region,
+              pricing: null,
+              shapePrices: [],
+              fromPriceMcPerHour: {
+                awakeMc: 140,
+                suspendedMc: 9,
+                stoppedMc: 9,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(stageSmallestShape(noRates, size(4, 8, 80))).toEqual({
+      isStaged: false,
+      awakeMcPerHour: 140,
+    });
+  });
+
+  it("prices the staged growing minimum instead of its smaller fixed sibling", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const overlap: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            { ...AUTO_SIZING_RUNGS[0], diskMb: 80 * 1024 },
+            {
+              cpus: 2,
+              memoryMb: 4 * 1024,
+              diskMb: 50 * 1024,
+              default: false,
+            },
+          ],
+          regions: [
+            {
+              ...region,
+              shapePrices: [
+                {
+                  cpus: 2,
+                  memoryMb: 4 * 1024,
+                  diskMb: 50 * 1024,
+                  priceMcPerHour: {
+                    awakeMc: 100,
+                    suspendedMc: 7,
+                    stoppedMc: 7,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(stageSmallestShape(overlap, size(2, 4, 30))).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 133,
+    });
+  });
+
+  it("compares a staged fixed sibling with the rated growing minimum", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const offered: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            AUTO_SIZING_RUNGS[0],
+            {
+              cpus: 2,
+              memoryMb: 4 * 1024,
+              diskMb: 80 * 1024,
+              default: false,
+            },
+          ],
+          regions: [
+            {
+              ...region,
+              shapePrices: [
+                {
+                  cpus: 2,
+                  memoryMb: 4 * 1024,
+                  diskMb: 80 * 1024,
+                  priceMcPerHour: {
+                    awakeMc: 222,
+                    suspendedMc: 9,
+                    stoppedMc: 9,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const staged = size(2, 4, 80);
+
+    expect(stageSmallestShape(offered, staged)).toEqual({
+      isStaged: false,
+      awakeMcPerHour: 135,
+    });
+    expect(stageNeedsCredits(130, stagePrice(offered, staged))).toBe(true);
+  });
+
+  it("offers one duplicate default size and resolves its price by first-listed rung", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const growing = AUTO_SIZING_RUNGS[0];
+    const fixed = {
+      cpus: growing.cpus,
+      memoryMb: growing.memoryMb,
+      diskMb: growing.diskMb,
+      default: false,
+    };
+    for (const [shapes, shouldGrow] of [
+      [[growing, fixed], true],
+      [[fixed, growing], false],
+    ] as const) {
+      const offered: SandboxCatalogue = {
+        ...catalogue,
+        providers: [
+          {
+            ...provider,
+            shapes,
+            regions: [
+              {
+                ...region,
+                shapePrices: [
+                  {
+                    cpus: fixed.cpus,
+                    memoryMb: fixed.memoryMb,
+                    diskMb: fixed.diskMb,
+                    priceMcPerHour: {
+                      awakeMc: 100,
+                      suspendedMc: 7,
+                      stoppedMc: 7,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      const options = configurationShapeOptions(offered);
+      const [option] = options;
+
+      expect(options).toHaveLength(1);
+      expect(stageGrowth(offered, option)).toEqual(
+        shouldGrow ? growing.grows : null,
+      );
+      expect(stagePrice(offered, option)).toEqual({
+        awakeMcPerHour: 100,
+        suspendedMcPerHour: 7,
+        stoppedMcPerHour: 7,
+        exact: true,
+        offer: null,
+      });
+    }
+  });
+
+  it("uses a listed offer without rates and gives only a larger unlisted disk a lower bound", () => {
+    const listed = autoSizingListedNoRatesCatalogue();
+    const [provider] = listed.providers;
+    const [region] = provider.regions;
+    const offer = { startAwakeMc: 140, ceilingAwakeMc: 1_500 };
+
+    expect(stagePrice(listed, size(2, 4, 50))).toEqual({
+      awakeMcPerHour: 140,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 9,
+      exact: true,
+      offer,
+    });
+    expect(stagePrice(listed, size(2, 4, 30))).toBeNull();
+    expect(stagePrice(listed, size(2, 4, 80))).toEqual({
+      awakeMcPerHour: 140,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 9,
+      exact: false,
+      offer: null,
+    });
+    expect(
+      stagePrice(
+        catalogueWithRegion({ ...region, shapePrices: undefined }),
+        size(2, 4, 50),
+      ),
+    ).toBeNull();
+    expect(
+      stagePrice(autoSizingScalarNoRatesCatalogue(), size(2, 4, 50)),
+    ).toEqual({
+      awakeMcPerHour: 135,
+      suspendedMcPerHour: 7,
+      stoppedMcPerHour: 7,
+      exact: true,
+      offer: null,
+    });
+  });
+
+  it("quotes allocated disk for a growing rung and refuses it for a fixed-only rung", () => {
+    const [provider] = catalogue.providers;
+    expect(
+      stageQuotedSize(provider, {
+        cpus: 4,
+        memoryMb: 8 * 1024,
+        diskMb: 30 * 1024,
+      }),
+    ).toEqual({
+      shape: { cpus: 4, memoryMb: 8 * 1024, diskMb: 30 * 1024 },
+      exact: true,
+      grows: { cpus: 16, memoryMb: 64 * 1024 },
+      listedDiskMb: 50 * 1024,
+    });
+
+    const fixedOnly: SandboxCatalogue = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            {
+              cpus: 4,
+              memoryMb: 8 * 1024,
+              diskMb: 50 * 1024,
+              default: true,
+            },
+          ],
+        },
+      ],
+    };
+    expect(stagePrice(fixedOnly, size(4, 8, 30))).toBeNull();
+  });
+});
+
 describe("quoted freeform geometry", () => {
   const SIZE = {
     os: "linux" as const,
@@ -775,6 +1533,7 @@ describe("quoted freeform geometry", () => {
       suspendedMcPerHour: 165,
       stoppedMcPerHour: 45,
       exact: true,
+      offer: null,
     });
     expect(sandboxReadinessLine(offered, SIZE)).toBe(READY_SENTENCE);
   });
@@ -807,6 +1566,7 @@ describe("quoted freeform geometry", () => {
       suspendedMcPerHour: 280,
       stoppedMcPerHour: 40,
       exact: true,
+      offer: null,
     });
     expect(sandboxReadinessLine(offered, size)).toBe(READY_SENTENCE);
   });
@@ -873,12 +1633,14 @@ describe("served exact per-shape prices", () => {
       suspendedMcPerHour: SERVED_MIDDLE.suspendedMc,
       stoppedMcPerHour: SERVED_MIDDLE.stoppedMc,
       exact: true,
+      offer: null,
     });
     expect(stagePrice(served, size(SMALL))).toEqual({
       awakeMcPerHour: SERVED_SMALL.awakeMc,
       suspendedMcPerHour: 0,
       stoppedMcPerHour: 0,
       exact: true,
+      offer: null,
     });
   });
 
@@ -1050,12 +1812,14 @@ describe("served source geometry without unit rates", () => {
       suspendedMcPerHour: 21,
       stoppedMcPerHour: 20,
       exact: true,
+      offer: null,
     });
     expect(stagePrice(source, { ...SIZE, diskMb: 30720 })).toEqual({
       awakeMcPerHour: 80,
       suspendedMcPerHour: 21,
       stoppedMcPerHour: 20,
       exact: false,
+      offer: null,
     });
     expect(stageSmallestShape(source, SIZE)).toBeNull();
   });

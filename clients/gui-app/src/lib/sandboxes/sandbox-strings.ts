@@ -7,9 +7,11 @@
  * Amounts are millicredits; a credit is a dollar, so a price reads `$0.12`.
  */
 import type {
+  SandboxGrowth,
   SandboxLifecycleVerb,
   SandboxCreditSource,
   SandboxOs,
+  SandboxPriceOffer,
 } from "@traycer/protocol/host/sandbox-control";
 import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -71,6 +73,36 @@ export function sandboxOsLabel(os: SandboxOs): string {
 /** `2 vCPU · 4 GB`. */
 export function sandboxShapeLabel(cpus: number, memoryMb: number): string {
   return `${cpus} vCPU · ${formatMemory(memoryMb)}`;
+}
+
+/**
+ * `2 vCPU · 4 GB, grows to 16 vCPU · 64 GB`. A fixed shape (`grows` `null`),
+ * or a start already at what it grows to, reads as its size alone.
+ */
+export function sandboxSizeLabel(
+  cpus: number,
+  memoryMb: number,
+  grows: SandboxGrowth | null,
+): string {
+  const start = sandboxShapeLabel(cpus, memoryMb);
+  return grows === null || (grows.cpus === cpus && grows.memoryMb === memoryMb)
+    ? start
+    : `${start}, grows to ${sandboxShapeLabel(grows.cpus, grows.memoryMb)}`;
+}
+
+/**
+ * An awake price: `$0.20`, or for a size that grows (`offer`) its range from
+ * the start to the most it can cost, `$0.14–$1.44`. A range whose ends read
+ * the same is one price.
+ */
+export function awakePriceDollars(
+  awakeMc: number,
+  offer: SandboxPriceOffer | null,
+): string {
+  if (offer === null) return formatSandboxDollars(awakeMc);
+  const start = formatSandboxDollars(offer.startAwakeMc);
+  const ceiling = formatSandboxDollars(offer.ceilingAwakeMc);
+  return start === ceiling ? ceiling : `${start}–${ceiling}`;
 }
 
 // ── The picker ────────────────────────────────────────────────────────────
@@ -170,12 +202,16 @@ export function usesCreditsClause(
     : `uses ${teamPossessive(configuration.teamName)} credits`;
 }
 
-/** The cost line: `$0.12 an hour while awake · uses Acme's credits`. */
+/**
+ * The cost line: `$0.12 an hour while awake · uses Acme's credits`, or with
+ * a size that grows, `$0.14–$1.44 an hour while awake · …`.
+ */
 export function costLine(
   priceMcPerHour: number,
+  offer: SandboxPriceOffer | null,
   configuration: SandboxConfigurationCopy,
 ): string {
-  return `${formatSandboxDollars(priceMcPerHour)} an hour while awake · ${usesCreditsClause(configuration)}`;
+  return `${awakePriceDollars(priceMcPerHour, offer)} an hour while awake · ${usesCreditsClause(configuration)}`;
 }
 
 /**
@@ -212,9 +248,30 @@ export function awakeAndRestingRates(price: {
   return `${hourlyRate(price.awakeMc)} while awake · ${hourlyRate(Math.max(price.suspendedMc, price.stoppedMc))} while suspended or stopped`;
 }
 
+/**
+ * An awake rate: `$0.21 an hour`, or a size that grows, `$0.14–$1.44 an
+ * hour`.
+ */
+export function awakeHourlyRate(
+  awakeMc: number,
+  offer: SandboxPriceOffer | null,
+): string {
+  return offer === null
+    ? hourlyRate(awakeMc)
+    : `${awakePriceDollars(awakeMc, offer)} an hour`;
+}
+
 /** The chip's short price: `$0.12/h`. */
 export function shortPriceLabel(priceMcPerHour: number): string {
   return `${formatSandboxDollars(priceMcPerHour)}/h`;
+}
+
+/** A short awake price: `$0.12/h`, or a size that grows, `$0.14–$1.44/h`. */
+export function shortAwakePriceLabel(
+  awakeMc: number,
+  offer: SandboxPriceOffer | null,
+): string {
+  return `${awakePriceDollars(awakeMc, offer)}/h`;
 }
 
 /** The New row's head at a zero or short balance: `needs credits`. */
@@ -224,14 +281,26 @@ export const NEEDS_CREDITS = "needs credits";
  * The funded New row's sub-line price: `$0.12 an hour while awake`, `from`
  * unless it is the one shape the catalogue prices exactly.
  */
-export function fundedRowPrice(priceMcPerHour: number, exact: boolean): string {
-  const price = `${formatSandboxDollars(priceMcPerHour)} an hour while awake`;
+export function fundedRowPrice(
+  priceMcPerHour: number,
+  offer: SandboxPriceOffer | null,
+  exact: boolean,
+): string {
+  const price = `${awakePriceDollars(priceMcPerHour, offer)} an hour while awake`;
   return exact ? price : `from ${price}`;
 }
 
-/** The New row's sub-line price at a zero or short balance. */
-export function needsCreditsRow(priceMcPerHour: number): string {
-  return `from ${formatSandboxDollars(priceMcPerHour)} an hour`;
+/**
+ * The New row's sub-line price at a zero or short balance: `from $0.12 an
+ * hour`, or a size that grows, its range `$0.14–$1.44 an hour`.
+ */
+export function needsCreditsRow(
+  priceMcPerHour: number,
+  offer: SandboxPriceOffer | null,
+): string {
+  return offer === null
+    ? `from ${formatSandboxDollars(priceMcPerHour)} an hour`
+    : `${awakePriceDollars(priceMcPerHour, offer)} an hour`;
 }
 
 export const ADD_CREDITS_LINK = "Add credits ↗";
@@ -376,20 +445,24 @@ export const CHANGE_LABEL = "Change";
 // ── Chip ──────────────────────────────────────────────────────────────────
 
 /**
- * The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`.
- * `priceIsFrom` reads the price as a lower bound (`from $0.12/h`): the price
- * is the region's smallest shape's, not an exact catalogue price.
+ * The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`,
+ * or a size that grows, `New Acme sandbox · 2 vCPU · 4 GB, grows to 16 vCPU ·
+ * 64 GB · $0.14–$1.44/h`. `priceIsFrom` reads the price as a lower bound
+ * (`from $0.12/h`): the price is the region's smallest shape's, not an exact
+ * catalogue price.
  */
 export function stagedChipLabel(args: {
   readonly configuration: SandboxConfigurationCopy;
   readonly cpus: number;
   readonly memoryMb: number;
+  readonly grows: SandboxGrowth | null;
   readonly priceMcPerHour: number | null;
+  readonly offer: SandboxPriceOffer | null;
   readonly priceIsFrom: boolean;
 }): string {
-  const head = `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
+  const head = `${newSandboxRowLabel(args.configuration)} · ${sandboxSizeLabel(args.cpus, args.memoryMb, args.grows)}`;
   if (args.priceMcPerHour === null) return head;
-  const price = shortPriceLabel(args.priceMcPerHour);
+  const price = shortAwakePriceLabel(args.priceMcPerHour, args.offer);
   return `${head} · ${args.priceIsFrom ? `from ${price}` : price}`;
 }
 
