@@ -42,12 +42,26 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
-import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import { type HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  createFakeAuthorityClock,
+  createTestAuthority,
+  fleetHost,
+} from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
+import { createInProcessSelectionAuthorityClient } from "@traycer-clients/shared/host-selection/in-process-selection-authority";
+import { silentAuthorityLog } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
 import {
   hasReadyRemoteSession,
   retireAllRemoteSessions,
 } from "@traycer-clients/shared/host-transport/remote/index";
+import { FakeRelayHost } from "@traycer-clients/shared/host-transport/remote/__tests__/fake-relay-host";
+import {
+  admitTaggedLoopbackOpen,
+  admitTaggedRemoteOpen,
+  CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE,
+  TAGGED_HOST_ADMISSION_FIXTURES,
+} from "@traycer-clients/shared/test-fixtures/tagged-host-admission";
 import { RemoteMuxTestPeer } from "@traycer-clients/shared/host-transport/__tests__/remote-mux-test-peer";
 import type {
   IStreamWebSocketFactory,
@@ -56,7 +70,9 @@ import type {
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { HostCompatibilityProvider } from "@/lib/host/compatibility-provider";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
@@ -85,6 +101,7 @@ import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { appLogger } from "@/lib/logger";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
+import { HostRuntimeProvider } from "@/lib/host";
 import { installAuthValidationFetch } from "../../../../../__tests__/test-browser-apis";
 
 const signOutRound2Harness = vi.hoisted(() => ({
@@ -101,6 +118,10 @@ const remoteSocketFactoryHarness = vi.hoisted(() => {
   };
   return harness;
 });
+const clientIdentityHarness = vi.hoisted(() => ({
+  compatibilityEpoch: 3,
+  appVersion: "1.5.0" as string | null,
+}));
 
 vi.mock(
   "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory",
@@ -142,6 +163,18 @@ vi.mock("@/lib/host/runtime", async (load) => {
         auth: { signOut: signOutRound2Harness.signOut },
       },
     useAuthService: () => ({ signOut: signOutRound2Harness.signOut }),
+  };
+});
+
+vi.mock("@/lib/host/client-identity", async (load) => {
+  const actual = await load<typeof import("@/lib/host/client-identity")>();
+  return {
+    ...actual,
+    getGuiClientIdentity: () => ({
+      kind: "desktop" as const,
+      compatibilityEpoch: clientIdentityHarness.compatibilityEpoch,
+      appVersion: clientIdentityHarness.appVersion,
+    }),
   };
 });
 
@@ -483,6 +516,36 @@ function installRuntimeFetch(mode: HostPolicyFetchMode): void {
   });
 }
 
+function installTaggedOpenFetch(hostId: string): void {
+  const restoreValidation = installAuthValidationFetch();
+  const validationFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: (input: RequestInfo | URL, init: RequestInit | undefined) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.endsWith(`/api/v3/hosts/${hostId}/attach-grant`)) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              grant: "fixture-relay-pass",
+              expires_in: 300,
+              session_grant: "fixture-host-token",
+              session_grant_expires_in: 300,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        );
+      }
+      return validationFetch(input, init);
+    },
+  });
+  runtimeFetchRestorers.push(restoreValidation);
+}
+
 async function createModalHostRuntimeFixture(
   entry: RemoteHostDirectoryEntry,
   fetchMode: HostPolicyFetchMode,
@@ -518,15 +581,16 @@ async function createModalHostRuntimeFixture(
   await directory.refresh();
 
   let requestSeq = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `modal-host-${++requestSeq}`,
+    handlers: {},
+  });
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
     onHostTokenRenewal: () => undefined,
     registry: hostRpcRegistry,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `modal-host-${++requestSeq}`,
-      handlers: {},
-    }),
+    messenger,
     singleAttemptMessenger: null,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
@@ -605,6 +669,8 @@ beforeEach(() => {
   controllerStatus.data = undefined;
   authErrorToastHarness.show.mockReset();
   hostPolicyPatchCalls = 0;
+  clientIdentityHarness.compatibilityEpoch = 3;
+  clientIdentityHarness.appVersion = "1.5.0";
   // `ReportIssueAction` gates on this store, defaulting to `false` - so every
   // fixture that checks Report issue's PRESENCE needs it true first, or the
   // absence would be satisfied by the store gate rather than by
@@ -702,10 +768,164 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByText("This computer belongs to a team")).toBeTruthy();
   });
 
+  it("projects the tagged current-host OPEN epoch refusal through the runtime into the app-update modal", async () => {
+    const hostId = "epoch-3-host";
+    clientIdentityHarness.compatibilityEpoch = 2;
+    clientIdentityHarness.appVersion = "1.5.4";
+    const relay = new FakeRelayHost();
+    relay.stallOpens = true;
+    relay.admitOpen = (open) =>
+      admitTaggedRemoteOpen(CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE, open);
+    remoteSocketFactoryHarness.delegate = relay.factory;
+    installTaggedOpenFetch(hostId);
+
+    const publicKey = btoa(String.fromCharCode(...relay.hostStaticPublicKey));
+    const entry: RemoteHostDirectoryEntry = {
+      ...remoteHostEntry("9.9.9", "current"),
+      hostId,
+      publicKey,
+      websocketUrl: "wss://relay.test/attach",
+      owner: { kind: "user", id: "user-1" },
+    };
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: false,
+      traycerCli: undefined,
+    });
+    await runnerHost.tokenStore.signIn(
+      { token: "user-token", refreshToken: "user-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+
+    const clock = createFakeAuthorityClock(Date.now());
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost(hostId, "remote")],
+      },
+      initialIdentityKey: "user-1",
+      clock,
+      poolConfigured: false,
+    });
+    const authorityClient = createInProcessSelectionAuthorityClient(
+      authority.engine,
+      silentAuthorityLog,
+    );
+    Object.defineProperty(runnerHost, "selectionAuthority", {
+      configurable: true,
+      value: authorityClient,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, queryKeyHashFn: hashAppQueryKey },
+        mutations: { retry: false },
+      },
+    });
+
+    try {
+      render(
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <QueryClientProvider client={queryClient}>
+            <HostRuntimeProvider
+              registry={hostRpcRegistry}
+              fallback={<div data-testid="provider-fallback" />}
+              messengerFactory={null}
+              invalidator={null}
+              requestId={null}
+              remoteFetcher={() =>
+                Promise.resolve({ kind: "hosts", entries: [entry] })
+              }
+            >
+              <HostCompatibilityProvider>
+                <HostReadinessControllerContext.Provider
+                  value={controllerFor(
+                    {
+                      ...EMPTY_PRESENTATION,
+                      targetKind: "remote",
+                      localBootIntent: false,
+                    },
+                    GATE_OPEN,
+                  )}
+                >
+                  <WindowHostModalHost bypassed={false} />
+                </HostReadinessControllerContext.Provider>
+              </HostCompatibilityProvider>
+            </HostRuntimeProvider>
+          </QueryClientProvider>
+        </RunnerHostProvider>,
+      );
+
+      await waitFor(() => {
+        expect(useSelectionAuthorityStore.getState().attached).toBe(true);
+      });
+      await act(async () => {
+        expect(await authorityClient.activate(hostId)).toEqual({ ok: true });
+      });
+      await waitFor(() => expect(relay.openIdentities).toHaveLength(1));
+      await relay.releaseStalledOpens();
+      await waitFor(() => expect(relay.openDecisions).toHaveLength(1));
+
+      expect(relay.openDecisions[0]).toMatchObject({
+        kind: "fatal",
+        details: {
+          code: "INCOMPATIBLE",
+          clientCompatibilityRequirement: {
+            minimumCompatibilityEpoch: 3,
+            observedCompatibilityEpoch: 2,
+            failure: "below-minimum",
+            observedClientKind: "desktop",
+          },
+        },
+      });
+      expect(relay.openIdentities[0]).toMatchObject({
+        kind: "desktop",
+        compatibilityEpoch: 2,
+        appVersion: "1.5.4",
+      });
+      await waitFor(() => {
+        expect(
+          authority.engine
+            .snapshot()
+            .leases.find((lease) => lease.hostId === hostId),
+        ).toMatchObject({ status: "dead", dead: { reason: "incompatible" } });
+        expect(
+          useSelectionAuthorityStore.getState().effectiveHostId,
+        ).toBeNull();
+        expect(useSelectionAuthorityStore.getState().targetHostId).toBe(hostId);
+        expect(screen.getByTestId("window-host-modal-title").textContent).toBe(
+          "Update Traycer to continue",
+        );
+      });
+      expect(
+        screen.getByTestId("window-host-modal-client-compatibility-detail")
+          .textContent,
+      ).toContain("host needs 3");
+      expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+      expect(
+        screen.getByTestId("client-update-required-download-page"),
+      ).toBeTruthy();
+    } finally {
+      queryClient.clear();
+      authorityClient.dispose();
+      authority.dispose();
+    }
+  });
+
   it("draws the older-host cover after a real host-token refusal when the directory version is unknown", async () => {
     const hostId = "host-token-older-host-cover";
     const hostToken = "host-only-token";
     const signInToken = "sign-in-token";
+    const releasedHostLine = TAGGED_HOST_ADMISSION_FIXTURES.find(
+      ({ line }) => line === "host-v1.5.2–host-v1.5.4",
+    );
+    if (releasedHostLine === undefined) {
+      throw new Error("the released host admission fixture was missing");
+    }
     let mintCalls = 0;
     let signInRecoveryCalls = 0;
     clearHostDoorState(hostId);
@@ -773,16 +993,26 @@ describe("<WindowHostModalHost />", () => {
       expect(open.token).toBe(hostToken);
       expect(JSON.stringify(open)).not.toContain(signInToken);
 
+      if (typeof open.token !== "string") {
+        throw new Error("host OPEN did not carry its credential");
+      }
+      const admission = admitTaggedLoopbackOpen(
+        releasedHostLine,
+        open.clientIdentity,
+        open.token,
+        "host",
+      );
+      expect(admission.kind).toBe("fatal");
+      if (admission.kind !== "fatal") {
+        throw new Error("the released host line accepted the host token");
+      }
+      expect(admission.details.code).toBe("UNAUTHORIZED");
+
       act(() => {
         socket.fireMessage(
           JSON.stringify({
             kind: "fatalError",
-            details: {
-              code: "UNAUTHORIZED",
-              reason: "refused at the host door",
-              incompatibleMethods: null,
-              upgradeGuidance: null,
-            },
+            details: admission.details,
           }),
         );
       });

@@ -11,34 +11,28 @@ import {
   POOL_HOST_ID,
   type HostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
-import {
-  callEnvironmentIdOf,
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-  settleProcessHostRpcTierPlan,
-  type HostServingDecision,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { accountWideManifestFixtures } from "@traycer-clients/shared/test-fixtures/account-wide-manifest";
 import { viewReplicaRequestScope } from "@traycer-clients/shared/view-replica/identity";
 import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import { taskLight } from "@/lib/view-replica/__tests__/replica-fixtures";
 import {
+  recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { readHostServingDecision } from "@/lib/host/serving-decision";
-import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { useAppServingDecision } from "@/lib/host/app-serving-decision";
 import { queryClient as appQueryClient } from "@/lib/query-client";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { HostRuntimeContext } from "@/lib/host/runtime";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
-import { useConfigurationGuideQuery } from "@/hooks/environment/team/use-guide-query";
-import { useConfigurationReadClient } from "@/hooks/environment/team/use-configuration-read-client";
-import { useEnvironmentSkillsQuery } from "@/hooks/environment/team/use-environment-skills";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
   useCloudEpicTasksQuery,
   useCloudEpicTasksQueryForClient,
@@ -47,57 +41,25 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { historyReplicaService } from "@/lib/view-replica/history-replica";
 import { viewReplicaStore } from "@/lib/view-replica/view-replica-store";
 import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
+import { useConfigurationGuideQuery } from "@/hooks/environment/team/use-guide-query";
+import { useConfigurationReadClient } from "@/hooks/environment/team/use-configuration-read-client";
+import { useEnvironmentSkillsQuery } from "@/hooks/environment/team/use-environment-skills";
 
 const clientRef = vi.hoisted(() => ({
   current: null as HostClient<HostRpcRegistry> | null,
 }));
+const runtimeBindingRef = vi.hoisted(() => ({
+  current: null as HostRuntimeBinding<HostRpcRegistry> | null,
+}));
 
-const servingStore = vi.hoisted(() => {
-  let current: HostServingDecision = {
-    servingPeer: null,
-    servingPeerMethods: null,
-    servingPeerEnvironmentId: null,
-  };
-  const listeners = new Set<() => void>();
-  return {
-    get: () => current,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    publish: (decision: HostServingDecision) => {
-      current = decision;
-      for (const listener of [...listeners]) listener();
-    },
-  };
-});
-
-vi.mock("@/lib/host/app-serving-decision", async (importOriginal) => {
-  const react = await import("react");
-  const actual =
-    await importOriginal<typeof import("@/lib/host/app-serving-decision")>();
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
-    readServingTierHostId: (
-      method: string,
-      callerHostId: string | null,
-      selectedHostId: string | null,
-      params: unknown,
-    ) =>
-      hostRpcServingTierHostId(
-        method,
-        callerHostId,
-        readProcessHostRpcTierPlan(),
-        selectedHostId,
-        servingStore.get(),
-        callEnvironmentIdOf(params),
-      ),
-    useAppServingDecision: () =>
-      react.useSyncExternalStore(
-        servingStore.subscribe,
-        servingStore.get,
-        servingStore.get,
-      ),
+    getHostBindingSnapshot: () => runtimeBindingRef.current,
   };
 });
 
@@ -114,16 +76,16 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+vi.mock("@/hooks/environment/team/use-configuration-read-client", () => ({
+  useConfigurationReadClient: () =>
+    clientRef.current?.createRequesterForHostId(POOL_HOST_ID) ?? null,
+}));
+
 vi.mock("@/components/settings/environment/configuration-source", () => ({
   useConfigurationSource: () => ({
     kind: "pool",
     environmentId: "environment-1",
   }),
-}));
-
-vi.mock("@/hooks/environment/team/use-configuration-read-client", () => ({
-  useConfigurationReadClient: () =>
-    clientRef.current?.createRequesterForHostId("pool") ?? null,
 }));
 
 vi.mock("@/lib/host/cloud-verdict-preflight", () => ({
@@ -133,16 +95,12 @@ vi.mock("@/lib/host/cloud-verdict-preflight", () => ({
 const poolEntry = poolHostDirectoryEntry("wss://pool.test/rpc");
 if (poolEntry === null) throw new Error("pool fixture must build");
 
-describe("useHostQuery uses its answering peer for an account-wide list", () => {
+describe("useHostQuery follows the answering peer for account-wide reads", () => {
   afterEach(async () => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     clientRef.current = null;
-    servingStore.publish({
-      servingPeer: null,
-      servingPeerMethods: null,
-      servingPeerEnvironmentId: null,
-    });
+    runtimeBindingRef.current = null;
     useSelectionAuthorityStore.getState().reset();
     resetNegotiatedManifests();
     appQueryClient.clear();
@@ -156,16 +114,18 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
         queries: { retry: false, staleTime: Infinity, gcTime: Infinity },
       },
     });
-    let requests = 0;
+    let autoPolicyRequests = 0;
     let guideRequests = 0;
     let skillsRequests = 0;
+    let titleRequests = 0;
     let taskListRequests = 0;
+    let requestId = 0;
     const messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
-      requestId: () => `auto-policy-${requests}`,
+      requestId: () => `answering-peer-${++requestId}`,
       handlers: {
         "autoPolicy.get": () => {
-          requests += 1;
+          autoPolicyRequests += 1;
           return {
             body: null,
             updatedAt: null,
@@ -191,6 +151,10 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
             skills: [],
             deletedBundled: [],
           };
+        },
+        "epic.getChatTitle": () => {
+          titleRequests += 1;
+          return { chat: { title: "Task title" } };
         },
         "epic.listTasks": () => {
           taskListRequests += 1;
@@ -228,7 +192,8 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
       routing: {
         plan,
         selectedHostId: () => mockRemoteHostEntry.hostId,
-        serving: () => servingStore.get(),
+        serving: () =>
+          readHostServingDecision((hostId) => hostById.get(hostId) ?? null),
       },
     });
     clientRef.current = client;
@@ -250,18 +215,33 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
         { userId: "viewer-1", username: "Viewer" },
         [],
       );
+    const binding = Object.assign(Object.create(null), {
+      hostClient: client,
+    }) as HostRuntimeBinding<HostRpcRegistry>;
+    runtimeBindingRef.current = binding;
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
+      <HostRuntimeContext.Provider value={binding}>
+        <QueryClientProvider client={queryClient}>
+          {props.children}
+        </QueryClientProvider>
+      </HostRuntimeContext.Provider>
     );
+    const poolRequester = client.createRequesterForHostId(POOL_HOST_ID);
     const rendered = renderHook(
       () => {
         const skillsClient = useConfigurationReadClient();
         return {
+          servingDecision: useAppServingDecision(),
           autoPolicy: useAutoPolicyQuery(),
           guide: useConfigurationGuideQuery(),
           skills: useEnvironmentSkillsQuery(skillsClient, true),
+          title: useHostQuery({
+            cacheKeyIdentity: ["viewer-1"],
+            client: poolRequester,
+            method: "epic.getChatTitle",
+            params: { taskId: "task-1", chatId: "chat-1" },
+            options: { enabled: true, staleTime: Infinity },
+          }),
           tasks: useCloudEpicTasksQuery(undefined, { enabled: true }),
         };
       },
@@ -270,19 +250,25 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
 
     try {
       await waitFor(() => {
-        expect(requests).toBe(1);
+        expect(autoPolicyRequests).toBe(1);
         expect(guideRequests).toBe(1);
         expect(skillsRequests).toBe(1);
+        expect(titleRequests).toBe(1);
         expect(taskListRequests).toBe(1);
       });
       expect(
         messenger.calls
-          .filter((call) => call.method === "autoPolicy.get")
+          .filter((call) => call.method === "epic.getChatTitle")
           .map((call) => call.authority.endpoint.hostId),
       ).toEqual(["pool"]);
       expect(
         messenger.calls
           .filter((call) => call.method === "epic.listTasks")
+          .map((call) => call.authority.endpoint.hostId),
+      ).toEqual(["pool"]);
+      expect(
+        messenger.calls
+          .filter((call) => call.method === "autoPolicy.get")
           .map((call) => call.authority.endpoint.hostId),
       ).toEqual(["pool"]);
       expect(
@@ -304,58 +290,74 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
       if (teamPeer === undefined) throw new Error("team fixture must exist");
       const currentManifest = accountWideManifestFixtures().current;
       expect(currentManifest.size).toBe(23);
-      recordNegotiatedHostMethods(teamPeer.hostId, [...currentManifest]);
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: teamPeer.hostId },
-      });
-      appQueryClient.setQueryData(
-        hostQueryKeys.method<HostRpcRegistry, "environment.binding.read">(
-          poolEntry.hostId,
-          "environment.binding.read",
-          { hostId: teamPeer.hostId },
-        ),
-        {
-          hostId: teamPeer.hostId,
-          environment: {
-            environmentId: "environment-1",
-            ownerKind: "organization",
-            ownerId: "team-1",
-            roomId: "room-team",
-            label: "Team",
+      const teamManifest: ConnectionManifest = Object.fromEntries(
+        [...currentManifest].map((method) => [
+          method,
+          {
+            major: 1,
+            minor:
+              method === "environment.configuration.guide.get" ||
+              method === "environment.configuration.skills.list"
+                ? 1
+                : 0,
           },
-          explicit: true,
-          enrolledByUserId: "viewer-1",
-          canUnbind: false,
-        },
+        ]),
       );
-      act(() =>
-        servingStore.publish(
-          readHostServingDecision((hostId) => hostById.get(hostId) ?? null),
-        ),
-      );
-      await waitFor(() => expect(guideRequests).toBe(2));
-      await waitFor(() => expect(skillsRequests).toBe(2));
-      expect(requests).toBe(1);
+      act(() => {
+        recordNegotiatedHostManifest(teamPeer.hostId, { ...teamManifest });
+        useSelectionAuthorityStore.setState({
+          servingPeer: { kind: "computer", hostId: teamPeer.hostId },
+        });
+        appQueryClient.setQueryData(
+          hostQueryKeys.method<HostRpcRegistry, "environment.binding.read">(
+            poolEntry.hostId,
+            "environment.binding.read",
+            { hostId: teamPeer.hostId },
+          ),
+          {
+            hostId: teamPeer.hostId,
+            environment: {
+              environmentId: "environment-1",
+              ownerKind: "organization",
+              ownerId: "team-1",
+              roomId: "room-team",
+              label: "Team",
+            },
+            explicit: true,
+            enrolledByUserId: "viewer-1",
+            canUnbind: false,
+          },
+        );
+      });
+      await waitFor(() => {
+        expect(
+          rendered.result.current.servingDecision.servingPeer?.hostId,
+        ).toBe(teamPeer.hostId);
+        expect(rendered.result.current.title.isFetching).toBe(false);
+        expect(rendered.result.current.autoPolicy.isFetching).toBe(false);
+        expect(rendered.result.current.guide.isFetching).toBe(false);
+        expect(rendered.result.current.skills.isFetching).toBe(false);
+        expect(rendered.result.current.tasks.query.isFetching).toBe(false);
+        expect(guideRequests).toBe(2);
+        expect(skillsRequests).toBe(2);
+      });
+      expect(autoPolicyRequests).toBe(1);
+      expect(titleRequests).toBe(1);
       expect(taskListRequests).toBe(1);
-      expect(
-        messenger.calls
-          .filter((call) => call.method === "autoPolicy.get")
-          .map((call) => call.authority.endpoint.hostId),
-      ).toEqual(["pool"]);
       expect(
         messenger.calls
           .filter(
             (call) => call.method === "environment.configuration.guide.get",
           )
           .map((call) => call.authority.endpoint.hostId),
-      ).toEqual(["pool", "team-computer"]);
+      ).toEqual(["pool", teamPeer.hostId]);
       expect(
         messenger.calls
           .filter(
             (call) => call.method === "environment.configuration.skills.list",
           )
           .map((call) => call.authority.endpoint.hostId),
-      ).toEqual(["pool", "team-computer"]);
+      ).toEqual(["pool", teamPeer.hostId]);
       expect(
         queryClient
           .getQueryCache()
@@ -363,59 +365,102 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
           .filter((query) => query.queryKey[2] === "autoPolicy.get")
           .map((query) => query.queryKey[1]),
       ).toEqual(["pool"]);
+      expect(
+        messenger.calls
+          .filter((call) => call.method === "epic.getChatTitle")
+          .map((call) => call.authority.endpoint.hostId),
+      ).toEqual(["pool"]);
+      expect(
+        queryClient
+          .getQueryCache()
+          .getAll()
+          .filter((query) => query.queryKey[2] === "epic.getChatTitle")
+          .map((query) => query.queryKey[1]),
+      ).toEqual(["pool"]);
 
       act(() =>
-        servingStore.publish({
-          servingPeer: mockRemoteHostEntry,
-          servingPeerMethods: null,
-          servingPeerEnvironmentId: null,
+        useSelectionAuthorityStore.setState({
+          servingPeer: { kind: "computer", hostId: mockRemoteHostEntry.hostId },
         }),
       );
-      expect(guideRequests).toBe(2);
-      expect(requests).toBe(1);
+      await waitFor(() => {
+        expect(
+          rendered.result.current.servingDecision.servingPeer?.hostId,
+        ).toBe(mockRemoteHostEntry.hostId);
+        expect(rendered.result.current.title.isFetching).toBe(false);
+      });
+      expect(titleRequests).toBe(1);
       expect(taskListRequests).toBe(1);
 
       act(() =>
-        servingStore.publish({
-          servingPeer: mockRemoteHostEntry,
-          servingPeerMethods: new Set(["autoPolicy.get"]),
-          servingPeerEnvironmentId: null,
+        recordNegotiatedHostManifest(mockRemoteHostEntry.hostId, {
+          "epic.getChatTitle": { major: 1, minor: 0 },
         }),
       );
-      await waitFor(() => expect(requests).toBe(2));
+      await waitFor(() => {
+        expect(
+          rendered.result.current.servingDecision.servingPeerMethods?.has(
+            "epic.getChatTitle",
+          ),
+        ).toBe(true);
+      });
+      await waitFor(() => {
+        expect(
+          queryClient
+            .getQueryCache()
+            .getAll()
+            .filter((query) => query.queryKey[2] === "epic.getChatTitle")
+            .map((query) => query.queryKey[1])
+            .sort(),
+        ).toEqual(["mock-remote", "pool"]);
+      });
+      await waitFor(() => expect(titleRequests).toBe(2));
+      await waitFor(() =>
+        expect(rendered.result.current.title.isFetching).toBe(false),
+      );
       expect(
         messenger.calls
-          .filter((call) => call.method === "autoPolicy.get")
+          .filter((call) => call.method === "epic.getChatTitle")
           .map((call) => call.authority.endpoint.hostId),
       ).toEqual(["pool", mockRemoteHostEntry.hostId]);
       expect(
         queryClient
           .getQueryCache()
           .getAll()
-          .filter((query) => query.queryKey[2] === "autoPolicy.get")
+          .filter((query) => query.queryKey[2] === "epic.getChatTitle")
           .map((query) => query.queryKey[1])
           .sort(),
       ).toEqual(["mock-remote", "pool"]);
 
       act(() =>
-        servingStore.publish({
-          servingPeer: mockRemoteHostEntry,
-          servingPeerMethods: new Set(["autoPolicy.get"]),
-          servingPeerEnvironmentId: null,
+        useSelectionAuthorityStore.setState({
+          effectiveHostId: mockRemoteHostEntry.hostId,
+          servingPeer: { kind: "computer", hostId: mockRemoteHostEntry.hostId },
         }),
       );
-      expect(requests).toBe(2);
-
-      useSelectionAuthorityStore.setState({
-        effectiveHostId: teamPeer.hostId,
-        servingPeer: { kind: "computer", hostId: teamPeer.hostId },
+      await waitFor(() => {
+        expect(
+          rendered.result.current.servingDecision.servingPeer?.hostId,
+        ).toBe(mockRemoteHostEntry.hostId);
+        expect(rendered.result.current.title.isFetching).toBe(false);
       });
+      expect(titleRequests).toBe(2);
+
       act(() =>
-        servingStore.publish(
-          readHostServingDecision((hostId) => hostById.get(hostId) ?? null),
-        ),
+        useSelectionAuthorityStore.setState({
+          effectiveHostId: teamPeer.hostId,
+          servingPeer: { kind: "computer", hostId: teamPeer.hostId },
+        }),
       );
+      await waitFor(() => {
+        expect(
+          rendered.result.current.servingDecision.servingPeer?.hostId,
+        ).toBe(teamPeer.hostId);
+        expect(rendered.result.current.tasks.query.isFetching).toBe(false);
+        expect(rendered.result.current.title.isFetching).toBe(false);
+      });
       expect(taskListRequests).toBe(1);
+      expect(titleRequests).toBe(2);
       await act(async () => {
         await rendered.result.current.tasks.query.refetch();
       });
@@ -486,7 +531,8 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
       routing: {
         plan,
         selectedHostId: () => mockRemoteHostEntry.hostId,
-        serving: () => servingStore.get(),
+        serving: () =>
+          readHostServingDecision((hostId) => hostById.get(hostId) ?? null),
       },
     });
     clientRef.current = client;
@@ -509,10 +555,16 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
         [],
       );
     await viewReplicaStore.warm("viewer-1");
+    const binding = Object.assign(Object.create(null), {
+      hostClient: client,
+    }) as HostRuntimeBinding<HostRpcRegistry>;
+    runtimeBindingRef.current = binding;
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
+      <HostRuntimeContext.Provider value={binding}>
+        <QueryClientProvider client={queryClient}>
+          {props.children}
+        </QueryClientProvider>
+      </HostRuntimeContext.Provider>
     );
     const poolRequester = client.createRequesterForHostId(POOL_HOST_ID);
     const rendered = renderHook(
@@ -536,18 +588,15 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
         ).toHaveLength(1);
       });
 
-      recordNegotiatedHostMethods(mockRemoteHostEntry.hostId, [
-        ...accountWideManifestFixtures().current,
-      ]);
-      useSelectionAuthorityStore.setState({
-        effectiveHostId: mockRemoteHostEntry.hostId,
-        servingPeer: { kind: "computer", hostId: mockRemoteHostEntry.hostId },
+      act(() => {
+        recordNegotiatedHostMethods(mockRemoteHostEntry.hostId, [
+          ...accountWideManifestFixtures().current,
+        ]);
+        useSelectionAuthorityStore.setState({
+          effectiveHostId: mockRemoteHostEntry.hostId,
+          servingPeer: { kind: "computer", hostId: mockRemoteHostEntry.hostId },
+        });
       });
-      act(() =>
-        servingStore.publish(
-          readHostServingDecision((hostId) => hostById.get(hostId) ?? null),
-        ),
-      );
       expect(plan.pool?.hostId).toBe(poolEntry.hostId);
 
       await waitFor(() => {
@@ -588,11 +637,13 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
         ).toContain("late-pool-page");
       });
 
-      expect(
-        viewReplicaStore
-          .read(historyReplicaService, computerAddress)
-          ?.page.tasks.map((task) => task.epic?.light?.id),
-      ).toEqual(["computer-page"]);
+      await waitFor(() => {
+        expect(
+          viewReplicaStore
+            .read(historyReplicaService, computerAddress)
+            ?.page.tasks.map((task) => task.epic?.light?.id),
+        ).toEqual(["computer-page"]);
+      });
       expect(
         viewReplicaStore
           .read(historyReplicaService, poolAddress)
