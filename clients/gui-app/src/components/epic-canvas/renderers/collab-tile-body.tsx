@@ -391,6 +391,23 @@ function draftRangeOwnedByTile(
   return { from: draft.from, to: draft.to };
 }
 
+function useArtifactBodyPermissions(
+  artifactId: string,
+  commentsSupported: boolean,
+) {
+  const role = useEpicPermissionRole();
+  const { store } = useOpenEpicHandle();
+  const bodyReadOnly = useStore(
+    store,
+    (state) => state.artifactRooms.readOnlyByArtifactId?.[artifactId] === true,
+  );
+  return {
+    bodyReadOnly,
+    editable: !bodyReadOnly && isEditableRole(role),
+    canDraftComment: !bodyReadOnly && commentsSupported,
+  };
+}
+
 function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const readingWidth = useReadingWidthStyle();
   const {
@@ -403,14 +420,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     doc,
     awareness,
   } = props;
-  const role = useEpicPermissionRole();
   const profile = useAuthStore((s) => s.profile);
-  const { store } = useOpenEpicHandle();
-  const bodyReadOnly = useStore(
-    store,
-    (state) => state.artifactRooms.readOnlyByArtifactId?.[node.id] === true,
-  );
-  const editable = !bodyReadOnly && isEditableRole(role);
   const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(
     null,
@@ -444,7 +454,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const commentsUnavailable = useEpicCommentsHaveNoUsableRoom();
   const commentsSupported =
     commentArtifactKind !== null && !commentsUnavailable;
-  const canDraftComment = commentsSupported && !bodyReadOnly;
+  const { bodyReadOnly, editable, canDraftComment } =
+    useArtifactBodyPermissions(node.id, commentsSupported);
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
   const activeThreadId = useActiveThreadId(epicId);
   const hoverThreadId = useHoverThreadId(epicId);
