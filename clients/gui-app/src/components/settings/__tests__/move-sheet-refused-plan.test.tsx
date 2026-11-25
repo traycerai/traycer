@@ -584,8 +584,18 @@ afterEach(() => {
 const LOCAL_SOURCE_REFUSAL =
   "Couldn't read this computer's settings. Try again.";
 
-function mountLocalSourceSheet(planFailure: HostRpcError | null): Harness {
-  const queryClient = shortLivedQueryClient();
+function sourceRefusal(method: "plan" | "stage", code: string): HostRpcError {
+  return HostRpcError.fromWireEnvelope(
+    hostResponseErrorSchema.parse({ code, message: LOCAL_SOURCE_REFUSAL }),
+    `refused-${method}`,
+    `environment.move.${method}`,
+  );
+}
+
+function mountLocalSourceSheet(
+  planFailure: HostRpcError | null,
+  queryClient: QueryClient,
+): Harness {
   queryClient.setQueryData(
     environmentQueryKeys.personalForMove("user-me"),
     environmentMovePersonalSchema.parse({ items: [], holdsSecrets: false }),
@@ -625,31 +635,77 @@ async function pressMove(harness: Harness): Promise<void> {
   await settle();
 }
 
+async function retryLocalPlan(
+  harness: Harness,
+  terminal: "error" | "success",
+): Promise<void> {
+  const finished = Promise.withResolvers<void>();
+  const unsubscribe = harness.queryClient.getQueryCache().subscribe((event) => {
+    if (
+      event.type === "updated" &&
+      event.action.type === terminal &&
+      isMovePlanKey(event.query.queryKey)
+    ) {
+      finished.resolve();
+    }
+  });
+  try {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await finished.promise;
+    });
+  } finally {
+    unsubscribe();
+  }
+  await settle();
+}
+
 describe("<MoveSheet /> with unread computer settings", () => {
-  it("shows the existing inline Retry when the opening read is refused", async () => {
-    mountLocalSourceSheet(planRefusal("RPC_ERROR", LOCAL_SOURCE_REFUSAL));
+  it("shows the opening refusal without automatically retrying the plan", async () => {
+    const harness = mountLocalSourceSheet(
+      sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
+      createAppQueryClient(),
+    );
     await settle();
 
-    expect(screen.getByText(LOCAL_SOURCE_REFUSAL)).toBeTruthy();
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(acceptIsDisabled()).toBe(true);
+
+    harness.computer.planFailure = null;
+    await advanceLegendListTime(1_000);
+    expect(harness.planReads()).toBe(1);
     expect(acceptIsDisabled()).toBe(true);
   });
 
+  it("keeps the opening refusal after a background plan refresh until Retry", async () => {
+    const harness = mountLocalSourceSheet(
+      sourceRefusal("plan", "E_MOVE_LOCAL_SOURCE_UNREAD"),
+      shortLivedQueryClient(),
+    );
+    await settle();
+    expect(acceptIsDisabled()).toBe(true);
+
+    harness.computer.planFailure = null;
+    harness.computer.plan = FRESH_PLAN;
+    const reads = harness.planReads();
+    await rereadPlan(harness);
+
+    expect(harness.planReads()).toBe(reads + 1);
+    expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    await retryLocalPlan(harness, "success");
+    expect(summaryText()).toBe("3 variables");
+    expect(acceptIsDisabled()).toBe(false);
+  });
+
   it("keeps the generic stage failure when the same message comes without the source refusal code", async () => {
-    const harness = mountLocalSourceSheet(null);
+    const harness = mountLocalSourceSheet(null, shortLivedQueryClient());
     await settle();
     expect(acceptIsDisabled()).toBe(false);
 
-    harness.refuseStage(
-      HostRpcError.fromWireEnvelope(
-        hostResponseErrorSchema.parse({
-          code: "RPC_ERROR",
-          message: LOCAL_SOURCE_REFUSAL,
-        }),
-        "stage-refused",
-        "environment.move.stage",
-      ),
-    );
+    harness.refuseStage(sourceRefusal("stage", "RPC_ERROR"));
     await pressMove(harness);
 
     expect(harness.acceptancePosts()).toBe(0);
@@ -658,20 +714,11 @@ describe("<MoveSheet /> with unread computer settings", () => {
   });
 
   it("refuses the press before any acceptance POST and enables Move only after Retry reads the plan", async () => {
-    const harness = mountLocalSourceSheet(null);
+    const harness = mountLocalSourceSheet(null, shortLivedQueryClient());
     await settle();
     expect(acceptIsDisabled()).toBe(false);
 
-    harness.refuseStage(
-      HostRpcError.fromWireEnvelope(
-        hostResponseErrorSchema.parse({
-          code: "E_MOVE_LOCAL_SOURCE_UNREAD",
-          message: LOCAL_SOURCE_REFUSAL,
-        }),
-        "stage-refused",
-        "environment.move.stage",
-      ),
-    );
+    harness.refuseStage(sourceRefusal("stage", "E_MOVE_LOCAL_SOURCE_UNREAD"));
     await pressMove(harness);
 
     expect(harness.stages()).toBe(1);
@@ -684,30 +731,11 @@ describe("<MoveSheet /> with unread computer settings", () => {
     expect(planIsDrawn()).toBe(false);
     expect(acceptIsDisabled()).toBe(true);
 
-    harness.computer.planFailure = planRefusal(
-      "RPC_ERROR",
-      LOCAL_SOURCE_REFUSAL,
+    harness.computer.planFailure = sourceRefusal(
+      "plan",
+      "E_MOVE_LOCAL_SOURCE_UNREAD",
     );
-    const failedPlan = Promise.withResolvers<void>();
-    const unsubscribe = harness.queryClient
-      .getQueryCache()
-      .subscribe((event) => {
-        if (
-          event.type === "updated" &&
-          event.action.type === "error" &&
-          isMovePlanKey(event.query.queryKey)
-        )
-          failedPlan.resolve();
-      });
-    try {
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-        await failedPlan.promise;
-      });
-    } finally {
-      unsubscribe();
-    }
-    await settle();
+    await retryLocalPlan(harness, "error");
     expect(screen.queryByText(LOCAL_SOURCE_REFUSAL)).not.toBeNull();
     expect(acceptIsDisabled()).toBe(true);
 
