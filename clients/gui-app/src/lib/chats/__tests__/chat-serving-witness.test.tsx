@@ -107,6 +107,7 @@ class StatusDrivableClient extends FakeStreamClient {
 
 const NOT_VISIBLE: StreamCloseReason = {
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code: "CHAT_NOT_VISIBLE",
     reason: "chat is not published yet",

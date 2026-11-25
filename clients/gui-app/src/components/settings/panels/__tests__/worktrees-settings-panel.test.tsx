@@ -301,6 +301,7 @@ vi.mock(
               settleTarget(path, false);
             },
             onDroppedAfterStart: () => undefined,
+            onBackoffEntered: () => undefined,
             onConnectionStatus: (status, reason) =>
               options.callbacks.onConnectionStatus({
                 status,
@@ -2913,7 +2914,11 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       streamMock.commandCallbacks?.onConnectionStatus({
         status: "closed",
-        reason: { kind: "fatalError", details: STREAM_FATAL },
+        reason: {
+          kind: "fatalError",
+          signInVerdict: null,
+          details: STREAM_FATAL,
+        },
         retryCause: null,
         continuity: null,
         startSent: true,
@@ -2934,7 +2939,11 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       streamMock.commandCallbacks?.onConnectionStatus({
         status: "closed",
-        reason: { kind: "fatalError", details: STREAM_FATAL },
+        reason: {
+          kind: "fatalError",
+          signInVerdict: null,
+          details: STREAM_FATAL,
+        },
         retryCause: null,
         continuity: null,
         startSent: false,

@@ -219,6 +219,7 @@ describe("notifications store", () => {
 
     handle().callbacks.onConnectionStatus("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "UNAUTHORIZED",
         reason: "expired bearer",
@@ -241,6 +242,7 @@ describe("notifications store", () => {
     handle().callbacks.onConnectionStatus("closed", { kind: "caller" });
     handle().callbacks.onConnectionStatus("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "schema mismatch",

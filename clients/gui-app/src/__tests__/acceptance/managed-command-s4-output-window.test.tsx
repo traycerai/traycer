@@ -683,6 +683,7 @@ describe("S4 · output window", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: fatalErrorDetails(
             "MANAGED_COMMAND_NOT_FOUND",
             "MANAGED_COMMAND_NOT_FOUND: no such managed command in this epic",
@@ -716,6 +717,7 @@ describe("S4 · output window", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: fatalErrorDetails(
             "UNAUTHORIZED",
             "UNAUTHORIZED: role revoked",
@@ -751,6 +753,7 @@ describe("S4 · output window", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: fatalErrorDetails(
             "MANAGED_COMMAND_OUTPUT_FAILED",
             "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
@@ -842,6 +845,7 @@ describe("S4 · output window", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: fatalErrorDetails(
             "MANAGED_COMMAND_OUTPUT_FAILED",
             "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",

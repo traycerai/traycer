@@ -35,6 +35,10 @@ export default defineConfig({
         import.meta.dirname,
         "../../scripts/test-worker-environment.ts",
       ),
+      resolveTestSetup(
+        import.meta.dirname,
+        "../../scripts/test-poll-lasts-its-test.ts",
+      ),
       resolveTestSetup(import.meta.dirname, "./vitest.env.ts"),
       "./vitest.setup.ts",
     ],

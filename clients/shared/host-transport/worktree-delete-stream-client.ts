@@ -13,6 +13,7 @@ import type {
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
+import { signalsBackoff } from "./i-stream-session";
 
 /**
  * Typed handlers for a `worktree.deleteByPath` session. Frames flow
@@ -53,6 +54,12 @@ export interface WorktreeDeleteStreamCallbacks {
    * deletion was started.
    */
   readonly onConnectionStatus: StatusChangeHandler;
+  /**
+   * Before the request was sent: the transport put the session on a delayed
+   * redial (it entered backoff). Nothing was started. A `reconnecting` it
+   * follows at once with its next dial does not report this.
+   */
+  readonly onBackoffEntered: () => void;
 }
 
 export interface WorktreeDeleteStreamClientOptions {
@@ -126,6 +133,14 @@ export class WorktreeDeleteStreamClient {
       }
       this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
+    // A transport that does not report backoff never does; its sessions end
+    // with `closed`.
+    const session = this.session;
+    if (signalsBackoff(session))
+      session.onBackoffEntered(() => {
+        if (this.closed || session.hasSentOpenRequest()) return;
+        this.callbacks.onBackoffEntered();
+      });
   }
 
   /**

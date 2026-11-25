@@ -3,12 +3,15 @@ import type {
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import {
+  BOT_SNAPSHOT_DEADLINE_MS,
+  botReadTimedOutError,
   findBot,
   formatBotTime,
   listBots,
-  openLocalStreamClient,
   readBotSnapshot,
+  withLocalBotStream,
 } from "../internal/bot-host";
+import { refusalEndingCliError } from "../internal/host-door-words";
 import { cliError, CLI_ERROR_CODES } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
@@ -24,10 +27,18 @@ export function buildBotCheckinsCommand(opts: {
 }): CommandFn {
   return async () => {
     const bot = findBot(await listBots(), opts.bot);
-    const { client } = await openLocalStreamClient();
-    const snapshot = await readBotSnapshot(client, bot.botId).finally(() => {
-      client.close("bot-checkins-settled");
-    });
+    const snapshot = await withLocalBotStream(
+      null,
+      {
+        span: { kind: "from-first-dial", ms: BOT_SNAPSHOT_DEADLINE_MS },
+        ended: () => Promise.reject(botReadTimedOutError()),
+      },
+      (ending) => Promise.reject(refusalEndingCliError(ending)),
+      (client, _endpoint, dial) =>
+        readBotSnapshot(client, bot.botId, dial).finally(() => {
+          client.close("bot-checkins-settled");
+        }),
+    );
     if (snapshot === null) {
       throw cliError({
         code: CLI_ERROR_CODES.NOT_FOUND,

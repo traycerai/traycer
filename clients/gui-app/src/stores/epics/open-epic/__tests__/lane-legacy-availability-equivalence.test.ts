@@ -433,6 +433,7 @@ function createLaneArm(): AvailabilityArm {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "artifact.subscribe is not served by this host",

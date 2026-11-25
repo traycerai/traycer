@@ -32,7 +32,10 @@ export async function retryHostDoor(
   try {
     // Whatever the mint answers, the redial below asks again on refusal.
     if (userId !== null && hostDoorStateFor(hostId)?.kind === "token-expired")
-      await hostTokens.obtain(userId, hostId, true, null);
+      await hostTokens.obtain(userId, hostId, true, {
+        signal: null,
+        owner: null,
+      });
   } finally {
     reopenHostConnectionNow(hostId);
     for (const rebuildNow of [...(rebuildOwners.get(hostId) ?? [])])
