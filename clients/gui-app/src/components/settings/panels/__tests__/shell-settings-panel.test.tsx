@@ -2,13 +2,55 @@
 // selected host's own config), so it reads `useHostScope`. Mock at that
 // boundary: these suites render the panel bare, without the host runtime and
 // query providers the real hook needs.
-const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
-  current: {},
+import type { EnvironmentCloudSource } from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+
+type SettingsSaveItemExpectation = {
+  readonly key: string;
+  readonly value: string;
+  readonly revision: number;
+};
+
+type HostBindingFixture = {
+  readonly hostClient: unknown;
+  readonly auth?: {
+    readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
+  };
+};
+
+const settingsSaveCloudMock = vi.hoisted(() => ({
+  current: null as EnvironmentCloudSource | null,
 }));
+const environmentEditorCommitObserver = vi.hoisted(() => ({
+  current: null as {
+    readonly hostId: string;
+    readonly key: string;
+    readonly value: string;
+    readonly commit: () => void;
+  } | null,
+}));
+
+const scopeOverrides = vi.hoisted(
+  (): {
+    current: Record<string, unknown>;
+    byHost: Map<string, Record<string, unknown>>;
+  } => ({ current: {}, byHost: new Map() }),
+);
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { useContext } = await import("react");
+  const { PersonalPageContext } =
+    await import("@/components/settings/personal/personal-page-context");
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  const useHostScope = () => hostScopeFixture(scopeOverrides.current);
+  const useHostScope = () => {
+    const page = useContext(PersonalPageContext);
+    const scope =
+      page === null
+        ? scopeOverrides.current
+        : (scopeOverrides.byHost.get(page.hostId ?? "") ??
+          scopeOverrides.current);
+    return hostScopeFixture(scope);
+  };
   return {
     useHostScope,
     useHostScopeFor: useHostScope,
@@ -25,19 +67,79 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 // standing up a real `<HostRuntimeProvider>` - see `providers-settings-panel.test.tsx`
 // and `provider-mcp-tab.test.tsx` for the same partial-object pattern.
 const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
-    current: null,
-  }),
+  (): {
+    current: HostBindingFixture | null;
+    byHost: Map<string, HostBindingFixture>;
+  } => ({ current: null, byHost: new Map() }),
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
+  const { useContext } = await import("react");
+  const { PersonalPageContext } =
+    await import("@/components/settings/personal/personal-page-context");
+  const useBinding = () => {
+    const page = useContext(PersonalPageContext);
+    return page === null
+      ? hostBindingMock.current
+      : (hostBindingMock.byHost.get(page.hostId ?? "") ??
+          hostBindingMock.current);
+  };
   return {
     ...actual,
-    useHostBinding: () => hostBindingMock.current,
+    useHostBinding: useBinding,
     // Add a secret, which a key-shaped value is refused for, reads the client.
-    useHostClient: () => hostBindingMock.current?.hostClient,
+    useHostClient: () => useBinding()?.hostClient,
   };
 });
+
+vi.mock("@/hooks/environment/use-environment-cloud", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/environment/use-environment-cloud")
+    >();
+  return {
+    ...actual,
+    useEnvironmentCloud: () => settingsSaveCloudMock.current,
+  };
+});
+
+vi.mock(
+  "@/components/settings/panels/env-override-editor",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/panels/env-override-editor")
+      >();
+    const { createElement, useContext, useLayoutEffect } =
+      await import("react");
+    const { PersonalPageContext } =
+      await import("@/components/settings/personal/personal-page-context");
+    type EditorProps = import("react").ComponentProps<
+      typeof actual.EnvOverrideEditor
+    >;
+    const EnvOverrideEditorWithCommitSignal = (props: EditorProps) => {
+      const page = useContext(PersonalPageContext);
+      const observer = environmentEditorCommitObserver.current;
+      const receivedExpectedRow =
+        observer !== null &&
+        page?.hostId === observer.hostId &&
+        props.overrides.some(
+          (entry) =>
+            entry.key === observer.key && entry.value === observer.value,
+        );
+      useLayoutEffect(() => {
+        if (receivedExpectedRow) {
+          environmentEditorCommitObserver.current?.commit();
+        }
+      }, [receivedExpectedRow]);
+      return createElement(actual.EnvOverrideEditor, props);
+    };
+    return {
+      ...actual,
+      EnvOverrideEditor: EnvOverrideEditorWithCommitSignal,
+    };
+  },
+);
 
 const sandboxCredentialRefusal = vi.hoisted(() => ({
   current: null as string | null,
@@ -57,6 +159,47 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import {
+  configEnvListRequestSchema,
+  configEnvListResponseSchema,
+  configEnvSetRequestSchema,
+  configEnvSetResponseSchema,
+  type ConfigEnvSetRequest,
+} from "@traycer/protocol/host/config/index";
+import {
+  environmentHostReadRequestSchema,
+  environmentHostReadResponseSchemaV11,
+} from "@traycer/protocol/host/environment/contracts";
+import { environmentStatusV13 } from "@traycer/protocol/host/environment-contracts";
+import {
+  environmentLocalOverridesRequestSchema,
+  environmentLocalOverridesResponseSchema,
+} from "@traycer/protocol/host/environment-schemas";
+import {
+  environmentProposalsV12,
+  settingValueSchema,
+} from "@traycer/protocol/host/environment/settings-proposals";
+import {
+  authnHeldApplyConflictSchema,
+  authnItemWriteResponseSchema,
+  authnItemsResponseSchema,
+  authnOperationReviewResponseSchema,
+  type AuthnItemRow,
+} from "@traycer-clients/shared/environment/authn-environment-schemas";
+import {
+  environmentPath,
+  type EnvironmentCloud,
+  type EnvironmentTransportAnswer,
+  type EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import { createSettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
+import { settingsSaveMemoryKey } from "@/lib/persist";
+import { settingsSaveIdFromRequestId } from "@traycer/protocol/framework/settings-save-request-id";
+import { SettingsSaveCoordinatorContext } from "@/providers/settings-save-coordinator-context";
+import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsSaveMemoryStore } from "@/stores/settings/settings-save-memory-store";
 import {
   ABANDONED_SAVE_MESSAGE,
   abandonedSaveError,
@@ -87,19 +230,24 @@ import {
   PersonalPageContext,
   type PersonalPageContextValue,
 } from "@/components/settings/personal/personal-page-context";
-import { useEnvironmentLocalOverridesRead } from "@/hooks/environment/use-environment-reads";
+import {
+  useEnvironmentLocalOverridesRead,
+  useEnvironmentStatusRead,
+} from "@/hooks/environment/use-environment-reads";
 import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
-import { queryKeys } from "@/lib/query-keys";
+import { environmentQueryKeys, queryKeys } from "@/lib/query-keys";
 import {
   ALL_CONFIG_RPC_METHODS,
   CONFIG_SHELL_METHODS,
   buildConfigHostFixture,
   type ConfigHostFixture,
 } from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import { queryUpdatedBeyond } from "./kept-variable-actions-support";
 import type {
   MockHandlerMap,
   MockPhaseEvent,
@@ -111,7 +259,11 @@ afterEach(() => {
   vi.useRealTimers();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
+  scopeOverrides.byHost.clear();
   hostBindingMock.current = null;
+  hostBindingMock.byHost.clear();
+  settingsSaveCloudMock.current = null;
+  environmentEditorCommitObserver.current = null;
   sandboxCredentialRefusal.current = null;
 });
 
@@ -161,8 +313,14 @@ function renderShellPanelOverRpc(options: {
    */
   readonly methods?: readonly string[] | null;
   readonly hostKind?: HostScopeOption["kind"];
+  readonly saveCoordinator?: SettingsSaveCoordinator;
+  readonly environmentDirectory?: EnvironmentDirectoryResult;
+  readonly liveEnvironmentStatus?: true;
+  readonly hostName?: string;
 }): ConfigHostFixture & {
   readonly queryClient: QueryClient;
+  readonly container: HTMLElement;
+  readonly activateBindings: () => void;
   readonly rerenderPanel: () => void;
   readonly unmountPanel: () => void;
 } {
@@ -188,7 +346,7 @@ function renderShellPanelOverRpc(options: {
     );
   }
 
-  scopeOverrides.current = {
+  const scope = {
     host: hostScopeOptionFixture({
       hostId,
       isLocalMachine,
@@ -209,7 +367,24 @@ function renderShellPanelOverRpc(options: {
     status: "ready",
     client: fixture.client,
   };
-  hostBindingMock.current = { hostClient: fixture.client };
+  const environmentDirectory = options.environmentDirectory;
+  const binding: HostBindingFixture = {
+    hostClient: fixture.client,
+    ...(environmentDirectory === undefined
+      ? {}
+      : {
+          auth: {
+            listEnvironments: () => Promise.resolve(environmentDirectory),
+          },
+        }),
+  };
+  const activateBindings = (): void => {
+    scopeOverrides.current = scope;
+    scopeOverrides.byHost.set(hostId, scope);
+    hostBindingMock.current = binding;
+    hostBindingMock.byHost.set(hostId, binding);
+  };
+  activateBindings();
 
   const runnerHost: IRunnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
@@ -227,7 +402,7 @@ function renderShellPanelOverRpc(options: {
     section: "shell",
     pick: PERSONAL_PICK,
     state: { kind: "unknown" },
-    hostName: hostId,
+    hostName: options.hostName ?? hostId,
     localOverrides: options.localOverrides ?? [],
     hostId,
     client: fixture.client,
@@ -237,14 +412,26 @@ function renderShellPanelOverRpc(options: {
   const panel = () => {
     let settingsPanel = <ShellSettingsPanel />;
     if (options.liveLocalOverrides === true) {
-      settingsPanel = (
-        <ShellPanelWithLiveLocalOverrides page={personalPageValue} />
-      );
+      settingsPanel =
+        options.liveEnvironmentStatus === true ? (
+          <ShellPanelWithLiveStatusAndLocalOverrides page={personalPageValue} />
+        ) : (
+          <ShellPanelWithLiveLocalOverrides page={personalPageValue} />
+        );
     } else if (options.localOverrides !== undefined) {
       settingsPanel = (
         <PersonalPageContext.Provider value={personalPageValue}>
           <ShellSettingsPanel />
         </PersonalPageContext.Provider>
+      );
+    }
+    if (options.saveCoordinator !== undefined) {
+      settingsPanel = (
+        <SettingsSaveCoordinatorContext.Provider
+          value={options.saveCoordinator}
+        >
+          {settingsPanel}
+        </SettingsSaveCoordinatorContext.Provider>
       );
     }
     return (
@@ -260,7 +447,12 @@ function renderShellPanelOverRpc(options: {
   return {
     ...fixture,
     queryClient,
-    rerenderPanel: () => rendered.rerender(panel()),
+    container: rendered.container,
+    activateBindings,
+    rerenderPanel: () => {
+      activateBindings();
+      rendered.rerender(panel());
+    },
     unmountPanel: () => rendered.unmount(),
   };
 }
@@ -269,6 +461,35 @@ function ShellPanelWithLiveLocalOverrides(props: {
   readonly page: PersonalPageContextValue;
 }) {
   const { page } = props;
+  const { data } = useEnvironmentLocalOverridesRead(
+    page.client,
+    page.hostId,
+    true,
+  );
+  return (
+    <PersonalPageContext.Provider
+      value={{ ...page, localOverrides: data?.overrides ?? [] }}
+    >
+      <ShellSettingsPanel />
+    </PersonalPageContext.Provider>
+  );
+}
+
+function ShellPanelWithLiveStatusAndLocalOverrides(props: {
+  readonly page: PersonalPageContextValue;
+}) {
+  return (
+    <PersonalPageContext.Provider value={props.page}>
+      <ShellPanelStatusAndLocalOverrides page={props.page} />
+    </PersonalPageContext.Provider>
+  );
+}
+
+function ShellPanelStatusAndLocalOverrides(props: {
+  readonly page: PersonalPageContextValue;
+}) {
+  const { page } = props;
+  useEnvironmentStatusRead(page.client, page.hostId, true);
   const { data } = useEnvironmentLocalOverridesRead(
     page.client,
     page.hostId,
@@ -2019,6 +2240,896 @@ function inputValue(element: HTMLElement): string {
   return element.value;
 }
 
+function nextSuccessfulHostResponse(
+  fixture: ConfigHostFixture,
+  method: string,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let unsubscribe = (): void => undefined;
+    unsubscribe = fixture.messenger.subscribe((event) => {
+      if (event.kind !== "response" || event.method !== method) return;
+      unsubscribe();
+      resolve(event.error === null);
+    });
+  });
+}
+
+function nextConfigEnvListMatch(
+  fixture: ConfigHostFixture,
+  key: string,
+  value: string,
+  after: () => boolean,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let unsubscribe = (): void => undefined;
+    unsubscribe = fixture.messenger.subscribe((event) => {
+      if (
+        event.kind !== "response" ||
+        event.method !== "config.env.list" ||
+        !after()
+      ) {
+        return;
+      }
+      unsubscribe();
+      if (event.error !== null) {
+        resolve(false);
+        return;
+      }
+      const result = configEnvListResponseSchema.parse(event.result);
+      resolve(
+        result.entries.some(
+          (entry) => entry.key === key && entry.value === value,
+        ),
+      );
+    });
+  });
+}
+
+function nextEnvironmentStatusRevision(
+  fixture: ConfigHostFixture,
+  revision: number,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let unsubscribe = (): void => undefined;
+    unsubscribe = fixture.messenger.subscribe((event) => {
+      if (event.kind !== "response" || event.method !== "environment.status")
+        return;
+      unsubscribe();
+      if (event.error !== null) {
+        resolve(false);
+        return;
+      }
+      const status = environmentStatusV13.responseSchema.parse(event.result);
+      resolve(
+        status.receivedRevision === revision &&
+          status.appliedRevision === revision,
+      );
+    });
+  });
+}
+
+function variablePayloadText(value: unknown): string | null {
+  const parsed = settingValueSchema.safeParse(value);
+  if (
+    !parsed.success ||
+    typeof parsed.data !== "object" ||
+    parsed.data === null ||
+    Array.isArray(parsed.data) ||
+    !("value" in parsed.data)
+  ) {
+    return null;
+  }
+  return typeof parsed.data.value === "string" ? parsed.data.value : null;
+}
+
+function settingsSaveItemHasValue(
+  queryClient: QueryClient,
+  environmentId: string,
+  viewerId: string,
+  expected: SettingsSaveItemExpectation,
+): boolean {
+  const query = queryClient.getQueryCache().find({
+    queryKey: environmentQueryKeys
+      .settingsSaveItems(environmentId, "variable", viewerId, "")
+      .slice(0, 6),
+    exact: false,
+  });
+  const data = query?.state.data;
+  if (!Array.isArray(data)) return false;
+  const parsed = authnItemsResponseSchema.safeParse({ items: data });
+  if (!parsed.success) return false;
+  const row = parsed.data.items.find((item) => item.key === expected.key);
+  return (
+    row !== undefined &&
+    row.revision === expected.revision &&
+    variablePayloadText(row.value) === expected.value
+  );
+}
+
+function nextSettingsSaveItemValue(
+  queryClient: QueryClient,
+  environmentId: string,
+  viewerId: string,
+  expected: SettingsSaveItemExpectation,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let unsubscribe = (): void => undefined;
+    let completed = false;
+    const check = (): void => {
+      if (completed) return;
+      const query = queryClient.getQueryCache().find({
+        queryKey: environmentQueryKeys
+          .settingsSaveItems(environmentId, "variable", viewerId, "")
+          .slice(0, 6),
+        exact: false,
+      });
+      if (
+        query !== undefined &&
+        query.state.fetchStatus === "idle" &&
+        query.state.error !== null
+      ) {
+        completed = true;
+        unsubscribe();
+        resolve(false);
+        return;
+      }
+      if (
+        !settingsSaveItemHasValue(
+          queryClient,
+          environmentId,
+          viewerId,
+          expected,
+        )
+      ) {
+        return;
+      }
+      completed = true;
+      unsubscribe();
+      resolve(true);
+    };
+    unsubscribe = queryClient.getQueryCache().subscribe(check);
+    check();
+  });
+}
+
+function captureConfigEnvSetRequest(
+  fixture: ConfigHostFixture,
+  capture: (request: ConfigEnvSetRequest, saveId: string | null) => void,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let unsubscribe = (): void => undefined;
+    unsubscribe = fixture.messenger.subscribe((event) => {
+      if (event.kind !== "request" || event.method !== "config.env.set") return;
+      unsubscribe();
+      const request = configEnvSetRequestSchema.parse(event.params);
+      const saveId = settingsSaveIdFromRequestId(event.requestId);
+      capture(request, saveId);
+      resolve(saveId !== null);
+    });
+  });
+}
+
+function nextEnvironmentEditorCommit(
+  hostId: string,
+  key: string,
+  value: string,
+): Promise<void> {
+  return new Promise((resolve) => {
+    environmentEditorCommitObserver.current = {
+      hostId,
+      key,
+      value,
+      commit: () => {
+        environmentEditorCommitObserver.current = null;
+        resolve();
+      },
+    };
+  });
+}
+
+const authnHostStatusRowSchema = z.strictObject({
+  hostId: z.string(),
+  hostName: z.string(),
+  hostKind: z.enum(["personal", "sandbox"]),
+  hostVersion: z.string().nullable(),
+  bindingGeneration: z.number().int().nonnegative(),
+  desiredRevision: z.number().int().nonnegative(),
+  receivedRevision: z.number().int().nonnegative(),
+  appliedRevision: z.number().int().nonnegative(),
+  reportedAt: z.number().int().nonnegative().nullable(),
+  online: z.boolean(),
+  lastSeenAt: z.number().int().nonnegative().nullable(),
+  remoteAccess: z
+    .strictObject({ enabled: z.boolean(), epoch: z.number().int() })
+    .nullable(),
+  setupStage: z.null(),
+  purgePending: z.boolean(),
+  minimumHostVersion: z.string().nullable(),
+  localOverrides: z.array(z.string()),
+  items: z.array(z.unknown()),
+  setupAttempts: z.array(z.unknown()),
+  environmentId: z.string().optional(),
+  sharingGeneration: z.number().int().nonnegative().optional(),
+  holdsBotSlot: z.boolean().optional(),
+  enrolledByUserId: z.string().nullable().optional(),
+  boundAt: z.number().int().nullable().optional(),
+  hostPlatform: z.string().nullable().optional(),
+});
+const authnHostsResponseSchema = z.strictObject({
+  hosts: z.array(authnHostStatusRowSchema),
+});
+
+describe("a later Personal variable edit on two computers", () => {
+  const ACCOUNT = "00000000-0000-4000-8000-000000000101";
+  const PERSONAL_ENVIRONMENT = "00000000-0000-4000-8000-000000000102";
+  const HOST_X = "00000000-0000-4000-8000-000000000103";
+  const HOST_Y = "00000000-0000-4000-8000-000000000104";
+  const KEY = "ROW21_PERSONAL_VARIABLE";
+  const PERSONAL_BEFORE = "personal-before";
+  const PERSONAL_AFTER = "personal-after";
+  const X_OWN_VALUE = "kept-on-x";
+  const HELD_ID = "00000000-0000-4000-8000-000000000121";
+  const HELD_REVISION = 10;
+  const PERSONAL_ROW_REVISION = 3;
+  const APPLIED_REVISION = 11;
+
+  it("applies Y's edit to X while X keeps its own value and note", async () => {
+    const previousMemoryName =
+      useSettingsSaveMemoryStore.persist.getOptions().name;
+    useSettingsSaveMemoryStore.persist.setOptions({
+      name: settingsSaveMemoryKey(ACCOUNT),
+    });
+    useSettingsSaveMemoryStore.persist.clearStorage();
+    useSettingsSaveMemoryStore.setState({ records: {}, inFlight: {} });
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: ACCOUNT,
+        userName: "Row 21",
+        email: "row21@example.test",
+      },
+      { userId: ACCOUNT, username: "row21" },
+      [],
+    );
+
+    const personalDirectory: EnvironmentDirectoryResult = {
+      kind: "ok",
+      list: {
+        environments: [
+          {
+            environmentId: PERSONAL_ENVIRONMENT,
+            ownerKind: "user",
+            ownerId: ACCOUNT,
+            roomId: "room-personal",
+            label: "Personal",
+          },
+        ],
+      },
+    };
+    const hostsResponse = (includeBinding: boolean) =>
+      authnHostsResponseSchema.parse({
+        hosts: [HOST_X, HOST_Y].map((hostId) => ({
+          hostId,
+          hostName: hostId === HOST_X ? "Computer X" : "Computer Y",
+          hostKind: "personal",
+          hostVersion: "1.5.4",
+          bindingGeneration: 1,
+          desiredRevision: personalRevision,
+          receivedRevision: personalRevision,
+          appliedRevision: personalRevision,
+          reportedAt: 1,
+          online: true,
+          lastSeenAt: 1,
+          remoteAccess: { enabled: true, epoch: 0 },
+          setupStage: null,
+          purgePending: false,
+          minimumHostVersion: null,
+          localOverrides: [],
+          items: [],
+          setupAttempts: [],
+          ...(includeBinding
+            ? {
+                environmentId: PERSONAL_ENVIRONMENT,
+                sharingGeneration: 1,
+                holdsBotSlot: false,
+                enrolledByUserId: ACCOUNT,
+                boundAt: null,
+                hostPlatform: "darwin-arm64",
+              }
+            : {}),
+        })),
+      });
+    const personalRows = new Map<string, AuthnItemRow>();
+    const makePersonalRow = (
+      key: string,
+      value: string,
+      revision: number,
+    ): AuthnItemRow => ({
+      kind: "variable",
+      key,
+      os: "any",
+      value: { value },
+      revision,
+      updatedAt: revision,
+      writtenBy: { source: "live", hostId: null, hostName: null },
+    });
+    personalRows.set(
+      KEY,
+      makePersonalRow(KEY, PERSONAL_BEFORE, PERSONAL_ROW_REVISION),
+    );
+
+    const xValues = new Map<string, string>([[KEY, PERSONAL_BEFORE]]);
+    const yValues = new Map<string, string>([[KEY, PERSONAL_BEFORE]]);
+    const valuesByHost = new Map<string, Map<string, string>>([
+      [HOST_X, xValues],
+      [HOST_Y, yValues],
+    ]);
+    const localOverridesByHost = new Map<string, readonly LocalOverride[]>([
+      [
+        HOST_X,
+        [
+          {
+            target: { kind: "variable", key: KEY },
+            os: "any",
+            value: X_OWN_VALUE,
+            setAt: 1,
+          },
+        ],
+      ],
+      [HOST_Y, []],
+    ]);
+    const statusRevisionByHost = new Map<string, number>([
+      [HOST_X, HELD_REVISION],
+      [HOST_Y, HELD_REVISION],
+    ]);
+    let personalRevision = HELD_REVISION;
+    let ySetRequest: ConfigEnvSetRequest | null = null;
+    let ySaveId: string | null = null;
+    let ySetWasLocalOverride = false;
+    let holdConsumed = false;
+    let applySucceeded = false;
+    let resolveApply: (value: boolean) => void = () => undefined;
+    const applyCompleted = new Promise<boolean>((resolve) => {
+      resolveApply = resolve;
+    });
+    let resolvePersonalRead: (value: boolean) => void = () => undefined;
+    const personalReadAfterApply = new Promise<boolean>((resolve) => {
+      resolvePersonalRead = resolve;
+    });
+
+    const personalEnvironment = "/" + environmentPath(PERSONAL_ENVIRONMENT);
+    const applyPrefix = personalEnvironment + "/review/held/";
+    const failedApplyAnswer = (
+      status: number,
+      code: string,
+      message: string,
+    ): EnvironmentTransportAnswer => {
+      resolveApply(false);
+      return {
+        status,
+        text: JSON.stringify({ error: { code, message } }),
+      };
+    };
+    const readPersonalHosts = (
+      request: EnvironmentTransportRequest,
+      url: URL,
+    ): EnvironmentTransportAnswer | null => {
+      const isHostsRoute =
+        request.method === "GET" &&
+        url.pathname === personalEnvironment + "/hosts";
+      const hasValidQuery =
+        url.searchParams.size === 0 ||
+        (url.searchParams.size === 1 &&
+          url.searchParams.get("include") === "binding");
+      if (!isHostsRoute || !hasValidQuery) return null;
+      const includeBinding = url.searchParams.get("include") === "binding";
+      return {
+        status: 200,
+        text: JSON.stringify(hostsResponse(includeBinding)),
+      };
+    };
+    const readPersonalItems = (
+      request: EnvironmentTransportRequest,
+      url: URL,
+    ): EnvironmentTransportAnswer | null => {
+      const isItemsRoute =
+        request.method === "GET" &&
+        url.pathname === personalEnvironment + "/items" &&
+        url.searchParams.size === 1 &&
+        url.searchParams.has("kind");
+      if (!isItemsRoute) return null;
+      const kind = url.searchParams.get("kind");
+      let body: { readonly items: AuthnItemRow[] };
+      try {
+        body = authnItemsResponseSchema.parse({
+          items: [...personalRows.values()].filter((row) => row.kind === kind),
+        });
+      } catch (error) {
+        if (applySucceeded && kind === "variable") resolvePersonalRead(false);
+        throw error;
+      }
+      if (applySucceeded && kind === "variable") {
+        const appliedRow = body.items.find((row) => row.key === KEY);
+        resolvePersonalRead(
+          appliedRow !== undefined &&
+            appliedRow.revision === APPLIED_REVISION &&
+            variablePayloadText(appliedRow.value) === PERSONAL_AFTER &&
+            appliedRow.writtenBy.source === "live" &&
+            appliedRow.writtenBy.hostId === null &&
+            appliedRow.writtenBy.hostName === null,
+        );
+      }
+      return { status: 200, text: JSON.stringify(body) };
+    };
+    const readPersonalReview = (
+      request: EnvironmentTransportRequest,
+      url: URL,
+    ): EnvironmentTransportAnswer | null => {
+      const isReviewRoute =
+        request.method === "GET" &&
+        url.pathname === personalEnvironment + "/review" &&
+        url.searchParams.size === 1 &&
+        url.searchParams.get("include") === "operation";
+      if (!isReviewRoute) return null;
+      const held =
+        ySetRequest === null || ySaveId === null || holdConsumed
+          ? []
+          : [
+              {
+                type: "held",
+                heldId: HELD_ID,
+                revision: HELD_REVISION,
+                kind: "variable",
+                key: ySetRequest.key,
+                os: "any",
+                hostId: HOST_Y,
+                sharingGeneration: 1,
+                hostName: "Computer Y",
+                heldAt: 2,
+                live: {
+                  revision: PERSONAL_ROW_REVISION,
+                  value: { value: PERSONAL_BEFORE },
+                },
+                op: "put",
+                value: { value: ySetRequest.value },
+              },
+            ];
+      const body = {
+        review: {
+          hosts: [],
+          applied: [],
+          needsYou: held,
+          staysOnOneHost: [],
+          unrecognisedUploaded: false,
+        },
+      };
+      authnOperationReviewResponseSchema.parse(body);
+      return { status: 200, text: JSON.stringify(body) };
+    };
+    const applyPersonalValue = (
+      sourceRequest: ConfigEnvSetRequest,
+    ): EnvironmentTransportAnswer => {
+      const value = sourceRequest.value;
+      if (value === null) throw new Error("expected a variable value");
+      const appliedRow = makePersonalRow(
+        sourceRequest.key,
+        value,
+        APPLIED_REVISION,
+      );
+      const response = authnItemWriteResponseSchema.parse({
+        item: appliedRow,
+        replayed: false,
+        revision: APPLIED_REVISION,
+      });
+      if (response.item === null) {
+        throw new Error("expected the applied variable row");
+      }
+      personalRows.set(sourceRequest.key, response.item);
+      personalRevision = APPLIED_REVISION;
+      const xHostValues = valuesByHost.get(HOST_X);
+      if (xHostValues === undefined) {
+        throw new Error("missing X variable state");
+      }
+      xHostValues.set(sourceRequest.key, value);
+      statusRevisionByHost.set(HOST_X, APPLIED_REVISION);
+      holdConsumed = true;
+      applySucceeded = true;
+      resolveApply(true);
+      return { status: 200, text: JSON.stringify(response) };
+    };
+    const applyHeldPayload = (
+      request: EnvironmentTransportRequest,
+      heldId: string,
+    ): EnvironmentTransportAnswer => {
+      const parsedRequest = z
+        .object({
+          revision: z.number().int().nonnegative(),
+          expectedLiveRevision: z.number().int().nonnegative().nullable(),
+        })
+        .strict()
+        .safeParse(request.body);
+      if (!parsedRequest.success) {
+        return failedApplyAnswer(400, "bad_request", "Invalid Apply request");
+      }
+      const applyRequest = parsedRequest.data;
+      const sourceRequest = ySetRequest;
+      if (heldId !== HELD_ID || holdConsumed || sourceRequest === null) {
+        return failedApplyAnswer(404, "not_found", "Held change not found");
+      }
+      if (applyRequest.revision !== HELD_REVISION) {
+        const conflict = authnHeldApplyConflictSchema.parse({
+          code: "superseded",
+        });
+        resolveApply(false);
+        return { status: 409, text: JSON.stringify(conflict) };
+      }
+      const currentRow = personalRows.get(KEY) ?? null;
+      if (
+        applyRequest.expectedLiveRevision !== (currentRow?.revision ?? null)
+      ) {
+        const conflict = authnHeldApplyConflictSchema.parse({
+          code: "revision_conflict",
+          current: currentRow,
+        });
+        resolveApply(false);
+        return { status: 409, text: JSON.stringify(conflict) };
+      }
+      return applyPersonalValue(sourceRequest);
+    };
+    const applyPersonalReview = (
+      request: EnvironmentTransportRequest,
+      url: URL,
+    ): EnvironmentTransportAnswer | null => {
+      const isApplyPath =
+        url.pathname.includes("/review/held/") &&
+        url.pathname.endsWith("/apply");
+      if (!isApplyPath) return null;
+      const hasValidRoute =
+        request.method === "POST" &&
+        url.pathname.startsWith(applyPrefix) &&
+        url.searchParams.size === 0;
+      if (!hasValidRoute) {
+        return failedApplyAnswer(404, "not_found", "Held change not found");
+      }
+      const applyPath = url.pathname.slice(applyPrefix.length);
+      const heldId = applyPath.slice(0, -"/apply".length);
+      return applyHeldPayload(request, heldId);
+    };
+    const answerPersonalRequest = (
+      request: EnvironmentTransportRequest,
+    ): EnvironmentTransportAnswer => {
+      const url = new URL(request.url);
+      const answer =
+        readPersonalHosts(request, url) ??
+        readPersonalItems(request, url) ??
+        readPersonalReview(request, url) ??
+        applyPersonalReview(request, url);
+      if (answer === null)
+        throw new Error("unexpected Personal settings route");
+      return answer;
+    };
+    const cloud: EnvironmentCloud = {
+      authnBaseUrl: "https://authn.test/",
+      bearer: { kind: "cloud", getBearerToken: () => "fixture-bearer" },
+      onOriginSignIn: () => true,
+      transport: (request) => {
+        try {
+          return Promise.resolve(answerPersonalRequest(request));
+        } catch (error) {
+          return Promise.reject(
+            error instanceof Error
+              ? error
+              : new Error("Personal settings transport failed"),
+          );
+        }
+      },
+    };
+
+    const fixtureByHost = new Map<string, ConfigHostFixture>();
+    const coordinator = createSettingsSaveCoordinator({
+      accountId: () => ACCOUNT,
+      cloud: () => cloud,
+      readProposals: async (hostId) => {
+        const fixture = fixtureByHost.get(hostId);
+        if (fixture === undefined) return null;
+        const request = environmentProposalsV12.requestSchema.parse({});
+        const response = await fixture.client.request(
+          "environment.proposals",
+          request,
+        );
+        return environmentProposalsV12.responseSchema.parse(response);
+      },
+      now: () => 10,
+      schedule: () => () => undefined,
+    });
+
+    const commonMethods = [
+      ...CONFIG_SHELL_METHODS,
+      "environment.status",
+      "environment.host.read",
+      "environment.proposals",
+      "environment.localOverrides",
+    ];
+    const handlersFor = (hostId: string): MockHandlerMap<HostRpcRegistry> => ({
+      "environment.status": (request) => {
+        environmentStatusV13.requestSchema.parse(request);
+        const revision = statusRevisionByHost.get(hostId);
+        if (revision === undefined) throw new Error("missing host revision");
+        return environmentStatusV13.responseSchema.parse(
+          environmentStatusFixture({
+            principal: { kind: "personal" },
+            desiredRevision: revision,
+            receivedRevision: revision,
+            appliedRevision: revision,
+          }),
+        );
+      },
+      "environment.host.read": (request) => {
+        environmentHostReadRequestSchema.parse(request);
+        return environmentHostReadResponseSchemaV11.parse({
+          hostId,
+          environment: {
+            environmentId: PERSONAL_ENVIRONMENT,
+            ownerKind: "user",
+            ownerId: ACCOUNT,
+            roomId: "room-" + hostId,
+            label: "Personal",
+          },
+          explicit: false,
+          enrolledByUserId: ACCOUNT,
+          canUnbind: false,
+          sharingGeneration: 1,
+        });
+      },
+      "environment.proposals": (request) => {
+        environmentProposalsV12.requestSchema.parse(request);
+        const proposals =
+          hostId === HOST_Y && ySetRequest !== null && ySaveId !== null
+            ? [
+                {
+                  proposal: {
+                    proposalId: ySaveId,
+                    environmentId: PERSONAL_ENVIRONMENT,
+                    hostId,
+                    sharingGeneration: 1,
+                    kind: "variable",
+                    key: ySetRequest.key,
+                    os: "any",
+                    operation: "put",
+                    state: "proposed",
+                  },
+                  localOverride: ySetWasLocalOverride,
+                  deliveredRevision: PERSONAL_ROW_REVISION,
+                  promotion: {
+                    saveId: ySaveId,
+                    heldRevision: HELD_REVISION,
+                  },
+                },
+              ]
+            : [];
+        return environmentProposalsV12.responseSchema.parse({ proposals });
+      },
+      "environment.localOverrides": (request) => {
+        environmentLocalOverridesRequestSchema.parse(request);
+        return environmentLocalOverridesResponseSchema.parse({
+          overrides: localOverridesByHost.get(hostId) ?? [],
+        });
+      },
+      "config.env.list": (request) => {
+        configEnvListRequestSchema.parse(request);
+        const values = valuesByHost.get(hostId);
+        if (values === undefined)
+          throw new Error("missing host variable state");
+        return configEnvListResponseSchema.parse({
+          entries: [...values.entries()].map(([key, value]) => ({
+            key,
+            value,
+          })),
+        });
+      },
+      "config.env.set": (request) => {
+        const parsed = configEnvSetRequestSchema.parse(request);
+        const values = valuesByHost.get(hostId);
+        if (values === undefined)
+          throw new Error("missing host variable state");
+        if (parsed.value === null) throw new Error("expected a Personal value");
+        values.set(parsed.key, parsed.value);
+        if (hostId === HOST_Y) {
+          ySetRequest = parsed;
+          ySetWasLocalOverride = true;
+        }
+        return configEnvSetResponseSchema.parse({
+          key: parsed.key,
+          value: parsed.value,
+        });
+      },
+    });
+
+    const methodsWithLocalOverrides = [
+      ...commonMethods,
+      "config.env.localOverride.clear",
+    ];
+    settingsSaveCloudMock.current = () => cloud;
+    const x = renderShellPanelOverRpc({
+      hostId: HOST_X,
+      hostName: "Computer X",
+      liveLocalOverrides: true,
+      liveEnvironmentStatus: true,
+      methods: methodsWithLocalOverrides,
+      environmentDirectory: personalDirectory,
+      overrideHandlers: handlersFor(HOST_X),
+      saveCoordinator: coordinator,
+    });
+    fixtureByHost.set(HOST_X, x);
+
+    try {
+      const xField = await within(x.container).findByLabelText(
+        "Value for " + KEY,
+      );
+      const xNote = await within(x.container).findByTestId("env-row-own-value");
+      const xNoteTextBefore = xNote.textContent;
+      const xStartedFromPersonal =
+        inputValue(xField) === PERSONAL_BEFORE &&
+        xNoteTextBefore.includes("Computer X");
+      expect(xStartedFromPersonal).toBe(true);
+      const xKeepWasPresentBefore = xNoteTextBefore.includes(X_OWN_VALUE);
+      expect(xKeepWasPresentBefore).toBe(true);
+
+      const initialXStatus = nextEnvironmentStatusRevision(x, HELD_REVISION);
+      await act(async () => {
+        await x.queryClient.invalidateQueries({
+          queryKey: queryKeys.hostMethod(HOST_X, "environment.status", {}),
+          exact: true,
+        });
+      });
+      const xStartedAtInitialRevision = await initialXStatus;
+      expect(xStartedAtInitialRevision).toBe(true);
+
+      const y = renderShellPanelOverRpc({
+        hostId: HOST_Y,
+        hostName: "Computer Y",
+        localOverrides: [],
+        methods: methodsWithLocalOverrides,
+        overrideHandlers: handlersFor(HOST_Y),
+        saveCoordinator: coordinator,
+      });
+      fixtureByHost.set(HOST_Y, y);
+      const yField = await within(y.container).findByLabelText(
+        "Value for " + KEY,
+      );
+      const yStartedFromPersonal = inputValue(yField) === PERSONAL_BEFORE;
+      expect(yStartedFromPersonal).toBe(true);
+      const yBaselineEditBase = nextSettingsSaveItemValue(
+        y.queryClient,
+        PERSONAL_ENVIRONMENT,
+        ACCOUNT,
+        {
+          key: KEY,
+          value: PERSONAL_BEFORE,
+          revision: PERSONAL_ROW_REVISION,
+        },
+      );
+      const yBaselineIsBound = await yBaselineEditBase;
+      expect(yBaselineIsBound).toBe(true);
+
+      const ySetResponse = nextSuccessfulHostResponse(y, "config.env.set");
+      const ySetRequestWasCorrelated = captureConfigEnvSetRequest(
+        y,
+        (request, saveId) => {
+          ySetRequest = request;
+          ySaveId = saveId;
+        },
+      );
+      const yReadAfterEdit = nextConfigEnvListMatch(
+        y,
+        KEY,
+        PERSONAL_AFTER,
+        () => ySetRequest !== null,
+      );
+      const proposalResponse = nextSuccessfulHostResponse(
+        y,
+        "environment.proposals",
+      );
+      const yAppliedEditBase = nextSettingsSaveItemValue(
+        y.queryClient,
+        PERSONAL_ENVIRONMENT,
+        ACCOUNT,
+        {
+          key: KEY,
+          value: PERSONAL_AFTER,
+          revision: APPLIED_REVISION,
+        },
+      );
+
+      fireEvent.change(yField, { target: { value: PERSONAL_AFTER } });
+      fireEvent.blur(yField);
+
+      const ySetRequestHasSaveCorrelation = await ySetRequestWasCorrelated;
+      expect(ySetRequestHasSaveCorrelation).toBe(true);
+      const yWriteCompleted = await ySetResponse;
+      expect(yWriteCompleted).toBe(true);
+      const yReadHasPersonalEdit = await yReadAfterEdit;
+      expect(yReadHasPersonalEdit).toBe(true);
+      const proposalReadCompleted = await proposalResponse;
+      expect(proposalReadCompleted).toBe(true);
+      const personalProposalWasApplied = await applyCompleted;
+      expect(personalProposalWasApplied && applySucceeded).toBe(true);
+      const personalReadHasAppliedEdit = await personalReadAfterApply;
+      expect(personalReadHasAppliedEdit).toBe(true);
+      const yPersonalEditBaseWasPublished = await yAppliedEditBase;
+      expect(yPersonalEditBaseWasPublished).toBe(true);
+
+      const xReadAfterEdit = nextConfigEnvListMatch(
+        x,
+        KEY,
+        PERSONAL_AFTER,
+        () => true,
+      );
+      const xOverrideReadAfterEdit = nextSuccessfulHostResponse(
+        x,
+        "environment.localOverrides",
+      );
+      const xConfigListQueryKey = queryKeys.hostMethod(
+        HOST_X,
+        "config.env.list",
+        {},
+      );
+      const xConfigListUpdateCount =
+        x.queryClient.getQueryState(xConfigListQueryKey)?.dataUpdateCount ?? 0;
+      const xConfigListUpdated = queryUpdatedBeyond(
+        x.queryClient,
+        "config.env.list",
+        xConfigListUpdateCount,
+      );
+      const xEditorCommittedUpdatedRow = nextEnvironmentEditorCommit(
+        HOST_X,
+        KEY,
+        PERSONAL_AFTER,
+      );
+      const appliedXStatus = nextEnvironmentStatusRevision(x, APPLIED_REVISION);
+      await act(async () => {
+        await x.queryClient.invalidateQueries({
+          queryKey: queryKeys.hostMethod(HOST_X, "environment.status", {}),
+          exact: true,
+        });
+      });
+      const xReceivedAndAppliedRevision = await appliedXStatus;
+      expect(xReceivedAndAppliedRevision).toBe(true);
+      const xReadHasPersonalEdit = await xReadAfterEdit;
+      expect(xReadHasPersonalEdit).toBe(true);
+      const xOverrideReadCompleted = await xOverrideReadAfterEdit;
+      expect(xOverrideReadCompleted).toBe(true);
+      await xConfigListUpdated;
+      await xEditorCommittedUpdatedRow;
+      const xFieldShowsPersonalEdit = within(x.container).getByLabelText(
+        "Value for " + KEY,
+      );
+      const xFieldHasPersonalEdit =
+        inputValue(xFieldShowsPersonalEdit) === PERSONAL_AFTER;
+      expect(xFieldHasPersonalEdit).toBe(true);
+
+      const xNoteAfterEdit = within(x.container).getByTestId(
+        "env-row-own-value",
+      );
+      const xNoteTextAfter = xNoteAfterEdit.textContent;
+      const xNoteIdentifiesX = xNoteTextAfter.includes("Computer X");
+      const xOwnValueRemains = xNoteTextAfter.includes(X_OWN_VALUE);
+      const xKeepActionRemains = xNoteTextAfter.includes("Use everywhere");
+      expect(xNoteIdentifiesX).toBe(true);
+      expect(xOwnValueRemains).toBe(true);
+      expect(xKeepActionRemains).toBe(true);
+      y.unmountPanel();
+    } finally {
+      coordinator.stop();
+      x.unmountPanel();
+      useSettingsSaveMemoryStore.persist.clearStorage();
+      useSettingsSaveMemoryStore.setState({ records: {}, inFlight: {} });
+      useSettingsSaveMemoryStore.persist.setOptions({
+        name: previousMemoryName,
+      });
+      useAuthStore.setState(useAuthStore.getInitialState(), true);
+    }
+  });
+});
 describe("<ShellSettingsPanel /> an accepted variable write", () => {
   function renderWithEnvRead(
     transport: "rpc" | "bridge",
