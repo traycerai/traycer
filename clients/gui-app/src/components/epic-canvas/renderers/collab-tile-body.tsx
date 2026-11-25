@@ -1,3 +1,6 @@
+import { useStore } from "zustand";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { isEditableRole } from "@/lib/epic-permissions";
 import {
   FloatingDraftPopover,
   ThreadAnchorHoverPopover,
@@ -41,7 +44,6 @@ import { startCommentDraft } from "@/lib/comments/start-comment-draft";
 import {
   useChildIdsOf,
   useEpicArtifactBodyAvailability,
-  useEpicArtifactBodyReadOnly,
   useEpicArtifactBodySubscribeAnswered,
   useEpicArtifactBodySyncing,
   useEpicArtifactBodyAwareness,
@@ -403,8 +405,12 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   } = props;
   const role = useEpicPermissionRole();
   const profile = useAuthStore((s) => s.profile);
-  const bodyReadOnly = useEpicArtifactBodyReadOnly(node.id);
-  const editable = !bodyReadOnly && (role === "owner" || role === "editor");
+  const { store } = useOpenEpicHandle();
+  const bodyReadOnly = useStore(
+    store,
+    (state) => state.artifactRooms.readOnlyByArtifactId?.[node.id] === true,
+  );
+  const editable = !bodyReadOnly && isEditableRole(role);
   const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(
     null,
@@ -438,6 +444,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const commentsUnavailable = useEpicCommentsHaveNoUsableRoom();
   const commentsSupported =
     commentArtifactKind !== null && !commentsUnavailable;
+  const canDraftComment = commentsSupported && !bodyReadOnly;
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
   const activeThreadId = useActiveThreadId(epicId);
   const hoverThreadId = useHoverThreadId(epicId);
@@ -471,9 +478,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     options: { enabled: commentsSupported, laneDroppedAt },
   });
   const clearFlashThread = useCommentThreadsStore((s) => s.clearFlashThread);
-  useEffect(() => {
-    if (commentsUnavailable) setDraft(epicId, null);
-  }, [commentsUnavailable, epicId, setDraft]);
+
   // The state lane's records for this artifact, or `null` where it has said
   // nothing. Resolved once here and fed to the decoration sets AND the hover
   // preview below, because they must agree by construction: a thread the
@@ -519,6 +524,10 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     () => draftRangeOwnedByTile(draft, tileId, node.id),
     [draft, tileId, node.id],
   );
+  useEffect(() => {
+    if (commentsUnavailable || (bodyReadOnly && ownedDraftRange !== null))
+      setDraft(epicId, null);
+  }, [bodyReadOnly, commentsUnavailable, epicId, ownedDraftRange, setDraft]);
 
   // Stable callback for the keymap extension. Reads via closure; the
   // extension caches it on `this.options` so a callback identity flip
@@ -528,14 +537,14 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const onCommentShortcut = useMemo<
     ((editor: Editor) => boolean) | null
   >(() => {
-    if (!commentsSupported) return null;
+    if (!canDraftComment) return null;
     return (ed) =>
       startCommentDraft(
         ed,
         { epicId, tabId: viewTabId, tileId, artifactId: node.id },
         setDraft,
       ).started;
-  }, [commentsSupported, epicId, viewTabId, tileId, node.id, setDraft]);
+  }, [canDraftComment, epicId, viewTabId, tileId, node.id, setDraft]);
 
   const hasChildren = useChildIdsOf(node.id).length > 0;
   const editor = useCollabTileEditor({
@@ -584,7 +593,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   }, [editor, isActive, editable, node.id, node.instanceId, node.type]);
 
   const commentAction = useMemo<ArtifactCommentAction | null>(() => {
-    if (!commentsSupported || editor === null) return null;
+    if (!canDraftComment || editor === null) return null;
     return {
       onStart: () => {
         startCommentDraft(
@@ -594,7 +603,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
         );
       },
     };
-  }, [commentsSupported, editor, epicId, viewTabId, tileId, node.id, setDraft]);
+  }, [canDraftComment, editor, epicId, viewTabId, tileId, node.id, setDraft]);
 
   // Send to chat: the excerpt is frozen the moment the button is pressed and
   // kept tile-local - a sibling pane editing the same artifact must not adopt
@@ -807,15 +816,17 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
         </div>
         {editor !== null && commentsSupported ? (
           <>
-            <FloatingDraftPopover
-              epicId={epicId}
-              hostClient={tabHostClient}
-              artifactType={commentArtifactKind}
-              artifactId={node.id}
-              tileId={tileId}
-              editor={editor}
-              onCreated={onActivateThread}
-            />
+            {canDraftComment ? (
+              <FloatingDraftPopover
+                epicId={epicId}
+                hostClient={tabHostClient}
+                artifactType={commentArtifactKind}
+                artifactId={node.id}
+                tileId={tileId}
+                editor={editor}
+                onCreated={onActivateThread}
+              />
+            ) : null}
             <ThreadAnchorHoverPopover
               epicId={epicId}
               hostClient={tabHostClient}

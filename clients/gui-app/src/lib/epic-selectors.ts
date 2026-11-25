@@ -2306,13 +2306,6 @@ export function useEpicArtifactBodyAvailability(
   });
 }
 
-export function useEpicArtifactBodyReadOnly(artifactId: string): boolean {
-  const handle = useOpenEpicHandle();
-  return useStore(handle.store, (state) =>
-    Object.hasOwn(state.artifactRooms.readOnlyByArtifactId ?? {}, artifactId),
-  );
-}
-
 /**
  * Whether the host is serving `artifactId`'s body from its local copy while it
  * reconciles that copy with the cloud (`artifact.subscribe@1.1`'s `bodySync`).

@@ -103,6 +103,7 @@ function makeWsStreamClient(
 
 interface Seen {
   readonly doc: string[];
+  readonly readOnly: boolean[];
   readonly docUpdate: string[];
   readonly docAck: string[];
   readonly awareness: string[];
@@ -113,6 +114,7 @@ function attach(): { session: StubSession; seen: Seen } {
   const session = new StubSession();
   const seen: Seen = {
     doc: [],
+    readOnly: [],
     docUpdate: [],
     docAck: [],
     awareness: [],
@@ -125,7 +127,10 @@ function attach(): { session: StubSession; seen: Seen } {
     authorityEpoch: EPOCH,
     seedOfferProvider: () => null,
     callbacks: {
-      onDoc: (frame) => seen.doc.push(frame.artifactId),
+      onDoc: (frame) => {
+        seen.doc.push(frame.artifactId);
+        seen.readOnly.push("readOnly" in frame && frame.readOnly === true);
+      },
       onDocUpdate: (frame) => seen.docUpdate.push(frame.artifactId),
       onDocAck: (frame) => seen.docAck.push(frame.artifactId),
       onAwareness: (frame) => seen.awareness.push(frame.artifactId),
@@ -169,7 +174,28 @@ describe("ArtifactStreamClient - frame addressing", () => {
     // The control. Without it a guard that dropped EVERYTHING would pass the
     // refusals below while breaking the lane outright.
     expect(seen.doc).toEqual([OURS]);
+    expect(seen.readOnly).toEqual([false]);
     expect(seen.docAck).toEqual([OURS]);
+  });
+
+  it("delivers the negotiated read-only mark on a document seed", () => {
+    const { session, seen } = attach();
+
+    session.emitFrame(
+      {
+        kind: "doc",
+        authorityEpoch: EPOCH,
+        artifactId: OURS,
+        docGuid: "guid-inline",
+        stateVectorBase64: "",
+        hasBinaryPayload: true,
+        readOnly: true,
+      },
+      bytes,
+    );
+
+    expect(seen.doc).toEqual([OURS]);
+    expect(seen.readOnly).toEqual([true]);
   });
 
   it("drops every non-pong frame naming a different artifact", () => {
@@ -234,6 +260,7 @@ describe("ArtifactStreamClient - frame addressing", () => {
     // corruptions the guard exists for.
     expect(seen).toEqual({
       doc: [],
+      readOnly: [],
       docUpdate: [],
       docAck: [],
       awareness: [],

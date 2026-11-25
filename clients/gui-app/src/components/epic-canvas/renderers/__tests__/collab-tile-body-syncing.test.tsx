@@ -22,10 +22,14 @@ import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { CollabTileBody } from "../collab-tile-body";
 
-const { editorLife, fakeEditor } = vi.hoisted(() => ({
-  editorLife: { mounts: 0, unmounts: 0 },
-  fakeEditor: { isEmpty: false, id: "fake-editor" },
-}));
+const { editorLife, fakeEditor, editorOptions, permissionRole } = vi.hoisted(
+  () => ({
+    editorLife: { mounts: 0, unmounts: 0 },
+    fakeEditor: { isEmpty: false, id: "fake-editor" },
+    editorOptions: [] as boolean[],
+    permissionRole: { value: "owner" },
+  }),
+);
 
 const ARTIFACT_ID = "artifact-1";
 const TEST_ID = "collab-tile";
@@ -47,7 +51,10 @@ vi.mock("@tiptap/react", () => ({
 }));
 
 vi.mock("../use-collab-tile-editor", () => ({
-  useCollabTileEditor: () => fakeEditor,
+  useCollabTileEditor: (options: { readonly editable: boolean }) => {
+    editorOptions.push(options.editable);
+    return fakeEditor;
+  },
 }));
 
 vi.mock("@/lib/epic-selectors", async (importOriginal) => {
@@ -61,7 +68,7 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => {
     useEpicArtifactBodySubscribeAnswered: () => true,
     useEpicSnapshotLoaded: () => true,
     useChildIdsOf: () => [],
-    useEpicPermissionRole: () => "owner",
+    useEpicPermissionRole: () => permissionRole.value,
     useOpenEpicId: () => "epic-1",
     useEpicCommentsHaveNoUsableRoom: () => false,
   };
@@ -145,6 +152,7 @@ type StoreState = {
   artifactRooms: {
     stateByArtifactId: Record<string, "ready">;
     bodySyncingByArtifactId: Record<string, true>;
+    readOnlyByArtifactId?: Readonly<Record<string, true>>;
   };
 };
 
@@ -213,6 +221,8 @@ describe("CollabTileBody syncing strip", () => {
   beforeEach(() => {
     editorLife.mounts = 0;
     editorLife.unmounts = 0;
+    editorOptions.length = 0;
+    permissionRole.value = "owner";
   });
 
   afterEach(() => {
@@ -271,5 +281,41 @@ describe("CollabTileBody syncing strip", () => {
     mountTile(handle);
     expect(screen.getByTestId(STRIP_ID)).toBeTruthy();
     expect(screen.getByTestId("editor-content")).toBeTruthy();
+  });
+
+  it("locks an Editor only while the served body carries the read-only mark", () => {
+    permissionRole.value = "editor";
+    const handle = makeHandle();
+    const tile = mountTile(handle);
+    expect(editorOptions.at(-1)).toBe(true);
+
+    act(() => {
+      handle.store.setState((state) => ({
+        artifactRooms: {
+          ...state.artifactRooms,
+          readOnlyByArtifactId: { [ARTIFACT_ID]: true },
+        },
+      }));
+    });
+    expect(editorOptions.at(-1)).toBe(false);
+
+    act(() => {
+      handle.store.setState((state) => ({
+        artifactRooms: {
+          ...state.artifactRooms,
+          readOnlyByArtifactId: {},
+        },
+      }));
+    });
+    expect(editorOptions.at(-1)).toBe(true);
+    tile.unmount();
+  });
+
+  it("keeps a Viewer read-only when the stream has no body-specific mark", () => {
+    permissionRole.value = "viewer";
+    const handle = makeHandle();
+    const tile = mountTile(handle);
+    expect(editorOptions.at(-1)).toBe(false);
+    tile.unmount();
   });
 });
