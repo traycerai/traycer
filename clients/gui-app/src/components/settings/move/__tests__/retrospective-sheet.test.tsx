@@ -12,7 +12,7 @@ import {
   APPROVE,
   DISCARD,
   RETROSPECTIVE_GOT_IT,
-  type HeldApplyChoice,
+  type PersonalHeldChoice,
 } from "@/components/settings/move/retrospective-copy";
 import { sharedInUseFromItems } from "@/components/settings/move/review-inventory";
 import {
@@ -62,7 +62,7 @@ interface SheetOverrides {
   readonly shownAt: number | null;
   readonly onShown: () => void;
   readonly onAcknowledged: () => void;
-  readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
+  readonly onHeldApply: (heldId: string, choice: PersonalHeldChoice) => void;
   readonly onOpenChange: (open: boolean) => void;
   readonly onMoveToPersonal: () => void;
   readonly onStopSharing: (() => void) | null;
@@ -87,6 +87,7 @@ function sheetElement(overrides: SheetOverrides): ReactNode {
       held={[HELD_HOOK]}
       stillLocal={STILL_LOCAL}
       heldPendingId={overrides.heldPendingId}
+      heldActions={null}
       heldApproveRefused={new Set()}
       heldIssue={null}
       inventoryRead={null}
@@ -335,6 +336,7 @@ describe("RetrospectiveSheet", () => {
         held={[]}
         stillLocal={STILL_LOCAL}
         heldPendingId={null}
+        heldActions={null}
         heldApproveRefused={new Set()}
         heldIssue={null}
         inventoryRead={null}

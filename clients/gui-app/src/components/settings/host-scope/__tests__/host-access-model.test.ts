@@ -67,6 +67,7 @@ function reviewEntry(overrides: Partial<ReviewHeldEntry>): ReviewHeldEntry {
     value: null,
     op: "put",
     heldRevision: 1,
+    sharingGeneration: null,
     liveRevision: null,
     ...overrides,
   };

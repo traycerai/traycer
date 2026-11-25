@@ -84,6 +84,8 @@ export type ReviewHeldEntry = EnvironmentReviewEntryV12 & {
   readonly op: "put" | "delete";
   readonly heldRevision: number;
   readonly liveRevision: number | null;
+  /** Host-proposal holds carry a generation. Historical Move holds do not. */
+  readonly sharingGeneration: number | null;
 };
 
 const NO_HELD_FACTS = {
@@ -149,6 +151,7 @@ export async function readProjectedReviewHolds<Projection>(
       op: entry.op,
       heldRevision: entry.revision,
       liveRevision: entry.live?.revision ?? null,
+      sharingGeneration: entry.sharingGeneration,
     };
     holds.push(
       project({ entry: held, proposed: entry.value, current: entry.live }),

@@ -2,25 +2,28 @@ import { useQueryClient } from "@tanstack/react-query";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { useCallback, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { ReviewChoiceOutcome } from "@traycer-clients/shared/environment/environment-review";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import {
-  stillLocalFromPlanes,
-  type EnvironmentPlanes,
-} from "@/components/settings/move/cohort-rows";
+import { stillLocalFromPlanes } from "@/components/settings/move/cohort-rows";
 import { heldRowsFromReview } from "@/components/settings/move/held-from-review";
 import {
   appliedOnHostNames,
   roomSharedLine,
   sharedInUseFromItems,
 } from "@/components/settings/move/review-inventory";
-import type { HeldApplyChoice } from "@/components/settings/move/retrospective-copy";
+import {
+  DISCARD,
+  HELD_COMMAND_CHOICES,
+  keepOnComputerLabel,
+  type HeldChoiceAction,
+  type PersonalHeldChoice,
+} from "@/components/settings/move/retrospective-copy";
 import {
   RetrospectiveSheet,
   type HeldRow,
-  type StillLocalRow,
 } from "@/components/settings/move/retrospective-sheet";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
 import {
@@ -36,6 +39,7 @@ import {
   useEnvironmentStatusRead,
   type EnvironmentRead,
 } from "@/hooks/environment/use-environment-reads";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
@@ -77,7 +81,12 @@ export function RetrospectiveSession(props: {
   const appliedOn = useAppliedOnHosts(props.open);
   const record = useEnvironmentReviewRecordMutation(props.client);
   const entries = review.data?.entries ?? [];
-  const heldApply = useEnvironmentReviewHeldApplyMutation(entries);
+  const supportsKeep = useHostSupportsMethod(
+    props.stopHostId,
+    "environment.review.heldKeep",
+  );
+  const keepClient = supportsKeep ? props.stopClient : null;
+  const heldApply = useEnvironmentReviewHeldApplyMutation(entries, keepClient);
   const recordMutate = record.mutate;
   const queryClient = useQueryClient();
   const retryReview = (): void => {
@@ -96,14 +105,8 @@ export function RetrospectiveSession(props: {
   }, [recordMutate]);
 
   const held = props.held ?? heldRowsFromReview(entries);
-  const planes = status.data === null ? null : planesFromStatus(status.data);
-  const { stillLocal, offerStop } = planeFacts(planes);
-  // A team's computer is the team's: its local planes are not the person's
-  // settings, so the sheet offers no move (`localRowCohort` has the same rule).
-  const teamOwned = status.data?.principal?.kind === "team";
-  const statusItems = status.data?.items ?? [];
-  const sharedInUse = sharedInUseFromItems(statusItems);
-  const roomShared = roomSharedLine(planes, statusItems);
+  const { stillLocal, offerStop, teamOwned, sharedInUse, roomShared } =
+    retrospectiveInventory(status.data);
   const evidence =
     review.data === null ? { version: null, at: null } : review.data.evidence;
   const heldPendingId = heldApply.isPending ? heldApply.variables.heldId : null;
@@ -116,13 +119,13 @@ export function RetrospectiveSession(props: {
       conflicted: NO_CONFLICTS,
     });
   }
-  const onHeldApply = (heldId: string, choice: HeldApplyChoice): void => {
+  const onHeldApply = (heldId: string, choice: PersonalHeldChoice): void => {
     const openingId = opening.id;
     heldApply.mutate(
       { heldId, choice },
       {
         onSuccess: (answer) => {
-          if (answer.outcome !== "conflict") return;
+          if (choice !== "approve" || answer.outcome !== "conflict") return;
           setOpening((current) =>
             current.id === openingId
               ? {
@@ -150,7 +153,15 @@ export function RetrospectiveSession(props: {
         stillLocal={stillLocal}
         heldPendingId={heldPendingId}
         heldApproveRefused={opening.conflicted}
-        heldIssue={heldApplyIssue(heldApply.data)}
+        heldActions={(heldId) =>
+          heldActions(
+            entries.find((entry) => entry.entryId === heldId),
+            keepClient === null ? null : props.stopHostId,
+            props.hostName,
+            teamOwned,
+          )
+        }
+        heldIssue={heldApplyIssue(heldApply.data?.outcome)}
         inventoryRead={inventoryReadLine(review, props.hostName, retryReview)}
         onOpenChange={props.onOpenChange}
         onShown={onShown}
@@ -192,6 +203,71 @@ export function RetrospectiveSession(props: {
   );
 }
 
+const DISCARD_VALUE = {
+  choice: "discard",
+  label: DISCARD,
+  variant: undefined,
+} as const;
+const SHARE_VALUE = {
+  choice: "approve",
+  label: "Use everywhere",
+  variant: "default",
+} as const;
+
+const NATIVE_KEPT_SETTING_KINDS: ReadonlySet<string> = new Set([
+  "shell",
+  "browser_agent_access",
+  "agent_selection_guide",
+  "agent_definition",
+  "mcp_server",
+  "fallback_policy",
+  "pack_policy",
+  "managed_profile",
+]);
+
+// Executable and unfamiliar kinds keep their approval labels without a Keep action.
+const VALUE_REVIEW_KINDS: ReadonlySet<string> = new Set([
+  "variable",
+  "env_override",
+  "browser_agent_access",
+  "agent_memory",
+  "agent_selection_guide",
+  "fallback_policy",
+  "pack_policy",
+  "managed_profile",
+  "sandbox_defaults",
+  "storage_policy",
+  "snapshot_policy",
+]);
+
+function heldActions(
+  entry: ReviewHeldEntry | undefined,
+  keepHostId: string | null,
+  hostName: string,
+  teamOwned: boolean,
+): readonly HeldChoiceAction<PersonalHeldChoice>[] {
+  if (entry === undefined || entry.sharingGeneration === null || teamOwned)
+    return HELD_COMMAND_CHOICES;
+  const keepableKind =
+    entry.kind === "variable" ||
+    entry.kind === "env_override" ||
+    NATIVE_KEPT_SETTING_KINDS.has(entry.kind);
+  if (!keepableKind || keepHostId === null || entry.hostId !== keepHostId) {
+    return VALUE_REVIEW_KINDS.has(entry.kind)
+      ? [DISCARD_VALUE, SHARE_VALUE]
+      : HELD_COMMAND_CHOICES;
+  }
+  return [
+    DISCARD_VALUE,
+    {
+      choice: "keep",
+      label: keepOnComputerLabel(hostName),
+      variant: undefined,
+    },
+    SHARE_VALUE,
+  ];
+}
+
 /**
  * Where the review read is, while it is read or once it fails: an inventory
  * with no rows would otherwise read as nothing on this computer.
@@ -217,25 +293,20 @@ function inventoryReadLine(
  * A held-row choice's answer under the rows. `gone` and `conflict` draw
  * nothing here: the reread draws the row as it is now, or drops it.
  */
-function heldApplyIssue(
-  answer: ReviewChoiceOutcome | undefined,
-): ConfigurationWriteIssue {
-  return answer?.outcome === "forbidden" ? { kind: "forbidden" } : null;
+function heldApplyIssue(outcome: string | undefined): ConfigurationWriteIssue {
+  return outcome === "forbidden" ? { kind: "forbidden" } : null;
 }
 
-/**
- * What the planes say on the sheet: the settings still on this computer, and
- * whether it can still stop using Personal (a computer that stopped has
- * nothing left to stop). Nothing of either before the planes are read.
- */
-function planeFacts(planes: EnvironmentPlanes | null): {
-  readonly stillLocal: readonly StillLocalRow[];
-  readonly offerStop: boolean;
-} {
-  if (planes === null) return { stillLocal: [], offerStop: false };
+function retrospectiveInventory(status: EnvironmentStatusResponseV13 | null) {
+  const planes = status === null ? null : planesFromStatus(status);
+  const items = status?.items ?? [];
   return {
-    stillLocal: stillLocalFromPlanes(planes),
-    offerStop: planesOfferStopSharing(planes),
+    stillLocal: planes === null ? [] : stillLocalFromPlanes(planes),
+    offerStop: planes !== null && planesOfferStopSharing(planes),
+    // A team's local planes are not the person's settings.
+    teamOwned: status?.principal?.kind === "team",
+    sharedInUse: sharedInUseFromItems(items),
+    roomShared: roomSharedLine(planes, items),
   };
 }
 

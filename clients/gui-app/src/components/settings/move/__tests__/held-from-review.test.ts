@@ -18,6 +18,7 @@ function heldRemoval(kind: string, key: string): ReviewHeldEntry {
     value: null,
     op: "delete",
     heldRevision: 8,
+    sharingGeneration: null,
     liveRevision: 3,
   };
 }

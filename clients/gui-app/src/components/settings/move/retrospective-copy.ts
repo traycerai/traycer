@@ -23,17 +23,24 @@ export const RETROSPECTIVE_STILL_ON_THIS_COMPUTER = "Still on this computer";
 export const DISCARD = "Discard";
 export const APPROVE = "Approve";
 
-export type HeldApplyChoice = "discard" | "approve";
-
-export interface HeldChoiceAction {
-  readonly choice: HeldApplyChoice;
-  readonly label: string;
+export function keepOnComputerLabel(hostName: string): string {
+  return `Keep on ${hostName} only`;
 }
 
-export const HELD_COMMAND_CHOICES: readonly HeldChoiceAction[] = [
-  { choice: "approve", label: APPROVE },
-  { choice: "discard", label: DISCARD },
-];
+export type HeldApplyChoice = "discard" | "approve";
+export type PersonalHeldChoice = HeldApplyChoice | "keep";
+
+export interface HeldChoiceAction<Choice extends PersonalHeldChoice> {
+  readonly choice: Choice;
+  readonly label: string;
+  readonly variant: "default" | undefined;
+}
+
+export const HELD_COMMAND_CHOICES: readonly HeldChoiceAction<HeldApplyChoice>[] =
+  [
+    { choice: "approve", label: APPROVE, variant: undefined },
+    { choice: "discard", label: DISCARD, variant: undefined },
+  ];
 
 export function retrospectiveTitle(hostName: string): string {
   return `What an earlier version already shared from ${hostName}`;

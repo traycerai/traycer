@@ -150,6 +150,7 @@ function entryOf(overrides: Partial<ReviewHeldEntry>): ReviewHeldEntry {
     op: "put",
     heldRevision: 1,
     liveRevision: 1,
+    sharingGeneration: null,
     ...overrides,
   };
 }
