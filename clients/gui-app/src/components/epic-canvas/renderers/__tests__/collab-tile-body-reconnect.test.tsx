@@ -76,18 +76,25 @@ import {
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import type { Editor } from "@tiptap/react";
 import type {
   ArtifactStreamClientFactory,
   EpicStateStreamClientFactory,
   EpicStatusStreamClientFactory,
 } from "@traycer-clients/shared/epic-lanes";
 import type { ArtifactStreamCallbacks } from "@traycer-clients/shared/host-transport/artifact-stream-client";
+import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type {
   EpicStatusSnapshotFrame,
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
-import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
+import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import {
+  artifactSubscribeServerFrameSchemaV10,
+  artifactSubscribeServerFrameSchemaV13,
+} from "@traycer/protocol/host/epic/artifact-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
 import {
   openStoreForTest,
@@ -100,20 +107,25 @@ import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { CollabTileBody } from "../collab-tile-body";
 
-const { fakeEditor } = vi.hoisted(() => ({
-  fakeEditor: { isEmpty: false, id: "fake-editor" },
-}));
-
 const TEST_ID = "collab-tile";
 const EPOCH = "epoch-1";
 
-vi.mock("@tiptap/react", () => ({
-  EditorContent: () => <div data-testid="editor-content" />,
-}));
-
-vi.mock("../use-collab-tile-editor", () => ({
-  useCollabTileEditor: () => fakeEditor,
-}));
+vi.mock("@tiptap/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tiptap/react")>();
+  return {
+    ...actual,
+    EditorContent: ({ editor }: { readonly editor: Editor | null }) =>
+      editor === null ? (
+        <div data-testid="editor-content" data-editor-ready="false" />
+      ) : (
+        <div
+          data-testid="editor-content"
+          data-editor-ready="true"
+          data-editable={editor.isEditable ? "true" : "false"}
+        />
+      ),
+  };
+});
 
 vi.mock("@/lib/epic-selectors", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
@@ -134,13 +146,17 @@ vi.mock("@/components/comments", () => ({
   FloatingDraftPopover: () => null,
   ThreadAnchorHoverPopover: () => null,
 }));
-vi.mock("@/editor-core", () => ({
-  applyCommentDecorationSnapshot: () => undefined,
-  ArtifactLinkPopover: () => null,
-  ArtifactToolbar: () => null,
-  deriveCollabUser: () => ({ name: "Guest", color: "#000" }),
-  updateArtifactToolbarPosition: () => undefined,
-}));
+vi.mock("@/editor-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/editor-core")>();
+  return {
+    ...actual,
+    applyCommentDecorationSnapshot: () => undefined,
+    ArtifactLinkPopover: () => null,
+    ArtifactToolbar: () => null,
+    deriveCollabUser: () => ({ name: "Guest", color: "#000" }),
+    updateArtifactToolbarPosition: () => undefined,
+  };
+});
 vi.mock("@/hooks/comments/use-activate-comment-thread", () => ({
   useActivateCommentThread: () => () => undefined,
 }));
@@ -222,40 +238,91 @@ function statusSnapshot(): EpicStatusSnapshotFrame {
   return parsed;
 }
 
+function stateSnapshot(): EpicStateSnapshotFrame {
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    basis: "cold",
+    authorityEpoch: EPOCH,
+    position: 0,
+    reconciledWithCloud: false,
+    epicMeta: { revision: 0, meta: { title: "Task", updatedAt: 1000 } },
+    artifactRecords: [],
+    deletedArtifacts: [],
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+  });
+  if (parsed.kind !== "snapshot") {
+    throw new Error(`expected a state snapshot frame, got ${parsed.kind}`);
+  }
+  return parsed;
+}
+
 interface BodyRig {
   readonly handle: OpenedStoreForTest;
+  readonly outboundWrites: readonly {
+    readonly artifactId: string;
+    readonly docGuid: string;
+    readonly update: Uint8Array;
+  }[];
+  replayOutboundWrites(artifactId: string, startIndex: number): string;
   /** The status lane names the epoch bodies attach under. */
   announceEpoch(): Promise<void>;
   /** The host reports a non-terminal `unavailable` on the lane that is open. */
   deliverUnavailable(artifactId: string, terminal: boolean): Promise<void>;
   /** The host serves this body on the lane that is open. */
-  seedDoc(artifactId: string, docGuid: string): Promise<void>;
+  seedDoc(
+    artifactId: string,
+    docGuid: string,
+    readOnly: boolean,
+  ): Promise<void>;
 }
 
 function createBodyRig(): BodyRig {
   let statusCallbacks: EpicStatusStreamCallbacks | null = null;
+  let stateCallbacks: EpicStateStreamCallbacks | null = null;
   // Captured PER ARTIFACT ID: a tile that switches artifacts opens a SECOND
   // lane for the new id, and seeding/refusing has to reach the right one.
   const bodyCallbacksByArtifactId = new Map<string, ArtifactStreamCallbacks>();
+  const outboundWrites: {
+    artifactId: string;
+    docGuid: string;
+    update: Uint8Array;
+  }[] = [];
+  const hostSeeds = new Map<
+    string,
+    {
+      readonly docGuid: string;
+      readonly update: Uint8Array;
+      readonly stateVectorBase64: string;
+    }
+  >();
 
   const statusFactory: EpicStatusStreamClientFactory = (_epicId, callbacks) => {
     statusCallbacks = callbacks;
     return { close: () => undefined };
   };
-  const stateFactory: EpicStateStreamClientFactory = () => ({
-    close: () => undefined,
-  });
+  const stateFactory: EpicStateStreamClientFactory = (_epicId, callbacks) => {
+    stateCallbacks = callbacks;
+    return { close: () => undefined };
+  };
   const artifactFactory: ArtifactStreamClientFactory = (request) => {
     bodyCallbacksByArtifactId.set(request.artifactId, request.callbacks);
     return {
-      applyUpdate: () => undefined,
+      applyUpdate: (docGuid, update) => {
+        outboundWrites.push({
+          artifactId: request.artifactId,
+          docGuid,
+          update: update.slice(),
+        });
+      },
       awareness: () => undefined,
       close: () => undefined,
     };
   };
 
   const laneSelection: EpicLaneSelectionSources = {
-    support: () => "unknown",
+    support: () => "supported",
     subscribeSupport: () => () => {},
     unaries: absentLaneUnaries(),
     stateStreamClientFactory: stateFactory,
@@ -280,6 +347,11 @@ function createBodyRig(): BodyRig {
     return statusCallbacks;
   }
 
+  function liveState(): EpicStateStreamCallbacks {
+    if (stateCallbacks === null) throw new Error("no state client");
+    return stateCallbacks;
+  }
+
   function liveBody(artifactId: string): ArtifactStreamCallbacks {
     const callbacks = bodyCallbacksByArtifactId.get(artifactId);
     if (callbacks === undefined) {
@@ -299,9 +371,28 @@ function createBodyRig(): BodyRig {
 
   return {
     handle,
+    outboundWrites,
+    replayOutboundWrites(artifactId, startIndex): string {
+      const seed = hostSeeds.get(artifactId);
+      if (seed === undefined) throw new Error("the body must have a host seed");
+      const replay = new Y.Doc();
+      Y.applyUpdate(replay, seed.update);
+      for (const write of outboundWrites.slice(startIndex)) {
+        if (write.artifactId === artifactId)
+          Y.applyUpdate(replay, write.update);
+      }
+      const bodyJson = replay
+        .getXmlFragment(artifactBodyFragmentName(artifactId))
+        .toJSON();
+      replay.destroy();
+      return bodyJson;
+    },
     async announceEpoch(): Promise<void> {
       await act(async () => {
+        liveStatus().onConnectionStatus("open", null, null, null);
+        liveState().onConnectionStatus("open", null, null, null);
         liveStatus().onSnapshot(statusSnapshot(), true);
+        liveState().onSnapshot(stateSnapshot());
         await settle();
       });
     },
@@ -326,24 +417,45 @@ function createBodyRig(): BodyRig {
         await settle();
       });
     },
-    async seedDoc(artifactId: string, docGuid: string): Promise<void> {
-      const donor = new Y.Doc();
-      donor
-        .getXmlFragment(artifactBodyFragmentName(artifactId))
-        .insert(0, [new Y.XmlText("hello")]);
-      const parsed = artifactSubscribeServerFrameSchemaV10.parse({
+    async seedDoc(
+      artifactId: string,
+      docGuid: string,
+      readOnly: boolean,
+    ): Promise<void> {
+      const existingSeed = hostSeeds.get(artifactId);
+      const seed =
+        existingSeed !== undefined && existingSeed.docGuid === docGuid
+          ? existingSeed
+          : (() => {
+              const donor = new Y.Doc();
+              const paragraph = new Y.XmlElement("paragraph");
+              paragraph.insert(0, [new Y.XmlText("hello")]);
+              donor
+                .getXmlFragment(artifactBodyFragmentName(artifactId))
+                .insert(0, [paragraph]);
+              const created = {
+                docGuid,
+                update: Y.encodeStateAsUpdate(donor),
+                stateVectorBase64: encodeDocStateVectorBase64(donor),
+              };
+              donor.destroy();
+              hostSeeds.set(artifactId, created);
+              return created;
+            })();
+      const parsed = artifactSubscribeServerFrameSchemaV13.parse({
         kind: "doc",
         hasBinaryPayload: true,
         authorityEpoch: EPOCH,
         artifactId,
         docGuid,
-        stateVectorBase64: encodeDocStateVectorBase64(donor),
+        stateVectorBase64: seed.stateVectorBase64,
+        ...(readOnly ? { readOnly: true } : {}),
       });
       if (parsed.kind !== "doc") {
         throw new Error(`expected a doc frame, got ${parsed.kind}`);
       }
       await act(async () => {
-        liveBody(artifactId).onDoc(parsed, Y.encodeStateAsUpdate(donor));
+        liveBody(artifactId).onDoc(parsed, seed.update.slice());
         await settle();
       });
     },
@@ -442,7 +554,7 @@ describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
     const rig = rigUnderTest();
     await rig.announceEpoch();
     await mountTile(rig.handle, NODE_A);
-    await rig.seedDoc(NODE_A.id, "guid-1");
+    await rig.seedDoc(NODE_A.id, "guid-1", false);
 
     expect(screen.getByTestId("editor-content")).toBeTruthy();
 
@@ -461,7 +573,7 @@ describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
     // THE THIRD BEAT: the SAME held lease recovers once the room is ready
     // again, with no remount and no fresh acquire - `forget` moving the
     // still-held body back into `awaiting` is what makes this reachable.
-    await rig.seedDoc(NODE_A.id, "guid-1");
+    await rig.seedDoc(NODE_A.id, "guid-1", false);
 
     expect(screen.getByTestId("editor-content")).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();
@@ -471,7 +583,7 @@ describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
     const rig = rigUnderTest();
     await rig.announceEpoch();
     const result = await mountTile(rig.handle, NODE_A);
-    await rig.seedDoc(NODE_A.id, "guid-1");
+    await rig.seedDoc(NODE_A.id, "guid-1", false);
     expect(screen.getByTestId("editor-content")).toBeTruthy();
 
     // A prop change on the SAME mounted component - not a store poke, so a
@@ -485,5 +597,50 @@ describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
     expect(loading.dataset.bodyBoundOnce).toBe("false");
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByText(/reconnect/i)).toBeNull();
+  });
+
+  it("holds a same-guid local edit when a marked seed arrives and locks the real editor", async () => {
+    const rig = rigUnderTest();
+    await rig.announceEpoch();
+    await mountTile(rig.handle, NODE_A);
+    await rig.seedDoc(NODE_A.id, "guid-1", false);
+
+    const editorContent = screen.getByTestId("editor-content");
+    expect(editorContent.dataset.editorReady).toBe("true");
+    expect(editorContent.dataset.editable).toBe("true");
+
+    const body = rig.handle.store.getState().getArtifactFragment(NODE_A.id);
+    if (body === null) throw new Error("the seeded body should be resident");
+    const localParagraph = new Y.XmlElement("paragraph");
+    localParagraph.insert(0, [new Y.XmlText("local edit")]);
+    body.insert(body.length, [localParagraph]);
+    await settleLeaseAttach(rig.handle);
+    expect(rig.outboundWrites.length).toBeGreaterThan(0);
+
+    const writesBeforeMarkedSeed = rig.outboundWrites.length;
+    await rig.seedDoc(NODE_A.id, "guid-1", true);
+
+    expect(screen.getByTestId("editor-content").dataset.editorReady).toBe(
+      "true",
+    );
+    expect(screen.getByTestId("editor-content").dataset.editable).toBe("false");
+    expect(rig.outboundWrites).toHaveLength(writesBeforeMarkedSeed);
+
+    const queuedParagraph = new Y.XmlElement("paragraph");
+    queuedParagraph.insert(0, [new Y.XmlText("queued edit")]);
+    body.insert(body.length, [queuedParagraph]);
+    await settleLeaseAttach(rig.handle);
+    expect(rig.outboundWrites).toHaveLength(writesBeforeMarkedSeed);
+
+    const writesBeforeWritableSeed = rig.outboundWrites.length;
+    await rig.seedDoc(NODE_A.id, "guid-1", false);
+    expect(screen.getByTestId("editor-content").dataset.editable).toBe("true");
+    expect(rig.outboundWrites).toHaveLength(writesBeforeWritableSeed + 1);
+    const reconciledBody = rig.replayOutboundWrites(
+      NODE_A.id,
+      writesBeforeWritableSeed,
+    );
+    expect(reconciledBody).toContain("local edit");
+    expect(reconciledBody).toContain("queued edit");
   });
 });
