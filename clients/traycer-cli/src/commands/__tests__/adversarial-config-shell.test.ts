@@ -143,6 +143,24 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
       `shell config saved (path=${shellPath}, args=["--host"])`,
   },
   {
+    name: "shell set (args only)",
+    method: "config.shell.set",
+    params: () => ({
+      path: null,
+      args: ["--requested"],
+      selection: { kind: "not_stated" },
+      executableWriteGrant: null,
+    }),
+    response: () => ({ path: null, args: ["--host"] }),
+    seed: async () => {
+      await setShell("/bin/previous-shell", ["--file"]);
+    },
+    invoke: (_shellPath, ctx) =>
+      buildConfigShellSetCommand({ path: null, args: ["--requested"] })(ctx),
+    expectedData: () => ({ path: null, args: ["--host"] }),
+    expectedHuman: () => `shell config saved (path=<default>, args=["--host"])`,
+  },
+  {
     name: "shell reset",
     method: "config.shell.reset",
     params: () => ({ executableWriteGrant: null }),

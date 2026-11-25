@@ -208,17 +208,29 @@ function namedMutations(queryClient: QueryClient, method: string) {
     .filter((mutation) => mutation.options.mutationKey?.[0] === method);
 }
 
+function hasNullGrant(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "executableWriteGrant" in value &&
+    value.executableWriteGrant === null
+  );
+}
+
 function mutationVariablesMatch(args: {
   readonly queryClient: QueryClient;
   readonly method: string;
   readonly count: number;
   readonly keys: readonly string[];
+  readonly nullGrant: boolean;
 }): boolean {
   const mutations = namedMutations(args.queryClient, args.method);
   return (
     mutations.length === args.count &&
-    mutations.every((mutation) =>
-      hasExactObjectKeys(mutation.state.variables, args.keys),
+    mutations.every(
+      (mutation) =>
+        hasExactObjectKeys(mutation.state.variables, args.keys) &&
+        (!args.nullGrant || hasNullGrant(mutation.state.variables)),
     )
   );
 }
@@ -481,12 +493,14 @@ function postUnmountRetentionScan(args: {
       method: "providers.setEnvOverride",
       count: expectedWriteCount + args.replayMutationCount,
       keys: ["providerId", "key", "executableWriteGrant"],
+      nullGrant: true,
     }),
     deleteVariableShapesMatch: mutationVariablesMatch({
       queryClient: args.harness.queryClient,
       method: "providers.deleteEnvOverride",
       count: expectedDeleteCount,
       keys: ["providerId", "key"],
+      nullGrant: false,
     }),
     requestCountsMatch,
     requestTargetsMatch:
@@ -545,12 +559,13 @@ for (const row of rows) {
         active.setRequestContainsValue = params.value === FAKE_VALUE;
         active.setRequestTargetMatches =
           params.providerId === "codex" && params.key === "MODEL_LABEL_NEXT";
-        active.setRequestShapeMatches = hasExactObjectKeys(params, [
-          "providerId",
-          "key",
-          "value",
-          "executableWriteGrant",
-        ]);
+        active.setRequestShapeMatches =
+          hasExactObjectKeys(params, [
+            "providerId",
+            "key",
+            "value",
+            "executableWriteGrant",
+          ]) && params.executableWriteGrant === null;
         return new Promise((resolve, reject) => {
           writes.completions.push(() => {
             if (row.failMethod === "providers.setEnvOverride") {
@@ -654,12 +669,14 @@ for (const row of rows) {
       method: "providers.setEnvOverride",
       count: row.expectedWriteCalls + replayMutationCount,
       keys: ["providerId", "key", "executableWriteGrant"],
+      nullGrant: true,
     });
     const deleteVariablesMatch = mutationVariablesMatch({
       queryClient: harness.queryClient,
       method: "providers.deleteEnvOverride",
       count: row.expectedDeleteCalls,
       keys: ["providerId", "key"],
+      nullGrant: false,
     });
     expect({
       setRequestContainsValue: active.setRequestContainsValue,

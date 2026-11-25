@@ -36,7 +36,9 @@ import {
 import * as env from "@traycer/protocol/host/environment-schemas";
 import {
   hostNotificationHooksSave,
+  hostNotificationHooksSaveDowngradeV30ToV20,
   hostNotificationHooksSaveUpgradeV1ToV2,
+  hostNotificationHooksSaveUpgradeV2ToV3,
   hostNotificationHooksSaveV20,
   hostNotificationHooksSaveV30,
 } from "@traycer/protocol/host/notifications/host-notifications";
@@ -736,6 +738,29 @@ describe("released request bridges", () => {
       "host.notificationHooks.save",
     );
     expect(prepared.onWirePayload).toEqual({ hooks });
+  });
+
+  it("host.notificationHooks.save: the 2.0 to 3.0 upgrade and the 3.0 to 2.0 downgrade both carry a null grant", () => {
+    const upgraded = hostNotificationHooksSaveUpgradeV2ToV3.upgradeRequest({
+      hooks: [],
+      executableWriteGrant: null,
+    });
+    expect(upgraded).toEqual({
+      hooks: [],
+      executableWriteGrant: null,
+      configurationRevision: null,
+    });
+    const current = {
+      hooks: [],
+      executableWriteGrant: null,
+      configurationRevision: "rev-1",
+    };
+    const downgraded =
+      hostNotificationHooksSaveDowngradeV30ToV20.downgradeRequest(current);
+    expect(downgraded).toEqual({
+      ok: true,
+      value: { hooks: [], executableWriteGrant: null },
+    });
   });
 });
 
