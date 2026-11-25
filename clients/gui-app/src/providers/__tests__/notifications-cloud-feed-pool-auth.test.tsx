@@ -18,7 +18,10 @@ import {
   settleProcessHostRpcTierPlan,
   type HostServingDecision,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import {
+  poolEntry,
+  remoteEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   getNegotiatedHostMethods,
   recordNegotiatedHostManifest,
@@ -262,6 +265,13 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 
 settleProcessHostRpcTierPlan(poolEntry);
 
+const REMOTE_PERSONAL_HOST_ID = "remote-personal";
+const remotePersonalEntry: HostDirectoryEntry = {
+  ...remoteEntry(REMOTE_PERSONAL_HOST_ID, null),
+  version: "99.0.0",
+  owner: { kind: "user", id: "user-a" },
+};
+
 const teamComputerEntry: HostDirectoryEntry = {
   ...mockLocalHostEntry,
   owner: { kind: "team", id: "team-1", name: "Team" },
@@ -292,6 +302,7 @@ function createHostClient(): HostClient<HostRpcRegistry> {
     messenger,
     findHostById: (hostId) => {
       if (hostId === poolEntry.hostId) return poolEntry;
+      if (hostId === REMOTE_PERSONAL_HOST_ID) return remotePersonalEntry;
       if (hostId === mockLocalHostEntry.hostId) {
         return harness.teamServing ? teamComputerEntry : mockLocalHostEntry;
       }
@@ -307,6 +318,8 @@ function createHostClient(): HostClient<HostRpcRegistry> {
         if (peer.kind === "pool") entry = poolEntry;
         else if (peer.hostId === mockLocalHostEntry.hostId) {
           entry = harness.teamServing ? teamComputerEntry : mockLocalHostEntry;
+        } else if (peer.hostId === REMOTE_PERSONAL_HOST_ID) {
+          entry = remotePersonalEntry;
         }
         return {
           servingPeer: entry,
@@ -324,18 +337,22 @@ function createHostClient(): HostClient<HostRpcRegistry> {
 }
 
 function publishServingPeer(
-  peer: "pool" | "computer",
+  peer: "pool" | "computer" | "remote",
   selectionRevision: number,
 ): void {
-  const isComputer = peer === "computer";
+  const hosts = {
+    computer: mockLocalHostEntry.hostId,
+    remote: REMOTE_PERSONAL_HOST_ID,
+    pool: null,
+  };
+  const hostId = hosts[peer];
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
     attached: true,
-    preferredHostId: isComputer ? mockLocalHostEntry.hostId : null,
-    targetHostId: isComputer ? mockLocalHostEntry.hostId : null,
-    effectiveHostId: isComputer ? mockLocalHostEntry.hostId : null,
-    servingPeer: isComputer
-      ? { kind: "computer", hostId: mockLocalHostEntry.hostId }
-      : { kind: "pool" },
+    preferredHostId: hostId,
+    targetHostId: hostId,
+    effectiveHostId: hostId,
+    servingPeer:
+      hostId === null ? { kind: "pool" } : { kind: "computer", hostId },
     noPeerPresentation: null,
     leases: [],
     selectionRevision,
@@ -380,6 +397,13 @@ function recordComputerNotificationsManifest(): void {
     "host.notifications.indicatorState": { major: 1, minor: 1 },
     "host.notifications.clearAll": { major: 1, minor: 1 },
     "host.notifications.cloudFeed.subscribe": { major: 1, minor: 2 },
+  });
+}
+
+function recordRemoteCloudFeedManifest(): void {
+  recordNegotiatedHostManifest(REMOTE_PERSONAL_HOST_ID, {
+    "host.notifications.cloudFeed.subscribe": { major: 1, minor: 2 },
+    "host.notifications.cloudFeed.markRead": { major: 1, minor: 1 },
   });
 }
 
@@ -467,17 +491,19 @@ async function awaitProviderCloudArrival(index: number): Promise<void> {
 async function renderPoolNotificationsProvider(options: {
   readonly addressableHostId?: string | null;
   readonly noComputer: boolean;
-  readonly servingPeer: "pool" | "computer" | null;
+  readonly servingPeer: "pool" | "computer" | "remote" | null;
   readonly teamServing: boolean;
   readonly child: ReactNode;
 }): Promise<{
   readonly serving: FakeStreamClient;
   readonly pool: FakeStreamClient;
+  readonly remote: FakeStreamClient;
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly queryClient: QueryClient;
 }> {
   const serving = new FakeStreamClient(true);
   const pool = new FakeStreamClient(true);
+  const remote = new FakeStreamClient(true);
   const queryClient = new QueryClient();
   harness.client = createHostClient();
   harness.addressableHostId = options.addressableHostId ?? null;
@@ -486,9 +512,14 @@ async function renderPoolNotificationsProvider(options: {
   harness.streams.clear();
   harness.streams.set(mockLocalHostEntry.hostId, serving);
   harness.streams.set(poolEntry.hostId, pool);
+  harness.streams.set(REMOTE_PERSONAL_HOST_ID, remote);
   if (options.servingPeer === "computer") {
     if (options.teamServing) recordTeamComputerManifest();
     else recordComputerNotificationsManifest();
+  }
+  if (options.servingPeer === "remote") {
+    recordComputerNotificationsManifest();
+    recordRemoteCloudFeedManifest();
   }
   if (options.servingPeer !== null) {
     publishServingPeer(options.servingPeer, 1);
@@ -523,7 +554,7 @@ async function renderPoolNotificationsProvider(options: {
   });
   const messenger = harness.messenger;
   if (messenger === null) throw new Error("Pool host messenger is missing");
-  return { serving, pool, messenger, queryClient };
+  return { serving, pool, remote, messenger, queryClient };
 }
 
 describe("NotificationsSessionProvider pool sign-in recovery", () => {
@@ -801,6 +832,49 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
       ].sort(),
     );
     expect(pool.subscribes).toEqual([]);
+  });
+
+  it("keeps every bell stream on the healthy local computer while another computer serves the app", async () => {
+    const { pool, remote, serving } = await renderPoolNotificationsProvider({
+      addressableHostId: mockLocalHostEntry.hostId,
+      noComputer: false,
+      servingPeer: "remote",
+      teamServing: false,
+      child: <NotificationsBell />,
+    });
+
+    await waitFor(() => {
+      expect({
+        local: serving.subscribes.map(({ method }) => method).sort(),
+        remote: remote.subscribes.map(({ method }) => method).sort(),
+        pool: pool.subscribes.map(({ method }) => method).sort(),
+      }).toEqual({
+        local: [
+          "agent.activity.subscribe",
+          "host.notifications.cloudFeed.subscribe",
+          "host.notifications.feed.subscribe",
+          "notifications.subscribe",
+        ].sort(),
+        remote: [],
+        pool: [],
+      });
+    });
+
+    const row = cloudRow("remote-cloud-entry", 9);
+    const localDeliveryIndex = harness.cloudArrivalCompletions.length;
+    act(() =>
+      emitCloudSnapshot(
+        sessionFor(serving, "host.notifications.cloudFeed.subscribe"),
+        1,
+        [row],
+      ),
+    );
+    await awaitProviderCloudArrival(localDeliveryIndex);
+
+    fireEvent.click(screen.getByTestId("notifications-bell"));
+    expect((await screen.findByTestId("notification-title")).textContent).toBe(
+      "Cloud epic",
+    );
   });
 
   it("keeps the team-serving peer's cloud bell feed and mark-read on the pool", async () => {

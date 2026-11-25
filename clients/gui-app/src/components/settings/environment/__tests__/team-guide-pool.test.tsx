@@ -19,6 +19,8 @@ import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environmen
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { queryClient as appQueryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   negotiateMethodsOn,
   reachableHost,
@@ -51,6 +53,11 @@ vi.mock("@/lib/host/app-serving-decision", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  getHostBindingSnapshot: () => teamHostBoundary.binding,
+}));
+
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -75,6 +82,8 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
+  appQueryClient.clear();
+  useSelectionAuthorityStore.getState().reset();
   useSettingsEnvironmentPickStore.setState({ pick: null });
   servingFixture.current = {
     servingPeer: null,
@@ -344,6 +353,30 @@ describe("TeamGuide when a team computer serves the configuration", () => {
       servingPeerMethods: teamMethods,
       servingPeerEnvironmentId: "env-a",
     };
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+      servingPeer: { kind: "computer", hostId: mockLocalHostEntry.hostId },
+    });
+    appQueryClient.setQueryData(
+      hostQueryKeys.method<HostRpcRegistry, "environment.binding.read">(
+        POOL_HOST_ID,
+        "environment.binding.read",
+        { hostId: mockLocalHostEntry.hostId },
+      ),
+      {
+        hostId: mockLocalHostEntry.hostId,
+        environment: {
+          environmentId: "env-a",
+          ownerKind: "organization",
+          ownerId: "team-a",
+          roomId: "room-a",
+          label: "Acme",
+        },
+        explicit: true,
+        enrolledByUserId: "user-me",
+        canUnbind: false,
+      },
+    );
     const harness = mountTeamPageOnPoolBuild(
       poolSource("editor"),
       handlers({

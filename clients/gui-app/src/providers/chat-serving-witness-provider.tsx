@@ -25,7 +25,7 @@ export function ChatServingWitnessProvider(props: {
     "chat.serving.subscribe",
     binding?.hostId ?? null,
     binding?.wsStreamClient ?? null,
-    userId,
+    { userId, computerScope: "app-serving-peer" },
   ).client;
   const hasPool = readProcessHostRpcTierPlan().pool !== null;
   const poolStreamClient = hasPool ? streamClient : null;

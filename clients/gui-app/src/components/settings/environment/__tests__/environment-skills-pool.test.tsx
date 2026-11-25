@@ -41,6 +41,8 @@ import {
   teamHostBoundary,
 } from "./team-configuration-test-support";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { queryClient as appQueryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 
 const servingFixture = vi.hoisted(() => ({
   current: {
@@ -67,6 +69,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
   useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
+  getHostBindingSnapshot: () => teamHostBoundary.binding,
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -91,6 +94,8 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
+  appQueryClient.clear();
+  useSelectionAuthorityStore.getState().reset();
   servingFixture.current = {
     servingPeer: null,
     servingPeerMethods: null,
@@ -295,6 +300,30 @@ describe("The Skills page when a team computer serves the configuration", () => 
       servingPeerMethods: teamMethods,
       servingPeerEnvironmentId: "env-a",
     };
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+      servingPeer: { kind: "computer", hostId: mockLocalHostEntry.hostId },
+    });
+    appQueryClient.setQueryData(
+      hostQueryKeys.method<HostRpcRegistry, "environment.binding.read">(
+        POOL_HOST_ID,
+        "environment.binding.read",
+        { hostId: mockLocalHostEntry.hostId },
+      ),
+      {
+        hostId: mockLocalHostEntry.hostId,
+        environment: {
+          environmentId: "env-a",
+          ownerKind: "organization",
+          ownerId: "team-a",
+          roomId: "room-a",
+          label: "Acme",
+        },
+        explicit: true,
+        enrolledByUserId: "user-me",
+        canUnbind: false,
+      },
+    );
     const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
       "environment.configuration.skills.list": () => ({
         outcome: "listed" as const,

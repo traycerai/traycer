@@ -1481,6 +1481,87 @@ describe("<HostReadyGate />", () => {
       expect(screen.getByRole("main").textContent).toBe("app");
     });
 
+    it("keeps the real startup card at the original 15-second mark after a late pool restart announcement", async () => {
+      const { authority, reporterId, incarnationId, computerHostId } =
+        await authorityWithServingComputer(true);
+      try {
+        syncAuthorityStore(authority);
+        renderGateWithAuthorityNarrator({
+          readiness: { kind: "ready" },
+          hasBeenReady: true,
+          hasLocalHost: false,
+        });
+        expect(screen.queryByTestId("window-host-modal")).toBeNull();
+
+        loseAuthorityPeer(
+          authority,
+          { reporterId, incarnationId },
+          POOL_HOST_ID,
+          "pool-session",
+        );
+        expect(authority.engine.snapshot().servingPeer).toEqual({
+          kind: "computer",
+          hostId: computerHostId,
+        });
+        loseAuthorityPeer(
+          authority,
+          { reporterId, incarnationId },
+          computerHostId,
+          "computer-session",
+        );
+        expect(authority.engine.snapshot().noPeerPresentation).toBe(
+          "connecting",
+        );
+        syncAuthorityStore(authority);
+        expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+
+        const announcementDelayMs = 1_000;
+        authority.clock.advance(announcementDelayMs);
+
+        authority.engine.ingestEvidence(reporterId, incarnationId, {
+          kind: "restart-intent",
+          hostId: POOL_HOST_ID,
+          tombstoneId: "late-pool-restart",
+          expiresAt: null,
+          at: authority.clock.now(),
+        });
+        expect(authority.engine.snapshot().noPeerPresentation).toBe(
+          "connecting",
+        );
+        syncAuthorityStore(authority);
+        expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+
+        authority.clock.advance(HOST_STARTING_BUDGET_MS - announcementDelayMs);
+        expect(authority.engine.snapshot().noPeerPresentation).toBe(
+          "connecting",
+        );
+        syncAuthorityStore(authority);
+        expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+        expect(screen.queryByTestId("window-host-modal")).toBeNull();
+
+        authority.engine.ingestEvidence(
+          reporterId,
+          incarnationId,
+          authoritySessionEvidence(
+            POOL_HOST_ID,
+            "pool-recovered-after-restart",
+            "established",
+            authority.clock.now(),
+          ),
+        );
+        expect(authority.engine.snapshot().servingPeer).toEqual({
+          kind: "pool",
+        });
+        expect(authority.engine.snapshot().noPeerPresentation).toBeNull();
+        syncAuthorityStore(authority);
+        expect(screen.queryByTestId("window-host-startup-card")).toBeNull();
+        expect(screen.queryByTestId("window-host-modal")).toBeNull();
+        expect(screen.getByRole("main").textContent).toBe("app");
+      } finally {
+        authority.dispose();
+      }
+    });
+
     it("keeps the cold-start card through a local restart hold before the no-peer clock starts", () => {
       const authority = authorityWithLocalColdStartHold();
       try {

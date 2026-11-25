@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   poolHostDirectoryEntry,
@@ -30,12 +31,19 @@ import { readHostServingDecision } from "@/lib/host/serving-decision";
 import { queryClient as appQueryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { OrganizationProvider } from "@/hooks/organization/organization-provider";
-import { useOrganization } from "@/hooks/organization/organization-context";
+import {
+  useOrganization,
+  useOrganizationView,
+} from "@/hooks/organization/organization-context";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
 const runtimeClient = vi.hoisted(() => ({
   current: null as HostClient<HostRpcRegistry> | null,
+}));
+const runtimeBindingRef = vi.hoisted(() => ({
+  current: null as HostRuntimeBinding<HostRpcRegistry> | null,
 }));
 const servingDecision = vi.hoisted(() => {
   let current: HostServingDecision = {
@@ -87,6 +95,14 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    getHostBindingSnapshot: () => runtimeBindingRef.current,
+  };
+});
+
 vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
   useSurfaceHostStreamBinding: () => null,
 }));
@@ -122,6 +138,13 @@ const teamComputer: HostDirectoryEntry = {
   owner: { kind: "team", id: "team-1", name: "Team" },
 };
 
+const personalComputer: HostDirectoryEntry = {
+  ...teamComputer,
+  hostId: "personal-computer",
+  label: "Personal computer",
+  owner: { kind: "user", id: "viewer-1" },
+};
+
 function OrganizationCommandProbe() {
   const organization = useOrganization();
   return (
@@ -147,11 +170,20 @@ function OrganizationCommandProbe() {
   );
 }
 
+function OrganizationGroupsProbe() {
+  const groupNames = useOrganizationView(
+    (view) => view?.groups.groups.map((group) => group.name).join(",") ?? "",
+    Object.is,
+  );
+  return <output data-testid="organization-groups">{groupNames}</output>;
+}
+
 describe("OrganizationProvider uses the pool for a team serving peer", () => {
   afterEach(() => {
     cleanup();
     runtimeClient.current?.dispose();
     runtimeClient.current = null;
+    runtimeBindingRef.current = null;
     servingDecision.publish({
       servingPeer: null,
       servingPeerMethods: null,
@@ -296,6 +328,127 @@ describe("OrganizationProvider uses the pool for a team serving peer", () => {
         ["organization.command", poolEntry.hostId],
       ]);
       expect(teamComputer.hostId).not.toBe(poolEntry.hostId);
+    } finally {
+      view.unmount();
+      queryClient.clear();
+    }
+  });
+
+  it("projects a personal serving computer's organization refresh into the real view", async () => {
+    const plan = settleProcessHostRpcTierPlan(poolEntry);
+    const currentManifest = accountWideManifestFixtures().current;
+    recordNegotiatedHostMethods(personalComputer.hostId, [...currentManifest]);
+    recordNegotiatedHostMethods(poolEntry.hostId, [
+      "organization.command",
+      "organization.refresh",
+    ]);
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "viewer-1", userName: "Viewer", email: "viewer@example.com" },
+        { userId: "viewer-1", username: "Viewer" },
+        [],
+      );
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: personalComputer.hostId,
+      targetHostId: personalComputer.hostId,
+      servingPeer: { kind: "computer", hostId: personalComputer.hostId },
+    });
+    const serving = readHostServingDecision((hostId) =>
+      hostId === personalComputer.hostId ? personalComputer : null,
+    );
+    act(() => servingDecision.publish(serving));
+
+    const personalView: OrganizationView = {
+      catalog: [],
+      groups: {
+        version: "personal-refresh",
+        groups: [
+          {
+            groupId: "personal-group",
+            name: "Personal group",
+            color: "#4488cc",
+            position: 0,
+          },
+        ],
+        memberships: [],
+      },
+      appearances: [],
+      taskLabels: {},
+      ready: true,
+      authenticationRequired: false,
+      pending: [],
+      failures: [],
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity, gcTime: Infinity },
+      },
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "organization-personal-request",
+      handlers: {
+        "organization.refresh": () => personalView,
+      },
+    });
+    const hosts = new Map<string, HostDirectoryEntry>([
+      [poolEntry.hostId, poolEntry],
+      [personalComputer.hostId, personalComputer],
+    ]);
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => hosts.get(hostId) ?? null,
+      messenger,
+      routing: {
+        plan,
+        selectedHostId: () => personalComputer.hostId,
+        serving: () => servingDecision.get(),
+      },
+    });
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "fixture-token",
+        identity: {
+          userId: "viewer-1",
+          username: "Viewer",
+          providerHandle: "viewer",
+        },
+      }),
+    );
+    runtimeClient.current = client;
+    runtimeBindingRef.current = Object.assign(Object.create(null), {
+      hostClient: client,
+    }) as HostRuntimeBinding<HostRpcRegistry>;
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <OrganizationProvider>
+          <OrganizationGroupsProbe />
+        </OrganizationProvider>
+      </QueryClientProvider>,
+    );
+
+    try {
+      await waitFor(() => {
+        expect(
+          messenger.calls.filter(
+            (call) => call.method === "organization.refresh",
+          ),
+        ).toHaveLength(1);
+        expect(screen.getByTestId("organization-groups").textContent).toBe(
+          "Personal group",
+        );
+      });
+      expect(
+        messenger.calls.map((call) => [
+          call.method,
+          call.authority.endpoint.hostId,
+        ]),
+      ).toEqual([["organization.refresh", personalComputer.hostId]]);
     } finally {
       view.unmount();
       queryClient.clear();

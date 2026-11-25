@@ -262,7 +262,7 @@ export function useHeldNotificationFeedMode(
  * remote host's lanes on the local host's capabilities.
  *
  * `cloudFeedClient` is the client the cloud feed is opened on: in a build
- * with a pool, the serving computer's when it serves the feed for this
+ * with a pool, the bell computer's when it serves the feed for this
  * person and the pool's otherwise (the feed is account-wide), else `client`
  * itself. Only the cloud projection is read from it; the local
  * projection and the four partitioned unary methods are the serving host's.

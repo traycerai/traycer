@@ -29,7 +29,15 @@ import {
   type OrganizationCommand,
   type OrganizationView,
 } from "@traycer/protocol/host/organization/contracts";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useAuthService, useHostClient } from "@/lib/host";
+import {
+  readServingTierHostId,
+  useAppServingDecision,
+} from "@/lib/host/app-serving-decision";
 import { authMutationKeys } from "@/lib/query-keys/auth-mutation-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
@@ -65,6 +73,7 @@ interface OrganizationLifecycle {
 
 interface OrganizationIdentityScope {
   readonly hostId: string | null;
+  readonly viewHostId: string | null;
   readonly userId: string | null;
   // `null` means no account-wide view has arrived; older hosts omit the token.
   historyInvalidation: string | undefined | null;
@@ -81,11 +90,18 @@ export function OrganizationProvider({
     value: OrganizationDialog;
     returnFocusTo: HTMLElement | null;
   } | null>(null);
-  // Organization is account-wide: the pool's family (see `usePoolTierHostClient`).
   const client = usePoolTierHostClient(useHostClient());
   const binding = useSurfaceHostStreamBinding(null);
   const readiness = useReactiveHostReadiness(client);
   const { hostId, requestContextUserId: userId } = readiness;
+  const viewHostId = hostRpcServingTierHostId(
+    "organization.read",
+    hostId,
+    readProcessHostRpcTierPlan(),
+    null,
+    useAppServingDecision(),
+    null,
+  );
   // The SAME stream the subscription below rides, not the surface's own. In a
   // pool build those are different hosts: commands and frames would go to the
   // pool while a refused draft intent waited on a recovery from somewhere
@@ -94,7 +110,7 @@ export function OrganizationProvider({
     "organization.subscribe",
     binding?.hostId ?? null,
     binding?.wsStreamClient ?? null,
-    userId,
+    { userId, computerScope: "app-serving-peer" },
   ).client;
   const accountUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
@@ -104,13 +120,14 @@ export function OrganizationProvider({
   useLayoutEffect(() => {
     identityScope.current = {
       hostId,
+      viewHostId,
       userId: accountUserId === userId ? userId : null,
       historyInvalidation: null,
     };
     return () => {
       identityScope.current = null;
     };
-  }, [hostId, userId, accountUserId]);
+  }, [hostId, viewHostId, userId, accountUserId]);
   const queryClient = useQueryClient();
   // Read at call time, so the re-read keeps one identity, and with it
   // `accept` and every subscription effect that depends on it.
@@ -150,7 +167,7 @@ export function OrganizationProvider({
     },
     [client, queryClient],
   );
-  const scope = `${hostId}:${userId}`;
+  const scope = `${viewHostId}:${userId}`;
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
   useLayoutEffect(() => {
     lifecycle.current = createLifecycle();
@@ -180,8 +197,8 @@ export function OrganizationProvider({
   const ownAccount = userId !== null && userId === accountUserId;
   const supported = hostSupport === true && authorized && ownAccount;
   const key = useMemo(
-    () => organizationKeys.view(hostId, userId),
-    [hostId, userId],
+    () => organizationKeys.view(viewHostId, userId),
+    [viewHostId, userId],
   );
   const [requests, setRequests] = useState<
     ReadonlyMap<string, readonly string[]>
@@ -225,17 +242,18 @@ export function OrganizationProvider({
   });
   const accept = useCallback(
     (next: OrganizationView, ids: readonly string[]) => {
+      const current = identityScope.current;
       if (
         client.getRequestContextUserId() !== userId ||
-        client.getActiveHostId() !== hostId
+        client.getActiveHostId() !== hostId ||
+        current === null ||
+        current.viewHostId !== viewHostId
       )
         return;
       // Task chunks can carry tokens from another subscription generation.
       // Keep only the account-wide baseline, including across reconnects.
-      const current = identityScope.current;
       if (
         ids.length === 0 &&
-        current !== null &&
         current.userId !== null &&
         useAuthStore.getState().contextMetadata?.userId === userId
       ) {
@@ -290,7 +308,16 @@ export function OrganizationProvider({
         },
       }));
     },
-    [key, queryClient, client, userId, hostId, revalidateIdentity, supported],
+    [
+      key,
+      queryClient,
+      client,
+      userId,
+      hostId,
+      viewHostId,
+      revalidateIdentity,
+      supported,
+    ],
   );
   const mutation = useHostMutation({
     client,
@@ -387,7 +414,10 @@ export function OrganizationProvider({
     )
       return;
     await queryClient.refetchQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, "organization.refresh"),
+      queryKey: hostQueryKeys.methodScope(
+        readServingTierHostId("organization.refresh", hostId, null, null),
+        "organization.refresh",
+      ),
       predicate: (entry) => entry.queryKey.at(-1) === userId,
       type: "active",
     });
@@ -400,7 +430,10 @@ export function OrganizationProvider({
     const previous = current.confirmedView;
     if (previous !== null && organizationFiltersChanged(previous, view)) {
       void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(hostId, "organization.history"),
+        queryKey: hostQueryKeys.methodScope(
+          readServingTierHostId("organization.history", hostId, null, null),
+          "organization.history",
+        ),
       });
       void queryClient.invalidateQueries({
         predicate: (entry) =>
@@ -534,7 +567,7 @@ function OrganizationSubscription(props: {
     "organization.subscribe",
     binding?.hostId ?? null,
     binding?.wsStreamClient ?? null,
-    props.userId,
+    { userId: props.userId, computerScope: "app-serving-peer" },
   ).client;
   const { taskIds, accept } = props;
   const receivedFrame = useRef(false);

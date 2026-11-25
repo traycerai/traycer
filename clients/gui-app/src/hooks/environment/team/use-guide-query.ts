@@ -15,6 +15,7 @@ import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { environmentMutationKeys } from "@/lib/query-keys";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 
 /** The guide, from the configuration's room: no host has to be running it. */
 export function useConfigurationGuideQuery() {
@@ -42,11 +43,18 @@ export function useConfigurationGuideQuery() {
 /**
  * Whether the peer that answers for this environment advertises Guide writes.
  */
-export function useConfigurationGuideWritable(): boolean {
+export function useConfigurationGuideWritable(
+  method:
+    | "environment.configuration.guide.set"
+    | "environment.configuration.guide.reset",
+): boolean {
   const client = useConfigurationReadClient();
   const environmentId = useConfigurationEnvironmentId();
   return useHostSupportsMethod(client.getActiveHostId(), {
-    method: "environment.configuration.guide.set",
+    method:
+      readProcessHostRpcTierPlan().pool === null
+        ? "environment.configuration.guide.set"
+        : method,
     environmentId,
   });
 }

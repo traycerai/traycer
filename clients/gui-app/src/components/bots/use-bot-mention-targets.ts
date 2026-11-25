@@ -4,6 +4,7 @@ import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotMentionTarget } from "@/components/bots/bot-mentions-context";
 import { useEpicGetTaskContextsForClient } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useCloudEpicTasksQueryForClient } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import { useAnsweringHostClient } from "@/hooks/host/use-pool-tier";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { taskMentionDisplayTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import {
@@ -104,7 +105,8 @@ export function useBotMentionTargets(input: {
     userId,
     { enabled: contextsRun },
   );
-  const home = useCloudEpicTasksQueryForClient(client, undefined, {
+  const listClient = useAnsweringHostClient(client, "epic.listTasks");
+  const home = useCloudEpicTasksQueryForClient(listClient, undefined, {
     enabled: true,
   });
   const personalOwnerId = personal === true ? userId : null;

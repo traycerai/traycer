@@ -703,9 +703,6 @@ function describeCompatVerdictForAuthority(compatibility: HostCompatibility): {
   readonly anchoredAt: "success" | "failure";
 } | null {
   if (compatibility.status === "incompatible") {
-    const code =
-      terminalHostCompatibilityCode(compatibility.error) ??
-      compatibility.error.code;
     const blocking =
       compatibility.error.fatalDetails?.incompatibleMethods?.[0]?.blocking ??
       null;
@@ -713,7 +710,10 @@ function describeCompatVerdictForAuthority(compatibility: HostCompatibility): {
       // The fatal's own code, refined by WHY the handshake broke when the
       // frame said. This is the machine code the ∅ modal's update-host variant
       // and Settings render from.
-      code: blocking === null ? code : `${code}:${blocking}`,
+      code:
+        blocking === null
+          ? compatibility.error.code
+          : `${compatibility.error.code}:${blocking}`,
       // Deliberately null. A fatal error frame carries method CANONICALS
       // ({major, minor} per method), not host version strings, and the
       // contract is explicit that these two fields are descriptive only and
@@ -797,19 +797,9 @@ function isHostUnreachableError(error: HostRpcError): boolean {
 }
 
 export function isTerminalHostCompatibilityError(error: HostRpcError): boolean {
-  return terminalHostCompatibilityCode(error) !== null;
-}
-
-function terminalHostCompatibilityCode(error: HostRpcError): string | null {
-  if (error.code === "INCOMPATIBLE" || error.code === "DOWNGRADE_UNSUPPORTED") {
-    return error.code;
-  }
-  // The remote messenger may cache a terminal OPEN refusal as a transport
-  // failure. Its fatal details retain the host's actual compatibility verdict.
-  const code = error.fatalDetails?.code;
-  return code === "INCOMPATIBLE" || code === "DOWNGRADE_UNSUPPORTED"
-    ? code
-    : null;
+  return (
+    error.code === "INCOMPATIBLE" || error.code === "DOWNGRADE_UNSUPPORTED"
+  );
 }
 
 export function describeHostCompatibilityError(error: HostRpcError): string {

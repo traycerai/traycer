@@ -37,7 +37,7 @@ function PoolEnvironmentArmScope(): null {
     "environment.chats.subscribe",
     null,
     null,
-    viewerId,
+    { userId: viewerId, computerScope: "app-serving-peer" },
   ).client;
   const chats = useStreamMethodSupportFor(
     client,

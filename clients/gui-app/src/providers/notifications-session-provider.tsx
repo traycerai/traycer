@@ -318,15 +318,16 @@ export function NotificationsSessionProvider(
   // A null entry yields a null id, which withholds mixed mode - the safe way
   // for this to be unknown.
   // The cloud feed is account-wide: in a build with a server pool it opens on
-  // the serving computer when that computer serves it for this person, and on
-  // the pool otherwise; without one it rides the serving host's client as
-  // before. The serving host keeps its own lane either way, and the host-side
-  // presence fallback behind it.
+  // the bell's own computer when it serves the feed for this person, and on
+  // the pool otherwise. The bell's computer also carries the host lanes.
   const cloudFeed = useRoutedStreamClient(
     "host.notifications.cloudFeed.subscribe",
     hostIdOf(servingHostEntry),
     servingStreamClient,
-    hostClient.getRequestContextUserId(),
+    {
+      userId: requestContextUserId,
+      computerScope: "surface-computer",
+    },
   );
   const cloudFeedStreamClient = cloudFeed.client;
   // The replica tier's copy of the cloud feed: painted by the body before

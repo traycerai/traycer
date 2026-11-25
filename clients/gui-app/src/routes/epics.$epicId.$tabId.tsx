@@ -4,8 +4,11 @@ import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
   negotiatedListTasksServesLocalFirst,
-  registerCloudEpicTasksClient,
 } from "@/lib/cloud-epic-tasks-query";
+import {
+  readHistoryPagePeerId,
+  registerHistoryPrefetchPeer,
+} from "@/lib/cloud-epic-tasks-query/query";
 import { isMobileApp } from "@/lib/mobile-app";
 import { requireSignedIn } from "@/lib/router-auth";
 import {
@@ -44,9 +47,14 @@ export const Route = createFileRoute("/epics/$epicId/$tabId")({
   },
   loader: ({ context }) => {
     const client = context.getHostClient();
-    const hostId = client?.getActiveHostId() ?? null;
     const auth = context.getAuthSnapshot();
-    if (hostId === null || client === null) return;
+    if (client === null) return;
+    const hostId = readHistoryPagePeerId(
+      client,
+      client.getActiveHostId(),
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    if (hostId === null) return;
     // The phone restores this route at launch, where the prefetch put
     // History's first page ahead of the task's first paint. Its drawer warms
     // the same query after that paint or on the first open.
@@ -72,10 +80,14 @@ export const Route = createFileRoute("/epics/$epicId/$tabId")({
     const userId = auth.contextMetadata?.userId ?? null;
     if (userId === null) return;
     if (client.getRequestContextUserId() !== userId) return;
-    registerCloudEpicTasksClient(hostId, client);
+    const prefetchPeer = registerHistoryPrefetchPeer(
+      client,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    if (prefetchPeer === null) return;
     void context.queryClient.prefetchQuery(
       cloudEpicTasksFirstPageQueryOptions(
-        hostId,
+        prefetchPeer,
         userId,
         LIST_CLOUD_TASKS_REQUEST,
       ),

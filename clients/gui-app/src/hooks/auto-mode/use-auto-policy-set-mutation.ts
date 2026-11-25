@@ -12,6 +12,7 @@ import type {
 import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
 import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   HostRequestAbortedError,
   HostRpcError,
@@ -40,6 +41,7 @@ import {
   hostQueryKeys,
 } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 
 const METHOD = "autoPolicy.set";
 
@@ -185,7 +187,12 @@ export function useAutoPolicySetMutation(): UseMutationResult<
       // ordered against a later save routed through host B.
       scope: autoPolicyWriteScope(),
       onMutate: () => ({
-        hostId: client.getActiveHostId() ?? null,
+        hostId: readServingTierHostId(
+          "autoPolicy.get",
+          client.getActiveHostId(),
+          null,
+          null,
+        ),
         viewerUserId,
       }),
       // CANCEL, then write - see `use-auto-judge-set-mutation.ts` for the
@@ -243,13 +250,41 @@ export function useAutoPolicySetMutation(): UseMutationResult<
             team: previous?.team ?? null,
           }),
         );
+        // The save carries the account's new body and stamp. If the read moved,
+        // let the new peer supply its own defaults and refresh status.
+        if (
+          readProcessHostRpcTierPlan().pool !== null &&
+          variables.operation.onOriginSignIn()
+        ) {
+          const currentReadPeer = readServingTierHostId(
+            "autoPolicy.get",
+            client.getActiveHostId(),
+            null,
+            null,
+          );
+          if (currentReadPeer !== null && currentReadPeer !== ctx.hostId) {
+            void queryClient.invalidateQueries({
+              queryKey: hostQueryKeys.autoPolicyForViewer(
+                currentReadPeer,
+                ctx.viewerUserId,
+              ),
+              exact: true,
+            });
+          }
+        }
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't save the Auto mode policy."),
     }),
     mutationFn: (variables) =>
       withHostMutationErrorBoundary(METHOD, () => {
-        const hostId = client.getActiveHostId() ?? null;
+        const surfaceHostId = client.getActiveHostId();
+        const hostId = readServingTierHostId(
+          METHOD,
+          surfaceHostId,
+          null,
+          variables.request,
+        );
         if (
           binding === null ||
           hostId === null ||
@@ -261,7 +296,16 @@ export function useAutoPolicySetMutation(): UseMutationResult<
           return client.request(METHOD, variables.request);
         }
         return saveOnSignIn(
-          { binding, client, hostId, viewerId: viewerUserId, stream },
+          {
+            binding,
+            client:
+              hostId === surfaceHostId
+                ? client
+                : client.createRequesterForHostId(hostId),
+            hostId,
+            viewerId: viewerUserId,
+            stream,
+          },
           variables,
         );
       }),

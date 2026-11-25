@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   decideHostStreamDispatch,
@@ -7,7 +7,10 @@ import {
   type HostStreamRpcMethod,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  getNegotiatedHostMethods,
+  subscribeNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { useAppServingDecision } from "@/lib/host/app-serving-decision";
@@ -25,22 +28,25 @@ import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-clie
  * the answering peer's and a move between peers is one refetch.
  */
 export function useAnsweringHostClient(
-  surfaceClient: HostClient<HostRpcRegistry>,
-  method: string,
-): HostClient<HostRpcRegistry> {
+  surfaceClient: HostClient<HostRpcRegistry> | null,
+  method: "epic.listTasks" | "organization.history",
+): HostClient<HostRpcRegistry> | null {
   const serving = useAppServingDecision();
   const plan = readProcessHostRpcTierPlan();
-  const answeringHostId = hostRpcServingTierHostId(
-    method,
-    surfaceClient.getActiveHostId(),
-    plan,
-    null,
-    serving,
-    null,
-  );
+  const answeringHostId =
+    plan.pool === null
+      ? null
+      : hostRpcServingTierHostId(
+          method,
+          surfaceClient?.getActiveHostId() ?? null,
+          plan,
+          null,
+          serving,
+          null,
+        );
   return useMemo(
     () =>
-      plan.pool === null
+      plan.pool === null || surfaceClient === null
         ? surfaceClient
         : surfaceClient.createRequesterForHostId(answeringHostId),
     [answeringHostId, plan.pool, surfaceClient],
@@ -72,6 +78,8 @@ export function usePoolTierHostClient(
  * computer when it negotiated the method and may serve it for this person,
  * and on the pool otherwise; a pool-only stream always on the pool in a build
  * with one. Without a pool both stay on the surface's own client, as before.
+ * The bell uses the surface computer's authority for its cloud feed, so the
+ * only computer it can open on is the one carrying its other feeds.
  *
  * `client` is `null` while the routed peer's client is not built yet, is
  * still the previous user's, or the route refuses: a binding is used only
@@ -85,19 +93,35 @@ export function useRoutedStreamClient(
   method: HostStreamRpcMethod,
   surfaceHostId: string | null,
   surfaceStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null,
-  userId: string | null,
+  options: {
+    readonly userId: string | null;
+    readonly computerScope: "app-serving-peer" | "surface-computer";
+  },
 ): RoutedStreamClient {
   const binding = useHostBinding();
-  const serving = useAppServingDecision();
+  const appServing = useAppServingDecision();
   const plan = readProcessHostRpcTierPlan();
   const target =
     surfaceHostId === null
       ? null
       : (binding?.hostClient.resolveHostById(surfaceHostId) ?? null);
+  const targetMethods = useSyncExternalStore(
+    subscribeNegotiatedManifests,
+    () =>
+      surfaceHostId === null ? null : getNegotiatedHostMethods(surfaceHostId),
+  );
+  const serving =
+    options.computerScope === "surface-computer"
+      ? {
+          servingPeer: target,
+          servingPeerMethods: targetMethods,
+          servingPeerEnvironmentId: null,
+        }
+      : appServing;
   const decision = decideHostStreamDispatch(
     method,
     target,
-    target === null ? null : getNegotiatedHostMethods(target.hostId),
+    targetMethods,
     plan,
     null,
     serving,
@@ -118,7 +142,7 @@ export function useRoutedStreamClient(
   if (onSurface) {
     return { client: surfaceStreamClient, peerHostId: routed.hostId };
   }
-  const owner = remoteAwareOwnerIdentityKey(routed, userId);
+  const owner = remoteAwareOwnerIdentityKey(routed, options.userId);
   return {
     client:
       routedBinding !== null &&

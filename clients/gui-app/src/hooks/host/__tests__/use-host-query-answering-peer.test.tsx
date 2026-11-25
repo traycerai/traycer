@@ -40,6 +40,8 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { historyReplicaService } from "@/lib/view-replica/history-replica";
 import { viewReplicaStore } from "@/lib/view-replica/view-replica-store";
+import { HistoryLocalContributionMount } from "@/providers/history-local-contribution-mount";
+import { __resetHistoryContributionsForTests } from "@/lib/history-composition/history-local-contribution";
 import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -104,6 +106,7 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
     useSelectionAuthorityStore.getState().reset();
     resetNegotiatedManifests();
     appQueryClient.clear();
+    __resetHistoryContributionsForTests();
     await viewReplicaStore.evict({ kind: "identity-retired" });
   });
 
@@ -119,6 +122,7 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
     let skillsRequests = 0;
     let titleRequests = 0;
     let taskListRequests = 0;
+    let localHistoryRequests = 0;
     let requestId = 0;
     const messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -158,17 +162,25 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
         },
         "epic.listTasks": () => {
           taskListRequests += 1;
-          return { tasks: [taskLight("pool-task", null)], hasMore: false };
+          return {
+            tasks: [
+              taskLight("pool-task", null),
+              taskLight("deleted-pool-task", null),
+            ],
+            hasMore: false,
+          };
         },
-        "epic.localHistory.read": () =>
-          ({
+        "epic.localHistory.read": () => {
+          localHistoryRequests += 1;
+          return {
             complete: true,
             willComplete: true,
             localHomeRows: [taskLight("team-local-task", null)],
             preservedRows: [],
-            tombstonedEpicIds: [],
+            tombstonedEpicIds: ["deleted-pool-task"],
             localRows: "present",
-          }) satisfies LocalHistoryReadResponse,
+          } satisfies LocalHistoryReadResponse;
+        },
       },
     });
     const hostById = new Map<string, HostDirectoryEntry>([
@@ -222,6 +234,7 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <HostRuntimeContext.Provider value={binding}>
         <QueryClientProvider client={queryClient}>
+          <HistoryLocalContributionMount />
           {props.children}
         </QueryClientProvider>
       </HostRuntimeContext.Provider>
@@ -461,26 +474,42 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
       });
       expect(taskListRequests).toBe(1);
       expect(titleRequests).toBe(2);
-      await act(async () => {
-        await rendered.result.current.tasks.query.refetch();
-      });
       await waitFor(() => {
+        expect(localHistoryRequests).toBeGreaterThan(0);
         expect(
-          rendered.result.current.tasks.tasks.map(
-            (task) => task.epic?.light?.id,
-          ),
-        ).toContain("team-local-task");
+          rendered.result.current.tasks.tasks
+            .map((task) => task.epic?.light?.id)
+            .sort(),
+        ).toEqual(["pool-task", "team-local-task"]);
       });
+      expect(taskListRequests).toBe(1);
       expect(
         messenger.calls
           .filter((call) => call.method === "epic.listTasks")
           .map((call) => call.authority.endpoint.hostId),
-      ).toEqual(["pool", "pool"]);
+      ).toEqual(["pool"]);
       expect(
         messenger.calls
           .filter((call) => call.method === "epic.localHistory.read")
-          .map((call) => call.authority.endpoint.hostId),
-      ).toEqual([teamPeer.hostId, teamPeer.hostId]);
+          .map((call) => call.authority.endpoint.hostId)
+          .sort(),
+      ).toEqual([teamPeer.hostId, mockRemoteHostEntry.hostId].sort());
+
+      act(() =>
+        useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } }),
+      );
+      await waitFor(() => {
+        expect(rendered.result.current.servingDecision.servingPeer).toEqual(
+          poolEntry,
+        );
+        expect(
+          rendered.result.current.tasks.tasks
+            .map((task) => task.epic?.light?.id)
+            .sort(),
+        ).toEqual(["deleted-pool-task", "pool-task"]);
+      });
+      expect(taskListRequests).toBe(1);
+      expect(localHistoryRequests).toBe(2);
     } finally {
       rendered.unmount();
       client.dispose();
