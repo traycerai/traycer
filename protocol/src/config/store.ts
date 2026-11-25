@@ -15,6 +15,10 @@ import { platform as osPlatform, userInfo } from "node:os";
 import * as nodePath from "node:path";
 import { cliConfigDir, cliConfigPath } from "./paths";
 import {
+  CliConfigQueue,
+  throwIfCliConfigLockAborted,
+} from "./cli-config-queue";
+import {
   acquireCliConfigLock,
   acquireHostCliConfigLock,
   type CliConfigLockHandle,
@@ -526,6 +530,27 @@ export function migrateCliConfig(raw: unknown): unknown {
  * surface, not something to silently paper over.
  */
 export async function readCliConfig(): Promise<CliConfig> {
+  return (await readCliConfigSnapshot()).config;
+}
+
+interface CliConfigSnapshot {
+  readonly config: CliConfig;
+  readonly storedAgentBrowserAccess: boolean | undefined;
+}
+
+function storedAgentBrowserAccess(raw: unknown): boolean | undefined {
+  if (typeof raw !== "object" || raw === null || !("browser" in raw))
+    return undefined;
+  const { browser } = raw;
+  return typeof browser === "object" &&
+    browser !== null &&
+    "agentAccess" in browser &&
+    typeof browser.agentAccess === "boolean"
+    ? browser.agentAccess
+    : undefined;
+}
+
+async function readCliConfigSnapshot(): Promise<CliConfigSnapshot> {
   let raw: string;
   try {
     raw = await readFile(cliConfigPath(), "utf8");
@@ -539,7 +564,7 @@ export async function readCliConfig(): Promise<CliConfig> {
       "code" in err &&
       err.code === "ENOENT"
     ) {
-      return EMPTY_CLI_CONFIG;
+      return { config: EMPTY_CLI_CONFIG, storedAgentBrowserAccess: undefined };
     }
     throw err;
   }
@@ -557,7 +582,10 @@ export async function readCliConfig(): Promise<CliConfig> {
       `Traycer's config.json does not match the expected schema: ${result.error.message}`,
     );
   }
-  return result.data;
+  return {
+    config: result.data,
+    storedAgentBrowserAccess: storedAgentBrowserAccess(parsed),
+  };
 }
 
 /** Migrates and validates a parsed config document. */
@@ -638,12 +666,18 @@ function normalizedShellEntries(
  */
 export async function writeCliConfig(next: CliConfig): Promise<void> {
   // No read: a whole replacement must still work over an unreadable file.
-  await runCliConfigUpdate(async () => ({ next, result: undefined }));
+  await runCliConfigUpdate(async () => ({
+    next: {
+      config: next,
+      storedAgentBrowserAccess: storedAgentBrowserAccess(next),
+    },
+    result: undefined,
+  }));
 }
 
 /** What an {@link updateCliConfig} merge produces: `next: null` writes nothing. */
-interface CliConfigUpdate<T> {
-  readonly next: CliConfig | null;
+interface CliConfigUpdate<T, Next = CliConfig> {
+  readonly next: Next | null;
   readonly result: T;
 }
 
@@ -653,7 +687,7 @@ const CLI_CONFIG_LOCK_LOST_ATTEMPTS = 3;
 
 // Serializes this process's updates, so its writers queue here instead of
 // polling the lock file against each other.
-let cliConfigUpdateQueue: Promise<unknown> = Promise.resolve();
+const cliConfigUpdateQueue = new CliConfigQueue();
 
 function cliConfigLockPath(): string {
   return `${cliConfigPath()}.lock`;
@@ -670,7 +704,14 @@ function cliConfigLockPath(): string {
 export async function updateCliConfig<T>(
   apply: (current: CliConfig) => CliConfigUpdate<T>,
 ): Promise<T> {
-  return runCliConfigUpdate(async () => apply(await readCliConfig()));
+  return runCliConfigUpdate(async () => {
+    const snapshot = await readCliConfigSnapshot();
+    const { next, result } = apply(snapshot.config);
+    return {
+      next: next === null ? null : { ...snapshot, config: next },
+      result,
+    };
+  });
 }
 
 interface ReservedCliConfigWrite {
@@ -685,29 +726,30 @@ const reservedCliConfigWrite = new AsyncLocalStorage<ReservedCliConfigWrite>();
 /**
  * The host can wait for the file lock before taking its write gate. The
  * callback may make sequential store mutations under that reserved lock.
+ * Abort stops admission. Once the callback starts it finishes under the lock.
  * Keep callbacks to native file work and its ownership bookkeeping.
  */
 export function withHostCliConfigFileLock<T>(
   run: () => Promise<T>,
   onUnknownHolder: (lockPath: string) => void,
+  signal: AbortSignal,
 ): Promise<T> {
-  return enqueueCliConfigUpdate(async () => {
+  return cliConfigUpdateQueue.run(async () => {
     const lockPath = cliConfigLockPath();
-    const handle = await acquireHostCliConfigLock(lockPath, onUnknownHolder);
+    const handle = await acquireHostCliConfigLock(
+      lockPath,
+      onUnknownHolder,
+      signal,
+    );
     const reservation = { handle, lockPath, active: true, writing: false };
     try {
+      throwIfCliConfigLockAborted(signal);
       return await reservedCliConfigWrite.run(reservation, run);
     } finally {
       reservation.active = false;
       await handle.release();
     }
-  });
-}
-
-function enqueueCliConfigUpdate<T>(run: () => Promise<T>): Promise<T> {
-  const result = cliConfigUpdateQueue.then(run);
-  cliConfigUpdateQueue = result.catch(() => undefined);
-  return result;
+  }, signal);
 }
 
 /**
@@ -716,17 +758,20 @@ function enqueueCliConfigUpdate<T>(run: () => Promise<T>): Promise<T> {
  * before the rename, so it must only read the file and compute.
  */
 async function runCliConfigUpdate<T>(
-  produce: () => Promise<CliConfigUpdate<T>>,
+  produce: () => Promise<CliConfigUpdate<T, CliConfigSnapshot>>,
 ): Promise<T> {
   const reservation = reservedCliConfigWrite.getStore();
   if (reservation?.active === true) {
     return applyReservedCliConfigUpdate(produce, reservation);
   }
-  return enqueueCliConfigUpdate(() => runCliConfigUpdateLocked(produce, 1));
+  return cliConfigUpdateQueue.run(
+    () => runCliConfigUpdateLocked(produce, 1),
+    undefined,
+  );
 }
 
 async function applyReservedCliConfigUpdate<T>(
-  produce: () => Promise<CliConfigUpdate<T>>,
+  produce: () => Promise<CliConfigUpdate<T, CliConfigSnapshot>>,
   reservation: ReservedCliConfigWrite,
 ): Promise<T> {
   if (reservation.writing || reservation.lockPath !== cliConfigLockPath())
@@ -744,7 +789,7 @@ async function applyReservedCliConfigUpdate<T>(
 }
 
 async function applyCliConfigUpdate<T>(
-  produce: () => Promise<CliConfigUpdate<T>>,
+  produce: () => Promise<CliConfigUpdate<T, CliConfigSnapshot>>,
   handle: CliConfigLockHandle,
 ): Promise<{ written: true; result: T } | { written: false }> {
   const { next, result } = await produce();
@@ -754,7 +799,7 @@ async function applyCliConfigUpdate<T>(
 }
 
 async function runCliConfigUpdateLocked<T>(
-  produce: () => Promise<CliConfigUpdate<T>>,
+  produce: () => Promise<CliConfigUpdate<T, CliConfigSnapshot>>,
   attempt: number,
 ): Promise<T> {
   const lockPath = cliConfigLockPath();
@@ -781,9 +826,10 @@ async function runCliConfigUpdateLocked<T>(
  * lock is no longer ours at the rename.
  */
 async function writeCliConfigFile(
-  next: CliConfig,
+  snapshot: CliConfigSnapshot,
   handle: CliConfigLockHandle,
 ): Promise<boolean> {
+  const { config: next, storedAgentBrowserAccess } = snapshot;
   const validated = cliConfigSchema.parse({
     ...next,
     shell: {
@@ -800,7 +846,13 @@ async function writeCliConfigFile(
   // when one holds the lock past a takeover.
   const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    await writeFile(tmp, JSON.stringify(validated, null, 2) + "\n", {
+    // Readers need the effective default. Preserve whether the key was
+    // actually on disk so an unrelated write cannot turn it into a setting.
+    const stored = {
+      ...validated,
+      browser: { ...validated.browser, agentAccess: storedAgentBrowserAccess },
+    };
+    await writeFile(tmp, JSON.stringify(stored, null, 2) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });
@@ -1120,6 +1172,18 @@ export async function resetShell(): Promise<void> {
   });
 }
 
+/** Updates the stored shell block without seeding remembered entries. */
+export function updateCliShellConfig(
+  apply: (shell: CliConfig["shell"]) => CliConfig["shell"] | null,
+): Promise<boolean> {
+  return updateCliConfig((current) => {
+    const shell = apply(current.shell);
+    return shell === null
+      ? { next: null, result: false }
+      : { next: { ...current, shell }, result: true };
+  });
+}
+
 /**
  * Persists the client + host log thresholds, preserving the user's shell and
  * env-override config. Reads-modify-writes through the schema like every other
@@ -1255,6 +1319,13 @@ export async function readBrowserConfig(): Promise<BrowserConfig> {
   return (await readCliConfig()).browser;
 }
 
+/** The stored value, before the default is applied. */
+export async function readStoredAgentBrowserAccess(): Promise<
+  boolean | undefined
+> {
+  return (await readCliConfigSnapshot()).storedAgentBrowserAccess;
+}
+
 /**
  * Best-effort synchronous browser read, for the per-call gate on agent browser
  * tools. Fails OPEN - a missing, unreadable, or invalid `browser` block
@@ -1291,13 +1362,26 @@ export function readBrowserConfigSync(): BrowserConfig {
  * rest of the config.
  */
 export async function setAgentBrowserAccess(enabled: boolean): Promise<void> {
-  await updateCliConfig((current) => ({
-    next: {
-      ...current,
-      browser: { ...current.browser, agentAccess: enabled },
-    },
-    result: undefined,
-  }));
+  await writeAgentBrowserAccess(enabled);
+}
+
+/** Removes the stored setting so readers use the browser's runtime default. */
+export async function unsetAgentBrowserAccess(): Promise<void> {
+  await writeAgentBrowserAccess(undefined);
+}
+
+async function writeAgentBrowserAccess(
+  enabled: boolean | undefined,
+): Promise<void> {
+  await runCliConfigUpdate(async () => {
+    const current = await readCliConfigSnapshot();
+    if (current.storedAgentBrowserAccess === enabled)
+      return { next: null, result: undefined };
+    return {
+      next: { ...current, storedAgentBrowserAccess: enabled },
+      result: undefined,
+    };
+  });
 }
 
 /** The policy for worktrees agents create (`allow` when unset). */
