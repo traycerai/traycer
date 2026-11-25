@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { poolHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   createHostRpcTierPlan,
@@ -12,10 +14,17 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { CURRENT_TEAM_COMPUTER_METHODS } from "@traycer-clients/shared/test-fixtures/account-wide-manifest";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { queryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { readHostServingDecision } from "@/lib/host/serving-decision";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
+import { cloudEpicTasksQueryKey } from "@/lib/cloud-epic-tasks-query/query";
 
 const teamComputer: HostDirectoryEntry = {
   hostId: "team-computer",
@@ -173,5 +182,85 @@ describe("app serving decision uses the cached team binding", () => {
         "environment-team",
       ),
     ).toBe(legacyTeamSandbox.hostId);
+  });
+
+  it("keeps account-wide History keys and dispatch on the effective computer when the build has no pool", async () => {
+    const computer = remoteEntry("effective-computer", null);
+    const directory = new Map([[computer.hostId, computer]]);
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: computer.hostId,
+      targetHostId: computer.hostId,
+      effectiveHostId: computer.hostId,
+      servingPeer: { kind: "computer", hostId: computer.hostId },
+      noPeerPresentation: null,
+      leases: [],
+      selectionRevision: 4,
+    });
+    const serving = readHostServingDecision(
+      (hostId) => directory.get(hostId) ?? null,
+    );
+    const plan = createHostRpcTierPlan(poolHostDirectoryEntry(""));
+    expect(plan.pool).toBeNull();
+
+    const answerHostId = hostRpcServingTierHostId(
+      "epic.listTasks",
+      computer.hostId,
+      plan,
+      null,
+      serving,
+      null,
+    );
+    expect(answerHostId).toBe(computer.hostId);
+    if (answerHostId === null) throw new Error("effective computer is missing");
+    expect(
+      cloudEpicTasksQueryKey(
+        answerHostId,
+        "serving-decision-user",
+        LIST_CLOUD_TASKS_REQUEST,
+      ).slice(0, 3),
+    ).toEqual(["host", computer.hostId, "cloud.listTasks"]);
+
+    const messenger = new MockHostMessenger({
+      registry: hostRpcRegistry,
+      requestId: () => "no-pool-history-request",
+      handlers: {
+        "epic.listTasks": () => ({ tasks: [], hasMore: false }),
+      },
+    });
+    const client = new HostClient({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      messenger,
+      findHostById: (hostId) => directory.get(hostId) ?? null,
+      routing: {
+        plan,
+        selectedHostId: () => null,
+        serving: () =>
+          readHostServingDecision((hostId) => directory.get(hostId) ?? null),
+      },
+    });
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "test-token",
+        identity: {
+          userId: "serving-decision-user",
+          username: "Serving decision user",
+          providerHandle: "serving-decision-user",
+        },
+      }),
+    );
+    try {
+      await client
+        .createRequesterForHostId(answerHostId)
+        .request("epic.listTasks", LIST_CLOUD_TASKS_REQUEST);
+      expect(
+        messenger.calls.map((call) => call.authority.endpoint.hostId),
+      ).toEqual([computer.hostId]);
+    } finally {
+      client.dispose();
+    }
   });
 });

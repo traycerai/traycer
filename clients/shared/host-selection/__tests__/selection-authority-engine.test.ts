@@ -4359,6 +4359,7 @@ describe("SelectionAuthorityEngineImpl - pool serving election", () => {
     fleet.publish(0, null, [
       { hostId: "sandbox-1", kind: "sandbox", teamOwned: false },
     ]);
+    const eventStart = authority.events.length;
     expect(await engine.activate("window", incarnation, "sandbox-1")).toEqual({
       ok: true,
     });
@@ -4366,6 +4367,42 @@ describe("SelectionAuthorityEngineImpl - pool serving election", () => {
     expect(activated.effectiveHostId).toBe("sandbox-1");
     expect(findLease(activated.leases, "sandbox-1")?.status).toBe("connecting");
     expect(activated.servingPeer).toEqual({ kind: "pool" });
+    const activationEvent = authority.events
+      .slice(eventStart)
+      .find((event) => event.kind === "selection");
+    if (activationEvent?.kind !== "selection") {
+      throw new Error("expected activation to emit a selection event");
+    }
+    expect(activationEvent.revision).toBe(activated.revision);
+    expect(activationEvent.change).toMatchObject({
+      preferredHostId: "sandbox-1",
+      targetHostId: "sandbox-1",
+      effectiveHostId: "sandbox-1",
+      previousEffectiveHostId: null,
+      cause: "activate",
+      servingPeer: { kind: "pool" },
+      noPeerPresentation: null,
+    });
+
+    const snapshotAttachSeq = engine.allocateAttachSeq("snapshot-window");
+    const snapshotAttach = engine.attach(
+      "snapshot-window",
+      attachRequest(snapshotAttachSeq, []),
+    );
+    if (!snapshotAttach.ok) {
+      throw new Error("expected the snapshot window to attach");
+    }
+    expect(snapshotAttach.snapshot.contractVersion).toBe(1);
+    expect(snapshotAttach.snapshot.revision).toBe(activationEvent.revision);
+    expect(snapshotAttach.snapshot.preferredHostId).toBe("sandbox-1");
+    expect(snapshotAttach.snapshot.targetHostId).toBe("sandbox-1");
+    expect(snapshotAttach.snapshot.effectiveHostId).toBe("sandbox-1");
+    expect(snapshotAttach.snapshot.leases).toEqual([
+      { hostId: "sandbox-1", status: "connecting", dead: null },
+    ]);
+    expect(snapshotAttach.snapshot.servingPeer).toEqual({ kind: "pool" });
+    expect(snapshotAttach.snapshot.noPeerPresentation).toBeNull();
+
     engine.ingestEvidence(
       "window",
       incarnation,

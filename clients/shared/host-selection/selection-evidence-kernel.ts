@@ -50,6 +50,7 @@
  * tombstones there.
  */
 import {
+  normalizeSelectionServing,
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type HostLeaseSnapshot,
   type LiveSessionAnnouncement,
@@ -546,8 +547,11 @@ export class SelectionEvidenceKernel implements TransportEvidenceReporter {
       preferredHostId: change.preferredHostId,
       targetHostId: change.targetHostId,
       effectiveHostId: change.effectiveHostId,
-      servingPeer: change.servingPeer,
-      noPeerPresentation: change.noPeerPresentation,
+      ...normalizeSelectionServing(
+        change.effectiveHostId,
+        change.servingPeer,
+        change.noPeerPresentation,
+      ),
       leases: this.current.leases,
       selectionRevision: revision,
     });
@@ -586,12 +590,16 @@ export class SelectionEvidenceKernel implements TransportEvidenceReporter {
       effectiveHostId: selectionIsFresher
         ? snapshot.effectiveHostId
         : this.current.effectiveHostId,
-      servingPeer: selectionIsFresher
-        ? snapshot.servingPeer
-        : this.current.servingPeer,
-      noPeerPresentation: selectionIsFresher
-        ? snapshot.noPeerPresentation
-        : this.current.noPeerPresentation,
+      ...(selectionIsFresher
+        ? normalizeSelectionServing(
+            snapshot.effectiveHostId,
+            snapshot.servingPeer,
+            snapshot.noPeerPresentation,
+          )
+        : {
+            servingPeer: this.current.servingPeer,
+            noPeerPresentation: this.current.noPeerPresentation,
+          }),
       leases: leasesAreFresher ? snapshot.leases : this.current.leases,
       selectionRevision: this.appliedSelectionRevision,
     });

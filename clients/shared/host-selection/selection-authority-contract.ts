@@ -133,11 +133,10 @@
  * `SELECTION_AUTHORITY_CONTRACT_VERSION` is a major version, additive-only
  * within it. The RENDERER passes its own compiled major through `attach`
  * (the preload must not substitute its cached copy); a mismatch returns a
- * typed refusal naming both versions. Same-major skew is enforced IN CODE at
- * both binding boundaries by the exported `parse*` functions: raw inbound
- * values cross through them, unknown members map per each parser's fixed
- * rule or drop the value, and the IPC layer never hands unparsed input to
- * domain code.
+ * typed refusal naming both versions. Within a major, keep existing wire
+ * fields and their meanings. Raw IPC parsers ignore or normalize unfamiliar
+ * data. The renderer also normalizes additive fields on values already parsed
+ * by its preload, which can have a smaller view of the contract.
  */
 
 import {
@@ -151,13 +150,8 @@ import {
 // this module owns is the kind of split import that goes stale.
 export type { ClientCompatibilityRequirement };
 
-/**
- * Major version of this contract. Additive-only within a major. Version 2
- * adds the serving peer to the selection slice: a renderer of version 1 reads
- * `effectiveHostId` as the peer that serves it, which a pool build no longer
- * guarantees.
- */
-export const SELECTION_AUTHORITY_CONTRACT_VERSION = 2;
+/** Major version of this contract. Additive-only within a major. */
+export const SELECTION_AUTHORITY_CONTRACT_VERSION = 1;
 
 /**
  * The epoch-rejection detail, or `null` when it is absent or malformed.
@@ -746,13 +740,14 @@ export function servingPeerEquals(
 }
 
 /**
- * Raw-boundary parser for {@link ServingPeer}. Malformed → the effective
- * computer, or null with none: the reading every build had before the pool.
+ * Missing or malformed fields use the effective computer, if any. An
+ * explicit null is the authority's verdict that no peer serves.
  */
 function parseServingPeer(
   raw: unknown,
   effectiveHostId: string | null,
 ): ServingPeer | null {
+  if (raw === null) return null;
   if (isRecord(raw)) {
     if (raw["kind"] === "pool") return { kind: "pool" };
     if (raw["kind"] === "computer" && typeof raw["hostId"] === "string") {
@@ -764,9 +759,22 @@ function parseServingPeer(
     : { kind: "computer", hostId: effectiveHostId };
 }
 
-/** Raw-boundary parser for {@link NoPeerPresentation}; unknown → null. */
-function parseNoPeerPresentation(raw: unknown): NoPeerPresentation | null {
-  return raw === "connecting" || raw === "offline" ? raw : null;
+/** Normalizes serving fields on both raw IPC and preload-parsed values. */
+export function normalizeSelectionServing(
+  effectiveHostId: string | null,
+  servingPeer: unknown,
+  noPeerPresentation: unknown,
+): {
+  servingPeer: ServingPeer | null;
+  noPeerPresentation: NoPeerPresentation | null;
+} {
+  return {
+    servingPeer: parseServingPeer(servingPeer, effectiveHostId),
+    noPeerPresentation:
+      noPeerPresentation === "connecting" || noPeerPresentation === "offline"
+        ? noPeerPresentation
+        : null,
+  };
 }
 
 /**
@@ -838,8 +846,11 @@ export function parseSelectionChange(raw: unknown): SelectionChange | null {
     targetHostId,
     effectiveHostId,
     previousEffectiveHostId,
-    servingPeer: parseServingPeer(record["servingPeer"], effectiveHostId),
-    noPeerPresentation: parseNoPeerPresentation(record["noPeerPresentation"]),
+    ...normalizeSelectionServing(
+      effectiveHostId,
+      record["servingPeer"],
+      record["noPeerPresentation"],
+    ),
     cause: safeCause,
   };
 }
@@ -1020,8 +1031,9 @@ export function parseSelectionAttachResult(
         preferredHostId,
         targetHostId,
         effectiveHostId,
-        servingPeer: parseServingPeer(snapshot["servingPeer"], effectiveHostId),
-        noPeerPresentation: parseNoPeerPresentation(
+        ...normalizeSelectionServing(
+          effectiveHostId,
+          snapshot["servingPeer"],
           snapshot["noPeerPresentation"],
         ),
         leases,

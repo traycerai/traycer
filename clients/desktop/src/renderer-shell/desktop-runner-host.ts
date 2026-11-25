@@ -258,13 +258,12 @@ import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
- * bridge. The preload hands back plain structured-clone-safe values, so the
- * shape here matches the preload bridge output exactly.
+ * bridge. An older preload can omit fields added to this shape.
  */
 export interface DesktopPreloadBridge {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
-  readonly poolBaseUrl: string;
+  readonly poolBaseUrl?: string;
   // Runtime redirect_uri from main (dev loopback). Empty string when the build
   // uses the compile-time custom-scheme redirect (staging/prod).
   readonly authRedirectUri: string;
@@ -1051,7 +1050,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.bridge.authnBaseUrl;
     this.relayBaseUrl = options.bridge.relayBaseUrl;
-    this.poolBaseUrl = options.bridge.poolBaseUrl;
+    this.poolBaseUrl = options.bridge.poolBaseUrl ?? "";
     this.hasLocalHost = options.bridge.localHostCapability !== "none";
     this.windows = options.bridge.windows;
     this.menu = options.bridge.menu;

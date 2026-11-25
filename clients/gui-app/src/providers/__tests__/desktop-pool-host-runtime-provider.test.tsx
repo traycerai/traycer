@@ -147,14 +147,15 @@ describe("desktop pool build through the real host runtime provider", () => {
         </RunnerHostContext.Provider>,
       );
 
-      await waitFor(() => {
+      const binding = await waitFor(() => {
         expect(screen.getByTestId("runtime-published")).toBeTruthy();
         expect(useSelectionAuthorityStore.getState().attached).toBe(true);
         expect(readProcessHostRpcTierPlan().pool?.hostId).toBe(POOL_HOST_ID);
+        const publishedBinding = bindingsRef.current;
+        if (publishedBinding === null)
+          throw new Error("runtime binding was not published");
+        return publishedBinding;
       });
-      const binding = bindingsRef.current;
-      if (binding === null)
-        throw new Error("runtime binding was not published");
       expect(binding.directory.findById(POOL_HOST_ID)?.websocketUrl).toBe(
         runnerHost.poolBaseUrl,
       );
