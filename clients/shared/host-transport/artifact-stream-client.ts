@@ -38,10 +38,10 @@
  * attach.
  */
 import {
-  artifactSubscribeServerFrameSchemaV12,
+  artifactSubscribeServerFrameSchemaV13,
   type ArtifactSubscribeClientFrameV10,
   type ArtifactSubscribeSeedOffer,
-  type ArtifactSubscribeServerFrameV12,
+  type ArtifactSubscribeServerFrameV13,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -53,8 +53,8 @@ import type { IStreamClient } from "./i-stream-client";
 
 export const ARTIFACT_SUBSCRIBE_METHOD = "artifact.subscribe";
 
-type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV12["kind"]> =
-  Extract<ArtifactSubscribeServerFrameV12, { readonly kind: Kind }>;
+type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV13["kind"]> =
+  Extract<ArtifactSubscribeServerFrameV13, { readonly kind: Kind }>;
 
 export type ArtifactDocFrame = ArtifactServerFrame<"doc">;
 export type ArtifactDocUpdateFrame = ArtifactServerFrame<"docUpdate">;
@@ -177,7 +177,7 @@ export class ArtifactStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (this.closed) return;
-    const parsed = artifactSubscribeServerFrameSchemaV12.safeParse(envelope);
+    const parsed = artifactSubscribeServerFrameSchemaV13.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     // The address invariant the contract STATES but cannot enforce: every

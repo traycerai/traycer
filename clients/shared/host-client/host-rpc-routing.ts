@@ -570,7 +570,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.deletedArtifacts.revive": "target-host",
   "epic.editArtboard": "target-host",
   "epic.editComment": "target-host",
-  "epic.fetchArtifactAttachment": "target-host",
+  "epic.fetchArtifactAttachment": "addressed-peer",
   "epic.finishArtifactImage": "target-host",
   "epic.getChatRunSettings": "target-host",
   "epic.getChatRunSettingsBatch": "target-host",
@@ -581,11 +581,11 @@ export const HOST_UNARY_RPC_ROUTES = {
   // On the chat's own host: the pool holds the copy, never the records.
   "epic.hydrateChat": "target-host",
   "epic.listChatPublicationTargets": "target-host",
-  "epic.listChatRecords": "target-host",
+  "epic.listChatRecords": "addressed-peer",
   "epic.listCloudChatPayloads": "target-host",
   "epic.listCloudChats": "target-host",
-  "epic.listCollaborators": "target-host",
-  "epic.listCommentThreads": "target-host",
+  "epic.listCollaborators": "addressed-peer",
+  "epic.listCommentThreads": "addressed-peer",
   "epic.listHtmlArtifactVersions": "target-host",
   "epic.listTaskHosts": "target-host",
   // History: the server pool's pages. What only a host knows - its
@@ -602,7 +602,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.mentionStories": "target-host",
   "epic.mentionTickets": "target-host",
   "epic.prepareArtifactImage": "target-host",
-  "epic.readArtifactObject": "target-host",
+  "epic.readArtifactObject": "addressed-peer",
   "epic.readChatAttachment": "target-host",
   "epic.readChatFile": "target-host",
   // The whole-download pair: a host the device holds reads them as a byte
@@ -842,7 +842,7 @@ export const HOST_UNARY_RPC_ROUTES = {
 export const HOST_STREAM_RPC_ROUTES = {
   "agent.activity.subscribe": "target-host",
   "agent.inbox.subscribe": "target-host",
-  "artifact.subscribe": "target-host",
+  "artifact.subscribe": "addressed-peer",
   "bot.listChanged": "target-host",
   "bot.memory.subscribe": "target-host",
   "bot.subscribe": "target-host",
@@ -855,8 +855,8 @@ export const HOST_STREAM_RPC_ROUTES = {
   "cloud.recovered.subscribe": "target-host",
   "drafts.subscribe": "target-host",
   "epic.communicationGraph.subscribe": "target-host",
-  "epic.state.subscribe": "target-host",
-  "epic.status.subscribe": "target-host",
+  "epic.state.subscribe": "addressed-peer",
+  "epic.status.subscribe": "addressed-peer",
   "epic.subscribe": "target-host",
   // The environment arm: a team environment's own rows in one task, for a
   // member of it. Only the server pool serves them; the app composes them

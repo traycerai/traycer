@@ -194,56 +194,60 @@ const artifactSubscribeUnavailableFrameSchemaV10 = lazySchema(() =>
   }),
 );
 
+/**
+ * The body seed. Binary payload is either a full
+ * `Y.encodeStateAsUpdate` over the host's doc, or a DELTA against the
+ * client's offer - `seededFromOffer` is the only thing that distinguishes
+ * them, and it is load-bearing.
+ */
+const artifactSubscribeDocFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("doc"),
+    ...epicLaneEpochFrameFields,
+    ...artifactSubscribeAddressFields,
+    /**
+     * The identity of the document these bytes belong to. A client whose
+     * offer named a DIFFERENT guid must discard its replica and install this
+     * one wholesale - that is the reseed, and it is how a deleted-and-
+     * recreated artifact can never splice histories.
+     */
+    docGuid: z.string().min(1),
+    /**
+     * Base64 `Y.encodeStateVector` of the host's doc AFTER the bytes carried
+     * here. The client's coverage watermark for this body: compare it against
+     * the local replica to decide whether the body is converged or still owes
+     * the host an update.
+     */
+    stateVectorBase64: z.string(),
+    /**
+     * Present ONLY when the payload is a delta against the offer this client
+     * sent - i.e. the bytes are NOT self-sufficient and MUST be merged into
+     * the very replica that produced the offer.
+     *
+     * Absence means a full seed, and every non-delta case is deliberately
+     * indistinguishable: a cold attach, an offer whose `knownDocGuid` did not
+     * match, an unparseable state vector, and any host-side fallback all look
+     * identical. A full seed is always safe to install, so collapsing them
+     * removes every branch where a client could mistake one for the other.
+     *
+     * `z.literal(true)` rather than `z.boolean()`, on the
+     * `seededFromOffer` precedent: the fact is two-state, so this leaves
+     * exactly ONE representation of "full seed" (absence) instead of two, and
+     * no consumer can branch on `=== false` where it meant `!== true`.
+     *
+     * LOAD-BEARING, not cosmetic. Both forms apply through `Y.applyUpdate`,
+     * so this does not select an apply function - it FORBIDS the client's
+     * swap-in-a-fresh-doc path, which would drop every byte a delta
+     * legitimately omitted.
+     */
+    seededFromOffer: z.literal(true).optional(),
+    hasBinaryPayload: z.literal(true),
+  }),
+);
+
 export const artifactSubscribeServerFrameSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    /**
-     * The body seed. Binary payload is either a full
-     * `Y.encodeStateAsUpdate` over the host's doc, or a DELTA against the
-     * client's offer - `seededFromOffer` is the only thing that distinguishes
-     * them, and it is load-bearing.
-     */
-    z.object({
-      kind: z.literal("doc"),
-      ...epicLaneEpochFrameFields,
-      ...artifactSubscribeAddressFields,
-      /**
-       * The identity of the document these bytes belong to. A client whose
-       * offer named a DIFFERENT guid must discard its replica and install this
-       * one wholesale - that is the reseed, and it is how a deleted-and-
-       * recreated artifact can never splice histories.
-       */
-      docGuid: z.string().min(1),
-      /**
-       * Base64 `Y.encodeStateVector` of the host's doc AFTER the bytes carried
-       * here. The client's coverage watermark for this body: compare it against
-       * the local replica to decide whether the body is converged or still owes
-       * the host an update.
-       */
-      stateVectorBase64: z.string(),
-      /**
-       * Present ONLY when the payload is a delta against the offer this client
-       * sent - i.e. the bytes are NOT self-sufficient and MUST be merged into
-       * the very replica that produced the offer.
-       *
-       * Absence means a full seed, and every non-delta case is deliberately
-       * indistinguishable: a cold attach, an offer whose `knownDocGuid` did not
-       * match, an unparseable state vector, and any host-side fallback all look
-       * identical. A full seed is always safe to install, so collapsing them
-       * removes every branch where a client could mistake one for the other.
-       *
-       * `z.literal(true)` rather than `z.boolean()`, on the
-       * `seededFromOffer` precedent: the fact is two-state, so this leaves
-       * exactly ONE representation of "full seed" (absence) instead of two, and
-       * no consumer can branch on `=== false` where it meant `!== true`.
-       *
-       * LOAD-BEARING, not cosmetic. Both forms apply through `Y.applyUpdate`,
-       * so this does not select an apply function - it FORBIDS the client's
-       * swap-in-a-fresh-doc path, which would drop every byte a delta
-       * legitimately omitted.
-       */
-      seededFromOffer: z.literal(true).optional(),
-      hasBinaryPayload: z.literal(true),
-    }),
+    artifactSubscribeDocFrameSchemaV10,
     /**
      * An incremental update to the body identified by `docGuid`. A client that
      * holds a different guid must DROP these rather than apply them: they
@@ -469,5 +473,30 @@ export const artifactSubscribeV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: artifactSubscribeOpenRequestSchemaV10,
   serverFrameSchema: artifactSubscribeServerFrameSchemaV12,
+  clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
+});
+
+export const ARTIFACT_SUBSCRIBE_READ_ONLY_BODY_MINOR = 3;
+
+export const artifactSubscribeServerFrameSchemaV13 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    artifactSubscribeDocFrameSchemaV10.extend({
+      /** The authority serves this body without accepting edits to it. */
+      readOnly: z.literal(true).optional(),
+    }),
+    ...artifactSubscribeServerFrameSchemaV12.options.filter(
+      (option) => option !== artifactSubscribeDocFrameSchemaV10,
+    ),
+  ]),
+);
+export type ArtifactSubscribeServerFrameV13 = z.infer<
+  typeof artifactSubscribeServerFrameSchemaV13
+>;
+
+export const artifactSubscribeV13 = defineStreamRpcContract({
+  method: "artifact.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: artifactSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: artifactSubscribeServerFrameSchemaV13,
   clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
 });

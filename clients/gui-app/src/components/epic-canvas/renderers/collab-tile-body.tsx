@@ -41,6 +41,7 @@ import { startCommentDraft } from "@/lib/comments/start-comment-draft";
 import {
   useChildIdsOf,
   useEpicArtifactBodyAvailability,
+  useEpicArtifactBodyReadOnly,
   useEpicArtifactBodySubscribeAnswered,
   useEpicArtifactBodySyncing,
   useEpicArtifactBodyAwareness,
@@ -402,7 +403,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   } = props;
   const role = useEpicPermissionRole();
   const profile = useAuthStore((s) => s.profile);
-  const editable = role === "owner" || role === "editor";
+  const bodyReadOnly = useEpicArtifactBodyReadOnly(node.id);
+  const editable = !bodyReadOnly && (role === "owner" || role === "editor");
   const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(
     null,
