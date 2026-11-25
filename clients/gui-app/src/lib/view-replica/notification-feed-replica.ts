@@ -6,7 +6,6 @@ import {
   type HostNotificationsCloudFeedRowV18,
   type HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
-import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import {
   clientStreamCanonicalVersion,
   viewReplicaRequestScope,
@@ -77,15 +76,11 @@ export const notificationFeedReplicaService =
     asCached: (page) => page,
   });
 
-/**
- * The replica address of the feed served for `servingHostId`: the pool's in a
- * build with one, whichever host serves the window.
- */
+/** The replica address of the peer carrying the cloud-feed stream. */
 export function notificationFeedReplicaAddress(
   accountId: string,
-  servingHostId: string | null,
+  servingTier: string | null,
 ): ViewReplicaAddress | null {
-  const servingTier = readServingTierHostId(SERVICE, servingHostId, null, null);
   if (servingTier === null) return null;
   return {
     accountId,

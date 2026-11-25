@@ -202,7 +202,7 @@ const TEAM_COMPUTER_ENVIRONMENT_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether a team owns this computer: a team host or a team's sandbox. */
-function isTeamComputer(entry: HostDirectoryEntry): boolean {
+export function isTeamComputer(entry: HostDirectoryEntry): boolean {
   return entry.owner?.kind === "team" || isTeamSandboxHostDirectoryEntry(entry);
 }
 

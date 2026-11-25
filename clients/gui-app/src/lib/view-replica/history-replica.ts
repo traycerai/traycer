@@ -3,7 +3,6 @@ import {
   type ListTaskLight,
   type ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import {
   clientUnaryCanonicalVersion,
   viewReplicaRequestScope,
@@ -96,12 +95,10 @@ export function taskRowScope(task: ListTaskLight): ViewReplicaRowScope {
  */
 export function historyReplicaAddress(
   accountId: string,
-  hostId: string,
+  servingTier: string,
   request: ListCloudTasksRequest,
 ): ViewReplicaAddress | null {
   if (request.filters !== null) return null;
-  const servingTier = readServingTierHostId(SERVICE, hostId, null, null);
-  if (servingTier === null) return null;
   return {
     accountId,
     service: SERVICE,
@@ -138,13 +135,14 @@ export function useHistoryReplicaPage(
  */
 export function rememberHistoryFirstPage(input: {
   readonly accountId: string;
-  readonly hostId: string;
+  readonly hostId: string | null;
   readonly request: ListCloudTasksRequest;
   readonly page: ListTasksResponse;
   readonly observedAt: number;
 }): void {
   const cloudPage = input.page.completeness?.cloudPage;
   if (cloudPage !== undefined && cloudPage !== "settled") return;
+  if (input.hostId === null) return;
   const address = historyReplicaAddress(
     input.accountId,
     input.hostId,

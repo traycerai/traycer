@@ -5006,6 +5006,59 @@ describe("SelectionAuthorityEngineImpl - pool serving election", () => {
     expect(engine.snapshot().noPeerPresentation).toBeNull();
     authority.dispose();
   });
+
+  it("keeps the no-peer card connecting when the pool announces restart after its original deadline starts", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: EMPTY_FLEET_SEED,
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "window");
+    fleet.publish(0, null, []);
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence(
+        "pool",
+        "pool-before-restart",
+        "established",
+        clock.now(),
+      ),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool-before-restart", "lost", clock.now()),
+    );
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+
+    const announcementDelayMs = 1_000;
+    clock.advance(announcementDelayMs);
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      restartIntent("pool", "pool-restart-after-loss", null, clock.now()),
+    );
+    clock.advance(HOST_STARTING_BUDGET_MS - announcementDelayMs);
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+
+    clock.advance(
+      RESTART_INTENT_EPISODE_MS -
+        HOST_STARTING_BUDGET_MS +
+        announcementDelayMs -
+        1,
+    );
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(1);
+    expect(engine.snapshot().noPeerPresentation).toBe("offline");
+    authority.dispose();
+  });
 });
 
 describe("SelectionAuthorityEngineImpl - a dead host reaches `dead` (B1/C6)", () => {

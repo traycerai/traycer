@@ -14,6 +14,10 @@ import {
   useAppServingDecision,
 } from "@/lib/host/app-serving-decision";
 
+export type HostCapabilityMethod =
+  | string
+  | { readonly method: string; readonly environmentId: string | null };
+
 /**
  * Whether `hostId` advertised `method` in its last handshake.
  *
@@ -36,7 +40,7 @@ import {
  */
 export function useHostSupportsMethod(
   hostId: string | null,
-  method: string,
+  method: HostCapabilityMethod,
 ): boolean {
   return useHostMethodSupport(hostId, method) === true;
 }
@@ -60,8 +64,12 @@ export function useHostSupportsMethod(
  */
 export function useHostMethodSupport(
   hostId: string | null,
-  method: string,
+  capability: HostCapabilityMethod,
 ): boolean | null {
+  const { method, environmentId } =
+    typeof capability === "string"
+      ? { method: capability, environmentId: null }
+      : capability;
   // The peer whose manifest answers for `method`: the one the call goes to
   // whichever host the caller names - for an account-wide method, the
   // serving computer when it answers it, else the pool.
@@ -71,7 +79,7 @@ export function useHostMethodSupport(
     readProcessHostRpcTierPlan(),
     null,
     useAppServingDecision(),
-    null,
+    environmentId,
   );
   return useSyncExternalStore(subscribeNegotiatedManifests, () => {
     if (manifestHostId === null) return null;

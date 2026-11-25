@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -7,13 +8,21 @@ import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mo
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   poolHostDirectoryEntry,
+  POOL_HOST_ID,
   type HostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  callEnvironmentIdOf,
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
   settleProcessHostRpcTierPlan,
   type HostServingDecision,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { accountWideManifestFixtures } from "@traycer-clients/shared/test-fixtures/account-wide-manifest";
+import { viewReplicaRequestScope } from "@traycer-clients/shared/view-replica/identity";
+import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
+import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import { taskLight } from "@/lib/view-replica/__tests__/replica-fixtures";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
@@ -30,8 +39,14 @@ import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
 import { useConfigurationGuideQuery } from "@/hooks/environment/team/use-guide-query";
 import { useConfigurationReadClient } from "@/hooks/environment/team/use-configuration-read-client";
 import { useEnvironmentSkillsQuery } from "@/hooks/environment/team/use-environment-skills";
-import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import {
+  useCloudEpicTasksQuery,
+  useCloudEpicTasksQueryForClient,
+} from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { historyReplicaService } from "@/lib/view-replica/history-replica";
+import { viewReplicaStore } from "@/lib/view-replica/view-replica-store";
+import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
 
 const clientRef = vi.hoisted(() => ({
   current: null as HostClient<HostRpcRegistry> | null,
@@ -63,6 +78,20 @@ vi.mock("@/lib/host/app-serving-decision", async (importOriginal) => {
     await importOriginal<typeof import("@/lib/host/app-serving-decision")>();
   return {
     ...actual,
+    readServingTierHostId: (
+      method: string,
+      callerHostId: string | null,
+      selectedHostId: string | null,
+      params: unknown,
+    ) =>
+      hostRpcServingTierHostId(
+        method,
+        callerHostId,
+        readProcessHostRpcTierPlan(),
+        selectedHostId,
+        servingStore.get(),
+        callEnvironmentIdOf(params),
+      ),
     useAppServingDecision: () =>
       react.useSyncExternalStore(
         servingStore.subscribe,
@@ -105,7 +134,7 @@ const poolEntry = poolHostDirectoryEntry("wss://pool.test/rpc");
 if (poolEntry === null) throw new Error("pool fixture must build");
 
 describe("useHostQuery uses its answering peer for an account-wide list", () => {
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     clientRef.current = null;
@@ -117,6 +146,7 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
     useSelectionAuthorityStore.getState().reset();
     resetNegotiatedManifests();
     appQueryClient.clear();
+    await viewReplicaStore.evict({ kind: "identity-retired" });
   });
 
   it("refetches once when a personal manifest arrives and stays on the pool for a team peer", async () => {
@@ -164,16 +194,17 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
         },
         "epic.listTasks": () => {
           taskListRequests += 1;
-          return { tasks: [], hasMore: false };
+          return { tasks: [taskLight("pool-task", null)], hasMore: false };
         },
-        "epic.localHistory.read": () => ({
-          complete: true,
-          willComplete: true,
-          localHomeRows: [],
-          preservedRows: [],
-          tombstonedEpicIds: [],
-          localRows: "none",
-        }),
+        "epic.localHistory.read": () =>
+          ({
+            complete: true,
+            willComplete: true,
+            localHomeRows: [taskLight("team-local-task", null)],
+            preservedRows: [],
+            tombstonedEpicIds: [],
+            localRows: "present",
+          }) satisfies LocalHistoryReadResponse,
       },
     });
     const hostById = new Map<string, HostDirectoryEntry>([
@@ -374,10 +405,204 @@ describe("useHostQuery uses its answering peer for an account-wide list", () => 
         }),
       );
       expect(requests).toBe(2);
+
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: teamPeer.hostId,
+        servingPeer: { kind: "computer", hostId: teamPeer.hostId },
+      });
+      act(() =>
+        servingStore.publish(
+          readHostServingDecision((hostId) => hostById.get(hostId) ?? null),
+        ),
+      );
+      expect(taskListRequests).toBe(1);
+      await act(async () => {
+        await rendered.result.current.tasks.query.refetch();
+      });
+      await waitFor(() => {
+        expect(
+          rendered.result.current.tasks.tasks.map(
+            (task) => task.epic?.light?.id,
+          ),
+        ).toContain("team-local-task");
+      });
+      expect(
+        messenger.calls
+          .filter((call) => call.method === "epic.listTasks")
+          .map((call) => call.authority.endpoint.hostId),
+      ).toEqual(["pool", "pool"]);
+      expect(
+        messenger.calls
+          .filter((call) => call.method === "epic.localHistory.read")
+          .map((call) => call.authority.endpoint.hostId),
+      ).toEqual([teamPeer.hostId, teamPeer.hostId]);
     } finally {
       rendered.unmount();
       client.dispose();
       queryClient.clear();
+    }
+  });
+
+  it("keeps a late pool page in the pool replica after History moves to a computer", async () => {
+    const plan = settleProcessHostRpcTierPlan(poolEntry);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity, gcTime: Infinity },
+      },
+    });
+    let requestId = 0;
+    let listTaskRequests = 0;
+    const poolPage = Promise.withResolvers<ListTasksResponse>();
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `history-peer-${++requestId}`,
+      handlers: {
+        "epic.listTasks": () => {
+          listTaskRequests += 1;
+          return listTaskRequests === 1
+            ? poolPage.promise
+            : { tasks: [taskLight("computer-page", null)], hasMore: false };
+        },
+        "epic.localHistory.read": () => ({
+          complete: true,
+          willComplete: true,
+          localHomeRows: [],
+          preservedRows: [],
+          tombstonedEpicIds: [],
+          localRows: "present",
+        }),
+      },
+    });
+    const hostById = new Map<string, HostDirectoryEntry>([
+      [poolEntry.hostId, poolEntry],
+      [mockRemoteHostEntry.hostId, mockRemoteHostEntry],
+    ]);
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => hostById.get(hostId) ?? null,
+      messenger,
+      routing: {
+        plan,
+        selectedHostId: () => mockRemoteHostEntry.hostId,
+        serving: () => servingStore.get(),
+      },
+    });
+    clientRef.current = client;
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "test",
+        identity: {
+          userId: "viewer-1",
+          username: "Viewer",
+          providerHandle: "viewer",
+        },
+      }),
+    );
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "viewer-1", userName: "Viewer", email: "viewer@example.com" },
+        { userId: "viewer-1", username: "Viewer" },
+        [],
+      );
+    await viewReplicaStore.warm("viewer-1");
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const poolRequester = client.createRequesterForHostId(POOL_HOST_ID);
+    const rendered = renderHook(
+      () => ({
+        app: useCloudEpicTasksQuery(undefined, { enabled: true }),
+        heldPool: useCloudEpicTasksQueryForClient(poolRequester, undefined, {
+          enabled: true,
+        }),
+      }),
+      { wrapper: Wrapper },
+    );
+
+    try {
+      await waitFor(() => {
+        expect(
+          messenger.calls.filter(
+            (call) =>
+              call.method === "epic.listTasks" &&
+              call.authority.endpoint.hostId === POOL_HOST_ID,
+          ),
+        ).toHaveLength(1);
+      });
+
+      recordNegotiatedHostMethods(mockRemoteHostEntry.hostId, [
+        ...accountWideManifestFixtures().current,
+      ]);
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: mockRemoteHostEntry.hostId,
+        servingPeer: { kind: "computer", hostId: mockRemoteHostEntry.hostId },
+      });
+      act(() =>
+        servingStore.publish(
+          readHostServingDecision((hostId) => hostById.get(hostId) ?? null),
+        ),
+      );
+      expect(plan.pool?.hostId).toBe(poolEntry.hostId);
+
+      await waitFor(() => {
+        expect(
+          messenger.calls.some(
+            (call) =>
+              call.method === "epic.listTasks" &&
+              call.authority.endpoint.hostId === mockRemoteHostEntry.hostId,
+          ),
+        ).toBe(true);
+        expect(
+          rendered.result.current.app.tasks.map((task) => task.epic?.light?.id),
+        ).toContain("computer-page");
+      });
+
+      const poolAddress = {
+        accountId: "viewer-1",
+        service: "epic.listTasks",
+        servingTier: POOL_HOST_ID,
+        requestScope: viewReplicaRequestScope(LIST_CLOUD_TASKS_REQUEST),
+      };
+      const computerAddress = {
+        ...poolAddress,
+        servingTier: mockRemoteHostEntry.hostId,
+      };
+      await act(async () => {
+        poolPage.resolve({
+          tasks: [taskLight("late-pool-page", null)],
+          hasMore: false,
+        });
+        await poolPage.promise;
+      });
+      await waitFor(() => {
+        expect(
+          rendered.result.current.heldPool.tasks.map(
+            (task) => task.epic?.light?.id,
+          ),
+        ).toContain("late-pool-page");
+      });
+
+      expect(
+        viewReplicaStore
+          .read(historyReplicaService, computerAddress)
+          ?.page.tasks.map((task) => task.epic?.light?.id),
+      ).toEqual(["computer-page"]);
+      expect(
+        viewReplicaStore
+          .read(historyReplicaService, poolAddress)
+          ?.page.tasks.map((task) => task.epic?.light?.id),
+      ).toContain("late-pool-page");
+    } finally {
+      rendered.unmount();
+      client.dispose();
+      queryClient.clear();
+      await viewReplicaStore.evict({ kind: "identity-retired" });
     }
   });
 });

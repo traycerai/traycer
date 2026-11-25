@@ -2352,9 +2352,8 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   }
 
   /**
-   * The no-peer episode's card, fixing its deadline on the episode's first
-   * pass: an announced pool restart's own hold when one is open, the
-   * host-starting presentation budget otherwise.
+   * Fix the first deadline once. A pool restart announced during the wait
+   * can hold the card longer, without starting a fresh ordinary budget.
    */
   private noPeerPresentation(now: number): NoPeerPresentation {
     if (this.noPeerOfflineAt === null) {
@@ -2362,7 +2361,13 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       this.noPeerOfflineAt =
         hold !== null && now < hold ? hold : now + HOST_STARTING_BUDGET_MS;
     }
-    return now < this.noPeerOfflineAt ? "connecting" : "offline";
+    return now < this.noPeerPresentationDeadline(this.noPeerOfflineAt)
+      ? "connecting"
+      : "offline";
+  }
+
+  private noPeerPresentationDeadline(offlineAt: number): number {
+    return Math.max(offlineAt, this.poolRestartHoldUntil ?? offlineAt);
   }
 
   /**
@@ -3334,7 +3339,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       consider(returnReady.since + FAILOVER_CANDIDATE_STABILITY_MS);
     }
     const noPeerOfflineAt = this.noPeerOfflineAt;
-    if (noPeerOfflineAt !== null) consider(noPeerOfflineAt);
+    if (noPeerOfflineAt !== null) {
+      consider(this.noPeerPresentationDeadline(noPeerOfflineAt));
+    }
     return earliest;
   }
 

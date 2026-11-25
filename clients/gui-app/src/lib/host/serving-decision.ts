@@ -4,7 +4,10 @@ import {
   POOL_HOST_ID,
   type HostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
-import type { HostServingDecision } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  isTeamComputer,
+  type HostServingDecision,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ServingPeer } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import {
   getNegotiatedHostMethods,
@@ -52,10 +55,6 @@ function cachedServedEnvironmentId(hostId: string): string | null {
   return null;
 }
 
-function isTeamOwned(entry: HostDirectoryEntry): boolean {
-  return entry.owner?.kind === "team";
-}
-
 function decisionFor(
   peerHostId: string | null,
   findHostById: (hostId: string) => HostDirectoryEntry | null,
@@ -72,7 +71,7 @@ function decisionFor(
   return {
     servingPeer,
     servingPeerMethods: getNegotiatedHostMethods(servingPeer.hostId),
-    servingPeerEnvironmentId: isTeamOwned(servingPeer)
+    servingPeerEnvironmentId: isTeamComputer(servingPeer)
       ? environmentId(servingPeer.hostId)
       : null,
   };
@@ -114,11 +113,10 @@ export function useHostServingDecision(
       ? null
       : getNegotiatedHostMethods(peerHostId),
   );
+  const servingPeer = peerHostId === null ? null : findHostById(peerHostId);
   const teamPeerId =
-    peerHostId !== null &&
-    peerHostId !== POOL_HOST_ID &&
-    findHostById(peerHostId)?.owner?.kind === "team"
-      ? peerHostId
+    servingPeer !== null && isTeamComputer(servingPeer)
+      ? servingPeer.hostId
       : null;
   const readEnvironment = useCallback(
     () => (teamPeerId === null ? null : cachedServedEnvironmentId(teamPeerId)),
@@ -128,7 +126,6 @@ export function useHostServingDecision(
     subscribeQueryCache,
     readEnvironment,
   );
-  const servingPeer = peerHostId === null ? null : findHostById(peerHostId);
   return useMemo(
     () => ({
       servingPeer,

@@ -9,16 +9,26 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  settleProcessHostRpcTierPlan,
+  type HostServingDecision,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { accountWideManifestFixtures } from "@traycer-clients/shared/test-fixtures/account-wide-manifest";
+import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { EnvironmentSkillV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { EnvironmentSkillsPage } from "@/components/settings/environment/environment-skills";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   negotiateMethodsOn,
+  reachableHost,
   teamEnvironments,
 } from "./mcp-skills-test-support";
 import {
@@ -31,6 +41,23 @@ import {
   teamHostBoundary,
 } from "./team-configuration-test-support";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+const servingFixture = vi.hoisted(() => ({
+  current: {
+    servingPeer: null,
+    servingPeerMethods: null,
+    servingPeerEnvironmentId: null,
+  } as HostServingDecision,
+}));
+
+vi.mock("@/lib/host/app-serving-decision", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/app-serving-decision")>();
+  return {
+    ...actual,
+    useAppServingDecision: () => servingFixture.current,
+  };
+});
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -64,6 +91,11 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
+  servingFixture.current = {
+    servingPeer: null,
+    servingPeerMethods: null,
+    servingPeerEnvironmentId: null,
+  };
 });
 
 const LIST = { major: 1, minor: 0 };
@@ -238,5 +270,45 @@ describe("The Skills page on a build with a server pool and no host running the 
     await waitFor(() => {
       expect(screen.getByText("review")).toBeTruthy();
     });
+  });
+});
+
+describe("The Skills page when a team computer serves the configuration", () => {
+  it("offers the serving computer's skill actions when the pool only advertises the list", async () => {
+    negotiateMethodsOn(POOL_HOST_ID, {
+      "environment.configuration.skills.list": LIST_V11,
+    });
+    const teamMethods = accountWideManifestFixtures().current;
+    expect(teamMethods.size).toBe(23);
+    const teamManifest: ConnectionManifest = Object.fromEntries(
+      [...teamMethods].map((method) => [method, LIST]),
+    );
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      ...teamManifest,
+      "environment.configuration.skills.list": LIST_V11,
+    });
+    servingFixture.current = {
+      servingPeer: {
+        ...mockLocalHostEntry,
+        owner: { kind: "team", id: "team-a", name: "Acme" },
+      },
+      servingPeerMethods: teamMethods,
+      servingPeerEnvironmentId: "env-a",
+    };
+    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+      "environment.configuration.skills.list": () => ({
+        outcome: "listed" as const,
+        revision: "rev-team",
+        policyRevision: null,
+        skills: [REVIEW],
+        deletedBundled: [],
+      }),
+      "environment.host.list": () => ({ hosts: [reachableHost] }),
+      "environment.list": () => teamEnvironments,
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("review")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
   });
 });

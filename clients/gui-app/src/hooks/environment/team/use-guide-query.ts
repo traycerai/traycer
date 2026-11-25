@@ -1,5 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import {
+  useConfigurationEnvironmentId,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
 import { useConfigurationReadClient } from "./use-configuration-read-client";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
@@ -37,15 +40,15 @@ export function useConfigurationGuideQuery() {
 }
 
 /**
- * Whether the tier that serves the guide takes its writes: the pool once it
- * advertises them, or the picked host in a build without one.
+ * Whether the peer that answers for this environment advertises Guide writes.
  */
 export function useConfigurationGuideWritable(): boolean {
   const client = useConfigurationReadClient();
-  return useHostSupportsMethod(
-    client.getActiveHostId(),
-    "environment.configuration.guide.set",
-  );
+  const environmentId = useConfigurationEnvironmentId();
+  return useHostSupportsMethod(client.getActiveHostId(), {
+    method: "environment.configuration.guide.set",
+    environmentId,
+  });
 }
 
 /** Set and reset, through the same client as the read. */

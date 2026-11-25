@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -46,22 +47,31 @@ import type { ReactNode } from "react";
 interface PoolProviderHarness {
   client: HostClient<HostRpcRegistry> | null;
   messenger: MockHostMessenger<HostRpcRegistry> | null;
+  addressableHostId: string | null;
   noComputer: boolean;
   teamServing: boolean;
+  readonly cloudArrivalCompletions: Array<Promise<void>>;
   readonly streams: Map<string, IHostStreamClient<HostStreamRpcRegistry>>;
 }
 
 const harness = vi.hoisted<PoolProviderHarness>(() => ({
   client: null,
   messenger: null,
+  addressableHostId: null,
   noComputer: false,
   teamServing: false,
+  cloudArrivalCompletions: [],
   streams: new Map(),
 }));
 
 const showNotificationMock = vi.hoisted(() =>
   vi.fn(() => Promise.resolve("presented" as const)),
 );
+const toastMock = vi.hoisted(() => {
+  const toast = vi.fn();
+  Object.assign(toast, { error: vi.fn(), success: vi.fn() });
+  return toast;
+});
 const directory = vi.hoisted(() => ({
   list: vi.fn(() => Promise.resolve([])),
   onChange: vi.fn(() => ({ dispose: vi.fn() })),
@@ -165,7 +175,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => null,
+  useAddressableHostId: () => harness.addressableHostId,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -211,13 +221,34 @@ vi.mock(
   },
 );
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: toastMock }));
+vi.mock("@/lib/notifications/notification-display", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-display")
+    >();
+  return {
+    ...actual,
+    displayCloudSnapshotArrivals: (
+      ...args: Parameters<typeof actual.displayCloudSnapshotArrivals>
+    ) => {
+      const completion = actual.displayCloudSnapshotArrivals(...args);
+      harness.cloudArrivalCompletions.push(completion);
+      return completion;
+    },
+  };
+});
 
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
+import {
+  notificationFeedReplicaAddress,
+  notificationFeedReplicaService,
+} from "@/lib/view-replica/notification-feed-replica";
+import { viewReplicaStore } from "@/lib/view-replica/view-replica-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { __resetNotificationsStoreForTests } from "@/stores/notifications/notifications-store";
 import { __resetHostNotificationsStoreForTests } from "@/stores/notifications/host-notifications-store";
@@ -421,7 +452,20 @@ function emitCloudSnapshot(
   );
 }
 
+async function awaitProviderCloudArrival(index: number): Promise<void> {
+  const completion = harness.cloudArrivalCompletions.at(index);
+  if (completion === undefined) {
+    throw new Error(
+      `the provider did not capture cloud arrival ${String(index)}`,
+    );
+  }
+  await act(async () => {
+    await completion;
+  });
+}
+
 async function renderPoolNotificationsProvider(options: {
+  readonly addressableHostId?: string | null;
   readonly noComputer: boolean;
   readonly servingPeer: "pool" | "computer" | null;
   readonly teamServing: boolean;
@@ -436,6 +480,7 @@ async function renderPoolNotificationsProvider(options: {
   const pool = new FakeStreamClient(true);
   const queryClient = new QueryClient();
   harness.client = createHostClient();
+  harness.addressableHostId = options.addressableHostId ?? null;
   harness.noComputer = options.noComputer;
   harness.teamServing = options.teamServing;
   harness.streams.clear();
@@ -483,11 +528,13 @@ async function renderPoolNotificationsProvider(options: {
 
 describe("NotificationsSessionProvider pool sign-in recovery", () => {
   beforeEach(() => {
+    harness.cloudArrivalCompletions.length = 0;
     window.localStorage.clear();
     resetNegotiatedManifests();
     useSelectionAuthorityStore.getState().reset();
     useNotificationsPopoverStore.getState().setOpen(false);
     harness.noComputer = false;
+    harness.addressableHostId = null;
     harness.teamServing = false;
     harness.messenger = null;
     showNotificationMock.mockClear();
@@ -500,10 +547,11 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     useAppLocalNotificationsStore.getState().resetForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
     harness.client = null;
     harness.messenger = null;
+    harness.addressableHostId = null;
     harness.noComputer = false;
     harness.teamServing = false;
     harness.streams.clear();
@@ -514,6 +562,7 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     useSelectionAuthorityStore.getState().reset();
     useNotificationsPopoverStore.getState().setOpen(false);
     resetNegotiatedManifests();
+    await viewReplicaStore.evict({ kind: "identity-retired" });
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -539,33 +588,45 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
   it("serves and reads the cloud bell from the pool, then reopens once on the serving computer", async () => {
     const { messenger, pool, queryClient, serving } =
       await renderPoolNotificationsProvider({
+        addressableHostId: mockLocalHostEntry.hostId,
         noComputer: true,
         servingPeer: "pool",
         teamServing: false,
         child: <NotificationsBell />,
       });
+    await viewReplicaStore.warm("user-a");
     expect(pool.subscribes.map(({ method }) => method)).toEqual([
       "host.notifications.cloudFeed.subscribe",
     ]);
     expect(serving.subscribes).toEqual([]);
 
+    const originalPoolSession = sessionFor(
+      pool,
+      "host.notifications.cloudFeed.subscribe",
+    );
+    const poolReplicaAddress = notificationFeedReplicaAddress(
+      "user-a",
+      poolEntry.hostId,
+    );
+    const computerReplicaAddress = notificationFeedReplicaAddress(
+      "user-a",
+      mockLocalHostEntry.hostId,
+    );
+    if (poolReplicaAddress === null || computerReplicaAddress === null) {
+      throw new Error("both cloud-feed replica addresses must exist");
+    }
     const row = cloudRow("pool-cloud-entry", 7);
-    act(() =>
-      emitCloudSnapshot(
-        sessionFor(pool, "host.notifications.cloudFeed.subscribe"),
-        1,
-        [],
-      ),
-    );
-    act(() =>
-      emitCloudSnapshot(
-        sessionFor(pool, "host.notifications.cloudFeed.subscribe"),
-        2,
-        [row],
-      ),
-    );
+    act(() => emitCloudSnapshot(originalPoolSession, 1, []));
+    const initialRowDeliveryIndex = harness.cloudArrivalCompletions.length;
+    act(() => emitCloudSnapshot(originalPoolSession, 2, [row]));
+    await awaitProviderCloudArrival(initialRowDeliveryIndex);
+    expect(showNotificationMock).toHaveBeenCalledTimes(1);
     await waitFor(() => {
-      expect(showNotificationMock).toHaveBeenCalledTimes(1);
+      expect(
+        viewReplicaStore
+          .read(notificationFeedReplicaService, poolReplicaAddress)
+          ?.page.rows.map((storedRow) => storedRow.entryId),
+      ).toEqual([row.entryId]);
     });
 
     fireEvent.click(screen.getByTestId("notifications-bell"));
@@ -615,11 +676,20 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
       },
     ]);
 
+    // This frame is already queued on the live pool stream when the serving
+    // store moves. Deliver it before React commits the replacement composition.
+    const delayedPoolRow = {
+      ...row,
+      presentation: { ...row.presentation, epicTitle: "Pool late snapshot" },
+    };
+    const delayedPoolDeliveryIndex = harness.cloudArrivalCompletions.length;
     act(() => {
       harness.noComputer = false;
       recordComputerNotificationsManifest();
       publishServingPeer("computer", 2);
+      emitCloudSnapshot(originalPoolSession, 4, [delayedPoolRow]);
     });
+    await awaitProviderCloudArrival(delayedPoolDeliveryIndex);
     await waitFor(() => {
       expect(serving.subscribes.map(({ method }) => method).sort()).toEqual(
         [
@@ -633,7 +703,25 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
         sessionFor(pool, "host.notifications.cloudFeed.subscribe").closed,
       ).toBe(true);
     });
+    await waitFor(() => {
+      expect(
+        viewReplicaStore
+          .read(notificationFeedReplicaService, poolReplicaAddress)
+          ?.page.rows.map((storedRow) => [
+            storedRow.entryId,
+            storedRow.presentation.epicTitle,
+          ]),
+      ).toEqual([[row.entryId, "Pool late snapshot"]]);
+    });
+    expect(
+      viewReplicaStore.read(
+        notificationFeedReplicaService,
+        computerReplicaAddress,
+      ),
+    ).toBeNull();
+    expect(showNotificationMock).toHaveBeenCalledTimes(1);
 
+    const computerDeliveryIndex = harness.cloudArrivalCompletions.length;
     act(() =>
       emitCloudSnapshot(
         sessionFor(serving, "host.notifications.cloudFeed.subscribe"),
@@ -641,9 +729,23 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
         [row],
       ),
     );
+    await awaitProviderCloudArrival(computerDeliveryIndex);
     await waitFor(() => {
       expect(screen.getAllByTestId("notification-title")).toHaveLength(1);
+      expect(
+        viewReplicaStore
+          .read(notificationFeedReplicaService, computerReplicaAddress)
+          ?.page.rows.map((storedRow) => storedRow.entryId),
+      ).toEqual([row.entryId]);
     });
+    expect(
+      viewReplicaStore
+        .read(notificationFeedReplicaService, poolReplicaAddress)
+        ?.page.rows.map((storedRow) => [
+          storedRow.entryId,
+          storedRow.presentation.epicTitle,
+        ]),
+    ).toEqual([[row.entryId, "Pool late snapshot"]]);
     expect(showNotificationMock).toHaveBeenCalledTimes(1);
     expect(pool.subscribes).toHaveLength(1);
     expect(
@@ -668,7 +770,9 @@ describe("NotificationsSessionProvider pool sign-in recovery", () => {
     expect(pool.sessions[0].closed).toBe(true);
     const reopenedPoolSession = pool.sessions[1];
     expect(reopenedPoolSession.closed).toBe(false);
-    act(() => emitCloudSnapshot(reopenedPoolSession, 4, [row]));
+    const reopenedPoolDeliveryIndex = harness.cloudArrivalCompletions.length;
+    act(() => emitCloudSnapshot(reopenedPoolSession, 5, [row]));
+    await awaitProviderCloudArrival(reopenedPoolDeliveryIndex);
     await waitFor(() => {
       expect(screen.getAllByTestId("notification-title")).toHaveLength(1);
     });

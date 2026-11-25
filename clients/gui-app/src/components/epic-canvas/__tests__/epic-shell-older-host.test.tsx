@@ -9,14 +9,56 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  createHostRpcTierPlan,
+  type HostServingDecision,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  buildConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
+} from "@traycer/protocol/framework/capability-manifest";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import type {
+  HostRequestOptions,
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { RemoteHostMessenger } from "@traycer-clients/shared/host-transport/remote/remote-host-messenger";
+import { RemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import {
+  emptyStreamRegistry,
+  FakeRelayHost,
+} from "@traycer-clients/shared/host-transport/remote/__tests__/fake-relay-host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import {
+  getNegotiatedHostMethodVersion,
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  poolHostDirectoryEntry,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type { ConnectionManifest } from "@traycer/protocol/framework/index";
+import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
+import { CommentThreadCard } from "@/components/comments/comment-thread-card";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { HostReadinessControllerContext } from "@/components/layout/host-readiness-controller-context";
 import type {
@@ -42,6 +84,16 @@ import {
 import { resetFakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useTaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
+import { useEpicCreateArtifact } from "@/hooks/epic/use-epic-node-mutations";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import {
+  composerEditorAt,
+  typeIntoEditor,
+} from "@/components/comments/__tests__/comment-submit-test-support";
 
 const EPIC_ID = "epic-older-host";
 const TAB_ID = "epic-older-host-tab";
@@ -49,6 +101,31 @@ const WINDOW_HOST_ID = "window-host";
 const TAB_HOST_ID = "tab-host";
 const USER_ID = "user-older-host";
 const RELAY_URL = "wss://relay.test/attach";
+const ARTIFACT_SHA256 = "a".repeat(64);
+
+const ORIGINAL_TASK_THREAD: CommentThreadWire = {
+  threadId: "original-host-thread",
+  resolved: false,
+  createdAt: 1,
+  comments: [
+    {
+      commentId: "original-host-comment",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Task note" }],
+          },
+        ],
+      },
+      createdAt: 1,
+      updatedAt: null,
+      author: { userId: USER_ID, fallbackHandle: "viewer" },
+    },
+  ],
+  data: { createdByUserId: USER_ID, quotedText: "Task note" },
+};
 
 const seams = vi.hoisted(() => ({
   minimumHostVersion: "0.0.0",
@@ -57,6 +134,7 @@ const seams = vi.hoisted(() => ({
   openAttempts: [] as string[],
   carriedHostIds: [] as string[],
   openedSettings: [] as unknown[],
+  showSessionConsumers: false,
 }));
 
 vi.mock(
@@ -127,9 +205,7 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-const sessionHostClients = vi.hoisted(
-  () => new Map<string, Record<string, unknown>>(),
-);
+const sessionHostClients = vi.hoisted(() => new Map<string, object>());
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) => {
     if (hostId === null) return null;
@@ -282,7 +358,115 @@ function remoteRow(
   };
 }
 
+function OriginalTaskSessionConsumers(): ReactNode {
+  const sessionHostId = useEpicSessionHostId();
+  const sessionClient = useEpicSessionHostClient();
+  const taskHosts = useTaskHostsView(EPIC_ID);
+  const artifact = useArtifactObjectTextQuery(sessionHostId ?? "", {
+    epicId: EPIC_ID,
+    sha256: ARTIFACT_SHA256,
+  });
+  const createArtifact = useEpicCreateArtifact();
+  const [createResult, setCreateResult] = useState("idle");
+
+  return (
+    <section>
+      <span data-testid="original-session-host">{sessionHostId}</span>
+      <span data-testid="original-task-tree-view">{taskHosts.kind}</span>
+      <span data-testid="original-artifact-read">
+        {artifact.data?.kind === "text" ? artifact.data.text : "pending"}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          void createArtifact
+            .mutateAsync({
+              epicId: EPIC_ID,
+              parentId: null,
+              artifactType: "canvas",
+              title: "Original host canvas",
+            })
+            .then(
+              () => setCreateResult("sent"),
+              () => setCreateResult("refused"),
+            );
+        }}
+      >
+        Create canvas on this task
+      </button>
+      <span data-testid="original-task-action-result">{createResult}</span>
+      {sessionClient === null ? null : (
+        <CommentThreadCard
+          epicId={EPIC_ID}
+          hostClient={sessionClient}
+          artifactType="spec"
+          artifactId="original-host-artifact"
+          thread={ORIGINAL_TASK_THREAD}
+          currentUserId={USER_ID}
+          canModerate={false}
+          isExpanded
+          hasAnchor
+          onExpandedChange={() => undefined}
+          onActivateAnchor={() => undefined}
+        />
+      )}
+    </section>
+  );
+}
+
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
+let routedTaskHostClient: HostClient<HostRpcRegistry> | null = null;
+let originalTaskRemoteSession: RemoteSession<
+  HostRpcRegistry,
+  typeof emptyStreamRegistry
+> | null = null;
+let taskConsumerQueryClient: QueryClient | null = null;
+
+class RecordingRemoteHostMessenger extends RemoteHostMessenger<
+  HostRpcRegistry,
+  typeof emptyStreamRegistry
+> {
+  readonly routedCalls: Array<{
+    readonly method: string;
+    readonly hostId: string;
+    readonly requiredHostMethodVersion: HostRequestOptions["requiredHostMethodVersion"];
+  }> = [];
+
+  override request<Method extends keyof HostRpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    options: HostRequestOptions,
+  ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+    this.record(method, options);
+    return super.request(method, params, options);
+  }
+
+  override requestWithResponseTimeout<
+    Method extends keyof HostRpcRegistry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    responseTimeoutMs: number,
+    options: HostRequestOptions,
+  ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+    this.record(method, options);
+    return super.requestWithResponseTimeout(
+      method,
+      params,
+      responseTimeoutMs,
+      options,
+    );
+  }
+
+  private record(method: string, options: HostRequestOptions): void {
+    this.routedCalls.push({
+      method,
+      hostId: options.authority.endpoint.hostId,
+      requiredHostMethodVersion: options.requiredHostMethodVersion,
+    });
+  }
+}
+
 const emitRowChanged = vi.hoisted(() => ({ run: () => undefined }));
 
 function installStreams(): {
@@ -450,15 +634,20 @@ function renderTabOnAnotherComputer(seededOnTabComputer: boolean): void {
   );
 }
 
-function renderFollowingTab(): { readonly moveTo: (hostId: string) => void } {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
+function renderFollowingTab(queryClient: QueryClient): {
+  readonly moveTo: (hostId: string) => void;
+  readonly mountSessionConsumers: () => void;
+} {
   const tree = () => (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
-          <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+          <>
+            <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+            {seams.showSessionConsumers ? (
+              <OriginalTaskSessionConsumers />
+            ) : null}
+          </>
         </TestEpicSessionTab>
       </TooltipProvider>
     </QueryClientProvider>
@@ -467,6 +656,12 @@ function renderFollowingTab(): { readonly moveTo: (hostId: string) => void } {
   return {
     moveTo: (hostId) => {
       seams.effectiveHostId = hostId;
+      act(() => {
+        view.rerender(tree());
+      });
+    },
+    mountSessionConsumers: () => {
+      seams.showSessionConsumers = true;
       act(() => {
         view.rerender(tree());
       });
@@ -488,7 +683,12 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     seams.openAttempts.length = 0;
     seams.carriedHostIds.length = 0;
     seams.openedSettings.length = 0;
+    seams.showSessionConsumers = false;
     sessionHostClients.clear();
+    routedTaskHostClient = null;
+    originalTaskRemoteSession = null;
+    taskConsumerQueryClient = null;
+    resetNegotiatedManifests();
     resetHostConnectionRegistryForTest();
     resetFakeDurableStreamTransports();
     clearSessionCreatedEpics();
@@ -516,6 +716,12 @@ describe("a task tab whose computer falls below the minimum host version", () =>
 
   afterEach(() => {
     cleanup();
+    originalTaskRemoteSession?.close();
+    originalTaskRemoteSession = null;
+    routedTaskHostClient?.dispose();
+    routedTaskHostClient = null;
+    taskConsumerQueryClient?.clear();
+    taskConsumerQueryClient = null;
     __getOpenEpicRegistryForTests().disposeAll();
     __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     clearSessionCreatedEpics();
@@ -524,6 +730,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     useSelectionAuthorityStore.getState().reset();
     useHostDoorStateStore.setState({ byHost: new Map() });
     seams.effectiveHostId = WINDOW_HOST_ID;
+    resetNegotiatedManifests();
     setMobileApp(false);
   });
 
@@ -565,9 +772,128 @@ describe("a task tab whose computer falls below the minimum host version", () =>
 
   it("keeps Open on original host for a tab re-pointed away, and it goes back there", async () => {
     const streams = installStreams();
+    const originalEntry = remoteRow(WINDOW_HOST_ID, "2.0.0");
+    const servingEntry = remoteRow(TAB_HOST_ID, "2.0.0");
+    seams.rows.set(WINDOW_HOST_ID, originalEntry);
+    seams.rows.set(TAB_HOST_ID, servingEntry);
+    const poolEntry = poolHostDirectoryEntry("wss://pool.test/rpc");
+    if (poolEntry === null) throw new Error("pool fixture must build");
+    const originalManifest = {
+      "epic.listTaskHosts": { major: 1, minor: 0 },
+      "epic.readArtifactObject": { major: 1, minor: 0 },
+      "epic.listCollaborators": { major: 1, minor: 0 },
+      "epic.replyToCommentThread": { major: 1, minor: 0 },
+      "epic.createArtifact": { major: 1, minor: 0 },
+    } satisfies ConnectionManifest;
+    const servingManifest = {
+      ...originalManifest,
+      "epic.createArtifact": { major: 1, minor: 1 },
+    } satisfies ConnectionManifest;
+    recordNegotiatedHostManifest(TAB_HOST_ID, servingManifest);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    taskConsumerQueryClient = queryClient;
+    const relay = new FakeRelayHost();
+    const releasedFloorMethods = new Set(RELEASED_FLOOR_METHOD_NAMES);
+    const currentHostManifest = buildConnectionManifest(
+      hostRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const floorManifest: Record<string, { major: number; minor: number }> = {};
+    const optionalManifest: Record<string, { major: number; minor: number }> =
+      {};
+    for (const [method, version] of Object.entries(currentHostManifest)) {
+      if (releasedFloorMethods.has(method)) {
+        floorManifest[method] =
+          method === "epic.createArtifact" ? { major: 1, minor: 0 } : version;
+      } else {
+        optionalManifest[method] = version;
+      }
+    }
+    relay.floorRpcManifest = floorManifest;
+    relay.optionalRpcManifest = optionalManifest;
+    relay.unaryResponseFor = ({ method }) => {
+      const result = {
+        "epic.listTaskHosts": { hosts: [] },
+        "epic.readArtifactObject": {
+          kind: "text",
+          text: "Original host artifact body",
+          mediaType: "text/plain",
+          networkPolicy: "open",
+        },
+        "epic.listCollaborators": {
+          collaborators: [],
+          collaboratorsAvailable: true,
+        },
+        "epic.replyToCommentThread": { ok: true },
+      }[method];
+      return { result: result ?? relay.unaryResult, error: null };
+    };
+    const lease = new MutableBearerLease("original-host-token", USER_ID);
+    let remoteRequestId = 0;
+    originalTaskRemoteSession = new RemoteSession({
+      hostId: WINDOW_HOST_ID,
+      attachBaseUrl: RELAY_URL,
+      hostStaticPublicKey: relay.hostStaticPublicKey,
+      grantProvider: () =>
+        Promise.resolve({
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        }),
+      hostToken: () => lease.getBearerToken(),
+      auth: null,
+      door: null,
+      clock: null,
+      livenessProbe: null,
+      rpcRegistry: hostRpcRegistry,
+      streamRegistry: emptyStreamRegistry,
+      webSocketFactory: relay.factory,
+      requestId: () => `original-host-${String((remoteRequestId += 1))}`,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      clientIdentity: TEST_CLIENT_IDENTITY,
+    });
+    originalTaskRemoteSession.start();
+    await waitFor(() => {
+      expect(originalTaskRemoteSession?.isReady()).toBe(true);
+    });
+    const messenger = new RecordingRemoteHostMessenger(
+      originalTaskRemoteSession,
+    );
+    const entries = new Map<string, HostDirectoryEntry>([
+      [WINDOW_HOST_ID, originalEntry],
+      [TAB_HOST_ID, servingEntry],
+      [poolEntry.hostId, poolEntry],
+    ]);
+    routedTaskHostClient = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => entries.get(hostId) ?? null,
+      messenger,
+      routing: {
+        plan: createHostRpcTierPlan(poolEntry),
+        selectedHostId: () => TAB_HOST_ID,
+        serving: (): HostServingDecision => ({
+          servingPeer: servingEntry,
+          servingPeerMethods: new Set(Object.keys(servingManifest)),
+          servingPeerEnvironmentId: null,
+        }),
+      },
+    });
+    routedTaskHostClient.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "original-host-token",
+        identity: {
+          userId: USER_ID,
+          username: USER_ID,
+          providerHandle: USER_ID,
+        },
+      }),
+    );
     publishTabRow("2.0.0");
     seams.effectiveHostId = WINDOW_HOST_ID;
-    const view = renderFollowingTab();
+    const view = renderFollowingTab(queryClient);
     await waitFor(() => {
       expect(streams.opened()).toBe(1);
     });
@@ -581,7 +907,6 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     await waitFor(() => {
       expect(streams.closed()).toBe(1);
     });
-
     publishTabRow("1.5.4");
 
     const card = await screen.findByTestId("epic-repoint-failure");
@@ -591,6 +916,15 @@ describe("a task tab whose computer falls below the minimum host version", () =>
         .map((button) => button.textContent),
     ).toEqual(["Update now", "Open on original host"]);
 
+    sessionHostClients.set(
+      WINDOW_HOST_ID,
+      routedTaskHostClient.createRequesterForHostId(WINDOW_HOST_ID),
+    );
+    sessionHostClients.set(
+      TAB_HOST_ID,
+      routedTaskHostClient.createRequesterForHostId(TAB_HOST_ID),
+    );
+
     fireEvent.click(
       within(card).getByRole("button", { name: "Open on original host" }),
     );
@@ -598,6 +932,76 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     await waitForTaskShown();
     expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
     expect(seams.openAttempts.at(-1)).toBe(WINDOW_HOST_ID);
+    expect(seams.effectiveHostId).toBe(TAB_HOST_ID);
+    view.mountSessionConsumers();
+    await waitFor(() => {
+      expect(screen.getByTestId("original-session-host").textContent).toBe(
+        WINDOW_HOST_ID,
+      );
+      expect(screen.getByTestId("original-task-tree-view").textContent).toBe(
+        "none",
+      );
+      expect(screen.getByTestId("original-artifact-read").textContent).toBe(
+        "Original host artifact body",
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create canvas on this task" }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("original-task-action-result").textContent,
+      ).toBe("refused");
+    });
+    expect(
+      getNegotiatedHostMethodVersion(WINDOW_HOST_ID, "epic.createArtifact"),
+    ).toEqual({ major: 1, minor: 0 });
+    expect(
+      relay.unaryRequests.filter(
+        (request) => request.method === "epic.createArtifact",
+      ),
+    ).toEqual([]);
+    expect(
+      messenger.routedCalls.filter(
+        (call) => call.method === "epic.createArtifact",
+      ),
+    ).toEqual([
+      {
+        method: "epic.createArtifact",
+        hostId: WINDOW_HOST_ID,
+        requiredHostMethodVersion: {
+          method: "epic.createArtifact",
+          version: { major: 1, minor: 1 },
+        },
+      },
+    ]);
+
+    await screen.findByRole("button", { name: /^Reply/ });
+    typeIntoEditor(composerEditorAt(0), "reply on the original task");
+    fireEvent.click(screen.getByRole("button", { name: /^Reply/ }));
+    await waitFor(() => {
+      expect(
+        messenger.routedCalls.filter(
+          (call) => call.method === "epic.replyToCommentThread",
+        ),
+      ).toHaveLength(1);
+    });
+
+    for (const method of [
+      "epic.listTaskHosts",
+      "epic.readArtifactObject",
+      "epic.replyToCommentThread",
+    ]) {
+      expect(
+        messenger.routedCalls
+          .filter((call) => call.method === method)
+          .map((call) => call.hostId),
+      ).toEqual([WINDOW_HOST_ID]);
+      expect(
+        relay.unaryRequests.filter((request) => request.method === method),
+      ).toHaveLength(1);
+    }
   });
 
   it("starts no further rebuild while the row stays below the floor, past fifteen minutes", async () => {

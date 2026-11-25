@@ -13,6 +13,8 @@ import {
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { readServingTierHostId } from "@/lib/host/app-serving-decision";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type {
   ListTasksRequest,
   ListTasksResponse,
@@ -99,6 +101,11 @@ interface FetchCloudEpicTasksScopedPageOptions {
   readonly requestContextPolicy: "wait" | "require-current";
 }
 
+interface DispatchedHistoryPage {
+  readonly response: ListTasksResponse;
+  readonly answeringHostId: string | null;
+}
+
 export const LIST_CLOUD_TASKS_REQUEST: ListCloudTasksRequest = {
   limit: PAGE_LIMIT,
   filters: null,
@@ -134,19 +141,19 @@ export function cloudEpicTasksLastKnownQueryKey(
 function fetchCloudEpicTasksScopedPageByHostId(
   hostId: string,
   options: FetchCloudEpicTasksScopedPageOptions,
-): Promise<ListTasksResponse> {
+): Promise<DispatchedHistoryPage> {
   const client = getCloudEpicTasksClient(hostId);
   if (client === null) {
     return Promise.reject(new Error(`No host client registered for ${hostId}`));
   }
   if (options.requestContextPolicy === "require-current") {
-    return dispatchScopedPageWithCurrentRequestContext(client, options);
+    return dispatchScopedPageWithCurrentRequestContext(client, hostId, options);
   }
   return waitForMatchingRequestContext(client, options).then(() =>
     // Waiting is only permission to try the synchronous boundary below; an
     // already-resolved wait still resumes in a microtask, after which the
     // client may represent a different principal.
-    dispatchScopedPageWithCurrentRequestContext(client, options),
+    dispatchScopedPageWithCurrentRequestContext(client, hostId, options),
   );
 }
 
@@ -180,7 +187,8 @@ export function fetchCloudEpicTasksFirstPageByHostId(
   options: FetchCloudEpicTasksFirstPageOptions,
 ): Promise<ListTasksResponse> {
   const observedAt = Date.now();
-  const contribution = readHistoryContributionForPage(hostId, userId, {
+  const localTarget = historyLocalTarget(hostId);
+  const contribution = readHistoryContributionForPage(localTarget, userId, {
     filters: options.request.filters,
     abortSignal: options.abortSignal,
     requestContextPolicy: options.requestContextPolicy,
@@ -220,11 +228,13 @@ export function fetchCloudEpicTasksFirstPageByHostId(
         }
         return admitCloudEpicTasksFirstPage(local, { hostId, userId });
       }
-      const page = admitCloudEpicTasksFirstPage(poolResult.value, {
+      const { response, answeringHostId } = poolResult.value;
+      const page = admitCloudEpicTasksFirstPage(response, {
         hostId,
         userId,
       });
       fenceDeletionsAfterPoolPage(hostId, userId, {
+        localTarget,
         filters: options.request.filters,
         abortSignal: options.abortSignal,
         queryClient: options.queryClient,
@@ -232,7 +242,7 @@ export function fetchCloudEpicTasksFirstPageByHostId(
       });
       rememberHistoryFirstPage({
         accountId: userId,
-        hostId,
+        hostId: answeringHostId,
         request: options.request,
         page,
         observedAt,
@@ -260,23 +270,25 @@ export function fetchHostLocalHistoryPageByHostId(
     readonly requestContextPolicy: "wait" | "require-current";
   },
 ): Promise<ListTasksResponse> {
-  return readHistoryContributionForPage(hostId, userId, options).then(
-    (contribution) => {
-      // These readers ask one host what it holds, so a host that could not
-      // answer is their failure, not an empty answer: the reconciler then
-      // closes nothing, and Home reports its coverage as partial.
-      if (contribution.kind === "absent") {
-        throw new HostLocalHistoryUnavailableError();
-      }
-      return admitCloudEpicTasksFirstPage(
-        hostLocalHistoryPage(contribution.read),
-        {
-          hostId,
-          userId,
-        },
-      );
-    },
-  );
+  return readHistoryContributionForPage(
+    { hostId, client: getCloudEpicTasksClient(hostId) },
+    userId,
+    options,
+  ).then((contribution) => {
+    // These readers ask one host what it holds, so a host that could not
+    // answer is their failure, not an empty answer: the reconciler then
+    // closes nothing, and Home reports its coverage as partial.
+    if (contribution.kind === "absent") {
+      throw new HostLocalHistoryUnavailableError();
+    }
+    return admitCloudEpicTasksFirstPage(
+      hostLocalHistoryPage(contribution.read),
+      {
+        hostId,
+        userId,
+      },
+    );
+  });
 }
 
 /** The host named by a host-local read did not answer it completely. */
@@ -302,6 +314,7 @@ function fenceDeletionsAfterPoolPage(
   hostId: string,
   userId: string,
   input: {
+    readonly localTarget: HistoryLocalTarget | null;
     readonly filters: ListCloudTasksRequest["filters"];
     readonly abortSignal: AbortSignal | undefined;
     readonly queryClient: QueryClient;
@@ -313,7 +326,7 @@ function fenceDeletionsAfterPoolPage(
       ? input.firstRead.read.tombstonedEpicIds
       : [],
   );
-  readHistoryContributionForPage(hostId, userId, {
+  readHistoryContributionForPage(input.localTarget, userId, {
     filters: input.filters,
     abortSignal: input.abortSignal,
     requestContextPolicy: "require-current",
@@ -331,6 +344,28 @@ function fenceDeletionsAfterPoolPage(
   );
 }
 
+interface HistoryLocalTarget {
+  readonly hostId: string;
+  readonly client: HostClient<HostRpcRegistry> | null;
+}
+
+/** The local leg must retain its computer across the first read and fence. */
+function historyLocalTarget(listHostId: string): HistoryLocalTarget | null {
+  const client = getCloudEpicTasksClient(listHostId);
+  if (readProcessHostRpcTierPlan().pool === null) {
+    return { hostId: listHostId, client };
+  }
+  const peer = useSelectionAuthorityStore.getState().servingPeer;
+  if (peer?.kind !== "computer") return null;
+  return {
+    hostId: peer.hostId,
+    client:
+      peer.hostId === listHostId
+        ? client
+        : (client?.createRequesterForHostId(peer.hostId) ?? null),
+  };
+}
+
 /**
  * The host's contribution to one History page, read under the same
  * request-context rule as the page: it waits for, or requires, a context
@@ -339,7 +374,7 @@ function fenceDeletionsAfterPoolPage(
  * for the replica's paint gate.
  */
 async function readHistoryContributionForPage(
-  hostId: string,
+  target: HistoryLocalTarget | null,
   userId: string,
   options: {
     readonly filters: ListCloudTasksRequest["filters"];
@@ -347,7 +382,8 @@ async function readHistoryContributionForPage(
     readonly requestContextPolicy: "wait" | "require-current";
   },
 ): Promise<HistoryHostContribution> {
-  const client = getCloudEpicTasksClient(hostId);
+  if (target === null) return { kind: "absent" };
+  const { hostId, client } = target;
   if (client !== null && options.requestContextPolicy === "wait") {
     await waitForMatchingRequestContext(client, {
       expectedUserId: userId,
@@ -413,7 +449,8 @@ export function fetchCloudEpicTasksCursorPageByHostId(
 ): Promise<ListTasksResponse> {
   // A cursor page carries no local rows, but the host's tombstones apply to
   // it too: a pool page further down can still list a task deleted here.
-  const contribution = readHistoryContributionForPage(hostId, userId, {
+  const localTarget = historyLocalTarget(hostId);
+  const contribution = readHistoryContributionForPage(localTarget, userId, {
     filters: options.request.filters,
     abortSignal: options.abortSignal,
     requestContextPolicy: "require-current",
@@ -428,8 +465,9 @@ export function fetchCloudEpicTasksCursorPageByHostId(
       requestContextPolicy: "require-current",
     }),
     contribution,
-  ]).then(([response, hostContribution]) => {
+  ]).then(([{ response }, hostContribution]) => {
     fenceDeletionsAfterPoolPage(hostId, userId, {
+      localTarget,
       filters: options.request.filters,
       abortSignal: options.abortSignal,
       queryClient: options.queryClient,
@@ -673,8 +711,9 @@ function waitForMatchingRequestContext(
  */
 async function dispatchScopedPageWithCurrentRequestContext(
   client: HostClient<HostRpcRegistry>,
+  hostId: string,
   options: FetchCloudEpicTasksScopedPageOptions,
-): Promise<ListTasksResponse> {
+): Promise<DispatchedHistoryPage> {
   if (!hasMatchingRequestContext(client, options.expectedUserId)) {
     throw new Error(
       "Cloud epic tasks request context no longer matches its cache user.",
@@ -689,16 +728,24 @@ async function dispatchScopedPageWithCurrentRequestContext(
   if (!authorizesCloudCapability(useAuthStore.getState().status)) {
     throw new CloudEpicTasksVerdictWithdrawnError();
   }
+  if (hasOrganizationFilters(options.request.filters)) {
+    return fetchOrganizationHistory(client, hostId, options);
+  }
   const request = buildListTasksRequest(options.request, options.cursor);
-  if (hasOrganizationFilters(options.request.filters))
-    return fetchOrganizationHistory(client, options);
-  return client.requestWithSignal(
+  const answeringHostId = readServingTierHostId(
+    "epic.listTasks",
+    hostId,
+    null,
+    request,
+  );
+  const response = await client.requestWithSignal(
     "epic.listTasks",
     options.localFirstPhase === undefined
       ? request
       : { ...request, localFirstPhase: options.localFirstPhase },
     options.abortSignal,
   );
+  return { response, answeringHostId };
 }
 
 function hasOrganizationFilters(filters: CloudTaskFilters | null): boolean {
@@ -708,15 +755,16 @@ function hasOrganizationFilters(filters: CloudTaskFilters | null): boolean {
     filters?.includeUngrouped,
   );
 }
-function fetchOrganizationHistory(
+async function fetchOrganizationHistory(
   client: HostClient<HostRpcRegistry>,
+  hostId: string,
   options: FetchCloudEpicTasksScopedPageOptions,
-): Promise<ListTasksResponse> {
+): Promise<DispatchedHistoryPage> {
   // The tier that serves `organization.history` (the pool, in a build with
   // one), whose manifest is the one that says whether it is there.
   const servingHostId = readServingTierHostId(
     "organization.history",
-    client.getActiveHostId(),
+    hostId,
     null,
     null,
   );
@@ -740,7 +788,7 @@ function fetchOrganizationHistory(
         "Update this device to use Newest created with labels or groups.",
       ),
     );
-  return client.requestWithSignal(
+  const response = await client.requestWithSignal(
     "organization.history",
     {
       ...options.request,
@@ -748,6 +796,7 @@ function fetchOrganizationHistory(
     },
     options.abortSignal,
   );
+  return { response, answeringHostId: servingHostId };
 }
 
 function hasMatchingRequestContext(

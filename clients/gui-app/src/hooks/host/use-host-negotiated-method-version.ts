@@ -6,6 +6,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { subscribeNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HostCapabilityMethod } from "@/hooks/host/use-host-supports-method";
 import { useAppServingDecision } from "@/lib/host/app-serving-decision";
 import {
   readNegotiatedMethodVersion,
@@ -29,8 +30,12 @@ export type { NegotiatedMethodVersion };
  */
 export function useHostNegotiatedMethodVersion(
   client: HostClient<HostRpcRegistry> | null,
-  method: string,
+  capability: HostCapabilityMethod,
 ): NegotiatedMethodVersion {
+  const { method, environmentId } =
+    typeof capability === "string"
+      ? { method: capability, environmentId: null }
+      : capability;
   const subscribe = useCallback(
     (onStoreChange: () => void): (() => void) => {
       const unsubscribeManifest = subscribeNegotiatedManifests(onStoreChange);
@@ -52,11 +57,11 @@ export function useHostNegotiatedMethodVersion(
       readProcessHostRpcTierPlan(),
       null,
       serving,
-      null,
+      environmentId,
     );
     if (hostId === null) return null;
     return readNegotiatedMethodVersion(hostId, method);
-  }, [client, method, serving]);
+  }, [client, environmentId, method, serving]);
 
   return useSyncExternalStore(subscribe, getSnapshot);
 }

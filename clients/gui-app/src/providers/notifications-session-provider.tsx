@@ -146,19 +146,6 @@ function cloudLaneFromPeer(
 }
 
 /**
- * Whether no computer serves this window's notifications while the pool
- * serves the app: the bell is then the account's cloud feed alone (the
- * session body's cloud-only composition). Never true in a build with no pool
- * address, whose serving peer is never the pool.
- */
-function useCloudOnlyNotifications(
-  servingHostEntry: HostDirectoryEntry | null,
-): boolean {
-  const servingPeerHostId = useServingPeerHostId();
-  return servingHostEntry === null && servingPeerHostId === POOL_HOST_ID;
-}
-
-/**
  * The cloud-only composition has no host projection to negotiate: its mode is
  * the cloud feed's once that feed is served, and `local` (nothing opens)
  * before. Every other composition keeps the negotiated mode.
@@ -182,6 +169,12 @@ function cloudFeedRecoveryHostId(
 
 function hostIdOf(entry: HostDirectoryEntry | null): string | null {
   return entry === null ? null : entry.hostId;
+}
+
+function useNotificationsCompositionPeer() {
+  const cloudOnly = useServingPeerHostId() === POOL_HOST_ID;
+  const computerEntry = useNotificationsServingHostEntry();
+  return { cloudOnly, servingHostEntry: cloudOnly ? null : computerEntry };
 }
 
 const POOL_CLOUD_LANE: HostNotificationsCloudLane = {
@@ -273,7 +266,7 @@ export function NotificationsSessionProvider(
   }, [runnerHost]);
   const hostClient = useHostClient();
   const requestContextUserId = useRequestContextUserId(hostClient);
-  const servingHostEntry = useNotificationsServingHostEntry();
+  const { cloudOnly, servingHostEntry } = useNotificationsCompositionPeer();
   const streamAuth = useStreamAuthRevalidator();
   const streamBinding = useHostStreamClientBindingFor(
     servingHostEntry,
@@ -336,10 +329,6 @@ export function NotificationsSessionProvider(
     hostClient.getRequestContextUserId(),
   );
   const cloudFeedStreamClient = cloudFeed.client;
-  // No computer serves this window's notifications while the pool serves the
-  // app: the bell is the account's cloud feed alone (the body's cloud-only
-  // composition). Never true in a build with no pool address.
-  const cloudOnly = useCloudOnlyNotifications(servingHostEntry);
   // The replica tier's copy of the cloud feed: painted by the body before
   // this session's first snapshot, and the version it was stored with
   // answers the mode's cloud-projection floor until the feed's own client
@@ -352,10 +341,7 @@ export function NotificationsSessionProvider(
     notificationFeedReplicaService,
     replicaAccountId === null || !admitsLocalPlane(replicaStatus)
       ? null
-      : notificationFeedReplicaAddress(
-          replicaAccountId,
-          servingHostEntry?.hostId ?? null,
-        ),
+      : notificationFeedReplicaAddress(replicaAccountId, cloudFeed.peerHostId),
   );
   const cachedCloudFeedVersion = replicaFeed?.cloudFeedVersion ?? null;
   const negotiatedFeedMode = useNotificationFeedModeFor(
@@ -1301,7 +1287,7 @@ function NotificationsSessionBody(
           if (accepted.summary !== null && accepted.version !== null) {
             rememberNotificationFeed({
               accountId,
-              servingHostId,
+              servingHostId: cloudFeedPeerHostId,
               page: {
                 rows,
                 summary: accepted.summary,
@@ -1332,7 +1318,7 @@ function NotificationsSessionBody(
       );
     },
     [
-      servingHostId,
+      cloudFeedPeerHostId,
       recordCompletions,
       completeIndicatorsReask,
       showNotification,

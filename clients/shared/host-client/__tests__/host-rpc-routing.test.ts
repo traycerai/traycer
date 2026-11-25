@@ -9,7 +9,6 @@ import { releasedStreamMethodNames } from "@traycer/protocol/host/__tests__/__fi
 import {
   accountWideManifestFixtures,
   CURRENT_TEAM_COMPUTER_METHODS,
-  RELEASED_151_ACCOUNT_WIDE_METHODS,
 } from "../../test-fixtures/account-wide-manifest";
 import { POOL_HOST_ID } from "../host-directory";
 import {
@@ -215,11 +214,18 @@ describe("decideHostRpcDispatch", () => {
     } = accountWideManifestFixtures();
     const fixtures = [released151, released154, current];
     expect(fixtures.map((fixture) => fixture.size)).toEqual([14, 54, 23]);
+    expect(accountWideMethods).toHaveLength(56);
     expect(
-      RELEASED_151_ACCOUNT_WIDE_METHODS.filter(
-        (method) => !accountWideMethods.includes(method),
+      fixtures.map(
+        (fixture) =>
+          accountWideMethods.filter((method) => fixture.has(method)).length,
       ),
-    ).toEqual([]);
+    ).toEqual([14, 54, 23]);
+    expect(
+      fixtures.map((fixture) =>
+        [...fixture].filter((method) => !accountWideMethods.includes(method)),
+      ),
+    ).toEqual([[], [], []]);
 
     for (const method of accountWideMethods) {
       const route =
