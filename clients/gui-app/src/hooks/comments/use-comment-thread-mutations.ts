@@ -80,12 +80,8 @@ function commentWriteErrorToast(error: HostRpcError, fallback: string): void {
  * `/stream` transport anyway, so optimistic mutation would just race the
  * incoming CRDT update.
  *
- * Each mutation captures the active host id in `onMutate` and reuses that
- * captured id for cache writes/invalidation. Reading `getActiveHostId()`
- * at success time would target whichever host is bound at that moment -
- * if the user switches hosts mid-flight, the in-flight ack would land on
- * the new host's cache while the original host's thread list stays
- * stale.
+ * Each mutation captures the serving peer and viewer in `onMutate` so its
+ * response updates the cache entry for that request.
  *
  * Every hook here takes its `client` from the caller and there is no app-wide
  * wrapper: both mount contexts are Epic-scoped (the collab tile's floating
@@ -95,23 +91,33 @@ function commentWriteErrorToast(error: HostRpcError, fallback: string): void {
  */
 interface MutationContext {
   readonly hostId: string | null;
+  readonly viewerUserId: string;
+}
+
+function captureMutationContext(
+  client: HostClient<HostRpcRegistry> | null,
+): MutationContext {
+  return {
+    hostId: client?.getActiveHostId() ?? null,
+    viewerUserId: useAuthStore.getState().contextMetadata?.userId ?? "",
+  };
 }
 
 function useThreadInvalidator(): (
-  hostId: string | null,
+  context: MutationContext,
   epicId: string,
   artifactType: CommentArtifactKind,
   artifactId: string,
 ) => void {
   const queryClient = useQueryClient();
-  return (hostId, epicId, artifactType, artifactId) => {
+  return ({ hostId, viewerUserId }, epicId, artifactType, artifactId) => {
     if (hostId === null) return;
     void queryClient.invalidateQueries({
-      queryKey: commentThreadsQueryKey(hostId, {
-        epicId,
-        artifactType,
-        artifactId,
-      }),
+      queryKey: commentThreadsQueryKey(
+        hostId,
+        { epicId, artifactType, artifactId },
+        viewerUserId,
+      ),
     });
   };
 }
@@ -139,14 +145,14 @@ export function useCreateCommentThreadForClient(
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
+        return captureMutationContext(client);
       },
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentCreated, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
         });
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
@@ -175,14 +181,14 @@ export function useReplyToCommentThreadForClient(
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
+        return captureMutationContext(client);
       },
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentReplied, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
         });
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
@@ -209,12 +215,12 @@ export function useEditCommentForClient(
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
+        return captureMutationContext(client);
       },
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentEdited, null);
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
@@ -241,12 +247,12 @@ export function useDeleteCommentForClient(
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
+        return captureMutationContext(client);
       },
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
@@ -275,7 +281,7 @@ export function useSetCommentThreadResolvedForClient(
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
+        return captureMutationContext(client);
       },
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(
@@ -285,7 +291,7 @@ export function useSetCommentThreadResolvedForClient(
           null,
         );
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
@@ -315,20 +321,24 @@ export function useDeleteCommentThreadForClient(
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
+        return captureMutationContext(client);
       },
       onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
-        const { hostId } = ctx as MutationContext;
+        const { hostId, viewerUserId } = ctx;
         if (hostId !== null) {
           // Clear the deleted thread from the cached list eagerly so the
           // sidebar drops it before the network round-trip.
           queryClient.setQueryData<ListCommentThreadsResponse>(
-            commentThreadsQueryKey(hostId, {
-              epicId: variables.epicId,
-              artifactType: variables.artifactType,
-              artifactId: variables.artifactId,
-            }),
+            commentThreadsQueryKey(
+              hostId,
+              {
+                epicId: variables.epicId,
+                artifactType: variables.artifactType,
+                artifactId: variables.artifactId,
+              },
+              viewerUserId,
+            ),
             (prior) =>
               prior === undefined
                 ? prior
@@ -340,7 +350,7 @@ export function useDeleteCommentThreadForClient(
           );
         }
         invalidate(
-          hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,

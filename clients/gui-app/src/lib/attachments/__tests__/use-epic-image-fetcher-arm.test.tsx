@@ -8,24 +8,46 @@
  * legacy arm keeps the waiting doc read it always had.
  */
 import type { ReactNode } from "react";
-import { renderHook } from "@testing-library/react";
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  FetchArtifactAttachmentRequest,
+  FetchArtifactAttachmentResponse,
+} from "@traycer/protocol/host/epic/artifact-attachment";
 
+import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
 import {
   resetArtifactAttachmentHostSupport,
   resetEpicImageFetcherArmAbort,
   useEpicImageFetcher,
 } from "@/lib/attachments/use-attachment-blob-src";
+import { useImageBlobUrlState } from "@/lib/attachments/use-image-blob-url";
 import {
   ArtifactAttachmentScopeContext,
   type ArtifactAttachmentScopeValue,
 } from "@/lib/attachments/artifact-attachment-scope-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   installedArm: "legacy" as "lanes" | "legacy" | null,
   readEpicAttachmentBytes: vi.fn(),
   readHeldEpicAttachmentBytes: vi.fn(),
 }));
+
+const originalCreateObjectURL = Object.getOwnPropertyDescriptor(
+  URL,
+  "createObjectURL",
+);
+const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(
+  URL,
+  "revokeObjectURL",
+);
 
 /**
  * The store surface `useEpicImageFetcher` actually consumes.
@@ -109,10 +131,23 @@ function wrapperFor(
 }
 
 beforeEach(() => {
+  imageBlobCache.clear();
   resetArtifactAttachmentHostSupport();
 });
 
 afterEach(() => {
+  imageBlobCache.clear();
+  if (originalCreateObjectURL === undefined) {
+    Reflect.deleteProperty(URL, "createObjectURL");
+  } else {
+    Object.defineProperty(URL, "createObjectURL", originalCreateObjectURL);
+  }
+  if (originalRevokeObjectURL === undefined) {
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+  } else {
+    Object.defineProperty(URL, "revokeObjectURL", originalRevokeObjectURL);
+  }
+  useAuthStore.getState().setSignedOut();
   mocks.installedArm = "legacy";
   mocks.readEpicAttachmentBytes.mockReset();
   mocks.readHeldEpicAttachmentBytes.mockReset();
@@ -278,5 +313,124 @@ describe("useEpicImageFetcher - byte source per arm", () => {
       /cancelled|abort/i,
     );
     expect(mocks.readEpicAttachmentBytes).not.toHaveBeenCalled();
+  });
+
+  it("renders a fresh artifact image after the signed-in account changes", async () => {
+    let urlCount = 0;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => `blob:account-switch/${++urlCount}`,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => undefined,
+    });
+
+    let activeAccount: "synthetic-account-a" | "synthetic-account-b" =
+      "synthetic-account-a";
+    let resolveAccountB: (
+      value: FetchArtifactAttachmentResponse,
+    ) => void = () => {
+      throw new Error("account B image response was not requested");
+    };
+    const accountBResponse = new Promise<FetchArtifactAttachmentResponse>(
+      (resolve) => {
+        resolveAccountB = resolve;
+      },
+    );
+    const requestWithSignal = vi.fn(
+      (
+        _method: "epic.fetchArtifactAttachment",
+        _params: FetchArtifactAttachmentRequest,
+        _signal: AbortSignal | undefined,
+      ): Promise<FetchArtifactAttachmentResponse> =>
+        activeAccount === "synthetic-account-a"
+          ? Promise.resolve({
+              ok: true,
+              bytesBase64: "AQID",
+              mediaType: "image/png",
+            })
+          : accountBResponse,
+    );
+    const scope = scopeWith(requestWithSignal);
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "synthetic-account-a",
+        userName: "A",
+        email: "a@example.test",
+      },
+      { userId: "synthetic-account-a", username: "A" },
+      [],
+    );
+    mocks.installedArm = "lanes";
+
+    const ArtifactImage = (): ReactNode => {
+      const image = useImageBlobUrlState(
+        HASH,
+        "image/png",
+        useEpicImageFetcher(),
+        null,
+      );
+      return <img alt="Synthetic attachment" src={image.url ?? undefined} />;
+    };
+    const rendered = render(<ArtifactImage />, { wrapper: wrapperFor(scope) });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("img", { name: "Synthetic attachment" })
+          .getAttribute("src"),
+      ).toBe("blob:account-switch/1");
+    });
+    const accountAUrl = screen
+      .getByRole("img", { name: "Synthetic attachment" })
+      .getAttribute("src");
+    expect(accountAUrl).toBe("blob:account-switch/1");
+    expect(requestWithSignal).toHaveBeenCalledTimes(1);
+
+    activeAccount = "synthetic-account-b";
+    act(() => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "synthetic-account-b",
+          userName: "B",
+          email: "b@example.test",
+        },
+        { userId: "synthetic-account-b", username: "B" },
+        [],
+      );
+    });
+    rendered.rerender(<ArtifactImage />);
+
+    expect(
+      screen
+        .getByRole("img", { name: "Synthetic attachment" })
+        .getAttribute("src"),
+    ).toBeNull();
+    await waitFor(() => {
+      expect(requestWithSignal).toHaveBeenCalledTimes(2);
+    });
+    await act(async () => {
+      resolveAccountB({
+        ok: true,
+        bytesBase64: "BAUG",
+        mediaType: "image/png",
+      });
+      await accountBResponse;
+    });
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("img", { name: "Synthetic attachment" })
+          .getAttribute("src"),
+      ).toBe("blob:account-switch/2");
+    });
+    expect(
+      screen
+        .getByRole("img", { name: "Synthetic attachment" })
+        .getAttribute("src"),
+    ).not.toBe(accountAUrl);
   });
 });

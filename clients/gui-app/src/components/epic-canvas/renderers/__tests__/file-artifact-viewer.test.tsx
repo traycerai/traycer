@@ -34,8 +34,11 @@ import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artif
 import {
   ArtifactServer,
   type ArtifactReadSpan,
+  type ArtifactReadSpanResult,
 } from "@/lib/sandbox/artifact-serving/artifact-server";
 import { FileArtifactViewer } from "@/components/epic-canvas/renderers/file-artifact-viewer";
+import { createAppQueryClient } from "@/lib/query-client";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const DOCX_MEDIA_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -196,6 +199,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAuthStore.getState().setSignedOut();
   mocks.downloadBlobToDevice.mockReset();
   mocks.saveBlobToDisk.mockReset();
   mocks.fileSave = null;
@@ -230,6 +234,16 @@ function objectOf(
 
 function textBytes(text: string): Uint8Array {
   return new TextEncoder().encode(text);
+}
+
+function signInAs(userId: string): void {
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId, userName: userId, email: `${userId}@example.test` },
+      { userId, username: userId },
+      [],
+    );
 }
 
 /** Serves `bytes` whole and records every span it was asked for. */
@@ -602,6 +616,57 @@ describe("<FileArtifactViewer />", () => {
     expect(await screen.findByText("the new file")).toBeTruthy();
   });
 
+  it("does not render account A's cached artifact blob for account B", async () => {
+    const accountABytes = Uint8Array.from([1, 2, 3]);
+    const accountBBytes = Uint8Array.from([4, 5, 6]);
+    const sharedSha = "c".repeat(64);
+    const queryClient = createAppQueryClient();
+    const accountARead = servingSpan(accountABytes);
+    const accountBRequests: string[] = [];
+    let resolveAccountB: (value: ArtifactReadSpanResult) => void = () => {
+      throw new Error("account B blob read was not requested");
+    };
+    const accountBRead: ArtifactReadSpan = (sha256, _offset, _length) => {
+      accountBRequests.push(sha256);
+      return new Promise((resolve) => {
+        resolveAccountB = resolve;
+      });
+    };
+    let currentRead = accountARead.readSpan;
+    const readForViewer: ArtifactReadSpan = (...args) => currentRead(...args);
+    const sharedObject = objectOf(accountABytes, sharedSha, "image/png");
+    signInAs("synthetic-account-a");
+    renderViewerWith(queryClient, "photo.png", sharedObject, readForViewer);
+    await screen.findByTestId("image-preview");
+    const accountAUrl = screen
+      .getByTestId("image-preview")
+      .getAttribute("data-url");
+    expect(accountAUrl).toBe("blob:test/0");
+
+    currentRead = accountBRead;
+    act(() => signInAs("synthetic-account-b"));
+
+    expect(screen.queryByTestId("image-preview")).toBeNull();
+    expect(screen.getByText("Loading file…")).toBeTruthy();
+    await waitFor(() => expect(accountBRequests).toEqual([sharedSha]));
+    expect(
+      screen.queryByTestId("image-preview")?.getAttribute("data-url"),
+    ).not.toBe(accountAUrl);
+
+    act(() => {
+      resolveAccountB({
+        bytes: accountBBytes,
+        totalBytes: accountBBytes.length,
+        mediaType: "image/png",
+      });
+    });
+    await screen.findByTestId("image-preview");
+    expect(screen.getByTestId("image-preview").getAttribute("data-url")).toBe(
+      "blob:test/1",
+    );
+    expect(accountARead.requests).toHaveLength(1);
+  });
+
   it("keeps the painted file and reads nothing more when only the object's status moves from queued to published", async () => {
     const bytes = textBytes("steady file");
     const { readSpan, requests } = servingSpan(bytes);
@@ -962,7 +1027,7 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
       isPending: false,
       refetch: vi.fn<(...args: unknown[]) => unknown>(),
     };
-    const queryClient = new QueryClient();
+    const queryClient = createAppQueryClient();
     const { readSpan } = recordedMediaSpans();
     const first = renderViewerWith(
       queryClient,
@@ -1379,6 +1444,70 @@ describe("<FileArtifactViewer /> media in a browser", () => {
     });
     expect(spans).toEqual([]);
     expect(mocks.createdUrls).toEqual([]);
+  });
+
+  it("does not render account A's signed URL while account B's URL is being minted", async () => {
+    mocks.localHostId = "host-2";
+    const accountAUrl = "https://cdn.example.test/clip-a.mp4?sig=synthetic-a";
+    mocks.urlResponse = {
+      kind: "url",
+      url: accountAUrl,
+      expiresAt: Date.now() + 60_000,
+    };
+    const accountBUrl = {
+      kind: "url",
+      url: "https://cdn.example.test/clip-b.mp4?sig=synthetic-b",
+      expiresAt: Date.now() + 60_000,
+    } as const;
+    let resolveAccountB: (
+      value: EpicReadArtifactObjectResponse,
+    ) => void = () => {
+      throw new Error("account B signed URL was not requested");
+    };
+    const accountBAnswer = new Promise<EpicReadArtifactObjectResponse>(
+      (resolve) => {
+        resolveAccountB = resolve;
+      },
+    );
+    const queryClient = new QueryClient();
+    const { readSpan } = recordedMediaSpans();
+    signInAs("synthetic-account-a");
+    const rendered = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() =>
+      expect(
+        rendered.container.querySelector("video")?.getAttribute("src"),
+      ).toBe(accountAUrl),
+    );
+    expect(mocks.urlRequests).toHaveLength(1);
+
+    mocks.urlAnswer = () => accountBAnswer;
+    act(() => signInAs("synthetic-account-b"));
+    rendered.rerenderWith(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+
+    expect(rendered.container.querySelector("video")).toBeNull();
+    expect(screen.getByText("Loading media…")).toBeTruthy();
+    await waitFor(() => expect(mocks.urlRequests).toHaveLength(2));
+    expect(
+      rendered.container.querySelector("video")?.getAttribute("src"),
+    ).not.toBe(accountAUrl);
+    await act(async () => {
+      resolveAccountB(accountBUrl);
+      await accountBAnswer;
+    });
+    await waitFor(() =>
+      expect(
+        rendered.container.querySelector("video")?.getAttribute("src"),
+      ).toBe(accountBUrl.url),
+    );
   });
 
   it("renews the signed URL when Retry is pressed after a playback error", async () => {

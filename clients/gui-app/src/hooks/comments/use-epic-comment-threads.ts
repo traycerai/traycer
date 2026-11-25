@@ -7,7 +7,8 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { hostQueryEntryKey, useHostQuery } from "@/hooks/host/use-host-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudReadRefusedWithoutVerdict } from "@/lib/host/cloud-verdict-preflight";
 import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
@@ -27,8 +28,15 @@ import {
 export function commentThreadsQueryKey(
   hostId: string,
   params: ListCommentThreadsRequest,
+  viewerUserId: string,
 ): readonly unknown[] {
-  return ["host", hostId, "epic.listCommentThreads", params] as const;
+  return hostQueryEntryKey<HostRpcRegistry, "epic.listCommentThreads">({
+    hostId,
+    effectiveHostId: hostId,
+    method: "epic.listCommentThreads",
+    params,
+    cacheKeyIdentity: [viewerUserId],
+  });
 }
 
 export interface UseEpicCommentThreadsOptions {
@@ -144,8 +152,9 @@ export function useEpicCommentThreadsForClient(args: {
 }): UseQueryResult<ListCommentThreadsResponse, HostRpcError> {
   const { client, epicId, artifactType, artifactId, options } = args;
   const sessionHandle = useMaybeOpenEpicHandle();
+  const viewerUserId = useCloudChatViewerId();
   return useHostQuery({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [viewerUserId],
     client,
     method: "epic.listCommentThreads",
     params: { epicId, artifactType, artifactId },

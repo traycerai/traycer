@@ -23,6 +23,7 @@ import {
   type ArtifactAttachmentScopeValue,
 } from "@/lib/attachments/artifact-attachment-scope-context";
 import { base64ToBytes } from "@/lib/composer/image-base64";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   readEpicAttachmentBytes,
   readHeldEpicAttachmentBytes,
@@ -261,6 +262,9 @@ export function resetEpicImageFetcherArmAbort(): void {
 export function useEpicImageFetcher(): ScopedImageBytesFetcher {
   const handle = useMaybeOpenEpicHandle();
   const scope = useArtifactAttachmentScope();
+  const viewerUserId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
   // SUBSCRIBED, not read imperatively at call time. The arm decides which of
   // the two legs below runs, and the legacy leg's contract is to WAIT - so an
   // in-place host upgrade that swaps `@1` for `lanes` mid-read leaves that
@@ -311,7 +315,9 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
       fetch,
     });
     return {
-      scopeKey: persisted.scopeKey,
+      // The persistent store already has an account partition. The blob
+      // cache and rendered URL also need the viewer in their in-memory key.
+      scopeKey: JSON.stringify([persisted.scopeKey, viewerUserId]),
       fetch: async (hash, callerSignal) => {
         if (handle === null) {
           throw new Error("No open-epic handle to fetch image attachment");
@@ -329,7 +335,7 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
         }
       },
     };
-  }, [handle, scope, fetch, installedArm]);
+  }, [handle, scope, fetch, installedArm, viewerUserId]);
 }
 
 /**
