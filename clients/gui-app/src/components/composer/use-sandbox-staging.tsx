@@ -28,9 +28,9 @@ import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/
 import {
   newRowFacts,
   newRowPresentation,
+  useNewSandboxRowInputs,
   type NewRowFacts,
 } from "@/components/composer/new-sandbox-rows";
-import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useTeamBundleBalances } from "@/hooks/sandboxes/use-team-bundle-balances";
 import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
 import {
@@ -45,7 +45,6 @@ import {
   type EpicCollaboratorsView,
 } from "@/hooks/epics/use-epic-collaborators-query";
 import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
-import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { useSampledNow } from "@/lib/relative-time";
@@ -58,7 +57,6 @@ import {
   sandboxShapeAndCostLine,
   sandboxTodayCost,
 } from "@/lib/sandboxes/sandbox-row-lines";
-import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import {
   stageBalanceMc,
   stageConfigurationCopy,
@@ -249,22 +247,20 @@ export function useSandboxStaging(input: {
   const surfaceKey = surface === null ? "" : surface.surfaceKey;
   const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
-  const user = useAuthUser().data ?? null;
   const teamBalanceMc = useTeamBundleBalances();
   // Neither read without a surface: nothing prices or shapes a stage.
   const reads = surface !== null;
-  const catalogueQuery = useSandboxCatalogue(reads);
-  const catalogue = catalogueQuery.data ?? null;
-  let catalogueState: "loading" | "error" | null = null;
-  if (catalogue === null) {
-    catalogueState = catalogueQuery.isError ? "error" : "loading";
-  }
+  const {
+    user,
+    catalogue,
+    catalogueState,
+    defaults: defaultsFor,
+  } = useNewSandboxRowInputs(reads);
   const computers = useMemo(
     () => (reads ? input.hosts.filter(isEnvironmentComputer) : []),
     [input.hosts, reads],
   );
   const computerStatuses = useRegisteredHostEnvironmentStatuses(computers);
-  const defaultsFor = useSandboxDefaultsLookup(reads);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
     (s) => s.lastConfigurationByHost,

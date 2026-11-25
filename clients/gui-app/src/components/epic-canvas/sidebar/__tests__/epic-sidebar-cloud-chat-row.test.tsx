@@ -656,6 +656,7 @@ describe("EpicSidebarCloudChatRow on a mounting surface", () => {
       revealRowControls: true,
       searchQuery: null,
       startNewChat: () => undefined,
+      newChatUnavailable: false,
     };
   }
 

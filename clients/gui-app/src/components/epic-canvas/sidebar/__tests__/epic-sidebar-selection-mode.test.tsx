@@ -828,7 +828,10 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => testState.rowHostEntry,
 }));
 
@@ -6529,6 +6532,7 @@ describe("chat tree on a mounting surface", () => {
       revealRowControls: true,
       searchQuery: null,
       startNewChat: () => undefined,
+      newChatUnavailable: false,
       ...overrides,
     };
   }
@@ -6580,6 +6584,20 @@ describe("chat tree on a mounting surface", () => {
 
     expect(started).toEqual(["chat-root"]);
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+  });
+
+  it("disables New child agent on a surface whose placement is unavailable", () => {
+    seedChatTree();
+    const startNewChat = vi.fn();
+    renderOnSurface(mountedSurface({ newChatUnavailable: true, startNewChat }));
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-more-chat-root"));
+    const childAction = screen.getByRole("menuitem", {
+      name: "New child agent",
+    });
+    expect(isMenuItemUnavailable(childAction)).toBe(true);
+    fireEvent.click(childAction);
+    expect(startNewChat).not.toHaveBeenCalled();
   });
 
   it("narrows by the SURFACE's query when it owns one", () => {

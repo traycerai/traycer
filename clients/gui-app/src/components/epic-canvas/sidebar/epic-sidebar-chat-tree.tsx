@@ -3,8 +3,7 @@ import {
   usePoolComputerUnavailable,
 } from "@/hooks/host/use-pool-computer-unavailable";
 import { useTerminalAgentDocRename } from "@/hooks/epic/use-terminal-agent-doc-rename";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { usePoolSidebarReparentBlocked } from "@/components/epic-canvas/dnd/sidebar-agent-reparent-route";
 import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
@@ -354,6 +353,7 @@ import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
+  type ChatTreeSurface,
   useChatTreeSurface,
   useRevealRowControls,
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
@@ -2330,6 +2330,7 @@ function ChatNodeShellBody(
     writeRoute,
     renameUnavailable: terminalOwnerUnavailable && !terminalDocRename,
     deleteUnavailable: terminalOwnerUnavailable,
+    childCreateSurface,
     archiveEntry: decision.entry,
     sharingEntry: sharing.entry,
     onNewChildAgent: handleNewChildAgent,
@@ -3324,7 +3325,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     [epicId, nodeId, sourceHostId, viewTabId],
   );
   const dragDisabled = useDragSourceDisabled();
-  const onPool = useServingPeerHostId() === POOL_HOST_ID;
+  const reparentBlocked = usePoolSidebarReparentBlocked(nodeId, sessionHostId);
   const {
     attributes,
     listeners,
@@ -3332,7 +3333,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
     isDragging,
   } = useDraggable({
     id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
-    disabled: dragDisabled || onPool || selectionMode || dragData === null,
+    disabled:
+      dragDisabled || reparentBlocked || selectionMode || dragData === null,
     data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(
@@ -3956,6 +3958,10 @@ interface ChatRowMenuEntriesProps {
   readonly writeRoute: ChatWriteRoute;
   readonly renameUnavailable: boolean;
   readonly deleteUnavailable: boolean;
+  readonly childCreateSurface: Pick<
+    ChatTreeSurface,
+    "newChatUnavailable"
+  > | null;
   readonly archiveEntry: ChatRowArchiveEntry | null;
   readonly sharingEntry: ChatSharingMenuDecision;
   readonly onNewChildAgent: () => void;
@@ -4121,7 +4127,9 @@ function chatRowMenuEntries(
       id: "new-child-agent",
       label: "New child agent",
       icon: <Plus className="size-3.5" />,
-      disabled: !props.canMutate,
+      disabled:
+        !props.canMutate ||
+        props.childCreateSurface?.newChatUnavailable === true,
       disabledTooltip: null,
       variant: "default",
       testIds: {

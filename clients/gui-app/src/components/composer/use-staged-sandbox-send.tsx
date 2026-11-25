@@ -1,3 +1,4 @@
+import { stageTakingTerminal } from "@/lib/sandboxes/staged-terminal-target";
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { StagedStopFailure } from "@/components/composer/staged-sandbox-stop-failure";
 import {
@@ -212,8 +213,8 @@ export function startStagedTerminal(
   surfaceKey: string,
   start: (fresh: boolean) => void,
 ): StagedTerminalAsk {
-  const current = readStagedSandbox(surfaceKey);
-  if (current === null || current.phase === "handoff") {
+  const current = stageTakingTerminal(readStagedSandbox(surfaceKey));
+  if (current === null) {
     return { kind: "not-taken" };
   }
   if (current.failure?.kind === "settings" && current.createdHostId !== null) {

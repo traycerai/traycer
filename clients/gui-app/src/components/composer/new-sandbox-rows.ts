@@ -4,6 +4,10 @@ import type {
   SandboxGrowth,
 } from "@traycer/protocol/host/sandbox-control";
 import type { HostSwitcherNewRow } from "@/components/settings/host-scope/host-switcher-new-rows";
+import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import {
   configurationStageShape,
   stageBalanceMc,
@@ -42,22 +46,57 @@ export interface NewRowFacts {
   readonly needsCredits: boolean;
 }
 
-export function newRowFacts(input: {
+interface NewSandboxRowInputs {
   readonly user: AuthenticatedUser | null;
-  readonly teamBalanceMc: TeamBalanceMc;
   readonly catalogue: SandboxCatalogue | null;
   readonly defaults: (
     configurationKey: string,
   ) => SandboxConfigurationDefaults | null;
-}): readonly NewRowFacts[] {
+}
+
+export function useNewSandboxRowInputs(
+  enabled: boolean,
+): NewSandboxRowInputs & {
+  readonly catalogueState: "loading" | "error" | null;
+} {
+  const user = useAuthUser().data ?? null;
+  const query = useSandboxCatalogue(enabled);
+  const unavailable = useSandboxControlUnavailableReason() !== null;
+  const catalogue = unavailable ? null : (query.data ?? null);
+  const defaults = useSandboxDefaultsLookup(enabled);
+  let catalogueState: "loading" | "error" | null = null;
+  if (catalogue === null) {
+    catalogueState = query.isError ? "error" : "loading";
+  }
+  return { user, catalogue, defaults, catalogueState };
+}
+
+/** Whether the existing New rows can stage a usable shape. */
+export function hasStageableNewSandboxRow(input: NewSandboxRowInputs): boolean {
+  return stageConfigurations(input.user).some(
+    (configuration) => newRowShape(input, configuration) !== null,
+  );
+}
+
+function newRowShape(
+  input: NewSandboxRowInputs,
+  configuration: StageConfiguration,
+): StageShape | null {
+  return input.catalogue === null
+    ? null
+    : configurationStageShape(
+        input.catalogue,
+        input.defaults(stageConfigurationKey(configuration)),
+      );
+}
+
+export function newRowFacts(
+  input: NewSandboxRowInputs & {
+    readonly teamBalanceMc: TeamBalanceMc;
+  },
+): readonly NewRowFacts[] {
   return stageConfigurations(input.user).map((configuration) => {
-    const shape =
-      input.catalogue === null
-        ? null
-        : configurationStageShape(
-            input.catalogue,
-            input.defaults(stageConfigurationKey(configuration)),
-          );
+    const shape = newRowShape(input, configuration);
     const price =
       input.catalogue === null || shape === null
         ? null

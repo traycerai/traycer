@@ -1,4 +1,4 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import { useNewTerminalPickerDisabled } from "./use-new-terminal-picker-disabled";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 /**
  * Picker popover behind the Terminals panel "+" action. Top section picks
@@ -23,10 +23,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { NewTerminalPickerBody } from "@/components/epic-canvas/sidebar/new-terminal-picker-body";
-import {
-  useSurfaceHostPin,
-  useTabSurfaceKey,
-} from "@/hooks/host/use-surface-host-pin";
+import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
 import {
   mintNewEpicTerminalTile,
   type TerminalLaunchTarget,
@@ -55,8 +52,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const placement = useColumnOverlayPlacement("row");
   const { epicId, onLaunched, tabId } = props;
   const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
-  const pin = useSurfaceHostPin(surfaceKey);
-  const disabled = usePoolComputerUnavailable(pin.resolvedHostId);
+  const disabled = useNewTerminalPickerDisabled(tabId);
   const isOpen = usePanelHeaderMenuOpen(tabId, "terminals", "create");
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const setIsOpen = useCallback(

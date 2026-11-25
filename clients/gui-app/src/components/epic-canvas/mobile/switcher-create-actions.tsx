@@ -1,8 +1,4 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
-import {
-  useSurfaceHostPin,
-  useTabSurfaceKey,
-} from "@/hooks/host/use-surface-host-pin";
+import { useNewTerminalPickerDisabled } from "@/components/epic-canvas/sidebar/use-new-terminal-picker-disabled";
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -48,6 +44,7 @@ interface SwitcherCreateProps {
 export function SwitcherNewChatAction(props: {
   readonly onSelect: () => void;
   readonly isPending: boolean;
+  readonly disabled: boolean;
 }) {
   return (
     <Button
@@ -56,7 +53,7 @@ export function SwitcherNewChatAction(props: {
       size="icon-sm"
       aria-label="New chat"
       data-testid="switcher-new-chat"
-      disabled={props.isPending}
+      disabled={props.isPending || props.disabled}
       onClick={props.onSelect}
     >
       {props.isPending ? (
@@ -81,8 +78,7 @@ export function SwitcherNewChatAction(props: {
 export function SwitcherNewTerminalRow(props: SwitcherCreateProps) {
   const { epicId, tabId, onClose } = props;
   const [pickerOpen, setPickerOpen] = useState(false);
-  const pin = useSurfaceHostPin(useTabSurfaceKey("new-terminal", tabId));
-  const disabled = usePoolComputerUnavailable(pin.resolvedHostId);
+  const disabled = useNewTerminalPickerDisabled(tabId);
   return (
     <>
       <SwitcherNewItemRow

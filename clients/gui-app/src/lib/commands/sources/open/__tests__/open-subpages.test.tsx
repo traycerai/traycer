@@ -18,6 +18,7 @@ import {
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
@@ -773,6 +774,7 @@ function launchedTerminalCwd(
 }
 
 afterEach(() => {
+  useSelectionAuthorityStore.getState().reset();
   cleanup();
   vi.clearAllMocks();
   cloudChatsMock.current = [];
@@ -1227,54 +1229,60 @@ describe("Terminals opener sub-page", () => {
     expect(labels).toContain("Create terminal on Sleeping box");
   });
 
-  it("wakes a sleeping sandbox as Open terminal when its workspace page opens", () => {
-    const sleeping = hostScopeOptionFixture({
-      hostId: "sleeping-host",
-      name: "Sleeping box",
-      isLocalMachine: false,
-      isActive: false,
-      connectable: false,
-      kind: "sandbox",
-      sandbox: {
-        state: "suspended",
-        frozen: false,
-        summary: sandboxSummaryFixture({
-          hostId: "sleeping-host",
-          state: "suspended",
-          burst: false,
-        }),
-        ownerKind: "unknown",
-        teamOwned: false,
-      },
-    });
-    extraHostsMock.directory = [
-      {
+  it.each([false, true])(
+    "wakes a named sleeping sandbox from its workspace page with pool=%s",
+    (onPool) => {
+      if (onPool)
+        useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      const sleeping = hostScopeOptionFixture({
         hostId: "sleeping-host",
-        label: "Sleeping box",
-        kind: "remote",
-        websocketUrl: null,
-        version: null,
-        transportDialability: "dialable",
-      },
-    ];
-    extraHostsMock.options = [...extraHostsMock.options, sleeping];
-    const items = renderItems(useTerminalsOpenerItems);
-    const newTerminal = items[0];
-    if (newTerminal.subpage === null) {
-      throw new Error("expected terminal workspace subpage");
-    }
-    const hostPage = renderItems(newTerminal.subpage.useItems).find(
-      (item) => item.subpage?.title === "Create terminal on Sleeping box",
-    );
-    if (hostPage === undefined || hostPage.subpage === null) {
-      throw new Error("expected the sleeping host's page");
-    }
-    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+        name: "Sleeping box",
+        isLocalMachine: false,
+        isActive: false,
+        connectable: false,
+        kind: "sandbox",
+        sandbox: {
+          state: "suspended",
+          frozen: false,
+          summary: sandboxSummaryFixture({
+            hostId: "sleeping-host",
+            state: "suspended",
+            burst: false,
+          }),
+          ownerKind: "unknown",
+          teamOwned: false,
+        },
+      });
+      extraHostsMock.directory = [
+        {
+          hostId: "sleeping-host",
+          label: "Sleeping box",
+          kind: "remote",
+          websocketUrl: null,
+          version: null,
+          transportDialability: "dialable",
+        },
+      ];
+      extraHostsMock.options = [...extraHostsMock.options, sleeping];
+      const items = renderItems(useTerminalsOpenerItems);
+      const newTerminal = items[0];
+      expect(newTerminal.disabled).toBe(false);
+      if (newTerminal.subpage === null) {
+        throw new Error("expected terminal workspace subpage");
+      }
+      const hostPage = renderItems(newTerminal.subpage.useItems).find(
+        (item) => item.subpage?.title === "Create terminal on Sleeping box",
+      );
+      if (hostPage === undefined || hostPage.subpage === null) {
+        throw new Error("expected the sleeping host's page");
+      }
+      expect(wakeSandboxOnPick).not.toHaveBeenCalled();
 
-    renderItems(hostPage.subpage.useItems);
+      renderItems(hostPage.subpage.useItems);
 
-    expect(wakeSandboxOnPick).toHaveBeenCalledWith(sleeping, "open-terminal");
-  });
+      expect(wakeSandboxOnPick).toHaveBeenCalledWith(sleeping, "open-terminal");
+    },
+  );
 
   describe("a team's Automations pod", () => {
     const POD_HOST = "team-pod-host";

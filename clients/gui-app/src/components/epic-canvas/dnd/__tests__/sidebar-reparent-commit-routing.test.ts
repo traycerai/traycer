@@ -16,7 +16,7 @@
  * imperatively through it, so stubbing it is what lets a drop be committed
  * without an app shell.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { TreeNode, TreeSlice } from "@/stores/epics/open-epic/types";
@@ -35,6 +35,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const seam = vi.hoisted(() => {
   // Typed through a helper rather than an `as TreeSlice` on the literal: the
@@ -319,48 +320,103 @@ beforeEach(() => {
   seam.hostBinding = null;
 });
 
+afterEach(() => {
+  useSelectionAuthorityStore.getState().reset();
+});
+
 describe("commitSidebarReparentDrop routes by which plane owns the pointer", () => {
-  it("sends a registry-backed terminal agent through epic.reparentChat", async () => {
+  it("does not stage or dispatch a forced drop on the pool when a registry owner is unavailable", async () => {
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
     seam.tree = treeOf([
       node("tui-1", "terminal-agent", null),
       node("tui-parent", "terminal-agent", null),
     ]);
-    seam.recordIds = ["tui-1", "tui-parent"];
-    seam.request.mockResolvedValueOnce({ updated: true });
-    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    seam.recordIds = ["tui-1"];
 
     await drop("tui-1", "tui-parent");
 
-    // The optimistic overlay stamps BEFORE the RPC fires, so the row moves at
-    // drop time rather than waiting on the round trip.
-    expect(seam.beginReparentMutation).toHaveBeenCalledWith(
-      "tui-1",
-      "tui-parent",
-    );
-    expect(seam.beginReparentMutation.mock.invocationCallOrder[0]).toBeLessThan(
-      seam.request.mock.invocationCallOrder[0],
-    );
-
-    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
-      epicId: "epic-1",
-      chatId: "tui-1",
-      newParentId: "tui-parent",
-    });
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+    expect(seam.request).not.toHaveBeenCalled();
     expect(seam.reparentArtifact).not.toHaveBeenCalled();
-    // On success the moved node's record query is re-asked on the session's
-    // host, so a drop does not sit under its old parent until the 20s poll
-    // when the push stream is down or negotiated below @1.1.
-    await vi.waitFor(() => {
-      expect(invalidate).toHaveBeenCalledWith({
-        queryKey: hostQueryKeys.methodScope("host-1", "epic.listTuiAgents"),
-      });
-    });
-    // The RPC's ack retires the stamp as LANDED, not deleted - the overlay
-    // stays applied until the invalidated record refetch actually lands the
-    // moved pointer.
-    expect(seam.retirePendingMutation).toHaveBeenCalledWith("req-1", "landed");
-    invalidate.mockRestore();
   });
+
+  it("retires the overlay and sends no RPC when the owner's lease drops during the commit", async () => {
+    useSelectionAuthorityStore.setState({
+      servingPeer: { kind: "pool" },
+      leases: [{ hostId: "host-1", status: "ready", dead: null }],
+    });
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1"];
+    seam.beginReparentMutation.mockImplementationOnce(() => {
+      useSelectionAuthorityStore.setState({ leases: [] });
+      return "overlay-under-test";
+    });
+
+    await drop("tui-1", "tui-parent");
+
+    expect(seam.retirePendingMutation).toHaveBeenCalledExactlyOnceWith(
+      "overlay-under-test",
+      "failed",
+    );
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "sends a ready registry-backed terminal agent through epic.reparentChat with pool=%s",
+    async (onPool) => {
+      if (onPool) {
+        useSelectionAuthorityStore.setState({
+          servingPeer: { kind: "pool" },
+          leases: [{ hostId: "host-1", status: "ready", dead: null }],
+        });
+      }
+      seam.tree = treeOf([
+        node("tui-1", "terminal-agent", null),
+        node("tui-parent", "terminal-agent", null),
+      ]);
+      seam.recordIds = ["tui-1", "tui-parent"];
+      seam.request.mockResolvedValueOnce({ updated: true });
+      const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+      await drop("tui-1", "tui-parent");
+
+      // The optimistic overlay stamps BEFORE the RPC fires, so the row moves at
+      // drop time rather than waiting on the round trip.
+      expect(seam.beginReparentMutation).toHaveBeenCalledWith(
+        "tui-1",
+        "tui-parent",
+      );
+      expect(
+        seam.beginReparentMutation.mock.invocationCallOrder[0],
+      ).toBeLessThan(seam.request.mock.invocationCallOrder[0]);
+
+      expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+        epicId: "epic-1",
+        chatId: "tui-1",
+        newParentId: "tui-parent",
+      });
+      expect(seam.reparentArtifact).not.toHaveBeenCalled();
+      // On success the moved node's record query is re-asked on the session's
+      // host, so a drop does not sit under its old parent until the 20s poll
+      // when the push stream is down or negotiated below @1.1.
+      await vi.waitFor(() => {
+        expect(invalidate).toHaveBeenCalledWith({
+          queryKey: hostQueryKeys.methodScope("host-1", "epic.listTuiAgents"),
+        });
+      });
+      // The RPC's ack retires the stamp as LANDED, not deleted - the overlay
+      // stays applied until the invalidated record refetch actually lands the
+      // moved pointer.
+      expect(seam.retirePendingMutation).toHaveBeenCalledWith(
+        "req-1",
+        "landed",
+      );
+      invalidate.mockRestore();
+    },
+  );
 
   it("retires the overlay stamp as FAILED when epic.reparentChat rejects", async () => {
     seam.tree = treeOf([
@@ -411,32 +467,37 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("routes a docResident: true agent to the Y.Doc branch even though it is not absent from the union", async () => {
-    // `epic.listTuiAgents@1.1` unions the doc-resident remainder INTO the
-    // same table `epic.listTuiAgents` records fill, so "absent from the
-    // union" stopped being a reliable doc-only tell - this id is very much
-    // present. `docResident` is the marker that survives the union, and this
-    // pins the routing decision to IT rather than to presence.
-    //
-    // Ablation: revert to the pre-`@1.1` presence check
-    // (`!Object.hasOwn(state.tuiAgentRecords.byId, id)`) and this agent reads
-    // as registry-backed - the drop would call `epic.reparentChat` with a
-    // `chatId` naming no registry chat, the exact host error `docResident`
-    // exists to prevent.
-    seam.tree = treeOf([
-      node("tui-frozen", "terminal-agent", null),
-      node("tui-parent", "terminal-agent", null),
-    ]);
-    seam.docResidentIds = ["tui-frozen"];
+  it.each([false, true])(
+    "routes a doc-resident agent to the document under pool=%s",
+    async (onPool) => {
+      if (onPool)
+        useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      // `epic.listTuiAgents@1.1` unions the doc-resident remainder INTO the
+      // same table `epic.listTuiAgents` records fill, so "absent from the
+      // union" stopped being a reliable doc-only tell - this id is very much
+      // present. `docResident` is the marker that survives the union, and this
+      // pins the routing decision to IT rather than to presence.
+      //
+      // Ablation: revert to the pre-`@1.1` presence check
+      // (`!Object.hasOwn(state.tuiAgentRecords.byId, id)`) and this agent reads
+      // as registry-backed - the drop would call `epic.reparentChat` with a
+      // `chatId` naming no registry chat, the exact host error `docResident`
+      // exists to prevent.
+      seam.tree = treeOf([
+        node("tui-frozen", "terminal-agent", null),
+        node("tui-parent", "terminal-agent", null),
+      ]);
+      seam.docResidentIds = ["tui-frozen"];
 
-    await drop("tui-frozen", "tui-parent");
+      await drop("tui-frozen", "tui-parent");
 
-    expect(seam.reparentArtifact).toHaveBeenCalledWith(
-      "tui-frozen",
-      "tui-parent",
-    );
-    expect(seam.request).not.toHaveBeenCalled();
-  });
+      expect(seam.reparentArtifact).toHaveBeenCalledWith(
+        "tui-frozen",
+        "tui-parent",
+      );
+      expect(seam.request).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends a doc-homed chat through epic.reparentChat on a FLOOR-ERA host", async () => {
     // No handshake recorded, so this host has no chat record plane at all -

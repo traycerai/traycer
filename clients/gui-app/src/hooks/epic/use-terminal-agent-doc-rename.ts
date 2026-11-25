@@ -1,4 +1,5 @@
-import { useMaybeEpicStore } from "@/hooks/use-epic-store";
+import { useCallback, useSyncExternalStore } from "react";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { ownValue } from "@/lib/own-value";
 
@@ -15,8 +16,18 @@ export function useTerminalAgentDocRename(
   id: string | null,
   hostId: string | null,
 ): boolean {
-  return useMaybeEpicStore(
-    (state) => id !== null && terminalAgentUsesDocRename(state, id, hostId),
-    false,
+  const handle = useMaybeOpenEpicHandle();
+  const store = id === null || handle === null ? null : handle.store;
+  const subscribe = useCallback(
+    (onChange: () => void) => store?.subscribe(onChange) ?? (() => undefined),
+    [store],
   );
+  const getSnapshot = useCallback(
+    () =>
+      id !== null &&
+      store !== null &&
+      terminalAgentUsesDocRename(store.getState(), id, hostId),
+    [hostId, id, store],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

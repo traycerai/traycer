@@ -1102,6 +1102,20 @@ describe("classifySendRefusal", () => {
     });
   });
 
+  it("gives the landing send path the existing plan remedy for a team attachment refusal", () => {
+    expect(
+      classifySendRefusal(
+        makeError(
+          "FORBIDDEN",
+          "Sharing with this team requires a paid team plan",
+        ),
+      ),
+    ).toEqual({
+      kind: "actionable",
+      message: "This team needs the Sync plan before it can share tasks.",
+    });
+  });
+
   it("gives way for a retryable sign-in check", () => {
     expect(
       classifySendRefusal(

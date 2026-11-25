@@ -10,6 +10,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -164,6 +166,7 @@ const testState = vi.hoisted(() => ({
     readonly overrideHostId: string | null;
     readonly sessionHostId: string | null;
   }>,
+  overrideHostId: null as string | null,
   /**
    * The workspace-controls element the body was handed. The
    * ComposerBody mock renders only the banner, so the picker's `hostScope`
@@ -246,6 +249,10 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
       followsEffective: testState.followsEffective.current,
     };
   },
+}));
+
+vi.mock("@/components/composer/pool-composer-actions", () => ({
+  PoolComposerActions: () => <button type="button">Connect a computer</button>,
 }));
 
 // The Epic session's host, the modal's DEFAULT placement tier - handed to the
@@ -576,7 +583,7 @@ function Harness() {
               tabId="tab-1"
               placement={null}
               parentId={null}
-              hostId={null}
+              hostId={testState.overrideHostId}
               dismissPickerRef={dismissPickerRef}
               onSubmitted={testState.onSubmitted}
             />
@@ -645,10 +652,12 @@ beforeEach(() => {
   localHost.id = null;
   testState.recordPlacement.mockClear();
   testState.placementInputs.length = 0;
+  testState.overrideHostId = null;
 });
 
 afterEach(() => {
   cleanup();
+  useSelectionAuthorityStore.getState().reset();
   testState.createChat.mockClear();
   testState.createChat.mockResolvedValue({ initialTurnStarted: false });
   testState.createTerminalAgent.mockClear();
@@ -660,6 +669,98 @@ afterEach(() => {
 });
 
 describe("new-conversation modal shares the composer's placement semantics", () => {
+  it("keeps a row-scoped new-chat box on its named host while offline and after it becomes ready", () => {
+    testState.overrideHostId = "computer-row";
+    testState.placement.current = {
+      resolvedHostId: "computer-row",
+      client: { getActiveHostId: () => "computer-row" },
+      hostLabel: "Row computer",
+      isPinned: false,
+      namedHostDead: true,
+    };
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+
+    const view = renderModal();
+    expect(testState.placementInputs.at(-1)).toEqual({
+      epicId: "epic-1",
+      overrideHostId: "computer-row",
+      sessionHostId: "host-session",
+    });
+    expect(testState.bodySubmit).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    act(() => testState.bodySubmit?.());
+    expect(noticeText()).toContain("Row computer is offline.");
+    expect(testState.createChat).not.toHaveBeenCalled();
+
+    testState.placement.current = {
+      ...testState.placement.current,
+      namedHostDead: false,
+    };
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        leases: [{ hostId: "computer-row", status: "ready", dead: null }],
+      }),
+    );
+    view.rerender(<Harness />);
+    act(() => testState.bodySubmit?.());
+    expect(testState.createChat).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ hostId: "computer-row" }),
+    );
+  });
+
+  it.each(["connecting", "pool-session"] as const)(
+    "restores the ordinary message box and the same draft from %s",
+    (placement) => {
+      const readyTarget = testState.placement.current;
+      const view = renderModal();
+      const message =
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"];
+      expect(
+        screen.queryByRole("button", { name: "Connect a computer" }),
+      ).toBeNull();
+      expect(message?.content).toEqual(DIRTY_CONTENT);
+
+      if (placement === "pool-session") {
+        testState.placement.current = {
+          ...readyTarget,
+          resolvedHostId: POOL_HOST_ID,
+        };
+      }
+      act(() =>
+        useSelectionAuthorityStore.setState({
+          servingPeer: { kind: "pool" },
+          leases:
+            placement === "connecting"
+              ? [{ hostId: "host-a", status: "connecting", dead: null }]
+              : [{ hostId: POOL_HOST_ID, status: "ready", dead: null }],
+        }),
+      );
+      view.rerender(<Harness />);
+      expect(
+        screen.getByRole("button", { name: "Connect a computer" }),
+      ).toBeTruthy();
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toBe(message);
+
+      testState.placement.current = readyTarget;
+      act(() =>
+        useSelectionAuthorityStore.setState({
+          leases: [{ hostId: "host-a", status: "ready", dead: null }],
+        }),
+      );
+      view.rerender(<Harness />);
+      expect(
+        screen.queryByRole("button", { name: "Connect a computer" }),
+      ).toBeNull();
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toEqual(message);
+    },
+  );
+
   it("creates on the resolved host when the placement is usable", () => {
     renderModal();
     act(() => {

@@ -482,6 +482,7 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const TEST_LANDING_PAGE_ID = "test-landing-page";
 /** The window's landing composer surface, which stages a sandbox. */
@@ -835,6 +836,7 @@ describe("<LandingTerminalPanel />", () => {
     useStagedSandboxStore.setState({ bySurface: {} });
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useSurfaceHostSelectionStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
     mocks.activeHostId = null;
     mocks.placementHostId = null;
     mocks.clientActiveHostId = null;
@@ -2083,6 +2085,107 @@ describe("<LandingTerminalPanel />", () => {
     });
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
     expect(screen.queryByTestId("landing-new-tab-chooser")).toBeNull();
+  });
+
+  it("keeps the staged terminal launch available on the pool and routes it to the staged sandbox", async () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
+    useStagedSandboxStore.getState().stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const plus = screen.getByTestId("landing-terminal-new-tab");
+    expect(plus.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(plus);
+    await pickTerminalFromChooser();
+
+    expect(runStagedSandbox).toHaveBeenCalledTimes(1);
+    expect(runStagedSandbox).toHaveBeenCalledWith(
+      COMPOSER_SURFACE,
+      true,
+      { taskId: null, resume: false },
+      expect.anything(),
+    );
+    expect(readStagedSandbox(COMPOSER_SURFACE)).toMatchObject({
+      openTerminal: true,
+      sendTaken: false,
+    });
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("routes the Mod+Shift+J terminal action to the staged sandbox while the pool serves the app", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    useStagedSandboxStore.getState().stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.new", fakeKeybindingRouter());
+    });
+
+    expect(runStagedSandbox).toHaveBeenCalledTimes(1);
+    expect(runStagedSandbox).toHaveBeenCalledWith(
+      COMPOSER_SURFACE,
+      true,
+      { taskId: null, resume: false },
+      expect.anything(),
+    );
+    expect(readStagedSandbox(COMPOSER_SURFACE)).toMatchObject({
+      openTerminal: true,
+      sendTaken: false,
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+  });
+
+  it("keeps the landing terminal plus disabled on the pool when no stage or computer can take it", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const plus = screen.getByTestId("landing-terminal-new-tab");
+    expect(plus.hasAttribute("disabled")).toBe(true);
+    const chooserBeforePress = screen.queryByTestId("landing-new-tab-chooser");
+    fireEvent.click(plus);
+    expect(screen.queryByTestId("landing-new-tab-chooser")).toBe(
+      chooserBeforePress,
+    );
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
   });
 
   it("leaves the window's staged sandbox alone when the draft was opened for one host: Terminal never takes it", async () => {

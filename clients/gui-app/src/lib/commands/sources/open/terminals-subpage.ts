@@ -367,6 +367,39 @@ function makeHostWorkspaceSubpage(host: HostScopeOption): CommandSubpage {
   };
 }
 
+function useOtherTerminalWorkspaceHosts(
+  resolvedHostId: string | null,
+): readonly HostScopeOption[] {
+  const directory = useHostDirectoryList();
+  const hostOptions = useHostOptions().hosts;
+  return useMemo(() => {
+    // Match the picker's rule, including sleeping sandboxes. The subpage
+    // wakes them and fetches workspaces through the named client.
+    const groups = groupHostOptions(hostOptions, false, null, null);
+    const offeredHosts = new Map(
+      [
+        ...groups.personal,
+        ...groups.sandboxes,
+        ...groups.teams.flatMap((team) => [
+          ...team.computers,
+          ...team.sandboxes,
+        ]),
+      ].map((host) => [host.hostId, host]),
+    );
+    return (directory.data ?? []).flatMap((entry) => {
+      const host = offeredHosts.get(entry.hostId);
+      if (
+        entry.hostId === resolvedHostId ||
+        host === undefined ||
+        !isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE)
+      ) {
+        return [];
+      }
+      return [host];
+    });
+  }, [directory.data, hostOptions, resolvedHostId]);
+}
+
 function useNewTerminalWorkspaceItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
@@ -387,24 +420,7 @@ function useNewTerminalWorkspaceItems(
   // Command subpages mount only when selected, so this refresh gives the
   // workspace chooser the same freshly-reachable host list as the old dialog.
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
-  const directory = useHostDirectoryList();
-  // Every picker's host rule (`hostOptionPickerGroup`): personal hosts, the
-  // user's sandboxes and each team's computers and sandboxes; never Automations, an agent's
-  // burst sandbox or a sandbox whose control-plane row has not answered.
-  const hostOptions = useHostOptions().hosts;
-  const offeredHosts = useMemo(() => {
-    const groups = groupHostOptions(hostOptions, false, null, null);
-    return new Map(
-      [
-        ...groups.personal,
-        ...groups.sandboxes,
-        ...groups.teams.flatMap((team) => [
-          ...team.computers,
-          ...team.sandboxes,
-        ]),
-      ].map((host) => [host.hostId, host]),
-    );
-  }, [hostOptions]);
+  const otherHosts = useOtherTerminalWorkspaceHosts(resolvedHostId);
   const retryBindings = bindings.refetch;
   return useMemo(() => {
     const selectedHostLeaves =
@@ -426,28 +442,17 @@ function useNewTerminalWorkspaceItems(
             },
             hostClient,
           );
-    // The new-terminal picker's own row rule, `isHostOptionSelectable`: a
-    // sleeping sandbox is offered and woken when its sub-page opens. Each
-    // workspace row's launch gate still dials before it opens a tile.
-    const otherHosts = (directory.data ?? []).flatMap((entry) => {
-      const host = offeredHosts.get(entry.hostId);
-      if (
-        entry.hostId === resolvedHostId ||
-        host === undefined ||
-        !isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE)
-      ) {
-        return [];
-      }
-      return [
+    return [
+      ...selectedHostLeaves,
+      ...otherHosts.map((host) =>
         openerSubpageLeaf({
           id: `open:terminals:new:host:${host.hostId}`,
           label: host.name,
           keywords: [host.hostId, host.name, "host", "computer", "machine"],
           subpage: makeHostWorkspaceSubpage(host),
         }),
-      ];
-    });
-    return [...selectedHostLeaves, ...otherHosts];
+      ),
+    ];
   }, [
     resolvedHostId,
     bindings.data,
@@ -457,9 +462,8 @@ function useNewTerminalWorkspaceItems(
     retryBindings,
     retryDisabled,
     ctx,
-    directory.data,
     hostClient,
-    offeredHosts,
+    otherHosts,
   ]);
 }
 
@@ -482,7 +486,10 @@ export function useTerminalsOpenerItems(
     surfaceKey,
     ctx.activeEpicId,
   );
-  const createDisabled = usePoolComputerUnavailable(resolvedHostId);
+  const noComputer = usePoolComputerUnavailable(resolvedHostId);
+  const otherHosts = useOtherTerminalWorkspaceHosts(resolvedHostId);
+  const createDisabled =
+    noComputer && !otherHosts.some((host) => host.sandbox !== null);
   const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const hostClient = useHostClientForHostId(activeEpicHostId);
   const scope = { kind: "epic" as const, epicId: ctx.activeEpicId ?? "" };

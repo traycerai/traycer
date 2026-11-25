@@ -9,6 +9,7 @@ import type { OpenCreatedChatWhenProjectedWithNavigationArgs } from "@/lib/comma
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useSwitcherNewChat } from "@/components/epic-canvas/mobile/use-switcher-new-chat";
 import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 const EPIC_ID = "epic-1";
@@ -120,9 +121,11 @@ beforeEach(() => {
   spies.toastError.mockReset();
   spies.placement.refused = false;
   spies.isPending = false;
+  useSelectionAuthorityStore.getState().reset();
   useNewConversationModalOpenStore.getState().close();
 });
 afterEach(() => {
+  useSelectionAuthorityStore.getState().reset();
   useNewConversationModalOpenStore.getState().close();
 });
 
@@ -246,6 +249,30 @@ describe("useSwitcherNewChat", () => {
     expect(spies.toastError).toHaveBeenCalledTimes(1);
     expect(spies.mutate).not.toHaveBeenCalled();
     expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("blocks creates on the pool until the pinned placement is ready, then sends to that computer", async () => {
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const { result } = renderHook(() =>
+      useSwitcherNewChat(EPIC_ID, TAB_ID, vi.fn()),
+    );
+
+    expect(result.current.unavailable).toBe(true);
+    act(() => result.current.start("parent-1"));
+    expect(spies.mutate).not.toHaveBeenCalled();
+
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        leases: [{ hostId: HOST_ID, status: "ready", dead: null }],
+      }),
+    );
+    expect(result.current.unavailable).toBe(false);
+    act(() => result.current.start("parent-1"));
+    expect(lastCreate().request).toMatchObject({
+      hostId: HOST_ID,
+      parentId: "parent-1",
+    });
+    await answer({ chatId: "chat-new" });
   });
 
   it("never files a New Conversation modal request", () => {

@@ -1,5 +1,6 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { useLandingNewTabAvailability } from "@/components/home/terminal-panel/landing-new-tab-availability";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 /**
  * One flat row per `chord`-kind action in `ACTION_META`. Runs as
@@ -49,8 +50,10 @@ export const actionsSource: ReactCommandSource = {
     const homeTabEnabled = isHomeTabEnabled();
     const placement = useTabStripPlacement();
     const collapseOffered = useSideStripCollapseOffered();
-    const composer = useComposerSurfaceHostPin();
-    const noComputer = usePoolComputerUnavailable(composer.resolvedHostId);
+    const onPool = useServingPeerHostId() === POOL_HOST_ID;
+    const availability = useLandingNewTabAvailability();
+    const terminalDisabled = onPool && (availability?.terminalDisabled ?? true);
+    const browserDisabled = onPool && (availability?.browserDisabled ?? true);
     const stripCollapsible = placement !== "top" && collapseOffered;
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];
@@ -63,13 +66,21 @@ export const actionsSource: ReactCommandSource = {
           continue;
         const item = buildActionItem(meta, bindings[id] ?? null);
         items.push(
-          noComputer && (id === "app.terminal.new" || id === "app.browser.new")
+          (id === "app.terminal.new" && terminalDisabled) ||
+            (id === "app.browser.new" && browserDisabled)
             ? { ...item, disabled: true }
             : item,
         );
       }
       return items;
-    }, [bindings, canRecover, homeTabEnabled, noComputer, stripCollapsible]);
+    }, [
+      bindings,
+      browserDisabled,
+      canRecover,
+      homeTabEnabled,
+      stripCollapsible,
+      terminalDisabled,
+    ]);
   },
 };
 

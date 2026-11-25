@@ -5,10 +5,20 @@ import {
   screen,
   type RenderResult,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import * as Y from "yjs";
 import type { ReactElement, ReactNode } from "react";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
+import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { STATUS_DOT_CLASSES } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
@@ -84,6 +94,8 @@ interface Holder {
   ownerHostIdByNodeId: Record<string, string>;
   indicators: IndicatorFixture;
   search: ArtifactSearchResults;
+  newChatUnavailable: boolean;
+  startNewChat: Mock<() => void>;
 }
 
 interface IndicatorFlags {
@@ -120,51 +132,58 @@ const holder = vi.hoisted((): Holder => ({
     isFetching: false,
     refetch: () => {},
   },
+  newChatUnavailable: false,
+  startNewChat: vi.fn<() => void>(),
 }));
 
-vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
-  // The row menu reads the artifact's kind to decide whether it offers export.
-  // Answer from the real projection this suite already renders inside.
-  useArtifactById: (
-    await importOriginal<typeof import("@/lib/epic-selectors")>()
-  ).useArtifactById,
-  useEpicArtifactRecords: () => holder.records,
-  useEpicActiveAgentIds: () => holder.workingAgentIds,
-  useEpicAgentActivityTiers: () => holder.activityTiers,
-  // Read by the archive rule the Show facet brings with it.
-  useEpicArchivedNodeIds: (): ReadonlyArray<string> => [],
-  useEpicChatHarnessId: () => null,
-  useMaybeEpicTuiAgentHarnessId: () => null,
-  useEpicPermissionRole: () => holder.role,
-  // The chat projection's OWN host. Deliberately distinct from the `hostId` on
-  // the records above, which is the app-wide ACTIVE host for chat rows.
-  useEpicNodeHostId: (nodeId: string) =>
-    holder.ownerHostIdByNodeId[nodeId] ?? null,
-  // The lists sort by tree-node recency; expose nodes for the fixtures so the
-  // real epic-sort comparator resolves every id.
-  useEpicTreeIndex: () => ({
-    rootIds: [],
-    childrenByParent: {},
-    nodeById: Object.fromEntries(
-      holder.records.map((record, index) => [
-        record.id,
-        {
-          id: record.id,
-          title: record.name,
-          createdAt: index,
-          updatedAt: index,
-        },
-      ]),
-    ),
-  }),
-}));
+vi.mock("@/lib/epic-selectors", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
+  return {
+    ...actual,
+    // The row menu reads the artifact's kind to decide whether it offers export.
+    // Answer from the real projection this suite already renders inside.
+    useArtifactById: actual.useArtifactById,
+    useEpicArtifactRecords: () => holder.records,
+    useEpicActiveAgentIds: () => holder.workingAgentIds,
+    useEpicAgentActivityTiers: () => holder.activityTiers,
+    // Read by the archive rule the Show facet brings with it.
+    useEpicArchivedNodeIds: (): ReadonlyArray<string> => [],
+    useEpicChatHarnessId: () => null,
+    useMaybeEpicTuiAgentHarnessId: () => null,
+    useEpicPermissionRole: () => holder.role,
+    // The chat projection's OWN host. Deliberately distinct from the `hostId` on
+    // the records above, which is the app-wide ACTIVE host for chat rows.
+    useEpicNodeHostId: (nodeId: string) =>
+      holder.ownerHostIdByNodeId[nodeId] ?? null,
+    // The lists sort by tree-node recency; expose nodes for the fixtures so the
+    // real epic-sort comparator resolves every id.
+    useEpicTreeIndex: () => ({
+      rootIds: [],
+      childrenByParent: {},
+      nodeById: Object.fromEntries(
+        holder.records.map((record, index) => [
+          record.id,
+          {
+            id: record.id,
+            title: record.name,
+            createdAt: index,
+            updatedAt: index,
+          },
+        ]),
+      ),
+    }),
+  };
+});
 // The archive rule asks which tiles are open, so an archived-but-open row is
 // never hidden. Partial mock: everything else in the canvas store stays real.
 vi.mock("@/stores/epics/canvas/store", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useOpenTileContentIds: () => new Set<string>(),
 }));
-vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
+vi.mock("@/stores/epics/canvas/canvas-selectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/stores/epics/canvas/canvas-selectors")
+  >()),
   useIsActiveEpicArtifact: (_tabId: string, id: string) =>
     holder.activeId === id,
   findOpenArtifactInTab: () => null,
@@ -191,6 +210,13 @@ vi.mock("@/components/epic-canvas/mobile/use-switcher-activate", () => ({
     const ref = buildRef();
     holder.activateCalls.push({ id: ref.id, ref });
   },
+}));
+vi.mock("@/components/epic-canvas/mobile/use-switcher-new-chat", () => ({
+  useSwitcherNewChat: () => ({
+    start: holder.startNewChat,
+    isPending: false,
+    unavailable: holder.newChatUnavailable,
+  }),
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
@@ -251,17 +277,20 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
 // markers so their own wiring (composer mode, the terminal picker dialog, the
 // artifact-kind dropdown) doesn't need to mount here - this file exercises
 // each list's editor gating and row positioning in isolation.
-vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
-  SwitcherNewChatAction: () => (
-    <button type="button" data-testid="switcher-new-chat" />
-  ),
-  SwitcherNewTerminalRow: () => (
-    <button type="button" data-testid="switcher-new-terminal" />
-  ),
-  SwitcherNewArtifactMenu: () => (
-    <button type="button" data-testid="new-artifact-action" />
-  ),
-}));
+vi.mock(
+  "@/components/epic-canvas/mobile/switcher-create-actions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-canvas/mobile/switcher-create-actions")
+    >()),
+    SwitcherNewTerminalRow: () => (
+      <button type="button" data-testid="switcher-new-terminal" />
+    ),
+    SwitcherNewArtifactMenu: () => (
+      <button type="button" data-testid="new-artifact-action" />
+    ),
+  }),
+);
 
 const PROPS = { epicId: "epic-1", tabId: "tab-1", onClose: () => {} };
 
@@ -377,12 +406,15 @@ function newSessionHandle(): OpenedStoreForTest {
 }
 
 let sessionHandle: OpenedStoreForTest;
+let queryClient: QueryClient;
 
 function SessionWrapper(props: { readonly children: ReactNode }): ReactElement {
   return (
-    <EpicSessionContext.Provider value={sessionHandle}>
-      {props.children}
-    </EpicSessionContext.Provider>
+    <QueryClientProvider client={queryClient}>
+      <EpicSessionContext.Provider value={sessionHandle}>
+        {props.children}
+      </EpicSessionContext.Provider>
+    </QueryClientProvider>
   );
 }
 
@@ -407,14 +439,20 @@ beforeEach(() => {
   holder.indicatorChatIdCalls = [];
   holder.ownerHostIdByNodeId = {};
   holder.indicators = { epics: {}, chats: {} };
+  holder.newChatUnavailable = false;
+  holder.startNewChat.mockReset();
   // Reset with the rest: a case that activates search would otherwise leave
   // every later case rendering the results surface instead of the browse list.
   holder.search = INACTIVE_SEARCH;
   viewport.height = 10_000;
   sessionHandle = newSessionHandle();
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
 });
 afterEach(() => {
   cleanup();
+  queryClient.clear();
   sessionHandle.dispose();
   document.documentElement.style.fontSize = "";
 });
@@ -643,5 +681,17 @@ describe("<SwitcherArtifactsList />", () => {
       ["tk-2", "0"],
       ["st-1", "0"],
     ]);
+  });
+});
+
+describe("<SwitcherAgentsList />", () => {
+  it("disables New chat when the frozen placement is unavailable", () => {
+    holder.newChatUnavailable = true;
+    render(<SwitcherAgentsList {...PROPS} />);
+
+    const newChat = screen.getByRole("button", { name: "New chat" });
+    expect(newChat.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(newChat);
+    expect(holder.startNewChat).not.toHaveBeenCalled();
   });
 });

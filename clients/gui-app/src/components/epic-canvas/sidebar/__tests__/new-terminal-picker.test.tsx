@@ -51,6 +51,29 @@ import {
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 import { resetEpicTerminalDurableCreatesForTests } from "@/lib/terminals/epic-terminal-durable-create-coordinator";
 import { modLabel } from "@/lib/keybindings/platform";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+
+const sandboxInputs = vi.hoisted(() => ({
+  catalogue: null as SandboxCatalogue | null,
+  controlUnavailable: null as string | null,
+}));
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({
+    data: sandboxInputs.catalogue,
+    isError: false,
+  }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
+  useSandboxControlUnavailableReason: () => sandboxInputs.controlUnavailable,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
+  useSandboxDefaultsLookup: () => () => null,
+}));
 
 const selectById = vi.fn();
 const refreshDirectory = vi.fn(() => Promise.resolve([]));
@@ -300,8 +323,11 @@ describe("<NewTerminalPicker />", () => {
     refreshDirectory.mockClear();
     retryBindings.mockClear();
     useSurfaceHostSelectionStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
     stubLoadedBindings();
     staged.staging = null;
+    sandboxInputs.catalogue = null;
+    sandboxInputs.controlUnavailable = null;
     useStagedSandboxStore.setState({ bySurface: {} });
   });
 
@@ -346,6 +372,93 @@ describe("<NewTerminalPicker />", () => {
     );
     expect(launched.map(launchedTerminalCwd)).toEqual(["/home/sandbox"]);
     expect(readStagedSandbox(surfaceKey)).toBeNull();
+  });
+
+  it("keeps New terminal enabled on the pool when a Personal New sandbox row can be staged", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    sandboxInputs.catalogue = readinessCatalogue({
+      warm: 0,
+      coldCreateMeasuredMs: 60_000,
+    });
+    openPicker();
+
+    expect(
+      screen.getByTestId("epic-terminals-panel-add").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(screen.getByTestId("new-terminal-picker-popover")).toBeDefined();
+  });
+
+  it("keeps New terminal enabled on the pool while a retained stage can take it", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+    const surfaceKey = tabSurfaceKey("new-terminal", tabId);
+    useStagedSandboxStore.getState().stage(surfaceKey, {
+      kind: "existing",
+      hostId: SANDBOX_HOST,
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    renderWithClient(
+      <TooltipProvider>
+        <NewTerminalPicker epicId="epic-1" tabId={tabId} onLaunched={null} />
+      </TooltipProvider>,
+    );
+
+    const button = screen.getByTestId("epic-terminals-panel-add");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(button);
+    expect(screen.getByTestId("new-terminal-picker-popover")).toBeDefined();
+  });
+
+  it.each([
+    { name: "no stage or New rows", mobile: false },
+    { name: "staging mobile", mobile: true },
+  ])("disables New terminal on the pool with $name", ({ mobile }) => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    if (mobile) sandboxInputs.controlUnavailable = "staging-mobile";
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+    renderWithClient(
+      <TooltipProvider>
+        <NewTerminalPicker epicId="epic-1" tabId={tabId} onLaunched={null} />
+      </TooltipProvider>,
+    );
+
+    const button = screen.getByTestId("epic-terminals-panel-add");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(screen.queryByTestId("new-terminal-picker-popover")).toBeNull();
+  });
+
+  it("keeps New terminal enabled when a computer serves even without New sandbox rows", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "computer", hostId: "host-1" },
+      leases: [],
+    });
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+    renderWithClient(
+      <TooltipProvider>
+        <NewTerminalPicker epicId="epic-1" tabId={tabId} onLaunched={null} />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByTestId("epic-terminals-panel-add").hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("closes the tab's open picker, popover and phone dialog alike, when the staged sandbox's terminal launches", () => {

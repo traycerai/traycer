@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
+import { useLandingNewTabAvailability } from "@/components/home/terminal-panel/landing-new-tab-availability";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
@@ -74,6 +76,8 @@ describe("actionsSource", () => {
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
+    useSelectionAuthorityStore.getState().reset();
+    useLandingNewTabAvailability.setState(null);
   });
 
   afterEach(() => {
@@ -83,6 +87,39 @@ describe("actionsSource", () => {
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
+    useSelectionAuthorityStore.getState().reset();
+    useLandingNewTabAvailability.setState(null);
+  });
+
+  it("updates the open palette's terminal action as a staged terminal becomes unavailable", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    useLandingNewTabAvailability.setState({
+      terminalDisabled: false,
+      browserDisabled: true,
+    });
+    let captured: ReadonlyArray<CommandItem> = [];
+    function PaletteItems() {
+      captured = actionsSource.useItems(ctx());
+      return null;
+    }
+    render(<PaletteItems />);
+
+    const terminalAction = () =>
+      captured.find((item) => item.actionId === "app.terminal.new");
+    expect(terminalAction()?.disabled).toBeUndefined();
+
+    act(() => {
+      useLandingNewTabAvailability.setState({
+        terminalDisabled: true,
+        browserDisabled: true,
+      });
+    });
+
+    expect(terminalAction()?.disabled).toBe(true);
   });
 
   it("emits one item per chord-kind action and skips digit-kind ones", () => {
