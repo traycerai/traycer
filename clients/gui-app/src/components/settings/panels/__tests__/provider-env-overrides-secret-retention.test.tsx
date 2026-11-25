@@ -480,7 +480,7 @@ function postUnmountRetentionScan(args: {
       queryClient: args.harness.queryClient,
       method: "providers.setEnvOverride",
       count: expectedWriteCount + args.replayMutationCount,
-      keys: ["providerId", "key"],
+      keys: ["providerId", "key", "executableWriteGrant"],
     }),
     deleteVariableShapesMatch: mutationVariablesMatch({
       queryClient: args.harness.queryClient,
@@ -549,6 +549,7 @@ for (const row of rows) {
           "providerId",
           "key",
           "value",
+          "executableWriteGrant",
         ]);
         return new Promise((resolve, reject) => {
           writes.completions.push(() => {
@@ -652,7 +653,7 @@ for (const row of rows) {
       queryClient: harness.queryClient,
       method: "providers.setEnvOverride",
       count: row.expectedWriteCalls + replayMutationCount,
-      keys: ["providerId", "key"],
+      keys: ["providerId", "key", "executableWriteGrant"],
     });
     const deleteVariablesMatch = mutationVariablesMatch({
       queryClient: harness.queryClient,

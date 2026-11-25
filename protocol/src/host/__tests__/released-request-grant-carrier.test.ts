@@ -4,6 +4,7 @@ import {
   type SchemaVersion,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import { isJsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import { prepareRequestPayload } from "@traycer/protocol/host-transport/remote/rpc-codec";
 import { RELEASED_154_GRANT_REQUESTS } from "./released-154-grant-request-schemas";
 
@@ -182,10 +183,6 @@ const grantCases: readonly ReleasedGrantCase[] = [
   },
 ];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 const SCHEMA_KEYWORDS = new Set([
   "$schema",
   "additionalProperties",
@@ -224,7 +221,7 @@ function typeMismatch(typeName: string, value: unknown): string | null {
       : "expected integer";
   }
   if (typeName === "object") {
-    return isRecord(value) ? null : "expected object";
+    return isJsonObject(value) ? null : "expected object";
   }
   return typeof value === typeName ? null : `expected ${typeName}`;
 }
@@ -292,7 +289,7 @@ function objectMismatch(
       if (nameError !== null) return nameError;
     }
   }
-  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const properties = isJsonObject(schema.properties) ? schema.properties : {};
   const required = Array.isArray(schema.required) ? schema.required : [];
   for (const key of required) {
     if (typeof key !== "string")
@@ -312,7 +309,7 @@ function objectMismatch(
     if (schema.additionalProperties === false) {
       return `${path} unexpected ${key}`;
     }
-    if (isRecord(schema.additionalProperties)) {
+    if (isJsonObject(schema.additionalProperties)) {
       const extraError = mismatchAt(
         schema.additionalProperties,
         propertyValue,
@@ -329,7 +326,7 @@ function mismatchAt(
   value: unknown,
   path: string,
 ): string | null {
-  if (!isRecord(schema)) return `${path} schema is not an object`;
+  if (!isJsonObject(schema)) return `${path} schema is not an object`;
   const unknownKeyword = unhandledKeyword(schema);
   if (unknownKeyword !== null) return `${path} ${unknownKeyword}`;
   if (Array.isArray(schema.anyOf)) {
@@ -350,7 +347,10 @@ function mismatchAt(
     if (typeError !== null) return `${path} ${typeError}`;
   }
   if ("const" in schema && value !== schema.const) return `${path} const`;
-  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
+  if (
+    Array.isArray(schema.enum) &&
+    !schema.enum.some((member) => member === value)
+  ) {
     return `${path} enum`;
   }
   if (schema.type === "string" && typeof value === "string") {
@@ -367,7 +367,7 @@ function mismatchAt(
   if (schema.type === "array" && Array.isArray(value)) {
     return arrayMismatch(schema, value, path);
   }
-  if (schema.type === "object" && isRecord(value)) {
+  if (schema.type === "object" && isJsonObject(value)) {
     return objectMismatch(schema, value, path);
   }
   return null;
