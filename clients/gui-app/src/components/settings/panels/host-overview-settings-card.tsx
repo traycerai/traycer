@@ -2,10 +2,11 @@ import {
   configurationRoleOf,
   mayChangeConfiguration,
 } from "@/components/settings/environment/configuration-source";
+import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
 import { TeamGiveDialog } from "@/components/settings/panels/team-give-dialog";
-import { useMayChangeTeamConfiguration } from "@/hooks/environment/use-may-change-team-configuration";
+import { useTeamConfigurationAccess } from "@/hooks/environment/use-may-change-team-configuration";
 import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
@@ -50,8 +51,12 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
+import {
+  useEnvironmentHostReadQuery,
+  type EnvironmentHostRead,
+} from "@/hooks/bots/use-environment-host-read-query";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
+import { environmentReadLostAuthority } from "@/hooks/environment/environment-read-data";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import {
   useHostNegotiatedMethodVersions,
@@ -289,13 +294,25 @@ function TeamOwnedHostSettingsRow(props: {
   );
 }
 
-function ClaimLocalTeamComputer(props: {
+interface ClaimLocalTeamComputerProps {
   readonly environmentId: string;
   readonly hostId: string;
   readonly hostName: string;
   readonly onClaimed: (receipt: string) => void;
-}): ReactNode {
-  const mayClaim = useMayChangeTeamConfiguration(props.environmentId);
+}
+
+function ClaimLocalTeamComputer(props: ClaimLocalTeamComputerProps): ReactNode {
+  const access = useTeamConfigurationAccess(props.environmentId);
+  if (access === "denied") return null;
+  return (
+    <ClaimLocalTeamComputerDialog {...props} mayClaim={access === "allowed"} />
+  );
+}
+
+function ClaimLocalTeamComputerDialog(
+  props: ClaimLocalTeamComputerProps & { readonly mayClaim: boolean },
+): ReactNode {
+  const { mayClaim } = props;
   const [open, setOpen] = useState(false);
   const mutation = useTeamComputerClaim(props.environmentId, () => {
     props.onClaimed(
@@ -303,13 +320,14 @@ function ClaimLocalTeamComputer(props: {
     );
     setOpen(false);
   });
-  if (!mayClaim) return null;
+  if (!mayClaim && !open) return null;
   return (
     <>
       <Button
         type="button"
         variant="outline"
         size="sm"
+        disabled={!mayClaim}
         onClick={() => {
           mutation.reset();
           setOpen(true);
@@ -350,8 +368,10 @@ function ClaimLocalTeamComputer(props: {
             </Button>
             <Button
               type="button"
-              disabled={mutation.isPending}
-              onClick={() => mutation.mutate(props.hostId)}
+              disabled={!mayClaim || mutation.isPending}
+              onClick={() => {
+                if (mayClaim) mutation.mutate(props.hostId);
+              }}
             >
               {mutation.isPending ? (
                 <AgentSpinningDots
@@ -648,7 +668,7 @@ function settingsRailPick(input: {
     : PERSONAL_PICK;
 }
 
-/** A failed read shows nothing. Pending reads reserve the control. */
+/** Once answered, the card keeps its host-scoped reads through a reread error. */
 export function HostOverviewSettingsCardSlot(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
@@ -657,7 +677,7 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
   readonly receipt: OwnershipReceipt;
-  /** The card shows again after a time it could not: the host is back. */
+  /** The host can answer again after a failure or a period away. */
   readonly onReturn: () => void;
 }): ReactNode {
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
@@ -677,22 +697,37 @@ export function HostOverviewSettingsCardSlot(props: {
     props.hostId,
     props.usable && bindingSupport === true,
   );
+  const bindingRead = overviewBindingRead(binding);
+  const readFailed = status.isError || bindingRead.failed;
+  const missingRequiredBinding =
+    bindingSupport === false &&
+    !overviewHasOwnSettings(binding, status.isError ? status.data : null);
+  const authorityLost =
+    environmentReadLostAuthority(status.error ?? null) ||
+    bindingRead.authorityLost;
   const hidden =
+    authorityLost ||
     !props.usable ||
     props.client === null ||
     props.hostId === null ||
     status.supported === false ||
-    status.isError ||
-    (bindingSupport === false && binding.kind !== "own_settings") ||
-    binding.kind === "failed" ||
-    (binding.kind === "binding" && binding.query.isError);
-  const wasHidden = useRef(hidden);
+    missingRequiredBinding;
+  const unavailable = hidden || readFailed;
+  const wasUnavailable = useRef(unavailable);
   const { onReturn } = props;
   useEffect(() => {
-    if (wasHidden.current && !hidden) onReturn();
-    wasHidden.current = hidden;
-  }, [hidden, onReturn]);
+    if (wasUnavailable.current && !unavailable) onReturn();
+    wasUnavailable.current = unavailable;
+  }, [unavailable, onReturn]);
   if (hidden) return null;
+  if (readFailed) {
+    const model = hostSettingsRowModel(
+      status.data,
+      bindingRead.data,
+      props.hostName,
+    );
+    if (model.kind === "loading") return null;
+  }
   return (
     <HostOverviewSettingsCard
       key={JSON.stringify([props.hostId, userId])}
@@ -700,12 +735,45 @@ export function HostOverviewSettingsCardSlot(props: {
       hostId={props.hostId}
       hostName={props.hostName}
       status={status.data}
-      binding={binding.kind === "binding" ? (binding.query.data ?? null) : null}
+      binding={bindingRead.data}
       owner={props.owner}
       isLocalMachine={props.isLocalMachine}
       receipt={props.receipt}
     />
   );
+}
+
+/** An earlier Local status is sufficient while its fresh read is unavailable. */
+function overviewHasOwnSettings(
+  binding: EnvironmentHostRead,
+  lastStatus: EnvironmentStatusResponseV13 | null,
+): boolean {
+  if (binding.kind === "own_settings") return true;
+  return lastStatus !== null && localRowCohort(lastStatus).kind === "local";
+}
+
+function overviewBindingRead(read: EnvironmentHostRead): {
+  readonly data: EnvironmentHostBinding | null;
+  readonly failed: boolean;
+  readonly authorityLost: boolean;
+} {
+  if (read.kind === "binding") {
+    const authorityLost = environmentReadLostAuthority(
+      read.query.error ?? null,
+    );
+    return {
+      data: authorityLost ? null : (read.query.data ?? null),
+      failed: read.query.isError,
+      authorityLost,
+    };
+  }
+  if (read.kind === "failed")
+    return {
+      data: read.lastBinding,
+      failed: true,
+      authorityLost: read.bindingAuthorityLost,
+    };
+  return { data: null, failed: false, authorityLost: false };
 }
 
 function TransferReceipt(props: { readonly value: string | null }): ReactNode {

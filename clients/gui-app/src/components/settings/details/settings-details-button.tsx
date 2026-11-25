@@ -6,6 +6,7 @@ import {
 import { useState, type ReactNode } from "react";
 import {
   queryOptions,
+  skipToken,
   useMutation,
   useQuery,
   useQueryClient,
@@ -13,7 +14,6 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   DetailsDrawer,
-  type DetailsItemRetry,
   type DetailsTab,
 } from "@/components/settings/details/details-drawer";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
@@ -31,15 +31,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const DETAILS_LOAD_FAILED = "Couldn't load details.";
 
-const NO_ITEM_RETRY: DetailsItemRetry = {
-  onRetry: () => {},
-  pending: false,
-  error: null,
-};
-
-/** Mounted only while open: no previous reader's evidence is rendered on open. */
+/** Keep the controls mounted while their diagnostics subject is being read. */
 function DetailsSession(props: {
-  readonly subject: DetailsSubject;
+  readonly subject: DetailsSubject | null;
   readonly title: string;
   readonly controls: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
@@ -53,17 +47,18 @@ function DetailsSession(props: {
   const recovery = useDetailsRecovery();
   const itemRetry = useSecretRemovalRetry();
   const viewerUserId = useCloudChatViewerId();
-  const [selected, setSelected] = useState<{
+  const [selection, setSelected] = useState<{
     readonly subject: DetailsSubject;
     readonly title: string;
   } | null>(null);
+  const selected = props.subject === null ? null : selection;
   const subject = selected?.subject ?? props.subject;
   const title = selected?.title ?? props.title;
-  const load = async () => {
-    const provider = getDetailsProvider(subject.kind);
+  const load = async (target: DetailsSubject) => {
+    const provider = getDetailsProvider(target.kind);
     if (provider === null)
       throw new Error("Details are unavailable. Update Traycer and try again.");
-    return provider(subject, {
+    return provider(target, {
       environmentCloud: beginEnvironmentCloudOperation(environmentCloud),
       queryClient,
     });
@@ -71,13 +66,13 @@ function DetailsSession(props: {
   const entry = useQuery(
     queryOptions({
       queryKey: settingsDetailsQueryKeys.entry(hostId, subject, viewerUserId),
-      queryFn: load,
+      queryFn: subject === null ? skipToken : () => load(subject),
       staleTime: 0,
       gcTime: 0,
       retry: false,
       refetchOnMount: "always",
       refetchOnWindowFocus: "always",
-      enabled: viewerUserId.length > 0,
+      enabled: subject !== null && viewerUserId.length > 0,
     }),
   );
   const exportDiagnostics = useMutation({
@@ -102,14 +97,16 @@ function DetailsSession(props: {
   // A failed read says so in one line; a failed export keeps its own words.
   let error: string | null = exportDiagnostics.error?.message ?? null;
   if (entry.error !== null) error = DETAILS_LOAD_FAILED;
+  const loading = entry.isPending || entry.isFetching;
   return (
     <DetailsDrawer
       entry={entry.isFetching ? null : (entry.data ?? null)}
+      hasSubject={subject !== null}
       title={title}
       open
       onOpenChange={props.onOpenChange}
-      loading={entry.isPending || entry.isFetching}
-      error={error}
+      loading={subject === null ? false : loading}
+      error={subject === null ? null : error}
       exportPending={exportDiagnostics.isPending}
       recoveryPending={recovery.pending}
       onExport={() => exportDiagnostics.mutate()}
@@ -139,38 +136,6 @@ function DetailsSession(props: {
 }
 
 /**
- * The subject's own actions alone, while the subject is not known (its
- * environment not yet, or not, looked up): an action never waits on a lookup
- * only the diagnostics need.
- */
-function DetailsControlsSession(props: {
-  readonly title: string;
-  readonly controls: ReactNode;
-  readonly onOpenChange: (open: boolean) => void;
-}): ReactNode {
-  return (
-    <DetailsDrawer
-      entry={null}
-      title={props.title}
-      open
-      onOpenChange={props.onOpenChange}
-      loading={false}
-      error={null}
-      exportPending={false}
-      recoveryPending={false}
-      onExport={() => {}}
-      onRetry={() => {}}
-      onRecover={() => {}}
-      onSubjectSelect={() => {}}
-      itemRetry={NO_ITEM_RETRY}
-      controls={props.controls}
-      onBack={null}
-      initialTab="status"
-    />
-  );
-}
-
-/**
  * The common entry point, also used by notification and sandbox surfaces.
  * `subject` null shows only `controls`, and the diagnostics once it is known.
  */
@@ -185,14 +150,6 @@ export function SettingsDetailsDialog(props: {
   readonly initialTab: DetailsTab;
 }): ReactNode {
   if (!props.open) return null;
-  if (props.subject === null)
-    return (
-      <DetailsControlsSession
-        title={props.title}
-        controls={props.controls}
-        onOpenChange={props.onOpenChange}
-      />
-    );
   return (
     <DetailsSession
       subject={props.subject}

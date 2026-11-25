@@ -31,6 +31,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -38,7 +39,15 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import type {
   EnvironmentSecretRemovalV12,
@@ -404,6 +413,28 @@ describe("the all-secrets drawer", () => {
   });
 });
 
+function committedDetailsControl(
+  read: () => HTMLElement | null,
+): Promise<HTMLElement> {
+  const existing = read();
+  if (existing !== null) return Promise.resolve(existing);
+  const committed = Promise.withResolvers<HTMLElement>();
+  const observer = new MutationObserver(() => {
+    const control = read();
+    if (control === null) return;
+    observer.disconnect();
+    committed.resolve(control);
+  });
+  observer.observe(document.body, {
+    attributes: true,
+    characterData: true,
+    childList: true,
+    subtree: true,
+  });
+  onTestFinished(() => observer.disconnect());
+  return committed.promise;
+}
+
 describe("the subject's own controls", () => {
   function openWithControls(
     harness: TeamPageHarness,
@@ -437,6 +468,78 @@ describe("the subject's own controls", () => {
       repair.compareDocumentPosition(controls) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("selects Status when a Details subject disappears with Export selected", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({ hostStates: [brokenHost] }),
+    });
+    const subject: DetailsSubject = {
+      environmentId: "env-a",
+      kind: "variable",
+      key: "FOO",
+    };
+    const dialog = (target: DetailsSubject | null): ReactNode => (
+      <SettingsDetailsDialog
+        subject={target}
+        title="Settings"
+        controls={<button type="button">Verify here</button>}
+        open
+        onOpenChange={() => undefined}
+        initialTab="status"
+      />
+    );
+    const view = render(dialog(subject), { wrapper: harness.Wrapper });
+    const exportTab = await committedDetailsControl(() =>
+      screen.queryByRole("tab", { name: "Export diagnostics" }),
+    );
+    const drawer = screen.getByRole("dialog", { name: "Settings" });
+    fireEvent.mouseDown(exportTab, { button: 0, ctrlKey: false });
+    expect(exportTab.getAttribute("aria-selected")).toBe("true");
+
+    view.rerender(dialog(null));
+
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBe(drawer);
+    const statusTab = screen.getByRole("tab", { name: "Status" });
+    expect(statusTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "Verify here" })).toBeTruthy();
+  });
+
+  it("preserves the stopped Move's Export request through a failed diagnostics read and Retry", async () => {
+    let historyUnavailable = true;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => {
+        if (historyUnavailable) throw new Error("History is unavailable");
+        return history({ hostStates: [brokenHost] });
+      },
+    });
+    const dialog = (
+      <SettingsDetailsDialog
+        subject={{
+          environmentId: "env-a",
+          kind: "host_settings",
+          key: "host-a",
+        }}
+        title="Settings"
+        controls={null}
+        open
+        onOpenChange={() => undefined}
+        initialTab="export"
+      />
+    );
+    render(dialog, { wrapper: harness.Wrapper });
+    const retry = await committedDetailsControl(() =>
+      screen.queryByRole("button", { name: "Retry" }),
+    );
+    expect(screen.getByText("Couldn't load details.")).toBeTruthy();
+
+    historyUnavailable = false;
+    fireEvent.click(retry);
+
+    const exportTab = await committedDetailsControl(() =>
+      screen.queryByRole("tab", { name: "Export diagnostics" }),
+    );
+    expect(exportTab.getAttribute("aria-selected")).toBe("true");
   });
 
   it("shows them beside the failure line when the details cannot be read", async () => {

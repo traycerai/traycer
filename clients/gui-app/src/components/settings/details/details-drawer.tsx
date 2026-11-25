@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -202,6 +202,7 @@ export type DetailsTab = "status" | "export";
 /** A single drawer for every provider. Opening it starts no host lifecycle. */
 export function DetailsDrawer(props: {
   readonly entry: DetailsEntry | null;
+  readonly hasSubject: boolean;
   readonly title: string;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -228,6 +229,24 @@ export function DetailsDrawer(props: {
   const history = props.entry?.history();
   const hasHistory =
     history !== undefined && history.readerScope !== "status_only";
+  const [selection, setSelection] = useState<{
+    readonly tab: string;
+    readonly hasSubject: boolean;
+  }>({ tab: props.initialTab, hasSubject: props.hasSubject });
+  const lostSubject = selection.hasSubject && !props.hasSubject;
+  const lostHistory =
+    selection.tab === "history" && entry !== null && !hasHistory;
+  // A failed diagnostics read still has a subject, and Retry can answer it.
+  if (selection.hasSubject !== props.hasSubject || lostHistory) {
+    setSelection({
+      tab: lostSubject || lostHistory ? "status" : selection.tab,
+      hasSubject: props.hasSubject,
+    });
+  }
+  const tabUnavailable =
+    (selection.tab === "export" && entry === null) ||
+    (selection.tab === "history" && !hasHistory);
+  const tab = tabUnavailable ? "status" : selection.tab;
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
@@ -276,7 +295,12 @@ export function DetailsDrawer(props: {
           {/* The controls keep one place, so they never remount (and lose
               what they hold) when the status arrives. */}
           {entry === null && props.controls === null ? null : (
-            <Tabs defaultValue={props.initialTab}>
+            <Tabs
+              value={tab}
+              onValueChange={(next) =>
+                setSelection({ tab: next, hasSubject: props.hasSubject })
+              }
+            >
               <TabsList variant="line" className="max-w-full flex-wrap">
                 <TabsTrigger value="status">Status</TabsTrigger>
                 {hasHistory ? (

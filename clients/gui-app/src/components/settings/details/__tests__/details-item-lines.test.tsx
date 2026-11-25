@@ -139,6 +139,7 @@ function renderDrawer(input: {
         history: () => ({ readerScope: "status_only", entries: [] }),
         exportDiagnostics: () => Promise.reject(new Error("not exported")),
       }}
+      hasSubject
       title="Secrets"
       open
       onOpenChange={() => undefined}

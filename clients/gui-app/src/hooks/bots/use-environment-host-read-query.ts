@@ -1,3 +1,4 @@
+import { environmentReadLostAuthority } from "@/hooks/environment/environment-read-data";
 import { useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
@@ -46,7 +47,12 @@ const STATUS_STALE_MS = 5 * 60_000;
 export type EnvironmentHostRead =
   | { readonly kind: "own_settings" }
   | { readonly kind: "pending" }
-  | { readonly kind: "failed"; readonly retry: () => void }
+  | {
+      readonly kind: "failed";
+      readonly retry: () => void;
+      readonly lastBinding: EnvironmentHostBinding | null;
+      readonly bindingAuthorityLost: boolean;
+    }
   | {
       readonly kind: "binding";
       readonly query: UseQueryResult<EnvironmentHostBinding, HostRpcError>;
@@ -126,7 +132,21 @@ export function useEnvironmentHostReadQuery(
     },
   });
   if (statusAnswer === "own_settings") return { kind: "own_settings" };
-  if (statusAnswer === "failed") return { kind: "failed", retry: retryStatus };
+  if (statusAnswer === "failed") {
+    const bindingVisible =
+      enabled &&
+      hostId !== null &&
+      (!fromPool || (cloudAuthorized && viewerUserId.length > 0));
+    const query = fromPool ? pooled : own;
+    const bindingAuthorityLost = environmentReadLostAuthority(query.error);
+    return {
+      kind: "failed",
+      retry: retryStatus,
+      lastBinding:
+        bindingVisible && !bindingAuthorityLost ? (query.data ?? null) : null,
+      bindingAuthorityLost,
+    };
+  }
   if (enabled && statusAnswer === "unsettled") return { kind: "pending" };
   return { kind: "binding", query: fromPool ? pooled : own };
 }

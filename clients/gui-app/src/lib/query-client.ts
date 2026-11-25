@@ -22,8 +22,16 @@ import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-quer
 import { lastingHostRefusal } from "@/lib/host/lasting-host-refusal";
 import { installBotReadReadability } from "@/lib/bots/bot-read-readability";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import { environmentReadLostAuthority } from "@/hooks/environment/environment-read-data";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { worktreeQuerySuccessOrderFor } from "@/lib/worktree/worktree-query-success-order";
+
+const ENVIRONMENT_AUTHORITY_READS = [
+  "environment.status",
+  "environment.host.read",
+  "environment.binding.read",
+];
 
 const SAFE_QUERY_KEY_MARKERS = new Set([
   "auth",
@@ -60,6 +68,18 @@ export function createAppQueryClient(): QueryClient {
   const client = new QueryClient({
     queryCache: new QueryCache({
       onError: (error, query) => {
+        // A later transport failure replaces the error. Withdraw the answer
+        // at the authority refusal so it cannot come back without a success.
+        if (
+          query.state.data !== undefined &&
+          error instanceof HostRpcError &&
+          environmentReadLostAuthority(error) &&
+          ENVIRONMENT_AUTHORITY_READS.some((method) =>
+            hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, method),
+          )
+        ) {
+          query.setState({ data: undefined });
+        }
         appLogger.warn("[query] request failed", {
           queryKey: summarizeQueryKey(query.queryKey),
           failureCount: query.state.fetchFailureCount,
@@ -93,12 +113,15 @@ export function createAppQueryClient(): QueryClient {
         // withdrawn verdict again. A Move source refusal waits for Retry.
         // A lasting refusal (signed out, no access, a
         // host that cannot serve the call) answers the same at once, so it
-        // surfaces on its first answer too.
+        // surfaces on its first answer too. Apply the same authority rule
+        // used to withdraw environment data before retry can mask a refusal.
         retry: (failureCount, error) =>
           lastingHostRefusal(error) === null &&
           !(
             error instanceof HostRpcError &&
-            error.code === "E_MOVE_LOCAL_SOURCE_UNREAD"
+            (error.code === "E_MOVE_LOCAL_SOURCE_UNREAD" ||
+              (ENVIRONMENT_AUTHORITY_READS.includes(error.method) &&
+                environmentReadLostAuthority(error)))
           ) &&
           !(error instanceof RetryableTransportError) &&
           !(error instanceof CloudEpicTasksRequestContextTimeoutError) &&

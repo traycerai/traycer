@@ -4,10 +4,10 @@ export const settingsDetailsQueryKeys = {
   all: () => ["settings-details"] as const,
   entry: (
     hostId: string | null,
-    subject: DetailsSubject,
+    subject: DetailsSubject | null,
     viewerUserId: string,
   ) => ["settings-details", hostId, subject, viewerUserId] as const,
-  export: (subject: DetailsSubject) =>
+  export: (subject: DetailsSubject | null) =>
     ["settings-details-export", subject] as const,
 };
 
