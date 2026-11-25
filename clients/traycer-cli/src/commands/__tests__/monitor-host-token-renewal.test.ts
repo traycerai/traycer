@@ -1,9 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  processReleasedHosts,
+  type HostInstance,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
+import { nameReason } from "../../internal/__tests__/released-memory-test-support";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import { runMonitor } from "../monitor";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import {
+  nextCasePerson,
+  type CasePerson,
+} from "../../internal/__tests__/case-person-test-support";
 
 type FakeSession = {
   statusChange: ((status: string, reason: unknown) => void) | null;
@@ -11,8 +21,14 @@ type FakeSession = {
 };
 type SchedulerOptions = { readonly revalidate: () => Promise<unknown> };
 type StreamOptions = {
-  readonly bearer: () => { getBearerToken: () => string } | null;
-  readonly door: { admitted: () => void };
+  readonly bearer: (hostId: string) => { getBearerToken: () => string } | null;
+  readonly door: {
+    readonly admitted: (instance: HostInstance) => () => void;
+    readonly refused: (
+      details: FatalErrorDetails,
+      instance: HostInstance,
+    ) => void;
+  };
 };
 
 const state = vi.hoisted(() => {
@@ -140,9 +156,32 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
   return {
     ...actual,
     createCliCredentialsStore: vi.fn(() => ({ dispose: vi.fn() })),
-    createStoreBackedRevalidator: vi.fn(() => ({
-      revalidateCurrentContext: state.revalidate,
-    })),
+    createStoreBackedRevalidator: vi.fn(
+      ({
+        lease,
+      }: {
+        readonly lease: {
+          getBearerToken(): string;
+          rotate(token: string): void;
+        };
+      }) => ({
+        revalidateCurrentContext: state.revalidate,
+        adoptStoredSignIn: async () => undefined,
+        // A rotation it accepts installs a distinct sign-in, which the next mint is sent with.
+        rotateSignIn: async () => {
+          const tried = lease.getBearerToken();
+          const outcome: unknown = await state.revalidate();
+          const installed = outcome === "rotated" ? `${tried}+rotated` : null;
+          if (installed !== null) lease.rotate(installed);
+          return {
+            outcome,
+            installed,
+            refused: outcome === "rejected" ? tried : null,
+            accepted: installed,
+          };
+        },
+      }),
+    ),
   };
 });
 
@@ -159,6 +198,7 @@ const pidMock = vi.mocked(readHostPidMetadata);
 function unauthorizedFatal(doorReason: "token_expired" | "not_admitted") {
   return {
     kind: "fatalError" as const,
+    signInVerdict: null,
     details: {
       code: "UNAUTHORIZED" as const,
       reason: "expired",
@@ -167,6 +207,29 @@ function unauthorizedFatal(doorReason: "token_expired" | "not_admitted") {
       doorReason,
     },
   };
+}
+
+/** The host the monitor's endpoint resolves to. */
+const HOST_ID = "host-1";
+
+/**
+ * A host's refusal of an open, as the real stream delivers it: reported to
+ * the door, then the session closes with it.
+ */
+function refuseOpen(
+  index: number,
+  options: StreamOptions,
+  fatal: {
+    readonly kind: "fatalError";
+    readonly signInVerdict: null;
+    readonly details: FatalErrorDetails;
+  },
+): void {
+  options.door.refused(
+    fatal.details,
+    processReleasedHosts.currentInstance(HOST_ID),
+  );
+  state.sessions[index]?.statusChange?.("closed", fatal);
 }
 
 async function startMonitor() {
@@ -185,7 +248,11 @@ async function waitForMintCount(count: number) {
   await vi.waitFor(() => expect(state.mint).toHaveBeenCalledTimes(count));
 }
 
+// The person this case signs in as, one no earlier case used.
+let person: CasePerson = nextCasePerson();
+
 beforeEach(() => {
+  person = nextCasePerson();
   vi.useFakeTimers();
   state.sessions.length = 0;
   state.streamOptions.length = 0;
@@ -200,7 +267,7 @@ beforeEach(() => {
   resolveAuthMock.mockResolvedValue({
     token: "signin",
     authnBaseUrl: "https://authn.test",
-    userId: "user-1",
+    userId: person.userId,
   });
   pidMock.mockResolvedValue({
     pid: 1,
@@ -216,6 +283,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  processReleasedHosts.forgetAll();
   vi.clearAllTimers();
   vi.useRealTimers();
 });
@@ -291,13 +359,10 @@ describe("runMonitor host-token renewal", () => {
   it("retries after a rejected persistence write during reactive token recovery", async () => {
     state.rejectPersistence = true;
     const { result, options } = await startMonitor();
-    options.bearer();
+    options.bearer(HOST_ID);
     await waitForMintCount(1);
     state.rejectPersistence = false;
-    state.sessions[0]?.statusChange?.(
-      "closed",
-      unauthorizedFatal("not_admitted"),
-    );
+    refuseOpen(0, options, unauthorizedFatal("not_admitted"));
     state.rejectPersistence = true;
     await waitForMintCount(2);
 
@@ -312,19 +377,23 @@ describe("runMonitor host-token renewal", () => {
     );
   });
 
+  // A `not-admitted` ends the command only once the host has named a reason
+  // (a sign-in could still follow before); the other refusals end it at once.
   it.each([
-    ["not-admitted", { kind: "not-admitted" }, CLI_ERROR_CODES.FORBIDDEN],
+    ["not-admitted", { kind: "not-admitted" }, CLI_ERROR_CODES.FORBIDDEN, true],
     [
       "sandbox-frozen",
       { kind: "sandbox-frozen" },
       CLI_ERROR_CODES.HOST_UNREACHABLE,
+      false,
     ],
   ] as const)(
     "ends on initial %s refusal with the ruled empty message",
-    async (_name, failure, code) => {
+    async (_name, failure, code, hostNamedReason) => {
       state.minted.push(failure);
       const { result, options } = await startMonitor();
-      options.bearer();
+      if (hostNamedReason) nameReason("host-1");
+      options.bearer(HOST_ID);
       await waitForMintCount(1);
 
       expect(await result).toMatchObject({
@@ -340,7 +409,7 @@ describe("runMonitor host-token renewal", () => {
     );
     state.revalidate.mockResolvedValue("rotated");
     const { result, options } = await startMonitor();
-    options.bearer();
+    options.bearer(HOST_ID);
     await waitForMintCount(2);
 
     expect(await result).toMatchObject({
@@ -362,12 +431,11 @@ describe("runMonitor host-token renewal", () => {
       { kind: "not-admitted" },
     );
     const { result, options } = await startMonitor();
-    options.bearer();
+    options.bearer(HOST_ID);
     await waitForMintCount(1);
-    state.sessions[0]?.statusChange?.(
-      "closed",
-      unauthorizedFatal("not_admitted"),
-    );
+    // The stream records a refusal that names its reason before it reports it.
+    nameReason("host-1");
+    refuseOpen(0, options, unauthorizedFatal("not_admitted"));
     await waitForMintCount(2);
 
     expect(await result).toMatchObject({
@@ -377,20 +445,14 @@ describe("runMonitor host-token renewal", () => {
 
   it("earns another fresh token after an admitted open resets recovery", async () => {
     const { result, options } = await startMonitor();
-    options.bearer();
+    options.bearer(HOST_ID);
     await waitForMintCount(1);
-    state.sessions[0]?.statusChange?.(
-      "closed",
-      unauthorizedFatal("token_expired"),
-    );
+    refuseOpen(0, options, unauthorizedFatal("token_expired"));
     await waitForMintCount(2);
     await vi.waitFor(() => expect(state.sessions).toHaveLength(2));
 
-    options.door.admitted();
-    state.sessions[1]?.statusChange?.(
-      "closed",
-      unauthorizedFatal("token_expired"),
-    );
+    options.door.admitted(processReleasedHosts.currentInstance(HOST_ID));
+    refuseOpen(1, options, unauthorizedFatal("token_expired"));
     await waitForMintCount(3);
     await vi.waitFor(() => expect(state.sessions).toHaveLength(3));
 

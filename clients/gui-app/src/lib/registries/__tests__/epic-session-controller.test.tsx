@@ -145,6 +145,7 @@ function resetAuth(
 function unauthorizedEpicClose(doorReason: string | null): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "UNAUTHORIZED",
       reason: "test host refusal",

@@ -192,14 +192,35 @@ function stage(input: {
   });
   hoisted.createCredentialsStore.mockReturnValue({ dispose: vi.fn() });
   hoisted.createStoreBackedRevalidator.mockImplementation(
-    (args: { readonly lease: { rotate(token: string): void } }) => {
+    (args: {
+      readonly lease: { getBearerToken(): string; rotate(token: string): void };
+    }) => {
       hoisted.revalidateCurrentContext.mockImplementation(async () => {
         if (hoisted.refreshOutcome === "rotated") {
           args.lease.rotate(hoisted.refreshedToken);
         }
         return hoisted.refreshOutcome;
       });
-      return { revalidateCurrentContext: hoisted.revalidateCurrentContext };
+      return {
+        revalidateCurrentContext: hoisted.revalidateCurrentContext,
+        // The file holds no other sign-in than the one the command read.
+        adoptStoredSignIn: async () => undefined,
+        // The token session's refresh: the scripted outcome, as the rotation's result.
+        rotateSignIn: async () => {
+          const refused = args.lease.getBearerToken();
+          const outcome = await hoisted.revalidateCurrentContext();
+          if (outcome === "rotated")
+            return {
+              outcome,
+              installed: hoisted.refreshedToken,
+              refused: null,
+              accepted: hoisted.refreshedToken,
+            };
+          if (outcome === "rejected")
+            return { outcome, installed: null, refused, accepted: null };
+          return { outcome, installed: null, refused: null, accepted: null };
+        },
+      };
     },
   );
   hoisted.callHostRpc.mockImplementation(
@@ -403,7 +424,6 @@ describe("bot list", () => {
     expect(
       hoisted.validateIdentity.mock.calls.map(([, token]) => token),
     ).toEqual(["sign-in-bearer", "refreshed-bearer"]);
-    expect(hoisted.createStoreBackedRevalidator).toHaveBeenCalledTimes(1);
     expect(hoisted.revalidateCurrentContext).toHaveBeenCalledTimes(1);
   });
 

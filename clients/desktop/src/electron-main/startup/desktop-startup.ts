@@ -163,6 +163,7 @@ import {
 import { EpicWindowOwnership } from "../windows/epic-window-ownership";
 import { PerWindowState } from "../windows/per-window-state";
 import { DesktopAuthSession } from "../auth/desktop-auth-session";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { FileTokenStore } from "../auth/file-token-store";
 import { DesktopSupportService } from "../app/support";
 import { MenuController } from "../menu/menu-controller";
@@ -825,6 +826,10 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const ownership = new EpicWindowOwnership(desktopStateStore);
   const perWindowState = new PerWindowState(desktopStateStore);
   const authSession = new DesktopAuthSession();
+  // A released computer main remembered was the person's who signed out.
+  authSession.on("change", (session) => {
+    if (session.status !== "signed-in") processReleasedHosts.forgetAll();
+  });
   // Owner of the single machine-local credentials file (tech plan §3). ENV-scoped
   // (shared across dev slots + the CLI), never slot-scoped. The bridge disposes it.
   const authTokenStore = new FileTokenStore({

@@ -34,6 +34,7 @@ import {
   type BotStreamClient,
   listBots,
   openLocalStreamClient,
+  refusalEndingCommand,
   refuseUnlessBoundHere,
   toBotCliError,
   unreadableStreamError,
@@ -435,6 +436,12 @@ class ReplyFollower {
       this.onFrame(envelope);
     });
     session.onStatusChange((status, reason) => {
+      // A mint refusal that ended the command closed the client.
+      const refused = refusalEndingCommand(this.input.client);
+      if (refused !== null) {
+        this.finish(() => this.reject(refused));
+        return;
+      }
       // A drop re-subscribes on its own and the new snapshot starts over;
       // the person's timeout bounds the wait either way.
       if (
