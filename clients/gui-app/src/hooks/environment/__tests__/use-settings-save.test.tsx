@@ -48,6 +48,7 @@ import type {
   SetupScript,
 } from "@traycer/protocol/host/environment-schemas";
 import { readSettingsItemRows } from "@traycer-clients/shared/environment/settings-save-target";
+import * as settingsSaveTarget from "@traycer-clients/shared/environment/settings-save-target";
 import type { ConfigShellGetResponseV11 } from "@traycer/protocol/host/config/index";
 import { hostRpcRegistry } from "@traycer/protocol/host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
@@ -146,6 +147,29 @@ vi.mock(
     }),
   }),
 );
+const followUpCallbacks = vi.hoisted(() => ({
+  pending: null as Set<() => void> | null,
+}));
+vi.mock(
+  "@/lib/environment/settings-save-coordinator",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/lib/environment/settings-save-coordinator")
+      >();
+    return {
+      ...actual,
+      scheduleFollowUp: (run: () => void, delayMs: number) => {
+        const pending = followUpCallbacks.pending;
+        if (pending === null) return actual.scheduleFollowUp(run, delayMs);
+        pending.add(run);
+        return () => {
+          pending.delete(run);
+        };
+      },
+    };
+  },
+);
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
 }));
@@ -172,6 +196,10 @@ const moveAcceptanceAnswer = z.strictObject({
 const heldApplyRequest = z.strictObject({
   revision: z.number().int().nonnegative(),
   expectedLiveRevision: z.number().int().nonnegative().nullable(),
+  requiresSecrets: z.boolean().optional(),
+});
+const guardedHeldApplyRequest = heldApplyRequest.extend({
+  expectedSharingGeneration: z.number().int().nonnegative(),
 });
 const PROVIDER_ID = "codex";
 const ITEM_KEY = `${PROVIDER_ID}:CODEX_API_KEY`;
@@ -344,6 +372,12 @@ interface MutableAuthnState {
   move: EnvironmentMoveAttemptOutcome | null;
   readonly bindingRequested: Deferred<void>;
   readonly computerVariables: Map<string, string | null>;
+  originSharingGeneration: number;
+  acceptedMoveReadGate: {
+    readonly entered: Deferred<void>;
+    readonly resume: Deferred<void>;
+  } | null;
+  rejectedGuardedApply: number;
   applyReview:
     | ((request: EnvironmentTransportRequest) => EnvironmentTransportAnswer)
     | null;
@@ -496,6 +530,9 @@ function makeSaveHarness(overrides: {
   const state: MutableAuthnState = {
     authnUnreachable: false,
     acceptedMove: null,
+    originSharingGeneration: SHARING_GENERATION,
+    acceptedMoveReadGate: null,
+    rejectedGuardedApply: 0,
     move: null,
     bindingRequested: deferred<void>(),
     computerVariables: new Map(),
@@ -577,6 +614,11 @@ function makeSaveHarness(overrides: {
         new URL(request.url).pathname ===
           `/api/v3/hosts/${HOST_ID}/move-acceptances/${MOVE_ACCEPTANCE_ID}`
       ) {
+        const readGate = state.acceptedMoveReadGate;
+        if (readGate !== null) {
+          readGate.entered.resolve(undefined);
+          await readGate.resume.promise;
+        }
         if (state.acceptedMove === null) return { status: 404, text: "" };
         const { identity, revision } = state.acceptedMove;
         return {
@@ -1409,6 +1451,56 @@ async function pressOutageSave(
   return { appSaveId, record, saveId };
 }
 
+interface OutageApplyFence {
+  readonly interruption: string;
+  readonly heldGeneration: number;
+}
+
+function readOutageApply(
+  request: EnvironmentTransportRequest,
+  state: MutableAuthnState,
+  { interruption, heldGeneration }: OutageApplyFence,
+):
+  | { readonly body: z.infer<typeof heldApplyRequest>; readonly conflict: null }
+  | { readonly body: null; readonly conflict: EnvironmentTransportAnswer } {
+  const submitted = requestBody(request);
+  const checked = guardedHeldApplyRequest.safeParse(submitted);
+  const body = checked.success
+    ? checked.data
+    : heldApplyRequest.parse(submitted);
+  if (checked.success) {
+    expect(checked.data.expectedSharingGeneration).toBe(heldGeneration);
+  }
+  if (checked.success && interruption === "old-authn") {
+    state.rejectedGuardedApply += 1;
+    return {
+      body: null,
+      conflict: {
+        status: 400,
+        text: JSON.stringify({
+          statusCode: 400,
+          error: "apply body is invalid",
+        }),
+      },
+    };
+  }
+  if (
+    checked.success &&
+    checked.data.expectedSharingGeneration !== state.originSharingGeneration
+  ) {
+    return {
+      body: null,
+      conflict: {
+        status: 409,
+        text: JSON.stringify(
+          authnHeldApplyConflictSchema.parse({ code: "superseded" }),
+        ),
+      },
+    };
+  }
+  return { body, conflict: null };
+}
+
 function exposeOutageHold(
   harness: SaveHarness,
   {
@@ -1419,6 +1511,7 @@ function exposeOutageHold(
     receiptAcceptanceId,
     heldId,
     heldRevision,
+    interruption,
   }: {
     readonly key: string;
     readonly currentRow: AuthnItemRow;
@@ -1427,6 +1520,7 @@ function exposeOutageHold(
     readonly receiptAcceptanceId: string | undefined;
     readonly heldId: string;
     readonly heldRevision: number;
+    readonly interruption: string;
   },
 ): void {
   const address = { kind: "variable", key };
@@ -1477,7 +1571,11 @@ function exposeOutageHold(
     text: JSON.stringify(reviewBody),
   };
   harness.state.applyReview = (request) => {
-    const body = heldApplyRequest.parse(requestBody(request));
+    const { body, conflict } = readOutageApply(request, harness.state, {
+      interruption,
+      heldGeneration: held.sharingGeneration,
+    });
+    if (conflict !== null) return conflict;
     const current = harness.state.rowsByKind.variable.find(
       (item) =>
         item.kind === held.kind && item.key === held.key && item.os === held.os,
@@ -1530,18 +1628,76 @@ function exposeOutageHold(
   };
 }
 
+async function reconcileThroughProviderCleanup(
+  harness: SaveHarness,
+  mounted: MountedOutageSave,
+  coordinator: SettingsSaveCoordinator,
+): Promise<void> {
+  const gate = { entered: deferred<void>(), resume: deferred<void>() };
+  harness.state.acceptedMoveReadGate = gate;
+  const readHost = settingsSaveTarget.readSettingsSaveHost;
+  let proofReadArmed = false;
+  let stopped = false;
+  const observation = vi
+    .spyOn(settingsSaveTarget, "readSettingsSaveHost")
+    .mockImplementation(async (cloud, environmentId, hostId) => {
+      const host = await readHost(cloud, environmentId, hostId);
+      if (!proofReadArmed || host === null) return host;
+      return {
+        ...host,
+        get sharingGeneration() {
+          if (!stopped) {
+            // Run the real provider cleanup before the proof helper's caller resumes.
+            queueMicrotask(() => {
+              mounted.unmount();
+              stopped = true;
+            });
+          }
+          return host.sharingGeneration;
+        },
+      };
+    });
+  try {
+    const reconciliation = coordinator.reconcile(HOST_ID);
+    await gate.entered.promise;
+    proofReadArmed = true;
+    gate.resume.resolve(undefined);
+    await act(async () => reconciliation);
+    expect(reviewApplyRequests(harness)).toHaveLength(0);
+    expect(stopped).toBe(true);
+  } finally {
+    observation.mockRestore();
+  }
+}
+
 async function reconcileOutageSave(
   harness: SaveHarness,
   mounted: MountedOutageSave,
-  signOut: boolean,
-): Promise<void> {
-  const coordinator = mounted.result.current.coordinator;
+  interruption: string,
+) {
+  let coordinator = mounted.result.current.coordinator;
+  if (interruption === "reopen") {
+    mounted.unmount();
+    useSettingsSaveMemoryStore.persist.setOptions({
+      name: settingsSaveMemoryKey(null),
+    });
+    await useSettingsSaveMemoryStore.persist.rehydrate();
+    const reopened = renderHook(() => useSettingsSaveCoordinator(), {
+      wrapper: harness.wrapper,
+    });
+    coordinator = reopened.result.current;
+  }
   if (coordinator === null) throw new Error("Expected the save coordinator");
-  if (signOut) {
-    const retired = nextSaveMemoryBucket(settingsSaveMemoryKey(null));
+  if (interruption === "sign-out" || interruption === "account-switch") {
+    const nextAccount = interruption === "account-switch" ? ACCOUNT_B : null;
+    const retired = nextSaveMemoryBucket(settingsSaveMemoryKey(nextAccount));
     act(() => {
       authIdentityGeneration += 1;
-      useAuthStore.setState(useAuthStore.getInitialState(), true);
+      if (nextAccount === null) {
+        useAuthStore.setState(useAuthStore.getInitialState(), true);
+      } else {
+        setAccount(nextAccount);
+      }
     });
     await retired;
     const reentered = nextSaveMemoryBucket(settingsSaveMemoryKey(ACCOUNT_A));
@@ -1551,7 +1707,46 @@ async function reconcileOutageSave(
     });
     await reentered;
   }
+  if (interruption === "provider-cleanup") {
+    await reconcileThroughProviderCleanup(harness, mounted, coordinator);
+  } else if (interruption === "stop") {
+    const gate = { entered: deferred<void>(), resume: deferred<void>() };
+    harness.state.acceptedMoveReadGate = gate;
+    const reconciliation = coordinator.reconcile(HOST_ID);
+    await gate.entered.promise;
+    harness.state.hostListed = false;
+    harness.state.originSharingGeneration += 1;
+    gate.resume.resolve(undefined);
+    await act(async () => reconciliation);
+  } else {
+    await act(async () => coordinator.reconcile(HOST_ID));
+  }
+
+  return coordinator;
+}
+
+async function checkOldAuthnRefusal(
+  harness: SaveHarness,
+  {
+    coordinator,
+    editor,
+    toastError,
+    followUps,
+  }: {
+    readonly coordinator: SettingsSaveCoordinator;
+    readonly editor: ShellConfigController;
+    readonly toastError: typeof toast.error;
+    readonly followUps: ReadonlySet<() => void>;
+  },
+): Promise<void> {
+  expect(harness.state.rejectedGuardedApply).toBe(1);
+  expect(reviewApplyRequests(harness)).toHaveLength(1);
+  expect(records()).toEqual([]);
+  expect(toastError).not.toHaveBeenCalled();
+  expect(editor.configError).toBeNull();
+  expect(followUps.size).toBe(0);
   await act(async () => coordinator.reconcile(HOST_ID));
+  expect(reviewApplyRequests(harness)).toHaveLength(1);
 }
 
 async function signOutAndReenterSameAccount(): Promise<void> {
@@ -1671,6 +1866,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  followUpCallbacks.pending = null;
   for (const harness of activeHarnesses.splice(0)) harness.dispose();
   addressableHostMock.id = HOST_ID;
   vi.restoreAllMocks();
@@ -1784,14 +1980,14 @@ describe("settings-save callers", () => {
       scope: "unbound",
       independent: false,
       receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
-      signOut: false,
+      interruption: "none",
     },
     {
       label: "the accepted Move's write with the binding published",
       scope: "bound",
       independent: false,
       receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
-      signOut: false,
+      interruption: "none",
     },
     {
       label:
@@ -1799,39 +1995,74 @@ describe("settings-save callers", () => {
       scope: "still-local",
       independent: false,
       receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
-      signOut: false,
+      interruption: "none",
     },
     {
       label: "a later independent write with the same bytes",
       scope: "unbound",
       independent: true,
       receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
-      signOut: false,
+      interruption: "none",
     },
     {
       label: "a receipt from another acceptance",
       scope: "unbound",
       independent: false,
       receiptAcceptanceId: MOVE_ATTEMPT_ID,
-      signOut: false,
+      interruption: "none",
     },
     {
       label: "a receipt without an acceptance",
       scope: "unbound",
       independent: false,
       receiptAcceptanceId: undefined,
-      signOut: false,
+      interruption: "none",
     },
     {
       label: "a sign-out before recovery",
       scope: "unbound",
       independent: false,
       receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
-      signOut: true,
+      interruption: "sign-out",
+    },
+    {
+      label: "a direct account switch away and back",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "account-switch",
+    },
+    {
+      label: "a Stop during the consumed acceptance read",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "stop",
+    },
+    {
+      label: "provider cleanup between the final proof and Apply",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "provider-cleanup",
+    },
+    {
+      label: "an older authn with the strict original Apply body",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "old-authn",
+    },
+    {
+      label: "a reopen on the same sign-in",
+      scope: "unbound",
+      independent: false,
+      receiptAcceptanceId: MOVE_ACCEPTANCE_ID,
+      interruption: "reopen",
     },
   ])(
     "recovers or leaves an outage save in review with $label",
-    async ({ scope, independent, receiptAcceptanceId, signOut }) => {
+    async ({ scope, independent, receiptAcceptanceId, interruption }) => {
       const harness = makeSaveHarness({
         ownSettings: true,
         hostListed: false,
@@ -1843,6 +2074,9 @@ describe("settings-save callers", () => {
       const heldRevision = 22;
       const heldId = "00000000-0000-4000-8000-000000000103";
       harness.state.computerVariables.set(key, "V1");
+      const toastError = vi.spyOn(toast, "error");
+      const followUps = new Set<() => void>();
+      if (interruption === "old-authn") followUpCallbacks.pending = followUps;
       const mounted = await startSettingsSaveDuringMove(harness);
       const { result } = mounted;
 
@@ -1904,8 +2138,13 @@ describe("settings-save callers", () => {
         receiptAcceptanceId,
         heldId,
         heldRevision,
+        interruption,
       });
-      await reconcileOutageSave(harness, mounted, signOut);
+      const coordinator = await reconcileOutageSave(
+        harness,
+        mounted,
+        interruption,
+      );
 
       const signedIn = harness.environmentCloud();
       const [personal, review] = await Promise.all([
@@ -1913,7 +2152,9 @@ describe("settings-save callers", () => {
         environmentReview.readHeldChangesForMatch(signedIn, ENVIRONMENT_ID),
       ]);
       const applied =
-        !signOut && !independent && receiptAcceptanceId === MOVE_ACCEPTANCE_ID;
+        (interruption === "none" || interruption === "reopen") &&
+        !independent &&
+        receiptAcceptanceId === MOVE_ACCEPTANCE_ID;
       expect({
         computer: harness.state.computerVariables.get(key),
         correlatedSave: appSaveId !== null && record?.editId === appSaveId,
@@ -1927,6 +2168,14 @@ describe("settings-save callers", () => {
         personalRevision: applied ? heldRevision + 1 : currentRow.revision,
         review: applied ? [] : [heldId],
       });
+      if (interruption === "old-authn") {
+        await checkOldAuthnRefusal(harness, {
+          coordinator,
+          editor: result.current.editor,
+          toastError,
+          followUps,
+        });
+      }
     },
   );
 
