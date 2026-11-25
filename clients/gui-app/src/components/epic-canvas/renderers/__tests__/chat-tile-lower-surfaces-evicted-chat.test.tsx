@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render as testingRender,
@@ -11,6 +12,12 @@ import type {
   ChatRunSettings,
   OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 
 const composerProps = vi.hoisted(
   () => [] as Array<{ sendDisabled: boolean | undefined }>,
@@ -48,6 +55,17 @@ vi.mock("@/hooks/agent/use-stop-agent-mutation", () => ({
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
+}));
+vi.mock("@/components/composer/pool-composer-actions", () => ({
+  PoolComposerActions: ({
+    place,
+  }: {
+    readonly place: (hostId: string) => void;
+  }) => (
+    <button type="button" onClick={() => place("team-sandbox")}>
+      Use team sandbox
+    </button>
+  ),
 }));
 
 import {
@@ -232,9 +250,60 @@ function evictedAccess(parksEvictedSend: boolean) {
 afterEach(() => {
   cleanup();
   composerProps.length = 0;
+  useSelectionAuthorityStore.getState().reset();
+  useSurfaceHostSelectionStore.getState().resetForTests();
+  useComposerDraftStore.setState({
+    drafts: useComposerDraftStore.getInitialState().drafts,
+  });
 });
 
 describe("the composer of an evicted chat the pool serves", () => {
+  it("keeps the offline chat and its draft while its next chat is placed on a team sandbox", () => {
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const base = props({ ...VIEWER_CANNOT_ACT, isCopy: true });
+    const draftStore = useComposerDraftStore.getState();
+    draftStore.setSnapshot(
+      base.chatId,
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "saved draft" }],
+          },
+        ],
+      },
+      null,
+    );
+    const previousDraft = useComposerDraftStore.getState().drafts[base.chatId];
+    render(<ChatLowerInteractionSurfaces {...base} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Use team sandbox" }));
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        newConversationSurfaceKey(base.epicId)
+      ],
+    ).toBe("team-sandbox");
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
+    expect(useComposerDraftStore.getState().drafts[base.chatId]).toBe(
+      previousDraft,
+    );
+
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: "working-computer" },
+      }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Use team sandbox" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(useComposerDraftStore.getState().drafts[base.chatId]).toBe(
+      previousDraft,
+    );
+  });
+
   it("keeps a parked chat read-only for a viewer and offers Clone agent", () => {
     const onClone = vi.fn();
     const interactionProps = props(evictedAccess(true));
