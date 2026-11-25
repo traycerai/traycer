@@ -62,7 +62,10 @@ export interface PerWindowEpicViewTab {
     | { readonly kind: "phase-migration"; readonly phaseId: string };
 }
 
-export type PerWindowStateFeature = "tab-strip-layout-v2" | "active-route-v1";
+export type PerWindowStateFeature =
+  | "tab-strip-layout-v2"
+  | "active-route-v1"
+  | "landing-draft-reference-move-v1";
 
 /** Main-owned feature declaration. Never infer support from bridge presence. */
 export interface PerWindowStateCapabilities {
@@ -110,12 +113,70 @@ export interface PerWindowLandingDraft {
   readonly namedHostId?: string;
 }
 
+export interface LandingDraftReference {
+  readonly slotId: string;
+  readonly occurrenceId: string;
+}
+
+export interface WindowLandingDraftReference extends LandingDraftReference {
+  readonly moveToken: string | null;
+}
+
+export interface WindowDraftTopology {
+  readonly revision: number;
+  readonly references: readonly WindowLandingDraftReference[];
+  readonly activeDraftId: string | null;
+}
+
+export type WindowDraftReferenceEdit =
+  | { readonly kind: "attach"; readonly ref: LandingDraftReference }
+  | { readonly kind: "detach"; readonly ref: LandingDraftReference };
+
+export interface UpdateWindowDraftReferencesRequest {
+  readonly expectedTopologyRevision: number | null;
+  readonly edits: readonly WindowDraftReferenceEdit[];
+  readonly activeDraftId: string | null;
+}
+
+export type FlushWindowDraftTopologyResult =
+  | { readonly result: "ready"; readonly revision: number }
+  | { readonly result: "conflict" }
+  | { readonly result: "unavailable" };
+
+export type WindowDraftTopologyResult =
+  | { readonly result: "committed"; readonly revision: number }
+  | { readonly result: "conflict" }
+  | { readonly result: "unavailable" };
+
+export interface MoveWindowDraftReferenceRequest {
+  readonly moveToken: string;
+  readonly ref: LandingDraftReference;
+  readonly expectedSourceTopologyRevision: number;
+}
+
+export interface WindowDraftMoveReceipt {
+  readonly destinationWindowId: string;
+  readonly sourceTopologyRevision: number;
+  readonly destinationTopologyRevision: number;
+}
+
+export type MoveWindowDraftReferenceResult =
+  | ({
+      readonly result: "moved";
+      readonly replayed: boolean;
+      readonly destinationLoadFailed?: true;
+    } & WindowDraftMoveReceipt)
+  | { readonly result: "conflict" }
+  | { readonly result: "unavailable" };
+
 export interface PerWindowSnapshot {
   /** Monotonic, per-window persisted revision. Legacy snapshots begin at 0. */
   readonly revision?: number;
   readonly epicTabs: readonly PerWindowEpicViewTab[];
   readonly activeTabId: string | null;
   readonly canvasByTabId: Readonly<Record<string, JsonValue>>;
+  /** Absent on snapshots that still need legacy draft import. */
+  readonly draftTopology?: WindowDraftTopology;
   readonly landingDrafts: readonly PerWindowLandingDraft[];
   readonly activeLandingDraftId: string | null;
   /** Opaque renderer-owned JSON for the version-2 tab strip. */

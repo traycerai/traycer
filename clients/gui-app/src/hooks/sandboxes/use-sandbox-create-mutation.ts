@@ -115,6 +115,7 @@ const latestCreateByScope = new Map<string, symbol>();
 interface ScopedCreateAttempt {
   readonly key: string;
   readonly userId: string | null;
+  readonly source: SandboxCreateScope["source"];
   readonly current: () => boolean;
   readonly finish: () => void;
 }
@@ -131,6 +132,7 @@ function beginScopedCreate(scope: SandboxCreateScope): ScopedCreateAttempt {
   return {
     key,
     userId,
+    source: scope.source,
     current: () =>
       signedInUserId() === userId && latestCreateByScope.get(key) === id,
     finish: () => {
@@ -240,10 +242,14 @@ async function reconcileSandboxCreate(
     !expired && Date.now() < until && signedInUserId() === userId;
   const read = async (): Promise<void> => {
     while (current()) {
-      const result = await auth
+      const answer = await auth
         .getSandbox(sandboxId)
         .catch(() => UNREADABLE_ROW);
       if (!current()) return;
+      const result =
+        answer.kind === "ok" && answer.sandbox.id !== sandboxId
+          ? UNREADABLE_ROW
+          : answer;
       readState.last = result;
       if (!pollCreatingSandbox(result)) return;
       await new Promise<void>((resolve) => {
@@ -344,7 +350,9 @@ async function finishJoinedCreate(
         key,
         error.nextRequest === null
           ? undefined
-          : { kind: "retry", request: error.nextRequest, error },
+          : attempt.source === "failed-row"
+            ? retainedCreateRetry(error.nextRequest, error)
+            : { kind: "retry", request: error.nextRequest, error },
       );
     }
     throw error;
@@ -356,6 +364,7 @@ function nextCreateRequest(
   request: SandboxCreateRequest,
   attempted: SandboxCreateRequest,
 ): SandboxCreateRequest | null {
+  if (refusal.kind === "network-error") return attempted;
   if (refusal.kind !== "refused") return request;
   if (refusal.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT)
     return attempted;
@@ -561,6 +570,16 @@ function pressedCreateRefusal(input: {
       });
     else if (retained !== undefined)
       settleRetainedCreate(attempt, retained, error);
+    else if (
+      error.nextRequest !== null &&
+      attempt.source === "failed-row" &&
+      (payload !== null || result.kind === "network-error")
+    ) {
+      replaceContinuation(
+        attempt.key,
+        retainedCreateRetry(error.nextRequest, error),
+      );
+    }
   }
   return error;
 }
@@ -614,8 +633,19 @@ async function sendCreateFromPress(
     if (retained !== undefined) settleRetainedCreate(attempt, retained, null);
     return accepted;
   } catch (error) {
-    if (retained !== undefined && error instanceof SandboxCreateError)
-      settleRetainedCreate(attempt, retained, error);
+    if (error instanceof SandboxCreateError) {
+      if (retained !== undefined) {
+        settleRetainedCreate(attempt, retained, error);
+      } else if (
+        current() &&
+        attempt.source === "failed-row" &&
+        !(error instanceof SandboxUnresolvedCreateError) &&
+        error.nextRequest !== null &&
+        useSandboxCreateContinuations.getState().byScope[key] === undefined
+      ) {
+        replaceContinuation(key, retainedCreateRetry(error.nextRequest, error));
+      }
+    }
     throw error;
   }
 }

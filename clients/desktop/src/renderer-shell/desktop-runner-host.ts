@@ -238,7 +238,11 @@ import type {
   DesktopAuthSessionSnapshot,
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
+  FlushWindowDraftTopologyResult,
+  LandingDraftReference,
   MenuCommandPayload,
+  MoveWindowDraftReferenceRequest,
+  MoveWindowDraftReferenceResult,
   OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   OwnershipClaimResult,
@@ -251,6 +255,8 @@ import type {
   SupportLogTailResult,
   SupportRevealLogResult,
   SupportSnapshot,
+  UpdateWindowDraftReferencesRequest,
+  WindowDraftTopologyResult,
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
@@ -932,6 +938,9 @@ export interface DesktopWindowsBridge {
   requestOpenDraftInNewWindow(
     draftId: string,
   ): Promise<OpenDraftInNewWindowResult>;
+  moveDraftReference?(
+    request: MoveWindowDraftReferenceRequest,
+  ): Promise<MoveWindowDraftReferenceResult>;
   ownership: {
     snapshot(): Promise<readonly OwnershipEntry[]>;
     claim(tabId: string, epicId: string): Promise<OwnershipClaimResult>;
@@ -947,6 +956,12 @@ export interface DesktopWindowsBridge {
       patch: PerWindowStatePatch,
     ): Promise<PerWindowStateUpdateAcknowledgement | void>;
     clear(): Promise<void>;
+    flushDraftTopology?(
+      ref: LandingDraftReference,
+    ): Promise<FlushWindowDraftTopologyResult>;
+    updateDraftReferences?(
+      request: UpdateWindowDraftReferencesRequest,
+    ): Promise<WindowDraftTopologyResult>;
     onChange(handler: (snapshot: PerWindowSnapshot) => void): {
       dispose: () => void;
     };

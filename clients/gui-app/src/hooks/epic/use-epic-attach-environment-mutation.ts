@@ -104,10 +104,19 @@ interface EpicAttachmentContext {
 const METHOD = "epic.attachEnvironment";
 
 /** Sent after the host answers, so it must still go as the presser: never once that sign-in has ended. */
+export interface AcceptedEpicAttachment {
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly teamId: string;
+  readonly environmentId: string;
+}
+
 export interface EpicAttachment {
   readonly epicId: string;
   readonly teamId: string;
   readonly operation: EnvironmentCloud | null;
+  readonly mayIssue?: (hostId: string) => boolean;
+  readonly onAccepted?: (attachment: AcceptedEpicAttachment) => void;
 }
 
 type AttachmentFailureKind = "unauthorized" | "forbidden" | "refused";
@@ -160,12 +169,25 @@ function assertOriginSignIn(
   });
 }
 
+function assertAttachmentMayIssue(attachment: EpicAttachment, hostId: string | null): void {
+  if (attachment.mayIssue === undefined) return;
+  if (hostId !== null && attachment.mayIssue(hostId)) return;
+  throw new HostRequestAbortedError({
+    message: "The attachment is no longer current",
+    requestId: crypto.randomUUID(),
+    method: METHOD,
+    mayHaveDispatched: false,
+  });
+}
+
 // Each send only while the pressed sign-in is current, checked before the bearer is
 // read; each answer is checked again after its wait.
 async function attachOnSignIn(
   binding: HostRuntimeBinding<HostRpcRegistry>,
   attachment: EpicAttachment,
   operation: EnvironmentCloud,
+  readHostId: () => string | null,
+  hostId: string | null,
 ): Promise<void> {
   assertOriginSignIn(operation, false);
   const directory = await binding.auth.listEnvironments();
@@ -181,12 +203,23 @@ async function attachOnSignIn(
       candidate.ownerId === attachment.teamId,
   );
   if (environment === undefined) throw attachmentFailure("refused");
+  assertAttachmentMayIssue(attachment, readHostId());
   const result = await binding.auth.attachTaskEnvironment({
     taskId: attachment.epicId,
     environmentId: environment.environmentId,
   });
   assertOriginSignIn(operation, true);
-  if (result.kind === "ok") return;
+  if (result.kind === "ok") {
+    if (hostId !== null) {
+      attachment.onAccepted?.({
+        epicId: attachment.epicId,
+        hostId,
+        teamId: attachment.teamId,
+        environmentId: environment.environmentId,
+      });
+    }
+    return;
+  }
   throw attachmentFailure(
     result.kind === "no_response" ? "refused" : result.kind,
   );
@@ -256,10 +289,13 @@ export function useEpicAttachEnvironment(
         }
         // A caller may have waited on a create since the press.
         assertOriginSignIn(operation, false);
+        const readHostId = (): string | null => client.getActiveHostId();
+        const hostId = readHostId();
+        assertAttachmentMayIssue(attachment, hostId);
         const prepared = await client.request(METHOD, {
           epicId: attachment.epicId,
         });
-        await attachOnSignIn(binding, attachment, operation);
+        await attachOnSignIn(binding, attachment, operation, readHostId, hostId);
         return prepared;
       }),
   });

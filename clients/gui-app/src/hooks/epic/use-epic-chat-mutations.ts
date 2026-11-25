@@ -102,6 +102,42 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
  * on the wrong machine.
  */
 export type CreateChatMutationInput = CreateChatRequestV15;
+
+interface PendingSandboxCreateIssueVerifier {
+  readonly verify: () => Promise<boolean>;
+  readonly isCurrent: () => boolean;
+  readonly isActorCurrent: () => boolean;
+}
+
+export type PendingSandboxCreateChatMutationInput = CreateChatMutationInput & {
+  readonly pendingIssue: PendingSandboxCreateIssueVerifier;
+};
+
+type GuardedCreateChatMutationInput = CreateChatMutationInput & {
+  readonly pendingIssue?: PendingSandboxCreateIssueVerifier;
+};
+
+const PENDING_SANDBOX_CREATE_SUPERSEDED = "pending-sandbox-create-superseded";
+
+function pendingSandboxCreateIssueLost(): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message: "The pending request changed before issue.",
+    requestId: PENDING_SANDBOX_CREATE_SUPERSEDED,
+    method: "epic.createChat",
+    fatalDetails: null,
+  });
+}
+
+async function preparePendingSandboxCreate(
+  params: GuardedCreateChatMutationInput,
+): Promise<CreateChatMutationInput> {
+  const { pendingIssue, ...request } = params;
+  if (pendingIssue === undefined || !(await pendingIssue.verify()))
+    throw pendingSandboxCreateIssueLost();
+  return request;
+}
+
 interface CreateChatMutationContext {
   readonly hostId: string | null;
   /**
@@ -275,10 +311,7 @@ export function useEpicCreateChatForHostClient(
   return useCreateChatForClient(client, null);
 }
 
-/**
- * A durable sandbox dispatch can settle after sign-out. Its caller records the
- * original account's receipt; these lifecycle effects belong only to that account.
- */
+/** The pending request carries its issue grant through each transport call. */
 export function useEpicCreateChatForPendingSandbox(
   client: HostClient<HostRpcRegistry> | null,
   ownerUserId: string | null,
@@ -295,11 +328,23 @@ function useCreateChatForClient(
     HostRpcRegistry,
     "epic.createChat",
     CreateChatMutationContext,
-    CreateChatMutationInput
+    GuardedCreateChatMutationInput
   >({
     client,
     method: "epic.createChat",
+    ...(ownerFence === null
+      ? {}
+      : {
+          prepareRequest: preparePendingSandboxCreate,
+          signalFor: (params: GuardedCreateChatMutationInput): undefined => {
+            if (params.pendingIssue?.isCurrent() !== true)
+              throw pendingSandboxCreateIssueLost();
+            return undefined;
+          },
+        }),
     mapVariables: (params) => {
+      if (ownerFence !== null && params.pendingIssue?.isCurrent() !== true)
+        throw pendingSandboxCreateIssueLost();
       if (
         ownerFence !== null &&
         ownerFence.ownerUserId !== currentProfileUserId()
@@ -363,6 +408,8 @@ function useCreateChatForClient(
         ownerFence.ownerUserId !== currentProfileUserId()
       )
         return response;
+      if (ownerFence !== null && !(await variables.pendingIssue?.verify()))
+        return response;
       return redispatch();
     },
     options: {
@@ -372,6 +419,8 @@ function useCreateChatForClient(
         ownerUserId: currentProfileUserId(),
       }),
       onSuccess: (data, params, ctx) => {
+        if (ownerFence !== null && params.pendingIssue?.isActorCurrent() !== true)
+          return;
         if (
           ownerFence !== null &&
           ownerFence.ownerUserId !== currentProfileUserId()
@@ -420,6 +469,12 @@ function useCreateChatForClient(
         invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
       onError: (error, variables) => {
+        if (
+          ownerFence !== null &&
+          (error.requestId === PENDING_SANDBOX_CREATE_SUPERSEDED ||
+            variables.pendingIssue?.isActorCurrent() !== true)
+        )
+          return;
         if (
           ownerFence !== null &&
           ownerFence.ownerUserId !== currentProfileUserId()

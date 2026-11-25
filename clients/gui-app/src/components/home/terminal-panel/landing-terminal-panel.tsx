@@ -85,7 +85,17 @@ import {
   type LandingPanelPlaceholder,
   type LandingPanelTabRef,
   type LandingTerminalTabRef,
+  type LandingTerminalRequest,
+  type LandingRestoredTerminalRequest,
 } from "@/stores/home/landing-panel-store";
+import {
+  claimDraftAuthorityEffect,
+  claimDraftAuthorityRestoredTerminal,
+} from "@/lib/drafts/draft-authority-pending";
+import { draftAuthorityActorIsCurrent } from "@/lib/drafts/draft-authority-session";
+import { createProtectedLandingTerminal } from "@/lib/terminals/landing-terminal-protected-create";
+import { useHostBinding } from "@/lib/host";
+import { readStagedSandbox } from "@/stores/composer/staged-sandbox-store";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
 import {
@@ -129,6 +139,7 @@ import {
   type LandingTerminalKillVariables,
 } from "./use-landing-terminal-kill-mutation";
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
+import { useProtectedLandingTerminalReadiness } from "./protected-landing-terminal-readiness";
 import { landingPaneAnchorDraftIds } from "./landing-pane-anchor-store";
 import {
   openLandingStagedTerminal,
@@ -623,7 +634,35 @@ function settleTerminalReveal(args: {
  * target, while chooser presentation reads the provider's workspace source for
  * that same captured draft. No consumer reads live host or draft focus.
  */
+function claimProtectedLandingOpen(
+  intent: LandingRestoredTerminalRequest,
+  target: { readonly terminalId: string; readonly landingPageId: string; readonly cwd: string },
+) {
+  if (intent.kind === "handoff") {
+    return claimDraftAuthorityRestoredTerminal({ handoff: intent.handoff, target });
+  }
+  const { actor, source, operationId, hostId, sandboxId, sourceStage } = intent.request;
+  const setupAttempt = sourceStage.authoritySetupAttempt;
+  return claimDraftAuthorityEffect({
+    actor,
+    source,
+    operationId,
+    expectedIssueGeneration: null,
+    recovery: "initial",
+    ...(setupAttempt !== undefined && setupAttempt.attemptId === sourceStage.attemptId
+      ? { setupAttempt }
+      : {}),
+    effect: {
+      kind: "terminal",
+      phase: "setup",
+      identity: target.terminalId,
+      payload: { ...target, hostId, sandboxId },
+    },
+  });
+}
+
 export function LandingTerminalPanel(): ReactNode {
+  const protectedOpenAuth = useHostBinding()?.auth ?? null;
   const {
     focusedLandingPageId,
     target,
@@ -1417,6 +1456,56 @@ export function LandingTerminalPanel(): ReactNode {
   const terminalRequest = useLandingPanelStore(
     (state) => state.terminalRequest,
   );
+  const protectedOpenInFlight = useRef<LandingTerminalRequest | null>(null);
+  const protectedOpen = terminalRequest?.protectedOpen;
+  const protectedHostId = terminalRequest?.hostId ?? null;
+  const protectedEntry =
+    protectedHostId === null ? undefined : authorityEntries[protectedHostId];
+  const protectedCwd = protectedHostId === null
+    ? null
+    : resolveLandingTerminalLaunchCwd(null, reconciledContext, protectedHostId);
+  const protectedInstanceId =
+    protectedOpen === undefined ? null : `landing-terminal-${protectedOpen.terminalId}`;
+  const protectedReady =
+    protectedOpen !== undefined &&
+    protectedHostId !== null &&
+    terminalRequest?.landingPageId === landingPageId &&
+    targetLandingPageId === landingPageId &&
+    surfaceActive &&
+    target.hostId === protectedHostId &&
+    target.availability === "supported" &&
+    target.client !== null &&
+    protectedOpenAuth !== null &&
+    protectedCwd !== null &&
+    landingTerminalAuthorityReady(protectedEntry);
+  const { probe: protectedGridProbe, grid: protectedGrid } =
+    useProtectedLandingTerminalReadiness(
+      protectedReady && protectedInstanceId !== null
+        ? {
+            hostId: protectedHostId,
+            terminalId: protectedOpen.terminalId,
+            instanceId: protectedInstanceId,
+          }
+        : null,
+    );
+  const activeProtectedTarget = useRef<{
+    readonly request: LandingTerminalRequest;
+    readonly target: LandingTerminalTarget;
+    readonly cwd: string;
+    readonly capability: "capable" | "legacy";
+  } | null>(null);
+  useLayoutEffect(() => {
+    const capability = protectedEntry?.authority.capability.status;
+    activeProtectedTarget.current =
+      protectedReady &&
+      terminalRequest !== null &&
+      (capability === "capable" || capability === "legacy")
+        ? { request: terminalRequest, target, cwd: protectedCwd, capability }
+        : null;
+    return () => {
+      activeProtectedTarget.current = null;
+    };
+  }, [protectedCwd, protectedEntry, protectedReady, target, terminalRequest]);
   // The start page in front of the person. The panel stays hosted on the page
   // it was on until a newly focused one registers its anchor, so binding waits
   // for the two to agree: the request is for the page the person is looking at.
@@ -1444,6 +1533,105 @@ export function LandingTerminalPanel(): ReactNode {
       return;
     }
     if (terminalRequest.landingPageId !== landingPageId) return;
+    if (protectedOpen !== undefined) {
+      const { intent, terminalId } = protectedOpen;
+      const provenance = intent.kind === "handoff" ? intent.handoff : intent.request;
+      const { actor, sandboxId } = provenance;
+      const hostId = terminalRequest.hostId;
+      const client = target.client;
+      const activeTarget = activeProtectedTarget.current;
+      if (
+        protectedOpenInFlight.current === terminalRequest ||
+        activeTarget === null ||
+        activeTarget.request !== terminalRequest ||
+        client === null ||
+        protectedOpenAuth === null ||
+        protectedGrid === null ||
+        protectedInstanceId === null
+      ) return;
+      const { cwd, capability } = activeTarget;
+      const isCurrent = (): boolean => {
+        const active = activeProtectedTarget.current;
+        return active?.request === terminalRequest &&
+          active.target.client === client &&
+          active.target.hostId === hostId &&
+          active.target.generation === target.generation &&
+          active.capability === capability &&
+          active.cwd === cwd &&
+          useLandingPanelStore.getState().terminalRequest === terminalRequest &&
+          (intent.kind === "handoff" ||
+            readStagedSandbox(terminalRequest.surfaceKey) === intent.request.sourceStage) &&
+          draftAuthorityActorIsCurrent(actor);
+      };
+      const protectedTarget = { terminalId, landingPageId, cwd, hostId };
+      protectedOpenInFlight.current = terminalRequest;
+      void protectedOpenAuth.getSandbox(sandboxId)
+        .then(async (answer) => {
+          if (
+            answer.kind !== "ok" ||
+            answer.sandbox.id !== sandboxId ||
+            answer.sandbox.hostId !== hostId ||
+            answer.sandbox.state !== "awake" ||
+            answer.sandbox.frozen ||
+            !isCurrent()
+          ) return null;
+          const claim = await claimProtectedLandingOpen(intent, protectedTarget);
+          if (!isCurrent()) return null;
+          if (claim.kind === "committed" || claim.kind === "replayed") {
+            useLandingPanelStore.getState().reserveProtectedTerminal(hostId, terminalId);
+          }
+          return createProtectedLandingTerminal({
+            actor,
+            claim,
+            target: protectedTarget,
+            client,
+            capability,
+            grid: protectedGrid,
+            isCurrent,
+          });
+        })
+        .then((result) => {
+          if (result === null || result.kind === "held" || !isCurrent()) return;
+          const current = useLandingPanelStore.getState();
+          const instanceId = protectedInstanceId;
+          if (!current.tabs.some((tab) => tab.instanceId === instanceId)) {
+            current.fulfillPlaceholder({
+              kind: "terminal",
+              instanceId,
+              sessionId: terminalId,
+              hostId,
+              cwd,
+              name: terminalSessionTitle({
+                title: null,
+                activeProcessName: null,
+                currentCwd: cwd,
+                taskHome: null,
+              }),
+              titleSource: "default",
+              hostAuthorityAcknowledged: result.kind === "capable",
+              pendingCreate: false,
+              protectedAdoptOnly: true,
+            }, null);
+          }
+          if (result.kind === "capable")
+            current.adoptHostTerminal(instanceId, result.terminal);
+          if (!isCurrent()) return;
+          current.clearTerminalRequest();
+          const anchoredPageIds = landingPaneAnchorDraftIds();
+          current.revealPanel({
+            landingPageIds: [...new Set([landingPageId, ...anchoredPageIds])],
+            everyPage: anchoredPageIds.length === 0,
+            instanceId,
+          });
+          focusTerminalInstance(instanceId);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (protectedOpenInFlight.current === terminalRequest)
+            protectedOpenInFlight.current = null;
+        });
+      return;
+    }
     const instanceId = createTerminalTab({
       ...target,
       launchWorkspacePath: null,
@@ -1461,6 +1649,11 @@ export function LandingTerminalPanel(): ReactNode {
     createTerminalTab,
     focusedDraftId,
     landingPageId,
+    protectedEntry,
+    protectedGrid,
+    protectedInstanceId,
+    protectedOpen,
+    protectedOpenAuth,
     reconciledContext,
     surfaceActive,
     target,
@@ -1842,6 +2035,7 @@ export function LandingTerminalPanel(): ReactNode {
           landingPageId={landingPageId}
           tabs={tabs}
           placeholder={placeholder}
+          protectedGridProbe={protectedGridProbe}
           activeInstanceId={activeInstanceId}
           availability={target.availability}
           panelOpen={panelOpen}
@@ -1886,6 +2080,7 @@ interface LandingTerminalPanelContentsProps {
   readonly landingPageId: string;
   readonly tabs: ReadonlyArray<LandingPanelTabRef>;
   readonly placeholder: LandingPanelPlaceholder | null;
+  readonly protectedGridProbe: ReactNode;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
@@ -2125,6 +2320,7 @@ function LandingTerminalPanelContents(
           landingPageId={props.landingPageId}
           tabs={props.tabs}
           placeholder={props.placeholder}
+          protectedGridProbe={props.protectedGridProbe}
           activeInstanceId={props.activeInstanceId}
           availability={props.availability}
           panelOpen={props.panelOpen}
@@ -2672,6 +2868,7 @@ function LandingTerminalPanelBody(props: {
   readonly landingPageId: string;
   readonly tabs: ReadonlyArray<LandingPanelTabRef>;
   readonly placeholder: LandingPanelPlaceholder | null;
+  readonly protectedGridProbe: ReactNode;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
@@ -2743,6 +2940,11 @@ function LandingTerminalPanelBody(props: {
 
   return (
     <div className="relative min-h-0 flex-1">
+      {props.protectedGridProbe === null ? null : (
+        <div aria-hidden className="invisible pointer-events-none absolute inset-0">
+          {props.protectedGridProbe}
+        </div>
+      )}
       <div
         aria-hidden={props.directoryPicker !== null}
         className={cn(

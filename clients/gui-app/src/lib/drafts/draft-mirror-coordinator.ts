@@ -43,7 +43,18 @@ import {
 import { isDraftsCapabilityMissing } from "./draft-capability";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
-import { interviewDraftBindingKey } from "./draft-ids";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+} from "./draft-authority-session";
+import {
+  draftAuthorityHostIdIsRetired,
+  listDraftAuthorityRetirements,
+  settleDraftAuthorityRetirement,
+  subscribeToDraftAuthorityRetirements,
+} from "./draft-authority-retirement";
+import type { DraftAuthorityActor, DraftAuthorityEditReceipt } from "./draft-authority-types";
+import { mintDraftId, interviewDraftBindingKey } from "./draft-ids";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
 import {
   adoptLandingDraft,
@@ -55,6 +66,7 @@ import {
   dropForeignLandingMirrorsAbsent,
   dropLandingAbsentFromList,
   landingDraftIsDirty,
+  flushCanonicalLandingDraft,
   landingDraftRememberSynced,
   landingRowIsForeign,
   rememberLandingBlobsOnHost,
@@ -67,13 +79,15 @@ import {
   collectComposerDirtyWrites,
   composerDraftIsDirty,
   composerDraftRememberSynced,
-  composerDraftRowIsForeign,
   composerSubmittedDraftDeleteIsPending,
   dropComposerAbsentFromList,
   findComposerChatIdByDraftId,
   pendingSubmittedDraftDelete,
   pendingSubmittedDraftDeleteHostId,
   pendingSubmittedDraftDeletesForHost,
+  captureDirectSendChatDraft,
+  consumeAcceptedDirectSend,
+  flushCanonicalChatDraft,
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
@@ -95,6 +109,7 @@ import {
   useNewConversationModalStore,
   findNewChatByDraftId,
   newChatDraftIsDirty,
+  flushCanonicalTaskDraft,
   newChatDraftRememberSynced,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
@@ -610,8 +625,12 @@ const sink: DraftMirrorSink = {
     applyInterviewHostDelete(draftId);
     applyNewChatHostDelete(draftId);
   },
-  collectDirtyWrites(hostId) {
-    return Promise.resolve(collectAllDirtyWrites(hostId));
+  async collectDirtyWrites(hostId) {
+    const candidate = collectAllDirtyWrites(hostId);
+    const admitted = await Promise.all(candidate.map(async (entry) =>
+      await draftMirrorWriteIsCurrent(hostId, entry.write) ? entry : null
+    ));
+    return admitted.filter((entry) => entry !== null);
   },
   rememberSynced(draftId, hostRevision, collectedGeneration, ownerHostId) {
     // Only the stores that KEY a frontier on the owner are told who owns the
@@ -634,6 +653,7 @@ const sink: DraftMirrorSink = {
     newChatDraftRememberSynced(draftId, hostRevision, collectedGeneration);
   },
   async prepareWrite(hostId, write) {
+    const actor = captureDraftAuthorityActor();
     const client = sessionClients.get(hostId);
     if (client === undefined) return write;
     const confirmed = await putDraftBlobsForWrite(
@@ -643,6 +663,12 @@ const sink: DraftMirrorSink = {
       currentDraftBlobOwnerId(),
     );
     rememberLandingBlobsOnHost(write.draftId, confirmed);
+    if (actor !== null && !draftAuthorityActorIsCurrent(actor)) {
+      throw new Error("Draft mirror session changed during image preparation");
+    }
+    if (!(await draftMirrorWriteIsCurrent(hostId, write))) {
+      throw new Error("Draft mirror write no longer matches the committed draft");
+    }
     return write;
   },
   dropAbsentFromList(hostId, listedIds) {
@@ -895,6 +921,9 @@ async function applyHostDocument(
    */
   stashImages: ReadonlyMap<string, ImageBlob> | null,
 ): Promise<boolean> {
+  const actor = captureDraftAuthorityActor();
+  const authorityOwned = document.kind !== "stash-entry" && document.kind !== "interview";
+  const applyOwner = currentDraftBlobOwnerId();
   if (document.kind === "landing") {
     knownLandingDraftIds.add(document.draftId);
     // The absence-sweep fence is reserved here, synchronously at the start
@@ -923,7 +952,8 @@ async function applyHostDocument(
   // A byte fence cannot answer this; only the apply can. Re-checked before
   // every side effect below rather than once here, because each of them is
   // past a different set of awaits.
-  const applyOwner = currentDraftBlobOwnerId();
+  if (authorityOwned && actor !== null &&
+    await draftAuthorityHostIdIsRetired(actor, document.draftId)) return false;
   if (rejectRetiredLandingDocument(document)) return false;
   if (composerSubmittedDraftDeleteIsPending(document.draftId)) {
     await retrySubmittedDraftDelete(document.draftId);
@@ -935,6 +965,8 @@ async function applyHostDocument(
     applyOwner,
   );
   if (prefetched === "abandoned") return false;
+  if (authorityOwned && actor !== null &&
+    await draftAuthorityHostIdIsRetired(actor, document.draftId)) return false;
   // A stash row WAS converted into a landing draft, so its hashes are rooted.
   if (prefetched === "ingested") return true;
   if (!applyStillOwned(applyOwner, document)) return false;
@@ -962,6 +994,33 @@ async function applyHostDocument(
     return applyComposerHostDocument(document);
   }
   return applyNewChatHostDocument(document);
+}
+
+async function draftMirrorWriteIsCurrent(
+  hostId: string,
+  write: DraftDirtyWrite["write"],
+): Promise<boolean> {
+  const chatId = write.target.chatId;
+  const epicId = write.target.epicId;
+  const committed =
+    write.kind === "landing" ? await flushCanonicalLandingDraft(write.draftId)
+    : write.kind === "chat-composer" && chatId !== null
+      ? await flushCanonicalChatDraft(chatId)
+    : write.kind === "new-chat" && epicId !== null
+      ? await flushCanonicalTaskDraft(epicId)
+    : null;
+  if (committed === null) return write.kind === "interview";
+  if (committed.kind !== "committed") return false;
+
+  const actor = captureDraftAuthorityActor();
+  if (actor !== null && await draftAuthorityHostIdIsRetired(actor, write.draftId)) {
+    return false;
+  }
+  const current = collectAllDirtyWrites(hostId).find(
+    (entry) => entry.write.draftId === write.draftId,
+  );
+  return current !== undefined &&
+    JSON.stringify(current.write) === JSON.stringify(write);
 }
 
 function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
@@ -1317,6 +1376,7 @@ export function acquireDraftMirrorSession(
   // until a new head arrives or the tree remounts.
   rebindCloudDraftImageClientForHost(args.hostId, args.client);
   session.start();
+  drainAuthorityRetirements(args.hostId);
   return session;
 }
 
@@ -1451,47 +1511,100 @@ export function draftMirrorSessionCountForTests(): number {
 }
 
 export async function submitComposerDraft(chatId: string): Promise<void> {
+  const actor = captureDraftAuthorityActor();
+  if (actor === null) return;
   const before = readComposerDraftSnapshot(chatId);
-  const hostId =
-    before.draftId === null ? null : hostIdForDraft(before.draftId);
-  const store = useComposerDraftStore.getState();
-  store.clearDraft(chatId);
-  if (before.draftId === null || hostId === null) return;
-  // A row the tab host does not own (a replica, or another host's row),
-  // submitted without an edit that would have forked it: `drafts.delete`
-  // there would answer `absent` and the owner's cloud row would survive.
-  // The id is dropped with no pending delete, and the cloud row is
-  // retracted on the user's authority through the tab host instead - the
-  // same rule the landing path applies to a foreign row.
-  const foreign = composerDraftRowIsForeign(before, hostId);
-  // Retire the id BEFORE any host round trip below is awaited. `clearDraft`
-  // keeps it, so an edit typed during an awaited retract or delete would
-  // re-dirty the id, the mirror could upsert it, and the tombstone that
-  // follows would remove that content and mark it synced. Fenced first,
-  // the next edit mints a fresh id and a fresh host row.
-  store.fenceAndDetachSubmittedDraft(
-    chatId,
-    before.draftId,
-    foreign ? null : hostId,
-  );
-  // A fork whose first write has not been acknowledged still carries
-  // `supersedes`: the upsert that would make the host retract the
-  // ancestor's cloud row has not landed (and after the fence above it never
-  // will), while the delete of the fresh id answers `absent`. The ancestor
-  // is retracted here on the user's authority instead, whatever the fresh
-  // row's ownership reads; a host that already retracted it (the ack raced
-  // this submit) has nothing left to pay.
-  if (before.supersedes !== null) {
-    store.recordPendingSubmittedDraftRetract(before.supersedes, hostId);
-    await retractDraftThroughHost(hostId, before.supersedes);
-  }
-  if (foreign) {
-    store.recordPendingSubmittedDraftRetract(before.draftId, hostId);
-    await retractDraftThroughHost(hostId, before.draftId);
+  const hostId = before.draftId === null ? null : hostIdForDraft(before.draftId);
+  const captured = captureDirectSendChatDraft(chatId, hostId, actor);
+  if (captured === null) return;
+  await consumeAcceptedDirectSend({
+    actionId: mintDraftId(),
+    actor,
+    capture: captured,
+  });
+}
+
+const authorityRetirementDrains = new Map<string, Promise<void>>();
+
+function drainAuthorityRetirements(hostId: string): void {
+  const actor = captureDraftAuthorityActor();
+  const session = sessions.get(hostId)?.session;
+  if (actor === null || session === undefined) return;
+  const key = JSON.stringify([actor.accountId, actor.sessionGeneration, hostId]);
+  const previous = authorityRetirementDrains.get(key);
+  const run = async (): Promise<void> => {
+    const rows = await listDraftAuthorityRetirements(actor, hostId);
+    if (rows === null) return;
+    for (const row of rows) {
+      if (!draftAuthorityActorIsCurrent(actor) ||
+        sessions.get(hostId)?.session !== session) {
+        return;
+      }
+      if (row.state !== "pending") continue;
+      const result = row.kind === "retract"
+        ? await session.retractOnHostOutcome(row.draftId)
+        : await session.deleteOnHostOutcome(row.draftId);
+      if (result !== "failed") await settleDraftAuthorityRetirement(actor, row);
+    }
+  };
+
+  const draining = (previous ?? Promise.resolve()).then(run).catch((error: unknown) => {
+    appLogger.warn("[draft-mirror] authority retirement failed", {
+      hostId,
+      error: describeLogError(error),
+    });
+  });
+  authorityRetirementDrains.set(key, draining);
+  void draining.then(() => {
+    if (authorityRetirementDrains.get(key) === draining) {
+      authorityRetirementDrains.delete(key);
+    }
+  });
+}
+
+export async function deliverInventoryRetirement(input: {
+  readonly actor: DraftAuthorityActor;
+  readonly receipt: DraftAuthorityEditReceipt;
+  readonly hostId: string;
+  readonly client: HostRequester<HostRpcRegistry> | null;
+}): Promise<void> {
+  const { actor, receipt, hostId, client } = input;
+  if (receipt.kind !== "tombstone" || receipt.accountId !== actor.accountId ||
+    !draftAuthorityActorIsCurrent(actor)) return;
+  if (sessions.has(hostId)) {
+    drainAuthorityRetirements(hostId);
     return;
   }
-  await retrySubmittedDraftDelete(before.draftId);
+  if (client === null) return;
+  const rows = await listDraftAuthorityRetirements(actor, hostId);
+  for (const row of rows ?? []) {
+    if (row.operationId !== receipt.operationId || row.state !== "pending") continue;
+    if (!draftAuthorityActorIsCurrent(actor)) return;
+    if (sessions.has(hostId)) {
+      drainAuthorityRetirements(hostId);
+      return;
+    }
+    try {
+      if (row.kind === "retract") await client.request("drafts.retract", { draftId: row.draftId });
+      else await client.request("drafts.delete", { draftId: row.draftId });
+    } catch (error: unknown) {
+      if (!isDraftsCapabilityMissing(error)) {
+        appLogger.warn("[draft-mirror] direct authority retirement failed", {
+          hostId,
+          error: describeLogError(error),
+        });
+        continue;
+      }
+    }
+    await settleDraftAuthorityRetirement(actor, row);
+  }
 }
+
+subscribeToDraftAuthorityRetirements((accountId, hostId) => {
+  if (captureDraftAuthorityActor()?.accountId === accountId) {
+    drainAuthorityRetirements(hostId);
+  }
+});
 
 /**
  * Send (or re-send) the pending delete/retract a submit or a drafts-list
@@ -1845,32 +1958,15 @@ function recoverIngestedCloudDraftImages(input: {
  * client directly. The receipt stays pending until the host answers, so a
  * failure is retried by whichever session for that host mounts later.
  */
-export function deleteLandingDraftThroughHost(
+export async function deleteLandingDraftThroughHost(
   draftId: string,
   hostId: string,
   client: HostRequester<HostRpcRegistry> | null,
-): void {
-  deleteLandingDraftOnHost(draftId, hostId);
-  if (sessions.has(hostId) || client === null) return;
-  if (pendingLandingDraftDeleteHostId(draftId) !== hostId) return;
-  void client
-    .request("drafts.delete", { draftId })
-    .then((response) => {
-      settleLandingDeleteOutcome(
-        draftId,
-        hostId,
-        response.deleted ? "deleted" : "absent",
-      );
-    })
-    .catch((error: unknown) => {
-      if (isDraftsCapabilityMissing(error)) {
-        settleLandingDeleteOutcome(draftId, hostId, "unsupported");
-        return;
-      }
-      appLogger.warn("[draft-mirror] direct drafts.delete failed", {
-        error: describeLogError(error),
-      });
-    });
+): Promise<void> {
+  const actor = captureDraftAuthorityActor();
+  if (actor === null) return;
+  const receipt = await deleteLandingDraftOnHost(draftId, hostId);
+  if (receipt !== null) await deliverInventoryRetirement({ actor, receipt, hostId, client });
 }
 
 /**

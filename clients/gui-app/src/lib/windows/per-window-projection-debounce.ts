@@ -22,6 +22,7 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
   let timer: Parameters<typeof clearTimeout>[0] | null = null;
   let disposed = false;
   let writeChain: Promise<void> = Promise.resolve();
+  let latestWrite = writeChain;
 
   const clearTimer = (): void => {
     if (timer === null) return;
@@ -33,7 +34,7 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
     clearTimer();
     const patch = pendingPatch;
     pendingPatch = null;
-    if (patch === null) return writeChain;
+    if (patch === null) return latestWrite;
     const attempt = writeChain
       .then(() => target.update(patch))
       .then(() => undefined);
@@ -41,6 +42,7 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
     // no handler, so every later patch would chain off it and be skipped for
     // the rest of the session. Sequence on a recovered chain and hand the
     // caller the real attempt so a flush still reports its own failure.
+    latestWrite = attempt;
     writeChain = attempt.catch(() => undefined);
     return attempt;
   };

@@ -2,9 +2,12 @@ import {
   useOrganization,
   type OrganizationContextValue,
 } from "@/hooks/organization/organization-context";
-import { batchHeaderTabRecovery } from "@/lib/tab-recovery/history";
+import {
+  batchHeaderTabRecovery,
+  recordClosedHeaderTab,
+} from "@/lib/tab-recovery/history";
 import { useCallback, useMemo, type ReactNode } from "react";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { readTabStripLayout } from "@/stores/tabs/store";
@@ -23,11 +26,17 @@ import {
   tabRequiresCloseConfirm,
 } from "@/stores/tabs/registry";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
-import { useTabCloseCommand } from "@/components/layout/tabs/use-tab-close-command";
+import {
+  observeDesktopDraftClose,
+  useTabCloseCommand,
+  withDesktopDraftReferencesClosed,
+  type DesktopDraftCloseObservation,
+} from "@/components/layout/tabs/use-tab-close-command";
 import { useNeighborTabPicker } from "@/components/layout/tabs/use-neighbor-tab-picker";
 import { useUnsyncedCloseDialog } from "@/components/layout/dialogs/use-unsynced-close-dialog";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
@@ -42,6 +51,7 @@ export interface CloseTabFlow {
 
 export function useCloseTabFlow(): CloseTabFlow {
   const navigate = useNavigate();
+  const router = useRouter();
   const organization = useOrganization();
   const closeTab = useTabCloseCommand();
   const closeTabsInBulk = useCloseTabsInBulk();
@@ -53,25 +63,47 @@ export function useCloseTabFlow(): CloseTabFlow {
   });
 
   const finalizeCloseTab = useCallback(
-    (tab: HeaderTab) => {
-      if (windowsBridge !== null && isOnlyBlankStartPage(tab)) {
+    (tab: HeaderTab, observation: DesktopDraftCloseObservation | null) => {
+      if (observation !== null && tab.kind === "draft") {
+        draftRuntimeRegistry.flush(tab.id);
+      }
+      const closeWindow = windowsBridge !== null && isOnlyBlankStartPage(tab);
+      if (closeWindow && observation === null) {
         void windowsBridge.requestClose(windowsBridge.windowId);
         return;
       }
       const captured = picker.capture(tab);
-      closeTab(tab);
-      if (tab.kind === "epic") {
-        Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
-          target: "task",
-        });
-      }
-      picker.navigateToCaptured(captured);
+      withDesktopDraftReferencesClosed(
+        observation,
+        [tab],
+        readTabStripLayout(),
+        (closed, recoveries) => {
+          if (closed.length === 0) return;
+          recoveries.forEach(recordClosedHeaderTab);
+          if (observation === null || tab.kind !== "draft") closeTab(tab);
+          if (tab.kind === "epic") {
+            Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+              target: "task",
+            });
+          }
+          if (closeWindow && getHeaderTabs().length === 0) {
+            void windowsBridge.requestClose(windowsBridge.windowId);
+          } else if (
+            observation === null ||
+            tab.kind !== "draft" ||
+            router.state.location.pathname === tab.route
+          ) {
+            picker.navigateToCaptured(captured);
+          }
+        },
+      );
     },
-    [closeTab, picker, windowsBridge],
+    [closeTab, picker, router, windowsBridge],
   );
 
   const requestCloseTab = useCallback(
     (tab: HeaderTab) => {
+      const observation = observeDesktopDraftClose(windowsBridge);
       // Read before the prompt, because the prompt is what turns a dirty tab
       // into a confirmed one.
       const confirmed = tabRequiresCloseConfirm(tab)
@@ -84,7 +116,7 @@ export function useCloseTabFlow(): CloseTabFlow {
         }
         const ungrouped = tasksUngroupedByClose([tab], organization);
         if (ungrouped.length === 0) {
-          finalizeCloseTab(tab);
+          finalizeCloseTab(tab, observation);
           return;
         }
         void removeTasksFromGroups(organization, ungrouped)
@@ -94,14 +126,14 @@ export function useCloseTabFlow(): CloseTabFlow {
               warnAboutHeldTabs(held, true);
               return;
             }
-            finalizeCloseTab(tab);
+            finalizeCloseTab(tab, observation);
           })
           .catch(() => undefined);
       };
       if (dialog.promptOrConfirm(tab, finalize)) return;
       finalize();
     },
-    [dialog, finalizeCloseTab, organization],
+    [dialog, finalizeCloseTab, organization, windowsBridge],
   );
 
   const closeOtherTabs = useCallback(
@@ -127,6 +159,7 @@ export function useCloseTabFlow(): CloseTabFlow {
 
   const closeGroup = useCallback(
     (groupId: string) => {
+      const observation = observeDesktopDraftClose(windowsBridge);
       const layout = readTabStripLayout();
       const members = getHeaderTabs().filter(
         (tab) => layout.customizations?.[tabRefKey(tab)]?.groupId === groupId,
@@ -159,26 +192,51 @@ export function useCloseTabFlow(): CloseTabFlow {
             first.closing,
             confirmed,
           );
-          // Do not keep a global batch open while the dialog waits: unrelated
-          // closes must stay separate. Only confirmed group closes run here.
-          batchHeaderTabRecovery(() => {
-            for (const tab of closing) {
-              if (tab === active) continue;
-              closeTab(tab);
-            }
-            if (
-              active !== undefined &&
-              closing.includes(active) &&
-              getHeaderTabs().some(
-                (tab) => tabRefKey(tab) === tabRefKey(active),
-              )
-            ) {
-              // Capture the neighbor after the other group members are gone.
-              finalizeCloseTab(active);
-            }
-          }, readTabStripLayout());
-          warnAboutHeldTabs(first.held, false);
-          warnAboutHeldTabs(held, ungrouped.length > 0);
+          const activeDraft =
+            observation !== null && active?.kind === "draft"
+              ? { tab: active, captured: picker.capture(active) }
+              : null;
+          const closingLayout = readTabStripLayout();
+          withDesktopDraftReferencesClosed(
+            observation,
+            closing,
+            closingLayout,
+            (closed, recoveries) => {
+              // The recovery batch covers only the completed close actions.
+              batchHeaderTabRecovery(() => {
+                recoveries.forEach(recordClosedHeaderTab);
+                for (const tab of closed) {
+                  if (
+                    tab === active ||
+                    (observation !== null && tab.kind === "draft")
+                  ) {
+                    continue;
+                  }
+                  closeTab(tab);
+                }
+                if (active === undefined || !closed.includes(active)) return;
+                const surviving = getHeaderTabs();
+                if (activeDraft !== null) {
+                  if (router.state.location.pathname !== activeDraft.tab.route) return;
+                  const neighbor = activeDraft.captured.neighbor;
+                  const available =
+                    neighbor === null
+                      ? null
+                      : surviving.find(
+                          (tab) => tabRefKey(tab) === tabRefKey(neighbor),
+                        );
+                  picker.navigateToCaptured({
+                    ...activeDraft.captured,
+                    neighbor: available ?? surviving[0] ?? null,
+                  });
+                } else if (surviving.some((tab) => tabRefKey(tab) === tabRefKey(active))) {
+                  finalizeCloseTab(active, null);
+                }
+              }, closingLayout);
+              warnAboutHeldTabs(first.held, false);
+              warnAboutHeldTabs(held, ungrouped.length > 0);
+            },
+          );
         };
         if (ungrouped.length === 0) {
           commit();
@@ -192,7 +250,16 @@ export function useCloseTabFlow(): CloseTabFlow {
         return;
       finalize();
     },
-    [activePathname, closeTab, dialog, finalizeCloseTab, organization],
+    [
+      activePathname,
+      closeTab,
+      dialog,
+      finalizeCloseTab,
+      organization,
+      picker,
+      router,
+      windowsBridge,
+    ],
   );
 
   const closeActiveTab = useCallback(() => {
@@ -300,8 +367,10 @@ function useCloseTabsInBulk(): (
 ) => void {
   const organization = useOrganization();
   const closeTab = useTabCloseCommand();
+  const windowsBridge = useWindowsBridge();
   return useCallback(
     (candidates, layout, afterClose) => {
+      const observation = observeDesktopDraftClose(windowsBridge);
       // Nothing here is ever prompted, so nothing here is ever confirmed.
       const confirmed = new Set<string>();
       const first = splitByUnsyncedEdits(
@@ -317,21 +386,28 @@ function useCloseTabsInBulk(): (
           first.closing.filter((tab) => !isTabCloseLocked(tab)),
           confirmed,
         );
-        batchHeaderTabRecovery(() => {
-          for (const other of closing) {
-            closeTab(other);
-            if (other.kind === "epic") {
-              Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
-                target: "task",
-              });
-            }
-          }
-        }, layout);
-        warnAboutHeldTabs(first.held, false);
-        // Separate, because the reason differs: these lost their group
-        // before their edits appeared.
-        warnAboutHeldTabs(held, ungrouped.length > 0);
-        afterClose(closing);
+        withDesktopDraftReferencesClosed(
+          observation,
+          closing,
+          layout,
+          (closed, recoveries) => {
+            batchHeaderTabRecovery(() => {
+              recoveries.forEach(recordClosedHeaderTab);
+              for (const other of closed) {
+                if (observation === null || other.kind !== "draft") closeTab(other);
+                if (other.kind === "epic") {
+                  Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+                    target: "task",
+                  });
+                }
+              }
+            }, layout);
+            warnAboutHeldTabs(first.held, false);
+            // Separate, because these lost their group before their edits appeared.
+            warnAboutHeldTabs(held, ungrouped.length > 0);
+            afterClose(closed);
+          },
+        );
       };
       // The ungroup is accepted before anything closes, exactly as it is for
       // a single tab: a refused removal would otherwise leave the account
@@ -345,7 +421,7 @@ function useCloseTabsInBulk(): (
         .then(commit)
         .catch(() => undefined);
     },
-    [closeTab, organization],
+    [closeTab, organization, windowsBridge],
   );
 }
 

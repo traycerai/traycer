@@ -1,6 +1,10 @@
 import { tryReserveLandingImageResidency } from "@/lib/composer/landing-image-budget";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import type { DraftDocument } from "@traycer/protocol/host";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityVersion,
+} from "@/lib/drafts/draft-authority-types";
 import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -9,6 +13,7 @@ import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { queryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
+  admitCanonicalLandingHistoryDraft,
   applyLandingHostDocument,
   rememberLandingBlobsOnHost,
   useLandingDraftStore,
@@ -41,11 +46,37 @@ function contentWithImageSizes(
   };
 }
 
+type SavedLandingItem = Extract<ClosedHeaderTab, { kind: "draft" }>;
+
+type SavedDraftDestination =
+  | { readonly kind: "legacy" }
+  | { readonly kind: "desktop"; readonly actor: DraftAuthorityActor | null };
+
 /** Resolve a saved draft without recreating content that was permanently deleted. */
 export async function prepareSavedDraft(
-  item: Extract<ClosedHeaderTab, { kind: "draft" }>,
+  item: SavedLandingItem,
   stillCurrent: () => boolean,
 ): Promise<boolean> {
+  return await readSavedDraft(item, stillCurrent, { kind: "legacy" }) === true;
+}
+
+export async function prepareDesktopHistoryDraft(input: {
+  readonly item: SavedLandingItem;
+  readonly actor: DraftAuthorityActor | null;
+  readonly isCurrent: () => boolean;
+}): Promise<DraftAuthorityVersion | null> {
+  const result = await readSavedDraft(input.item, input.isCurrent, {
+    kind: "desktop",
+    actor: input.actor,
+  });
+  return typeof result === "boolean" ? null : result;
+}
+
+async function readSavedDraft(
+  item: SavedLandingItem,
+  stillCurrent: () => boolean,
+  destination: SavedDraftDestination,
+): Promise<boolean | DraftAuthorityVersion> {
   const canRestore = (): boolean =>
     stillCurrent() && !landingDraftIsRetired(item.draftId);
   if (!canRestore()) return false;
@@ -54,7 +85,7 @@ export async function prepareSavedDraft(
       .getState()
       .drafts.some((draft) => draft.id === item.draftId)
   )
-    return true;
+    return destination.kind === "legacy";
   // Unadopted drafts are retained locally and never LRU-evicted. No row means
   // there is no saved draft to reopen. Adopted mirrors may need a host read.
   if (item.hostId === null) return false;
@@ -77,7 +108,7 @@ export async function prepareSavedDraft(
       .getState()
       .drafts.some((draft) => draft.id === item.draftId)
   )
-    return true;
+    return destination.kind === "legacy";
   const document = listed.drafts.find(
     (draft) => draft.draftId === item.draftId,
   );
@@ -87,15 +118,17 @@ export async function prepareSavedDraft(
     throw new Error("The draft is not available from its host yet.");
   }
   if (document.kind !== "landing") return false;
-  return prepareHostDraft(document, item.hostId, client, canRestore);
+  return prepareHostDraft(item.draftId, document, item.hostId, client, canRestore, destination);
 }
 
 async function prepareHostDraft(
+  draftId: string,
   document: Extract<DraftDocument, { kind: "landing" }>,
   hostId: string,
   client: DraftBlobClient,
   stillCurrent: () => boolean,
-): Promise<boolean> {
+  destination: SavedDraftDestination,
+): Promise<boolean | DraftAuthorityVersion> {
   const hashes = blobHashesOfDocument(document);
   const images = await readDraftBlobsForRecovery(hostId, client, hashes);
   if (!stillCurrent()) return false;
@@ -104,7 +137,7 @@ async function prepareHostDraft(
       .getState()
       .drafts.some((draft) => draft.id === document.draftId)
   )
-    return true;
+    return destination.kind === "legacy";
   if (hashes.some((hash) => !images.has(hash)))
     throw new Error("The draft's images are not available yet.");
   // RESIDENCY admission, for the same reason the landing stash import needs
@@ -133,22 +166,33 @@ async function prepareHostDraft(
         throw new Error("The draft's image could not be verified.");
     }
     if (!stillCurrent()) return false;
-    if (
-      !useLandingDraftStore
-        .getState()
-        .drafts.some((draft) => draft.id === document.draftId)
-    ) {
-      // Loading the host record prepares a local mirror; the coordinator still
-      // owns reopening its tab. The host's open state is not local tab presence.
-      const sizes = new Map(
-        [...images].map(([hash, image]) => [hash, image.bytes.byteLength]),
-      );
-      applyLandingHostDocument(
-        { ...document, portable: { ...document.portable, closed: true } },
-        contentWithImageSizes(document.portable.content, sizes),
-      );
-      rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
+    const localRowExists = useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId);
+    if (localRowExists) return destination.kind === "legacy";
+
+    const sizes = new Map(
+      [...images].map(([hash, image]) => [hash, image.bytes.byteLength]),
+    );
+    const content = contentWithImageSizes(document.portable.content, sizes);
+    const verifiedHashes = [...images.keys()];
+    if (destination.kind === "desktop") {
+      const result = await admitCanonicalLandingHistoryDraft({
+        actor: destination.actor,
+        hostId,
+        draftId,
+        document,
+        content,
+        verifiedHashes,
+        isCurrent: stillCurrent,
+      });
+      return result.kind === "committed" && stillCurrent() ? result.draft : false;
     }
+
+    // The legacy coordinator still owns opening the prepared closed mirror.
+    applyLandingHostDocument(
+      { ...document, portable: { ...document.portable, closed: true } },
+      content,
+    );
+    rememberLandingBlobsOnHost(document.draftId, verifiedHashes);
     return true;
   } finally {
     reservation.release();

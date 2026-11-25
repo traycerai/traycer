@@ -4,6 +4,7 @@ import {
   acceptEpicTerminalDurableCreate,
   EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_COLS,
   EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_ROWS,
+  type PendingTerminalCreateIssue,
 } from "@/lib/terminals/epic-terminal-durable-create-coordinator";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
@@ -56,29 +57,40 @@ function buildTerminalTileRef(
 export function mintNewEpicTerminalTile(
   target: MintNewEpicTerminalTileTarget,
 ): EpicTerminalRef {
-  return acceptNewEpicTerminalTile(target, {
-    terminalId: `term-${uuidv4()}`,
-    instanceId: uuidv4(),
-  });
+  return acceptNewEpicTerminalTile(
+    target,
+    { terminalId: `term-${uuidv4()}`, instanceId: uuidv4() },
+    undefined,
+  );
+}
+
+export function pendingSandboxTerminalId(sendId: string): string {
+  return `term-${uuidv5(`pending-sandbox-send:${sendId}:terminal`, uuidv5.URL)}`;
 }
 
 /** A pending send replayed by another window opens the same terminal. */
 export function mintPendingSandboxTerminalTile(
   target: MintNewEpicTerminalTileTarget,
   sendId: string,
+  pendingIssue: PendingTerminalCreateIssue,
 ): EpicTerminalRef {
-  return acceptNewEpicTerminalTile(target, {
-    terminalId: `term-${uuidv5(`pending-sandbox-send:${sendId}:terminal`, uuidv5.URL)}`,
-    instanceId: uuidv5(
-      `pending-sandbox-send:${sendId}:terminal-tile`,
-      uuidv5.URL,
-    ),
-  });
+  return acceptNewEpicTerminalTile(
+    target,
+    {
+      terminalId: pendingSandboxTerminalId(sendId),
+      instanceId: uuidv5(
+        `pending-sandbox-send:${sendId}:terminal-tile`,
+        uuidv5.URL,
+      ),
+    },
+    pendingIssue,
+  );
 }
 
 function acceptNewEpicTerminalTile(
   target: MintNewEpicTerminalTileTarget,
   identity: EpicTerminalTileIdentity,
+  pendingIssue: PendingTerminalCreateIssue | undefined,
 ): EpicTerminalRef {
   const ref = buildTerminalTileRef(target, identity);
   useEpicCanvasStore.getState().markTerminalPendingCreate(ref.hostId, ref.id);
@@ -89,6 +101,7 @@ function acceptNewEpicTerminalTile(
     cwd: target.cwd,
     cols: EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_COLS,
     rows: EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_ROWS,
+    ...(pendingIssue === undefined ? {} : { pendingIssue }),
   });
   return ref;
 }

@@ -1,4 +1,12 @@
 import type {
+  DraftAuthorityIssueReceipt,
+  DraftAuthoritySetupAttempt,
+} from "@/lib/drafts/draft-authority-pending";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityVersion,
+} from "@/lib/drafts/draft-authority-types";
+import type {
   SandboxCreateRequest,
   SandboxRateLimit,
 } from "@traycer/protocol/host/sandbox-control";
@@ -29,8 +37,10 @@ import type {
 } from "@/lib/sandboxes/returned-sandbox";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
+  abortPendingStageRecord,
   createPendingStageStorage,
   pendingStageAttemptCurrent,
+  preparePendingStageRecord,
   readPendingStageAttempt,
   readPendingStageRecord,
   removeAcknowledgedStageRetry,
@@ -146,7 +156,23 @@ interface StagedCreateRetryRow {
   readonly failure: StagedSandboxFailure;
 }
 
+export interface RestoredSandboxReadyWitness {
+  readonly actor: DraftAuthorityActor;
+  readonly draft: DraftAuthorityVersion;
+  readonly primary: DraftAuthorityIssueReceipt;
+  readonly surfaceKey: string;
+  readonly ownerId: string | null;
+  readonly clientRequestId: string;
+  readonly attemptId: string;
+  readonly hostId: string;
+  readonly sandboxId: string;
+}
+
+// The witness is coupled to the stage update but excluded from JSON persistence.
+export const STAGED_SANDBOX_READY_WITNESS: unique symbol = Symbol("restored sandbox readiness");
+
 export interface StagedSandbox {
+  readonly [STAGED_SANDBOX_READY_WITNESS]?: RestoredSandboxReadyWitness;
   /** The original create bound and this driver's post-preflight clock; absent on legacy stages. */
   readonly createAttempt?: {
     readonly budgetMs: number;
@@ -169,6 +195,7 @@ export interface StagedSandbox {
   readonly lastCreateKey?: string;
   /** Local attempt identity; the server key can repeat after a rowless refusal. */
   readonly attemptId?: string;
+  readonly authoritySetupAttempt?: DraftAuthoritySetupAttempt;
   /** Receipt that committed this attempt, independent of later stale acknowledgements. */
   readonly attemptRetryId?: string;
   /** The exact create request selected for that key, including the first POST. */
@@ -434,8 +461,15 @@ interface StagedSandboxStoreState {
         | "sendTaken"
         | "retryHandledId"
         | "createAttempt"
+        | "authoritySetupAttempt"
+        | typeof STAGED_SANDBOX_READY_WITNESS
       >
     >,
+  ) => void;
+  readonly presentSetupFailure: (
+    surfaceKey: string,
+    observed: StagedSandbox,
+    failure: StagedSandboxFailure,
   ) => void;
   /** Keeps the draft. A person's start-over action restages a failed pick. */
   readonly cancel: (surfaceKey: string, restageFailed: boolean) => void;
@@ -461,6 +495,20 @@ function withStage(
   const stage = bySurface[surfaceKey];
   if (stage === undefined) return bySurface;
   return { ...bySurface, [surfaceKey]: update(stage) };
+}
+
+export function sameStagedSandboxAttempt(
+  current: StagedSandbox,
+  observed: StagedSandbox,
+): boolean {
+  return (
+    current.clientRequestId === observed.clientRequestId &&
+    current.attemptId === observed.attemptId &&
+    current.attemptRetryId === observed.attemptRetryId &&
+    stagedCreateAttemptKey(current) === stagedCreateAttemptKey(observed) &&
+    current.createdSandboxId === observed.createdSandboxId &&
+    current.createdHostId === observed.createdHostId
+  );
 }
 
 function observedAttemptMatches(
@@ -613,6 +661,103 @@ function stagedPick({
  */
 export const PENDING_SEND_SURFACE_PREFIX = "pending-send:";
 
+export interface PendingSandboxHandoffReservation {
+  readonly fromSurfaceKey: string;
+  readonly sendId: string;
+  readonly expectedSourceStage: StagedSandbox;
+  readonly pendingStage: StagedSandbox;
+}
+
+const pendingHandoffReservations = new Map<string, PendingSandboxHandoffReservation>();
+
+function pendingHandoffSurface(sendId: string): string {
+  return `${PENDING_SEND_SURFACE_PREFIX}${sendId}`;
+}
+
+function pendingHandoffStageRecord(stage: StagedSandbox): string {
+  const { retryRequest: _mailbox, ...record } = stage;
+  return JSON.stringify(record);
+}
+
+/** The source stays in place until the exact outbox publication is verified. */
+export function preparePendingSandboxHandoff(
+  input: PendingSandboxHandoffReservation,
+): PendingSandboxHandoffReservation | null {
+  const { fromSurfaceKey, sendId, expectedSourceStage } = input;
+  const stage = readStagedSandbox(fromSurfaceKey);
+  if (fromSurfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX) || stage !== expectedSourceStage)
+    return null;
+  const pendingSurface = pendingHandoffSurface(sendId);
+  const existing = pendingHandoffReservations.get(sendId);
+  const preassigned = existing?.pendingStage.attemptId ?? input.pendingStage.attemptId;
+  const pendingStage =
+    input.pendingStage.target.kind === "existing"
+      ? { ...input.pendingStage, attemptId: preassigned ?? uuidv4() }
+      : input.pendingStage;
+  const expected = pendingHandoffStageRecord(pendingStage);
+  if (
+    existing === undefined
+      ? pendingSandboxHandoffReserved(fromSurfaceKey)
+      : existing.fromSurfaceKey !== fromSurfaceKey ||
+        existing.expectedSourceStage !== expectedSourceStage ||
+        pendingHandoffStageRecord(existing.pendingStage) !== expected
+  )
+    return null;
+  const projected = readStagedSandbox(pendingSurface);
+  if (
+    (projected !== null && pendingHandoffStageRecord(projected) !== expected) ||
+    !preparePendingStageRecord(pendingSurface, expected)
+  )
+    return null;
+  const reservation = existing ?? { ...input, pendingStage: structuredClone(pendingStage) };
+  pendingHandoffReservations.set(sendId, reservation);
+  try {
+    useStagedSandboxStore.setState((state) => ({
+      bySurface: { ...state.bySurface, [pendingSurface]: reservation.pendingStage },
+    }));
+  } catch {
+    // The durable pending stage already read back exactly.
+  }
+  return reservation;
+}
+
+export function pendingSandboxHandoffReserved(surfaceKey: string): boolean {
+  const stage = readStagedSandbox(surfaceKey);
+  if (stage === null) return false;
+  for (const reservation of pendingHandoffReservations.values()) {
+    if (reservation.fromSurfaceKey === surfaceKey && reservation.expectedSourceStage === stage)
+      return true;
+  }
+  return false;
+}
+
+export function releasePendingSandboxHandoffReservation(
+  reservation: PendingSandboxHandoffReservation,
+  outcome: "published" | "aborted",
+): void {
+  const { fromSurfaceKey, sendId, expectedSourceStage, pendingStage } = reservation;
+  if (pendingHandoffReservations.get(sendId) !== reservation) return;
+  try {
+    const store = useStagedSandboxStore.getState();
+    if (outcome === "published") {
+      if (store.bySurface[fromSurfaceKey] === expectedSourceStage)
+        store.clear(fromSurfaceKey);
+      return;
+    }
+    const pendingSurface = pendingHandoffSurface(sendId);
+    const expected = pendingHandoffStageRecord(pendingStage);
+    const current = store.bySurface[pendingSurface];
+    if (
+      abortPendingStageRecord(pendingSurface, expected) &&
+      current !== undefined &&
+      pendingHandoffStageRecord(current) === expected
+    )
+      store.clear(pendingSurface);
+  } finally {
+    pendingHandoffReservations.delete(sendId);
+  }
+}
+
 function persistedStages(
   bySurface: StagedSandboxStoreState["bySurface"],
 ): StagedSandboxStoreState["bySurface"] {
@@ -660,7 +805,11 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
       begin: (surfaceKey, now, options) => {
         const { resume, createKey, retryCreate, retryRequestId } = options;
         const stage = get().bySurface[surfaceKey];
-        if (stage === undefined || !observedAttemptMatches(stage, options))
+        if (
+          stage === undefined ||
+          pendingSandboxHandoffReserved(surfaceKey) ||
+          !observedAttemptMatches(stage, options)
+        )
           return null;
         // A legacy pending stage with no key still has its durable send ID.
         const clientRequestId =
@@ -679,12 +828,19 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
         const replacing =
           lastCreateKey !== previousKey && stage.target.kind === "new";
         const resumed = resume && !replacing && stage.startedAt !== null;
+        const firstReservedAttempt =
+          surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX) &&
+          stage.target.kind === "existing" &&
+          stage.startedAt === null &&
+          stage.attemptId !== undefined &&
+          !replacing;
         const bySurface = withStage(get().bySurface, surfaceKey, () => ({
           ...stage,
           phase: "creating",
           clientRequestId,
           lastCreateKey,
-          attemptId: resumed ? stage.attemptId : uuidv4(),
+          attemptId: resumed || firstReservedAttempt ? stage.attemptId : uuidv4(),
+          authoritySetupAttempt: resumed ? stage.authoritySetupAttempt : undefined,
           attemptRetryId:
             retryRequestId ?? (resumed ? stage.attemptRetryId : undefined),
           lastRetryCreate,
@@ -734,6 +890,21 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             ...patch,
           })),
         })),
+      presentSetupFailure: (surfaceKey, observed, failure) => {
+        const current = get().bySurface[surfaceKey];
+        if (
+          current === undefined ||
+          (current.phase !== "creating" && current.phase !== "handoff") ||
+          !sameStagedSandboxAttempt(current, observed)
+        )
+          return;
+        if (
+          current.phase === "creating" &&
+          JSON.stringify(current.failure) === JSON.stringify(failure)
+        )
+          return;
+        get().report(surfaceKey, { phase: "creating", failure });
+      },
       cancel: (surfaceKey, restageFailed) =>
         set((state) => ({
           bySurface: withStage(state.bySurface, surfaceKey, (stage) => {

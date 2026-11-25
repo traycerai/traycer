@@ -4,6 +4,18 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { writeDraftAuthority, type WriteDraftAuthorityInput } from "./draft-authority";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+} from "./draft-authority-session";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityEditReceipt,
+  DraftAuthorityHostRetirement,
+  DraftAuthorityLandingFlush,
+  DraftAuthorityVersion,
+} from "./draft-authority-types";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
   currentDraftBlobOwnerId,
@@ -13,10 +25,8 @@ import { isDraftsCapabilityMissing } from "@/lib/drafts/draft-capability";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import {
   composerBoundHostId,
-  deleteLandingDraftThroughHost,
-  hasDraftMirrorSession,
+  deliverInventoryRetirement,
   newChatBoundHostId,
-  retrySubmittedDraftDelete,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import {
   composerDraftWrite,
@@ -31,6 +41,9 @@ import {
 } from "@/lib/tab-navigation/intents";
 import {
   applyComposerHostDocument,
+  captureDirectSendChatDraft,
+  flushCanonicalChatDraft,
+  projectCanonicalChatDeletion,
   readComposerDraftSnapshot,
   useComposerDraftStore,
   type DraftState,
@@ -40,10 +53,15 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
   applyNewChatHostDocument,
+  captureCanonicalTaskDraft,
+  flushCanonicalTaskDraft,
+  projectCanonicalTaskDeletion,
   useNewConversationModalStore,
   type NewConversationModalDraftPatch,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
+  captureCanonicalLandingDraft,
+  projectCanonicalLandingDeletion,
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
@@ -187,46 +205,62 @@ export function openNewChatDraftRow(
   return true;
 }
 
-/**
- * Delete a start-page row. An own row goes through the host that HOLDS it
- * (the landing placement can point elsewhere), an unadopted row retires
- * locally, and a foreign row goes through the store's own `deleteDraft`: the
- * local mirror (and its tab) is gone at once, and the coordinator retracts
- * the cloud row through the placement host on the user's authority, retried
- * from the retirement receipt until that host answers. History used to keep
- * the mirror until the retract came back, which on a remote host is a visible
- * lag between the `Deleted` toast and the tab closing.
- */
-export function deleteLandingDraftRow(
+async function commitInventoryDelete(
+  actor: DraftAuthorityActor,
+  draft: DraftAuthorityVersion,
+  route: DraftAuthorityHostRetirement | null,
+  client: DraftClient,
+  canvas: WriteDraftAuthorityInput["canvas"],
+): Promise<DraftAuthorityEditReceipt | null> {
+  const outcome = await writeDraftAuthority({
+    operation: { id: mintDraftId(), actor },
+    expected: { kind: "current", draft },
+    mutation: { kind: "delete", retirements: route === null ? [] : [route] },
+    ...(canvas === undefined ? {} : { canvas }),
+  });
+  if ((outcome.kind !== "committed" && outcome.kind !== "replayed") ||
+    !draftAuthorityActorIsCurrent(actor)) {
+    return null;
+  }
+  if (route !== null) {
+    void deliverInventoryRetirement({ actor, receipt: outcome.receipt, hostId: route.hostId, client });
+  }
+  return outcome.receipt;
+}
+
+export async function deleteLandingDraftRow(
   draft: LandingDraftTab,
   hostId: string | null,
   client: DraftClient,
-): DraftRowDeleteOutcome {
-  const draftId = draft.id;
-  const restore = (): boolean => {
-    restoreLandingDraft(draft);
-    return true;
+): Promise<DraftRowDeleteOutcome> {
+  const actor = captureDraftAuthorityActor();
+  const current = useLandingDraftStore.getState().drafts.find((entry) => entry.id === draft.id);
+  const version = captureCanonicalLandingDraft(draft.id);
+  if (actor === null || current !== draft || version === null) return { deleted: false };
+  const unowned = draft.origin !== "replica" && draft.ownerHostId === null;
+  if (hostId === null && !unowned) return { deleted: false };
+  const foreign = !unowned &&
+    (draft.origin === "replica" || draft.ownerHostId !== hostId);
+  const route: DraftAuthorityHostRetirement | null = hostId === null || unowned
+    ? null
+    : {
+        accountId: actor.accountId,
+        hostId,
+        draftId: draft.id,
+        kind: foreign ? "retract" : "delete",
+      };
+  const receipt = await commitInventoryDelete(actor, version, route, client, undefined);
+  if (receipt === null) return { deleted: false };
+  await projectCanonicalLandingDeletion(receipt);
+  if (!draftAuthorityActorIsCurrent(actor)) return { deleted: false };
+  return {
+    deleted: true,
+    undo: foreign ? null : () => {
+      if (!draftAuthorityActorIsCurrent(actor)) return false;
+      restoreLandingDraft(draft);
+      return true;
+    },
   };
-  // With no resolved host there is nowhere to route a delete or a retract, and
-  // a local-only delete of a row with a cloud copy would leave that copy to be
-  // ingested straight back. Only a row nobody else owns is safe.
-  if (hostId === null) {
-    if (draft.ownerHostId !== null || draft.origin === "replica") {
-      return { deleted: false };
-    }
-    useLandingDraftStore.getState().deleteDraft(draftId);
-    return { deleted: true, undo: restore };
-  }
-  if (draft.origin !== "replica" && draft.ownerHostId === hostId) {
-    deleteLandingDraftThroughHost(draftId, hostId, client);
-    return { deleted: true, undo: restore };
-  }
-  if (draft.origin !== "replica" && draft.ownerHostId === null) {
-    useLandingDraftStore.getState().deleteDraft(draftId);
-    return { deleted: true, undo: restore };
-  }
-  useLandingDraftStore.getState().deleteDraft(draftId);
-  return { deleted: true, undo: null };
 }
 
 /**
@@ -255,70 +289,47 @@ function restoreLandingDraft(draft: LandingDraftTab): void {
   });
 }
 
-/**
- * Delete a chat row: empty the local buffer, retire its draft identity, and
- * tombstone the host row through the owner host.
- *
- * `clearDraft` upserts an EMPTY row rather than deleting one (it routes through
- * `replaceDraft`), which the read model hides by filtering empties - so the
- * host tombstone below is what actually removes the row, and it has to be sent
- * here because the chat whose draft this is, is not mounted (C1).
- */
-export function deleteComposerDraftRow(
+export async function deleteComposerDraftRow(
   row: {
     readonly chatId: string;
     readonly draftId: string;
     readonly ownerHostId: string | null;
     readonly foreign: boolean;
+    readonly content: JsonContent;
+    readonly lastTouchedAt: number;
   },
   client: DraftClient,
-): DraftRowDeleteOutcome {
+): Promise<DraftRowDeleteOutcome> {
+  const actor = captureDraftAuthorityActor();
   const before = readComposerDraftSnapshot(row.chatId);
-  const store = useComposerDraftStore.getState();
-  store.clearDraft(row.chatId);
-  // Retire the id before any host round trip: `clearDraft` keeps it, so an
-  // edit typed in that chat meanwhile would re-dirty the very id about to be
-  // tombstoned. Fenced first, the next edit mints a fresh id and host row.
-  // A foreign row records no pending DELETE - it is retracted, not deleted.
-  store.fenceAndDetachSubmittedDraft(
-    row.chatId,
-    row.draftId,
-    row.foreign ? null : row.ownerHostId,
-  );
-  // Undo may restore only this cleared buffer, never a later edit.
-  const cleared = readComposerDraftSnapshot(row.chatId);
-  const undo = row.foreign
-    ? null
-    : (): boolean => {
-        if (readComposerDraftSnapshot(row.chatId) !== cleared) return false;
-        restoreComposerDraft(row.chatId, before, row.ownerHostId, client);
-        return true;
-      };
-  if (row.ownerHostId === null) return { deleted: true, undo };
-  if (row.foreign) {
-    store.recordPendingSubmittedDraftRetract(row.draftId, row.ownerHostId);
-    if (client !== null) {
-      settleComposerDelete(
-        client.request("drafts.retract", { draftId: row.draftId }),
-        row.draftId,
-      );
-    }
-    return { deleted: true, undo };
+  if (actor === null || before.draftId !== row.draftId ||
+    before.content !== row.content || before.lastTouchedAt !== row.lastTouchedAt ||
+    before.ownerHostId !== row.ownerHostId) {
+    return { deleted: false };
   }
-  if (hasDraftMirrorSession(row.ownerHostId)) {
-    // A mounted session is preferred for the same reason a landing delete
-    // prefers one: it serializes the tombstone behind this host's in-flight
-    // upserts. The receipt this fence recorded is what it acts on.
-    void retrySubmittedDraftDelete(row.draftId);
-    return { deleted: true, undo };
-  }
-  if (client !== null) {
-    settleComposerDelete(
-      client.request("drafts.delete", { draftId: row.draftId }),
-      row.draftId,
-    );
-  }
-  return { deleted: true, undo };
+  const capture = captureDirectSendChatDraft(row.chatId, row.ownerHostId, actor);
+  if (capture === null) return { deleted: false };
+  const route: DraftAuthorityHostRetirement | null = row.ownerHostId === null ? null : {
+    accountId: actor.accountId,
+    hostId: row.ownerHostId,
+    draftId: row.draftId,
+    kind: row.foreign ? "retract" : "delete",
+  };
+  const receipt = await commitInventoryDelete(actor, capture.draft, route, client, capture.canvas);
+  if (receipt === null) return { deleted: false };
+  await projectCanonicalChatDeletion(receipt);
+  if (!draftAuthorityActorIsCurrent(actor)) return { deleted: false };
+  return {
+    deleted: true,
+    undo: row.foreign ? null : () => {
+      if (!draftAuthorityActorIsCurrent(actor) ||
+        useComposerDraftStore.getState().drafts[row.chatId] !== undefined) {
+        return false;
+      }
+      restoreComposerDraft(row.chatId, before, row.ownerHostId, client);
+      return true;
+    },
+  };
 }
 
 /**
@@ -340,9 +351,9 @@ function restoreComposerDraft(
   ownerHostId: string | null,
   client: DraftClient,
 ): void {
-  useComposerDraftStore
-    .getState()
-    .replaceDraft(chatId, before.content, before.selection);
+  const store = useComposerDraftStore.getState();
+  store.replaceDraft(chatId, before.content, before.selection);
+  if (before.targetEpicId !== null) store.bindTarget(chatId, before.targetEpicId);
   if (ownerHostId === null || client === null) return;
   // A mounted composer's own session already took the restore through
   // `notifyDraftLocalEdit`; a second upsert here would race its flush.
@@ -373,7 +384,12 @@ function restoreComposerDraft(
       supersedes: after.supersedes,
     }),
     applyComposerHostDocument,
-    () => composerBoundHostId(chatId) === null,
+  captureDirectSendChatDraft,
+  flushCanonicalChatDraft,
+  projectCanonicalChatDeletion,
+    () => composerBoundHostId(chatId) === null &&
+      readComposerDraftSnapshot(chatId) === after,
+    () => flushCanonicalChatDraft(chatId),
   );
 }
 
@@ -390,19 +406,26 @@ async function publishRestoredDraft(
   write: DraftWrite,
   apply: (document: DraftDocument) => void,
   stillUnmounted: () => boolean,
+  flush: () => Promise<DraftAuthorityLandingFlush>,
 ): Promise<void> {
   const { hostId, client } = owner;
+  const actor = captureDraftAuthorityActor();
+  if (actor === null) return;
   try {
+    const initial = await flush();
+    if (initial.kind !== "committed" || !stillUnmounted() ||
+      !draftAuthorityActorIsCurrent(actor)) return;
     await putDraftBlobsForWrite(
       hostId,
       client,
       write,
       currentDraftBlobOwnerId(),
     );
-    // Blob upload yielded: a mounted session may now own this write.
-    if (!stillUnmounted()) return;
+    const exact = await flush();
+    if (exact.kind !== "committed" || exact.draft.version !== initial.draft.version ||
+      !stillUnmounted() || !draftAuthorityActorIsCurrent(actor)) return;
     const response = await client.request("drafts.upsert", { draft: write });
-    apply(response.draft);
+    if (draftAuthorityActorIsCurrent(actor)) apply(response.draft);
   } catch (error: unknown) {
     if (isDraftsCapabilityMissing(error)) return;
     appLogger.warn("[drafts] restoring a draft on its owner host failed", {
@@ -411,84 +434,43 @@ async function publishRestoredDraft(
   }
 }
 
-/**
- * Clear the receipt once the host has answered. `absent` is as terminal as
- * `deleted` (ownership never moves), and a host too old for the method has
- * nothing to owe; anything else leaves the receipt pending, for whichever
- * session for that host mounts next to retry.
- */
-function settleComposerDelete(answer: Promise<unknown>, draftId: string): void {
-  void answer.then(
-    () => {
-      useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
-    },
-    (error: unknown) => {
-      if (isDraftsCapabilityMissing(error)) {
-        useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
-        return;
-      }
-      appLogger.warn("[drafts] direct chat draft delete failed", {
-        error: describeLogError(error),
-      });
-    },
-  );
-}
-
-/**
- * Delete a new-agent row: remove the epic's patch and tombstone the host row.
- *
- * `clearDraft` notifies the coordinator before it removes the entry, but that
- * routed delete resolves its host through `newChatHostByEpicId`, which only a
- * MOUNTED modal writes - so for the rows this list is made of it reaches
- * nothing and the host goes on listing the draft (C2). Hence the
- * explicit request here, skipped only when the routed one has genuinely been
- * sent: the epic is bound AND that host's session is up. Deferring to the
- * session there is not just tidiness - a bare request cannot be ordered
- * against the upserts a mounted modal may still have in flight, and a delete
- * that overtakes one would be undone by it.
- *
- * Best-effort by design: a failed delete re-lists on the next `drafts.list`
- * and the user deletes again.
- */
-export function deleteNewChatDraftRow(
+export async function deleteNewChatDraftRow(
   row: {
     readonly epicId: string;
     readonly draftId: string;
     readonly ownerHostId: string | null;
+    readonly content: JsonContent;
+    readonly lastTouchedAt: number;
   },
   client: DraftClient,
-): DraftRowDeleteOutcome {
-  const boundHostId = newChatBoundHostId(row.epicId);
-  const routed = boundHostId !== null && hasDraftMirrorSession(boundHostId);
-  const before =
-    useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId] ??
-    null;
-  useNewConversationModalStore.getState().clearDraft(row.epicId);
-  const cleared =
-    useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId];
-  if (!routed && client !== null && row.ownerHostId !== null) {
-    void client
-      .request("drafts.delete", { draftId: row.draftId })
-      .catch((error: unknown) => {
-        if (isDraftsCapabilityMissing(error)) return;
-        appLogger.warn("[drafts] direct new-chat draft delete failed", {
-          error: describeLogError(error),
-        });
-      });
+): Promise<DraftRowDeleteOutcome> {
+  const actor = captureDraftAuthorityActor();
+  const before = useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId];
+  const version = captureCanonicalTaskDraft(row.epicId);
+  if (actor === null || before === undefined || version === null ||
+    before.draftId !== row.draftId || before.content !== row.content ||
+    before.lastTouchedAt !== row.lastTouchedAt ||
+    (before.ownerHostId ?? newChatBoundHostId(row.epicId)) !== row.ownerHostId) {
+    return { deleted: false };
   }
-  const content = before?.content ?? null;
-  if (before === null || content === null) return { deleted: true, undo: null };
+  const route: DraftAuthorityHostRetirement | null = row.ownerHostId === null ? null : {
+    accountId: actor.accountId,
+    hostId: row.ownerHostId,
+    draftId: row.draftId,
+    kind: "delete",
+  };
+  const receipt = await commitInventoryDelete(actor, version, route, client, undefined);
+  if (receipt === null) return { deleted: false };
+  await projectCanonicalTaskDeletion(receipt);
+  if (!draftAuthorityActorIsCurrent(actor)) return { deleted: false };
   return {
     deleted: true,
     undo: () => {
-      if (
-        useNewConversationModalStore.getState().draftPatchesByEpicId[
-          row.epicId
-        ] !== cleared
-      ) {
+      if (!draftAuthorityActorIsCurrent(actor) ||
+        useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId] !== undefined) {
         return false;
       }
-      restoreNewChatDraft(row, before, content, client);
+      restoreNewChatDraft(row, before, row.content, client);
       return true;
     },
   };
@@ -550,6 +532,11 @@ function restoreNewChatDraft(
       supersedes: null,
     }),
     applyNewChatHostDocument,
-    () => newChatBoundHostId(epicId) === null,
+  captureCanonicalTaskDraft,
+  flushCanonicalTaskDraft,
+  projectCanonicalTaskDeletion,
+    () => newChatBoundHostId(epicId) === null &&
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId] === after,
+    () => flushCanonicalTaskDraft(epicId),
   );
 }

@@ -1,3 +1,9 @@
+import { requestRestoredSandboxActionRetry } from "@/lib/sandboxes/restored-sandbox-continuation";
+import { toast } from "sonner";
+import {
+  draftStorageRefusalPresentation,
+  type DraftStoragePress,
+} from "@/lib/drafts/draft-storage-refusal";
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { StagedStopFailure } from "@/components/composer/staged-sandbox-stop-failure";
 import {
@@ -56,8 +62,10 @@ import {
   type SandboxRowOperation,
 } from "@/hooks/sandboxes/use-sandbox-operation";
 import { sandboxShapeLabel } from "@/lib/sandboxes/sandbox-strings";
+import { captureRestoredDraftAction } from "@/lib/sandboxes/restored-draft-action";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import {
+  readRestoredSandboxReadyWitness,
   runStagedSandbox,
   type StagedRunRequest,
   type StagedSandboxRunDeps,
@@ -75,6 +83,7 @@ import {
   useStagedSandbox,
   useStagedSandboxStore,
   type HandoffOwnerWatch,
+  type RestoredSandboxReadyWitness,
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 
@@ -127,7 +136,15 @@ export function useStagedSandboxRunner(): StagedSandboxRunner {
   return useCallback(
     (surfaceKey, request) => {
       if (deps === null) return;
-      void runStagedSandbox(surfaceKey, request, deps);
+      const stage = readStagedSandbox(surfaceKey);
+      if (stage?.returnedDraft === undefined) {
+        void runStagedSandbox(surfaceKey, request, deps);
+        return;
+      }
+      const restoredDraftAuthority =
+        request.restoredDraftAuthority ?? captureRestoredDraftAction(stage);
+      if (restoredDraftAuthority === null) return;
+      void runStagedSandbox(surfaceKey, { ...request, restoredDraftAuthority }, deps);
     },
     [deps],
   );
@@ -190,6 +207,22 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
   );
 }
 
+type RestoredStageStoragePress = Extract<
+  DraftStoragePress,
+  "restored-send" | "restored-open" | "restored-start" | "restored-wake"
+>;
+
+function restoredStageStorageRefusal(press: RestoredStageStoragePress): () => void {
+  let shown = false;
+  return () => {
+    if (shown) return;
+    shown = true;
+    const presentation = draftStorageRefusalPresentation(press);
+    if (presentation.kind === "composer-failure")
+      toast.error(presentation.title, { description: presentation.description });
+  };
+}
+
 /** What became of an explicit terminal ask on a surface's stage. */
 export type StagedTerminalAsk =
   /** The stage took it: the terminal opens on the handoff. */
@@ -240,18 +273,39 @@ export function openLandingStagedTerminal(
   surfaceKey: string,
   runner: StagedSandboxRunner,
 ): StagedTerminalAsk {
+  const stage = readStagedSandbox(surfaceKey);
   const ask = startStagedTerminal(surfaceKey, (createKey) =>
     runner(surfaceKey, {
       taskId: null,
       resume: false,
       createKey,
+      ...(stage?.returnedDraft === undefined
+        ? {}
+        : { onStorageRefused: restoredStageStorageRefusal("restored-open") }),
     }),
   );
   if (ask.kind === "awake") {
-    useSurfaceHostSelectionStore
-      .getState()
-      .setSelection(surfaceKey, ask.hostId);
-    useLandingPanelStore.getState().requestTerminal(surfaceKey, ask.hostId);
+    if (stage?.returnedDraft !== undefined) {
+      const authority = captureRestoredDraftAction(stage);
+      if (
+        authority === null ||
+        authority.source.draft.slot.kind !== "landing" ||
+        stage.createdSandboxId === null
+      )
+        return { kind: "taken" };
+      useSurfaceHostSelectionStore.getState().setSelection(surfaceKey, ask.hostId);
+      useLandingPanelStore.getState().requestAwakeRestoredTerminal({
+        ...authority,
+        surfaceKey,
+        sourceStage: stage,
+        hostId: ask.hostId,
+        sandboxId: stage.createdSandboxId,
+        operationId: `restored-open:${authority.source.draft.occurrence}:${authority.source.draft.version}`,
+      });
+    } else {
+      useSurfaceHostSelectionStore.getState().setSelection(surfaceKey, ask.hostId);
+      useLandingPanelStore.getState().requestTerminal(surfaceKey, ask.hostId);
+    }
   }
   return ask;
 }
@@ -308,12 +362,16 @@ export function useStagedSandboxSend(input: {
   const runner = useStagedSandboxRunner();
 
   const run = useCallback(
-    (createKey: string | null): void => {
+    (createKey: string | null, press: RestoredStageStoragePress): void => {
       if (surfaceKey === null) return;
+      const staged = readStagedSandbox(surfaceKey);
       runner(surfaceKey, {
         taskId,
         resume: false,
         createKey,
+        ...(staged?.returnedDraft === undefined
+          ? {}
+          : { onStorageRefused: restoredStageStorageRefusal(press) }),
       });
     },
     [runner, surfaceKey, taskId],
@@ -333,7 +391,11 @@ export function useStagedSandboxSend(input: {
           sendTaken: current.sendTaken || (claimsSend && !current.openTerminal),
         });
       }
-      run(createKey);
+      run(
+        createKey,
+        current?.terminalLaunch != null ? "restored-start"
+          : current?.openTerminal === true ? "restored-open" : "restored-wake",
+      );
     },
     [claimsSend, ownerId, run, surfaceKey],
   );
@@ -343,6 +405,11 @@ export function useStagedSandboxSend(input: {
     if (surfaceKey === null) return;
     const current = readStagedSandbox(surfaceKey);
     if (current === null) return;
+    if (current.returnedDraft !== undefined) {
+      const ready = readRestoredSandboxReadyWitness(surfaceKey);
+      if (ready === null) return;
+      requestRestoredSandboxActionRetry(ready);
+    }
     if (handoffOwnerLive(surfaceKey, current.ownerId)) {
       useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
     } else if (claimsSend) {
@@ -369,6 +436,7 @@ export function useStagedSandboxSend(input: {
       const current = readStagedSandbox(surfaceKey);
       if (current === null) return false;
       if (current.phase === "handoff") {
+        if (current.returnedDraft !== undefined) return true;
         // The resubmit on the new host was refused: this send is the
         // person's own, on the host the surface is already pinned to.
         if (current.failure !== null) {
@@ -384,7 +452,10 @@ export function useStagedSandboxSend(input: {
       if (current.phase === "staged" || current.failure !== null) {
         const store = useStagedSandboxStore.getState();
         store.report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
-        run(current.failure === null ? null : stagedRetryKey(current));
+        run(
+          current.failure === null ? null : stagedRetryKey(current),
+          terminalLaunch === null ? "restored-send" : "restored-start",
+        );
       } else if (!current.sendTaken) {
         useStagedSandboxStore
           .getState()
@@ -616,7 +687,9 @@ function useSandboxGetStagedReadinessLine(
  * being prepared (its images read and inlined), a promise of whether it
  * reached its create.
  */
-export type StagedResubmit = boolean | Promise<boolean>;
+type StagedResubmitOutcome = boolean | "held";
+
+export type StagedResubmit = StagedResubmitOutcome | Promise<StagedResubmitOutcome>;
 
 /**
  * The handoff each surface's resubmit is still being prepared for, so the
@@ -639,7 +712,7 @@ function handoffIdentity(stage: StagedSandbox): string {
 function settleResubmit(
   surfaceKey: string,
   handedOff: string,
-  accepted: boolean,
+  accepted: StagedResubmitOutcome,
 ): void {
   if (resubmitsInFlight.get(surfaceKey) === handedOff) {
     resubmitsInFlight.delete(surfaceKey);
@@ -652,6 +725,7 @@ function settleResubmit(
   ) {
     return;
   }
+  if (accepted === "held") return;
   if (accepted) {
     useStagedSandboxStore.getState().clear(surfaceKey);
     return;
@@ -679,8 +753,9 @@ export function useStagedSandboxHandoff(input: {
   readonly surfaceKey: string | null;
   readonly resolvedHostId: string | null;
   readonly canSubmit: boolean;
-  readonly submit: () => StagedResubmit;
-  readonly prepareHandoff: (hostId: string) => void;
+  readonly submit: (restored: RestoredSandboxReadyWitness | null) => StagedResubmit;
+  readonly prepareHandoff: (hostId: string, restored: RestoredSandboxReadyWitness | null) => void;
+  readonly observeRestored?: (stage: StagedSandbox) => void;
   readonly ownerId: string | null;
   /** When the draft is gone once this unmounts; stable across renders. */
   readonly watchOwner: HandoffOwnerWatch;
@@ -691,6 +766,7 @@ export function useStagedSandboxHandoff(input: {
     canSubmit,
     submit,
     prepareHandoff,
+    observeRestored,
     ownerId,
     watchOwner,
   } = input;
@@ -702,6 +778,7 @@ export function useStagedSandboxHandoff(input: {
   // Once per handoff.
   const handedOffRef = useRef<string | null>(null);
   const preparedRef = useRef<string | null>(null);
+  const observedRef = useRef<string | null>(null);
   // Counts preparations, so the effect runs again on the render that holds
   // the prepared draft (a timestamp can repeat within a millisecond).
   const [preparations, markPrepared] = useReducer(
@@ -721,6 +798,7 @@ export function useStagedSandboxHandoff(input: {
       // No handoff now: a later one to the same host runs again.
       preparedRef.current = null;
       handedOffRef.current = null;
+      observedRef.current = null;
       return;
     }
     if (handoffHostId === null) {
@@ -728,11 +806,21 @@ export function useStagedSandboxHandoff(input: {
       handedOffRef.current = null;
       return;
     }
-    if (resolvedHostId !== handoffHostId) return;
-    const key = `${surfaceKey}\u0000${handoffHostId}`;
+    if (resolvedHostId !== handoffHostId || handoff === null) return;
+    const restored = handoff.returnedDraft === undefined
+      ? null
+      : readRestoredSandboxReadyWitness(surfaceKey);
+    if (handoff.returnedDraft !== undefined && restored === null) {
+      if (observedRef.current !== handoffId) {
+        observedRef.current = handoffId;
+        observeRestored?.(handoff);
+      }
+      return;
+    }
+    const key = `${surfaceKey}\u0000${handoffId}`;
     if (preparedRef.current !== key) {
       preparedRef.current = key;
-      prepareHandoff(handoffHostId);
+      prepareHandoff(handoffHostId, restored);
       // A render with the prepared draft, whatever `prepareHandoff` changed,
       // so the resubmit below reads it.
       markPrepared();
@@ -741,7 +829,8 @@ export function useStagedSandboxHandoff(input: {
     if (handedOffRef.current === key || !canSubmit) return;
     if (resubmitsInFlight.get(surfaceKey) === handoffId) return;
     handedOffRef.current = key;
-    const outcome = submit();
+    const outcome = submit(restored);
+    if (outcome === "held") return;
     if (outcome === true) {
       useStagedSandboxStore.getState().clear(surfaceKey);
       return;
@@ -756,14 +845,16 @@ export function useStagedSandboxHandoff(input: {
     }
     resubmitsInFlight.set(surfaceKey, handoffId);
     void outcome
-      .catch(() => false)
+      .catch((): StagedResubmitOutcome => restored === null ? false : "held")
       .then((accepted) => {
         settleResubmit(surfaceKey, handoffId, accepted);
       });
   }, [
     canSubmit,
+    handoff,
     handoffHostId,
     handoffId,
+    observeRestored,
     preparedHostId,
     preparations,
     prepareHandoff,
@@ -785,6 +876,11 @@ export interface StagedSandboxTerminal {
   readonly epicId: string;
   readonly open: (
     target: TerminalLaunchTarget,
+    provenance: NestedFocusProvenance,
+  ) => void;
+  readonly openRestored?: (
+    target: TerminalLaunchTarget,
+    stage: StagedSandbox,
     provenance: NestedFocusProvenance,
   ) => void;
 }
@@ -883,6 +979,13 @@ export function useNewHostActions(
     onOpenTerminal:
       terminal === null || terminalTarget === null
         ? null
-        : (provenance) => terminal.open(terminalTarget, provenance),
+        : (provenance) => {
+            const current = surfaceKey === null ? null : readStagedSandbox(surfaceKey);
+            if (current?.returnedDraft !== undefined) {
+              terminal.openRestored?.(terminalTarget, current, provenance);
+              return;
+            }
+            terminal.open(terminalTarget, provenance);
+          },
   };
 }

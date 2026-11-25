@@ -1,4 +1,11 @@
 import { create } from "zustand";
+import { v5 as uuidv5 } from "uuid";
+import type { DraftAuthorityRestoredTerminalHandoff } from "@/lib/drafts/draft-authority-pending";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityEffectSource,
+} from "@/lib/drafts/draft-authority-types";
+import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import {
@@ -22,6 +29,20 @@ export type LandingPanelTitleSource = "default" | "manual";
  */
 export const UNBOUND_LANDING_PAGE_ID = "unbound-landing-page";
 
+export interface DirectRestoredTerminalRequest {
+  readonly actor: DraftAuthorityActor;
+  readonly source: Extract<DraftAuthorityEffectSource, { kind: "restored-draft" }>;
+  readonly operationId: string;
+  readonly sandboxId: string;
+  readonly hostId: string;
+  readonly surfaceKey: string;
+  readonly sourceStage: StagedSandbox;
+}
+
+export type LandingRestoredTerminalRequest =
+  | { readonly kind: "handoff"; readonly handoff: DraftAuthorityRestoredTerminalHandoff }
+  | { readonly kind: "awake"; readonly request: DirectRestoredTerminalRequest };
+
 /** {@link LandingPanelStoreState.terminalRequest}. */
 export interface LandingTerminalRequest {
   /** The composer surface whose pin the host was asked through. */
@@ -29,6 +50,10 @@ export interface LandingTerminalRequest {
   readonly hostId: string;
   /** The start page it is for; `null` until the panel binds it. */
   readonly landingPageId: string | null;
+  readonly protectedOpen?: {
+    readonly intent: LandingRestoredTerminalRequest;
+    readonly terminalId: string;
+  };
 }
 
 /** Which kind of surface a panel tab holds. The strip mixes both. */
@@ -94,6 +119,8 @@ export interface LandingTerminalTabRef {
   readonly hostAuthorityAcknowledged?: boolean;
   /** A genuinely-new terminal awaiting `terminal.plain.create`. */
   readonly pendingCreate?: boolean;
+  /** Protected Open has already created this exact host session. */
+  readonly protectedAdoptOnly?: true;
   /** Schema version attached to legacy import evidence. */
   readonly sourceStoreVersion?: number;
   /**
@@ -480,6 +507,8 @@ export interface LandingPanelStoreState {
    */
   readonly terminalRequest: LandingTerminalRequest | null;
   readonly requestTerminal: (surfaceKey: string, hostId: string) => void;
+  readonly requestRestoredTerminal: (handoff: DraftAuthorityRestoredTerminalHandoff) => void;
+  readonly requestAwakeRestoredTerminal: (request: DirectRestoredTerminalRequest) => void;
   /**
    * A surface's pin moved: a request asked through it for another host is
    * one the person has moved on from.
@@ -605,6 +634,8 @@ export interface LandingPanelStoreState {
    * method that replaced the whole list would have each pass wipe the others'
    * tabs on every frame.
    */
+  readonly protectedTerminalReservations: ReadonlySet<string>;
+  readonly reserveProtectedTerminal: (hostId: string, terminalId: string) => void;
   readonly applyReconciliationSlice: (
     hostId: string,
     kind: LandingPanelTabKind,
@@ -709,6 +740,7 @@ export function parseLandingTerminalTabRef(
       ? { hostAuthorityAcknowledged: true }
       : {}),
     ...(value.pendingCreate === true ? { pendingCreate: true } : {}),
+    ...(value.protectedAdoptOnly === true ? { protectedAdoptOnly: true } : {}),
     ...(isNonNegativeInteger(value.sourceStoreVersion)
       ? { sourceStoreVersion: value.sourceStoreVersion }
       : {}),
@@ -789,14 +821,42 @@ export function parsePersistedLandingPanelState(
   };
 }
 
+function restoredTerminalPanelRequest(
+  intent: LandingRestoredTerminalRequest,
+): LandingTerminalRequest {
+  const request = intent.kind === "handoff" ? intent.handoff : intent.request;
+  const draft = intent.kind === "handoff" ? intent.handoff.draft : intent.request.source.draft;
+  return {
+    surfaceKey: request.surfaceKey,
+    hostId: request.hostId,
+    landingPageId: draft.slot.id,
+    protectedOpen: {
+      intent,
+      terminalId: `landing-term-${uuidv5(request.operationId, uuidv5.URL)}`,
+    },
+  };
+}
+
 export const useLandingPanelStore = create<LandingPanelStoreState>()(
   persist(
     (set, get) => ({
       ...initialLandingPanelState(),
       panelReveal: null,
       terminalRequest: null,
+      protectedTerminalReservations: new Set<string>(),
       requestTerminal: (surfaceKey, hostId) =>
         set({ terminalRequest: { surfaceKey, hostId, landingPageId: null } }),
+      requestRestoredTerminal: (handoff) =>
+        set({
+          terminalRequest: restoredTerminalPanelRequest({
+            kind: "handoff",
+            handoff,
+          }),
+        }),
+      requestAwakeRestoredTerminal: (request) =>
+        set({
+          terminalRequest: restoredTerminalPanelRequest({ kind: "awake", request }),
+        }),
       dropTerminalRequestOnSelection: (surfaceKey, hostId) =>
         set((state) =>
           state.terminalRequest !== null &&
@@ -1118,9 +1178,32 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
               : {}),
           };
         }),
+      reserveProtectedTerminal: (hostId, terminalId) => {
+        const key = landingTabRefKey({ kind: "terminal", hostId, sessionId: terminalId });
+        set((state) => state.protectedTerminalReservations.has(key) ? state : {
+          protectedTerminalReservations: new Set([...state.protectedTerminalReservations, key]),
+        });
+      },
       applyReconciliationSlice: (hostId, kind, refs, collapseWhenEmpty) =>
         set((state) => {
-          const tabs = spliceLandingPanelSlice(state.tabs, hostId, kind, refs);
+          const request = state.terminalRequest;
+          const terminalId = request?.hostId === hostId ? request.protectedOpen?.terminalId : undefined;
+          // A listing can see the host result before the actual issue executor
+          // verifies adoption. Keep that exact ID reserved through an uncertain
+          // result or a replaced request, until the protected route admits it.
+          const admitted = kind === "terminal"
+            ? refs.filter((ref) =>
+                (ref.sessionId !== terminalId &&
+                  !state.protectedTerminalReservations.has(landingTabRefKey(ref))) ||
+                state.tabs.some((tab) =>
+                  tab.kind === "terminal" &&
+                  tab.protectedAdoptOnly === true &&
+                  tab.hostId === ref.hostId &&
+                  tab.sessionId === ref.sessionId &&
+                  tab.instanceId === ref.instanceId),
+              )
+            : refs;
+          const tabs = spliceLandingPanelSlice(state.tabs, hostId, kind, admitted);
           return {
             tabs,
             activeInstanceId: nextActiveInstanceId(
@@ -1205,6 +1288,7 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
           ...initialLandingPanelState(),
           panelReveal: null,
           terminalRequest: null,
+          protectedTerminalReservations: new Set<string>(),
         }),
     }),
     {

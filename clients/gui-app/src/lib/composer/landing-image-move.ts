@@ -1,37 +1,8 @@
 /**
- * Cross-window image-byte handoff for a landing draft MOVE.
- *
- * A draft's persisted content is hash-only, and each window keeps its image
- * bytes in its OWN IndexedDB partition (`landing-image-store`). Moving a draft
- * to a new window therefore has to move bytes too, but the destination's
- * partition is keyed by a windowId that does not exist until the move IPC has
- * created the window - by which point its renderer is already loading. The
- * handoff closes that gap with a third, draftId-keyed database:
- *
- *   source:      stageDraftImageHandoff  - copy the draft's bytes into
- *                `…:draft-move:{draftId}:landing-images` BEFORE the move IPC.
- *   destination: adoptDraftImageHandoff  - on first projection, any referenced
- *                hash missing from the local partition is imported from the
- *                handoff DB (via `putImage`, which re-hashes and so verifies
- *                content addressing), then the handoff DB is deleted.
- *   source:      discardDraftImageHandoff - delete the handoff when the move
- *                is refused, so a cancelled move leaves nothing behind.
- *
- * Adoption is self-gating (it only opens the handoff DB when a hash is
- * actually missing locally), so ordinary restores never touch it, and a
- * destination that crashed before adopting simply retries on its next launch -
- * the handoff DB is deleted only after an adoption pass ran.
- *
- * The handoff DB is driven with RAW IndexedDB rather than `idb-keyval`
- * deliberately: `createStore` holds its connection open forever (no close is
- * exposed), and `indexedDB.deleteDatabase` BLOCKS until every connection to
- * that database closes - so a delete after an idb-keyval read/write in the
- * same window never resolves, silently stranding the handoff. Every open here
- * is paired with a `close()` before any delete can run. (The schema matches
- * what `createStore(name, "bytes")` would produce - version 1, one "bytes"
- * store - so tooling can still read a staged handoff either way.)
+ * Landing image bytes are stored per window. Stage them before a move so the
+ * destination can adopt them after the committed reference arrives. An opened
+ * handoff connection must close before deletion can settle across windows.
  */
-
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
@@ -40,8 +11,18 @@ import { PERSIST_PREFIX } from "@/lib/persist/keys";
 
 const HANDOFF_OBJECT_STORE = "bytes";
 
-function handoffDbName(draftId: string): string {
-  return `${PERSIST_PREFIX}:draft-move:${draftId}:landing-images`;
+type DraftImageHandoff = string | {
+  readonly draftId: string;
+  readonly moveToken: string;
+};
+
+function handoffDbName(handoff: DraftImageHandoff): string {
+  if (typeof handoff === "string") {
+    return `${PERSIST_PREFIX}:draft-move:${handoff}:landing-images`;
+  }
+  const draft = encodeURIComponent(handoff.draftId);
+  const token = encodeURIComponent(handoff.moveToken);
+  return `${PERSIST_PREFIX}:draft-move-token:${draft}:${token}:landing-images`;
 }
 
 function awaitRequest<T>(request: IDBRequest<T>): Promise<T> {
@@ -55,8 +36,8 @@ function awaitRequest<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
-function openHandoffDb(draftId: string): Promise<IDBDatabase> {
-  const request = indexedDB.open(handoffDbName(draftId), 1);
+function openHandoffDb(handoff: DraftImageHandoff): Promise<IDBDatabase> {
+  const request = indexedDB.open(handoffDbName(handoff), 1);
   request.onupgradeneeded = () => {
     if (!request.result.objectStoreNames.contains(HANDOFF_OBJECT_STORE)) {
       request.result.createObjectStore(HANDOFF_OBJECT_STORE);
@@ -87,16 +68,16 @@ function awaitTransaction(tx: IDBTransaction): Promise<void> {
  * because not every engine ships it; when absent the answer defaults to true
  * and the open-adopt-delete path handles the empty DB as before.
  */
-async function handoffDbExists(draftId: string): Promise<boolean> {
+async function handoffDbExists(handoff: DraftImageHandoff): Promise<boolean> {
   if (typeof indexedDB.databases !== "function") return true;
-  const name = handoffDbName(draftId);
+  const name = handoffDbName(handoff);
   const databases = await indexedDB.databases();
   return databases.some((info) => info.name === name);
 }
 
-function deleteHandoffDb(draftId: string): Promise<void> {
+function deleteHandoffDb(handoff: DraftImageHandoff): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(handoffDbName(draftId));
+    const request = indexedDB.deleteDatabase(handoffDbName(handoff));
     request.onsuccess = () => {
       resolve();
     };
@@ -142,7 +123,7 @@ export function draftHasIngestingImages(content: JsonContent): boolean {
  * reachable.
  */
 export async function stageDraftImageHandoff(
-  draftId: string,
+  handoff: DraftImageHandoff,
   hashes: ReadonlyArray<string>,
 ): Promise<void> {
   const entries: Array<readonly [string, Uint8Array<ArrayBuffer>]> = [];
@@ -152,7 +133,7 @@ export async function stageDraftImageHandoff(
     entries.push([hash, bytes]);
   }
   if (entries.length === 0) return;
-  const db = await openHandoffDb(draftId);
+  const db = await openHandoffDb(handoff);
   try {
     const tx = db.transaction(HANDOFF_OBJECT_STORE, "readwrite");
     const store = tx.objectStore(HANDOFF_OBJECT_STORE);
@@ -172,16 +153,19 @@ export async function stageDraftImageHandoff(
  * ever staged for the draft.
  */
 export async function adoptDraftImageHandoff(
-  draftId: string,
+  handoff: DraftImageHandoff,
   hashes: ReadonlyArray<string>,
 ): Promise<void> {
   const missing: string[] = [];
   for (const hash of hashes) {
     if ((await getImageBytes(hash)) === undefined) missing.push(hash);
   }
-  if (missing.length === 0) return;
-  if (!(await handoffDbExists(draftId))) return;
-  const db = await openHandoffDb(draftId);
+  if (missing.length === 0) {
+    if (typeof handoff !== "string") await deleteHandoffDb(handoff);
+    return;
+  }
+  if (!(await handoffDbExists(handoff))) return;
+  const db = await openHandoffDb(handoff);
   const imported: Array<Uint8Array<ArrayBuffer>> = [];
   try {
     const tx = db.transaction(HANDOFF_OBJECT_STORE, "readonly");
@@ -210,10 +194,10 @@ export async function adoptDraftImageHandoff(
   for (const bytes of imported) {
     await putImage(bytes);
   }
-  await deleteHandoffDb(draftId);
+  await deleteHandoffDb(handoff);
 }
 
 /** Source-side cleanup for a refused or failed move. */
-export function discardDraftImageHandoff(draftId: string): Promise<void> {
-  return deleteHandoffDb(draftId);
+export function discardDraftImageHandoff(handoff: DraftImageHandoff): Promise<void> {
+  return deleteHandoffDb(handoff);
 }

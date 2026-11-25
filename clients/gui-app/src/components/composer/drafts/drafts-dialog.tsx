@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ListFilter } from "lucide-react";
 import { DraftRow } from "@/components/composer/drafts/draft-row";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,14 @@ import {
 } from "@/components/ui/popover";
 import { useDraftInventory } from "@/hooks/drafts/use-draft-inventory";
 import { useDraftInventoryActions } from "@/hooks/drafts/use-draft-inventory-actions";
+import {
+  copyBrowserDraftRecovery,
+  draftsRecoveryRouteIsCurrent,
+  mergeDraftsRecoveryRows,
+  openBrowserDraftRecovery,
+  type DraftsRecoveryRoute,
+  type DraftsViewRow,
+} from "@/lib/drafts/browser-draft-recovery";
 import {
   draftRowSourceChip,
   neighbourRowId,
@@ -66,14 +74,24 @@ export function DraftsDialog(props: {
   /** The epic of the active tab, or `null` outside a task. */
   readonly activeEpicId: string | null;
   readonly onClose: () => void;
+  readonly recovery?: DraftsRecoveryRoute;
 }): ReactNode {
   const { activeEpicId } = props;
-  const rows = useDraftInventory(
+  const ordinaryRows = useDraftInventory(
     { surface: "landing", activeDraftId: null },
     "all",
   );
+  const rows = mergeDraftsRecoveryRows(ordinaryRows, props.recovery, null);
   const actions = useDraftInventoryActions(props.hostId, "avatar_menu");
   const openingRow = useRef(false);
+  const openAttempt = useRef(0);
+  const recoveryAccount = props.recovery?.actor.accountId;
+  const recoveryGeneration = props.recovery?.actor.sessionGeneration;
+  useLayoutEffect(() => {
+    return () => {
+      openAttempt.current += 1;
+    };
+  }, [recoveryAccount, recoveryGeneration]);
   const recordedOpen = useRef(false);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState(ALL_DRAFTS);
@@ -114,18 +132,52 @@ export function DraftsDialog(props: {
     });
   };
 
-  const openRow = (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
+  const finishOpen = () => {
     openingRow.current = true;
     useNewConversationModalOpenStore.getState().close();
     props.onClose();
+  };
+
+  const openRow = (
+    row: DraftsViewRow,
+    input: AnalyticsDraftInput,
+  ) => {
+    const attempt = ++openAttempt.current;
+    if ("recovery" in row) {
+      if (props.recovery === undefined) return;
+      void openBrowserDraftRecovery(props.recovery, row, input, () => {
+        if (openAttempt.current !== attempt) return false;
+        finishOpen();
+        return true;
+      });
+      return;
+    }
+    finishOpen();
     actions.openRow(row, input, query !== "");
+  };
+
+  const copyRow = (row: DraftsViewRow, input: AnalyticsDraftInput) => {
+    const attempt = ++openAttempt.current;
+    if (!("recovery" in row)) {
+      actions.copyRow(row, input);
+      return;
+    }
+    const route = props.recovery;
+    if (!draftsRecoveryRouteIsCurrent(route)) return;
+    void copyBrowserDraftRecovery(route, row, (content) => {
+      if (openAttempt.current === attempt) {
+        actions.copyRow({ ...row, content }, input);
+      }
+    });
   };
 
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) props.onClose();
+        if (open) return;
+        openAttempt.current += 1;
+        props.onClose();
       }}
     >
       <DialogContent
@@ -233,10 +285,17 @@ export function DraftsDialog(props: {
                     mobile
                     onHighlight={() => setHighlightedId(row.id)}
                     onOpen={(input) => openRow(row, input)}
-                    onCopy={(input) => actions.copyRow(row, input)}
+                    onCopy={(input) => copyRow(row, input)}
                     onDelete={(input) => {
+                      openAttempt.current += 1;
                       setHighlightedId(neighbourRowId(visibleRows, row.id));
-                      actions.deleteRow(row, input);
+                      if ("recovery" in row) {
+                        if (draftsRecoveryRouteIsCurrent(props.recovery)) {
+                          props.recovery.onDelete(row.recovery.reference, input);
+                        }
+                      } else {
+                        actions.deleteRow(row, input);
+                      }
                     }}
                   />
                 ))}
