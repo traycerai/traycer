@@ -333,6 +333,14 @@ function renderManagedProfileDialog(
 
 interface MutableAuthnState {
   authnUnreachable: boolean;
+  acceptedMove: {
+    readonly identity: {
+      readonly kind: string;
+      readonly key: string;
+      readonly os: string;
+    };
+    readonly revision: number;
+  } | null;
   move: EnvironmentMoveAttemptOutcome | null;
   readonly bindingRequested: Deferred<void>;
   readonly computerVariables: Map<string, string | null>;
@@ -487,6 +495,7 @@ function makeSaveHarness(overrides: {
   const listeners = new Set<() => void>();
   const state: MutableAuthnState = {
     authnUnreachable: false,
+    acceptedMove: null,
     move: null,
     bindingRequested: deferred<void>(),
     computerVariables: new Map(),
@@ -561,6 +570,36 @@ function makeSaveHarness(overrides: {
         return {
           status: 201,
           text: JSON.stringify(accepted),
+        };
+      }
+      if (
+        request.method === "GET" &&
+        new URL(request.url).pathname ===
+          `/api/v3/hosts/${HOST_ID}/move-acceptances/${MOVE_ACCEPTANCE_ID}`
+      ) {
+        if (state.acceptedMove === null) return { status: 404, text: "" };
+        const { identity, revision } = state.acceptedMove;
+        return {
+          status: 200,
+          text: JSON.stringify({
+            state: "consumed",
+            acceptanceId: MOVE_ACCEPTANCE_ID,
+            consumedAt: "2026-11-25T00:01:00.000Z",
+            result: {
+              targetKind: "personal",
+              migration: {
+                acceptanceId: MOVE_ACCEPTANCE_ID,
+                migration: {
+                  revision,
+                  converged: [identity],
+                  displaced: [],
+                  differs: [],
+                  needsYou: [],
+                },
+                secrets: [],
+              },
+            },
+          }),
         };
       }
       if (request.url.endsWith("/api/v3/environments/me")) {
@@ -1816,6 +1855,10 @@ describe("settings-save callers", () => {
         },
       };
       harness.state.rowsByKind = { variable: [moveRow] };
+      harness.state.acceptedMove = {
+        identity: { ...address, os: "any" },
+        revision: moveRevision,
+      };
       harness.state.authnUnreachable = true;
       const acceptedMove = {
         attemptId: MOVE_ATTEMPT_ID,
