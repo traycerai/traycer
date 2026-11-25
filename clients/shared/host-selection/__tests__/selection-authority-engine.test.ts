@@ -4389,9 +4389,10 @@ describe("SelectionAuthorityEngineImpl - pool serving election", () => {
       "snapshot-window",
       attachRequest(snapshotAttachSeq, []),
     );
-    if (!snapshotAttach.ok) {
+    if (snapshotAttach.ok !== true) {
       throw new Error("expected the snapshot window to attach");
     }
+    expect(snapshotAttach.incarnationId).toBeTypeOf("string");
     expect(snapshotAttach.snapshot.contractVersion).toBe(1);
     expect(snapshotAttach.snapshot.revision).toBe(activationEvent.revision);
     expect(snapshotAttach.snapshot.preferredHostId).toBe("sandbox-1");
