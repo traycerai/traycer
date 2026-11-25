@@ -26,6 +26,8 @@ import { hostV115MutationV20Fixtures } from "./__fixtures__/host-v1.1.5-mutation
 const METHODS = [
   "providers.beginApiKeyChange",
   "providers.settleApiKeyChange",
+  "providers.clearKeptApiKey",
+  "providers.setKeptApiKey",
 ] as const;
 const V10 = { major: 1, minor: 0 } as const;
 const NO_PEER_METHODS = {};
@@ -61,17 +63,20 @@ describe.each(METHODS)("%s optional v1.0 protocol", (method) => {
     expect(compatibility.blocking).toEqual([]);
 
     const request =
-      method === METHODS[0]
+      method === "providers.settleApiKeyChange"
         ? methodRegistry[1].versions[0].contract.requestSchema.parse({
-            providerId: "codex",
-          })
-        : methodRegistry[1].versions[0].contract.requestSchema.parse({
             providerId: "codex",
             changeToken: "opaque-change-token",
             action: "set",
             recordId: "record-synthetic",
             signInNumber: "17",
             recordRevision: "4",
+          })
+        : methodRegistry[1].versions[0].contract.requestSchema.parse({
+            providerId: "codex",
+            ...(method === "providers.setKeptApiKey"
+              ? { apiKey: "synthetic-value" }
+              : {}),
           });
     const methodSubset = { [method]: methodRegistry };
     validateVersionedRpcRegistry(methodSubset);
@@ -312,6 +317,45 @@ describe("keyless API-key change wire contracts", () => {
       );
       expect(decoded).toEqual(response);
       expect(decoded.state).toEqual(state);
+    },
+  );
+
+  it.each(["providers.clearKeptApiKey", "providers.setKeptApiKey"] as const)(
+    "roundtrips %s scoped to one provider",
+    (method) => {
+      const registry = hostRpcRegistry[method];
+      const contract = registry[1].versions[0].contract;
+      const input = {
+        providerId: "codex",
+        ...(method === "providers.setKeptApiKey"
+          ? { apiKey: "synthetic-value" }
+          : {}),
+      };
+      const request = contract.requestSchema.parse(input);
+      const prepared = prepareRequestPayload(
+        registry,
+        V10,
+        V10,
+        request,
+        "request-clear-kept",
+        contract.method,
+      );
+      expect(prepared.onWirePayload).toEqual(input);
+
+      const state = providerMutationCliStateSchemaV21.parse({
+        ...hostV115MutationV20Fixtures.minimalStatesByProviderId.codex,
+        profiles: [],
+      });
+      expect(
+        decodeResponsePayload(
+          registry,
+          V10,
+          V10,
+          { state },
+          "request-clear-kept",
+          contract.method,
+        ),
+      ).toEqual({ state });
     },
   );
 

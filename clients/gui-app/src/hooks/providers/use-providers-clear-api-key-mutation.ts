@@ -8,22 +8,32 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useProviderApiKeyChangeMutation } from "@/hooks/providers/use-provider-api-key-change-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
+type ClearProviderApiKeyVariables = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.clearApiKey"
+> & { readonly usePersonal?: true };
+
 export function useProvidersClearApiKey(
   expectedEnvironmentId: string | null,
 ): UseMutationResult<
   ProviderApiKeyChangeResponse,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.clearApiKey">,
+  ClearProviderApiKeyVariables,
   { readonly hostId: string | null }
 > {
-  return useProviderApiKeyChangeMutation<
-    RequestOfMethod<HostRpcRegistry, "providers.clearApiKey">
-  >({
+  return useProviderApiKeyChangeMutation<ClearProviderApiKeyVariables>({
     expectedEnvironmentId,
+    origin: undefined,
     method: "providers.clearApiKey",
     mutationKey: providersMutationKeys.clearApiKey(),
     errorMessage: "Couldn't clear the API key.",
-    changeOf: ({ providerId }) => ({ providerId, change: { action: "clear" } }),
+    changeOf: ({ providerId, usePersonal }) => ({
+      providerId,
+      change:
+        usePersonal === true
+          ? { action: "clear", usePersonal }
+          : { action: "clear" },
+    }),
     clearInput: () => undefined,
   });
 }

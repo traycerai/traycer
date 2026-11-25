@@ -1,4 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The palette's settings rows draw by the Environment pick's source, which
+// reads the window's host; this suite mounts no host runtime.
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).personalHostScopeModule,
+);
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).windowHostRunsPersonalModule,
+);
 import {
   act,
   cleanup,

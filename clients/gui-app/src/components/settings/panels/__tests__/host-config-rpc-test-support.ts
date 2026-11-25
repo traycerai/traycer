@@ -57,6 +57,7 @@ export interface DiagnosticsLogFixtureEntry {
 
 export interface ConfigHostFixture {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly hostId: string;
   /** Backs the shell/env handlers - same validated behaviour the bridge tests already relied on. */
   readonly cli: MockTraycerCli;
@@ -250,15 +251,16 @@ export function buildConfigHostFixture(options: {
     version: "1.5.0",
     transportDialability: "dialable",
   };
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `req-${options.hostId}`,
+    handlers: { ...handlers, ...options.overrideHandlers },
+  });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
     findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `req-${options.hostId}`,
-      handlers: { ...handlers, ...options.overrideHandlers },
-    }),
+    messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
@@ -267,6 +269,7 @@ export function buildConfigHostFixture(options: {
 
   return {
     client,
+    messenger,
     hostId: options.hostId,
     cli,
     setLogLevelCalls,

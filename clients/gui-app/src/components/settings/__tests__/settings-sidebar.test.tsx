@@ -2,6 +2,7 @@ import {
   SettingsSidebar,
   type SettingsSidebarVariant,
 } from "@/components/settings/settings-sidebar";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   SETTINGS_SECTION_GROUPS,
   SETTINGS_SECTIONS,
@@ -9,6 +10,11 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { setMobileApp } from "@/lib/mobile-app";
+import {
+  resetEnvironmentSectionReads,
+  windowHostRunsPersonal,
+} from "@/components/settings/__tests__/environment-section-reads-fixture";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -17,23 +23,53 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import {
+  PERSONAL_PICK,
+  UNRESOLVED_PICK,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
+import { useSectionServed } from "@/components/settings/personal/use-old-host-local-pick";
+import {
+  type AnyRouter,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
   Outlet,
   RouterProvider,
+  useLocation,
 } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  recordNegotiatedHostManifest,
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
+import {
+  pickOldHostLocal,
+  recordOldHost,
+} from "@/components/settings/__tests__/old-host-pick-fixture";
+import {
+  SettingsModalContent,
+  SettingsPanelForSection,
+} from "@/components/settings/settings-modal-content";
+import { SettingsSurface } from "@/components/settings/settings-surface";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import { useEffect, useState } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -48,6 +84,7 @@ const globalScopeOverrides = vi.hoisted(
     current: { client: null },
   }),
 );
+const poolServes = vi.hoisted(() => ({ current: false }));
 const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
 
 vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
@@ -55,11 +92,41 @@ vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
   soundtrackOffered: () => soundtrackOfferedMock.value,
 }));
 
+// The process tier plan settles once per process; a case that needs a server
+// pool sets it here so the others keep the no-pool plan.
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    const { poolEntry } =
+      await import("@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures");
+    const poolPlan = original.createHostRpcTierPlan(poolEntry);
+    return {
+      ...original,
+      readProcessHostRpcTierPlan: () =>
+        poolServes.current ? poolPlan : original.readProcessHostRpcTierPlan(),
+    };
+  },
+);
+
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
-  const useHostScopeFor = () => hostScopeFixture(globalScopeOverrides.current);
+  // One scope per override set, as the real hook's memoised scope is: a fresh
+  // object per render would restart the picker model's effects every render.
+  const scopes = new WeakMap<object, HostScope>();
+  const useHostScopeFor = () => {
+    const overrides = globalScopeOverrides.current;
+    const known = scopes.get(overrides);
+    if (known !== undefined) return known;
+    const scope = hostScopeFixture(overrides);
+    scopes.set(overrides, scope);
+    return scope;
+  };
   return {
     useHostScope,
     useHostScopeFor,
@@ -68,52 +135,168 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
       setScopedHostId: () => undefined,
     },
     usePersonalHostScope: useHostScope,
+    usePickHostScope: useHostScopeFor,
+    useHostScopeForHostId: useHostScopeFor,
   };
 });
 
-// The Environment dropdown reads each registered computer's
-// `environment.status` and negotiated version, and the footer's Sandboxes link
-// reads the environment list: all `useQuery`s, and this suite mounts no query
-// client. "No host has answered" is the honest empty answer; the picker's own
-// rows are covered by environment-picker.test.tsx.
+// Reads this suite mounts no host runtime or query client for answer the
+// honest "nothing has answered" from the shared fixture; the rows and pickers
+// have their own suites. The registered statuses are one map for every render,
+// as the real hook's memoised read: a fresh one would rebuild a Local default
+// pick, and re-set it, on every render.
+const noStatuses = vi.hoisted(() => new Map());
 vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
-  useRegisteredHostEnvironmentStatuses: () => new Map(),
+  useRegisteredHostEnvironmentStatuses: () => noStatuses,
 }));
-vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
-  useHostNegotiatedMethodVersions: () => new Map(),
+// The negotiated versions are the manifest registry's, which a case records
+// per host; nothing records one by default, so no host has negotiated.
+// Settings' Local move offer reads a host's client, which none of these hosts
+// has.
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
+  useHostClientForHostId: () => null,
 }));
-// The picker's Personal row reads the hosts running Personal from one hook;
-// these suites are about the sidebar around it.
+// Settings' pages are their own suites: the panels a search hit can land on
+// are probes, and the frame around them passes its children through, except
+// in the cases that turn `realFrame` on to follow a default pick resolving.
+// The move offer, the pick upkeep and the search are the real ones.
+const realFrame = vi.hoisted(() => ({ on: false }));
 vi.mock(
-  "@/components/settings/environment/use-hosts-running-configuration",
-  () => ({
-    useHostsRunningPersonal: () => ({
-      hosts: [],
-      state: "ready",
-      collisions: [],
-      retry: () => undefined,
-    }),
+  "@/components/settings/personal/personal-page-frame",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/personal/personal-page-frame")
+      >();
+    return {
+      ...actual,
+      PersonalPageFrame: (props: {
+        readonly section: SettingsSectionId;
+        readonly children: React.ReactNode;
+      }) =>
+        realFrame.on ? <actual.PersonalPageFrame {...props} /> : props.children,
+    };
+  },
+);
+// Each probe counts its mounts: a page that was never drawn mounted zero times.
+const probeMounts = vi.hoisted((): Record<string, number> => ({}));
+const probe = vi.hoisted(
+  () =>
+    async (name: string): Promise<() => React.ReactNode> => {
+      const { createElement, useEffect } = await import("react");
+      return function Probe() {
+        useEffect(() => {
+          probeMounts[name] = (probeMounts[name] ?? 0) + 1;
+        }, []);
+        return createElement("div", { "data-testid": `${name}-page-probe` });
+      };
+    },
+);
+vi.mock("@/components/settings/panels/providers-settings-panel", async () => ({
+  McpServersSettingsPanel: await probe("mcp-servers"),
+  ProvidersSettingsPanel: await probe("providers"),
+  SkillsSettingsPanel: await probe("skills"),
+}));
+// Browser agent access opens in place, so the Permissions page it used to be
+// redirected to is a probe that must never mount for it.
+vi.mock(
+  "@/components/settings/panels/permissions-settings-panel",
+  async () => ({
+    PermissionsSettingsPanel: await probe("permissions"),
   }),
 );
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: undefined }),
+vi.mock(
+  "@/components/settings/environment/members-settings-panel",
+  async () => ({ MembersSettingsPanel: await probe("members") }),
+);
+vi.mock("@/components/settings/panels/secrets-settings-panel", async () => ({
+  SecretsSettingsPanel: await probe("secrets"),
 }));
-vi.mock("@/components/settings/move-sheet", () => ({
-  MoveSheet: () => null,
+vi.mock(
+  "@/components/settings/panels/agent-memories-settings-panel",
+  async () => ({ AgentMemoriesSettingsPanel: await probe("agent-memories") }),
+);
+// Agents' own panel is real, since it picks its body by the host: only what
+// each body holds is a probe.
+vi.mock(
+  "@/components/settings/panels/agent-selection-guide-section",
+  async () => ({ AgentSelectionGuideSection: await probe("agents-guide") }),
+);
+vi.mock("@/components/settings/panels/agent-definitions-tab", async () => ({
+  AgentDefinitionsTab: await probe("agents-definitions"),
 }));
-// The Team rows and the trigger's team label read the environment list
-// through the window's host client, and this suite mounts no host runtime.
-// The rows have their own suite; a Personal pick names no team.
-vi.mock("@/components/settings/environment/team-pick-label", () => ({
-  usePickedTeamLabel: () => null,
-  useInvitedTeamName: () => null,
-}));
-vi.mock("@/components/settings/environment/team-rows", () => ({
-  TeamRows: () => null,
-}));
-vi.mock("@/components/settings/members/invite-accept-dialog", () => ({
-  InviteAcceptDialog: () => null,
-}));
+// The surface the search navigates through: an overlay that swaps the section
+// in place, which the test's own surface (below) implements. Nothing else
+// publishes an API, so every other case keeps the real bridge.
+const surfaceApi = vi.hoisted(
+  (): { setSection: ((section: string) => void) | null } => ({
+    setSection: null,
+  }),
+);
+vi.mock("@/stores/tabs/system-tab-modal-bridge", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/stores/tabs/system-tab-modal-bridge")
+    >();
+  return {
+    ...actual,
+    getSystemTabModalApi: () =>
+      surfaceApi.setSection === null
+        ? actual.getSystemTabModalApi()
+        : {
+            isOverlayActive: () => true,
+            setSection: surfaceApi.setSection,
+            openSettings: () => undefined,
+            active: null,
+            close: () => undefined,
+          },
+  };
+});
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).hostsRunningConfigurationModule,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-list-query",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).environmentListQueryModule,
+);
+vi.mock(
+  "@/components/settings/move-sheet",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).moveSheetModule,
+);
+vi.mock(
+  "@/components/settings/environment/team-pick-label",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).teamPickLabelModule,
+);
+vi.mock(
+  "@/components/settings/environment/team-rows",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).teamRowsModule,
+);
+vi.mock(
+  "@/components/settings/members/invite-accept-dialog",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).inviteAcceptDialogModule,
+);
 // The Guide group leaves the rail once every Getting started step is done;
 // the real answer reads several `useQuery`s and this suite mounts no query
 // client. Not done by default, as for a new account.
@@ -122,56 +305,44 @@ vi.mock("@/components/onboarding/getting-started-checklist", () => ({
   useGettingStartedGuideIsComplete: () => guideComplete.current,
 }));
 
-vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
-  AddHostDialog: () => null,
-}));
-
-// The sidebar now opts into the liveness poll directly (see
-// `useRegisteredHostsPollLiveness` in `settings-sidebar.tsx`). This suite
-// mocks `useHostScope` wholesale and renders no `QueryClientProvider`, so the
-// real hook — which calls `useQuery` unconditionally — would throw for want
-// of a query client. It is also irrelevant to navigation, which is what this
-// suite is about.
-vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
-  useRegisteredHostsPollLiveness: () => undefined,
-}));
-
-// Same reasoning, one hook later: the picker now resolves each row's update
-// badge through `useFleetUpdateViews`, which owns a `useQuery` for the fleet
-// sweep and therefore needs a query client this navigation suite deliberately
-// does not mount. Stubbed to the "nothing observed" answer — which is also the
-// honest production answer for a fleet with no borrowable sessions, so the
-// rows this suite asserts on render exactly as they would there.
-//
-// The badge's OWN behaviour is covered where it belongs (the host-option row
-// and per-host isolation suites); stubbing it here keeps a navigation test from
-// silently becoming a fleet-polling test.
-// Returns the SHARED constant rather than a literal spelled out here. A mock
-// factory is not type-checked against the module it replaces, so a hand-written
-// view silently loses any field added later — and `undefined` is not `null`, so
-// the row's badge would have read "last seen undefined" on every host while
-// this navigation suite went on passing. The whole point of exporting
-// `UNKNOWN_FLEET_UPDATE_VIEW` is that no caller, test or otherwise, writes one
-// of these by hand.
-// The environment label resolver is a per-host query hook (Tracy Bots);
-// mocked here for the same reason the fleet views are: this suite mounts no
-// QueryClient and the label is not what it tests.
-vi.mock("@/hooks/bots/use-host-environment-labels", () => ({
-  useHostEnvironmentLabelResolver: () => () => null,
-}));
-vi.mock("@/hooks/host/use-fleet-update-views", async () => {
-  const { UNKNOWN_FLEET_UPDATE_VIEW } =
-    await import("@/lib/host/fleet-update/fleet-update-view");
-  return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
-});
-
-// The host picker's balance banner reads the sandbox list through a
-// `useQuery`, which needs a query client this navigation suite deliberately
-// does not mount. It is irrelevant to navigation (it renders nothing for an
-// account with no sandboxes), and has its own suite.
-vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
-  SandboxBalanceBanner: () => null,
-}));
+// The shared fixture answers "nothing observed" for the liveness poll, the
+// picker rows' labels and update badges, and the balance banner: each reads a
+// `useQuery` this navigation suite mounts no client for.
+vi.mock(
+  "@/components/settings/host-scope/add-host-dialog",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).addHostDialogModule,
+);
+vi.mock(
+  "@/hooks/auth/use-registered-hosts-query",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).registeredHostsLivenessModule,
+);
+vi.mock(
+  "@/hooks/bots/use-host-environment-labels",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).hostEnvironmentLabelsModule,
+);
+vi.mock(
+  "@/hooks/host/use-fleet-update-views",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).fleetUpdateViewsModule,
+);
+vi.mock(
+  "@/components/hosts/sandbox-balance-banner",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).sandboxBalanceBannerModule,
+);
 
 // The deployment offers Automations and no row exists yet: the one state the
 // sidebar once drew an Automations / Start entry for.
@@ -191,6 +362,43 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => sandboxControl.reason,
 }));
 
+// The cloud road by default: a Personal pick offers the cloud's pages. A case
+// that is about what the window's host scope says sets `realWindowHostRuns`
+// to run the real hook over that scope.
+const realWindowHostRuns = vi.hoisted(() => ({ current: false }));
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async (importOriginal) => {
+    const real =
+      await importOriginal<
+        typeof import("@/components/settings/personal/use-window-host-runs-personal")
+      >();
+    const { windowHostRunsPersonalModule } =
+      await import("@/components/settings/__tests__/environment-section-reads-fixture");
+    return {
+      useWindowHostRunsPersonal: (scope: HostScope) =>
+        realWindowHostRuns.current
+          ? real.useWindowHostRunsPersonal(scope)
+          : windowHostRunsPersonalModule.useWindowHostRunsPersonal(),
+    };
+  },
+);
+// The real hook reads the window host's status through a `useQuery`; none is
+// mounted, and the case that runs it answers on the scope's status alone.
+vi.mock(
+  "@/hooks/environment/use-environment-reads",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/environment/use-environment-reads")
+    >()),
+    useEnvironmentStatusRead: () => ({
+      supported: null,
+      data: null,
+      isError: false,
+    }),
+  }),
+);
+
 // The Secrets and GitHub entry renders only with a runner host (it needs the
 // platform origin), and the existing cases in this suite have none. The
 // default stays `null` so they are unaffected; the sandbox cases below set it.
@@ -201,6 +409,17 @@ interface RunnerHostStub {
 }
 const runnerHostStub = vi.hoisted(() => ({
   current: null as RunnerHostStub | null,
+}));
+// Whether Host Overview would offer the picked computer an update: the card's
+// update line and its action follow it.
+const updateNow = vi.hoisted(() => ({ applies: false }));
+vi.mock("@/components/settings/panels/host-update-now-action", () => ({
+  useHostUpdateNow: () => ({
+    applies: updateNow.applies,
+    action: updateNow.applies ? (
+      <button type="button" data-testid="update-now-probe" />
+    ) : null,
+  }),
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => runnerHostStub.current,
@@ -231,8 +450,47 @@ function buildRouter(initialPath: string) {
   });
 }
 
+function buildVariantRouter(
+  initialEntries: Array<string>,
+  variant: SettingsSidebarVariant,
+) {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        <SettingsSidebar mode={{ kind: "route" }} variant={variant} />
+        <Outlet />
+      </>
+    ),
+  });
+  const taskRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/task-stub",
+    component: () => <div data-testid="task-stub" />,
+  });
+  const settingsIndexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings",
+    component: () => <div data-testid="settings-list" />,
+  });
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/$section",
+    component: () => <div data-testid="settings-body" />,
+  });
+  const routeTree = rootRoute.addChildren([
+    taskRoute,
+    settingsIndexRoute,
+    settingsRoute,
+  ]);
+  return createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries }),
+  });
+}
+
 afterEach(() => {
   soundtrackOfferedMock.value = false;
+  updateNow.applies = false;
 });
 
 describe("<SettingsSidebar /> leader hints", () => {
@@ -554,44 +812,6 @@ describe("<SettingsSidebar /> leader hints", () => {
 // the user-observable anchor is where back() lands - rather than through the
 // Link's props.
 describe("<SettingsSidebar /> section navigation history", () => {
-  function buildVariantRouter(
-    initialEntries: Array<string>,
-    variant: SettingsSidebarVariant,
-  ) {
-    const rootRoute = createRootRoute({
-      component: () => (
-        <>
-          <SettingsSidebar mode={{ kind: "route" }} variant={variant} />
-          <Outlet />
-        </>
-      ),
-    });
-    const taskRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/task-stub",
-      component: () => <div data-testid="task-stub" />,
-    });
-    const settingsIndexRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/settings",
-      component: () => <div data-testid="settings-list" />,
-    });
-    const settingsRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/settings/$section",
-      component: () => <div data-testid="settings-body" />,
-    });
-    const routeTree = rootRoute.addChildren([
-      taskRoute,
-      settingsIndexRoute,
-      settingsRoute,
-    ]);
-    return createRouter({
-      routeTree,
-      history: createMemoryHistory({ initialEntries }),
-    });
-  }
-
   it("mobile list pushes a section, so back returns to the list", async () => {
     const router = buildVariantRouter(
       ["/task-stub", "/settings"],
@@ -815,10 +1035,13 @@ describe("<SettingsSidebar /> scope groups", () => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setMobileApp(false);
+    // A resolved pick: Secrets is offered once the pick is known to serve it.
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
   });
 
   afterEach(() => {
     cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
     scopeOverrides.current = { client: null };
     globalScopeOverrides.current = { client: null };
     setMobileApp(false);
@@ -1065,15 +1288,24 @@ describe("<SettingsSidebar /> Environment pick", () => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setMobileApp(false);
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
   });
 
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     useSettingsEnvironmentPickStore.setState({
       pick: null,
       defaultPick: PERSONAL_PICK,
     });
     scopeOverrides.current = { client: null };
+    resetNegotiatedManifests();
+    resetEnvironmentSectionReads();
+    poolServes.current = false;
+    realWindowHostRuns.current = false;
+    globalScopeOverrides.current = { client: null };
+    useSettingsSearchStore.setState({ query: "" });
+    setMobileApp(false);
   });
 
   async function renderRail(): Promise<void> {
@@ -1089,8 +1321,8 @@ describe("<SettingsSidebar /> Environment pick", () => {
   const present = (id: string): boolean =>
     screen.queryByTestId(`settings-sidebar-item-${id}`) !== null;
 
-  /** The Environment group's rows by label, in rail order. */
-  function environmentRows(): string[] {
+  /** The Environment group's rows, in rail order. */
+  function environmentRowElements(): HTMLElement[] {
     const heading = Array.from(document.querySelectorAll("h2")).find(
       (node) => node.textContent === "Environment",
     );
@@ -1104,18 +1336,40 @@ describe("<SettingsSidebar /> Environment pick", () => {
       document.querySelectorAll<HTMLElement>(
         "[data-testid^='settings-sidebar-item-']",
       ),
-    )
-      .filter(
-        (row) =>
-          (heading.compareDocumentPosition(row) &
-            Node.DOCUMENT_POSITION_FOLLOWING) !==
-            0 &&
-          (next.compareDocumentPosition(row) &
-            Node.DOCUMENT_POSITION_PRECEDING) !==
-            0,
-      )
-      .map((row) => row.textContent);
+    ).filter(
+      (row) =>
+        (heading.compareDocumentPosition(row) &
+          Node.DOCUMENT_POSITION_FOLLOWING) !==
+          0 &&
+        (next.compareDocumentPosition(row) &
+          Node.DOCUMENT_POSITION_PRECEDING) !==
+          0,
+    );
   }
+
+  /** The Environment group's rows by label, in rail order. */
+  function environmentRows(): string[] {
+    return environmentRowElements().map((row) => row.textContent);
+  }
+
+  const LOCAL_PICK = {
+    kind: "local",
+    hostId: "host-old",
+    hostName: "Old laptop",
+  } as const;
+  const SECRETS_LIST = "environment.secrets.list";
+  /** The window's host list names the picked computer, as a listed one is. */
+  function listLocalPickHost(): void {
+    globalScopeOverrides.current = {
+      client: null,
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: LOCAL_PICK.hostId }),
+      ],
+    };
+  }
+  const secretsHit = (): Element | null =>
+    document.querySelector("[data-testid^='settings-search-result-secrets:']");
 
   const PERSONAL_ROWS = [
     "Providers",
@@ -1142,13 +1396,108 @@ describe("<SettingsSidebar /> Environment pick", () => {
   });
 
   it("keeps MCP servers, Skills, Sandboxes and Storage visible under a Local pick, and hides Members", async () => {
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
-    });
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    recordNegotiatedHostMethods(LOCAL_PICK.hostId, [
+      "environment.status",
+      SECRETS_LIST,
+    ]);
 
     await renderRail();
 
     expect(environmentRows()).toEqual(PERSONAL_ROWS);
+  });
+
+  const OLD_HOST_PICK = {
+    kind: "local",
+    hostId: "host-old",
+    hostName: "Old laptop",
+  } as const;
+
+  /**
+   * The rail beside a body that is the real Local move offer for the section
+   * the route names, inside the query client that offer reads through.
+   */
+  async function renderRailWithPages() {
+    const rootRoute = createRootRoute({
+      component: () => (
+        <>
+          <SettingsSidebar mode={{ kind: "route" }} variant="rail" />
+          <Outlet />
+        </>
+      ),
+    });
+    const settingsRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings/$section",
+      component: function Body() {
+        const section = useLocation().pathname.split("/")[2];
+        const id =
+          SETTINGS_SECTIONS.find((candidate) => candidate.id === section)?.id ??
+          "general";
+        return (
+          <LocalMovePageOr section={id}>
+            <div data-testid="settings-body" />
+          </LocalMovePageOr>
+        );
+      },
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([settingsRoute]),
+      history: createMemoryHistory({ initialEntries: ["/settings/general"] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId("settings-body");
+    return router;
+  }
+
+  /** Presses the rail's row for `id` until the route names that section. */
+  async function openFromRail(router: AnyRouter, id: string): Promise<void> {
+    const links = await screen.findAllByTestId(`settings-sidebar-item-${id}`);
+    fireEvent.click(links[links.length - 1]);
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe(`/settings/${id}`);
+    });
+  }
+
+  it("lists every Environment row but Members under a Local pick on a host whose methods lack environment.status", async () => {
+    pickOldHostLocal();
+
+    await renderRail();
+
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
+  });
+
+  it("keeps every Local row for a host that advertises environment.status", async () => {
+    recordNegotiatedHostManifest("host-old", {
+      "environment.status": { major: 1, minor: 3 },
+      [SECRETS_LIST]: { major: 1, minor: 0 },
+    });
+    listLocalPickHost();
+    useSettingsEnvironmentPickStore.setState({ pick: OLD_HOST_PICK });
+
+    await renderRail();
+
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
+  });
+
+  it("opens the Move offer from the same rail on a Local pick of a host that advertises environment.status", async () => {
+    recordNegotiatedHostManifest("host-old", {
+      "environment.status": { major: 1, minor: 3 },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: OLD_HOST_PICK });
+    const router = await renderRailWithPages();
+
+    await openFromRail(router, "mcp-servers");
+
+    expect(screen.getByTestId("local-move-page")).toBeTruthy();
+    expect(screen.getByTestId("local-move-page-move")).toBeTruthy();
   });
 
   it("shows Members when a team is picked", async () => {
@@ -1159,5 +1508,797 @@ describe("<SettingsSidebar /> Environment pick", () => {
     await renderRail();
 
     expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
+  });
+
+  it("lists the Secrets row under a Local pick whose computer the host list does not name, though the pool serves the list", async () => {
+    poolServes.current = true;
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    globalScopeOverrides.current = {
+      client: null,
+      hosts: [hostScopeOptionFixture({ hostId: "host-a" })],
+    };
+    recordNegotiatedHostMethods(POOL_HOST_ID, [SECRETS_LIST]);
+
+    await renderRail();
+
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
+  });
+
+  it("lists the Secrets row under a Local pick whose host answered without the list", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
+
+    await renderRail();
+
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
+  });
+
+  it("keeps the rail's rows the same when an old host's manifest lands under a remembered Local pick of it", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    await renderRail();
+    const before = environmentRows();
+
+    act(() => {
+      recordOldHost();
+    });
+
+    expect(before).toEqual(PERSONAL_ROWS);
+    expect(environmentRows()).toEqual(before);
+  });
+
+  it.each([
+    { name: "serves the list", methods: ["environment.status", SECRETS_LIST] },
+    { name: "lacks the list", methods: ["environment.status"] },
+  ])(
+    "keeps the rail's rows the same when a current host that $name lands its manifest under a Local pick of it",
+    async ({ methods }) => {
+      useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+      listLocalPickHost();
+      await renderRail();
+      const before = environmentRows();
+
+      act(() => {
+        recordNegotiatedHostMethods(LOCAL_PICK.hostId, methods);
+      });
+
+      expect(before).toEqual(PERSONAL_ROWS);
+      expect(environmentRows()).toEqual(before);
+    },
+  );
+
+  it.each([
+    { name: "unknown", runs: null, served: false },
+    {
+      name: "a host that runs Personal and serves the list",
+      runs: true,
+      served: true,
+    },
+    {
+      name: "a host that runs Personal and does not serve the list",
+      runs: true,
+      served: false,
+    },
+    { name: "a host that does not run Personal", runs: false, served: false },
+  ])(
+    "lists Personal's Secrets row, with the window's host being $name",
+    async ({ runs, served }) => {
+      windowHostRunsPersonal.current = runs;
+      recordNegotiatedHostMethods(
+        "host-a",
+        served ? [SECRETS_LIST] : ["environment.status"],
+      );
+
+      await renderRail();
+
+      expect(present("secrets")).toBe(true);
+    },
+  );
+
+  it("offers a team's Secrets row whatever its window's host serves", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-team" },
+    });
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+
+    await renderRail();
+
+    expect(present("secrets")).toBe(true);
+  });
+
+  it("offers Personal's Secrets row while the window's host is unreachable, since the page reads the cloud", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    realWindowHostRuns.current = true;
+    globalScopeOverrides.current = { status: "unreachable" };
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+
+    await renderRail();
+
+    expect(present("secrets")).toBe(true);
+  });
+
+  it("lists a Secrets search result under a Local pick before its host answers and after, whatever it serves", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+    const input = await screen.findByRole("combobox", {
+      name: "Search settings",
+    });
+
+    fireEvent.change(input, { target: { value: "secrets" } });
+
+    expect(secretsHit()).not.toBeNull();
+
+    act(() => {
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
+    });
+
+    expect(secretsHit()).not.toBeNull();
+  });
+
+  it("lists the phone's settings list a Secrets row under a Local pick before its host answers and after, whatever it serves", async () => {
+    setMobileApp(true);
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    const router = buildVariantRouter(["/settings"], "mobile-list");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+    await screen.findByTestId("settings-sidebar-item-providers");
+
+    expect(present("secrets")).toBe(true);
+
+    act(() => {
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
+    });
+
+    expect(present("secrets")).toBe(true);
+  });
+});
+
+describe("<SettingsSidebar /> the section held under an old host's Local pick", () => {
+  const HIDDEN_PAGES = [
+    ["mcp-servers", "MCP servers"],
+    ["skills", "Skills"],
+    ["secrets", "Secrets"],
+    ["agent-memories", "Memories"],
+    ["sandboxes", "Sandboxes"],
+    ["storage", "Storage"],
+  ] as const;
+
+  /** The modal's own wiring: the sidebar, and the page for the section the surface holds. */
+  function SettingsSurfaceHarness(props: {
+    readonly initialSection: SettingsSectionId;
+  }) {
+    const [section, setSection] = useState<SettingsSectionId>(
+      props.initialSection,
+    );
+    useEffect(() => {
+      surfaceApi.setSection = (next) => {
+        const found = SETTINGS_SECTIONS.find(
+          (candidate) => candidate.id === next,
+        );
+        if (found !== undefined) setSection(found.id);
+      };
+      return () => {
+        surfaceApi.setSection = null;
+      };
+    }, []);
+    return (
+      <>
+        <SettingsSidebar
+          mode={{ kind: "modal", activeSection: section, onSelect: setSection }}
+          variant="rail"
+        />
+        <div data-section={section} data-testid="held-section" />
+        <SettingsPanelForSection section={section} />
+      </>
+    );
+  }
+
+  beforeEach(() => {
+    for (const name of Object.keys(probeMounts)) delete probeMounts[name];
+    realFrame.on = false;
+    cleanup();
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    setMobileApp(false);
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetNegotiatedManifests();
+    useSettingsSearchStore.setState({ query: "" });
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+      defaultHostId: null,
+    });
+    useSelectionAuthorityStore.getState().reset();
+    scopeOverrides.current = { client: null };
+    globalScopeOverrides.current = { client: null };
+  });
+
+  async function renderSurface(initialSection: SettingsSectionId) {
+    const rootRoute = createRootRoute({
+      component: () => (
+        <SettingsSurfaceHarness initialSection={initialSection} />
+      ),
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>
+      </QueryClientProvider>,
+    );
+    return screen.findByRole("combobox", { name: "Search settings" });
+  }
+
+  /** A modal opened on a remembered `section`, the surface the sidebar sits in. */
+  async function renderModal(section: SettingsSectionId) {
+    const rootRoute = createRootRoute({
+      component: () => <SettingsModalContent section={section} />,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("combobox", { name: "Search settings" });
+  }
+
+  function hitFor(id: string): HTMLElement | undefined {
+    return screen
+      .queryAllByRole("option")
+      .find((option) =>
+        option.dataset.testid?.startsWith(`settings-search-result-${id}:`),
+      );
+  }
+
+  it.each(HIDDEN_PAGES)(
+    "lists a search hit for %s, and choosing it holds that section on the rail",
+    async (id, label) => {
+      pickOldHostLocal();
+      const input = await renderSurface("providers");
+
+      fireEvent.change(input, { target: { value: label } });
+      const hit = hitFor(id);
+      expect(hit).toBeDefined();
+      if (hit !== undefined) fireEvent.click(hit);
+      act(() => {
+        useSettingsSearchStore.setState({ query: "" });
+      });
+
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
+    },
+  );
+
+  it("still lists a hit for a page the old host has", async () => {
+    pickOldHostLocal();
+    const input = await renderSurface("providers");
+
+    fireEvent.change(input, { target: { value: "Permissions" } });
+
+    expect(hitFor("permissions")).toBeDefined();
+  });
+
+  const PROBED_HIDDEN_PAGES = [
+    "mcp-servers",
+    "skills",
+    "secrets",
+    "agent-memories",
+  ] as const;
+
+  /** The routed Settings tab: the real surface, whose section comes from the route or the remembered path. */
+  async function renderRoutedTab(path: string, lastPath: string | null) {
+    const rootRoute = createRootRoute({
+      component: () => <SettingsSurface lastPath={lastPath} />,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([]),
+      history: createMemoryHistory({ initialEntries: [path] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("combobox", { name: "Search settings" });
+    return router;
+  }
+
+  it.each(PROBED_HIDDEN_PAGES)(
+    "holds %s on the rail when a link reaches it through navigateToSettingsSection",
+    async (id) => {
+      pickOldHostLocal();
+      await renderSurface("providers");
+
+      act(() => {
+        navigateToSettingsSection(id);
+      });
+
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
+      expect(probeMounts[id] ?? 0).toBe(0);
+    },
+  );
+
+  it.each(PROBED_HIDDEN_PAGES)(
+    "holds %s on the rail when a deep link opens the routed tab on it",
+    async (id) => {
+      pickOldHostLocal();
+
+      await renderRoutedTab(`/settings/${id}`, null);
+
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
+      expect(probeMounts[id] ?? 0).toBe(0);
+    },
+  );
+
+  it("never mounts a hidden page when the routed tab's remembered path names it", async () => {
+    pickOldHostLocal();
+
+    await renderRoutedTab("/epics", "/settings/skills");
+
+    expect(probeMounts["skills"] ?? 0).toBe(0);
+    expect(screen.queryByTestId("local-move-page")).toBeNull();
+  });
+
+  /** The window's host is the old computer and no default pick is stored yet: the dropdown resolves it. */
+  function arriveInOldHostWindow(): void {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-old" });
+    globalScopeOverrides.current = {
+      host: hostScopeOptionFixture({ hostId: "host-old", name: "Old laptop" }),
+      client: null,
+    };
+    useSettingsEnvironmentPickStore.setState({
+      defaultPick: { kind: "unresolved" },
+      defaultHostId: null,
+    });
+    realFrame.on = true;
+  }
+
+  /** The default pick has resolved to the old host's Local row. */
+  async function defaultPickResolved(): Promise<void> {
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().defaultPick.kind).toBe(
+        "local",
+      );
+    });
+  }
+
+  it("holds Skills on the rail when a routed tab's default pick resolves to the old host's row", async () => {
+    arriveInOldHostWindow();
+
+    await renderRoutedTab("/settings/skills", null);
+    await defaultPickResolved();
+
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-skills"]);
+    expect(probeMounts["skills"] ?? 0).toBe(0);
+  });
+
+  it("holds Skills on the rail when a window opening on it resolves to the old host's row", async () => {
+    arriveInOldHostWindow();
+
+    await renderSurface("skills");
+    await defaultPickResolved();
+
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-skills"]);
+    expect(probeMounts["skills"] ?? 0).toBe(0);
+  });
+
+  function highlightedRows(): string[] {
+    return screen
+      .getAllByTestId(/^settings-sidebar-item-/)
+      .filter((row) => row.classList.contains("bg-accent"))
+      .map((row) => row.dataset["testid"] ?? "");
+  }
+
+  function heldSection(): string | undefined {
+    return screen.getByTestId("held-section").dataset["section"];
+  }
+
+  /** Presses the rail picker's row, with the dropdown opened as a pointer does. */
+  function pickFromRailPicker(rowTestId: string): void {
+    fireEvent.pointerDown(screen.getByTestId("environment-picker-trigger"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId(rowTestId));
+    });
+  }
+
+  it("keeps the modal on Secrets when the old host's Local row is picked from the rail's picker", async () => {
+    recordOldHost();
+    globalScopeOverrides.current = {
+      client: null,
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-old", name: "Old laptop" }),
+      ],
+    };
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    await renderSurface("secrets");
+
+    pickFromRailPicker("environment-picker-local-host-old");
+
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "local",
+      hostId: "host-old",
+      hostName: "Old laptop",
+    });
+    expect(heldSection()).toBe("secrets");
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-secrets"]);
+  });
+
+  it("keeps the modal on Members when Personal is picked from the rail's picker", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-team" },
+    });
+    await renderSurface("members");
+
+    pickFromRailPicker("environment-picker-personal");
+
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+      PERSONAL_PICK,
+    );
+    expect(heldSection()).toBe("members");
+  });
+
+  it.each(["secrets", "mcp-servers"] as const)(
+    "highlights %s, and not Providers, when the modal holds it under an old host's Local pick",
+    async (id) => {
+      pickOldHostLocal();
+
+      await renderSurface(id);
+
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
+    },
+  );
+
+  it.each(["secrets", "mcp-servers"] as const)(
+    "highlights %s, and not Providers, when a deep link opens the routed tab on it under an old host's Local pick",
+    async (id) => {
+      pickOldHostLocal();
+
+      await renderRoutedTab(`/settings/${id}`, null);
+
+      expect(highlightedRows()).toEqual([`settings-sidebar-item-${id}`]);
+    },
+  );
+
+  it("still draws a hidden page under a Personal pick on the same host", async () => {
+    recordNegotiatedHostMethods("host-old", ["host.status"]);
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+
+    await renderSurface("skills");
+
+    await screen.findByTestId("skills-page-probe");
+    expect(screen.queryByTestId("providers-page-probe")).toBeNull();
+    expect(highlightedRows()).toEqual(["settings-sidebar-item-skills"]);
+  });
+
+  const OLD_HOST_OPTION = hostScopeOptionFixture({
+    hostId: "host-old",
+    name: "Old laptop",
+  });
+  const NEW_HOST_OPTION = hostScopeOptionFixture({
+    hostId: "host-new",
+    name: "New laptop",
+  });
+  const NEW_HOST_PICK = {
+    kind: "local",
+    hostId: "host-new",
+    hostName: "New laptop",
+  } as const;
+  const LOCAL_PICK_OLD = {
+    kind: "local",
+    hostId: "host-old",
+    hostName: "Old laptop",
+  } as const;
+  const SECRETS_LIST = "environment.secrets.list";
+
+  /** The window's host scope, and the scope the pick reads through, are one. */
+  function scopeOn(overrides: Record<string, unknown>): void {
+    scopeOverrides.current = { client: null, ...overrides };
+    globalScopeOverrides.current = scopeOverrides.current;
+  }
+
+  const cardText = (testId: string): string =>
+    screen.getByTestId(testId).textContent;
+  /** Concealed or absent: the page stays mounted beneath the away notice, out of view. */
+  function expectHiddenFromView(node: Element | null): void {
+    expect(node === null || isConcealed(node)).toBe(true);
+  }
+  const sectionHeading = (name: string): HTMLElement =>
+    screen.getByRole("heading", { name });
+
+  it("answers Secrets with the not-available card and no update line under the old host's Local pick, under Secrets' own heading and with the route kept", async () => {
+    pickOldHostLocal();
+    scopeOn({ host: OLD_HOST_OPTION });
+    // No host update serves Secrets, so an update on offer adds no line.
+    updateNow.applies = true;
+
+    await renderSurface("secrets");
+
+    expect(sectionHeading("Secrets")).toBeTruthy();
+    expect(screen.getByText("Values and logins your agents use.")).toBeTruthy();
+    expect(cardText("page-not-on-computer-missing")).toBe("Not on Old laptop");
+    expect(screen.queryByTestId("update-now-probe")).toBeNull();
+    expect(heldSection()).toBe("secrets");
+    expect(screen.queryByTestId("providers-page-probe")).toBeNull();
+    expect(screen.queryByTestId("secrets-page-probe")).toBeNull();
+  });
+
+  it("answers MCP servers with the update card, not the move offer, under the old host's Local pick", async () => {
+    pickOldHostLocal();
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    updateNow.applies = true;
+
+    await renderSurface("mcp-servers");
+
+    expect(cardText("page-not-on-computer-update")).toContain(
+      "Update Old laptop to use MCP servers.",
+    );
+    expect(screen.getByTestId("update-now-probe")).toBeTruthy();
+    expect(screen.queryByTestId("local-move-page")).toBeNull();
+    expect(screen.queryByTestId("mcp-servers-page-probe")).toBeNull();
+  });
+
+  it("draws the Providers page, with no card, under the old host's Local pick", async () => {
+    pickOldHostLocal();
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    await renderSurface("providers");
+
+    expect(screen.getByTestId("providers-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
+  });
+
+  it("keeps the move offer for MCP servers, and draws Secrets, under a current host's Local pick that serves the list", async () => {
+    recordNegotiatedHostManifest("host-new", {
+      "environment.status": { major: 1, minor: 3 },
+      [SECRETS_LIST]: { major: 1, minor: 0 },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: NEW_HOST_PICK });
+    scopeOn({ host: NEW_HOST_OPTION });
+
+    await renderSurface("mcp-servers");
+
+    expect(screen.getByTestId("local-move-page")).toBeTruthy();
+    expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
+
+    cleanup();
+    await renderSurface("secrets");
+
+    expect(screen.getByTestId("secrets-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
+  });
+
+  it("answers Secrets with the not-available card and no update line under a current host's Local pick whose handshake lacks the list", async () => {
+    recordNegotiatedHostManifest("host-new", {
+      "environment.status": { major: 1, minor: 3 },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: NEW_HOST_PICK });
+    scopeOn({ host: NEW_HOST_OPTION });
+    updateNow.applies = true;
+
+    await renderSurface("secrets");
+
+    expect(cardText("page-not-on-computer-missing")).toBe("Not on New laptop");
+    expect(screen.queryByTestId("update-now-probe")).toBeNull();
+    expect(screen.queryByTestId("secrets-page-probe")).toBeNull();
+  });
+
+  it("says a Local pick's computer is not connected to this app once the host list has loaded without it, with no action", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
+    scopeOn({ host: null, isLoading: false });
+
+    await renderSurface("secrets");
+
+    expect(cardText("page-not-on-computer-unlisted")).toContain(
+      "Not on Old laptop",
+    );
+    expect(cardText("page-not-on-computer-unlisted")).toContain(
+      "Old laptop isn't connected to this app.",
+    );
+    expect(
+      within(screen.getByTestId("page-not-on-computer-unlisted")).queryByRole(
+        "button",
+      ),
+    ).toBeNull();
+  });
+
+  it("shows Connecting for a Local pick's computer while the host list is loading", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
+    scopeOn({ host: null, isLoading: true });
+
+    await renderSurface("secrets");
+
+    expect(cardText("host-scope-connecting")).toContain(
+      "Connecting to Old laptop",
+    );
+    expect(screen.queryByTestId("page-not-on-computer-unlisted")).toBeNull();
+  });
+
+  it("turns Connecting into the not-available card, with the route and heading unchanged, when a remembered Local pick's handshake lands old", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    const router = await renderRoutedTab("/settings/secrets", null);
+
+    expect(cardText("host-scope-connecting")).toContain(
+      "Connecting to Old laptop",
+    );
+    expect(sectionHeading("Secrets")).toBeTruthy();
+
+    act(() => {
+      recordOldHost();
+    });
+
+    expect(cardText("page-not-on-computer-missing")).toBe("Not on Old laptop");
+    expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
+    expect(sectionHeading("Secrets")).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/settings/secrets");
+  });
+
+  it("keeps Agents on Connecting, never the current host's tabs, until a listed old computer's handshake lands, then draws the guide alone", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK_OLD });
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    const router = await renderRoutedTab("/settings/agents", null);
+
+    expect(cardText("host-scope-connecting")).toContain(
+      "Connecting to Old laptop",
+    );
+    expect(screen.queryByTestId("agents-tab-definitions")).toBeNull();
+    expect(probeMounts["agents-guide"] ?? 0).toBe(0);
+
+    act(() => {
+      recordOldHost();
+    });
+
+    expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
+    expect(screen.getByTestId("agents-guide-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("agents-tab-definitions")).toBeNull();
+    expect(screen.queryByTestId("agents-guide-caption")).toBeNull();
+    // One mount: no current-host body held the guide before this one.
+    expect(probeMounts["agents-guide"]).toBe(1);
+    expect(router.state.location.pathname).toBe("/settings/agents");
+  });
+
+  it.each(["secrets", "mcp-servers"] as const)(
+    "shows only the away notice on %s under a Local pick of an unreachable old host, never the not-available card",
+    async (section) => {
+      pickOldHostLocal();
+      scopeOn({ host: OLD_HOST_OPTION, status: "unreachable" });
+      updateNow.applies = true;
+
+      await renderSurface(section);
+
+      expect(cardText("host-scope-unreachable")).toContain(
+        "Can't reach Old laptop from here",
+      );
+      expectHiddenFromView(screen.queryByTestId("page-not-on-computer-update"));
+      expectHiddenFromView(
+        screen.queryByTestId("page-not-on-computer-missing"),
+      );
+    },
+  );
+
+  it("shows only the away notice, not the move offer, on MCP servers under a Local pick of an unreachable current host", async () => {
+    recordNegotiatedHostManifest("host-new", {
+      "environment.status": { major: 1, minor: 3 },
+      [SECRETS_LIST]: { major: 1, minor: 0 },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: NEW_HOST_PICK });
+    scopeOn({ host: NEW_HOST_OPTION, status: "unreachable" });
+
+    await renderSurface("mcp-servers");
+
+    expect(cardText("host-scope-unreachable")).toContain(
+      "Can't reach New laptop from here",
+    );
+    expectHiddenFromView(screen.queryByTestId("local-move-page"));
+  });
+
+  it("opens a remembered Browser agent access in place under the old host's Local pick, with the not-available card", async () => {
+    pickOldHostLocal();
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    await renderModal("browser-agent-access");
+
+    expect(sectionHeading("Browser agent access")).toBeTruthy();
+    expect(cardText("page-not-on-computer")).toContain("Not on Old laptop");
+    expect(screen.queryByTestId("permissions-page-probe")).toBeNull();
+  });
+
+  it("answers Members under Personal with the team-only card, under Members' own heading", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+
+    await renderSurface("members");
+
+    expect(sectionHeading("Members")).toBeTruthy();
+    expect(cardText("page-not-on-computer-team-only")).toContain(
+      "Only a team has members",
+    );
+    expect(screen.queryByTestId("members-page-probe")).toBeNull();
+  });
+
+  it("draws the Members page under a team pick", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-team" },
+    });
+
+    await renderSurface("members");
+
+    expect(screen.getByTestId("members-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("page-not-on-computer")).toBeNull();
+  });
+
+  /** What `useSectionServed` answered at each render, for a pick and section. */
+  function servedHistory(
+    pick: EnvironmentPick,
+    section: SettingsSectionId,
+  ): { readonly answers: string[]; readonly rerender: () => void } {
+    const answers: string[] = [];
+    const view = renderHook(() => {
+      const answer = useSectionServed(pick, section);
+      answers.push(answer);
+      return answer;
+    });
+    return { answers, rerender: () => view.rerender() };
+  }
+
+  it("reads an unresolved pick, and a Local pick with no handshake, as pending", () => {
+    scopeOn({ host: OLD_HOST_OPTION });
+
+    expect(servedHistory(UNRESOLVED_PICK, "secrets").answers).toEqual([
+      "pending",
+    ]);
+    expect(servedHistory(LOCAL_PICK_OLD, "secrets").answers).toEqual([
+      "pending",
+    ]);
+  });
+
+  it("reads Secrets as not served for an old host's Local pick, without ever reading it as served while the handshake lands", () => {
+    scopeOn({ host: OLD_HOST_OPTION });
+    const history = servedHistory(LOCAL_PICK_OLD, "secrets");
+
+    act(() => {
+      recordOldHost();
+    });
+
+    expect(history.answers.at(-1)).toBe("not-served");
+    expect(history.answers).not.toContain("served");
+  });
+
+  it("reads Personal on a host that does not run Personal as served", () => {
+    windowHostRunsPersonal.current = false;
+    scopeOn({ host: NEW_HOST_OPTION });
+
+    expect(servedHistory(PERSONAL_PICK, "secrets").answers).toEqual(["served"]);
   });
 });

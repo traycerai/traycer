@@ -220,6 +220,8 @@ export function EnvOverrideEditor(props: {
   ) => void | Promise<void>;
   /** Resolves after the removal and its post-write overrides read complete. */
   readonly onDelete: (key: string) => void | Promise<void>;
+  readonly removeDisabled?: boolean;
+  readonly canRemove?: (key: string) => boolean;
   readonly renderDetails?: (key: string) => ReactNode;
 }) {
   const { namePlaceholder, emptyLabel } = props;
@@ -230,6 +232,7 @@ export function EnvOverrideEditor(props: {
   const submittingRef = useRef(false);
   const [writeError, setWriteError] = useState<string | null>(null);
   const disabled = props.disabled || pending !== null;
+  const removeDisabled = props.removeDisabled === true;
   // Retain the submitted row until the caller finishes its post-write read.
   const overrides = envRowsWithPending(props.overrides, pending);
   const keys = overrides.map((entry) => entry.key);
@@ -275,6 +278,7 @@ export function EnvOverrideEditor(props: {
     );
   };
   const onDelete = (key: string): void => {
+    if (removeDisabled || props.canRemove?.(key) === false) return;
     void submit(
       {
         oldKey: key,
@@ -329,6 +333,8 @@ export function EnvOverrideEditor(props: {
                   note={props.rowNotes.get(entry.key) ?? null}
                   details={props.renderDetails?.(entry.key) ?? null}
                   onDelete={onDelete}
+                  removeDisabled={removeDisabled}
+                  canRemove={props.canRemove?.(entry.key) !== false}
                 />
               );
             }
@@ -347,6 +353,8 @@ export function EnvOverrideEditor(props: {
                 savedRow={savedRow}
                 onCommit={onCommit}
                 onDelete={onDelete}
+                removeDisabled={removeDisabled}
+                canRemove={props.canRemove?.(entry.key) !== false}
               />
             );
           })}
@@ -416,6 +424,8 @@ function EnvOverrideRow(props: {
     value: string | null,
   ) => void;
   readonly onDelete: (key: string) => void;
+  readonly removeDisabled: boolean;
+  readonly canRemove: boolean;
 }) {
   const { entry, otherKeys, disabled, onCommit, onDelete } = props;
   const [open, setOpen] = useState(false);
@@ -522,13 +532,14 @@ function EnvOverrideRow(props: {
           onMode={(mode) => editDraft((current) => ({ ...current, mode }))}
           onCommit={commit}
         />
-        {props.phone ? null : (
-          <RemoveVariableButton
-            name={entry.key}
-            disabled={disabled}
-            onDelete={onDelete}
-          />
-        )}
+        <RemoveVariableButton
+          phone={props.phone}
+          canRemove={props.canRemove}
+          name={entry.key}
+          disabled={disabled}
+          removeDisabled={props.removeDisabled}
+          onDelete={onDelete}
+        />
       </div>
       <EnvRowNote note={props.note} />
       <EnvRowFooter draft={draft} disabled={disabled} onTrim={trimValue} />
@@ -569,11 +580,12 @@ function EnvOverrideRow(props: {
         busy={disabled}
         saveDisabled={false}
         removeLabel={`Remove ${entry.key}`}
+        removeDisabled={props.removeDisabled}
         onSave={() => {
           if (draftShowsEntry(draft, entry)) dismiss();
           else commit();
         }}
-        onRemove={() => onDelete(entry.key)}
+        onRemove={props.canRemove ? () => onDelete(entry.key) : null}
         onDismiss={dismiss}
       >
         {editor}
@@ -596,6 +608,8 @@ function EnvMaskedRow(props: {
   readonly note: ReactNode;
   readonly details: ReactNode;
   readonly onDelete: (key: string) => void;
+  readonly removeDisabled: boolean;
+  readonly canRemove: boolean;
 }) {
   const { entry, disabled } = props;
   const [open, setOpen] = useState(false);
@@ -615,13 +629,14 @@ function EnvMaskedRow(props: {
         >
           ••••••••
         </span>
-        {props.phone ? null : (
-          <RemoveVariableButton
-            name={entry.key}
-            disabled={disabled}
-            onDelete={props.onDelete}
-          />
-        )}
+        <RemoveVariableButton
+          phone={props.phone}
+          canRemove={props.canRemove}
+          name={entry.key}
+          disabled={disabled}
+          removeDisabled={props.removeDisabled}
+          onDelete={props.onDelete}
+        />
       </div>
       <EnvRowNote note={props.note} />
       <EnvRowDetails details={props.details} />
@@ -664,8 +679,9 @@ function EnvMaskedRow(props: {
         busy={disabled}
         saveDisabled
         removeLabel={`Remove ${entry.key}`}
+        removeDisabled={props.removeDisabled}
         onSave={null}
-        onRemove={() => props.onDelete(entry.key)}
+        onRemove={props.canRemove ? () => props.onDelete(entry.key) : null}
         onDismiss={() => {
           setOpen(false);
           props.onSheetToggle();
@@ -710,14 +726,18 @@ function EnvPhoneRowStatus(props: {
 }
 
 function RemoveVariableButton(props: {
+  readonly phone: boolean;
+  readonly canRemove: boolean;
   readonly name: string;
   readonly disabled: boolean;
+  readonly removeDisabled: boolean;
   readonly onDelete: (key: string) => void;
 }) {
+  if (props.phone || !props.canRemove) return null;
   return (
     <button
       type="button"
-      disabled={props.disabled}
+      disabled={props.disabled || props.removeDisabled}
       onClick={() => props.onDelete(props.name)}
       aria-label={`Remove ${props.name}`}
       // muted-fill-ok: hover also swings the icon to text-destructive, so

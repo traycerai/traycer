@@ -5,14 +5,16 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useProviderApiKeyChangeMutation } from "@/hooks/providers/use-provider-api-key-change-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
-interface SetProviderApiKeyVariables {
-  readonly providerId: ProviderId;
-}
+type SetProviderApiKeyVariables = { readonly providerId: ProviderId } & (
+  | { readonly intent?: "keep" }
+  | { readonly intent: "share"; readonly environmentId: string | null }
+);
 
 export function useProvidersSetApiKey(
   expectedEnvironmentId: string | null,
   readApiKey: () => string,
   clearApiKeyInput: () => void,
+  origin: "account-save" | undefined,
 ): UseMutationResult<
   ProviderApiKeyChangeResponse,
   HostRpcError,
@@ -21,13 +23,17 @@ export function useProvidersSetApiKey(
 > {
   return useProviderApiKeyChangeMutation<SetProviderApiKeyVariables>({
     expectedEnvironmentId,
+    origin,
     method: "providers.setApiKey",
     mutationKey: providersMutationKeys.setApiKey(),
     errorMessage: "Couldn't save the API key.",
-    changeOf: ({ providerId }) => ({
-      providerId,
-      change: { action: "set", apiKey: readApiKey() },
-    }),
+    changeOf: (variables) => {
+      const { providerId, ...choice } = variables;
+      return {
+        providerId,
+        change: { action: "set", apiKey: readApiKey(), ...choice },
+      };
+    },
     clearInput: clearApiKeyInput,
   });
 }

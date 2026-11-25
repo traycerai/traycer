@@ -1,4 +1,17 @@
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { EnvironmentMovePersonal } from "@traycer/protocol/host/environment/move-contracts";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { ChevronRight } from "lucide-react";
 import {
   GUIDE_DIFFERS_NOTE,
@@ -34,7 +47,10 @@ import { dataHandlingNoticeText } from "@/components/settings/members/data-handl
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
 import { answeredThisOpening } from "@/components/settings/move/answered-this-opening";
-import { useMoveRerun } from "@/components/settings/move/use-move-rerun";
+import {
+  useMoveRerun,
+  type MoveRerun,
+} from "@/components/settings/move/use-move-rerun";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,7 +70,10 @@ import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-enviro
 import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environment-move-start-mutation";
 import { usePersonalForMoveQuery } from "@/hooks/environment/use-personal-for-move-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostQueryEntryHash,
+  useHostQueryWithResponseMap,
+} from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
@@ -105,6 +124,152 @@ export function MoveSheet(): ReactNode {
   );
 }
 
+interface MoveSourceRefusal {
+  readonly message: string;
+}
+
+interface MoveSourceRetry {
+  readonly refusal: MoveSourceRefusal;
+  readonly target:
+    | { readonly kind: "plan"; readonly queryHash: string }
+    | { readonly kind: "rerun"; readonly attemptId: string };
+  signal: AbortSignal | null;
+  answered: boolean;
+}
+
+function retryMatchesPlan(
+  retry: MoveSourceRetry,
+  queryHash: string,
+  attemptId: string | undefined,
+): boolean {
+  return retry.target.kind === "plan"
+    ? retry.target.queryHash === queryHash
+    : retry.target.attemptId === attemptId;
+}
+
+function committedSourceRetry(
+  retry: MoveSourceRetry,
+  manual: boolean | undefined,
+): boolean {
+  return retry.answered && retry.signal?.aborted === false && manual !== true;
+}
+
+function useMovePlan(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly environmentId: string | null;
+  readonly personalItems: EnvironmentMovePersonal | undefined;
+  readonly supported: boolean;
+  readonly rerun: MoveRerun;
+  readonly sourceRetry: RefObject<MoveSourceRetry | null>;
+}) {
+  const {
+    client,
+    environmentId,
+    personalItems,
+    supported,
+    rerun,
+    sourceRetry,
+  } = input;
+  const planRead = {
+    cacheKeyIdentity: rerun.planKey,
+    client,
+    method: "environment.move.plan",
+    params: {
+      target: { kind: "personal", environmentId: environmentId ?? "" },
+      personal: personalItems ?? null,
+    },
+  } as const;
+  const queryClient = useQueryClient();
+  const planQueryHash = useHostQueryEntryHash<
+    HostRpcRegistry,
+    "environment.move.plan"
+  >(planRead);
+  const retryAttemptId = rerun.planKey?.[0];
+  const plan = useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "environment.move.plan",
+    MovePlan,
+    MoveSourceRetry | null
+  >({
+    ...planRead,
+    captureRequestContext: (signal) => {
+      const retry = sourceRetry.current;
+      if (retry === null) return null;
+      if (!retryMatchesPlan(retry, planQueryHash, retryAttemptId)) return null;
+      retry.signal ??= signal;
+      return retry.signal === signal ? retry : null;
+    },
+    mapResponse: ({ response, requestContext, signal }) => {
+      if (
+        requestContext !== null &&
+        requestContext !== undefined &&
+        !signal.aborted
+      ) {
+        requestContext.answered = true;
+      }
+      return response;
+    },
+    options: {
+      enabled:
+        supported &&
+        environmentId !== null &&
+        personalItems !== undefined &&
+        rerun.planReadable,
+      refetchOnWindowFocus: false,
+      // Every opening reads the plan again, however recent the cached one.
+      staleTime: 0,
+    },
+  });
+  const [sourceRefusal, setSourceRefusal] = useState<MoveSourceRefusal | null>(
+    null,
+  );
+  // The tagged host response must commit to the query. Cancellation or a
+  // replacement fetch can leave earlier success in that same cache entry.
+  useLayoutEffect(
+    () =>
+      queryClient.getQueryCache().subscribe((event) => {
+        if (event.type !== "updated" || event.query.queryHash !== planQueryHash)
+          return;
+        const { action, query } = event;
+        if (
+          action.type === "error" &&
+          action.error instanceof HostRpcError &&
+          action.error.code === "E_MOVE_LOCAL_SOURCE_UNREAD"
+        ) {
+          setSourceRefusal(action.error);
+        }
+        const retry = sourceRetry.current;
+        if (retry === null) return;
+        if (
+          !retryMatchesPlan(retry, planQueryHash, retryAttemptId) ||
+          query.state.fetchStatus !== "idle"
+        ) {
+          return;
+        }
+        // Even an error before dispatch or a reverted cancellation uses up
+        // the Retry. Neither can pass permission to the next background read.
+        if (
+          retry.signal === null &&
+          action.type !== "error" &&
+          action.type !== "setState"
+        ) {
+          return;
+        }
+        sourceRetry.current = null;
+        if (
+          action.type === "success" &&
+          committedSourceRetry(retry, action.manual)
+        ) {
+          setSourceRefusal((current) =>
+            current === retry.refusal ? null : current,
+          );
+        }
+      }),
+    [queryClient, planQueryHash, retryAttemptId, sourceRetry],
+  );
+  return { plan, queryClient, planQueryHash, sourceRefusal, setSourceRefusal };
+}
+
 function MoveSheetBody(props: {
   readonly target: MoveSheetTarget;
   readonly onClose: () => void;
@@ -125,26 +290,22 @@ function MoveSheetBody(props: {
   // the person's own sign-in; the plan waits for that read.
   const personalRead = usePersonalForMoveQuery(supported === true);
   const personalItems = personalRead.data ?? null;
-  const rerun = useMoveRerun(client, target.hostId);
-  const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
-    cacheKeyIdentity: rerun.planKey,
-    client,
-    method: "environment.move.plan",
-    params: {
-      target: { kind: "personal", environmentId: personal.environmentId ?? "" },
-      personal: personalItems,
-    },
-    options: {
-      enabled:
-        supported === true &&
-        personal.environmentId !== null &&
-        personalRead.data !== undefined &&
-        rerun.planReadable,
-      refetchOnWindowFocus: false,
-      // Every opening reads the plan again, however recent the cached one.
-      staleTime: 0,
-    },
-  });
+  const sourceRetry = useRef<MoveSourceRetry | null>(null);
+  const forgetStoppedRetry = useCallback((attemptId: string) => {
+    const retry = sourceRetry.current;
+    if (retry?.target.kind === "rerun" && retry.target.attemptId === attemptId)
+      sourceRetry.current = null;
+  }, []);
+  const rerun = useMoveRerun(client, target.hostId, forgetStoppedRetry);
+  const { plan, queryClient, planQueryHash, sourceRefusal, setSourceRefusal } =
+    useMovePlan({
+      client,
+      environmentId: personal.environmentId,
+      personalItems: personalRead.data,
+      supported: supported === true,
+      rerun,
+      sourceRetry,
+    });
   // Held here, above the `Details` fold, so a choice made inside it outlives
   // the fold closing, and the fold's own state outlives a plan read again.
   const [choices, setChoices] = useState<MoveChoices>(() => new Map());
@@ -194,6 +355,10 @@ function MoveSheetBody(props: {
             setChoices(new Map());
             return;
           }
+          if (result.kind === "local_source_unread") {
+            setSourceRefusal(result);
+            return;
+          }
           if (result.kind === "not_awaiting") {
             setNotAwaiting(true);
             return;
@@ -211,13 +376,36 @@ function MoveSheetBody(props: {
   // Only this opening's answered read counts: the cache still holds the last
   // opening's plan or refusal while this one's read is out.
   const planAnswered = answeredThisOpening(plan);
-  const refusal = planRefusal(plan, planAnswered, rerun.stoppedAgain);
+  // Only Retry can make the plan usable again after a source refusal.
+  const refusal =
+    sourceRefusal?.message ??
+    planRefusal(plan, planAnswered, rerun.stoppedAgain);
   const retryPlan = (): void => {
     if (rerun.stopped && refusal !== null) {
-      rerun.rerun(refusal, () => {
+      rerun.rerun(refusal, (attemptId) => {
         setChoices(new Map());
         setNotAwaiting(false);
+        if (sourceRefusal !== null) {
+          sourceRetry.current = {
+            refusal: sourceRefusal,
+            target: { kind: "rerun", attemptId },
+            signal: null,
+            answered: false,
+          };
+        }
       });
+      return;
+    }
+    if (sourceRefusal !== null) {
+      const query = queryClient.getQueryCache().get(planQueryHash);
+      if (query?.state.fetchStatus !== "idle") return;
+      sourceRetry.current = {
+        refusal: sourceRefusal,
+        target: { kind: "plan", queryHash: planQueryHash },
+        signal: null,
+        answered: false,
+      };
+      void plan.refetch().catch(ignoreError);
       return;
     }
     if (personalRead.data !== null) {
@@ -269,7 +457,7 @@ function MoveSheetBody(props: {
         ) : null}
         <PlanRefusedLine
           refusal={refusal}
-          pending={rerun.pending}
+          pending={rerun.pending || (sourceRefusal !== null && plan.isFetching)}
           onRetry={retryPlan}
         />
         <HostListReadFailed running={runningPersonal} />

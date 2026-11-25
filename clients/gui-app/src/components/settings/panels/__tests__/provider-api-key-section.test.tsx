@@ -103,6 +103,7 @@ function UnscopedProviderApiKeySection(props: {
 }): ReactNode {
   return (
     <ProviderApiKeySection
+      hostId={null}
       {...props}
       expectedEnvironmentId={null}
       environmentName={null}
@@ -457,6 +458,7 @@ describe("ProviderApiKeySection custody sentence", () => {
     };
     const section = (
       <ProviderApiKeySection
+        hostId={null}
         state={state}
         draft=""
         onDraftChange={() => undefined}

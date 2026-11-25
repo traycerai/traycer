@@ -94,6 +94,7 @@ const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
 
 /** The family's methods that carry an `@1.1` MINOR over their `@1.0`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
+  "environment.proposals",
   "environment.agentDefinitions.put",
   "environment.agentDefinitions.delete",
   "environment.setup.put",

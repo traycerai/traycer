@@ -117,6 +117,53 @@ export function pendingUploadFixture(
   };
 }
 
+/** The attempt `status.move` names once authn's acceptance exists; `needs_person` is the one the person must act on, `done` the one that finished. */
+export function moveAttemptFixture(
+  state: "running" | "retry" | "needs_person" | "done",
+): NonNullable<EnvironmentStatusResponseV13["move"]> {
+  const ids = { attemptId: "attempt-1", acceptanceId: "acceptance-1" };
+  switch (state) {
+    case "running":
+      return { ...ids, state };
+    case "retry":
+      return { ...ids, state, cause: "unavailable" };
+    case "needs_person":
+      return { ...ids, state, reason: "plan_changed" };
+    case "done":
+      return { ...ids, state };
+  }
+}
+
+export const REGISTERING_SETUP = { stage: "registering", state: "running" };
+
+/** The moving settings stage's wait for the person: what the host's status says of it, with or without a record. */
+export const MOVING_SETTINGS_WINDOW_SETUP = {
+  stage: "moving_settings",
+  state: "awaiting_consent",
+};
+
+/**
+ * The setup a person's accepted move shows while authn has not bound this
+ * computer: the registering stage after a Retry or a restart. With
+ * `status.move` in `retry` or `running`, it is past the accept.
+ */
+export const ACCEPTED_MOVE_CASES = (["retry", "running"] as const).map(
+  (state) => ["registering", state, REGISTERING_SETUP] as const,
+);
+
+/** A personal computer whose planes still read local, serving `setup` and `move`. */
+export function unboundMoveStatusFixture(
+  setup: EnvironmentStatusResponseV13["setup"],
+  move: EnvironmentStatusResponseV13["move"],
+): EnvironmentStatusResponseV13 {
+  return environmentStatusFixture({
+    principal: { kind: "personal" },
+    planes: { records: "local", broker: "local", room: "local" },
+    setup,
+    move,
+  });
+}
+
 export function environmentStatusFixture(
   overrides: Partial<EnvironmentStatusResponseV13>,
 ): EnvironmentStatusResponseV13 {

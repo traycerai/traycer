@@ -41,6 +41,7 @@ import {
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { searchSettings } from "@/lib/settings-search/settings-search";
+import { everySectionShown } from "@/lib/settings-search/__tests__/every-section-shown";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 
 // The provider list is read through the watched host's scope; this page needs
@@ -832,7 +833,6 @@ describe("Settings - Layout", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });
@@ -871,7 +871,6 @@ describe("Settings - Layout", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });
@@ -906,7 +905,6 @@ describe("Settings - Layout", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });
@@ -968,7 +966,6 @@ describe("Settings - Layout", () => {
       openHistory: vi.fn(),
       close: vi.fn(),
       setSection: vi.fn(),
-      replaceOwnedSettingsRoute: vi.fn(),
       promoteToTab: vi.fn(),
       isOverlayActive: () => true,
     });
@@ -1259,16 +1256,20 @@ describe("Settings - Layout", () => {
     it.each(["vertical tabs", "side tabs"])(
       "finds Position when searching %s",
       (query) => {
-        const anchors = searchSettings(query, {
-          runnerHost: null,
-          featureSettings: null,
-          mobileApp: false,
-          phoneLayout: false,
-          soundtrackOffered: false,
-          soundtrackRecordingOffered: false,
-          soundtrackSetPiecesOffered: false,
-          soundtrackOn: false,
-        }).map((result) => result.entry.anchor);
+        const anchors = searchSettings(
+          query,
+          {
+            runnerHost: null,
+            featureSettings: null,
+            mobileApp: false,
+            phoneLayout: false,
+            soundtrackOffered: false,
+            soundtrackRecordingOffered: false,
+            soundtrackSetPiecesOffered: false,
+            soundtrackOn: false,
+          },
+          everySectionShown,
+        ).map((result) => result.entry.anchor);
 
         expect(anchors).toContain("layout-tab-strip-placement");
       },
@@ -1277,16 +1278,20 @@ describe("Settings - Layout", () => {
     it.each(["activity", "live agents", "needs you"])(
       "finds View when searching %s (D8)",
       (query) => {
-        const anchors = searchSettings(query, {
-          runnerHost: null,
-          featureSettings: null,
-          mobileApp: false,
-          phoneLayout: false,
-          soundtrackOffered: false,
-          soundtrackRecordingOffered: false,
-          soundtrackSetPiecesOffered: false,
-          soundtrackOn: false,
-        }).map((result) => result.entry.anchor);
+        const anchors = searchSettings(
+          query,
+          {
+            runnerHost: null,
+            featureSettings: null,
+            mobileApp: false,
+            phoneLayout: false,
+            soundtrackOffered: false,
+            soundtrackRecordingOffered: false,
+            soundtrackSetPiecesOffered: false,
+            soundtrackOn: false,
+          },
+          everySectionShown,
+        ).map((result) => result.entry.anchor);
 
         expect(anchors).toContain("layout-side-strip-view");
       },
@@ -1672,7 +1677,6 @@ describe("Settings - Layout", () => {
         openHistory: vi.fn(),
         close: vi.fn(),
         setSection: vi.fn(),
-        replaceOwnedSettingsRoute: vi.fn(),
         promoteToTab: vi.fn(),
         isOverlayActive: () => true,
       });

@@ -13,6 +13,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
+  type ProviderCliStateV1014,
 } from "@traycer/protocol/host/provider-schemas";
 import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -606,7 +607,9 @@ function ProvidersSettingsPanelInner({
       // host's. Gating on `ready` alone would hide the control in the ordinary
       // no-explicit-pick case.
       //
-      // The Secrets link does not read a host, so it stays up on every scope.
+      // The Secrets link reads no host and is offered under every pick and
+      // scope: the Secrets page answers for the pick in its own body.
+      //
       // The status DOES belong here and only on a usable scope: it reports a
       // max over every provider and refreshes all of them. Settings live in
       // the body (the Model list timeout is in each provider's CLI & Args).
@@ -630,17 +633,7 @@ function ProvidersSettingsPanelInner({
   );
 }
 
-/**
- * "All providers · Checked …" plus Refresh, for the panel heading row.
- *
- * Named for its SCOPE because that is what was unclear: `checkedAt` is a max
- * over every provider and Refresh re-probes all of them, which read as
- * per-provider when it sat at the card's top-right.
- *
- * Mounted only on a USABLE scope - see `headerAction` above. Its hooks resolve
- * `useHostClient()`, so on `connecting` / `unreachable` / `vanished` they would
- * resolve the ambient host instead of the one the page names.
- */
+/** The header's link to Secrets, whose page answers for the pick. */
 function OpenSecretsLink(): ReactNode {
   return (
     <Button
@@ -657,6 +650,17 @@ function OpenSecretsLink(): ReactNode {
   );
 }
 
+/**
+ * "All providers · Checked …" plus Refresh, for the panel heading row.
+ *
+ * Named for its SCOPE because that is what was unclear: `checkedAt` is a max
+ * over every provider and Refresh re-probes all of them, which read as
+ * per-provider when it sat at the card's top-right.
+ *
+ * Mounted only on a USABLE scope - see `headerAction` above. Its hooks resolve
+ * `useHostClient()`, so on `connecting` / `unreachable` / `vanished` they would
+ * resolve the ambient host instead of the one the page names.
+ */
 function ProvidersGlobalStatus(): ReactNode {
   // SUBSCRIBED, like the body's instance. `subscribed: false` was avoiding a
   // duplicate that does not exist - two observers of one key share a fetch -
@@ -1019,7 +1023,7 @@ function ProvidersRailLayout({
   hostId,
   isSelectedHostLocal,
 }: {
-  readonly providers: readonly ProviderCliState[];
+  readonly providers: readonly ProviderCliStateV1014[];
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
@@ -1428,7 +1432,7 @@ function ProviderDetail({
   initialSignIn,
   permissionsTab,
 }: {
-  readonly state: ProviderCliState;
+  readonly state: ProviderCliStateV1014;
   readonly providers: readonly ProviderCliState[];
   readonly activeTab: ProviderTabKey;
   readonly onActiveTabChange: (tab: ProviderTabKey) => void;
@@ -1903,7 +1907,7 @@ function ProviderTabBody({
   onActiveTabChange,
 }: {
   readonly tab: ProviderTabKey;
-  readonly state: ProviderCliState;
+  readonly state: ProviderCliStateV1014;
   readonly providers: readonly ProviderCliState[];
   readonly hostId: string | null;
   readonly detailPaneInert: boolean;
@@ -1955,6 +1959,7 @@ function ProviderTabBody({
         <CredentialsManagedInAccountOr>
           <ProviderApiKeySection
             state={state}
+            hostId={hostId}
             draft={apiKeyDraft}
             onDraftChange={onApiKeyDraftChange}
             expectedEnvironmentId={null}

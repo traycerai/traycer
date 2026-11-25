@@ -90,11 +90,16 @@ export function createAppQueryClient(): QueryClient {
         // The History fetcher's two admission refusals are terminal for the
         // same reason as each other: a retry would start another full
         // request-context wait, or re-ask a store that will refuse the
-        // withdrawn verdict again. A lasting refusal (signed out, no access, a
+        // withdrawn verdict again. A Move source refusal waits for Retry.
+        // A lasting refusal (signed out, no access, a
         // host that cannot serve the call) answers the same at once, so it
         // surfaces on its first answer too.
         retry: (failureCount, error) =>
           lastingHostRefusal(error) === null &&
+          !(
+            error instanceof HostRpcError &&
+            error.code === "E_MOVE_LOCAL_SOURCE_UNREAD"
+          ) &&
           !(error instanceof RetryableTransportError) &&
           !(error instanceof CloudEpicTasksRequestContextTimeoutError) &&
           !(error instanceof CloudEpicTasksVerdictWithdrawnError) &&

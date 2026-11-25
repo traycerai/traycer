@@ -11,7 +11,11 @@ import type {
   HostOwnerPrincipal,
 } from "@traycer/protocol/host/host-status";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
-import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  environmentStatusFixture,
+  moveAttemptFixture,
+  unboundMoveStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
 import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -325,6 +329,20 @@ describe("teamEpicPersonalNotice", () => {
     ).toBeNull();
     expect(teamEpicSettingsLine(null)).toBeNull();
   });
+
+  it.each(["running", "stalled", "failed"])(
+    "keeps naming the computer's own settings while applying is %s with the move's record open",
+    (state) => {
+      expect(
+        teamEpicSettingsLine(
+          unboundMoveStatusFixture(
+            { stage: "applying", state },
+            moveAttemptFixture("retry"),
+          ),
+        ),
+      ).toBe("Running on this computer's own settings.");
+    },
+  );
 });
 
 describe("<TeamEpicPersonalLine />", () => {

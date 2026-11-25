@@ -28,6 +28,9 @@ import {
 import { OwnEnvironmentAuthProvider } from "@/hooks/environment/__tests__/own-environment-auth-provider";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { resetEnvironmentSectionReads } from "@/components/settings/__tests__/environment-section-reads-fixture";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
@@ -81,6 +84,33 @@ vi.mock("@/components/settings/move/this-computer", () => ({
 vi.mock("@/components/settings/move/use-this-computers-move", () => ({
   useThisComputersMove: () => "unknown",
 }));
+// The secret card is offered only where the default pick's page is served,
+// which reads the window's host through one scope and whether it runs
+// Personal: the shared fixtures answer both with the cloud road, so these
+// cases stay about the authn read.
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).personalHostScopeModule,
+);
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).windowHostRunsPersonalModule,
+);
+// The default is the one each case seeds for this window's null host: the
+// dropdown's upkeep would resolve it again from the fixture scope's own host.
+vi.mock(
+  "@/components/settings/environment/use-environment-picker-model",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).seededPickerModelModule,
+);
 
 const authnHostRecord = authnHostRowFixture({
   hostId: HOST_ID,
@@ -224,6 +254,11 @@ beforeEach(async () => {
   runtime = createOwnEnvironmentAuthRuntime();
   await signInOwnEnvironment(runtime);
   useAuthStore.setState({ shareableTeams: [] });
+  useSettingsEnvironmentPickStore.setState({
+    ...useSettingsEnvironmentPickStore.getInitialState(),
+    defaultPick: PERSONAL_PICK,
+    defaultHostId: null,
+  });
 });
 
 afterEach(() => {
@@ -233,6 +268,10 @@ afterEach(() => {
   hostBoundary.client = null;
   useAuthStore.setState({ status: "signed-out" });
   resetNegotiatedManifests();
+  resetEnvironmentSectionReads();
+  useSettingsEnvironmentPickStore.setState(
+    useSettingsEnvironmentPickStore.getInitialState(),
+  );
 });
 
 describe("the Guide's secret card through authn", () => {

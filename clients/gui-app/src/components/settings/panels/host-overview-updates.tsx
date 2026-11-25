@@ -344,7 +344,10 @@ function answerCardActions(answer: HostOverviewVersionAnswer): ReactNode {
 
 /** The header's Update now control, using the answer card's installation gate. */
 export function HostOverviewUpdateAction(
-  answer: HostOverviewVersionAnswer,
+  answer: Pick<
+    HostOverviewVersionAnswer,
+    "summary" | "degrade" | "foregroundUpdateLine"
+  >,
   inFlight: boolean,
   inMenu: boolean,
 ): ReactNode {

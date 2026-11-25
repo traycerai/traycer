@@ -6,6 +6,7 @@ import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import {
   isSettingsSectionVisible,
+  OPENED_IN_PLACE_SECTION_IDS,
   RETIRED_SECTION_REPLACEMENTS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
@@ -35,12 +36,14 @@ import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
+import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { CreditsSettingsPanel } from "@/components/settings/panels/credits-settings-panel";
 import { SandboxesSettingsPanel } from "@/components/settings/environment/sandboxes-page-slot";
 import { EnvironmentPickUpkeep } from "@/components/settings/environment-picker";
 import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
+import { PageOrNotOnComputer } from "@/components/settings/environment/page-not-on-computer";
 import { StorageSettingsPanel } from "@/components/settings/environment/storage-settings-panel";
 import { MembersSettingsPanel } from "@/components/settings/environment/members-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -68,9 +71,11 @@ export function SettingsModalContent(
 ): ReactNode {
   const { setSection } = useSystemTabModalActions();
   const requested: SettingsSectionId = props.section ?? "general";
-  const section: SettingsSectionId = isSettingsSectionVisible(requested)
-    ? requested
-    : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
+  const section: SettingsSectionId =
+    isSettingsSectionVisible(requested) ||
+    OPENED_IN_PLACE_SECTION_IDS.has(requested)
+      ? requested
+      : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
   return (
     <SettingsDensityContext.Provider value="compact">
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -107,9 +112,9 @@ const SETTINGS_PANELS = {
   "getting-started": GettingStartedSettingsPanel,
   general: GeneralSettingsPanel,
   browser: BrowserSettingsPanel,
-  // Retired: `SettingsModalContent` opens their replacement instead
-  // (`RETIRED_SECTION_REPLACEMENTS`), as their routes redirect there.
-  "browser-agent-access": PermissionsSettingsPanel,
+  // Opened in place by a remembered section or an old link
+  // (`OPENED_IN_PLACE_SECTION_IDS`), though navigation no longer offers it.
+  "browser-agent-access": BrowserAgentAccessSettingsPanel,
   appearance: AppearanceSettingsPanel,
   layout: LayoutSettingsPanel,
   "opening-behavior": OpeningBehaviorPanel,
@@ -143,6 +148,11 @@ const SETTINGS_PANELS = {
   members: MembersSettingsPanel,
 } satisfies Record<SettingsSectionId, () => ReactNode>;
 
+/**
+ * The one place every road to a page ends: a link, the palette, search, a
+ * deep link, a remembered route, the default pick and a pick change all render
+ * `section` here, and its body answers for the pick (`useSectionAnswer`).
+ */
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
@@ -156,12 +166,14 @@ export function SettingsPanelForSection(props: {
   return (
     <SettingsSectionContext value={section}>
       <EnvironmentPickUpkeep />
-      {/* Outside the frame: a Local pick's offer page reads no configuration. */}
-      <LocalMovePageOr section={section}>
-        <PersonalPageFrame section={section}>
-          <Panel />
-        </PersonalPageFrame>
-      </LocalMovePageOr>
+      <PageOrNotOnComputer section={section}>
+        {/* Outside the frame: a Local pick's offer page reads no configuration. */}
+        <LocalMovePageOr section={section}>
+          <PersonalPageFrame section={section}>
+            <Panel />
+          </PersonalPageFrame>
+        </LocalMovePageOr>
+      </PageOrNotOnComputer>
     </SettingsSectionContext>
   );
 }

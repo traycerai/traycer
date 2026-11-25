@@ -120,6 +120,9 @@ export const RPC_ERROR_CODES = [
   // No move waiting, or the request names another target. The app draws its own
   // line, so no message text is contract. Same additive degrade as E_INVALID_ARGUMENT.
   "E_MOVE_NOT_AWAITING",
+  // The computer could not read its settings while previewing or staging a Move.
+  // Older peers keep the existing 503 message under RPC_ERROR.
+  "E_MOVE_LOCAL_SOURCE_UNREAD",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may
   // retry with the SAME key once capacity returns. This meaning is part of the

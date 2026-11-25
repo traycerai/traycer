@@ -423,6 +423,7 @@ vi.mock(
             expectedEnvironmentId,
             readApiKey,
             clearApiKeyInput,
+            undefined,
           );
         return {
           mutate: (variables: { readonly providerId: string }) => {

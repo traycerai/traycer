@@ -4,6 +4,7 @@ import { ExternalLink } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
+  type ProviderCliStateV1014,
 } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,9 @@ import { takeProviderApiKeyInput } from "@/hooks/providers/provider-api-key-inpu
 import { useProvidersClearApiKey } from "@/hooks/providers/use-providers-clear-api-key-mutation";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
+import { isProviderKeyRecordDraft } from "@traycer-clients/shared/host-client/provider-api-key-change";
 import { useOpenLink } from "@/lib/links/open-link";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 import {
@@ -123,12 +127,14 @@ function apiKeyRowRefusal(
 // switch, which remounts it by `key`.
 export function ProviderApiKeySection({
   state,
+  hostId,
   draft,
   onDraftChange,
   expectedEnvironmentId,
   environmentName,
 }: {
-  readonly state: ProviderCliState;
+  readonly state: ProviderCliStateV1014;
+  readonly hostId: string | null;
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
   readonly expectedEnvironmentId: string | null;
@@ -142,8 +148,15 @@ export function ProviderApiKeySection({
     () => {
       sentApiKey.current = null;
     },
+    "account-save",
   );
   const clearApiKey = useProvidersClearApiKey(expectedEnvironmentId);
+  const keptKey = state.apiKeyKeptLocally === true;
+  const { canSave, canShare, canClear } = useProviderApiKeyCapabilities(
+    hostId,
+    keptKey,
+    state.apiKey.source,
+  );
   const openLink = useOpenLink();
   // A sandbox never takes a key: the field is disabled and the save is never
   // sent. Clearing a stored key sends nothing secret, so it stays.
@@ -155,22 +168,62 @@ export function ProviderApiKeySection({
   );
   const hostName = usePersonalHostName() ?? "this computer";
 
+  const recordEnvironmentId = state.apiKey.recordEnvironmentId ?? null;
   if (!state.apiKey.supported) return null;
 
   const providerId = state.providerId;
   const dashboardUrl = API_KEY_DASHBOARD_URL[providerId];
   const keyRefusal = providerApiKeyRefusal(providerId, draft);
   const displayedRefusal = apiKeyRowRefusal(state, draft, keyRefusal);
-  const saveDisabled =
-    setApiKey.isPending ||
-    draft.trim().length === 0 ||
-    credentialRefusal !== null ||
-    keyRefusal !== null;
-  const onSave = (): void => {
+  const trimmedDraft = draft.trim();
+  const saveDisabled = isProviderApiKeySaveDisabled({
+    keptKey,
+    trimmedDraft,
+    setPending: setApiKey.isPending,
+    clearPending: clearApiKey.isPending,
+    hasCredentialRefusal: credentialRefusal !== null,
+    hasKeyRefusal: keyRefusal !== null,
+  });
+  const onSave = (
+    intent: "save" | "share",
+    environmentId: string | null,
+  ): void => {
     if (saveDisabled) return;
-    sentApiKey.current = draft.trim();
-    setApiKey.mutate({ providerId }, { onSuccess: () => onDraftChange("") });
+    const options = { onSuccess: () => onDraftChange("") };
+    if (intent === "share") {
+      if (!canShare) return;
+      sentApiKey.current = trimmedDraft;
+      setApiKey.mutate(
+        {
+          providerId,
+          intent,
+          environmentId,
+        },
+        options,
+      );
+      return;
+    }
+    if (!canSave) return;
+    sentApiKey.current = trimmedDraft;
+    setApiKey.mutate(
+      keptKey ? { providerId, intent: "keep" } : { providerId },
+      options,
+    );
   };
+  const sharing = setApiKey.isPending && setApiKey.variables.intent === "share";
+  const clearDisabled =
+    clearApiKey.isPending || (keptKey && setApiKey.isPending);
+  const shareButton = (environmentId: string | null): ReactNode => (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={() => onSave("share", environmentId)}
+      disabled={saveDisabled}
+    >
+      {sharing ? <MutedAgentSpinner /> : null}
+      Use everywhere
+    </Button>
+  );
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-3">
@@ -198,46 +251,43 @@ export function ProviderApiKeySection({
         </button>
       )}
       <div className="flex items-center gap-2">
-        <Input
-          id={inputId}
-          type="password"
-          autoComplete="off"
-          className="w-full"
-          placeholder={
-            state.apiKey.source === "stored"
-              ? "Replace stored key…"
-              : `Paste your ${PROVIDER_DISPLAY_NAMES[providerId]} API key`
-          }
-          value={draft}
-          onChange={(e) => onDraftChange(e.target.value)}
+        <ProviderApiKeyField
+          inputId={inputId}
+          providerId={providerId}
+          source={state.apiKey.source}
+          draft={draft}
+          onDraftChange={onDraftChange}
           disabled={setApiKey.isPending || credentialRefusal !== null}
-          aria-invalid={displayedRefusal !== null}
-          aria-describedby={
-            displayedRefusal === null ? undefined : `${inputId}-refusal`
-          }
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onSave();
-          }}
-          font="mono"
-          size="sm"
+          displayedRefusal={displayedRefusal}
+          onSave={() => onSave("save", null)}
         />
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={onSave}
-          disabled={saveDisabled}
-        >
-          {setApiKey.isPending ? <MutedAgentSpinner /> : null}
-          Save
-        </Button>
-        {state.apiKey.source === "stored" ? (
+        {canSave ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => onSave("save", null)}
+            disabled={saveDisabled}
+          >
+            {setApiKey.isPending && !sharing ? <MutedAgentSpinner /> : null}
+            Save
+          </Button>
+        ) : null}
+        <ProviderApiKeyShareAction
+          canShare={canShare}
+          recordEnvironmentId={recordEnvironmentId}
+          renderButton={shareButton}
+        />
+        {canClear ? (
           <Button
             size="sm"
             variant="ghost"
             onClick={() => {
-              if (!clearApiKey.isPending) clearApiKey.mutate({ providerId });
+              if (clearDisabled) return;
+              clearApiKey.mutate(
+                keptKey ? { providerId, usePersonal: true } : { providerId },
+              );
             }}
-            disabled={clearApiKey.isPending}
+            disabled={clearDisabled}
           >
             {clearApiKey.isPending ? <MutedAgentSpinner /> : null}
             Clear
@@ -253,17 +303,153 @@ export function ProviderApiKeySection({
         {displayedRefusal}
       </p>
       <CredentialRefusalNote refusal={credentialRefusal} />
-      <ApiKeySourceLines
-        providerId={providerId}
-        fromShell={state.apiKey.source === "env"}
-        personalSecret={personalSecret}
-        hostName={hostName}
-        principal={principal}
-        recordEnvironmentId={state.apiKey.recordEnvironmentId ?? null}
-        environmentName={environmentName}
-      />
+      {keptKey ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {`${hostName} uses: ••••••••`}
+        </p>
+      ) : (
+        <ApiKeySourceLines
+          providerId={providerId}
+          fromShell={state.apiKey.source === "env"}
+          personalSecret={personalSecret}
+          hostName={hostName}
+          principal={principal}
+          recordEnvironmentId={recordEnvironmentId}
+          environmentName={environmentName}
+        />
+      )}
     </div>
   );
+}
+
+function useProviderApiKeyCapabilities(
+  hostId: string | null,
+  keptKey: boolean,
+  source: ProviderCliState["apiKey"]["source"],
+) {
+  const supportsClearKeptApiKey = useHostSupportsMethod(
+    hostId,
+    "providers.clearKeptApiKey",
+  );
+  const supportsSetKeptApiKey = useHostSupportsMethod(
+    hostId,
+    "providers.setKeptApiKey",
+  );
+  const supportsBeginApiKeyChange = useHostSupportsMethod(
+    hostId,
+    "providers.beginApiKeyChange",
+  );
+  const supportsSettleApiKeyChange = useHostSupportsMethod(
+    hostId,
+    "providers.settleApiKeyChange",
+  );
+  return {
+    canSave: !keptKey || supportsSetKeptApiKey,
+    canShare:
+      keptKey &&
+      supportsSetKeptApiKey &&
+      supportsBeginApiKeyChange &&
+      supportsSettleApiKeyChange,
+    canClear: keptKey ? supportsClearKeptApiKey : source === "stored",
+  };
+}
+
+function isProviderApiKeySaveDisabled({
+  keptKey,
+  trimmedDraft,
+  setPending,
+  clearPending,
+  hasCredentialRefusal,
+  hasKeyRefusal,
+}: {
+  readonly keptKey: boolean;
+  readonly trimmedDraft: string;
+  readonly setPending: boolean;
+  readonly clearPending: boolean;
+  readonly hasCredentialRefusal: boolean;
+  readonly hasKeyRefusal: boolean;
+}): boolean {
+  return (
+    setPending ||
+    (keptKey && clearPending) ||
+    trimmedDraft.length === 0 ||
+    (keptKey && !isProviderKeyRecordDraft(trimmedDraft)) ||
+    hasCredentialRefusal ||
+    hasKeyRefusal
+  );
+}
+
+function ProviderApiKeyField({
+  inputId,
+  providerId,
+  source,
+  draft,
+  onDraftChange,
+  disabled,
+  displayedRefusal,
+  onSave,
+}: {
+  readonly inputId: string;
+  readonly providerId: ProviderId;
+  readonly source: ProviderCliState["apiKey"]["source"];
+  readonly draft: string;
+  readonly onDraftChange: (draft: string) => void;
+  readonly disabled: boolean;
+  readonly displayedRefusal: string | null;
+  readonly onSave: () => void;
+}): ReactNode {
+  return (
+    <Input
+      id={inputId}
+      type="password"
+      autoComplete="off"
+      className="w-full"
+      placeholder={
+        source === "stored"
+          ? "Replace stored key…"
+          : `Paste your ${PROVIDER_DISPLAY_NAMES[providerId]} API key`
+      }
+      value={draft}
+      onChange={(e) => onDraftChange(e.target.value)}
+      disabled={disabled}
+      aria-invalid={displayedRefusal !== null}
+      aria-describedby={
+        displayedRefusal === null ? undefined : `${inputId}-refusal`
+      }
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onSave();
+      }}
+      font="mono"
+      size="sm"
+    />
+  );
+}
+
+function ProviderApiKeyShareAction({
+  canShare,
+  recordEnvironmentId,
+  renderButton,
+}: {
+  readonly canShare: boolean;
+  readonly recordEnvironmentId: string | null;
+  readonly renderButton: (environmentId: string | null) => ReactNode;
+}): ReactNode {
+  if (!canShare) return null;
+  if (recordEnvironmentId !== null) return renderButton(recordEnvironmentId);
+  return (
+    <ShareProviderApiKeyWithPersonalTarget>
+      {renderButton}
+    </ShareProviderApiKeyWithPersonalTarget>
+  );
+}
+
+function ShareProviderApiKeyWithPersonalTarget({
+  children,
+}: {
+  readonly children: (environmentId: string | null) => ReactNode;
+}): ReactNode {
+  const { environmentId } = usePersonalEnvironment(true);
+  return children(environmentId);
 }
 
 /** Under the key field, where the key comes from and where a saved one is kept. */

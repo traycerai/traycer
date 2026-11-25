@@ -2836,6 +2836,23 @@ export const providersListResponseSchema = lazySchema(() =>
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
 
+/** This host sends a positive marker for a provider whose key it keeps locally. */
+export const providerCliStateSchemaV1014 = lazySchema(() =>
+  providersListResponseSchema.shape.providers.element.extend({
+    apiKeyKeptLocally: z.literal(true).optional(),
+  }),
+);
+export type ProviderCliStateV1014 = z.infer<typeof providerCliStateSchemaV1014>;
+
+export const providersListResponseSchemaV1014 = lazySchema(() =>
+  providersListResponseSchema.extend({
+    providers: z.array(providerCliStateSchemaV1014),
+  }),
+);
+export type ProvidersListResponseV1014 = z.infer<
+  typeof providersListResponseSchemaV1014
+>;
+
 /**
  * Frozen `providers.list@10.7` response: the live envelope over the 10.7 row
  * (`providerCliStateSchemaV107`), before 10.8 added the native-memory pair.
@@ -4056,8 +4073,13 @@ export const providersSetEnvOverrideResponseSchemaV10 = lazySchema(() =>
     state: providerCliStateSchemaV10,
   }),
 );
+export const providersSetEnvOverrideResponseSchemaV23 = lazySchema(() =>
+  providersSetEnvOverrideResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
 export type ProvidersSetEnvOverrideResponse = z.infer<
-  typeof providersSetEnvOverrideResponseSchema
+  typeof providersSetEnvOverrideResponseSchemaV23
 >;
 
 export const providersDeleteEnvOverrideRequestSchema = lazySchema(() =>
@@ -4091,8 +4113,13 @@ export const providersDeleteEnvOverrideResponseSchemaV10 = lazySchema(() =>
     state: providerCliStateSchemaV10,
   }),
 );
+export const providersDeleteEnvOverrideResponseSchemaV22 = lazySchema(() =>
+  providersDeleteEnvOverrideResponseSchema.extend({
+    savedLocally: z.literal(true).optional(),
+  }),
+);
 export type ProvidersDeleteEnvOverrideResponse = z.infer<
-  typeof providersDeleteEnvOverrideResponseSchema
+  typeof providersDeleteEnvOverrideResponseSchemaV22
 >;
 
 export const providersDetectVersionRequestSchema = lazySchema(() =>

@@ -41,8 +41,7 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
-import { environmentSectionShown } from "@/lib/settings-environment-pages";
-import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useEnvironmentSectionShown } from "@/components/settings/environment/use-environment-section-shown";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -75,6 +74,27 @@ export interface SettingsSidebarProps {
  * `settings-sections.ts` for the grouping itself.
  */
 export function SettingsSidebar(props: SettingsSidebarProps) {
+  // The modal holds its section and reads no route: it is not always mounted
+  // under a router, so only the routed tab asks the route which row it holds.
+  return props.mode.kind === "modal" ? (
+    <SettingsSidebarBody {...props} heldSection={props.mode.activeSection} />
+  ) : (
+    <RoutedSettingsSidebar {...props} />
+  );
+}
+
+function RoutedSettingsSidebar(props: SettingsSidebarProps) {
+  const routedSection = useRoutedSectionId();
+  return <SettingsSidebarBody {...props} heldSection={routedSection} />;
+}
+
+function SettingsSidebarBody(
+  props: SettingsSidebarProps & {
+    /** The row the rail highlights: the section the surface holds. */
+    readonly heldSection: SettingsSectionId | null;
+  },
+) {
+  const { heldSection } = props;
   const scope = useHostScope();
   const globalScope = useHostScopeFor(WINDOW_HOST_SELECTION);
   // Read here, not in the search component, because a running search REPLACES
@@ -92,8 +112,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // `switchToSettingsSection` walks this list to resolve that digit back to a
   // section.
   const sections = visibleSettingsSections();
-  // A Local row hides the pages only a cloud configuration has.
-  const environmentPick = useEnvironmentPick();
+  // The kind of pick decides the Environment rows, and nothing a host answers
+  // does, so the rail keeps its shape while a handshake is pending.
+  const environmentSectionShown = useEnvironmentSectionShown(globalScope);
   // The Guide group leaves the rail once every Getting started step is done.
   const guideComplete = useGettingStartedGuideIsComplete();
   const groups = guideComplete
@@ -123,7 +144,11 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
       )}
     >
       <SidebarArtwork />
-      <SettingsSearch query={query} onQueryChange={setQuery} />
+      <SettingsSearch
+        query={query}
+        onQueryChange={setQuery}
+        sectionShown={environmentSectionShown}
+      />
       {/* The results took this space. Keeping the section list under them
           would put two competing lists in one column, and the top one already
           names the section every row belongs to. */}
@@ -140,10 +165,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 />
               ) : null}
               {group.id === "personal" ? (
-                <SettingsSidebarEnvironmentPicker
-                  scope={globalScope}
-                  mode={props.mode}
-                />
+                <div className="mb-1 px-1">
+                  <EnvironmentPicker scope={globalScope} />
+                </div>
               ) : null}
               {group.id === "host" ? (
                 <SettingsSidebarHostPicker
@@ -164,11 +188,12 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 {sections.map((section, index) =>
                   section.group === group.id &&
                   (group.id !== "personal" ||
-                    environmentSectionShown(environmentPick, section.id)) ? (
+                    environmentSectionShown(section.id)) ? (
                     <SettingsSidebarItem
                       key={section.id}
                       section={section}
                       index={index}
+                      active={heldSection === section.id}
                       mode={props.mode}
                       variant={props.variant}
                     />
@@ -186,39 +211,13 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   );
 }
 
-/**
- * The Environment dropdown, between the "Environment" heading and the pages
- * it governs. The section on screen comes from the mode: the modal names it,
- * the routed surface has it in its path.
- */
-function SettingsSidebarEnvironmentPicker(props: {
-  readonly scope: HostScope;
-  readonly mode: SettingsSidebarMode;
-}): ReactNode {
-  return (
-    <div className="mb-1 px-1">
-      {props.mode.kind === "modal" ? (
-        <EnvironmentPicker
-          scope={props.scope}
-          activeSection={props.mode.activeSection}
-        />
-      ) : (
-        <RoutedEnvironmentPicker scope={props.scope} />
-      )}
-    </div>
-  );
-}
-
-function RoutedEnvironmentPicker(props: {
-  readonly scope: HostScope;
-}): ReactNode {
+/** The offered section the route names, or `null` off every one. */
+function useRoutedSectionId(): SettingsSectionId | null {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const activeSection =
+  return (
     visibleSettingsSections().find((section) =>
       isSectionPathname(pathname, section.id),
-    )?.id ?? null;
-  return (
-    <EnvironmentPicker scope={props.scope} activeSection={activeSection} />
+    )?.id ?? null
   );
 }
 
@@ -345,12 +344,13 @@ function SettingsSidebarGroupHeader(props: {
 interface SettingsSidebarItemProps {
   section: SettingsSection;
   index: number;
+  active: boolean;
   mode: SettingsSidebarMode;
   variant: SettingsSidebarVariant;
 }
 
 function SettingsSidebarItem(props: SettingsSidebarItemProps) {
-  const { section, index, mode, variant } = props;
+  const { section, index, active, mode, variant } = props;
   const badgeModifier = useSettingsLeaderModifierForIndex(index);
   const Icon = section.icon;
   const digit = singleDigitLeaderDigitFor(index);
@@ -383,7 +383,6 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
     <span className="min-w-0 flex-1 truncate">{section.label}</span>
   );
   if (mode.kind === "modal") {
-    const active = mode.activeSection === section.id;
     return (
       <button
         type="button"
@@ -420,21 +419,21 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
       badge={badge}
       baseClass={baseClass}
       variant={variant}
+      active={active}
     />
   );
 }
 
 function SettingsSidebarRouteItem(props: {
   readonly section: SettingsSection;
+  readonly active: boolean;
   readonly label: ReactNode;
   readonly badge: ReactNode;
   readonly baseClass: string;
   readonly variant: SettingsSidebarVariant;
 }) {
-  const { section, label, badge, baseClass, variant } = props;
+  const { section, active, label, badge, baseClass, variant } = props;
   const Icon = section.icon;
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const active = isSectionPathname(pathname, section.id);
   // The rail replaces: its sections are peers on one screen, and back should
   // leave settings, not replay every section clicked. The mobile list pushes:
   // there a section is a full-screen drill-down BELOW the list, and a replace

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -8,7 +8,13 @@ import {
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { ConfigShellProbeResponse } from "@traycer/protocol/host/config/index";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostQuery,
+  useHostQueryEntryHash,
+} from "@/hooks/host/use-host-query";
+import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import type { EnvironmentLocalOverridesResponse } from "@traycer/protocol/host/environment-schemas";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { configMutationKeys, queryKeys } from "@/lib/query-keys";
 import type {
@@ -60,6 +66,9 @@ interface PressedEnvRename {
 const SHELL_LIST_STALE_MS = Number.POSITIVE_INFINITY;
 
 const SAVED_KINDS = ["shell", "variable"] as const;
+const CLEAR_LOCAL_OVERRIDE = "config.env.localOverride.clear";
+const READ_LOCAL_OVERRIDES = "environment.localOverrides" as const;
+const REMOVE_VARIABLE_ERROR = "Couldn't remove the variable";
 
 /**
  * The Shell panel over the selected host's own config RPC.
@@ -116,6 +125,15 @@ export function useRpcShellConfigController(props: {
     params: {},
     options: { enabled: props.enabled },
   });
+
+  const {
+    clearSupport,
+    legacyDelete,
+    canReadKeptVariables,
+    localOverrideQueryHash,
+    keptOverrides,
+    envDeleteDisabled,
+  } = useVariableRemoveAuthority(client, hostId, props.enabled);
 
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
 
@@ -211,11 +229,11 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
-      proposes: everyAnswerProposes,
+      proposes: (answer) => answer.savedLocally !== true,
     },
     mutationKey: configMutationKeys.envSet(),
     errorMessage: "Couldn't save the variable",
-    invalidateMethods: ["config.env.list"],
+    invalidateMethods: ["config.env.list", "environment.localOverrides"],
   });
   const envDeleteMutation = useHostScopedMutationForClient(client, {
     method: "config.env.delete",
@@ -227,11 +245,18 @@ export function useRpcShellConfigController(props: {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
-      proposes: everyAnswerProposes,
+      proposes: (answer) => answer.savedLocally !== true,
     },
     mutationKey: configMutationKeys.envDelete(),
-    errorMessage: "Couldn't remove the variable",
-    invalidateMethods: ["config.env.list"],
+    errorMessage: REMOVE_VARIABLE_ERROR,
+    invalidateMethods: ["config.env.list", "environment.localOverrides"],
+  });
+  const clearLocalOverride = useHostScopedMutationForClient(client, {
+    method: CLEAR_LOCAL_OVERRIDE,
+    mutationKey: [CLEAR_LOCAL_OVERRIDE],
+    errorMessage: REMOVE_VARIABLE_ERROR,
+    scope: { id: "config.env.localOverride" },
+    invalidateMethods: ["config.env.list", READ_LOCAL_OVERRIDES],
   });
 
   // Both host writes use one press's editor, sign-in classification and client.
@@ -279,7 +304,7 @@ export function useRpcShellConfigController(props: {
               set,
               requestId,
             ),
-          everyAnswerProposes,
+          (answer) => answer.savedLocally !== true,
         );
         if (rename.oldKey.length === 0) return;
         const remove = { key: rename.oldKey };
@@ -292,7 +317,7 @@ export function useRpcShellConfigController(props: {
               remove,
               requestId,
             ),
-          everyAnswerProposes,
+          (answer) => answer.savedLocally !== true,
         );
       },
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
@@ -304,6 +329,12 @@ export function useRpcShellConfigController(props: {
         if (hostId === null) return;
         void queryClient.invalidateQueries({
           queryKey: queryKeys.hostMethodScope(hostId, "config.env.list"),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.hostMethodScope(
+            hostId,
+            "environment.localOverrides",
+          ),
         });
       },
       onError: (error) => {
@@ -344,6 +375,58 @@ export function useRpcShellConfigController(props: {
     onError: callbacks.onError,
   });
 
+  const removeKeptVariable = (
+    key: string,
+    callbacks: ShellCommandCallbacks,
+  ): void => {
+    clearLocalOverride.mutate(
+      { target: { kind: "variable", key } },
+      {
+        onSuccess: (answer) => {
+          if (answer.outcome !== "saved") {
+            callbacks.onError(new Error(REMOVE_VARIABLE_ERROR));
+            return;
+          }
+          void Promise.all([
+            waitForShellEnvRead(
+              queryClient,
+              queryKeys.hostMethodScope(hostId, "config.env.list"),
+            ),
+            waitForShellEnvRead(
+              queryClient,
+              queryKeys.hostMethodScope(hostId, READ_LOCAL_OVERRIDES),
+            ),
+          ]).then(callbacks.onSuccess, callbacks.onError);
+        },
+        onError: callbacks.onError,
+      },
+    );
+  };
+
+  const deleteEnv = (key: string, callbacks: ShellCommandCallbacks): void => {
+    // A read can be invalidated between painting the button and the press.
+    const state = queryClient
+      .getQueryCache()
+      .get<EnvironmentLocalOverridesResponse>(localOverrideQueryHash)?.state;
+    if (
+      !legacyDelete &&
+      (!canReadKeptVariables ||
+        state?.status !== "success" ||
+        state.fetchStatus !== "idle" ||
+        state.isInvalidated ||
+        state.data === undefined)
+    ) {
+      callbacks.onError(new Error(REMOVE_VARIABLE_ERROR));
+      return;
+    }
+    if (keepsVariable(state?.data?.overrides ?? keptOverrides, key)) {
+      if (clearSupport === true) removeKeptVariable(key, callbacks);
+      else callbacks.onError(new Error(REMOVE_VARIABLE_ERROR));
+      return;
+    }
+    envDeleteMutation.mutate({ key }, afterEnvRead(callbacks));
+  };
+
   return {
     config: configQuery.data,
     configError: configQuery.error ?? envListQuery.error,
@@ -367,9 +450,15 @@ export function useRpcShellConfigController(props: {
     envPending:
       envListQuery.data === undefined ||
       envListQuery.isError ||
-      envSetMutation.isPending ||
-      envDeleteMutation.isPending ||
-      envRenameMutation.isPending,
+      [
+        envSetMutation,
+        envDeleteMutation,
+        clearLocalOverride,
+        envRenameMutation,
+      ].some(({ isPending }) => isPending),
+    envDeleteDisabled,
+    canRemoveEnv: (key) =>
+      clearSupport !== false || !keepsVariable(keptOverrides, key),
     probeSource,
     setShell: (request, callbacks) =>
       setMutation.mutate(
@@ -406,14 +495,72 @@ export function useRpcShellConfigController(props: {
       ),
     setEnv: (entry, callbacks) =>
       envSetMutation.mutate(entry, afterEnvRead(callbacks)),
-    setEnvAsync: async (entry) => {
-      await envSetMutation.mutateAsync(entry);
-    },
-    deleteEnv: (key, callbacks) =>
-      envDeleteMutation.mutate({ key }, afterEnvRead(callbacks)),
+    setEnvAsync: (entry) => envSetMutation.mutateAsync(entry),
+    deleteEnv,
     renameEnv: (rename, callbacks) =>
       envRenameMutation.mutate(rename, afterEnvRead(callbacks)),
   };
+}
+
+function useVariableRemoveAuthority(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  enabled: boolean,
+) {
+  const clearSupport = useHostMethodSupport(hostId, CLEAR_LOCAL_OVERRIDE);
+  const localOverridesSupport = useHostMethodSupport(
+    hostId,
+    READ_LOCAL_OVERRIDES,
+  );
+  const personalPage = useContext(PersonalPageContext);
+  const localOverrideArgs = {
+    cacheKeyIdentity: undefined,
+    client,
+    method: READ_LOCAL_OVERRIDES,
+    params: {},
+  };
+  const legacyDelete =
+    clearSupport === false && localOverridesSupport === false;
+  const canReadKeptVariables =
+    clearSupport !== null && localOverridesSupport === true;
+  const localOverrideQuery = useHostQuery<
+    HostRpcRegistry,
+    typeof READ_LOCAL_OVERRIDES
+  >({
+    ...localOverrideArgs,
+    options: { enabled: enabled && localOverridesSupport === true },
+  });
+  const localOverrideQueryHash = useHostQueryEntryHash(localOverrideArgs);
+  const keptOverrides =
+    localOverrideQuery.data?.overrides ??
+    (personalPage?.hostId === hostId ? personalPage.localOverrides : undefined);
+  const envDeleteDisabled =
+    !legacyDelete &&
+    (!canReadKeptVariables ||
+      !localOverrideQuery.isSuccess ||
+      localOverrideQuery.fetchStatus !== "idle");
+
+  return {
+    clearSupport,
+    legacyDelete,
+    canReadKeptVariables,
+    localOverrideQueryHash,
+    keptOverrides,
+    envDeleteDisabled,
+  };
+}
+
+function keepsVariable(
+  overrides:
+    | Readonly<EnvironmentLocalOverridesResponse["overrides"]>
+    | undefined,
+  key: string,
+): boolean {
+  return (
+    overrides?.some(
+      ({ target }) => target.kind === "variable" && target.key === key,
+    ) ?? false
+  );
 }
 
 /**

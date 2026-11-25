@@ -152,6 +152,8 @@ export function useBridgeShellConfigController(props: {
       addMutation.isPending ||
       removeMutation.isPending ||
       revertMutation.isPending,
+    envDeleteDisabled: false,
+    canRemoveEnv: () => true,
     envPending:
       envListQuery.data === undefined ||
       envListQuery.isError ||
@@ -171,6 +173,7 @@ export function useBridgeShellConfigController(props: {
       envSetMutation.mutate(entry, afterEnvRead(callbacks)),
     setEnvAsync: async (entry) => {
       await envSetMutation.mutateAsync(entry);
+      return {};
     },
     renameEnv: (rename, callbacks) =>
       envRenameMutation.mutate(rename, afterEnvRead(callbacks)),

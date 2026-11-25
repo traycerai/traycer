@@ -1,14 +1,22 @@
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
 
 afterEach(() => {
   useSettingsHostScopeStore.getState().reset();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
+    defaultHostId: null,
+    gone: null,
   });
+  useSelectionAuthorityStore.getState().reset();
 });
 
 describe("Settings host id adoption", () => {
@@ -57,6 +65,23 @@ describe("Settings host id adoption", () => {
         hostName: "Old default computer",
       },
     });
+  });
+
+  it("keeps a Local pick seen gone reading as the default under the computer's new id", () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-window" });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-old", hostName: "Old computer" },
+      defaultPick: PERSONAL_PICK,
+      defaultHostId: "host-window",
+    });
+    useSettingsEnvironmentPickStore.getState().markPickGone(null);
+    const { result } = renderHook(() => useEnvironmentPick());
+
+    act(() =>
+      useSettingsHostScopeStore.getState().adoptHostId("host-old", "host-new"),
+    );
+
+    expect(result.current).toEqual(PERSONAL_PICK);
   });
 });
 

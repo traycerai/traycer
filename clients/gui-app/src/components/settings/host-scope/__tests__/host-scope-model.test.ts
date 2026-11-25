@@ -284,6 +284,7 @@ describe("resolveScopedHost", () => {
       activeHostId: ACTIVE.hostId,
       listsResolved: input.listsResolved,
       listsFailed: input.listsFailed,
+      defaultsToFirstHost: true,
     });
     return {
       hostId: result.host?.hostId ?? null,
@@ -359,6 +360,66 @@ describe("resolveScopedHost", () => {
         listsFailed: false,
       }),
     ).toEqual({ hostId: ACTIVE.hostId, vanishedHostId: null });
+  });
+
+  describe("with nothing pinned and the active host's row missing", () => {
+    const OTHER = hostScopeOptionFixture({ hostId: "host-other" });
+
+    function following(input: {
+      readonly activeHostId: string | null;
+      readonly listsResolved: boolean;
+      readonly listsFailed: boolean;
+      readonly defaultsToFirstHost: boolean;
+    }): string | null {
+      return (
+        resolveScopedHost({ hosts: [OTHER], scopedHostId: null, ...input }).host
+          ?.hostId ?? null
+      );
+    }
+
+    it.each([
+      { lists: "still loading", listsResolved: false, listsFailed: false },
+      { lists: "failed", listsResolved: true, listsFailed: true },
+    ])(
+      "stands no other computer in for it while the lists are $lists",
+      ({ listsResolved, listsFailed }) => {
+        for (const defaultsToFirstHost of [true, false]) {
+          expect(
+            following({
+              activeHostId: ACTIVE.hostId,
+              listsResolved,
+              listsFailed,
+              defaultsToFirstHost,
+            }),
+          ).toBeNull();
+        }
+      },
+    );
+
+    it.each([ACTIVE.hostId, null])(
+      "reads the window's own host (active %s) as no host once settled lists leave it out",
+      (activeHostId) => {
+        expect(
+          following({
+            activeHostId,
+            listsResolved: true,
+            listsFailed: false,
+            defaultsToFirstHost: false,
+          }),
+        ).toBeNull();
+      },
+    );
+
+    it("lets a surface with its own host picker default to the first computer once settled lists leave it out", () => {
+      expect(
+        following({
+          activeHostId: ACTIVE.hostId,
+          listsResolved: true,
+          listsFailed: false,
+          defaultsToFirstHost: true,
+        }),
+      ).toBe(OTHER.hostId);
+    });
   });
 });
 

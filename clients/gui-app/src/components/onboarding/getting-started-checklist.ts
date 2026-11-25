@@ -15,6 +15,17 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
 import { useOptionalHostClient } from "@/lib/host";
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
+import { useLayoutEffect } from "react";
+import {
+  useDefaultEnvironmentPick,
+  useSecretsCardDecision,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
+import { useEnvironmentPickerModel } from "@/components/settings/environment/use-environment-picker-model";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+} from "@/components/settings/host-scope/use-host-scope";
 import {
   sandboxIsStagedInThisWindow,
   useStagedSandboxInThisWindow,
@@ -23,6 +34,7 @@ import { providerSetUp } from "@/components/onboarding/set-up-personal";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useThisComputer } from "@/components/settings/move/this-computer";
+import { useSectionServed } from "@/components/settings/personal/use-old-host-local-pick";
 import {
   useThisComputersMove,
   type ThisComputersMove,
@@ -77,6 +89,11 @@ export interface GettingStartedFacts {
   readonly hasSecondPersonalComputer: boolean;
   readonly sandboxStaged: boolean;
   readonly creditsAboveZero: boolean;
+  /**
+   * Whether the pick the card lands on, the window default, has a Secrets
+   * page; `null` until a settled answer decides it.
+   */
+  readonly secretsOffered: boolean | null;
   /** Where this computer's own settings stand against Personal. */
   readonly thisComputersMove: ThisComputersMove;
 }
@@ -114,18 +131,20 @@ function stepIsDone(
 }
 
 /**
- * Whether a card is shown at all. Two are conditional, each on a fact about
- * whether the step EXISTS for this person rather than whether it is done:
- * credits while a sandbox is staged in this window, and the move while this
- * computer can say where its settings stand - a card nobody can finish would
- * hold the checklist open for ever. A computer that runs a team's settings
- * (`team`) has no move to offer, so it shows no move card.
+ * Whether a card is shown at all. Some depend on a fact about whether the step
+ * EXISTS for this person rather than whether it is done: Secrets needs a
+ * Secrets page under the default pick its handler resets to (an old host's
+ * Local pick has none), credits needs a sandbox staged in this window, and the
+ * move needs this computer to be able to say where its settings stand - a card
+ * nobody can finish would hold the checklist open for ever. A computer that runs a team's
+ * settings (`team`) has no move to offer, so it shows no move card.
  */
 function cardApplies(
   card: GettingStartedCard,
   facts: GettingStartedFacts,
 ): boolean {
   if (card.id === "credits") return facts.sandboxStaged;
+  if (card.id === "secret") return facts.secretsOffered === true;
   if (card.id === "move") {
     const move = facts.thisComputersMove;
     return move === "not_moved" || move === "moved";
@@ -143,10 +162,15 @@ export function gettingStartedVisibleCards(
  * True when every step the Guide group currently shows is done. E4 hides
  * the group from this. Credits is in the count only while a sandbox is
  * staged in this window, and the move only while this computer can answer it.
+ * An undecided Secrets card is not shown but may yet be, so the Guide is not
+ * done until it is decided or its step is.
  */
 export function gettingStartedGuideIsComplete(
   facts: GettingStartedFacts,
 ): boolean {
+  if (facts.secretsOffered === null && !stepIsDone("secret", facts)) {
+    return false;
+  }
   return gettingStartedVisibleCards(facts).every((card) =>
     stepIsDone(card.id, facts),
   );
@@ -207,6 +231,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   // the one the sheet the card opens is for.
   const computer = useThisComputer();
   const thisComputersMove = useThisComputersMove(computer, true);
+  const secretsOffered = useSecretsCardOffered();
   return {
     providerSetUp:
       providers.data !== undefined && providerSetUp(providers.data.providers),
@@ -216,8 +241,33 @@ export function useGettingStartedFacts(): GettingStartedFacts {
       running.hosts.filter((host) => host.kind === "personal").length >= 2,
     sandboxStaged: sandboxIsStagedInThisWindow(staged),
     creditsAboveZero: (sandboxBalanceMc(user) ?? 0) > 0,
+    secretsOffered,
     thisComputersMove,
   };
+}
+
+/**
+ * Whether the Secrets card shows, `null` while undecided. Its handler resets
+ * the pick before it opens Secrets, so the page is judged under the default it
+ * lands on, resolved here by the dropdown's own upkeep: Home shows the card in
+ * a window where Settings never opened. Only a settled answer decides it, never
+ * one a retry can change (`useSectionServed`), and the first for the window's
+ * host is kept (`decideSecretsCard`), so an outage and the host's return,
+ * which change the page's source, never take the card away or add it after it
+ * was left out.
+ */
+function useSecretsCardOffered(): boolean | null {
+  useEnvironmentPickerModel(useHostScopeFor(WINDOW_HOST_SELECTION));
+  const served = useSectionServed(useDefaultEnvironmentPick(), "secrets");
+  const answered = served === "pending" ? null : served === "served";
+  const { hostId, offered: decided } = useSecretsCardDecision();
+  const decideSecretsCard = useSettingsEnvironmentPickStore(
+    (state) => state.decideSecretsCard,
+  );
+  useLayoutEffect(() => {
+    if (answered !== null) decideSecretsCard(hostId, answered);
+  }, [answered, hostId, decideSecretsCard]);
+  return decided ?? answered;
 }
 
 /** Whether the Guide group has nothing left to show (E4). */

@@ -57,12 +57,18 @@ import {
   type PersonalRowNotesTarget,
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
-import { UPDATE_HOST_TEXT } from "@/components/settings/personal/personal-page-status";
+import {
+  personalPageItemKinds,
+  UPDATE_HOST_TEXT,
+} from "@/components/settings/personal/personal-page-status";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { SettingsSectionId } from "@/lib/settings-sections";
+import {
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+} from "@/lib/settings-sections";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -203,8 +209,14 @@ function renderFrame(options: {
   return calls;
 }
 
+/** Pages that edit item kinds, so a page of theirs goes through the frame's status arm. */
+const ITEM_PAGE_SECTIONS: readonly SettingsSectionId[] =
+  SETTINGS_SECTIONS.filter(
+    (section) => personalPageItemKinds(section.id) !== null,
+  ).map((section) => section.id);
+
 describe("<PersonalPageFrame /> on a host that does not advertise environment.status", () => {
-  it("puts the page inside an inert region and the update line outside it", async () => {
+  it("leaves a Local pick's page editable, with no update line and nothing inert", async () => {
     renderFrame({
       section: "shell",
       methods: ["host.status"],
@@ -212,15 +224,38 @@ describe("<PersonalPageFrame /> on a host that does not advertise environment.st
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    const line = await screen.findByTestId("personal-page-read-only");
-    expect(line.textContent).toBe(UPDATE_HOST_TEXT);
-    // Outside the inert region, so assistive technology still reads it.
-    expect(line.closest("[inert]")).toBeNull();
-    // The page body is inside it: no edits until the host is updated.
-    const edit = screen.getByRole("button", { name: "Edit the page" });
-    expect(edit.closest("[inert]")).not.toBeNull();
-    expect(screen.getAllByTestId("personal-page-read-only")).toHaveLength(1);
+    const edit = await screen.findByRole("button", { name: "Edit the page" });
+
+    expect(screen.queryByTestId("personal-page-read-only")).toBeNull();
+    expect(screen.queryByText(UPDATE_HOST_TEXT)).toBeNull();
+    expect(edit.closest("[inert]")).toBeNull();
+    expect(document.querySelector("[inert]")).toBeNull();
   });
+
+  // The read-only arm (`UPDATE_HOST_TEXT`) is reached only through
+  // `HostPageFrame`: from `PersonalPageFrame`'s fall-through (a Local pick on
+  // any page, or any pick on a page outside the Environment group) and from
+  // `PersonalSourceFrame` when the window's host runs Personal, which needs a
+  // status this host never answers. Every other pick (a team, an unresolved
+  // pick, Personal on a host that does not run it) takes a cloud frame or the
+  // spinner. A Local pick is therefore the one route to render, on every page
+  // that edits item kinds.
+  it.each(ITEM_PAGE_SECTIONS.filter((section) => section !== "shell"))(
+    "never reaches the read-only arm on the %s page of a Local pick",
+    async (section) => {
+      renderFrame({
+        section,
+        methods: ["host.status"],
+        status: environmentStatusFixture({}),
+        overrides: [],
+        target: VARIABLE_TARGET,
+      });
+      await screen.findByRole("button", { name: "Edit the page" });
+
+      expect(screen.queryByTestId("personal-page-read-only")).toBeNull();
+      expect(screen.queryByText(UPDATE_HOST_TEXT)).toBeNull();
+    },
+  );
 });
 
 describe("<PersonalPageFrame /> on a host with a ready status", () => {

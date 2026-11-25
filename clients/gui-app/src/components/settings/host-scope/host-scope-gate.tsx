@@ -1,4 +1,5 @@
 import { Activity, memo, type ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -68,6 +69,7 @@ export function HostScopeGate(props: {
     const selection = scope.vanishedSelection;
     return (
       <HostScopeNotice
+        icon={null}
         tone="warn"
         title={`${selection.name} is no longer here.`}
         detail={null}
@@ -91,21 +93,11 @@ export function HostScopeGate(props: {
   if (scope.status === "vanished") {
     return (
       <HostScopeNotice
+        icon={null}
         tone="warn"
         title={`${hostLabelAtSentenceStart(scope.hostLabel)} is no longer registered`}
         detail="It was removed from your account, or signed out. Nothing here can act on it."
-        action={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={scope.returnToActive}
-            data-testid="host-scope-return-to-active"
-            className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
-          >
-            Back to {scope.activeHost?.name ?? "your active host"}
-          </Button>
-        }
+        action={<ReturnToActiveAction scope={scope} />}
         testId="host-scope-vanished"
       />
     );
@@ -117,25 +109,7 @@ export function HostScopeGate(props: {
   // had. This branch precedes the empty one so the confident copy can only be
   // reached by a list that actually answered.
   if (scope.host === null && scope.listsFailed) {
-    return (
-      <HostScopeNotice
-        tone="warn"
-        title="Couldn't load your hosts"
-        detail="The list of hosts on your account didn't come back. Nothing here is missing — it just hasn't loaded."
-        action={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={scope.retryLists}
-            data-testid="host-scope-retry-lists"
-          >
-            Try again
-          </Button>
-        }
-        testId="host-scope-lists-failed"
-      />
-    );
+    return <HostListsFailedNotice scope={scope} />;
   }
 
   if (scope.host === null) return <EmptyHostNotice scope={scope} />;
@@ -158,6 +132,71 @@ export function HostScopeGate(props: {
         {props.children}
       </HostScopeBody>
     </>
+  );
+}
+
+/**
+ * A Local pick's page while its computer cannot be reached: the scope's own
+ * "Can't reach" notice, with the page kept mounted underneath, hidden and
+ * frozen, so its drafts survive the outage and are there when it is back. The
+ * notice follows the scope's status as it is derived, with no grace period.
+ *
+ * Away outranks old: a computer with no route shows this notice even when it
+ * also needs an update, since nothing can reach it to update it. Only a host
+ * that is reachable but below the minimum version is left to the page's own
+ * update notice (`deriveHostScopeStatus` reports that as `unreachable` too).
+ */
+export function HostUnreachableGate(props: {
+  readonly scope: HostScope;
+  /** Puts the notice under the page's heading, which the hidden page takes with it. */
+  readonly renderNotice: (notice: ReactNode) => ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { scope } = props;
+  const host =
+    scope.status === "unreachable" &&
+    scope.host !== null &&
+    (!scope.host.connectable || !hostScopeNeedsUpdate(scope.host))
+      ? scope.host
+      : null;
+  return (
+    <>
+      {host === null
+        ? null
+        : props.renderNotice(<UnreachableNotice scope={scope} host={host} />)}
+      <HostScopeBody hostId={scope.hostId} usable={host === null}>
+        {props.children}
+      </HostScopeBody>
+    </>
+  );
+}
+
+/**
+ * The host lists failed before naming the host: nothing is known about it, so
+ * the notice claims nothing and offers the lists' retry.
+ */
+export function HostListsFailedNotice(props: {
+  readonly scope: HostScope;
+}): ReactNode {
+  return (
+    <HostScopeNotice
+      icon={null}
+      tone="warn"
+      title="Couldn't load your hosts"
+      detail="The list of hosts on your account didn't come back. Nothing here is missing — it just hasn't loaded."
+      action={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.scope.retryLists}
+          data-testid="host-scope-retry-lists"
+        >
+          Try again
+        </Button>
+      }
+      testId="host-scope-lists-failed"
+    />
   );
 }
 
@@ -200,6 +239,7 @@ function HostUpdateNeededNotice(props: {
 }): ReactNode {
   return (
     <HostScopeNotice
+      icon={null}
       tone="warn"
       title={HOST_UPDATE_SKEW_COPY.title}
       detail={HOST_UPDATE_REQUIRED_DETAIL}
@@ -226,6 +266,7 @@ function EmptyHostNotice(props: { readonly scope: HostScope }): ReactNode {
   const { scope } = props;
   return (
     <HostScopeNotice
+      icon={null}
       tone="idle"
       title={scope.isLoading ? "Finding your hosts…" : "No hosts yet"}
       detail={
@@ -280,16 +321,13 @@ function UnreachableNotice(props: {
   const { scope, host } = props;
   return (
     <HostScopeNotice
+      icon={null}
       tone="warn"
       title={`Can't reach ${host.name} from here`}
       // The two causes read the same to a user but have different fixes, so
       // the copy names which one this is rather than offering a generic
       // "try again" against a route that does not exist.
-      detail={
-        host.registered && !host.connectable
-          ? "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link."
-          : "No connection is available to this host."
-      }
+      detail={unreachableDetail(scope, host)}
       // Gated on `!scope.isViewingActive` — and that arm is live now, though
       // it genuinely was dead when this was written. The reasoning then was
       // that `deriveHostScopeStatus` answers "following" before it can ever
@@ -301,25 +339,56 @@ function UnreachableNotice(props: {
       // already null. There is nothing to return to, so nothing is offered:
       // the notice above already names the host and says why it is stuck.
       action={
-        scope.isViewingActive ? null : (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={scope.returnToActive}
-            data-testid="host-scope-return-to-active"
-            className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
-          >
-            Back to {scope.activeHost?.name ?? "your active host"}
-          </Button>
-        )
+        scope.isViewingActive ? null : <ReturnToActiveAction scope={scope} />
       }
       testId="host-scope-unreachable"
     />
   );
 }
 
-function HostScopeNotice(props: {
+/**
+ * Why `host` cannot be reached. Only the Host picker's own pages show the
+ * host's status above the notice, so only they say where it came from.
+ */
+function unreachableDetail(scope: HostScope, host: HostScopeOption): string {
+  if (!host.registered || host.connectable) {
+    return "No connection is available to this host.";
+  }
+  const detail =
+    "This host is in your account, but this app has no connection to it right now.";
+  return scope.readOnly
+    ? detail
+    : `${detail} Its status above is from your account, not a live link.`;
+}
+
+/**
+ * "Back to {active host}", on a scope that can re-point: a read-only scope
+ * (an Environment or Account page) follows its pick, not the Host picker, so
+ * clearing its selection would do nothing and nothing is offered.
+ */
+function ReturnToActiveAction(props: { readonly scope: HostScope }): ReactNode {
+  const { scope } = props;
+  if (scope.readOnly) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={scope.returnToActive}
+      data-testid="host-scope-return-to-active"
+      className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
+    >
+      Back to {scope.activeHost?.name ?? "your active host"}
+    </Button>
+  );
+}
+
+/**
+ * The card a host-scoped page shows in place of its body. `icon` is the page's
+ * own rail icon where the card stands for that page, `null` elsewhere.
+ */
+export function HostScopeNotice(props: {
+  readonly icon: LucideIcon | null;
   readonly tone: "warn" | "idle";
   readonly title: string;
   readonly detail: string | null;
@@ -335,6 +404,9 @@ function HostScopeNotice(props: {
       className="flex w-full min-w-0 flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
       data-testid={props.testId}
     >
+      {props.icon === null ? null : (
+        <props.icon aria-hidden className="size-5 text-muted-foreground" />
+      )}
       <div
         className={cn(
           "font-medium text-ui-sm",

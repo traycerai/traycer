@@ -846,11 +846,14 @@ binding path and offers no status retry; its observer reads again when the
 route returns. Unresolved picks ignore Personal membership results, including
 cached hosts.
 
-The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
-decides each Environment page's source, one rule per pick. A team reads the
-cloud. A Local row reads that computer's own host pages. Personal reads the
-cloud unless the window's host runs Personal by the dropdown's own rule
-(`hostRunsPersonal`: it reports Personal and has no Local row), when that
+The Environment dropdown shows `useEnvironmentPickerModel()`'s pick, which
+judges each computer's status as it renders; pages read `useEnvironmentPick()`,
+which the dropdown keeps current before paint. A pick seen gone (a Local pick
+whose computer moved, a team the person left) stays gone for the window.
+`PersonalPageFrame` decides each Environment page's source, one rule per pick. A
+team reads the cloud. A Local row reads that computer's own host pages. Personal
+reads the cloud unless the window's host runs Personal by the dropdown's own
+rule (`hostRunsPersonal`: it reports Personal and has no Local row), when that
 host's pages stay; while that host's status is unknown the page shows
 loading. A cloud-read page mounts `ConfigurationSourceBoundary` before it,
 resolves its descriptor through `environment.list@1.1` (the team's row, or
@@ -942,14 +945,17 @@ Account; the rest is the app itself.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
   Permissions, Memories (id `agent-memories`), Agents (id `agents`:
   tabs Selection guide and Definitions), Model routing, Variables & shells
-  (id `shell`), Secrets, Sandboxes, Storage, and Members on a team; a Local
-  row shows only Providers, Permissions, Agents,
-  Model routing, Variables & shells and Secrets. Browser agent access is the
+  (id `shell`), Secrets, Sandboxes, Storage, and Members on a team; Personal
+  and a Local row list every one of these but Members. The kind of pick alone
+  decides the rows (`environmentSectionShown`), so the rail never changes
+  shape when a host answers. Browser agent access is the
   Browser tab of Permissions (a region below the policy on a team, whose page
   has no tabs). `agent-definitions`,
   `browser-agent-access` and `machine-setup` are retired
-  (`RETIRED_SETTINGS_SECTION_IDS`): the first two redirect to Agents and
-  Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
+  (`RETIRED_SETTINGS_SECTION_IDS`): the first redirects to Agents
+  (`RETIRED_SECTION_REPLACEMENTS`, and its route), the second opens in place
+  from a link or a remembered section (`OPENED_IN_PLACE_SECTION_IDS`), and
+  `machine-setup` keeps its own route. These pages
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
   - **Memories** is one switch, "Let agents use and update common memory":
@@ -1245,9 +1251,14 @@ a query or mutation, so it reaches no cache, and closing the dialog drops it. A
 refusal shows the host's words (`Connect to manage secrets.` with no session on
 this computer) or the `secretChangeRefusalLine` for a create refusal's code;
 `destination_unresolvable` reads "Couldn't reach <address>. Check the server
-address, then save again." On a team's host the page is the team line, no list;
-on a host whose version predates the page, "Update this host to use your secrets
-here." **Replace** (`environment.secrets.replaceValue`, compare-and-set on the
+address, then save again." On a team's host the page is the team line, no list.
+Secrets is listed under every pick, and no host's answer adds or removes its
+row, search hit or palette row (`useEnvironmentSectionShown`). Where the pick's
+computer does not serve `environment.secrets.list`, the page's body reads "Not
+on {computer}" under its heading, with no update line: the method is
+pool-only, and no host update serves it (see the Environment picker below).
+While the window's host is out, Personal follows the cloud, as its page does.
+**Replace** (`environment.secrets.replaceValue`, compare-and-set on the
 version the list showed; a stale answer asks to look again) carries the same
 custody sentence, and the row then reads the rotation
 (`environment.secrets.rotation`, polled every 3 s only while it moves): "New
@@ -1386,8 +1397,59 @@ row's tooltip explains the activation consequence, and an unavailable row's
 tooltip reveals a cut-off name. Search appears from six hosts up; below that it
 is one more thing to skip past.
 
-Environment picker names also wrap in full. An outdated computer's row reads
-“Update to view these settings.” Its disabled state and Move sheet are unchanged.
+Environment picker names also wrap in full. A computer whose host serves no
+`environment.status` (a released host from before the Environment group) gets
+a Local row reading “its own settings, update to move to Personal”
+(`LOCAL_ROW_OLD_HOST`), with no Move verb, and the window opens on it. Its pages
+are that host's own and editable, as that release drew them
+(`HostOwnPageFrame`): Providers, Permissions, Agents (the guide alone), Model
+routing and Variables & shells (`oldHostSectionShown`). The rail, search and the
+command palette list the same rows as for any Local pick. Every road (a rail
+row, a link, the palette, search, a deep link, a remembered route, a pick
+change) ends at the section it names, and the surface never moves: the URL,
+heading, rail highlight and phone crumb all name that section. Its body
+answers in place (`SettingsPanelForSection`, `useSectionAnswer`), always
+under the section's own heading:
+
+- the page;
+- “Connecting to {computer}…” while a fact it needs is unknown: the picked
+  computer's handshake, or, for every Personal page but Members, whether the
+  window's host runs Personal, including while the host lists have not named
+  that host yet;
+- the lists' “Couldn't load your hosts” notice and its Try again, where a host
+  list failed before naming the computer, instead of a claim about it;
+- the not-available card, “Not on {computer}”. “Update {computer} to use
+  {page}.” and its action are added only where updating gives the page and an
+  update can be made: an old host's missing pages, through Host Overview's
+  Update now, or the minimum-version update for a computer below the minimum,
+  which has no client to read its versions through. Secrets never has the
+  line: no host update serves it;
+- “{computer} isn't connected to this app.” for a computer the settled host
+  list does not name;
+- for a Local pick that cannot be reached, “Can't reach {computer} from here”,
+  with the page kept, hidden, beneath. The notice offers no “Back to” and does
+  not mention a status above: an Environment page's scope follows its pick
+  (`HostScope.readOnly`), and it shows no Host picker status.
+
+Members under a non-team pick reads “Only a team has members”; a person
+removed from the team they were reading stays on that section under Personal.
+Browser agent access is retired from navigation, but a remembered section or
+an old link opens it in place, never redirected to Permissions
+(`OPENED_IN_PLACE_SECTION_IDS`): the Browser tab's switch under its own
+heading, or the not-available card on an old host. In-app links are always
+offered: Providers' “Open Secrets” and the secret-grant card's Secrets
+button open Secrets, and its body answers. Getting started's Secrets card
+resets the pick to the window's default before it opens Secrets, so it asks
+whether that default serves Secrets, not the pick in effect. The checklist
+resolves the default itself with the dropdown's own upkeep
+(`useEnvironmentPickerModel`), so Home decides it in a window where Settings
+never opened. The card is absent while the answer is unknown, and host lists
+that failed leave it unknown until their retry answers; the Guide is not done
+meanwhile unless a secret already is. Its first settled answer for the window's
+host is kept (`decideSecretsCard`) across an outage and the host's return, so
+it never shows and then goes, and never appears late. The pick is never
+switched on the person's behalf. A Personal pick is never touched. A host
+whose `environment.status` is 1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
 
 **Nothing in the host group is local-only any more.** Shell and Diagnostics
 carried a `requiresLocalHost` flag (dimmed rail rows, a `RequiresLocalHostNotice`

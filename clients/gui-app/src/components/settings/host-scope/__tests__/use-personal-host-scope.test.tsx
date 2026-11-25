@@ -156,7 +156,11 @@ function renderBothScopes(initialHostId: string | null) {
   return renderHookWithQueryClient(() => {
     const [scopedHostId, setScopedHostId] = useState(initialHostId);
     return {
-      hostGroup: useHostScopeFor({ scopedHostId, setScopedHostId }),
+      hostGroup: useHostScopeFor({
+        scopedHostId,
+        setScopedHostId,
+        defaultsToFirstHost: true,
+      }),
       personal: usePersonalHostScope(),
     };
   });

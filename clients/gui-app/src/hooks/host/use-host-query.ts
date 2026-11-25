@@ -146,7 +146,7 @@ export interface UseHostQueryWithResponseMapOptions<
    */
   readonly options: HostQueryTanstackOptions<Method, TData> | null;
   /** Captures cache-side ordering state immediately before request dispatch. */
-  readonly captureRequestContext?: () => TRequestContext;
+  readonly captureRequestContext?: (signal: AbortSignal) => TRequestContext;
   /**
    * Runs inside the queryFn immediately before the request goes out, and a
    * throw refuses THIS dispatch as a `HostRpcError` (normalized by the
@@ -366,7 +366,7 @@ export function useHostQueryWithResponseMap<
         const payload =
           buildRequest === undefined ? params : buildRequest(params);
         const requirement = args.requiredHostMethodVersion?.() ?? null;
-        const requestContext = args.captureRequestContext?.();
+        const requestContext = args.captureRequestContext?.(signal);
         const responseTimeoutMs = args.responseTimeoutMs;
         let response: ResponseOfMethod<Registry, Method>;
         if (responseTimeoutMs !== undefined) {

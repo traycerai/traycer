@@ -60,6 +60,7 @@ export function VariableEditSheet(props: {
   readonly busy: boolean;
   readonly saveDisabled: boolean;
   readonly removeLabel: string;
+  readonly removeDisabled?: boolean;
   readonly onSave: (() => void) | null;
   readonly onRemove: (() => void) | null;
   readonly onDismiss: () => void;
@@ -110,7 +111,7 @@ export function VariableEditSheet(props: {
             <Button
               type="button"
               variant="destructive-ghost"
-              disabled={props.busy}
+              disabled={props.busy || props.removeDisabled === true}
               aria-label={props.removeLabel}
               onClick={props.onRemove}
             >

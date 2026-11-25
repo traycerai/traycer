@@ -2,12 +2,21 @@ import {
   SETUP_STEPS,
   setupView,
 } from "@/components/settings/host-scope/host-access-model";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type {
+  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   localRowCohort,
   type LocalRowVerb,
 } from "@/components/settings/environment/local-row-cohort";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { LOCAL_ROW_OLD_HOST } from "@/components/settings/move/cohort-rows";
+import {
+  moveAcceptanceOpen,
+  moveHasStopped,
+} from "@/lib/environment/move-in-progress";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   PERSONAL_PICK,
@@ -67,20 +76,32 @@ export function isEnvironmentComputer(
  * A Local row exists while any plane is still this computer's own or stopped,
  * and its wording comes from those planes (`localRowCohort`). An unfinished
  * setup with no known configuration keeps a separate setup row, so the person
- * can still open the computer and finish or retry it. A host whose
- * `environment.status` predates 1.1 reports no
- * planes at all, so one that has not reached `applying` gets the greyed
- * `needs an update` row instead; one that has is already shared and has no
- * row. A host that has not answered, or not been dialled, has no row:
- * nothing is known about it.
+ * can still open the computer and finish or retry it. A host that serves
+ * no `environment.status` runs its own settings and cannot move until it is
+ * updated: its Local row says so, with no verb. A host whose
+ * `environment.status` is 1.0 reports no planes at all, so one that has not
+ * reached `applying` gets the greyed `needs an update` row instead; one that
+ * has is already shared and has no row. A host that has not answered, or not
+ * been dialled, has no row: nothing is known about it.
  */
 export function localPickerRow(
   host: EnvironmentPickerHost,
   status: EnvironmentStatusResponseV11 | null,
   version: NegotiatedMethodVersion,
 ): LocalPickerRow | null {
+  if (version === false) {
+    return {
+      kind: "local",
+      hostId: host.hostId,
+      name: host.name,
+      subtitle: LOCAL_ROW_OLD_HOST,
+      verb: null,
+      needsUpdate: false,
+      defaultsToLocal: true,
+    };
+  }
   if (isBeforeConsentGate(version)) {
-    return isUnmovedOldHost(status, version) ? needsUpdateRow(host) : null;
+    return isUnmovedOldHost(status) ? needsUpdateRow(host) : null;
   }
   if (status === null) return null;
   const cohort = localRowCohort(status);
@@ -142,9 +163,8 @@ export function hostRunsPersonal(
 /** An old host that has not reached `applying`: it has not moved. */
 function isUnmovedOldHost(
   status: EnvironmentStatusResponseV11 | null,
-  version: NegotiatedMethodVersion,
 ): boolean {
-  if (version === false || status === null || status.setup === null) {
+  if (status === null || status.setup === null) {
     return true;
   }
   const { stage } = status.setup;
@@ -167,9 +187,8 @@ function needsUpdateRow(host: EnvironmentPickerHost): LocalPickerRow {
  * `environment.status` below 1.1: the host predates the move's consent gate.
  * `null` (no handshake yet) is not "too old": nothing is known.
  */
-function isBeforeConsentGate(version: NegotiatedMethodVersion): boolean {
+function isBeforeConsentGate(version: SchemaVersion | null): boolean {
   if (version === null) return false;
-  if (version === false) return true;
   return version.major < 1 || (version.major === 1 && version.minor < 1);
 }
 
@@ -189,28 +208,44 @@ export function personalSubtitle(names: readonly string[]): string {
     : `your settings · on ${first}, ${second} and ${rest} more`;
 }
 
+/**
+ * The verb is `Finish moving` while an accepted Move has stopped, so the row
+ * opens the computer's Overview, where the stopped Move has its Retry,
+ * instead of the move sheet. The subtitle stays the planes' own: nothing has
+ * reached Personal yet.
+ */
+function withStoppedMove(
+  row: LocalPickerRow,
+  status: EnvironmentStatusResponseV13 | null,
+): LocalPickerRow {
+  if (row.kind !== "local" || status === null) return row;
+  if (!moveAcceptanceOpen(status) || !moveHasStopped(status)) return row;
+  return { ...row, verb: "finish_moving" };
+}
+
 export function environmentPickerModel(input: {
   readonly hosts: readonly EnvironmentPickerHost[];
-  readonly statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>;
+  readonly statuses: ReadonlyMap<string, EnvironmentStatusResponseV13 | null>;
   readonly versions: ReadonlyMap<string, NegotiatedMethodVersion>;
   /** This window's own host, whose Local row is the default pick. */
   readonly windowHostId: string | null;
 }): EnvironmentPickerModel {
   const localRows: LocalPickerRow[] = [];
   for (const host of input.hosts) {
-    const row = localPickerRow(
-      host,
-      input.statuses.get(host.hostId) ?? null,
-      input.versions.get(host.hostId) ?? null,
-    );
-    if (row !== null) localRows.push(row);
+    const status = input.statuses.get(host.hostId) ?? null;
+    const version = input.versions.get(host.hostId) ?? null;
+    const row = localPickerRow(host, status, version);
+    if (row !== null) {
+      localRows.push(version === false ? row : withStoppedMove(row, status));
+    }
   }
   const windowRow =
     localRows.find((row) => row.hostId === input.windowHostId) ?? null;
   const windowStatusKnown =
     input.windowHostId === null ||
     (input.hosts.some((host) => host.hostId === input.windowHostId) &&
-      (input.statuses.get(input.windowHostId) ?? null) !== null);
+      ((input.statuses.get(input.windowHostId) ?? null) !== null ||
+        input.versions.get(input.windowHostId) === false));
   let defaultPick = UNRESOLVED_PICK;
   if (windowStatusKnown) {
     defaultPick =
@@ -223,10 +258,11 @@ export function environmentPickerModel(input: {
 
 /**
  * Whether the person's per-computer pick is gone: its computer answered and
- * has neither local settings nor unfinished setup (or is too old). The pick
- * then returns to the default, so a page does not retain a finished setup's
- * per-computer entry. A computer that has not answered
- * yet keeps the pick: nothing is known.
+ * has neither local settings nor unfinished setup (or is too old). A computer
+ * that has not answered yet keeps the pick: nothing is known.
+ * `useEnvironmentPickerModel` marks a gone pick to read as the default for the
+ * rest of the window, so a page does not retain a finished setup's
+ * per-computer entry.
  */
 export function isStaleLocalPick(
   pick: EnvironmentPick | null,
