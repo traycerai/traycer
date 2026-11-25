@@ -4060,9 +4060,13 @@ describe("<NotificationsSessionProvider />", () => {
       });
     };
     emitCloudSnapshot(1, []);
+    // The feed is live through this client's own host, so the bot host's
+    // answer gives `pendingFork` alone and the count comes from the feed's
+    // rows, of which there are none.
     await waitFor(() => {
-      expect(screen.getByTestId("bot-thread-count").textContent).toBe("0");
+      expect(botHost.requests).toHaveLength(1);
     });
+    expect(screen.getByTestId("bot-thread-count").textContent).toBe("absent");
 
     // The host's own answer moves with the verdict; the cloud snapshot is what
     // reaches this client first, and nothing streams from the headless host.
@@ -4073,7 +4077,9 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("1");
     });
-    expect(botHost.requests.length).toBeGreaterThan(askedBeforeFirstVerdict);
+    await waitFor(() => {
+      expect(botHost.requests.length).toBeGreaterThan(askedBeforeFirstVerdict);
+    });
 
     botHost.response = wholeOriginAnswer(2);
     const askedBeforeSecondVerdict = botHost.requests.length;
@@ -4081,7 +4087,9 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("2");
     });
-    expect(botHost.requests.length).toBeGreaterThan(askedBeforeSecondVerdict);
+    await waitFor(() => {
+      expect(botHost.requests.length).toBeGreaterThan(askedBeforeSecondVerdict);
+    });
   });
 
   it("re-asks a host whose first indicator read was still in flight when a bot's verdict reached the cloud snapshot", async () => {
@@ -4178,9 +4186,8 @@ describe("<NotificationsSessionProvider />", () => {
       );
     });
     await waitFor(() => {
-      expect(screen.getByTestId("bot-thread-count").textContent).toBe("0");
+      expect(botHost.requests).toHaveLength(1);
     });
-    expect(botHost.requests).toHaveLength(1);
 
     const cloudSession = streamClient.sessionFor(
       "host.notifications.cloudFeed.subscribe",
@@ -4213,7 +4220,11 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("3");
     });
-    expect(botHost.requests).toHaveLength(2);
+    // The count comes from the feed's rows; the re-ask follows once the burst
+    // has gone quiet.
+    await waitFor(() => {
+      expect(botHost.requests).toHaveLength(2);
+    });
   });
 
   it("invalidates only referenced entities on read-state frames", async () => {
