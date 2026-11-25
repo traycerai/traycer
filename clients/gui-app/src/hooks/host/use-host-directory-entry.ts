@@ -7,16 +7,6 @@ import {
 import { useHostBinding } from "@/lib/host";
 
 /**
- * Re-exported from the connection registry, which OWNS this predicate now:
- * it is the rule the registry uses to decide whether a
- * host's row actually moved, and a second copy here would let the hook and
- * the registry disagree about what "changed" means for the same row. Kept as
- * a named export from this module because `useReactiveLocalHostEntry` imports
- * it from here.
- */
-export { hostDirectoryEntryEquals };
-
-/**
  * Reactively projects a single host directory entry, returning a
  * REFERENCE-STABLE value across benign directory churn.
  *

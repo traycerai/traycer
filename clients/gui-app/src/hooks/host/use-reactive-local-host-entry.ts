@@ -1,7 +1,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostDirectoryEntryEquals } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { useHostBinding } from "@/lib/host";
-import { hostDirectoryEntryEquals } from "@/hooks/host/use-host-directory-entry";
 
 /**
  * Reactively projects the LOCAL host's directory entry - the machine this
