@@ -4059,13 +4059,19 @@ describe("<NotificationsSessionProvider />", () => {
         });
       });
     };
-    emitCloudSnapshot(1, []);
+    // The host's whole-origin "none" lands before this client's feed is live.
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("0");
     });
+    // A live feed served through another host owns the counts from here on:
+    // an empty snapshot names no row for the thread.
+    emitCloudSnapshot(1, []);
+    await waitFor(() => {
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("absent");
+    });
 
-    // The host's own answer moves with the verdict; the cloud snapshot is what
-    // reaches this client first, and nothing streams from the headless host.
+    // The cloud snapshot is what reaches this client, and nothing streams from
+    // the headless host, so each one re-asks it.
     const firstVerdict = botVerdictRow("verdict-1", 2);
     botHost.response = wholeOriginAnswer(1);
     const askedBeforeFirstVerdict = botHost.requests.length;
@@ -4073,7 +4079,9 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("1");
     });
-    expect(botHost.requests.length).toBeGreaterThan(askedBeforeFirstVerdict);
+    await waitFor(() => {
+      expect(botHost.requests.length).toBeGreaterThan(askedBeforeFirstVerdict);
+    });
 
     botHost.response = wholeOriginAnswer(2);
     const askedBeforeSecondVerdict = botHost.requests.length;
@@ -4081,7 +4089,9 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("2");
     });
-    expect(botHost.requests.length).toBeGreaterThan(askedBeforeSecondVerdict);
+    await waitFor(() => {
+      expect(botHost.requests.length).toBeGreaterThan(askedBeforeSecondVerdict);
+    });
   });
 
   it("re-asks a host whose first indicator read was still in flight when a bot's verdict reached the cloud snapshot", async () => {
@@ -4213,7 +4223,10 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("3");
     });
-    expect(botHost.requests).toHaveLength(2);
+    // The count is the feed's own; the re-ask follows once the burst is quiet.
+    await waitFor(() => {
+      expect(botHost.requests).toHaveLength(2);
+    });
   });
 
   it("invalidates only referenced entities on read-state frames", async () => {
