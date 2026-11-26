@@ -1151,6 +1151,83 @@ describe("eslint config: test-files block deliberately exempts selectById (chara
   );
 });
 
+describe("selection test writes", () => {
+  const testPath = "src/lib/host/__tests__/selection-authority-fixture.test.ts";
+  const store = "@/stores/host/selection-authority-store";
+  const adapter =
+    "@/lib/registries/test-support/epic-session-controller-test-support";
+
+  async function writeViolations(code: string, filePath: string) {
+    const eslint = new ESLint({ cwd: guiAppRoot });
+    const results = await eslint.lintText(code, {
+      filePath: path.join(guiAppRoot, filePath),
+    });
+    return (results[0]?.messages ?? []).filter(
+      ({ ruleId }) => ruleId === "selection-test/no-store-write",
+    );
+  }
+
+  it.each([
+    [
+      "direct write without the fixture",
+      `import { useSelectionAuthorityStore } from "${store}"; useSelectionAuthorityStore.setState({});`,
+    ],
+    [
+      "renamed store import and local alias",
+      `import { useSelectionAuthorityStore as renamed } from "${store}"; const local = renamed; local["setState"]({});`,
+    ],
+    [
+      "namespace import and destructured setter",
+      `import * as authority from "${store}"; const { setState: write } = authority.useSelectionAuthorityStore; write({});`,
+    ],
+    [
+      "destructured store from a namespace import",
+      `import * as authority from "${store}"; const { useSelectionAuthorityStore: select } = authority; select.setState({});`,
+    ],
+    [
+      "destructured controller helper from a namespace import",
+      `import * as controller from "${adapter}"; const { setTestEffectiveHost: setHost } = controller; setHost("host-test", true);`,
+    ],
+    [
+      "store alias assigned after its declaration",
+      `import { useSelectionAuthorityStore } from "${store}"; let alias; function arrange() { alias = useSelectionAuthorityStore; } arrange(); alias.setState({});`,
+    ],
+    [
+      "dynamic import of the authority store",
+      `const { useSelectionAuthorityStore } = await import("${store}"); useSelectionAuthorityStore.setState({});`,
+    ],
+    [
+      "extracted snapshot publisher",
+      `import { useSelectionAuthorityStore as store } from "${store}"; const { applyKernelSnapshot } = store.getState(); void applyKernelSnapshot;`,
+    ],
+    [
+      "renamed controller projection helper",
+      `import { setTestEffectiveHost as setHost } from "${adapter}"; setHost("host-test", true);`,
+    ],
+  ])("rejects a %s", async (_name, code) => {
+    expect(await writeViolations(code, testPath)).toHaveLength(1);
+  });
+
+  it("allows an authority read and a teardown reset", async () => {
+    const code = `import * as authority from "${store}"; const { useSelectionAuthorityStore: store } = authority; void store.getState().servingPeer; store.getState().reset();`;
+    expect(await writeViolations(code, testPath)).toEqual([]);
+  });
+
+  it("keeps the named publisher and controller projection boundaries", async () => {
+    const write = `import { useSelectionAuthorityStore as store } from "${store}"; store.setState({});`;
+    const helper = `import { setTestEffectiveHost as setHost } from "${adapter}"; setHost("host-test", true);`;
+    for (const file of [
+      "src/lib/host/test-support/selection-authority-fixture.ts",
+      "src/lib/registries/test-support/epic-session-controller-test-support.ts",
+      "src/lib/registries/__tests__/epic-session-controller.test.tsx",
+      "src/lib/registries/test-support/test-epic-session-tab.tsx",
+      "src/providers/__tests__/epic-session-provider.test.tsx",
+    ]) {
+      expect(await writeViolations(write + "\n" + helper, file)).toEqual([]);
+    }
+  });
+});
+
 /**
  * Layer 2, end-to-end: the config-mention tests above only prove a matching
  * selector object exists somewhere in the array for a given file.

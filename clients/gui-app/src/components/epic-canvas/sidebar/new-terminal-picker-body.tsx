@@ -1,3 +1,7 @@
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 /**
  * Host+folder selection for terminal creation from the sidebar "+" popover:
@@ -76,6 +80,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   const [explicitRow, setExplicitRow] =
     useState<WorktreeBindingSelectorRowV12 | null>(null);
   const pin = useSurfaceHostPin(surfaceKey);
+  const retryDisabled = usePoolComputerUnavailable(pin.resolvedHostId);
   const client = useSurfaceHostClient(pin.resolvedHostId);
   const bindingsQuery = useTerminalWorkspaceBindingsForClient({
     client,
@@ -230,29 +235,17 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-2.5 py-2.5">
         <div className="min-w-0 text-xs text-muted-foreground">
-          {bindingsQuery.isError || hasUnverifiedRows ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={bindingsQuery.isFetching}
-              onClick={() => {
-                if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
-                void bindingsQuery.refetch({ cancelRefetch: false });
-              }}
-            >
-              {bindingsQuery.isFetching ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="terminal-workspace-retry-spinner"
-                  variant={undefined}
-                />
-              ) : null}
-              Retry
-            </Button>
-          ) : (
-            folderlessCwdStatus
-          )}
+          <TerminalFolderRetry
+            visible={bindingsQuery.isError || hasUnverifiedRows}
+            pending={bindingsQuery.isFetching}
+            fallback={folderlessCwdStatus}
+            disabled={retryDisabled}
+            onRetry={() => {
+              if (readPoolComputerUnavailable(pin.resolvedHostId)) return;
+              if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
+              void bindingsQuery.refetch({ cancelRefetch: false });
+            }}
+          />
         </div>
         <TerminalLaunchButton
           staged={stage !== null}
@@ -263,6 +256,34 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
         />
       </div>
     </>
+  );
+}
+
+function TerminalFolderRetry(props: {
+  readonly visible: boolean;
+  readonly fallback: ReactNode;
+  readonly pending: boolean;
+  readonly disabled: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  if (!props.visible) return props.fallback;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={props.pending || props.disabled}
+      onClick={props.onRetry}
+    >
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId="terminal-workspace-retry-spinner"
+          variant={undefined}
+        />
+      ) : null}
+      Retry
+    </Button>
   );
 }
 

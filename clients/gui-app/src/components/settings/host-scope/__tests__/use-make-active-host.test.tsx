@@ -18,17 +18,43 @@ import { hostScopeOptionFixture } from "../host-scope-fixture";
  * at once.
  */
 const activateCalls: string[] = [];
-let activation: Promise<boolean> | null = null;
+const activatedAccounts: string[] = [];
+let activation: Promise<unknown> | null = null;
 let resolveActivate: ((result: ActivateResult) => void) | null = null;
+let rejectActivate: ((error: Error) => void) | null = null;
+
+interface TestRequestContext {
+  readonly userId: string;
+  readonly abortController: AbortController;
+  readonly abortSignal: AbortSignal;
+}
+
+function requestContextFor(userId: string): TestRequestContext {
+  const abortController = new AbortController();
+  return {
+    userId,
+    abortController,
+    abortSignal: abortController.signal,
+  };
+}
+
+let requestContext = requestContextFor("user-1");
 
 const authority = {
   activate: (hostId: string): Promise<ActivateResult> => {
     activateCalls.push(hostId);
-    return new Promise<ActivateResult>((resolve) => {
+    activatedAccounts.push(requestContext.userId);
+    return new Promise<ActivateResult>((resolve, reject) => {
       resolveActivate = resolve;
+      rejectActivate = reject;
     });
   },
 };
+
+const mocks = vi.hoisted(() => ({
+  toastError: vi.fn(),
+  wake: vi.fn(),
+}));
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ selectionAuthority: authority }),
@@ -36,9 +62,16 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({
-    getRequestContext: () => ({}),
-    getRequestContextUserId: () => "user-1",
+    getRequestContext: () => requestContext,
+    getRequestContextUserId: () => requestContext.userId,
   }),
+}));
+
+vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
+
+vi.mock("@/lib/sandboxes/sandbox-wake", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sandboxes/sandbox-wake")>()),
+  wakeSandboxOnPickWithNotice: mocks.wake,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
@@ -71,6 +104,9 @@ beforeEach(() => {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  requestContext = requestContextFor("user-1");
+  mocks.toastError.mockReset();
+  mocks.wake.mockReset();
 });
 
 afterEach(async () => {
@@ -89,8 +125,12 @@ afterEach(async () => {
   cleanup();
   queryClient.clear();
   activateCalls.length = 0;
+  activatedAccounts.length = 0;
   resolveActivate = null;
+  rejectActivate = null;
   activation = null;
+  requestContext.abortController.abort();
+  requestContext = requestContextFor("user-1");
 });
 
 describe("useMakeActiveHost", () => {
@@ -170,6 +210,58 @@ describe("useMakeActiveHost", () => {
     expect(activateCalls).toEqual(["host-a"]);
     expect(settings.result.current.isActivating).toBe(true);
   });
+
+  it.each(["success", "refusal", "lost answer"] as const)(
+    "does not use a delayed %s result after the signing-in request context changes",
+    async (answer) => {
+      const sandbox = hostScopeOptionFixture({
+        hostId: "sandbox-host",
+        name: "Named sandbox",
+        isLocalMachine: false,
+        isActive: false,
+        kind: "sandbox",
+        sandbox: {
+          state: "suspended",
+          frozen: false,
+          summary: sandboxSummaryFixture({
+            id: "sbx-owned",
+            hostId: "sandbox-host",
+            state: "suspended",
+          }),
+          ownerKind: "user",
+          teamOwned: false,
+        },
+      });
+      const { result } = renderMakeActiveHost([sandbox]);
+      const showWakeRefusal = vi.fn<(show: () => void) => void>();
+      const origin = requestContext;
+
+      act(() => {
+        activation = result.current.makeActiveWithWakeNotice(
+          sandbox,
+          showWakeRefusal,
+          () => !origin.abortSignal.aborted,
+        );
+      });
+      expect(activateCalls).toEqual(["sandbox-host"]);
+      expect(activatedAccounts).toEqual(["user-1"]);
+
+      requestContext.abortController.abort();
+      requestContext = requestContextFor("user-2");
+      await act(async () => {
+        if (answer === "success") resolveActivate?.({ ok: true });
+        else if (answer === "refusal")
+          resolveActivate?.({ ok: false, reason: "unrecognized" });
+        else rejectActivate?.(new Error("activation response was lost"));
+        await activation;
+      });
+
+      expect(mocks.wake).not.toHaveBeenCalled();
+      expect(mocks.toastError).not.toHaveBeenCalled();
+      expect(showWakeRefusal).not.toHaveBeenCalled();
+      expect(activatedAccounts).toEqual(["user-1"]);
+    },
+  );
 
   describe("a management-only row", () => {
     const withSummary = (hostId: string, summary: SandboxSummary | null) =>

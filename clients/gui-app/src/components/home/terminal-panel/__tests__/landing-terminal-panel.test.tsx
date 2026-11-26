@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import type { AutomationTerminalPane } from "@/components/home/terminal-panel/automation-terminal-pane";
 import { useMemo, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -482,6 +483,7 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const TEST_LANDING_PAGE_ID = "test-landing-page";
 /** The window's landing composer surface, which stages a sandbox. */
@@ -835,6 +837,7 @@ describe("<LandingTerminalPanel />", () => {
     useStagedSandboxStore.setState({ bySurface: {} });
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useSurfaceHostSelectionStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
     mocks.activeHostId = null;
     mocks.placementHostId = null;
     mocks.clientActiveHostId = null;
@@ -2085,6 +2088,146 @@ describe("<LandingTerminalPanel />", () => {
     expect(screen.queryByTestId("landing-new-tab-chooser")).toBeNull();
   });
 
+  it("keeps the staged terminal launch available on the pool and routes it to the staged sandbox", async () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-a", kind: "remote", teamOwned: false },
+        { hostId: "host-sbx", kind: "sandbox", teamOwned: false },
+      ],
+    });
+    authority.goCold("host-a");
+    authority.goCold("host-sbx");
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
+    useStagedSandboxStore.getState().stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const plus = screen.getByTestId("landing-terminal-new-tab");
+    expect(plus.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(plus);
+    await pickTerminalFromChooser();
+
+    expect(runStagedSandbox).toHaveBeenCalledTimes(1);
+    expect(runStagedSandbox).toHaveBeenCalledWith(
+      COMPOSER_SURFACE,
+      true,
+      { taskId: null, resume: false },
+      expect.anything(),
+    );
+    expect(readStagedSandbox(COMPOSER_SURFACE)).toMatchObject({
+      openTerminal: true,
+      sendTaken: false,
+    });
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("routes the Mod+Shift+J terminal action to the staged sandbox while the pool serves the app", () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-a", kind: "remote", teamOwned: false },
+        { hostId: "host-sbx", kind: "sandbox", teamOwned: false },
+      ],
+    });
+    authority.goCold("host-a");
+    authority.goCold("host-sbx");
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    useStagedSandboxStore.getState().stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.new", fakeKeybindingRouter());
+    });
+
+    expect(runStagedSandbox).toHaveBeenCalledTimes(1);
+    expect(runStagedSandbox).toHaveBeenCalledWith(
+      COMPOSER_SURFACE,
+      true,
+      { taskId: null, resume: false },
+      expect.anything(),
+    );
+    expect(readStagedSandbox(COMPOSER_SURFACE)).toMatchObject({
+      openTerminal: true,
+      sendTaken: false,
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+  });
+
+  it("keeps the landing terminal plus disabled on the pool when no stage or computer can take it", () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+    });
+    authority.goCold("host-a");
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const plus = screen.getByTestId("landing-terminal-new-tab");
+    expect(plus.hasAttribute("disabled")).toBe(true);
+    const chooserBeforePress = screen.queryByTestId("landing-new-tab-chooser");
+    fireEvent.click(plus);
+    expect(screen.queryByTestId("landing-new-tab-chooser")).toBe(
+      chooserBeforePress,
+    );
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("keeps the landing terminal entry inert when only an unrelated computer is ready", () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "placement-computer", kind: "remote", teamOwned: false },
+        { hostId: "unrelated-team-computer", kind: "remote", teamOwned: true },
+      ],
+      savedPick: "placement-computer",
+      readyComputers: ["unrelated-team-computer"],
+    });
+    authority.goCold("placement-computer");
+    mocks.activeHostId = "placement-computer";
+    mocks.placementHostId = "placement-computer";
+    mocks.clientActiveHostId = "placement-computer";
+    seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const plus = screen.getByTestId("landing-terminal-new-tab");
+    expect(plus.matches(":disabled")).toBe(true);
+    const terminalCard = screen.getByTestId("landing-new-tab-card-terminal");
+    expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(plus);
+    fireEvent.click(terminalCard);
+    fireEvent.keyDown(terminalCard, { key: "Enter" });
+    act(() => {
+      dispatchAction("app.terminal.new", fakeKeybindingRouter());
+    });
+
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+    expect(runStagedSandbox).not.toHaveBeenCalled();
+  });
+
   it("leaves the window's staged sandbox alone when the draft was opened for one host: Terminal never takes it", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -2801,6 +2944,33 @@ describe("<LandingTerminalPanel />", () => {
   // The chooser's cap count and `app.browser.new` both read the TARGET host's
   // coordinator, which the panel pins unconditionally - so both must still
   // work while the panel itself is collapsed and showing nothing.
+  it("keeps the landing Browser card and new-browser shortcut inert on a cold pool", () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+    });
+    authority.goCold("host-a");
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    const openTab = vi.fn();
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const card = screen.getByTestId("landing-new-tab-card-browser");
+    expect(card.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(card);
+    fireEvent.keyDown(card, { key: "Enter" });
+    act(() => {
+      dispatchAction("app.browser.new", fakeKeybindingRouter());
+    });
+
+    expect(openTab).not.toHaveBeenCalled();
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
   it("opens a browser tab via app.browser.new with the panel collapsed", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";

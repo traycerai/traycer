@@ -38,17 +38,23 @@ export function useNowMs(intervalMs: number): number {
   return nowMs;
 }
 
+export function readLocalHostSnapshot(
+  runnerHost: IRunnerHost,
+): LocalHostSnapshot | null {
+  let snapshot: LocalHostSnapshot | null = null;
+  const probe = runnerHost.onLocalHostChange((next) => {
+    snapshot = next;
+  });
+  probe.dispose();
+  return snapshot;
+}
+
 export function useLocalHostSnapshot(
   runnerHost: IRunnerHost,
 ): LocalHostSnapshot | null {
-  const [snapshot, setSnapshot] = useState<LocalHostSnapshot | null>(() => {
-    let initial: LocalHostSnapshot | null = null;
-    const probe = runnerHost.onLocalHostChange((next) => {
-      initial = next;
-    });
-    probe.dispose();
-    return initial;
-  });
+  const [snapshot, setSnapshot] = useState(() =>
+    readLocalHostSnapshot(runnerHost),
+  );
   useEffect(() => {
     const subscription = runnerHost.onLocalHostChange((next) => {
       setSnapshot(next);

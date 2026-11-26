@@ -1,3 +1,8 @@
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useCallback, type ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -31,6 +36,8 @@ export function GitBindingsUnreadable(props: {
   readonly message: string;
   readonly onRetry: () => Promise<void>;
 }): ReactNode {
+  const hostId = useEpicSessionHostId();
+  const retryDisabled = usePoolComputerUnavailable(hostId);
   const onRetry = props.onRetry;
   const handleRefresh = useCallback((): Promise<void> => onRetry(), [onRetry]);
   const refresh = useRefreshSpinner({
@@ -63,8 +70,10 @@ export function GitBindingsUnreadable(props: {
           type="button"
           variant="outline"
           size="sm"
-          onClick={refresh.trigger}
-          disabled={refresh.refreshing}
+          onClick={() => {
+            if (!readPoolComputerUnavailable(hostId)) refresh.trigger();
+          }}
+          disabled={refresh.refreshing || retryDisabled}
           data-testid="git-bindings-unreadable-retry"
         >
           {refresh.refreshing ? (

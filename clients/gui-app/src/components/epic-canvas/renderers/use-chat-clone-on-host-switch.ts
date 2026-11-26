@@ -4,6 +4,10 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import { useHostBinding } from "@/lib/host";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
@@ -66,6 +70,8 @@ interface CloneProfileRecoveryOffer {
 export interface ChatCloneOnHostSwitch {
   readonly clone: () => void;
   readonly cloning: boolean;
+  readonly unavailableOnPool: boolean;
+  readonly readUnavailableOnPool: () => boolean;
   readonly profileRecovery: CloneProfileRecoveryOffer | null;
 }
 
@@ -84,6 +90,7 @@ export function useChatCloneOnHostSwitch(
   // frozen here instead.)
   const cloneTargetHostId = useEffectiveHostId();
   const cloneTargetClient = useHostClientForHostId(cloneTargetHostId);
+  const unavailableOnPool = usePoolComputerUnavailable(cloneTargetHostId);
   const createChat = useEpicCreateChatForHostClient(cloneTargetClient);
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const { openSettings } = useSystemTabModalActions();
@@ -254,6 +261,8 @@ export function useChatCloneOnHostSwitch(
   return {
     clone,
     cloning,
+    unavailableOnPool,
+    readUnavailableOnPool: () => readPoolComputerUnavailable(cloneTargetHostId),
     profileRecovery,
   };
 }

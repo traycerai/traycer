@@ -14,15 +14,19 @@ export function chatSandboxStateLine(
 ): ChatStateLine | null {
   if (line?.place !== "slot") return null;
   const { state } = line;
+  const description = {
+    allowsPoolActions: line.allowsPoolActions,
+    line: line.text,
+  };
   switch (state.kind) {
     case "destroyed":
-      return { line: line.text, actions: endActions };
+      return { ...description, actions: endActions };
     case "failed":
       return {
-        line: line.text,
+        ...description,
         actions: <SandboxFailedChatActions summary={state.sandbox} />,
       };
     default:
-      return { line: line.text, actions: null };
+      return { ...description, actions: null };
   }
 }

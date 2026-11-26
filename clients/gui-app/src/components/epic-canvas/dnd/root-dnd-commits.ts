@@ -81,13 +81,12 @@ import {
 } from "@/lib/registries/epic-session-registry";
 import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import { invalidateEpicTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
+import { canReparentProjected } from "@/lib/reparent-projection-rules";
 import {
-  canReparentProjected,
-  type ProjectedReparentNode,
-} from "@/lib/reparent-projection-rules";
-import type { OpenEpicState } from "@/stores/epics/open-epic/store";
-import { routeChatWrite } from "@/stores/epics/open-epic/chat-write-routing";
-import { readEpicDocRecordArms } from "@/stores/epics/open-epic/doc-record-arms";
+  agentReparentRoute,
+  readPoolAgentReparentBlocked,
+  reparentOwnerHostId,
+} from "@/components/epic-canvas/dnd/sidebar-agent-reparent-route";
 import { appLogger } from "@/lib/logger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -713,108 +712,6 @@ export interface SidebarReparentDropInput {
 }
 
 /**
- * Whether this node's parent pointer still lives in the epic Y.Doc rather than
- * on the host's record plane.
- *
- * Only terminal agents can answer yes. A migrated host serves its own rows
- * through `epic.listTuiAgents` AND evicts their doc entries, so a terminal
- * agent that is absent from the record slice is one whose binding host has not
- * migrated - either it predates `epic.listTuiAgents` entirely, or it is a
- * foreign binding host whose entries this host only relays. Both keep their
- * pointer in the doc, and both predate the `epic.reparentChat` terminal-agent
- * arm, so routing them to the RPC would hand an already-released `@1.0` a
- * `chatId` naming no chat: a host error where the doc write used to work.
- *
- * Chats never answer yes. `epic.reparentChat@1.0` has routed chats since
- * chats-off-YJS, and the host resolves a pre-migration chat through the same
- * storage seam, so the RPC is correct for a chat on every host that has the
- * method at all.
- *
- * ## ABSENCE STOPPED BEING THE TEST at `epic.listTuiAgents@1.1`
- *
- * "Absent from the record slice" was a sound proxy only while the record slice
- * was registry-only. `@1.1` serves the doc-resident remainder too - it has to,
- * because `epic.subscribe@2` has no doc replica to union those agents in from
- * - so a foreign-bound agent now ARRIVES as a record and absence goes quiet.
- *
- * Read literally, this function would then answer `false` for exactly the
- * agents it exists to catch, and route them to `epic.reparentChat` with an id
- * naming no registry chat: the host error described above, reintroduced by a
- * change that was fixing a different symptom. The row carries `docResident`
- * precisely so the distinction survives the union, and both tests are kept -
- * absence still covers a `@1.0` host, which sends no marker at all.
- */
-function isDocOnlyTerminalAgent(
-  state: OpenEpicState,
-  node: ProjectedReparentNode,
-): boolean {
-  // Read the UNION, not the record slice, on BOTH planes. Absence from the
-  // record slice is still a doc-only tell on a `@1.0` host, but it is the
-  // union that holds every agent the user can actually grab, and its
-  // `docResident` answers for both planes on every host version.
-  //
-  // `Object.hasOwn` rather than an `=== undefined` compare, for the same
-  // reason the record-slice version used it: `byId` is a `Record<string, T>`,
-  // so indexing it types as `T` even though a miss is plainly reachable here
-  // - a node id the union does not carry. The undefined check is unreachable
-  // to the type system and reachable at runtime, which is exactly the shape
-  // `no-unnecessary-condition` refuses to let through.
-  //
-  // CHATS are gated too now, but through `routeChatWrite` rather than through
-  // this function's `docResident` test, because the chat plane needs a second
-  // fact this one cannot see: whether the host serves a chat record plane AT
-  // ALL. `epic.reparentChat` is on `RELEASED_FLOOR_METHOD_NAMES`, so on a
-  // floor-era host it works and every chat projects from the doc - a home-only
-  // gate would disable the affordance on exactly the hosts that need no gate.
-  // See `chat-write-routing.ts`; the chat arm is applied at the call site.
-  if (node.type !== "terminal-agent") return false;
-  const byId = state.tuiAgents.byId;
-  if (!Object.hasOwn(byId, node.id)) return true;
-  return byId[node.id].docResident;
-}
-
-/**
- * Where an agent-family reparent goes: the RPC, the doc, or nowhere.
- *
- * Two planes, two different unaddressability rules, and crucially two different
- * ANSWERS when the row is unaddressable. A terminal agent whose home is the doc
- * has a doc write as its correct route - that is the `@1.0`-host case
- * `isDocOnlyTerminalAgent` was written for. A chat the record plane will not
- * address has NO route: on a host that serves that plane the doc is not the
- * authority, so a local write loses to record-wins on the next answer and reads
- * as an affordance that works while changing nothing. Collapsing the two into
- * one boolean is what sent a refused chat down the doc-write branch.
- */
-function agentReparentRoute(
-  state: OpenEpicState,
-  node: ProjectedReparentNode,
-  hostId: string | null,
-): "registry-rpc" | "doc" | "unavailable" {
-  if (node.type === "terminal-agent") {
-    return isDocOnlyTerminalAgent(state, node) ? "doc" : "registry-rpc";
-  }
-  if (node.type !== "chat") return "doc";
-  return routeChatWrite({
-    chat: Object.hasOwn(state.chats.byId, node.id)
-      ? state.chats.byId[node.id]
-      : undefined,
-    docArm: readEpicDocRecordArms(hostId),
-  });
-}
-
-function reparentOwnerHostId(
-  state: OpenEpicState,
-  node: ProjectedReparentNode,
-  sessionHostId: string | null,
-): string | null {
-  return (
-    (node.type === "terminal-agent"
-      ? state.tuiAgents.byId[node.id]?.hostId
-      : state.chats.byId[node.id]?.hostId) ?? sessionHostId
-  );
-}
-
-/**
  * Imperative reparent commit for a `sidebar-node` released on a reparent
  * target. Resolves the live epic session via the registry (`peek`, never
  * `acquire`), RE-RUNS `canReparent` against the projected tree (Decision D:
@@ -866,21 +763,20 @@ export async function commitSidebarReparentDrop(
   }
   // Judge addressability against the same host that will receive the write.
   const sessionHostId = getEpicSessionHandleHostId(handle);
-  const ownerHostId =
-    evaluation.node.family === "agent"
-      ? reparentOwnerHostId(state, evaluation.node, sessionHostId)
-      : sessionHostId;
-  const agentRoute =
-    evaluation.node.family === "agent"
-      ? agentReparentRoute(state, evaluation.node, ownerHostId)
-      : "doc";
+  const ownerHostId = reparentOwnerHostId(
+    state,
+    evaluation.node,
+    sessionHostId,
+  );
+  const agentRoute = agentReparentRoute(state, evaluation.node, ownerHostId);
   // A chat the host's record plane will not address has nowhere to go, so the
   // drop is a silent cancel - this file's own rule for a move it cannot make -
   // rather than a doc write the next record answer would erase. No overlay
   // stamp either: an optimistic patch for a mutation that is never sent is a
   // row that moves and then snaps back.
   if (agentRoute === "unavailable") return;
-  if (evaluation.node.family === "agent" && agentRoute === "registry-rpc") {
+  if (agentRoute === "registry-rpc") {
+    if (readPoolAgentReparentBlocked(agentRoute, ownerHostId)) return;
     // The agent family's parent pointer lives on the HOST's record (chat
     // registry row, or the terminal agent's tenant row), not on the doc: a
     // doc write would land on an entry that no longer exists or, for a
@@ -944,6 +840,11 @@ export async function commitSidebarReparentDrop(
         );
       }
     };
+    // The owner's lease can change while the worker prepares the overlay.
+    if (readPoolAgentReparentBlocked(agentRoute, ownerHostId)) {
+      void retire("failed");
+      return;
+    }
     void client
       .request("epic.reparentChat", {
         epicId: input.epicId,

@@ -8,6 +8,7 @@ import {
 } from "@/lib/sandboxes/chat-sandbox-state";
 import { chatSandboxStateLine } from "./chat-sandbox-state-line";
 import {
+  ChatSandboxFooterBlocksComposerContext,
   ChatSandboxLineContext,
   ChatStateLineContext,
 } from "./chat-state-line";
@@ -495,6 +496,7 @@ interface ChatTileProps {
 
 interface ChatTileSessionViewProps {
   readonly cloudChat?: CloudChatSummary;
+  readonly ownerHostId?: string;
   readonly restingSandbox?: RestingChatSandbox;
   /**
    * The road for a message to a chat its host may have dropped the records
@@ -955,25 +957,33 @@ function ChatTileForChat(props: ChatTileProps) {
         hostId={tabHostId}
       >
         <ChatSandboxLineContext value={sandbox.line !== null}>
-          <ChatStateLineContext value={stateLine}>
-            <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
-              <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
-                <ChatTileSessionView
-                  handle={handle}
-                  node={node}
-                  viewTabId={viewTabId}
-                  tileId={props.tileId}
-                  isActive={isActive}
-                  currentEpicId={epicId}
-                  restingSandbox={wakeOf(sandbox)}
-                  evictedSend={evictedSend}
-                  readOnlyNotice={readOnlyNotice}
-                  isLiveSession
-                  preContent={preContentFrame}
-                />
-              </ChatLoadAutofocusContext>
-            </PaneActivationFocusIntentContext>
-          </ChatStateLineContext>
+          <ChatSandboxFooterBlocksComposerContext
+            value={
+              sandbox.line?.place === "footer" &&
+              !sandbox.line.allowsPoolActions
+            }
+          >
+            <ChatStateLineContext value={stateLine}>
+              <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
+                <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
+                  <ChatTileSessionView
+                    handle={handle}
+                    node={node}
+                    viewTabId={viewTabId}
+                    tileId={props.tileId}
+                    isActive={isActive}
+                    currentEpicId={epicId}
+                    ownerHostId={tabHostId}
+                    restingSandbox={wakeOf(sandbox)}
+                    evictedSend={evictedSend}
+                    readOnlyNotice={readOnlyNotice}
+                    isLiveSession
+                    preContent={preContentFrame}
+                  />
+                </ChatLoadAutofocusContext>
+              </PaneActivationFocusIntentContext>
+            </ChatStateLineContext>
+          </ChatSandboxFooterBlocksComposerContext>
         </ChatSandboxLineContext>
       </TombstonedProfileProvider>
       <ChatSandboxFooter line={sandbox.line} />
@@ -1285,7 +1295,11 @@ export function ChatDeadTileBannerContainer(
         environmentOwned={environmentOwned}
         showsPublishedCopy={props.showsPublishedCopy}
         continueTargetLabel={continueOffer.targetLabel}
-        onClone={continues ? continueOffer.continueHere : offer.clone}
+        onClone={() => {
+          if (continues) continueOffer.continueHere();
+          else if (!offer.readUnavailableOnPool()) offer.clone();
+        }}
+        actionUnavailable={!continues && offer.unavailableOnPool}
         cloning={offer.cloning || continueOffer.continuing}
         className={undefined}
         testId={props.testId}
@@ -4456,6 +4470,7 @@ function useChatTileSessionViewModel(
 
   const lowerAccess = useMemo(
     () => ({
+      ownerHostId: props.ownerHostId,
       isCopy: isCopy || readOnlyPool,
       isViewer: accessFlags.isViewer && !canParkCreatorMessage,
       canAct,
@@ -4469,6 +4484,7 @@ function useChatTileSessionViewModel(
       accessFlags.isViewer,
       canParkCreatorMessage,
       canAct,
+      props.ownerHostId,
       props.readOnlyNotice,
       props.restingSandbox,
       evictedSend?.parks,

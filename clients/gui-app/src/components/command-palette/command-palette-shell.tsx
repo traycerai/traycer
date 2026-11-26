@@ -338,6 +338,7 @@ function GroupBlock(props: GroupBlockProps) {
             key={item.id}
             value={buildCmdkValue(item)}
             keywords={[...item.keywords]}
+            disabled={item.disabled === true}
             onSelect={() => onSelect(item)}
           >
             <span className="truncate">{item.label}</span>

@@ -13,6 +13,8 @@ import pluginQuery from "@tanstack/eslint-plugin-query";
 import pluginRouter from "@tanstack/eslint-plugin-router";
 import oxlint from "eslint-plugin-oxlint";
 import { plugin as shadcn } from "@shadcn/lint";
+import { selectionTestWrites } from "./eslint/selection-test-writes.mjs";
+import { legacySelectionTestWrites } from "./eslint/legacy-selection-test-writes.mjs";
 import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
 import {
@@ -2050,6 +2052,24 @@ export default tseslint.config(
   linterOptionsConfig,
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: [...testFileGlobs, "**/test-support/**/*.{ts,tsx}"],
+    ignores: [
+      // The fixture publishes the actual engine snapshot.
+      "src/lib/host/test-support/selection-authority-fixture.ts",
+      // The named controller-only projection and subscriber notification.
+      "src/lib/registries/test-support/epic-session-controller-test-support.ts",
+      // Legacy direct-controller tests model the controller's projection input.
+      "src/lib/registries/__tests__/epic-session-controller.test.tsx",
+      // The shared legacy bridge mirrors hook-only tests outside engine-backed cases.
+      "src/lib/registries/test-support/test-epic-session-tab.tsx",
+      ...legacySelectionTestWrites,
+    ],
+    plugins: {
+      "selection-test": { rules: { "no-store-write": selectionTestWrites } },
+    },
+    rules: { "selection-test/no-store-write": "error" },
+  },
   reactHooks.configs.flat.recommended,
   jsxA11y.flatConfigs.recommended,
   {

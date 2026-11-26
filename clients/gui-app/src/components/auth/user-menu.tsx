@@ -1,3 +1,7 @@
+import {
+  POOL_HOST_ID,
+  POOL_HOST_LABEL,
+} from "@traycer-clients/shared/host-client/host-directory";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { PersonAvatar } from "@/components/bots/bot-avatars";
 import { Button } from "@/components/ui/button";
@@ -24,6 +28,7 @@ import { useMakeActiveHost } from "@/components/settings/host-scope/use-host-sco
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useHostBinding } from "@/lib/host";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
@@ -324,6 +329,9 @@ function UserMenuHostSection(props: {
     listsFailed,
     retryLists,
   } = useHostOptions();
+  const servesFromPool = useServingPeerHostId() === POOL_HOST_ID;
+  // The radio value displays the serving peer. Only computer rows can make a pick.
+  const currentValue = servesFromPool ? POOL_HOST_ID : (activeHostId ?? "");
   // A picker of the app-wide host: no team's sandbox (the selection authority
   // refuses one), no burst sandbox, and no sandbox the control plane has not
   // yet confirmed is not one. The active host always keeps its row.
@@ -335,20 +343,25 @@ function UserMenuHostSection(props: {
   // Rows listed while a list is still on its first read (a sandbox list
   // withholds its rows until it answers) are not the whole account.
   const showsLoadingMore = isLoading && hosts.length > 0;
-  if (hosts.length === 0 && !showsRetry) return null;
+  if (!servesFromPool && hosts.length === 0 && !showsRetry) return null;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <DropdownMenuLabel className="shrink-0">Host</DropdownMenuLabel>
       <DropdownMenuRadioGroup
-        value={activeHostId ?? ""}
+        value={currentValue}
         className="min-h-0 max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto overscroll-contain"
         data-testid="user-menu-host-section"
       >
+        {servesFromPool ? (
+          <DropdownMenuRadioItem value={POOL_HOST_ID} disabled>
+            {POOL_HOST_LABEL}
+          </DropdownMenuRadioItem>
+        ) : null}
         {hosts.map((host) => (
           <UserMenuHostRow
             key={host.hostId}
             host={host}
-            active={host.hostId === activeHostId}
+            active={!servesFromPool && host.hostId === activeHostId}
             activatingHostId={activatingHostId}
             tooltipSide={props.tooltipSide}
             onPick={(hostId) => {

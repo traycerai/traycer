@@ -93,6 +93,7 @@ export interface SimulatorListModel {
   readonly loading: boolean;
   readonly nowMs: number;
   readonly refresh: () => void;
+  readonly readHostOffline: (hostId: string) => boolean;
 }
 
 function newestFirst(
@@ -287,5 +288,9 @@ export function useSimulatorListModel(epicId: string): SimulatorListModel {
     loading: status === "loading" && rowCount === 0,
     nowMs,
     refresh: catalog?.refetch ?? (() => undefined),
+    readHostOffline: (hostId) => {
+      const host = options.readHosts().find((entry) => entry.hostId === hostId);
+      return host?.health.state === "removed" || isBrowserDeviceOffline(host);
+    },
   };
 }

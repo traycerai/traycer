@@ -14,12 +14,14 @@ import {
   type TestEpicSessionEnvironment,
 } from "@/lib/registries/test-support/epic-session-controller-test-support";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
-import { useAuthService } from "@/lib/host";
+import { useAuthService, useHostBinding } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { hasActiveTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 /**
  * The controller's environment and host selection, derived from the SAME
@@ -38,13 +40,15 @@ function TestEpicSessionHookEnvironment(): ReactNode {
   const effectiveHostId = useEffectiveHostId();
   const attached = useSelectionAuthorityAttached();
   const authService = useAuthService();
+  const { hostClient } = useHostBinding() ?? {};
   const effectiveHostClient = useHostClientForHostId(effectiveHostId);
-  const latest = useRef({
-    openTransport,
-    effectiveHostId,
-    effectiveHostClient,
-    authService,
-  });
+  const latest = useRef({ openTransport, authService });
+  // The production bridge retains each named requester for the life of its
+  // binding. A test binding may recreate its wrapper around the same spine.
+  const requesters = useMemo(
+    () => ({ hostClient, byId: new Map<string, typeof effectiveHostClient>() }),
+    [hostClient],
+  );
   // The suite's own Query client, when it provides one: the session's History
   // and home write-throughs are controller-owned and need it, exactly as the
   // app's bridge supplies the app's.
@@ -55,32 +59,39 @@ function TestEpicSessionHookEnvironment(): ReactNode {
       resolveHostClient: (hostId) => {
         const override = readTestEpicSessionHostClientResolver();
         if (override !== null) return override(hostId);
-        return hostId === latest.current.effectiveHostId
-          ? latest.current.effectiveHostClient
-          : null;
+        if (requesters.byId.has(hostId))
+          return requesters.byId.get(hostId) ?? null;
+        if (requesters.hostClient === undefined) return null;
+        const client = resolveNamedHostClient(
+          { hostClient: requesters.hostClient },
+          hostId,
+        );
+        requesters.byId.set(hostId, client);
+        return client;
       },
       revalidateAuth: () => {
         void latest.current.authService.revalidateCurrentContext();
       },
       queryClient,
     }),
-    [queryClient],
+    [queryClient, requesters],
   );
   // EVERY commit, no deps: a re-render is how these suites say "an input
   // moved" - they mutate what a mocked hook answers and re-render, where
   // production would hear a store or host-row notification. Re-installing the
   // same environment is the controller's "reconcile everything".
   useLayoutEffect(() => {
-    latest.current = {
-      openTransport,
-      effectiveHostId,
-      effectiveHostClient,
-      authService,
-    };
+    latest.current = { openTransport, authService };
+    // Hook-only harnesses supply no binding. Retain each client observed at
+    // that seam when the effective host changes.
+    if (hostClient === undefined && effectiveHostId !== null) {
+      requesters.byId.set(effectiveHostId, effectiveHostClient);
+    }
     const selection = useSelectionAuthorityStore.getState();
     if (
-      selection.effectiveHostId !== effectiveHostId ||
-      selection.attached !== attached
+      !hasActiveTestSelectionAuthority() &&
+      (selection.effectiveHostId !== effectiveHostId ||
+        selection.attached !== attached)
     ) {
       setTestEffectiveHost(effectiveHostId, attached);
     }

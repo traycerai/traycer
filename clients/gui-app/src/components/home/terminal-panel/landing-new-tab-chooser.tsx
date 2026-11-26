@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 export type LandingNewTabKind = "terminal" | "browser";
 
 export interface LandingNewTabCardState {
-  /** Why this kind cannot be picked right now, or `null` when it can. */
+  /** The visible reason, empty when none is needed, or `null` when enabled. */
   readonly disabledReason: string | null;
   /**
    * A pick of this kind is already in flight on the device.
@@ -272,7 +272,7 @@ function LandingNewTabCard({
         ) : null}
       </span>
       <span className="text-ui-xs text-muted-foreground">{description}</span>
-      {disabledReason === null ? null : (
+      {disabledReason === null || disabledReason.length === 0 ? null : (
         <span
           className="text-ui-xs text-muted-foreground"
           data-testid={`landing-new-tab-card-${kind}-reason`}

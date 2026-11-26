@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 import { DraftsDialog } from "@/components/composer/drafts/drafts-dialog";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -73,12 +74,16 @@ function newChatRow(
 const inventoryMock = vi.hoisted(() => ({
   rows: [] as DraftInventoryRow[],
   calls: [] as Array<{ scope: unknown; filter: unknown }>,
+  servingPeerHostId: null as string | null,
 }));
 vi.mock("@/hooks/drafts/use-draft-inventory", () => ({
   useDraftInventory: (scope: unknown, filter: unknown) => {
     inventoryMock.calls.push({ scope, filter });
     return inventoryMock.rows;
   },
+}));
+vi.mock("@/lib/host/serving-decision", () => ({
+  useServingPeerHostId: () => inventoryMock.servingPeerHostId,
 }));
 
 // The row actions are exercised directly against real stores/a fake host in
@@ -104,6 +109,7 @@ beforeEach(() => {
   vi.spyOn(Analytics.getInstance(), "track").mockImplementation(() => true);
   inventoryMock.rows = [];
   inventoryMock.calls = [];
+  inventoryMock.servingPeerHostId = null;
   actionsMock.calls = [];
   actionsMock.openRow.mockReset();
   actionsMock.copyRow.mockReset();
@@ -430,6 +436,76 @@ describe("<DraftsDialog />", () => {
 
     expect(actionsMock.deleteRow).toHaveBeenCalledWith(row, "keyboard");
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps foreign landing draft Delete disabled on the pool without blocking Open or Copy", () => {
+    const row = landingRow({
+      id: "d-foreign",
+      foreign: true,
+      ownerHostId: "computer-a",
+    });
+    inventoryMock.rows = [row];
+    inventoryMock.servingPeerHostId = POOL_HOST_ID;
+    render(
+      <DraftsDialog
+        entryPoint="menu"
+        hostId={null}
+        activeEpicId={null}
+        onClose={noop}
+      />,
+    );
+
+    const remove = screen.getByRole("button", { name: "Delete draft" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(remove);
+    expect(actionsMock.deleteRow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Copy draft" }));
+    expect(actionsMock.copyRow).toHaveBeenCalledWith(row, "keyboard");
+    fireEvent.click(screen.getByRole("option"));
+    expect(actionsMock.openRow).toHaveBeenCalledWith(row, "pointer", false);
+  });
+
+  it("re-enables foreign landing draft Delete when a computer addresses the retract", () => {
+    const row = landingRow({
+      id: "d-foreign",
+      foreign: true,
+      ownerHostId: "computer-a",
+    });
+    inventoryMock.rows = [row];
+    inventoryMock.servingPeerHostId = POOL_HOST_ID;
+    render(
+      <DraftsDialog
+        entryPoint="menu"
+        hostId="computer-a"
+        activeEpicId={null}
+        onClose={noop}
+      />,
+    );
+
+    const remove = screen.getByRole("button", { name: "Delete draft" });
+    expect(remove.getAttribute("aria-disabled")).toBe("false");
+    fireEvent.click(remove);
+    expect(actionsMock.deleteRow).toHaveBeenCalledTimes(1);
+    expect(actionsMock.deleteRow).toHaveBeenCalledWith(row, "keyboard");
+  });
+
+  it("keeps local landing draft Delete enabled on the pool", () => {
+    const row = landingRow({ id: "d-local" });
+    inventoryMock.rows = [row];
+    inventoryMock.servingPeerHostId = POOL_HOST_ID;
+    render(
+      <DraftsDialog
+        entryPoint="menu"
+        hostId={null}
+        activeEpicId={null}
+        onClose={noop}
+      />,
+    );
+
+    const remove = screen.getByRole("button", { name: "Delete draft" });
+    expect(remove.getAttribute("aria-disabled")).toBe("false");
+    fireEvent.click(remove);
+    expect(actionsMock.deleteRow).toHaveBeenCalledTimes(1);
   });
 
   // Cmd+S stacks the dialog above an open new-agent modal,

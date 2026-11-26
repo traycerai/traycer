@@ -1,5 +1,8 @@
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
-import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
+import {
+  hostSandboxStateWord,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import {
@@ -79,11 +82,13 @@ export type ChatSandboxLine =
       readonly place: "slot";
       readonly text: string;
       readonly state: ChatSandboxState;
+      readonly allowsPoolActions: boolean;
     }
   | {
       readonly place: "footer";
       readonly text: string;
       readonly state: RestingChatSandbox | UnreachableChatSandbox;
+      readonly allowsPoolActions: boolean;
     };
 
 /**
@@ -153,6 +158,7 @@ export function resolveChatSandbox(
           place: "footer",
           text: `${state.sandbox.displayName} is running, but Traycer can’t connect`,
           state,
+          allowsPoolActions: true,
         },
         composer: { kind: "ordinary" },
       };
@@ -160,7 +166,30 @@ export function resolveChatSandbox(
 }
 
 function slotLine(state: ChatSandboxState, text: string): ChatSandboxView {
-  return { line: { place: "slot", text, state }, composer: { kind: "line" } };
+  const allowsPoolActions = sandboxStateAllowsPoolActions(
+    "sandbox" in state ? state.sandbox.state : undefined,
+  );
+  return {
+    line: { place: "slot", text, state, allowsPoolActions },
+    composer: { kind: "line" },
+  };
+}
+
+/** The listed lifecycle gates new starts independently of the existing line. */
+export function sandboxStateAllowsPoolActions(
+  state: HostSandboxState | undefined,
+): boolean {
+  switch (state) {
+    case "creating":
+    case "resuming":
+    case "starting":
+    case "suspending":
+    case "stopping":
+    case "destroying":
+      return false;
+    default:
+      return true;
+  }
 }
 
 /**
@@ -177,7 +206,12 @@ function restingView(
   const known: RestingChatSandbox = { ...state, configuration };
   const wakes = viewer.ownedByViewer || viewer.environmentOwned;
   return {
-    line: { place: "footer", text, state: known },
+    line: {
+      place: "footer",
+      text,
+      state: known,
+      allowsPoolActions: sandboxStateAllowsPoolActions(state.sandbox.state),
+    },
     composer: wakes ? { kind: "wake", sandbox: known } : { kind: "ordinary" },
   };
 }

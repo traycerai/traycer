@@ -489,6 +489,8 @@ import {
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry = directoryEntry(hostId, hostId);
@@ -785,6 +787,7 @@ describe("ChatForkDialog cross-host routing", () => {
     resetNegotiatedManifests();
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
     cleanup();
   });
 
@@ -1913,6 +1916,72 @@ describe("ChatForkDialog cross-host routing", () => {
       expect(
         contentIsSubmittable(readComposerDraftSnapshot("source-chat").content),
       ).toBe(false);
+    });
+
+    it("retires a pooled read-only source draft only after the other-host fork succeeds", async () => {
+      mountTestSelectionAuthority({
+        hosts: [
+          { hostId: TAB_HOST_ID, kind: "remote", teamOwned: false },
+          { hostId: OTHER_HOST_ID, kind: "remote", teamOwned: true },
+        ],
+        savedPick: TAB_HOST_ID,
+        readyComputers: [OTHER_HOST_ID],
+      });
+      renderDialog(
+        forkTarget({ assistantMessageId: null, carriesComposerDraft: true }),
+        ignoreOpenChange,
+      );
+      fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
+
+      await submitFork();
+      expect(readComposerDraftSnapshot("source-chat").content).toEqual(REFUSED);
+
+      cloneCreated("clone-chat");
+
+      expect(readComposerDraftSnapshot("clone-chat").content).toEqual(REFUSED);
+      expect(
+        contentIsSubmittable(readComposerDraftSnapshot("source-chat").content),
+      ).toBe(false);
+      expect(dialogMocks.createVariables).toMatchObject({
+        hostId: OTHER_HOST_ID,
+        forkSource: { sourceChatId: "source-chat" },
+      });
+    });
+
+    it("keeps the pooled read-only source draft when the real Fork action fails", async () => {
+      mountTestSelectionAuthority({
+        hosts: [
+          { hostId: TAB_HOST_ID, kind: "remote", teamOwned: false },
+          { hostId: OTHER_HOST_ID, kind: "remote", teamOwned: true },
+        ],
+        savedPick: TAB_HOST_ID,
+        readyComputers: [OTHER_HOST_ID],
+      });
+      const target = forkTarget({
+        assistantMessageId: null,
+        carriesComposerDraft: true,
+      });
+      const onOpenChange = vi.fn<(open: boolean) => void>();
+      const view = renderDialog(target, onOpenChange);
+      fireEvent.click(screen.getByTestId(`fork-host-${OTHER_HOST_ID}`));
+
+      await submitFork();
+      expect(readComposerDraftSnapshot("source-chat").content).toEqual(REFUSED);
+
+      dialogMocks.createError = { code: "RPC_ERROR" };
+      view.rerender(
+        <ChatForkDialog {...dialogProps(target, onOpenChange, true)} />,
+      );
+
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(readComposerDraftSnapshot("source-chat").content).toEqual(REFUSED);
+      expect(
+        contentIsSubmittable(readComposerDraftSnapshot("clone-chat").content),
+      ).toBe(false);
+      expect(dialogMocks.createVariables).toMatchObject({
+        hostId: OTHER_HOST_ID,
+        forkSource: { sourceChatId: "source-chat" },
+      });
     });
 
     it("leaves the draft where it is when the fork fails or is cancelled", async () => {

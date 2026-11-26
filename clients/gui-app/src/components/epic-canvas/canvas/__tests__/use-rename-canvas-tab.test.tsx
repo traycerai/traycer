@@ -24,6 +24,8 @@ import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -405,7 +407,12 @@ describe("useRenameCanvasTab", () => {
     mocks.settleAs = "success";
     mocks.handle.current?.dispose();
     mocks.handle.current = null;
+    useSelectionAuthorityStore.getState().reset();
   });
+
+  function makePoolServe(): void {
+    mountTestSelectionAuthority({ hosts: [] });
+  }
 
   it("stamps a trimmed optimistic rename before the RPC fires, and marks it landed (not deleted) once the RPC settles OK", async () => {
     const handle = newSession();
@@ -830,6 +837,53 @@ describe("useRenameCanvasTab", () => {
     expect(mocks.tuiCalls).toEqual([]);
     expect(handle.store.getState().tuiAgents.byId[agentId].title).toBe(
       "Doc agent name",
+    );
+    unmount();
+  });
+
+  it("keeps direct doc rename enabled for a doc-resident editor when its owner is unavailable", async () => {
+    makePoolServe();
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const agentId = createTerminalAgentInDocForTests(handle.doc);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    await act(async () => {
+      result.current(terminalAgentTile(agentId), "Edited while offline");
+      await handle.flush();
+      await handle.flush();
+    });
+
+    expect(mocks.tuiCalls).toEqual([]);
+    expect(handle.store.getState().tuiAgents.byId[agentId].title).toBe(
+      "Edited while offline",
+    );
+    unmount();
+  });
+
+  it("does not send a registry rename when its owner is unavailable", async () => {
+    makePoolServe();
+    const handle = newSession();
+    mocks.handle.current = handle;
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([agentRecord("agent-offline")], null);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    act(() => {
+      result.current(terminalAgentTile("agent-offline"), "Ignored rename");
+    });
+    await act(async () => {
+      await handle.flush();
+    });
+
+    expect(mocks.tuiCalls).toEqual([]);
+    expect(handle.store.getState().tuiAgents.byId["agent-offline"]?.title).toBe(
+      "An agent",
     );
     unmount();
   });

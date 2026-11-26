@@ -1,21 +1,38 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { isValidElement, useRef, useState, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
+  waitFor,
   type RenderResult,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { ActivationOutcome } from "@/components/settings/host-scope/use-host-scope";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { emptyLandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
+import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
+import { persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   newConversationModalStagingKey,
   useWorktreeIntentStagingStore,
@@ -27,6 +44,14 @@ import { SurfacePresentationBoundary } from "@/components/layout/surface-present
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { createAppQueryClient } from "@/lib/query-client";
+import {
+  teamSubscription,
+  userSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
+import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
@@ -48,6 +73,8 @@ const DIRTY_CONTENT: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "dirty" }] }],
 };
+
+const NEW_CHAT_DRAFT_STORAGE_KEY = persistKey(STORE_KEYS.newConversationDraft);
 
 const STAGING_KEY = newConversationModalStagingKey("host-a", "epic-1", null);
 const STAGING_KEY_ID = worktreeStagingKeyString(STAGING_KEY);
@@ -135,16 +162,24 @@ function placementHolder(): { current: PlacementTargetShape } {
 
 const testState = vi.hoisted(() => ({
   createChat: vi.fn<
-    (request: { readonly hostId: string }) => Promise<{
+    (request: {
+      readonly hostId: string;
+      readonly initialMessage: unknown;
+    }) => Promise<{
       readonly initialTurnStarted: boolean;
     }>
   >(() => Promise.resolve({ initialTurnStarted: false })),
+  createChatClientHostIds: [] as Array<string | null>,
   createTerminalAgent: vi.fn(() => Promise.resolve(null)),
   onSubmitted: vi.fn(),
   bodySubmit: null as (() => void) | null,
   bodyStartTerminal: null as
     | ((launch: TerminalAgentLaunch, assembledFor: string | null) => void)
     | null,
+  bodySnapshots: [] as Array<{
+    readonly composerMode: ComposerBodyProps["composerMode"];
+    readonly initialContent: ComposerBodyProps["initialContent"];
+  }>,
   installEditor: null as (() => void) | null,
   /** Drives what the modal's placement resolves to, per test. */
   placement: placementHolder(),
@@ -164,6 +199,8 @@ const testState = vi.hoisted(() => ({
     readonly overrideHostId: string | null;
     readonly sessionHostId: string | null;
   }>,
+  overrideHostId: null as string | null,
+  taskSessionHostId: "host-session",
   /**
    * The workspace-controls element the body was handed. The
    * ComposerBody mock renders only the banner, so the picker's `hostScope`
@@ -174,6 +211,36 @@ const testState = vi.hoisted(() => ({
   latestSeedPins: [] as unknown[],
   /** The `pathsReachTarget` the modal handed `useComposerHashPaste`. */
   pastePathsReachTarget: null as boolean | null,
+  poolActionsEnabled: false,
+  poolEntry: null as HostDirectoryEntry | null,
+  poolDirectoryListeners: new Set<() => void>(),
+  poolEvents: [] as string[],
+  poolUser: null as AuthenticatedUser | null,
+  poolCatalogue: null as SandboxCatalogue | null,
+  poolCreateSandbox:
+    vi.fn<(input: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>>(),
+  poolAttach:
+    vi.fn<
+      (input: {
+        readonly epicId: string;
+        readonly teamId: string;
+        readonly operation: EnvironmentCloud;
+      }) => Promise<{ readonly environmentId: string }>
+    >(),
+  poolActivate:
+    vi.fn<
+      (
+        option: HostScopeOption,
+        report: (show: () => void) => void,
+        current: () => boolean,
+      ) => Promise<ActivationOutcome>
+    >(),
+  poolOpenTransport: vi.fn<
+    (hostId: string) => {
+      readonly close: () => void;
+      readonly closeWithReason: (reason: string) => void;
+    }
+  >(),
 }));
 
 /** This renderer's own host id, which the modal compares its placement host with. */
@@ -185,11 +252,26 @@ vi.mock("@/components/home/composer/composer-body", async () => {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
       testState.bodyStartTerminal = props.onStartTerminal;
+      testState.bodySnapshots.push({
+        composerMode: props.composerMode,
+        initialContent: props.initialContent,
+      });
       testState.workspaceControlsElements.push(props.workspaceControls);
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
-      return React.createElement("div", null, props.topBanner);
+      return React.createElement(
+        "div",
+        null,
+        props.topBanner,
+        testState.poolActionsEnabled
+          ? React.createElement(
+              "button",
+              { type: "button", onClick: props.onSubmit },
+              "Send",
+            )
+          : null,
+      );
     },
   };
 });
@@ -248,6 +330,30 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
   },
 }));
 
+vi.mock(
+  "@/components/composer/pool-composer-actions",
+  async (importOriginal) => {
+    const React = await import("react");
+    const actual =
+      await importOriginal<
+        typeof import("@/components/composer/pool-composer-actions")
+      >();
+    return {
+      ...actual,
+      PoolComposerActions: (
+        props: Parameters<typeof actual.PoolComposerActions>[0],
+      ) =>
+        testState.poolActionsEnabled
+          ? React.createElement(actual.PoolComposerActions, props)
+          : React.createElement(
+              "button",
+              { type: "button" },
+              "Connect a computer",
+            ),
+    };
+  },
+);
+
 // The Epic session's host, the modal's DEFAULT placement tier - handed to the
 // (mocked) placement above, so this suite pins that the modal asks for the
 // session's host and not the app-wide one.
@@ -262,16 +368,24 @@ vi.mock("@/hooks/composer/use-composer-mirror-line", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
-  useEpicSessionHostId: () => "host-session",
+  useEpicSessionHostId: () => testState.taskSessionHostId,
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicCreateChatForHostClient: () => ({
+  useEpicCreateChatForHostClient: (
+    client: { readonly getActiveHostId: () => string | null } | null,
+  ) => ({
     isPending: false,
     // `mutateAsync`, matching the modal: it closes itself on submit, so its
     // completion handling rides a promise chain rather than the per-call
     // callbacks TanStack drops with the observer.
-    mutateAsync: testState.createChat,
+    mutateAsync: (request: {
+      readonly hostId: string;
+      readonly initialMessage: unknown;
+    }) => {
+      testState.createChatClientHostIds.push(client?.getActiveHostId() ?? null);
+      return testState.createChat(request);
+    },
   }),
 }));
 
@@ -439,10 +553,33 @@ const stubHostClient = {
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
 };
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => stubHostClient,
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  const auth = {
+    sandboxControlUnavailableReason: () => null,
+    environmentCloud: () => ({ onOriginSignIn: () => true }),
+    createSandbox: testState.poolCreateSandbox,
+  };
+  const directory = {
+    knownHostIds: () => [],
+    refresh: () => Promise.resolve(),
+    findById: (hostId: string) =>
+      testState.poolEntry?.hostId === hostId ? testState.poolEntry : null,
+    onChange: (listener: () => void) => {
+      testState.poolDirectoryListeners.add(listener);
+      return {
+        dispose: () => testState.poolDirectoryListeners.delete(listener),
+      };
+    },
+  };
+  const poolBinding = { auth, directory };
+  return {
+    ...actual,
+    useHostClient: () => stubHostClient,
+    useHostBinding: () =>
+      testState.poolActionsEnabled ? poolBinding : actual.useHostBinding(),
+  };
+});
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => stubHostClient,
@@ -451,6 +588,132 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [] }),
 }));
+vi.mock("@/hooks/auth/use-auth-user-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/auth/use-auth-user-query")>();
+  return {
+    ...actual,
+    useAuthUser: (...args: Parameters<typeof actual.useAuthUser>) =>
+      testState.poolActionsEnabled
+        ? { data: testState.poolUser }
+        : actual.useAuthUser(...args),
+  };
+});
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+      >();
+    return {
+      ...actual,
+      useSandboxCatalogue: (
+        ...args: Parameters<typeof actual.useSandboxCatalogue>
+      ) =>
+        testState.poolActionsEnabled
+          ? { data: testState.poolCatalogue, isError: false }
+          : actual.useSandboxCatalogue(...args),
+    };
+  },
+);
+vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-defaults")
+    >();
+  return {
+    ...actual,
+    useSandboxDefaultsLookup: (
+      ...args: Parameters<typeof actual.useSandboxDefaultsLookup>
+    ) =>
+      testState.poolActionsEnabled
+        ? () => null
+        : actual.useSandboxDefaultsLookup(...args),
+  };
+});
+vi.mock(
+  "@/hooks/sandboxes/use-team-bundle-balances",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-team-bundle-balances")
+      >();
+    return {
+      ...actual,
+      useTeamBundleBalances: (
+        ...args: Parameters<typeof actual.useTeamBundleBalances>
+      ) =>
+        testState.poolActionsEnabled
+          ? () => 0
+          : actual.useTeamBundleBalances(...args),
+    };
+  },
+);
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+      >();
+    return {
+      ...actual,
+      useEpicAttachEnvironment: (
+        ...args: Parameters<typeof actual.useEpicAttachEnvironment>
+      ) =>
+        testState.poolActionsEnabled
+          ? { mutateAsync: testState.poolAttach }
+          : actual.useEpicAttachEnvironment(...args),
+    };
+  },
+);
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >();
+    return {
+      ...actual,
+      useMakeActiveHost: (
+        ...args: Parameters<typeof actual.useMakeActiveHost>
+      ) =>
+        testState.poolActionsEnabled
+          ? { makeActiveWithWakeNotice: testState.poolActivate }
+          : actual.useMakeActiveHost(...args),
+    };
+  },
+);
+vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/host/use-durable-stream-transport")
+    >();
+  return {
+    ...actual,
+    useDurableStreamTransportFactory: (
+      ...args: Parameters<typeof actual.useDurableStreamTransportFactory>
+    ) =>
+      testState.poolActionsEnabled
+        ? testState.poolOpenTransport
+        : actual.useDurableStreamTransportFactory(...args),
+  };
+});
+vi.mock("@/stores/tabs/use-system-tab-modal", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/tabs/use-system-tab-modal")>();
+  return {
+    ...actual,
+    useSystemTabModalActions: (
+      ...args: Parameters<typeof actual.useSystemTabModalActions>
+    ) =>
+      testState.poolActionsEnabled
+        ? { openSettings: vi.fn() }
+        : actual.useSystemTabModalActions(...args),
+  };
+});
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: (_epicId: unknown, pin: unknown) => {
     testState.latestSeedPins.push(pin);
@@ -543,14 +806,23 @@ vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useEpicImageFetcher: () => vi.fn(),
   useEpicAttachmentBytesPresence: () => null,
 }));
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: {
-    getState: () => ({
-      markChatTitlePending: vi.fn(),
-      clearChatTitlePending: vi.fn(),
-    }),
-  },
-}));
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/epics/canvas/store")>();
+  return {
+    ...actual,
+    useEpicCanvasStore: {
+      ...actual.useEpicCanvasStore,
+      getState: () => ({
+        ...actual.useEpicCanvasStore.getState(),
+        openTabOrder: ["tab-1"],
+        tabsById: { "tab-1": { epicId: "epic-1" } },
+        markChatTitlePending: vi.fn(),
+        clearChatTitlePending: vi.fn(),
+      }),
+    },
+  };
+});
 vi.mock("@/stores/epics/initial-chat-handoff-store", () => ({
   useInitialChatHandoffStore: {
     getState: () => ({
@@ -576,7 +848,7 @@ function Harness() {
               tabId="tab-1"
               placement={null}
               parentId={null}
-              hostId={null}
+              hostId={testState.overrideHostId}
               dismissPickerRef={dismissPickerRef}
               onSubmitted={testState.onSubmitted}
             />
@@ -595,6 +867,12 @@ function Harness() {
 function workspaceControlsHostScope(element: unknown): unknown {
   if (!isValidElement<{ readonly hostScope: unknown }>(element)) return null;
   return element.props.hostScope;
+}
+
+function workspaceControlsSeed(element: unknown): unknown {
+  if (!isValidElement<{ readonly workspaceSeed: unknown }>(element))
+    return null;
+  return element.props.workspaceSeed;
 }
 
 /**
@@ -626,6 +904,7 @@ function draftSurvived(): boolean {
 }
 
 beforeEach(() => {
+  testState.createChatClientHostIds.length = 0;
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode("epic-1", "chat");
@@ -640,26 +919,373 @@ beforeEach(() => {
   testState.pinIsPinned.current = false;
   testState.followsEffective.current = true;
   testState.workspaceControlsElements = [];
+  testState.bodySnapshots = [];
   testState.latestSeedPins = [];
   testState.pastePathsReachTarget = null;
   localHost.id = null;
   testState.recordPlacement.mockClear();
+  testState.poolActionsEnabled = false;
+  testState.poolEntry = null;
+  testState.poolDirectoryListeners.clear();
+  testState.poolEvents.length = 0;
+  testState.poolUser = null;
+  testState.poolCatalogue = null;
+  testState.poolCreateSandbox.mockReset();
+  testState.poolAttach.mockReset();
+  testState.poolActivate.mockReset();
+  testState.poolOpenTransport.mockReset();
   testState.placementInputs.length = 0;
+  testState.overrideHostId = null;
+  testState.taskSessionHostId = "host-session";
+  useAuthStore.setState({ profile: null, contextMetadata: null });
 });
 
 afterEach(() => {
   cleanup();
+  testState.createChatClientHostIds.length = 0;
+  useSelectionAuthorityStore.getState().reset();
   testState.createChat.mockClear();
   testState.createChat.mockResolvedValue({ initialTurnStarted: false });
   testState.createTerminalAgent.mockClear();
   testState.onSubmitted.mockClear();
   testState.bodySubmit = null;
   testState.bodyStartTerminal = null;
+  testState.installEditor = null;
+  testState.poolActionsEnabled = false;
+  testState.poolEntry = null;
+  testState.poolDirectoryListeners.clear();
+  useAuthStore.setState({ profile: null, contextMetadata: null });
   useNewConversationModalStore.getState().resetForTests();
   toastMocks.toastRepointedStagingReset.mockReset();
 });
 
 describe("new-conversation modal shares the composer's placement semantics", () => {
+  it("sends from the real Team chooser to the ready pinned computer", async () => {
+    testState.poolActionsEnabled = true;
+    testState.poolUser = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 100,
+      }),
+      [teamSubscription(100)],
+    );
+    testState.poolCatalogue = readinessCatalogue({
+      warm: 0,
+      coldCreateMeasuredMs: 60_000,
+    });
+    testState.poolAttach.mockImplementation(() => {
+      testState.poolEvents.push("attach");
+      return Promise.resolve({ environmentId: "team-env" });
+    });
+    testState.poolCreateSandbox.mockImplementation((input) => {
+      testState.poolEvents.push("create");
+      expect(input.environmentId).toBe("team-env");
+      return Promise.resolve({
+        kind: "ok",
+        accepted: {
+          sandboxId: "sandbox-team",
+          hostId: "team-host",
+          sandbox: sandboxSummaryFixture({
+            id: "sandbox-team",
+            hostId: "team-host",
+            state: "creating",
+            wakeBudgetMs: 60_000,
+            environmentId: "team-env",
+          }),
+        },
+      });
+    });
+    testState.poolOpenTransport.mockReturnValue({
+      close: vi.fn(),
+      closeWithReason: vi.fn(),
+    });
+    testState.recordPlacement.mockImplementation((hostId) => {
+      testState.placement.current = {
+        resolvedHostId: hostId,
+        client: { getActiveHostId: () => hostId },
+        hostLabel: "Acme sandbox",
+        isPinned: true,
+        namedHostDead: false,
+      };
+    });
+    useAuthStore.setState({
+      profile: {
+        userId: "fake-user",
+        userName: "Test User",
+        email: "test@example.invalid",
+      },
+    });
+    const authority = mountTestSelectionAuthority({ hosts: [] });
+
+    testState.taskSessionHostId = POOL_HOST_ID;
+    const view = renderModal();
+    expect(testState.placementInputs.at(-1)?.sessionHostId).toBe(POOL_HOST_ID);
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Host: none selected" }),
+      { button: 0 },
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /New acme sandbox/i }),
+    );
+
+    await waitFor(() =>
+      expect(testState.poolEvents).toEqual(["attach", "create"]),
+    );
+    expect(testState.poolCreateSandbox).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ environmentId: "team-env" }),
+    );
+    expect(testState.poolActivate).not.toHaveBeenCalled();
+
+    act(() => {
+      testState.poolEntry = sandboxHostEntry("team-host", {
+        id: "team-1",
+        name: "Acme",
+      });
+      for (const listener of testState.poolDirectoryListeners) listener();
+    });
+    await waitFor(() =>
+      expect(testState.poolOpenTransport).toHaveBeenCalledExactlyOnceWith(
+        "team-host",
+      ),
+    );
+    act(() => {
+      authority.publishFleet(
+        [{ hostId: "team-host", kind: "sandbox", teamOwned: true }],
+        null,
+      );
+      authority.connectComputer("team-host");
+    });
+    await waitFor(() =>
+      expect(testState.recordPlacement).toHaveBeenCalledExactlyOnceWith(
+        "team-host",
+      ),
+    );
+    expect(testState.placement.current.resolvedHostId).toBe("team-host");
+    expect(testState.poolActivate).not.toHaveBeenCalled();
+
+    view.rerender(<Harness />);
+    await screen.findByRole("button", { name: "Send" });
+    act(() => testState.installEditor?.());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(testState.createChat).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ hostId: "team-host" }),
+      ),
+    );
+    expect(testState.createChatClientHostIds).toEqual(["team-host"]);
+    const sentMessage = testState.createChat.mock.calls[0]?.[0].initialMessage;
+    expect(sentMessage).toEqual(
+      expect.objectContaining({ content: DIRTY_CONTENT }),
+    );
+  });
+
+  it("rehydrates Terminal mode and workspace into a fresh store through the pool controls, then returns to Chat with the same text", async () => {
+    const folder: WorkspaceFolderInfo = {
+      path: "/repo",
+      name: "repo",
+      repoIdentifier: null,
+      hostId: "host-a",
+    };
+    useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode("epic-1", "terminal");
+    useNewConversationModalStore
+      .getState()
+      .addResolvedFolders("epic-1", emptyLandingDraftWorkspaceSnapshot(), [
+        folder,
+      ]);
+    const persistedBytes = window.localStorage.getItem(
+      NEW_CHAT_DRAFT_STORAGE_KEY,
+    );
+    if (persistedBytes === null)
+      throw new Error("new-chat draft was not persisted");
+
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+      savedPick: "host-a",
+      readyComputers: ["host-a"],
+    });
+    authority.goCold("host-a");
+
+    testState.taskSessionHostId = POOL_HOST_ID;
+    const view = renderModal();
+    expect(testState.placementInputs.at(-1)?.sessionHostId).toBe(POOL_HOST_ID);
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    expect(testState.bodySnapshots).toEqual([]);
+
+    useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
+    window.localStorage.setItem(NEW_CHAT_DRAFT_STORAGE_KEY, persistedBytes);
+    vi.resetModules();
+    const freshNewChatStoreModule =
+      await import("@/stores/epics/new-conversation-modal-store");
+    expect(freshNewChatStoreModule.useNewConversationModalStore).not.toBe(
+      useNewConversationModalStore,
+    );
+    const freshRestored =
+      freshNewChatStoreModule.useNewConversationModalStore.getState()
+        .draftPatchesByEpicId["epic-1"];
+    if (freshRestored === undefined)
+      throw new Error("new-chat draft did not reload into a fresh store");
+    expect(freshRestored.content).toEqual(DIRTY_CONTENT);
+    expect(freshRestored.composerMode).toBe("terminal");
+    expect(freshRestored.workspace?.folders).toEqual(["/repo"]);
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+
+    await act(async () => {
+      await useNewConversationModalStore.persist.rehydrate();
+    });
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+
+    const restored =
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"];
+    if (restored === undefined)
+      throw new Error("new-chat draft did not reload");
+    expect(restored.content).toEqual(DIRTY_CONTENT);
+    expect(restored.composerMode).toBe("terminal");
+    expect(restored.workspace?.folders).toEqual(["/repo"]);
+
+    act(() => {
+      authority.connectComputer("host-a");
+      authority.finishReturnDamping();
+    });
+    act(() => view.rerender(<Harness />));
+
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    expect(testState.bodySnapshots.at(-1)).toEqual({
+      composerMode: "terminal",
+      initialContent: DIRTY_CONTENT,
+    });
+    expect(
+      workspaceControlsSeed(testState.workspaceControlsElements.at(-1)),
+    ).toEqual(restored.workspace);
+
+    act(() =>
+      useNewConversationModalStore.getState().setComposerMode("epic-1", "chat"),
+    );
+
+    expect(testState.bodySnapshots.at(-1)).toEqual({
+      composerMode: "chat",
+      initialContent: DIRTY_CONTENT,
+    });
+    expect(
+      workspaceControlsSeed(testState.workspaceControlsElements.at(-1)),
+    ).toEqual(restored.workspace);
+  });
+
+  it("keeps a row-scoped new-chat box on its named host while offline and after it becomes ready", () => {
+    testState.overrideHostId = "computer-row";
+    testState.placement.current = {
+      resolvedHostId: "computer-row",
+      client: { getActiveHostId: () => "computer-row" },
+      hostLabel: "Row computer",
+      isPinned: false,
+      namedHostDead: true,
+    };
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "computer-row", kind: "remote", teamOwned: false }],
+      savedPick: "computer-row",
+      readyComputers: ["computer-row"],
+    });
+    authority.goCold("computer-row");
+
+    const view = renderModal();
+    expect(testState.placementInputs.at(-1)).toEqual({
+      epicId: "epic-1",
+      overrideHostId: "computer-row",
+      sessionHostId: "host-session",
+    });
+    expect(testState.bodySubmit).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    act(() => testState.bodySubmit?.());
+    expect(noticeText()).toContain("Row computer is offline.");
+    expect(testState.createChat).not.toHaveBeenCalled();
+
+    testState.placement.current = {
+      ...testState.placement.current,
+      namedHostDead: false,
+    };
+    act(() => {
+      authority.connectComputer("computer-row");
+      authority.finishReturnDamping();
+    });
+    view.rerender(<Harness />);
+    act(() => testState.bodySubmit?.());
+    expect(testState.createChat).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ hostId: "computer-row" }),
+    );
+  });
+
+  it.each(["connecting", "pool-session"] as const)(
+    "restores the ordinary message box and the same draft from %s",
+    (placement) => {
+      const authority = mountTestSelectionAuthority({
+        hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+        savedPick: "host-a",
+        readyComputers: placement === "connecting" ? [] : ["host-a"],
+        pool: "offline",
+      });
+      const readyTarget = testState.placement.current;
+      const view = renderModal();
+      const message =
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"];
+      expect(
+        screen.queryByRole("button", { name: "Connect a computer" }),
+      ).toBeNull();
+      expect(message?.content).toEqual(DIRTY_CONTENT);
+
+      if (placement === "pool-session") {
+        testState.taskSessionHostId = POOL_HOST_ID;
+        testState.placement.current = {
+          ...readyTarget,
+          resolvedHostId: POOL_HOST_ID,
+        };
+      }
+      act(() => {
+        authority.openPool();
+        if (placement === "pool-session") authority.goCold("host-a");
+      });
+      view.rerender(<Harness />);
+      if (placement === "pool-session") {
+        expect(testState.placementInputs.at(-1)?.sessionHostId).toBe(
+          POOL_HOST_ID,
+        );
+      }
+      expect(
+        screen.getByRole("button", { name: "Connect a computer" }),
+      ).toBeTruthy();
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toBe(message);
+
+      testState.placement.current = readyTarget;
+      act(() => {
+        authority.connectComputer("host-a");
+        authority.finishReturnDamping();
+      });
+      view.rerender(<Harness />);
+      expect(
+        screen.queryByRole("button", { name: "Connect a computer" }),
+      ).toBeNull();
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toEqual(message);
+    },
+  );
+
   it("creates on the resolved host when the placement is usable", () => {
     renderModal();
     act(() => {

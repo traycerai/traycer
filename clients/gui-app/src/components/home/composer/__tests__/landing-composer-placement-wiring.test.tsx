@@ -103,6 +103,10 @@ const testState = vi.hoisted(() => ({
   // default so the deposed-pin arm below is the realistic shape, not a case
   // `isPinned` would never actually take.
   composerIsPinned: true,
+  namedDraftHostId: null as string | null,
+  poolUnavailable: false,
+  poolAvailabilityReads: [] as Array<string | null>,
+  placementInputs: [] as Array<string | null>,
   /**
    * The placement refusal `useLandingComposerActions().submit` hands back - `null`
    * for a create that goes through, `{message}` for a submit-time refusal.
@@ -192,22 +196,32 @@ vi.mock("@/components/home/composer/composer-body", async () => {
 });
 
 vi.mock("@/hooks/host/use-composer-placement", () => ({
-  useComposerPlacement: () => ({
-    pin: {
-      selection: null,
-      setSelection: () => undefined,
-      resolvedHostId: landingTarget.resolvedHostId,
-      isPinned: testState.composerIsPinned,
-      latchOnFirstUse: () => undefined,
-    },
-    // Read fresh on every call (not captured once) so a test can mutate
-    // `landingTarget` and force a re-render to present a different resolved
-    // host to an already-mounted composer - see the §54-notice suite below.
-    target: landingTarget,
-    submitTarget: SUBMIT_TARGET,
-    hostLabelFor: () => "Studio Mac",
-    followsEffective: testState.composerFollowsEffective,
-  }),
+  useComposerPlacement: (namedHostId: string | null) => {
+    testState.placementInputs.push(namedHostId);
+    return {
+      pin: {
+        selection: null,
+        setSelection: () => undefined,
+        resolvedHostId: landingTarget.resolvedHostId,
+        isPinned: testState.composerIsPinned,
+        latchOnFirstUse: () => undefined,
+      },
+      // Read fresh on every call (not captured once) so a test can mutate
+      // `landingTarget` and force a re-render to present a different resolved
+      // host to an already-mounted composer - see the §54-notice suite below.
+      target: landingTarget,
+      submitTarget: SUBMIT_TARGET,
+      hostLabelFor: () => "Studio Mac",
+      followsEffective: testState.composerFollowsEffective,
+    };
+  },
+}));
+
+vi.mock("@/hooks/host/use-pool-computer-unavailable", () => ({
+  usePoolComputerUnavailable: (hostId: string | null) => {
+    testState.poolAvailabilityReads.push(hostId);
+    return testState.poolUnavailable;
+  },
 }));
 
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
@@ -253,7 +267,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
   return {
     useLandingDraftStore,
     // No draft in this suite was opened for a host.
-    useLandingDraftNamedHostId: () => null,
+    useLandingDraftNamedHostId: () => testState.namedDraftHostId,
   };
 });
 
@@ -599,6 +613,10 @@ afterEach(() => {
   testState.snapshot = null;
   testState.composerFollowsEffective = true;
   testState.composerIsPinned = true;
+  testState.namedDraftHostId = null;
+  testState.poolUnavailable = false;
+  testState.poolAvailabilityReads = [];
+  testState.placementInputs = [];
   testState.submitRefusal = null;
   testState.pickerCalls = [];
   testState.pastePathsReachTarget = null;
@@ -645,6 +663,40 @@ function editorHandle(): ComposerPromptEditorHandle {
 }
 
 describe("landing composer placement wiring", () => {
+  it("keeps a named-host landing draft on its box while that host is offline and when it becomes ready", () => {
+    testState.namedDraftHostId = "computer-a";
+    testState.poolUnavailable = true;
+    landingTarget = { ...READ_TARGET, resolvedHostId: "computer-a" };
+
+    const view = render(
+      <LandingComposer
+        draftId="named-draft"
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    expect(testState.poolAvailabilityReads).toContain("computer-a");
+    expect(testState.editorClassName).toBe(LANDING_COMPOSER_EDITOR_CLASSNAME);
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+
+    testState.poolUnavailable = false;
+    view.rerender(
+      <LandingComposer
+        draftId="named-draft"
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    expect(testState.editorClassName).toBe(LANDING_COMPOSER_EDITOR_CLASSNAME);
+    expect(testState.placementInputs).toContain("computer-a");
+  });
+
   it("constructs its actions with the FROZEN submit target", () => {
     render(
       <LandingComposer

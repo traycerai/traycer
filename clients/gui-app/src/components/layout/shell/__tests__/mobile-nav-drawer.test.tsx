@@ -252,6 +252,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouterProvider } from "../../../../__tests__/with-test-router";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
+import { POOL_HOST_LABEL } from "@traycer-clients/shared/host-client/host-directory";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 import {
   MobileDrawerHistoryGateProvider,
@@ -265,6 +266,8 @@ import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import {
@@ -433,6 +436,7 @@ describe("MobileNavDrawer", () => {
     refetch.mockClear();
     trackMock.mockClear();
     useMobileNavStore.setState({ open: true });
+    useSelectionAuthorityStore.getState().reset();
     useAuthStore.setState({
       profile: {
         userId: "u1",
@@ -501,6 +505,17 @@ describe("MobileNavDrawer", () => {
             Node.DOCUMENT_POSITION_FOLLOWING,
         ).not.toBe(0);
       });
+    });
+
+    it("keeps the pool label out of the phone Tasks drawer while the pool serves", async () => {
+      renderDrawer();
+      await screen.findByTestId("mobile-nav-task-list");
+      act(() => {
+        mountTestSelectionAuthority({ hosts: [] });
+      });
+
+      expect(screen.getByTestId("mobile-nav-all-tasks")).toBeTruthy();
+      expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
     });
 
     it("opens the notification center from the Notifications row and closes the drawer", async () => {

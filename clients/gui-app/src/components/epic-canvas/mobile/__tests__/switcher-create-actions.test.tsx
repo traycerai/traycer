@@ -8,6 +8,8 @@ import {
 
 const spies = vi.hoisted(() => ({
   createArtifact: vi.fn(),
+  terminalPickerDisabled: false,
+  terminalPickerReadDisabled: false,
 }));
 
 vi.mock("@/components/epic-canvas/mobile/use-switcher-create-artifact", () => ({
@@ -16,6 +18,15 @@ vi.mock("@/components/epic-canvas/mobile/use-switcher-create-artifact", () => ({
     isPending: false,
   }),
 }));
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-new-terminal-picker-disabled",
+  () => ({
+    useNewTerminalPickerDisabled: () => ({
+      disabled: spies.terminalPickerDisabled,
+      readDisabled: () => spies.terminalPickerReadDisabled,
+    }),
+  }),
+);
 // The dialog shell pulls the desktop host/folder picker body (heavy: host
 // queries, workspace search); stub it so this suite targets the row's own
 // wiring - whether it renders `open`, and that launching reaches `onLaunched`.
@@ -35,13 +46,21 @@ vi.mock("@/components/epic-canvas/mobile/mobile-new-terminal-dialog", () => ({
 
 beforeEach(() => {
   spies.createArtifact.mockClear();
+  spies.terminalPickerDisabled = false;
+  spies.terminalPickerReadDisabled = false;
 });
 afterEach(cleanup);
 
 describe("<SwitcherNewChatAction />", () => {
   it("calls onSelect when tapped", () => {
     const onSelect = vi.fn();
-    render(<SwitcherNewChatAction onSelect={onSelect} isPending={false} />);
+    render(
+      <SwitcherNewChatAction
+        onSelect={onSelect}
+        isPending={false}
+        disabled={false}
+      />,
+    );
     fireEvent.click(screen.getByTestId("switcher-new-chat"));
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("switcher-new-chat-pending")).toBeNull();
@@ -49,7 +68,9 @@ describe("<SwitcherNewChatAction />", () => {
 
   it("is disabled and shows a spinner while a create is pending", () => {
     const onSelect = vi.fn();
-    render(<SwitcherNewChatAction onSelect={onSelect} isPending />);
+    render(
+      <SwitcherNewChatAction onSelect={onSelect} isPending disabled={false} />,
+    );
     const button = screen.getByTestId("switcher-new-chat");
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(screen.getByTestId("switcher-new-chat-pending")).not.toBeNull();
@@ -76,6 +97,43 @@ describe("<SwitcherNewTerminalRow />", () => {
     // reaches the sheet's close call.
     fireEvent.click(dialog);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the mobile New terminal row disabled when the shared gate has no target", () => {
+    spies.terminalPickerDisabled = true;
+    spies.terminalPickerReadDisabled = true;
+    const onClose = vi.fn();
+    render(
+      <SwitcherNewTerminalRow
+        epicId="epic-1"
+        tabId="tab-1"
+        onClose={onClose}
+      />,
+    );
+
+    const row = screen.getByTestId("switcher-new-terminal");
+    expect(row.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(row);
+    expect(screen.queryByTestId("mobile-epic-new-terminal-dialog")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the shared terminal gate when the phone row is pressed", () => {
+    spies.terminalPickerReadDisabled = true;
+    const onClose = vi.fn();
+    render(
+      <SwitcherNewTerminalRow
+        epicId="epic-1"
+        tabId="tab-1"
+        onClose={onClose}
+      />,
+    );
+
+    const row = screen.getByTestId("switcher-new-terminal");
+    expect(row.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(row);
+    expect(screen.queryByTestId("mobile-epic-new-terminal-dialog")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

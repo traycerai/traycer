@@ -65,14 +65,16 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const newChat = useSwitcherNewChat(epicId, tabId, onClose);
   const startNewChat = newChat.start;
+  const newChatUnavailable = newChat.unavailable;
   const surface = useMemo<ChatTreeSurface>(
     () => ({
       onRowActivated: onClose,
       revealRowControls: coarsePointer,
       searchQuery,
       startNewChat,
+      newChatUnavailable,
     }),
-    [onClose, coarsePointer, searchQuery, startNewChat],
+    [onClose, coarsePointer, searchQuery, startNewChat, newChatUnavailable],
   );
   return (
     <ChatTreeSurfaceContext.Provider value={surface}>
@@ -95,6 +97,7 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
               <SwitcherNewChatAction
                 onSelect={() => startNewChat(null)}
                 isPending={newChat.isPending}
+                disabled={newChatUnavailable}
               />
             ) : null
           }

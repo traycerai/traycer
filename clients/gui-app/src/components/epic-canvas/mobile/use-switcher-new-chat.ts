@@ -10,11 +10,16 @@ import {
   openNewChatInActiveTile,
 } from "@/lib/commands/actions/new-chat";
 import { resolveLandingPlacement } from "@/lib/composer/landing-placement";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 
 export interface SwitcherNewChat {
   /** Create an empty agent (a child of `parentId` when non-null) and show it. */
   readonly start: (parentId: string | null) => void;
   readonly isPending: boolean;
+  readonly unavailable: boolean;
 }
 
 /**
@@ -52,6 +57,7 @@ export function useSwitcherNewChat(
     sessionHostId,
   });
   const submitTarget = placement.submitTarget;
+  const unavailable = usePoolComputerUnavailable(submitTarget.resolvedHostId);
   const recordPlacement = placement.pin.setSelection;
   const createChat = useEpicCreateChatForHostClient(submitTarget.client);
   const navigateNestedFocus = useEpicNestedFocusNavigation();
@@ -64,6 +70,7 @@ export function useSwitcherNewChat(
   const start = useCallback(
     (parentId: string | null) => {
       if (inFlight.current || createChat.isPending) return;
+      if (readPoolComputerUnavailable(submitTarget.resolvedHostId)) return;
       const verdict = resolveLandingPlacement(submitTarget);
       if (verdict.kind === "refused") {
         toast.error(verdict.message);
@@ -127,5 +134,5 @@ export function useSwitcherNewChat(
     ],
   );
 
-  return { start, isPending: createChat.isPending };
+  return { start, isPending: createChat.isPending, unavailable };
 }

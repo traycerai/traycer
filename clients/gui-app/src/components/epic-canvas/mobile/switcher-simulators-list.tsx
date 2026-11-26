@@ -1,3 +1,7 @@
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { useCallback } from "react";
 import { Smartphone, X } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -21,6 +25,10 @@ import {
   simulatorVersionLabel,
 } from "@/lib/simulator-view/simulator-labels";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
+import {
+  useSelectionAuthorityStore,
+  readServingPeerSnapshot,
+} from "@/stores/host/selection-authority-store";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 import { SwitcherListHeader, SwitcherListRow } from "./switcher-list-row";
 
@@ -102,6 +110,7 @@ export function SwitcherSimulatorsList(props: SwitcherListProps) {
                     epicId={epicId}
                     tabId={tabId}
                     offline={group.offline}
+                    readHostOffline={model.readHostOffline}
                     nowMs={model.nowMs}
                     onWatch={watch}
                   />
@@ -120,6 +129,7 @@ function SwitcherSimulatorRow(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly offline: boolean;
+  readonly readHostOffline: (hostId: string) => boolean;
   readonly nowMs: number;
   readonly onWatch: (row: SimulatorLiveRow) => void;
 }) {
@@ -129,13 +139,21 @@ function SwitcherSimulatorRow(props: {
     row.kind === "pending" ? "" : row.tileId,
     row.hostId,
   );
-  const { onWatch, offline } = props;
-  // The row has no disabled state, so a tap on an offline machine's row, a
-  // closed row or a pending one is simply not acted on.
+  const { onWatch, offline, readHostOffline } = props;
+  const onPool = useSelectionAuthorityStore(
+    (state) => state.servingPeer?.kind === "pool",
+  );
+  const unavailable = usePoolComputerUnavailable(row.hostId);
+  const watchDisabled = onPool && (unavailable || offline);
   const onSelect = useCallback(() => {
-    if (row.kind !== "live" || offline) return;
+    if (row.kind !== "live") return;
+    const blocked =
+      readServingPeerSnapshot()?.kind === "pool"
+        ? readPoolComputerUnavailable(row.hostId) || readHostOffline(row.hostId)
+        : offline;
+    if (blocked) return;
     onWatch(row);
-  }, [offline, onWatch, row]);
+  }, [offline, onWatch, readHostOffline, row]);
   const icon = <Smartphone className="size-4" aria-hidden />;
   if (row.kind === "pending")
     return (
@@ -175,7 +193,7 @@ function SwitcherSimulatorRow(props: {
   const countdown = simulatorIdleCountdownLabel(row.idleUntil, props.nowMs);
   return (
     <SwitcherListRow
-      disabled={false}
+      disabled={watchDisabled}
       icon={icon}
       label={row.name}
       secondaryLabel={
@@ -200,16 +218,20 @@ function SwitcherCloseAction(props: {
   const { row } = props;
   const { closeRecords, closing } = useSimulatorCatalogActions(props.epicId);
   const pending = row.records.some((record) => closing(record.sessionId));
+  const unavailable = usePoolComputerUnavailable(row.hostId);
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-sm"
-      disabled={pending}
+      disabled={pending || unavailable}
       aria-label={`Close ${row.name} in this task`}
       data-testid={`switcher-simulator-close-${row.instanceKey}`}
       className="shrink-0"
-      onClick={() => closeRecords(row.hostId, row.records)}
+      onClick={() => {
+        if (!readPoolComputerUnavailable(row.hostId))
+          closeRecords(row.hostId, row.records);
+      }}
     >
       {pending ? (
         <AgentSpinningDots
@@ -232,16 +254,20 @@ function SwitcherDismissAction(props: {
   const { row } = props;
   const { closeRecords, closing } = useSimulatorCatalogActions(props.epicId);
   const pending = closing(row.record.sessionId);
+  const unavailable = usePoolComputerUnavailable(row.hostId);
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-sm"
-      disabled={pending}
+      disabled={pending || unavailable}
       aria-label={`Dismiss ${row.name}`}
       data-testid={`switcher-simulator-dismiss-${row.record.sessionId}`}
       className="shrink-0"
-      onClick={() => closeRecords(row.hostId, [row.record])}
+      onClick={() => {
+        if (!readPoolComputerUnavailable(row.hostId))
+          closeRecords(row.hostId, [row.record]);
+      }}
     >
       {pending ? (
         <AgentSpinningDots

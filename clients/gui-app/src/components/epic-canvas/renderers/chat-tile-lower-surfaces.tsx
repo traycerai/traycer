@@ -1,3 +1,10 @@
+import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { TeamEpicPersonalLine } from "@/components/chat/composer/team-epic-personal-line";
 import {
@@ -10,8 +17,10 @@ import {
 } from "react";
 import { Lock } from "lucide-react";
 import {
+  ChatSandboxFooterBlocksComposerContext,
   ChatSandboxLineContext,
   ChatStateLineContext,
+  type ChatStateLine,
 } from "./chat-state-line";
 import type {
   BackgroundItem,
@@ -151,6 +160,8 @@ export interface ChatLowerRuntimeState {
 }
 
 export interface ChatLowerAccessState {
+  /** A published copy's owning computer, when its tile binds to a read peer. */
+  readonly ownerHostId?: string;
   /**
    * The sandbox this chat's next message wakes; only the composer can enqueue
    * one for it.
@@ -321,6 +332,7 @@ export interface ChatLowerComposerState {
 }
 
 interface ComposerSurfaceModel {
+  readonly ownerHostId: string;
   /**
    * The view tab this composer is rendered in. Reaches the composer only for
    * the provider re-auth banner's terminal sign-in: the host creates the PTY
@@ -638,6 +650,7 @@ export function ChatLowerInteractionSurfaces(
   const composerModel = useMemo(
     () => ({
       viewTabId: props.viewTabId,
+      ownerHostId: props.access.ownerHostId ?? props.hostId,
       runtime: props.runtime,
       access: props.access,
       turn: turnWithCascade,
@@ -655,6 +668,7 @@ export function ChatLowerInteractionSurfaces(
     }),
     [
       props.viewTabId,
+      props.hostId,
       props.runtime,
       props.access,
       turnWithCascade,
@@ -857,10 +871,23 @@ function ComposerSurface(props: {
   const { model, layout } = props;
   const tabHostId = useTabHostId();
   const stateLine = useContext(ChatStateLineContext);
+  const ownerUnavailable = usePoolComputerUnavailable(model.ownerHostId);
+  const footerBlocksComposer = useContext(
+    ChatSandboxFooterBlocksComposerContext,
+  );
   // Before the snapshot the pre-content body says the state line instead.
-  if (!model.runtime.snapshotLoaded) {
-    return null;
-  }
+  const hideComposer = composerSlotHidden(
+    model,
+    ownerUnavailable,
+    footerBlocksComposer,
+  );
+  const showPoolActions = poolActionsForChat(
+    model,
+    ownerUnavailable,
+    hideComposer,
+    stateLine,
+  );
+  if (hideComposer) return null;
   if (stateLine !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -868,6 +895,14 @@ function ComposerSurface(props: {
           notice={stateLine.line}
           actions={stateLine.actions}
         />
+        {showPoolActions ? <PoolChatActions model={model} /> : null}
+      </ComposerSlotShell>
+    );
+  }
+  if (showPoolActions) {
+    return (
+      <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
+        <PoolChatActions model={model} />
       </ComposerSlotShell>
     );
   }
@@ -948,6 +983,57 @@ function ComposerSurface(props: {
         hasPendingApprovals={model.hasPendingApprovals}
       />
     </>
+  );
+}
+
+function composerSlotHidden(
+  model: ComposerSurfaceModel,
+  ownerUnavailable: boolean,
+  footerBlocksComposer: boolean,
+): boolean {
+  return (
+    !model.runtime.snapshotLoaded || (ownerUnavailable && footerBlocksComposer)
+  );
+}
+
+function poolActionsForChat(
+  model: ComposerSurfaceModel,
+  ownerUnavailable: boolean,
+  hideComposer: boolean,
+  stateLine: ChatStateLine | null,
+): boolean {
+  if (hideComposer || !ownerUnavailable || model.subagentView !== null)
+    return false;
+  if (stateLine === null) {
+    // This composer can enqueue the message and wake its own sandbox.
+    return model.access.restingSandbox === undefined || model.access.isViewer;
+  }
+  return stateLine.allowsPoolActions;
+}
+
+function PoolChatActions(props: {
+  readonly model: ComposerSurfaceModel;
+}): ReactNode {
+  const { viewTabId, ownerHostId, composer } = props.model;
+  const { currentEpicId, nodeId } = composer;
+  return (
+    <PoolComposerActions
+      epicId={currentEpicId}
+      surfaceKey={JSON.stringify([currentEpicId, ownerHostId, nodeId])}
+      watchPlacement={null}
+      originatingChatHostId={ownerHostId}
+      place={(hostId) => {
+        const tabs = useEpicCanvasStore.getState();
+        if (
+          tabs.openTabOrder.includes(viewTabId) &&
+          tabs.tabsById[viewTabId]?.epicId === currentEpicId
+        ) {
+          useSurfaceHostSelectionStore
+            .getState()
+            .setSelection(newConversationSurfaceKey(currentEpicId), hostId);
+        }
+      }}
+    />
   );
 }
 

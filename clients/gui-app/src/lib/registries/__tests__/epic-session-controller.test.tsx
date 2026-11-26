@@ -65,7 +65,16 @@ import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { EFFECTIVE_HOST_POST_SESSION_CEILING_MS } from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   createInProcessEpicRuntimeWorker,
@@ -84,6 +93,7 @@ import {
   installTestEpicSessionEnvironment,
   openTestEpicTab,
   closeTestEpicTab,
+  notifyTestSelectionSubscribers,
   setTestEffectiveHost,
 } from "@/lib/registries/test-support/epic-session-controller-test-support";
 import {
@@ -583,7 +593,7 @@ function pokeSelectionAuthority(): void {
  * this is the poke a "notifications alone add no attempts" assertion needs.
  */
 function pokeSelectionAuthorityNoOp(): void {
-  useSelectionAuthorityStore.setState((state) => ({ ...state }));
+  notifyTestSelectionSubscribers();
 }
 
 type DesktopOwnershipClaimForTests = (
@@ -1152,6 +1162,194 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       expect(socket.subscriptions).toEqual([]);
     },
   );
+
+  it("retires the pending pool candidate when the outgoing computer leaves the directory", async () => {
+    const epicId = "epic-owner-removed-during-repoint";
+    const tabId = "tab-owner-removed-during-repoint";
+    const hostId = "host-a";
+    const artifactId = "spec-unsynced-outgoing";
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId, kind: "remote", teamOwned: false }],
+      savedPick: hostId,
+      readyComputers: [hostId],
+    });
+    const controller = getEpicSessionController();
+    const registry = __getOpenEpicRegistryForTests();
+    const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+    const constructWorker = getEpicRuntimeWorkerFactoryOverride();
+    assertTestFixture(constructWorker, "expected the task worker spy");
+    const closuresAtReplacement: boolean[][] = [];
+    __setEpicRuntimeWorkerFactoryForTests(() => {
+      const pending = spy.sessions.at(1);
+      if (pending !== undefined) {
+        closuresAtReplacement.push([pending.statusClosed, pending.stateClosed]);
+      }
+      return constructWorker();
+    });
+    const hostEntry = { ...mockRemoteHostEntry, hostId };
+    const findById = (id: string) =>
+      authority.fleetComputers().some((host) => host.hostId === id)
+        ? hostEntry
+        : null;
+    const rowListeners = new Set<() => void>();
+    installHostConnectionRegistrySource({
+      directory: {
+        findById,
+        onDirectoryChanged: (listener) => {
+          rowListeners.add(listener);
+          return { dispose: () => rowListeners.delete(listener) };
+        },
+      },
+      leases: null,
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      messenger: new MockHostMessenger({
+        registry: hostRpcRegistry,
+        requestId: () => "task-repoint",
+        handlers: {},
+      }),
+      invalidator: { invalidateHostScope: () => undefined },
+      findHostById: findById,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "test" }),
+    );
+    const outgoingClient = spine.createRequesterForHostId(hostId);
+    const poolClient = spine.createRequesterForHostId(POOL_HOST_ID);
+    const clients = new Map([
+      [hostId, outgoingClient],
+      [POOL_HOST_ID, poolClient],
+    ]);
+    installTestEpicSessionEnvironment({
+      ...defaultTestEpicSessionEnvironment(),
+      resolveHostClient: (id) => clients.get(id) ?? null,
+    });
+    onTestFinished(() => {
+      resetHostConnectionRegistryForTest();
+      spine.dispose();
+    });
+    openTestEpicTab(tabId, epicId, "Held computer task");
+    controller.attachSurface(epicId, tabId);
+    await waitFor(() => expect(spy.sessions).toHaveLength(1));
+    const source = spy.sessions.at(0);
+    assertPoolTaskLanes(source, "expected the computer task lanes");
+    act(() => {
+      source.status.onConnectionStatus("open", null, null, null);
+      source.state.onConnectionStatus("open", null, null, null);
+      source.status.onSnapshot(statusLaneSnapshot("computer-epoch"), true);
+      source.state.onSnapshot(
+        poolStateSnapshotWithArtifact(
+          "computer-epoch",
+          "Held computer task",
+          artifactId,
+        ),
+      );
+    });
+    await waitFor(() =>
+      expect(controller.readTabSnapshot(epicId, tabId).presentation.kind).toBe(
+        "ready",
+      ),
+    );
+    const held = registry.peek(epicId);
+    assertTestFixture(held, "expected the held computer handle");
+    const releaseBody = held.store
+      .getState()
+      .acquireArtifactBodyLease(artifactId);
+    onTestFinished(releaseBody);
+    await waitFor(() => expect(source.bodyLanes).toHaveLength(1));
+    const bodyLane = source.bodyLanes.at(0);
+    assertTestFixture(bodyLane, "expected the computer body lane");
+    const body = new Y.Doc();
+    body
+      .getXmlFragment(artifactBodyFragmentName(artifactId))
+      .insert(0, [new Y.XmlText("computer body")]);
+    deliverArtifactDoc(bodyLane, "computer-epoch", "computer-guid", body);
+    body.destroy();
+    await waitFor(() =>
+      expect(
+        held.store.getState().getArtifactBodyAvailability(artifactId),
+      ).toBe("ready"),
+    );
+    const fragment = held.store.getState().getArtifactFragment(artifactId);
+    assertTestFixture(fragment, "expected the outgoing body");
+    fragment.insert(fragment.length, [new Y.XmlText(" with unsynced edit")]);
+    await waitFor(() => expect(registry.hasUnsyncedEdits(epicId)).toBe(true));
+
+    act(() => {
+      authority.loseSession(hostId);
+      authority.advance(EFFECTIVE_HOST_POST_SESSION_CEILING_MS);
+    });
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
+    await waitFor(() => expect(spy.sessions).toHaveLength(2));
+    const first = spy.sessions.at(1);
+    assertPoolTaskLanes(first, "expected the first pool candidate");
+    expect(first.statusClosed).toBe(false);
+    expect(first.stateClosed).toBe(false);
+    expect(registry.peek(epicId)).toBe(held);
+    expect(
+      controller.readTabSnapshot(epicId, tabId).presentation,
+    ).toMatchObject({
+      kind: "establishing",
+      targetHostId: POOL_HOST_ID,
+    });
+    const publications: OpenEpicStoreHandle[] = [];
+    const stopObserving = registry.subscribe(() => {
+      const current = registry.peek(epicId);
+      if (
+        current !== null &&
+        current !== held &&
+        current !== publications.at(-1)
+      ) {
+        publications.push(current);
+      }
+    });
+    onTestFinished(stopObserving);
+    act(() => {
+      authority.publishFleet([], null);
+      for (const listener of rowListeners) listener();
+    });
+    await waitFor(() => expect(spy.sessions).toHaveLength(3));
+    const second = spy.sessions.at(2);
+    assertPoolTaskLanes(second, "expected the second pool candidate");
+    expect(closuresAtReplacement).toEqual([[true, true]]);
+    expect(
+      spy.sessions
+        .slice(1)
+        .filter((session) => !session.statusClosed && !session.stateClosed),
+    ).toEqual([second]);
+    expect(controller.readTabSnapshot(epicId, tabId)).toMatchObject({
+      presentation: { kind: "establishing", targetHostId: POOL_HOST_ID },
+      handle: held,
+    });
+    expect(publications).toEqual([]);
+
+    act(() => {
+      second.status.onConnectionStatus("open", null, null, null);
+      second.status.onSnapshot(
+        statusLaneSnapshot("pool-replacement-epoch"),
+        true,
+      );
+    });
+    expect(registry.peek(epicId)).toBe(held);
+    expect(publications).toEqual([]);
+    act(() => {
+      second.state.onConnectionStatus("open", null, null, null);
+      second.state.onSnapshot(
+        stateLaneSnapshot("pool-replacement-epoch", "Pool task"),
+      );
+    });
+    await waitFor(() =>
+      expect(controller.readTabSnapshot(epicId, tabId).sessionHostId).toBe(
+        POOL_HOST_ID,
+      ),
+    );
+    expect(publications).toEqual([registry.peek(epicId)]);
+    expect(spy.legacyOpenEpicIds).toEqual([]);
+    expect(registry.retainedCountForTests(epicId)).toBe(1);
+    expect(registry.hasUnsyncedEdits(epicId)).toBe(true);
+    expect(fragment.toJSON()).toBe("computer body with unsynced edit");
+  });
 
   it("closes a replayed pool status lane after a deficient pre-snapshot reconnect", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -2247,15 +2445,13 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       resolveHostClient: (hostId) =>
         hostId === "host-a" ? originalHostClient : null,
     });
-    useSelectionAuthorityStore.getState().applyKernelSnapshot({
-      attached: true,
-      preferredHostId: "host-a",
-      targetHostId: "host-a",
-      effectiveHostId: "host-a",
-      servingPeer: { kind: "computer", hostId: "host-a" },
-      noPeerPresentation: null,
-      leases: [{ hostId: "host-a", status: "ready", dead: null }],
-      selectionRevision: 1,
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-a", kind: "remote", teamOwned: false },
+        { hostId: "host-b", kind: "remote", teamOwned: false },
+      ],
+      savedPick: "host-a",
+      readyComputers: ["host-a", "host-b"],
     });
     openTestEpicTab(TAB_ID, EPIC_ID, "Pinned task");
     controller.attachSurface(EPIC_ID, TAB_ID);
@@ -2296,18 +2492,11 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     });
 
     controller.openOnOriginalHost(EPIC_ID);
-    useSelectionAuthorityStore.getState().applyKernelSnapshot({
-      attached: true,
+    authority.goCold("host-a");
+    expect(authority.finishReturnDamping()).toMatchObject({
       preferredHostId: "host-a",
       targetHostId: "host-a",
-      effectiveHostId: "host-b",
       servingPeer: { kind: "computer", hostId: "host-b" },
-      noPeerPresentation: null,
-      leases: [
-        { hostId: "host-a", status: "dead", dead: { reason: "offline" } },
-        { hostId: "host-b", status: "ready", dead: null },
-      ],
-      selectionRevision: 2,
     });
 
     const snapshot = controller.readTabSnapshot(EPIC_ID, TAB_ID);

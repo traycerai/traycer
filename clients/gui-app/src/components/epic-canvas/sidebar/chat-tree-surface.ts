@@ -56,6 +56,7 @@ export interface ChatTreeSurface {
    * empty chat (`useSwitcherNewChat`) and closes once it is on screen.
    */
   readonly startNewChat: (parentId: string | null) => void;
+  readonly newChatUnavailable: boolean;
 }
 
 export const ChatTreeSurfaceContext = createContext<ChatTreeSurface | null>(

@@ -29,6 +29,15 @@ const ROW: WorktreeBindingSelectorRow = {
 
 // Sandbox staging has its own suites (`composer/__tests__`): here the picker
 // stages nothing and the send is never intercepted.
+vi.mock("@/components/composer/new-sandbox-rows", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/composer/new-sandbox-rows")
+  >()),
+  useSandboxCatalogueReader: () => () => null,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: null }),
+}));
 vi.mock(
   "@/components/composer/use-sandbox-staging",
   async (importOriginal) => ({

@@ -116,6 +116,8 @@ export interface CommandItem {
    * Prevent selection in cmdk while retaining the row as contextual feedback.
    */
   readonly disabled?: boolean;
+  /** Recheck dispatch-time availability for an item backed by live evidence. */
+  readonly readDisabled?: () => boolean;
   /** Keep the current picker mounted for an inline action such as Retry. */
   readonly keepOpen?: boolean;
   /** Agent-tree presentation metadata used by the unified Agents opener. */

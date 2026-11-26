@@ -1,3 +1,6 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { canDeleteLandingDraft } from "@/lib/drafts/draft-inventory-actions";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ListFilter } from "lucide-react";
 import { DraftRow } from "@/components/composer/drafts/draft-row";
@@ -68,6 +71,7 @@ export function DraftsDialog(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const { activeEpicId } = props;
+  const onPool = useServingPeerHostId() === POOL_HOST_ID;
   const rows = useDraftInventory(
     { surface: "landing", activeDraftId: null },
     "all",
@@ -234,10 +238,21 @@ export function DraftsDialog(props: {
                     onHighlight={() => setHighlightedId(row.id)}
                     onOpen={(input) => openRow(row, input)}
                     onCopy={(input) => actions.copyRow(row, input)}
-                    onDelete={(input) => {
-                      setHighlightedId(neighbourRowId(visibleRows, row.id));
-                      actions.deleteRow(row, input);
-                    }}
+                    onDelete={
+                      onPool &&
+                      row.kind === "landing" &&
+                      !canDeleteLandingDraft(
+                        row.ownerHostId !== null || row.foreign,
+                        props.hostId,
+                      )
+                        ? null
+                        : (input) => {
+                            setHighlightedId(
+                              neighbourRowId(visibleRows, row.id),
+                            );
+                            actions.deleteRow(row, input);
+                          }
+                    }
                   />
                 ))}
               </CommandGroup>

@@ -1,3 +1,8 @@
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useCallback, type ReactNode } from "react";
 import { Unplug } from "lucide-react";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -48,6 +53,8 @@ export function GitHostUnreachable(props: {
    */
   readonly onUseDefaultHost: (() => void) | null;
 }): ReactNode {
+  const hostId = useEpicSessionHostId();
+  const retryDisabled = usePoolComputerUnavailable(hostId);
   const onRetry = props.onRetry;
   const handleRefresh = useCallback((): Promise<void> => onRetry(), [onRetry]);
   const refresh = useRefreshSpinner({
@@ -80,8 +87,10 @@ export function GitHostUnreachable(props: {
           type="button"
           variant="outline"
           size="sm"
-          onClick={refresh.trigger}
-          disabled={refresh.refreshing}
+          onClick={() => {
+            if (!readPoolComputerUnavailable(hostId)) refresh.trigger();
+          }}
+          disabled={refresh.refreshing || retryDisabled}
           data-testid="git-host-unreachable-retry"
         >
           {refresh.refreshing ? (
