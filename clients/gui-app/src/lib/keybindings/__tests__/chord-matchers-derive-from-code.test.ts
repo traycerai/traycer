@@ -155,7 +155,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount.ts": 2,
   "gui-app/src/components/epic-canvas/tile-find/tile-find-bar.tsx": 3,
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
-  "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
+  // Seven viewer-key reads, plus the typed zoom level's Enter (commit) and
+  // Escape (cancel the edit): named non-printable keys, not registered chords.
+  "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 9,
   // The search box's Escape (clears a non-empty query; not a registered chord).
   "gui-app/src/components/epics/epics-list-panel.tsx": 1,
   // The layout editor's sortable list: Space grabs a row (or activates it in
