@@ -165,18 +165,13 @@ export function HostOverviewSettingsCard(
   const refusalBinding =
     ownership?.unbound === false ? ownership.personalBinding : null;
   const supported = props.owner?.kind !== "team" && supportsOwnershipStop;
-  const bindingToOpen = supported ? refusalBinding : null;
-  // A healthy Personal row is a candidate recovery. The sheet re-reads its
-  // own preview to verify the environment and sharing generation too.
-  const canStayOpen =
-    supported &&
-    openedBinding !== null &&
-    (matchesStopPersonalBinding(openedBinding, refusalBinding) ||
-      (ownership === null &&
-        status?.principal?.kind === "personal" &&
-        status.bindingGeneration === openedBinding.bindingGeneration &&
-        (status.planes.records === "moved" ||
-          status.planes.records === "shared_unrecorded")));
+  const { bindingToOpen, canStayOpen } = ownershipStopBindingState({
+    supported,
+    openedBinding,
+    refusalBinding,
+    ownership,
+    status,
+  });
   if (openedBinding !== null && !canStayOpen) setOpenedBinding(null);
 
   return (
@@ -209,6 +204,29 @@ export function HostOverviewSettingsCard(
       />
     </>
   );
+}
+
+function ownershipStopBindingState(input: {
+  readonly supported: boolean;
+  readonly openedBinding: EnvironmentMoveStopPersonalBinding | null;
+  readonly refusalBinding: EnvironmentMoveStopPersonalBinding | null;
+  readonly ownership: EnvironmentStatusResponseV14["ownership"] | undefined;
+  readonly status: HostOverviewSettingsCardProps["status"];
+}) {
+  const { supported, openedBinding, refusalBinding, ownership, status } = input;
+  const bindingToOpen = supported ? refusalBinding : null;
+  // A healthy Personal row is a candidate recovery. The sheet re-reads its
+  // own preview to verify the environment and sharing generation too.
+  const canStayOpen =
+    supported &&
+    openedBinding !== null &&
+    (matchesStopPersonalBinding(openedBinding, refusalBinding) ||
+      (ownership === null &&
+        status?.principal?.kind === "personal" &&
+        status.bindingGeneration === openedBinding.bindingGeneration &&
+        (status.planes.records === "moved" ||
+          status.planes.records === "shared_unrecorded")));
+  return { bindingToOpen, canStayOpen };
 }
 
 function HostOverviewSettingsCardContents(
