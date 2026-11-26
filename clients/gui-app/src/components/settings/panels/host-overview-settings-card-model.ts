@@ -172,20 +172,10 @@ export type HostSettingsRowModel =
       readonly options: readonly HostSettingsRowOption[];
     };
 
-/**
- * Settings place comes from status; the binding answers only which team. A
- * computer that runs its own settings is in no team, and no binding is read
- * for it (`useEnvironmentHostReadQuery`), so its row does not wait for one.
- * An ownership read failure keeps its recovery row before either hold.
- * With readable ownership, the host's current-owner hold precedes any cached
- * or implicit binding. An old status projection names neither fact.
- */
-export function hostSettingsRowModel(
-  status: EnvironmentStatusResponseV13 | EnvironmentStatusResponseV14 | null,
-  binding: EnvironmentHostBinding | null,
+function hostSettingsOwnershipRow(
+  status: EnvironmentStatusResponseV13 | EnvironmentStatusResponseV14,
   hostName: string,
-): HostSettingsRowModel {
-  if (status === null) return { kind: "loading" };
+): HostSettingsRowModel | null {
   if ("ownership" in status && status.ownership !== null) {
     if (status.ownership.unbound) {
       return {
@@ -200,6 +190,25 @@ export function hostSettingsRowModel(
       personal: status.ownership.personalBinding !== null,
     };
   }
+  return null;
+}
+
+/**
+ * Settings place comes from status; the binding answers only which team. A
+ * computer that runs its own settings is in no team, and no binding is read
+ * for it (`useEnvironmentHostReadQuery`), so its row does not wait for one.
+ * An ownership read failure keeps its recovery row before either hold.
+ * With readable ownership, the host's current-owner hold precedes any cached
+ * or implicit binding. An old status projection names neither fact.
+ */
+export function hostSettingsRowModel(
+  status: EnvironmentStatusResponseV13 | EnvironmentStatusResponseV14 | null,
+  binding: EnvironmentHostBinding | null,
+  hostName: string,
+): HostSettingsRowModel {
+  if (status === null) return { kind: "loading" };
+  const ownershipRow = hostSettingsOwnershipRow(status, hostName);
+  if (ownershipRow !== null) return ownershipRow;
   if ("personalHold" in status && status.personalHold === "unconfirmed") {
     return {
       kind: "personal_hold",
