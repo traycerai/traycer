@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,7 @@ import {
 } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import type { ActivationOutcome } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   teamSubscription,
   userSubscription,
@@ -64,42 +66,54 @@ const harness = vi.hoisted(() => {
       vi.fn<
         () => Promise<{ readonly status: number; readonly text: string | null }>
       >(),
+    attachmentMutation: null as null | {
+      readonly mutateAsync: (input: {
+        readonly epicId: string;
+        readonly teamId: string;
+        readonly operation: EnvironmentCloud;
+      }) => Promise<{ readonly environmentId: string }>;
+    },
     createSandbox:
       vi.fn<
         (input: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
       >(),
     toastError: vi.fn(),
+    placement: null as {
+      readonly resolvedHostId: string | null;
+      readonly pin: { readonly setSelection: (hostId: string) => void };
+    } | null,
   };
 });
 
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({
-    auth: {
-      sandboxControlUnavailableReason: () => harness.controlUnavailable,
-      environmentCloud: () => ({ onOriginSignIn: () => harness.originCurrent }),
-      createSandbox: harness.createSandbox,
-      listEnvironments: harness.listEnvironments,
-      attachTaskEnvironment: (request: TaskEnvironmentAttachmentRequest) =>
-        attachTaskEnvironmentViaHttp(
-          "https://cloud.invalid",
-          "fixture-token",
-          null,
-          harness.attachmentTransport,
-          request,
-        ),
+vi.mock("@/lib/host", () => {
+  const auth = {
+    sandboxControlUnavailableReason: () => harness.controlUnavailable,
+    environmentCloud: () => ({
+      onOriginSignIn: () => harness.originCurrent,
+    }),
+    createSandbox: harness.createSandbox,
+    listEnvironments: harness.listEnvironments,
+    attachTaskEnvironment: (request: TaskEnvironmentAttachmentRequest) =>
+      attachTaskEnvironmentViaHttp(
+        "https://cloud.invalid",
+        "fixture-token",
+        null,
+        harness.attachmentTransport,
+        request,
+      ),
+  };
+  const directory = {
+    knownHostIds: () => [],
+    refresh: vi.fn(),
+    findById: (hostId: string) =>
+      harness.entry?.hostId === hostId ? harness.entry : null,
+    onChange: (listener: () => void) => {
+      harness.directoryListeners.add(listener);
+      return { dispose: () => harness.directoryListeners.delete(listener) };
     },
-    directory: {
-      knownHostIds: () => [],
-      refresh: vi.fn(),
-      findById: (hostId: string) =>
-        harness.entry?.hostId === hostId ? harness.entry : null,
-      onChange: (listener: () => void) => {
-        harness.directoryListeners.add(listener);
-        return { dispose: () => harness.directoryListeners.delete(listener) };
-      },
-    },
-  }),
-}));
+  };
+  return { useHostBinding: () => ({ auth, directory }) };
+});
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: harness.openSettings }),
 }));
@@ -118,6 +132,33 @@ vi.mock("@/hooks/sandboxes/use-team-bundle-balances", () => ({
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useMakeActiveHost: () => ({ makeActiveWithWakeNotice: harness.activate }),
 }));
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "origin-computer",
+}));
+vi.mock("@/hooks/host/use-composer-placement", () => ({
+  useEpicConversationPlacement: () => ({
+    target: { resolvedHostId: harness.placement?.resolvedHostId ?? null },
+    pin: harness.placement?.pin,
+  }),
+}));
+vi.mock("@/hooks/host/use-pool-computer-unavailable", () => ({
+  usePoolComputerUnavailable: () => true,
+}));
+vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+  >("@/hooks/epic/use-epic-attach-environment-mutation");
+  return {
+    ...actual,
+    useEpicAttachEnvironment: (
+      ...args: Parameters<typeof actual.useEpicAttachEnvironment>
+    ) => {
+      if (harness.attachmentMutation !== null)
+        return harness.attachmentMutation;
+      return actual.useEpicAttachEnvironment(...args);
+    },
+  };
+});
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => harness.openTeam,
 }));
@@ -127,6 +168,9 @@ vi.mock("sonner", async (importOriginal) => ({
 }));
 
 import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
+import { NewConversationModalBody } from "@/components/epic-canvas/sidebar/new-conversation-modal";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 function testUser(): AuthenticatedUser {
   return userWith(
@@ -147,9 +191,53 @@ function renderActions(epicId: string | null) {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <PoolComposerActions epicId={epicId} place={harness.place} />
+      <PoolComposerActions
+        epicId={epicId}
+        surfaceKey={epicId === null ? "landing-test" : `task:${epicId}`}
+        place={harness.place}
+        watchPlacement={null}
+      />
     </QueryClientProvider>,
   );
+}
+
+function renderTaskModalActions(epicId: string, tabId: string) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <NewConversationModalBody
+        epicId={epicId}
+        tabId={tabId}
+        placement={null}
+        parentId={null}
+        hostId={null}
+        dismissPickerRef={{ current: null }}
+        onSubmitted={vi.fn()}
+      />
+    </QueryClientProvider>,
+  );
+}
+
+function openModalRequest(
+  epicId: string,
+  tabId: string,
+  parentId: string | null,
+): void {
+  useNewConversationModalOpenStore.getState().open({
+    epicId,
+    tabId,
+    placement: null,
+    parentId,
+    hostId: null,
+  });
+}
+
+function fakeModalTaskAttachment(): void {
+  harness.attachmentMutation = {
+    mutateAsync: () => Promise.resolve({ environmentId: "team-env" }),
+  };
 }
 
 beforeEach(() => {
@@ -205,6 +293,12 @@ beforeEach(() => {
     return Promise.resolve({ kind: "network-error", detail: "offline" });
   });
   harness.toastError.mockReset();
+  harness.attachmentMutation = null;
+  harness.placement = {
+    resolvedHostId: "origin-computer",
+    pin: { setSelection: harness.place },
+  };
+  useNewConversationModalOpenStore.getState().close();
 });
 
 afterEach(() => {
@@ -212,21 +306,28 @@ afterEach(() => {
   vi.useRealTimers();
   useSelectionAuthorityStore.getState().reset();
   useAddHostDialogStore.getState().closeDialog();
+  useNewConversationModalOpenStore.getState().close();
+  useEpicCanvasStore.getState().discardTabState("pool-start-tab");
+  useEpicCanvasStore.getState().discardTabState("pool-origin-tab");
 });
 
 function acceptCreate(wakeBudgetMs: number | undefined): void {
-  harness.createSandbox.mockResolvedValueOnce({
-    kind: "ok",
-    accepted: {
-      sandboxId: SANDBOX_ID,
-      hostId: NEW_HOST_ID,
-      sandbox: sandboxSummaryFixture({
-        id: SANDBOX_ID,
+  harness.createSandbox.mockImplementationOnce((input) => {
+    harness.events.push("create");
+    harness.createInput = input;
+    return Promise.resolve({
+      kind: "ok",
+      accepted: {
+        sandboxId: SANDBOX_ID,
         hostId: NEW_HOST_ID,
-        state: "creating",
-        ...(wakeBudgetMs === undefined ? {} : { wakeBudgetMs }),
-      }),
-    },
+        sandbox: sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: NEW_HOST_ID,
+          state: "creating",
+          ...(wakeBudgetMs === undefined ? {} : { wakeBudgetMs }),
+        }),
+      },
+    });
   });
 }
 
@@ -262,7 +363,7 @@ async function pressStart(): Promise<HTMLElement> {
 
 async function pressTeam(): Promise<void> {
   fireEvent.pointerDown(
-    screen.getByRole("button", { name: "Choose whose sandbox" }),
+    screen.getByRole("button", { name: "Host: none selected" }),
     { button: 0 },
   );
   const teamRow = await screen.findByRole("menuitem", {
@@ -290,6 +391,156 @@ describe("PoolComposerActions", () => {
       "Couldn't verify your balance.",
     );
     expect(harness.activate).not.toHaveBeenCalled();
+  });
+
+  it("uses valid saved Personal defaults from the real Start a sandbox button", async () => {
+    harness.defaults.mockImplementation((key) =>
+      key === "personal"
+        ? {
+            os: "linux",
+            cpus: 4,
+            memoryMb: 8192,
+            diskMb: 30720,
+            idleMinutes: 14,
+            restingMinutes: null,
+          }
+        : null,
+    );
+    renderActions("epic-team");
+
+    await pressStart();
+
+    expect(harness.createInput).toMatchObject({
+      environmentId: null,
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 30720,
+      region: "us-east",
+      idleMinutes: 14,
+      destroyAfterRestingMinutes: 0,
+    });
+    expect(harness.events).toEqual(["create"]);
+  });
+
+  it("opens the existing host choices from the approved Host: none selected trigger", async () => {
+    renderActions("epic-team");
+
+    const trigger = screen.getByRole("button", {
+      name: "Host: none selected",
+    });
+    fireEvent.pointerDown(trigger, { button: 0 });
+
+    expect(
+      await screen.findByRole("menuitem", { name: /New Personal sandbox/ }),
+    ).toBeTruthy();
+  });
+
+  it("keeps a pending create in progress when the same composer closes and reopens", async () => {
+    const create = Promise.withResolvers<SandboxCreateFetchResult>();
+    harness.createSandbox.mockReturnValueOnce(create.promise);
+    const first = renderActions("epic-new-chat");
+
+    await pressStart();
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    const reopened = renderActions("epic-new-chat");
+    const start = screen.getByRole("button", { name: "Start a sandbox" });
+    expect(start.matches(":disabled")).toBe(true);
+    fireEvent.click(start);
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+
+    await changeFixture(() =>
+      create.resolve({ kind: "network-error", detail: "offline" }),
+    );
+    await waitFor(() => expect(start.matches(":disabled")).toBe(false));
+    reopened.unmount();
+  });
+
+  it("keeps an accepted Personal start pending across reopen until its listed sandbox serves", async () => {
+    vi.useFakeTimers();
+    acceptCreate(undefined);
+    const first = renderActions("epic-new-chat");
+
+    await pressStart();
+    await advanceClock(0);
+    expect(harness.directoryListeners.size).toBe(1);
+    first.unmount();
+
+    const reopened = renderActions("epic-new-chat");
+    const start = screen.getByRole("button", { name: "Start a sandbox" });
+    expect(start.matches(":disabled")).toBe(true);
+    fireEvent.click(start);
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+
+    await changeFixture(() =>
+      publishSandbox(sandboxHostEntry(NEW_HOST_ID, null)),
+    );
+    await advanceClock(0);
+    expect(harness.activate).toHaveBeenCalledTimes(1);
+    await changeFixture(() => sandboxReady(NEW_HOST_ID, NEW_HOST_ID));
+    await advanceClock(0);
+    expect(start.matches(":disabled")).toBe(false);
+    expect(harness.toastError).not.toHaveBeenCalled();
+    reopened.unmount();
+  });
+
+  it("settles one Personal create and wake notice after its composer closes during activation", async () => {
+    vi.useFakeTimers();
+    acceptCreate(undefined);
+    const activation = Promise.withResolvers<ActivationOutcome>();
+    harness.activate.mockReturnValue(activation.promise);
+    const first = renderActions("epic-personal-close");
+
+    await pressStart();
+    await advanceClock(0);
+    await changeFixture(() =>
+      publishSandbox(sandboxHostEntry(NEW_HOST_ID, null)),
+    );
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+    expect(harness.activate).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    const reopened = renderActions("epic-personal-close");
+    const start = screen.getByRole("button", { name: "Start a sandbox" });
+    expect(start.matches(":disabled")).toBe(true);
+    fireEvent.click(start);
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+
+    await changeFixture(() => activation.resolve("declined"));
+    await advanceClock(0);
+
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+    expect(harness.activate).toHaveBeenCalledTimes(1);
+    expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't wake this sandbox",
+      { description: "Try again in a moment." },
+    );
+    reopened.unmount();
+  });
+
+  it("lets a different task start independently while another task's create is pending", async () => {
+    const create = Promise.withResolvers<SandboxCreateFetchResult>();
+    harness.createSandbox.mockReturnValueOnce(create.promise);
+    const first = renderActions("epic-one");
+
+    fireEvent.click(first.getByRole("button", { name: "Start a sandbox" }));
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+
+    const second = renderActions("epic-two");
+    fireEvent.click(
+      within(second.container).getByRole("button", {
+        name: "Start a sandbox",
+      }),
+    );
+    await waitFor(() => expect(harness.createSandbox).toHaveBeenCalledTimes(2));
+
+    await changeFixture(() =>
+      create.resolve({ kind: "network-error", detail: "offline" }),
+    );
+    first.unmount();
+    second.unmount();
   });
 
   it.each([
@@ -358,7 +609,7 @@ describe("PoolComposerActions", () => {
     );
     renderActions("epic-team");
     fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Choose whose sandbox" }),
+      screen.getByRole("button", { name: "Host: none selected" }),
       { button: 0 },
     );
     const row = await screen.findByRole("menuitem", {
@@ -415,7 +666,10 @@ describe("PoolComposerActions", () => {
     await changeFixture(() => {
       publishSandbox(sandboxHostEntry(NEW_HOST_ID, null));
       useSelectionAuthorityStore.setState({
-        leases: [{ hostId: NEW_HOST_ID, status: "connecting", dead: null }],
+        leases: [
+          { hostId: NEW_HOST_ID, status: "connecting", dead: null },
+          { hostId: "other-computer", status: "ready", dead: null },
+        ],
         servingPeer: { kind: "computer", hostId: "other-computer" },
       });
     });
@@ -459,6 +713,43 @@ describe("PoolComposerActions", () => {
       expect(harness.toastError).toHaveBeenCalledTimes(wantedWakeErrors);
     },
   );
+
+  it("keeps a later computer pick when the superseded Personal sandbox misses its deadline", async () => {
+    vi.useFakeTimers();
+    acceptCreate(undefined);
+    renderActions("epic-personal");
+
+    await pressStart();
+    await changeFixture(() =>
+      publishSandbox(sandboxHostEntry(NEW_HOST_ID, null)),
+    );
+    expect(harness.activate).toHaveBeenCalledTimes(1);
+
+    await changeFixture(() => {
+      useSelectionAuthorityStore.setState({
+        preferredHostId: "later-computer",
+        servingPeer: { kind: "computer", hostId: "later-computer" },
+        leases: [
+          { hostId: NEW_HOST_ID, status: "connecting", dead: null },
+          { hostId: "later-computer", status: "ready", dead: null },
+        ],
+      });
+    });
+    await advanceClock(120_000);
+
+    expect(harness.activate).toHaveBeenCalledTimes(1);
+    expect(useSelectionAuthorityStore.getState().preferredHostId).toBe(
+      "later-computer",
+    );
+    expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "later-computer",
+    });
+    expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't wake this sandbox",
+      { description: "Try again in a moment." },
+    );
+  });
 
   it.each([true, false])(
     "uses one notice when the helper's wake refusal precedes the deadline: %s",
@@ -507,6 +798,89 @@ describe("PoolComposerActions", () => {
       hostId: "other-computer",
     });
   });
+
+  it("keeps a Team start pending through modal close and reopen, then pins its ready host once", async () => {
+    const epicId = "pool-team-modal";
+    const tabId = "pool-start-tab";
+    acceptCreate(undefined);
+    fakeModalTaskAttachment();
+    useEpicCanvasStore.getState().openEpicTabWithId(tabId, epicId, "Task");
+    openModalRequest(epicId, tabId, null);
+    const first = renderTaskModalActions(epicId, tabId);
+
+    await pressTeam();
+    await waitFor(() => expect(harness.createSandbox).toHaveBeenCalledTimes(1));
+    expect(harness.createInput).toMatchObject({ environmentId: "team-env" });
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+    first.unmount();
+    useNewConversationModalOpenStore.getState().close();
+
+    openModalRequest(epicId, tabId, null);
+    const reopened = renderTaskModalActions(epicId, tabId);
+    const start = screen.getByRole("button", { name: "Start a sandbox" });
+    expect(start.matches(":disabled")).toBe(true);
+    fireEvent.click(start);
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+
+    await changeFixture(() =>
+      publishSandbox(
+        sandboxHostEntry(NEW_HOST_ID, { id: "team", name: "Acme" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(harness.openTeam).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID),
+    );
+    await changeFixture(() => sandboxReady(NEW_HOST_ID, NEW_HOST_ID));
+    await waitFor(() =>
+      expect(harness.place).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID),
+    );
+
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+    expect(harness.closeTeam).toHaveBeenCalledTimes(1);
+    expect(start.matches(":disabled")).toBe(false);
+    expect(harness.toastError).not.toHaveBeenCalled();
+    reopened.unmount();
+  });
+
+  it.each(["origin record removed", "another modal row opened"] as const)(
+    "does not pin the Team host when the $scenario before it becomes ready",
+    async (scenario) => {
+      const epicId = "pool-team-origin";
+      const tabId = "pool-origin-tab";
+      acceptCreate(undefined);
+      fakeModalTaskAttachment();
+      useEpicCanvasStore.getState().openEpicTabWithId(tabId, epicId, "Task");
+      openModalRequest(epicId, tabId, null);
+      const view = renderTaskModalActions(epicId, tabId);
+
+      await pressTeam();
+      await waitFor(() =>
+        expect(harness.createSandbox).toHaveBeenCalledTimes(1),
+      );
+      expect(harness.createInput).toMatchObject({ environmentId: "team-env" });
+      await changeFixture(() =>
+        publishSandbox(
+          sandboxHostEntry(NEW_HOST_ID, { id: "team", name: "Acme" }),
+        ),
+      );
+      await waitFor(() =>
+        expect(harness.openTeam).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID),
+      );
+
+      if (scenario === "origin record removed") {
+        useEpicCanvasStore.getState().discardTabState(tabId);
+      } else {
+        openModalRequest(epicId, tabId, "another-chat");
+      }
+      await changeFixture(() => sandboxReady(NEW_HOST_ID, NEW_HOST_ID));
+      await waitFor(() => expect(harness.closeTeam).toHaveBeenCalledTimes(1));
+
+      expect(harness.place).not.toHaveBeenCalled();
+      expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+      expect(harness.toastError).not.toHaveBeenCalled();
+      view.unmount();
+    },
+  );
 
   it("attaches a task in cloud before creating the selectable low-credit Team sandbox row", async () => {
     renderActions("epic-team");
@@ -598,7 +972,7 @@ describe("PoolComposerActions", () => {
       screen.queryByRole("button", { name: "Start a sandbox" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Choose whose sandbox" }),
+      screen.queryByRole("button", { name: "Host: none selected" }),
     ).toBeNull();
   });
 

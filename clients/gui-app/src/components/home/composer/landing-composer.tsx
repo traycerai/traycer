@@ -1,4 +1,5 @@
 import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
+import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
 import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { SupersededAuthEraError } from "@/lib/auth/auth-service";
@@ -230,19 +231,42 @@ function landingSendRefusal(
 
 export function LandingComposer(props: LandingComposerProps) {
   const namedHostId = useLandingDraftNamedHostId(props.draftId);
+  // A draft opened for one machine stages separately from the window's pin.
+  const composerSurfaceKey = landingDraftSurfaceKey(
+    useComposerSurfaceHostKey(),
+    props.draftId,
+    namedHostId,
+  );
   const placement = useComposerPlacement(namedHostId);
   const unavailable = usePoolComputerUnavailable(
     placement.target.resolvedHostId,
   );
   if (unavailable && namedHostId === null) {
     return (
-      <PoolComposerActions epicId={null} place={placement.pin.setSelection} />
+      <PoolComposerActions
+        epicId={null}
+        surfaceKey={composerSurfaceKey}
+        watchPlacement={null}
+        place={(hostId) => {
+          const { draftId } = props;
+          if (
+            draftId !== null &&
+            (landingDraftIsRetired(draftId) ||
+              !useLandingDraftStore
+                .getState()
+                .drafts.some((draft) => draft.id === draftId))
+          ) {
+            return;
+          }
+          placement.pin.setSelection(hostId);
+        }}
+      />
     );
   }
   return (
     <ComputerLandingComposer
       {...props}
-      namedHostId={namedHostId}
+      composerSurfaceKey={composerSurfaceKey}
       placement={placement}
     />
   );
@@ -250,14 +274,14 @@ export function LandingComposer(props: LandingComposerProps) {
 
 function ComputerLandingComposer(
   props: LandingComposerProps & {
-    readonly namedHostId: string | null;
+    readonly composerSurfaceKey: string;
     readonly placement: ComposerPlacement;
   },
 ) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const createdUnboundDraftIdRef = useRef<string | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
-  const { namedHostId, placement } = props;
+  const { placement } = props;
   // READ target for this surface's queries; SUBMIT target (host-frozen client)
   // for anything that creates - see `useComposerPlacement`.
   const placementTarget = placement.target;
@@ -461,14 +485,7 @@ function ComputerLandingComposer(
       setGlobalRunSettings,
     ],
   );
-  // The window's pin key, which a staged sandbox is staged under; a draft
-  // opened for one machine stages under its own, so no sandbox picked for the
-  // window's other drafts takes its Send.
-  const composerSurfaceKey = landingDraftSurfaceKey(
-    useComposerSurfaceHostKey(),
-    props.draftId,
-    namedHostId,
-  );
+  const { composerSurfaceKey } = props;
   useLandingReturnedSandbox(composerSurfaceKey, draftId, activityEnabled);
   const settingsSeed = useMemo(
     () =>

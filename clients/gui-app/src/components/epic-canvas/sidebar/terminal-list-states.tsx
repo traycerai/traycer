@@ -1,4 +1,7 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 /**
  * The non-row states of a raw-terminal list - loading, load failure, empty,
@@ -53,7 +56,8 @@ export function TerminalsErrorState(props: {
   readonly onRetry: () => void;
   readonly testIdPrefix: string;
 }) {
-  const retryDisabled = usePoolComputerUnavailable(useEpicSessionHostId());
+  const hostId = useEpicSessionHostId();
+  const retryDisabled = usePoolComputerUnavailable(hostId);
   return (
     <div
       className="flex flex-col gap-2 px-2 py-1.5 text-ui-sm text-destructive"
@@ -69,7 +73,9 @@ export function TerminalsErrorState(props: {
           size="sm"
           disabled={props.isRetrying || retryDisabled}
           data-testid={`${props.testIdPrefix}-retry`}
-          onClick={props.onRetry}
+          onClick={() => {
+            if (!readPoolComputerUnavailable(hostId)) props.onRetry();
+          }}
         >
           {props.isRetrying ? (
             <AgentSpinningDots

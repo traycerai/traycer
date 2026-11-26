@@ -1,5 +1,5 @@
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
-import { useRef, useState, type ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { ChevronDown, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -31,6 +31,8 @@ import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
 import {
   stageConfigurationCopy,
   stageProviderFor,
+  type StageConfiguration,
+  type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   COULDNT_VERIFY_BALANCE,
@@ -44,6 +46,7 @@ import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
 import { finishPoolSandboxStart } from "@/lib/sandboxes/pool-sandbox-start";
 import { toastWakeFailed } from "@/lib/sandboxes/sandbox-wake";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HandoffOwnerWatch } from "@/stores/composer/staged-sandbox-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import {
@@ -54,7 +57,69 @@ import {
 
 interface PoolComposerActionsProps {
   readonly epicId: string | null;
+  readonly surfaceKey: string;
   readonly place: (hostId: string) => void;
+  readonly watchPlacement: HandoffOwnerWatch | null;
+}
+
+type PoolSandboxAuth = HostRuntimeBinding<HostRpcRegistry>["auth"];
+interface SandboxFlight {
+  readonly isCurrent: () => boolean;
+}
+
+// An accepted start can outlive its composer. Only the run that took this
+// slot can release it, and a sign-in change leaves the next account free.
+const flights = new WeakMap<PoolSandboxAuth, Map<string, SandboxFlight>>();
+const flightListeners = new Set<() => void>();
+
+function subscribeFlights(onChange: () => void): () => void {
+  flightListeners.add(onChange);
+  const unsubscribeAuth = useAuthStore.subscribe(onChange);
+  return () => {
+    flightListeners.delete(onChange);
+    unsubscribeAuth();
+  };
+}
+
+function notifyFlights(): void {
+  for (const listener of flightListeners) listener();
+}
+
+function claimSandboxFlight(
+  auth: PoolSandboxAuth,
+  surfaceKey: string,
+  current: () => boolean,
+): (() => void) | null {
+  if (!current()) return null;
+  const active = flights.get(auth) ?? new Map<string, SandboxFlight>();
+  if (active.get(surfaceKey)?.isCurrent()) return null;
+  const flight = { isCurrent: current };
+  flights.set(auth, active);
+  active.set(surfaceKey, flight);
+  notifyFlights();
+  return () => {
+    if (active.get(surfaceKey) !== flight) return;
+    active.delete(surfaceKey);
+    notifyFlights();
+  };
+}
+
+function watchTeamPlacement(
+  personal: boolean,
+  place: (hostId: string) => void,
+  watch: HandoffOwnerWatch | null,
+) {
+  if (personal || watch === null) return { place, stop: null };
+  let current = true;
+  const stop = watch(() => {
+    current = false;
+  });
+  return {
+    place: (hostId: string) => {
+      if (current) place(hostId);
+    },
+    stop,
+  };
 }
 
 export function PoolComposerActions(
@@ -94,7 +159,7 @@ function StartSandbox(
     readonly binding: HostRuntimeBinding<HostRpcRegistry>;
   },
 ): ReactNode {
-  const { binding, epicId, place } = props;
+  const { binding, epicId, place, surfaceKey, watchPlacement } = props;
   const { auth, directory } = binding;
   const queryClient = useQueryClient();
   const user = useAuthUser().data ?? null;
@@ -104,8 +169,10 @@ function StartSandbox(
   const attach = useEpicAttachEnvironment(null, "pool-sandbox");
   const { makeActiveWithWakeNotice } = useMakeActiveHost([]);
   const openTransport = useDurableStreamTransportFactory();
-  const flight = useRef(false);
-  const [pending, setPending] = useState(false);
+  const pending = useSyncExternalStore(
+    subscribeFlights,
+    () => flights.get(auth)?.get(surfaceKey)?.isCurrent() === true,
+  );
   const rows = newRowFacts({ user, teamBalanceMc, catalogue, defaults });
   const personal = rows[0];
   if (catalogue === null || personal.shape === null) return null;
@@ -134,11 +201,13 @@ function StartSandbox(
 
   const start = async (row: NewRowFacts): Promise<void> => {
     const { configuration, shape } = row;
-    if (flight.current || shape === null) return;
+    if (shape === null) return;
     const operation = auth.environmentCloud();
     const current = operation.onOriginSignIn;
-    flight.current = true;
-    setPending(true);
+    const release = claimSandboxFlight(auth, surfaceKey, current);
+    if (release === null) return;
+    const personal = configuration.kind === "personal";
+    const placement = watchTeamPlacement(personal, place, watchPlacement);
     try {
       const environmentId =
         configuration.kind === "team"
@@ -170,23 +239,25 @@ function StartSandbox(
               accepted: result.accepted,
               current,
               directory,
-              personal: configuration.kind === "personal",
+              personal,
               activate: makeActiveWithWakeNotice,
               openTransport,
-              place,
+              place: placement.place,
             })
           : null;
       refreshSandboxCreateLists(queryClient, directory, result);
       if (result.kind === "ok") {
         await finishing;
       } else {
-        toast.error(createFailureLine(result, row, catalogue));
+        toast.error(
+          createFailureLine(result, { configuration, shape }, catalogue),
+        );
       }
     } catch {
       if (current()) toastWakeFailed();
     } finally {
-      flight.current = false;
-      setPending(false);
+      placement.stop?.();
+      release();
     }
   };
 
@@ -206,13 +277,16 @@ function StartSandbox(
             type="button"
             size="icon"
             className="rounded-l-none"
-            aria-label="Choose whose sandbox"
+            aria-label="Host: none selected"
             disabled={pending}
           >
             <ChevronDown aria-hidden />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-max min-w-56">
+        <DropdownMenuContent
+          align="start"
+          className="w-max max-w-[var(--radix-dropdown-menu-content-available-width)]"
+        >
           {rows.map((row) => {
             const presentation = newRowPresentation(row, null);
             return (
@@ -258,7 +332,10 @@ function refreshSandboxCreateLists(
 
 function createFailureLine(
   result: Exclude<SandboxCreateFetchResult, { readonly kind: "ok" }>,
-  row: NewRowFacts,
+  row: {
+    readonly configuration: StageConfiguration;
+    readonly shape: StageShape;
+  },
   catalogue: SandboxCatalogue,
 ): string {
   const { configuration, shape } = row;
@@ -276,7 +353,6 @@ function createFailureLine(
         { waking: false, context: "sentence" },
       );
     case "shape": {
-      if (shape === null) return sandboxCreateFailureMessage(result, teamName);
       const region = stageProviderFor(catalogue, shape.os)?.regions.find(
         (candidate) => candidate.id === shape.region,
       );

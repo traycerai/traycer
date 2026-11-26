@@ -374,6 +374,7 @@ describe("the composer slot of a destroyed sandbox's chat", () => {
       render(
         <ChatStateLineContext
           value={{
+            kind: "destroyed",
             line,
             actions: <button type="button">Continue on another host</button>,
           }}

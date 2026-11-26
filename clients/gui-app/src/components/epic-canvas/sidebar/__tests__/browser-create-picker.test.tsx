@@ -9,6 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import type { EpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import {
+  DEFAULT_TILE_PLACEMENT_SETTINGS,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 import { BrowserCreatePicker } from "../browser-create-picker";
 
 interface FakeHost {
@@ -27,7 +33,10 @@ const state = vi.hoisted(() => ({
   setSelection: vi.fn(),
   withOwner: vi.fn(),
   openTab: vi.fn(),
-  openTile: vi.fn(),
+  openTile: vi.fn<EpicTileNavigation["openTile"]>(),
+  ownerHostIds: [] as string[],
+  liveDialableHostIds: [] as string[],
+  canDialOwner: vi.fn(),
   scope: "cloud",
   localHostId: "host-home",
   /** This machine's own host, as `useReactiveLocalHostId` reports it. */
@@ -64,6 +73,7 @@ vi.mock("@/hooks/browser/use-browser-catalog-actions", () => ({
   useBrowserCatalogActions: () => ({
     closeTab: vi.fn(),
     withOwner: state.withOwner,
+    canDialOwner: state.canDialOwner,
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
@@ -151,6 +161,15 @@ describe("BrowserCreatePicker", () => {
     state.withOwner.mockReset();
     state.openTab.mockReset();
     state.openTile.mockReset();
+    state.ownerHostIds = [];
+    state.liveDialableHostIds = ["host-work", "host-home", "host-vm"];
+    state.canDialOwner.mockReset();
+    state.canDialOwner.mockImplementation((hostId: string) =>
+      state.liveDialableHostIds.includes(hostId),
+    );
+    useSettingsStore.setState({
+      tilePlacement: DEFAULT_TILE_PLACEMENT_SETTINGS,
+    });
     vi.mocked(toastFromHostError).mockReset();
     vi.mocked(reportableErrorToast).mockReset();
   });
@@ -224,6 +243,113 @@ describe("BrowserCreatePicker", () => {
     await waitFor(() => expect(state.withOwner).toHaveBeenCalledTimes(1));
     expect(state.withOwner.mock.calls[0]?.[0]).toBe("host-work");
     expect(state.setSelection).not.toHaveBeenCalled();
+  });
+
+  it("opens Add on the pool for a dialable device without a ready lease and opens its browser tab on that owner", async () => {
+    state.hosts = [
+      fakeHost("pool-browser-owner", "Pool Browser Host", "online", {}),
+    ];
+    state.liveDialableHostIds = ["pool-browser-owner"];
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    useSettingsStore.setState({
+      tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
+    });
+    state.openTab.mockResolvedValue({
+      sessionId: "browser-session-1",
+      tabId: "browser-tab-1",
+      handoffToken: null,
+    });
+    state.withOwner.mockImplementation(
+      async (
+        hostId: string,
+        action: (sessions: BrowserSessionsState) => Promise<unknown>,
+      ) => {
+        state.ownerHostIds.push(hostId);
+        return action(fakeBrowserSessionsState(hostId));
+      },
+    );
+
+    const user = await openPicker();
+    expect(screen.getByTestId("add").hasAttribute("disabled")).toBe(false);
+    await user.click(
+      screen.getByRole("menuitem", { name: /Pool Browser Host/ }),
+    );
+
+    await waitFor(() => expect(state.openTab).toHaveBeenCalledTimes(1));
+    expect(state.ownerHostIds).toEqual(["pool-browser-owner"]);
+    expect(state.openTab).toHaveBeenCalledWith(null, "about:blank");
+    expect(state.openTile).toHaveBeenCalledTimes(1);
+    expect(state.openTile.mock.calls[0]?.[0].node).toMatchObject({
+      hostId: "pool-browser-owner",
+      sessionId: "browser-session-1",
+      tabId: "browser-tab-1",
+    });
+  });
+
+  it("disables pool Add when its listed owner has no live dialable route", () => {
+    state.hosts = [
+      fakeHost("offline-browser-owner", "Offline Browser Host", "online", {}),
+    ];
+    state.liveDialableHostIds = [];
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+
+    render(
+      wrap(
+        <BrowserCreatePicker
+          epicId="epic-1"
+          tabId="tab-1"
+          onOpened={null}
+          testId="add"
+          trigger="icon"
+        />,
+      ),
+    );
+
+    expect(state.canDialOwner).toHaveBeenCalledWith("offline-browser-owner");
+    expect(screen.getByTestId("add").hasAttribute("disabled")).toBe(true);
+  });
+
+  it("rechecks the live owner route when a device goes away after the chooser opens", async () => {
+    state.hosts = [
+      fakeHost("route-loss-owner", "Route Loss Host", "online", {}),
+    ];
+    state.liveDialableHostIds = ["route-loss-owner"];
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    useSettingsStore.setState({
+      tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
+    });
+    state.withOwner.mockImplementation(
+      async (
+        hostId: string,
+        action: (sessions: BrowserSessionsState) => Promise<unknown>,
+      ) => {
+        state.ownerHostIds.push(hostId);
+        return action(fakeBrowserSessionsState(hostId));
+      },
+    );
+
+    const user = await openPicker();
+    state.liveDialableHostIds = [];
+    state.canDialOwner.mockClear();
+    await user.click(screen.getByRole("menuitem", { name: /Route Loss Host/ }));
+
+    expect(state.canDialOwner).toHaveBeenCalledWith("route-loss-owner");
+    expect(state.ownerHostIds).toEqual([]);
+    expect(state.withOwner).not.toHaveBeenCalled();
+    expect(state.openTab).not.toHaveBeenCalled();
+    expect(state.openTile).not.toHaveBeenCalled();
   });
 
   it("reports a failed creation without exposing detail, makes no second attempt elsewhere, and offers the picker again", async () => {
@@ -301,3 +427,33 @@ describe("BrowserCreatePicker", () => {
     expect(screen.getByTestId("add").hasAttribute("disabled")).toBe(true);
   });
 });
+
+function fakeBrowserSessionsState(hostId: string): BrowserSessionsState {
+  return {
+    viewports: {},
+    setViewport: () => Promise.resolve(),
+    reportViewport: () => undefined,
+    hostId,
+    lifecycle: "live",
+    inventoryReady: true,
+    canMaterializeElectron: false,
+    connectionGeneration: 1,
+    items: [],
+    errorMessage: null,
+    retry: () => undefined,
+    openTab: (sessionId, url) => {
+      state.openTab(sessionId, url);
+      return Promise.resolve({
+        sessionId: "browser-session-1",
+        tabId: "browser-tab-1",
+        handoffToken: null,
+      });
+    },
+    prepareOpenTab: () => {
+      throw new Error("The PiP placement does not prepare a canvas tab.");
+    },
+    closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.resolve(),
+    moveTab: () => Promise.resolve(),
+  };
+}

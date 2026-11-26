@@ -9,6 +9,7 @@ import {
 const spies = vi.hoisted(() => ({
   createArtifact: vi.fn(),
   terminalPickerDisabled: false,
+  terminalPickerReadDisabled: false,
 }));
 
 vi.mock("@/components/epic-canvas/mobile/use-switcher-create-artifact", () => ({
@@ -20,7 +21,10 @@ vi.mock("@/components/epic-canvas/mobile/use-switcher-create-artifact", () => ({
 vi.mock(
   "@/components/epic-canvas/sidebar/use-new-terminal-picker-disabled",
   () => ({
-    useNewTerminalPickerDisabled: () => spies.terminalPickerDisabled,
+    useNewTerminalPickerDisabled: () => ({
+      disabled: spies.terminalPickerDisabled,
+      readDisabled: () => spies.terminalPickerReadDisabled,
+    }),
   }),
 );
 // The dialog shell pulls the desktop host/folder picker body (heavy: host
@@ -43,6 +47,7 @@ vi.mock("@/components/epic-canvas/mobile/mobile-new-terminal-dialog", () => ({
 beforeEach(() => {
   spies.createArtifact.mockClear();
   spies.terminalPickerDisabled = false;
+  spies.terminalPickerReadDisabled = false;
 });
 afterEach(cleanup);
 
@@ -96,6 +101,7 @@ describe("<SwitcherNewTerminalRow />", () => {
 
   it("keeps the mobile New terminal row disabled when the shared gate has no target", () => {
     spies.terminalPickerDisabled = true;
+    spies.terminalPickerReadDisabled = true;
     const onClose = vi.fn();
     render(
       <SwitcherNewTerminalRow
@@ -107,6 +113,24 @@ describe("<SwitcherNewTerminalRow />", () => {
 
     const row = screen.getByTestId("switcher-new-terminal");
     expect(row.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(row);
+    expect(screen.queryByTestId("mobile-epic-new-terminal-dialog")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the shared terminal gate when the phone row is pressed", () => {
+    spies.terminalPickerReadDisabled = true;
+    const onClose = vi.fn();
+    render(
+      <SwitcherNewTerminalRow
+        epicId="epic-1"
+        tabId="tab-1"
+        onClose={onClose}
+      />,
+    );
+
+    const row = screen.getByTestId("switcher-new-terminal");
+    expect(row.hasAttribute("disabled")).toBe(false);
     fireEvent.click(row);
     expect(screen.queryByTestId("mobile-epic-new-terminal-dialog")).toBeNull();
     expect(onClose).not.toHaveBeenCalled();

@@ -479,6 +479,7 @@ interface ChatTileProps {
 
 interface ChatTileSessionViewProps {
   readonly cloudChat?: CloudChatSummary;
+  readonly ownerHostId?: string;
   readonly restingSandbox?: RestingChatSandbox;
   /**
    * The road for a message to a chat its host may have dropped the records
@@ -1136,7 +1137,11 @@ export function ChatDeadTileBannerContainer(
         environmentOwned={environmentOwned}
         showsPublishedCopy={props.showsPublishedCopy}
         continueTargetLabel={continueOffer.targetLabel}
-        onClone={continues ? continueOffer.continueHere : offer.clone}
+        onClone={() => {
+          if (continues) continueOffer.continueHere();
+          else if (!offer.readUnavailableOnPool()) offer.clone();
+        }}
+        actionUnavailable={!continues && offer.unavailableOnPool}
         cloning={offer.cloning || continueOffer.continuing}
         className={undefined}
         testId={props.testId}
@@ -4249,6 +4254,7 @@ function useChatTileSessionViewModel(
 
   const lowerAccess = useMemo(
     () => ({
+      ownerHostId: props.ownerHostId,
       isCopy,
       isViewer: accessFlags.isViewer && !canParkCreatorMessage,
       canAct,
@@ -4261,6 +4267,7 @@ function useChatTileSessionViewModel(
       accessFlags.isViewer,
       canParkCreatorMessage,
       canAct,
+      props.ownerHostId,
       props.readOnlyNotice,
       props.restingSandbox,
       evictedSend?.parks,

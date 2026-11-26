@@ -575,6 +575,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         >
           <ChatTileSessionView
             cloudChat={matchingCloudChat ?? undefined}
+            ownerHostId={node.ownerHostId}
             isLiveSession={false}
             preContent={null}
             handle={replicaHandle}
@@ -645,6 +646,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         >
           <ChatTileSessionView
             cloudChat={matchingCloudChat ?? undefined}
+            ownerHostId={node.ownerHostId}
             isLiveSession={false}
             preContent={null}
             handle={applied.handle}

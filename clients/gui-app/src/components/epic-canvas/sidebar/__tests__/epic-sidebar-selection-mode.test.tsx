@@ -44,6 +44,7 @@ import {
   type ChatTreeSurface,
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   requestSidebarNodeReveal,
   useSidebarNodeRevealStore,
@@ -1498,6 +1499,7 @@ afterEach(() => {
   // Zustand stores are module scope, so a status staged here outlives this
   // file inside the same worker.
   useAuthStore.setState({ status: "signed-out" });
+  useSelectionAuthorityStore.getState().reset();
 });
 
 describe("epic sidebar selection mode", () => {
@@ -1916,6 +1918,107 @@ describe("epic sidebar selection mode", () => {
     // Proves the predicate isn't trivially false for everything - an
     // artifact sharing the deleted id would still be pruned.
     expect(isDeleted({ type: "spec", id: "agent-shared" }, EPIC_ID)).toBe(true);
+  });
+
+  it("disables the outer bulk Delete when a selected terminal owner is unavailable on the pool", async () => {
+    const agent = treeNode(
+      "agent-offline",
+      null,
+      "Offline terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      rootIds: [agent.id],
+      childrenByParent: {},
+      nodeById: { [agent.id]: agent },
+    };
+    testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-offline"));
+    const deleteButton = screen.getByTestId(
+      "epic-sidebar-delete-selected-chats",
+    );
+    expect(deleteButton.matches(":disabled")).toBe(true);
+
+    fireEvent.click(deleteButton);
+    fireEvent.keyDown(deleteButton, { key: "Enter" });
+
+    expect(screen.queryByTestId("confirm-action")).toBeNull();
+    expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+
+    act(() => {
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "pool" },
+        leases: [{ hostId: "host-B", status: "ready", dead: null }],
+      });
+    });
+    await waitFor(() => expect(deleteButton.matches(":disabled")).toBe(false));
+    fireEvent.click(deleteButton);
+    expect(screen.getByTestId("confirm-action")).toBeTruthy();
+  });
+
+  it("disables an open bulk-delete confirmation if its terminal owner leaves while the pool serves", async () => {
+    const agent = treeNode(
+      "agent-ready",
+      null,
+      "Ready terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      rootIds: [agent.id],
+      childrenByParent: {},
+      nodeById: { [agent.id]: agent },
+    };
+    testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
+    useSelectionAuthorityStore.setState({
+      servingPeer: { kind: "computer", hostId: "host-B" },
+      leases: [{ hostId: "host-B", status: "ready", dead: null }],
+    });
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-ready"));
+    const deleteButton = screen.getByTestId(
+      "epic-sidebar-delete-selected-chats",
+    );
+    expect(deleteButton.matches(":disabled")).toBe(false);
+    fireEvent.click(deleteButton);
+    const confirmButton = screen.getByTestId("confirm-action");
+    expect(confirmButton.matches(":disabled")).toBe(false);
+
+    act(() => {
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "pool" },
+        leases: [],
+      });
+    });
+
+    await waitFor(() => expect(confirmButton.matches(":disabled")).toBe(true));
+    fireEvent.click(confirmButton);
+    fireEvent.keyDown(confirmButton, { key: "Enter" });
+    expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+
+    act(() => {
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "pool" },
+        leases: [{ hostId: "host-B", status: "ready", dead: null }],
+      });
+    });
+    await waitFor(() => expect(confirmButton.matches(":disabled")).toBe(false));
+    fireEvent.click(confirmButton);
+
+    await waitFor(() =>
+      expect(testState.deleteTuiAgentMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        tuiAgentId: "agent-ready",
+        hostId: "host-B",
+      }),
+    );
   });
 
   it("archives the topmost selected agents and exits selection mode", async () => {

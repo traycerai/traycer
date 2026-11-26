@@ -1,4 +1,7 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useCallback, type ReactNode } from "react";
 import { TriangleAlert, RotateCcw } from "lucide-react";
@@ -22,7 +25,8 @@ const GIT_ROOTS_REFRESH_TIMEOUT_MS = 10_000;
 export function GitRootsUnavailable(props: {
   readonly onRetry: () => void;
 }): ReactNode {
-  const retryDisabled = usePoolComputerUnavailable(useEpicSessionHostId());
+  const hostId = useEpicSessionHostId();
+  const retryDisabled = usePoolComputerUnavailable(hostId);
   const onRetry = props.onRetry;
   const handleRefresh = useCallback((): Promise<void> => {
     onRetry();
@@ -56,7 +60,9 @@ export function GitRootsUnavailable(props: {
           type="button"
           variant="outline"
           size="sm"
-          onClick={refresh.trigger}
+          onClick={() => {
+            if (!readPoolComputerUnavailable(hostId)) refresh.trigger();
+          }}
           disabled={refresh.refreshing || retryDisabled}
           data-testid="git-roots-unavailable-retry"
         >

@@ -19,6 +19,7 @@ import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -65,6 +66,7 @@ import {
 
 const MOCK_HOST_CLIENT = {
   request: () => new Promise(() => {}),
+  getActiveHost: () => null,
   getActiveHostId: () => "host-test",
   getRequestContextUserId: () => "user-test",
   getRequestContext: () => ({ userId: "user-test" }),
@@ -74,6 +76,14 @@ const MOCK_HOST_DIRECTORY = {
   onChange: () => ({ dispose() {} }),
   findById: () => null,
 };
+const cloneTargetState = vi.hoisted(() => ({
+  client: null as {
+    getActiveHost: () => null;
+    getActiveHostId: () => string;
+  } | null,
+  hasBinding: false,
+  cloneAttempt: vi.fn(),
+}));
 
 // What tells a team sandbox's chat from a collaborator's: whether the build has
 // a server pool, and what the team environment list answers. The list query is
@@ -108,7 +118,10 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () =>
+    cloneTargetState.hasBinding
+      ? { directory: MOCK_HOST_DIRECTORY, hostClient: MOCK_HOST_CLIENT }
+      : null,
   useOptionalHostClient: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
@@ -127,7 +140,8 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : cloneTargetState.client,
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
@@ -164,8 +178,11 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => {
   };
 });
 
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-test",
+vi.mock("@/lib/commands/actions/clone-chat-on-host-switch", () => ({
+  cloneChatOnHostSwitch: (...args: unknown[]) => {
+    cloneTargetState.cloneAttempt(...args);
+    return () => undefined;
+  },
 }));
 
 // The container runs the real sandbox-state hook. Its external reads are
@@ -399,10 +416,16 @@ beforeEach(() => {
     },
     contextMetadata: { userId: VIEWER_USER_ID, username: "Viewer" },
   });
+  cloneTargetState.client = null;
+  cloneTargetState.hasBinding = false;
+  cloneTargetState.cloneAttempt.mockReset();
+  useSelectionAuthorityStore.getState().reset();
+  useSelectionAuthorityStore.setState({ effectiveHostId: "host-test" });
 });
 
 afterEach(() => {
   cleanup();
+  useSelectionAuthorityStore.getState().reset();
   activeHarness?.teardown();
   activeHarness = null;
   __getOpenEpicRegistryForTests().disposeAll();
@@ -423,6 +446,57 @@ afterEach(() => {
   collaboratorClient = null;
   collaboratorEntries = [];
   resetHostConnectionRegistryForTest();
+});
+
+describe("ChatDeadTileBannerContainer - clone target availability", () => {
+  it("disables and ignores Clone while the pool has no usable computer target", async () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      effectiveHostId: "host-test",
+      leases: [],
+    });
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: VIEWER_USER_ID,
+      providedOwnerUserId: undefined,
+      showsPublishedCopy: false,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    const clone = await screen.findByRole("button", { name: "Clone agent" });
+    expect(clone.hasAttribute("disabled")).toBe(true);
+    await user.click(clone);
+    expect(cloneTargetState.cloneAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps Clone enabled and starts it on the serving computer", async () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "computer", hostId: "host-test" },
+      effectiveHostId: "host-test",
+      leases: [{ hostId: "host-test", status: "ready", dead: null }],
+    });
+    cloneTargetState.client = MOCK_HOST_CLIENT;
+    cloneTargetState.hasBinding = true;
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: VIEWER_USER_ID,
+      providedOwnerUserId: undefined,
+      showsPublishedCopy: false,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    const clone = await screen.findByRole("button", { name: "Clone agent" });
+    expect(clone.hasAttribute("disabled")).toBe(false);
+    await user.click(clone);
+    expect(cloneTargetState.cloneAttempt).toHaveBeenCalledTimes(1);
+    expect(cloneTargetState.cloneAttempt.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ targetHostId: "host-test" }),
+    );
+  });
 });
 
 describe("ChatDeadTileBannerContainer - ownership resolution", () => {

@@ -23,6 +23,9 @@ import type {
   WorktreeBindingSelectorDisabledReason,
   WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { NewTerminalPicker } from "../new-terminal-picker";
 import { NewTerminalStagedHandoff } from "../new-terminal-staged-handoff";
 import { subscribeStagedTerminalLaunch } from "../new-terminal-staged-launch";
@@ -54,10 +57,19 @@ import { modLabel } from "@/lib/keybindings/platform";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 const sandboxInputs = vi.hoisted(() => ({
   catalogue: null as SandboxCatalogue | null,
   controlUnavailable: null as string | null,
+}));
+const hostOptionsInputs = vi.hoisted(() => ({
+  hosts: null as HostScopeOption[] | null,
+}));
+const sandboxWake = vi.hoisted(() => ({ pick: vi.fn() }));
+vi.mock("@/lib/sandboxes/sandbox-wake", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sandboxes/sandbox-wake")>()),
+  wakeSandboxOnPick: sandboxWake.pick,
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
@@ -216,7 +228,9 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   return {
     useHostOptions: () =>
       hostOptionsFixture({
-        hosts: [hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" })],
+        hosts: hostOptionsInputs.hosts ?? [
+          hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
+        ],
         activeHostId: "host-1",
       }),
   };
@@ -263,6 +277,56 @@ function makeRow(
     sources: [],
     isGitResolvePending: false,
   };
+}
+
+function teamComputerOption(hostId: string, name: string): HostScopeOption {
+  const item: HostListItem = {
+    hostId,
+    displayName: name,
+    platform: "linux",
+    kind: "machine",
+    publicKey: "pk",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: null,
+    },
+    owner: { kind: "team", id: "team-a", name: "Alpha" },
+  };
+  return hostScopeOptionFixture({
+    hostId,
+    name,
+    isLocalMachine: false,
+    isActive: false,
+    connectable: true,
+    registered: true,
+    kind: "machine",
+    item,
+    sandbox: null,
+  });
+}
+
+function stoppedSandboxOption(hostId: string, name: string): HostScopeOption {
+  return hostScopeOptionFixture({
+    hostId,
+    name,
+    isLocalMachine: false,
+    isActive: false,
+    connectable: false,
+    kind: "sandbox",
+    sandbox: {
+      state: "stopped",
+      frozen: false,
+      summary: sandboxSummaryFixture({ hostId, state: "stopped" }),
+      ownerKind: "user",
+      teamOwned: false,
+    },
+  });
 }
 
 function resetCanvas(): void {
@@ -328,6 +392,8 @@ describe("<NewTerminalPicker />", () => {
     staged.staging = null;
     sandboxInputs.catalogue = null;
     sandboxInputs.controlUnavailable = null;
+    hostOptionsInputs.hosts = null;
+    sandboxWake.pick.mockReset();
     useStagedSandboxStore.setState({ bySurface: {} });
   });
 
@@ -443,22 +509,86 @@ describe("<NewTerminalPicker />", () => {
     expect(screen.queryByTestId("new-terminal-picker-popover")).toBeNull();
   });
 
-  it("keeps New terminal enabled when a computer serves even without New sandbox rows", () => {
+  it("opens and launches when a computer serves with no New sandbox rows", () => {
     useSelectionAuthorityStore.setState({
       attached: true,
       servingPeer: { kind: "computer", hostId: "host-1" },
-      leases: [],
+      leases: [{ hostId: "host-1", status: "ready", dead: null }],
     });
-    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
-    renderWithClient(
-      <TooltipProvider>
-        <NewTerminalPicker epicId="epic-1" tabId={tabId} onLaunched={null} />
-      </TooltipProvider>,
-    );
-
+    const tabId = openPicker();
     expect(
       screen.getByTestId("epic-terminals-panel-add").hasAttribute("disabled"),
     ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const launched = tabTiles(tabId).filter((tile) => tile.type === "terminal");
+    expect(launched).toHaveLength(1);
+    const terminal = launched[0];
+    expect(terminal.hostId).toBe("host-1");
+    expect(launchedTerminalCwd(terminal)).toBe("/work/traycer");
+  });
+
+  it("opens and launches on a ready team computer while the pool serves", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [{ hostId: "host-1", status: "ready", dead: null }],
+    });
+    hostOptionsInputs.hosts = [teamComputerOption("host-1", "Alpha terminal")];
+
+    const tabId = openPicker();
+    expect(screen.getByText("Alpha terminal")).toBeDefined();
+    expect(
+      screen.getByTestId("epic-terminals-panel-add").hasAttribute("disabled"),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const launched = tabTiles(tabId).filter((tile) => tile.type === "terminal");
+    expect(launched).toHaveLength(1);
+    const terminal = launched[0];
+    expect(terminal.hostId).toBe("host-1");
+    expect(launchedTerminalCwd(terminal)).toBe("/work/traycer");
+  });
+
+  it("wakes an offered stopped sandbox from the desktop picker and launches after it is ready", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    const stopped = stoppedSandboxOption(SANDBOX_HOST, "Stopped sandbox");
+    hostOptionsInputs.hosts = [
+      hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
+      stopped,
+    ];
+
+    const tabId = openPicker();
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(
+      within(screen.getByTestId("settings-host-switcher-sandboxes")).getByRole(
+        "option",
+        { name: /Stopped sandbox/ },
+      ),
+    );
+
+    expect(sandboxWake.pick).toHaveBeenCalledWith(stopped, null);
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        tabSurfaceKey("new-terminal", tabId)
+      ],
+    ).toBe(SANDBOX_HOST);
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        leases: [{ hostId: SANDBOX_HOST, status: "ready", dead: null }],
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const launched = tabTiles(tabId).filter((tile) => tile.type === "terminal");
+    expect(launched).toHaveLength(1);
+    const terminal = launched[0];
+    expect(terminal.hostId).toBe(SANDBOX_HOST);
+    expect(launchedTerminalCwd(terminal)).toBe("/home/sandbox");
   });
 
   it("closes the tab's open picker, popover and phone dialog alike, when the staged sandbox's terminal launches", () => {

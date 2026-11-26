@@ -1,7 +1,8 @@
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { useServingPeerHostId } from "@/lib/host/serving-decision";
-import { useHostLeases } from "@/hooks/host/use-host-lease";
-import { readPoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  useSelectionAuthorityStore,
+  type SelectionAuthorityStoreState,
+} from "@/stores/host/selection-authority-store";
 import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 /**
@@ -1582,6 +1583,8 @@ function SidebarBulkDeleteController(props: {
     clearSelectedIds,
     cancelSelection,
   } = selection;
+  const { unavailable: deleteUnavailable, readUnavailable } =
+    useBulkDeleteUnavailable(pendingDeleteIds, recordById);
 
   // The bulk path dispatches `epic.deleteChat` per row, so it needs the same
   // gate the per-row menus have. It REFUSES AS A WHOLE rather than deleting
@@ -1612,7 +1615,7 @@ function SidebarBulkDeleteController(props: {
     if (pendingDeleteIds === null || deletePending) return;
     // The dialog's confirm is already disabled while this is non-null; the
     // check is here too because a keyboard submit is not the button.
-    if (blockedDeleteReason !== null) return;
+    if (blockedDeleteReason !== null || readUnavailable()) return;
     const deleteIds = sidebarBulkDeleteIds({
       ids: pendingDeleteIds,
       tree,
@@ -1638,16 +1641,6 @@ function SidebarBulkDeleteController(props: {
       closeDeleteDialog();
       return;
     }
-    if (
-      targets.some(
-        (target) =>
-          target.kind === "terminal-agent" &&
-          readPoolComputerUnavailable(
-            recordById.get(target.id)?.hostId ?? sessionHostId,
-          ),
-      )
-    )
-      return;
     targets.forEach((target) => {
       if (target.kind !== "terminal-agent") markArtifactSelfDeleted(target.id);
     });
@@ -1796,6 +1789,7 @@ function SidebarBulkDeleteController(props: {
     pendingDeleteIds,
     props.epicId,
     props.tabId,
+    readUnavailable,
     recordById,
     setDeletePending,
     tree,
@@ -1830,7 +1824,7 @@ function SidebarBulkDeleteController(props: {
 
   return (
     <ConfirmDestructiveDialog
-      blockedReason={blockedDeleteReason}
+      blockedReason={blockedDeleteReason ?? (deleteUnavailable ? "" : null)}
       open={pendingDeleteIds !== null}
       onOpenChange={(open) => {
         if (!open) closeDeleteDialog();
@@ -2672,42 +2666,54 @@ function SidebarSelectedChatArchiveButton(props: {
   );
 }
 function useBulkDeleteUnavailable(
-  ids: readonly string[],
+  ids: readonly string[] | null,
   recordById: ReadonlyMap<string, EpicTreeRecord>,
-): boolean {
-  const onPool = useServingPeerHostId() === POOL_HOST_ID;
+) {
   const sessionHostId = useEpicSessionHostId();
   const tree = useEpicTreeIndex();
   const chatsById = useChatsByIdForWriteRoute();
-  const leases = useHostLeases();
-  return (
-    onPool &&
-    sidebarBulkDeleteIds({
+  const deleteIds = useMemo(() => {
+    if (ids === null || ids.length === 0) return [];
+    return sidebarBulkDeleteIds({
       ids,
       tree,
       isAgentId: (id) => isAgentRecord(recordById.get(id)),
-    }).some((id) => {
-      const record = recordById.get(id);
-      if (record?.type === "chat") {
+    });
+  }, [ids, recordById, tree]);
+  const isUnavailable = useCallback(
+    ({ servingPeer, leases }: SelectionAuthorityStoreState) =>
+      servingPeer?.kind === "pool" &&
+      deleteIds.some((id) => {
+        const record = recordById.get(id);
+        if (record?.type === "chat") {
+          return (
+            resolveChatWriteRoute({
+              chatsById,
+              isChatRow: true,
+              nodeId: id,
+              sessionHostId,
+            }) === "unavailable"
+          );
+        }
+        if (record?.type !== "terminal-agent") return false;
+        const { hostId } = record;
         return (
-          resolveChatWriteRoute({
-            chatsById,
-            isChatRow: true,
-            nodeId: id,
-            sessionHostId,
-          }) === "unavailable"
+          hostId === POOL_HOST_ID ||
+          !leases.some(
+            (lease) => lease.hostId === hostId && lease.status === "ready",
+          )
         );
-      }
-      if (record?.type !== "terminal-agent") return false;
-      const { hostId } = record;
-      return (
-        hostId === POOL_HOST_ID ||
-        !leases.some(
-          (lease) => lease.hostId === hostId && lease.status === "ready",
-        )
-      );
-    })
+      }),
+    [chatsById, deleteIds, recordById, sessionHostId],
   );
+  const unavailable = useSelectionAuthorityStore(isUnavailable);
+  return {
+    unavailable,
+    readUnavailable: useCallback(
+      () => isUnavailable(useSelectionAuthorityStore.getState()),
+      [isUnavailable],
+    ),
+  };
 }
 
 function SidebarBulkSelectionActions() {
@@ -2728,10 +2734,8 @@ function SidebarBulkSelectionActions() {
     () => new Map(records.map((record) => [record.id, record])),
     [records],
   );
-  const deleteUnavailable = useBulkDeleteUnavailable(
-    selection.selectedVisibleIds,
-    recordById,
-  );
+  const { unavailable: deleteUnavailable, readUnavailable } =
+    useBulkDeleteUnavailable(selection.selectedVisibleIds, recordById);
   const selectedArtifacts = selection.selectedVisibleIds.flatMap((id) => {
     const record = recordById.get(id);
     // Bulk document export requires Markdown bodies.
@@ -2843,6 +2847,7 @@ function SidebarBulkSelectionActions() {
       <SidebarBulkDeleteButton
         selection={selection}
         disabled={!canMutate || deleteUnavailable || chatArchive.pending}
+        readUnavailable={readUnavailable}
       />
     </div>
   );
@@ -2851,6 +2856,7 @@ function SidebarBulkSelectionActions() {
 function SidebarBulkDeleteButton(props: {
   readonly selection: SidebarBulkSelectionValue;
   readonly disabled: boolean;
+  readonly readUnavailable: () => boolean;
 }) {
   const { selection } = props;
   return (
@@ -2869,7 +2875,9 @@ function SidebarBulkDeleteButton(props: {
         selection.deletePending ||
         props.disabled
       }
-      onClick={selection.requestDeleteSelected}
+      onClick={() => {
+        if (!props.readUnavailable()) selection.requestDeleteSelected();
+      }}
     >
       <Trash2 className="size-4" />
     </Button>

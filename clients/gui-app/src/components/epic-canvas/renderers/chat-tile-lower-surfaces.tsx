@@ -1,6 +1,6 @@
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
-import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   newConversationSurfaceKey,
   useSurfaceHostSelectionStore,
@@ -19,6 +19,7 @@ import { Lock } from "lucide-react";
 import {
   ChatSandboxLineContext,
   ChatStateLineContext,
+  type ChatStateLine,
 } from "./chat-state-line";
 import type {
   BackgroundItem,
@@ -158,6 +159,8 @@ export interface ChatLowerRuntimeState {
 }
 
 export interface ChatLowerAccessState {
+  /** A published copy's owning computer, when its tile binds to a read peer. */
+  readonly ownerHostId?: string;
   /**
    * The sandbox this chat's next message wakes; only the composer can enqueue
    * one for it.
@@ -328,6 +331,7 @@ export interface ChatLowerComposerState {
 }
 
 interface ComposerSurfaceModel {
+  readonly ownerHostId: string;
   /**
    * The view tab this composer is rendered in. Reaches the composer only for
    * the provider re-auth banner's terminal sign-in: the host creates the PTY
@@ -645,6 +649,7 @@ export function ChatLowerInteractionSurfaces(
   const composerModel = useMemo(
     () => ({
       viewTabId: props.viewTabId,
+      ownerHostId: props.access.ownerHostId ?? props.hostId,
       runtime: props.runtime,
       access: props.access,
       turn: turnWithCascade,
@@ -662,6 +667,7 @@ export function ChatLowerInteractionSurfaces(
     }),
     [
       props.viewTabId,
+      props.hostId,
       props.runtime,
       props.access,
       turnWithCascade,
@@ -864,23 +870,16 @@ function ComposerSurface(props: {
   const { model, layout } = props;
   const tabHostId = useTabHostId();
   const stateLine = useContext(ChatStateLineContext);
-  const onPool = useServingPeerHostId() === POOL_HOST_ID;
-  const { currentEpicId } = model.composer;
-  const poolActions =
-    onPool && model.subagentView === null ? (
-      <PoolComposerActions
-        epicId={currentEpicId}
-        place={(hostId) => {
-          useSurfaceHostSelectionStore
-            .getState()
-            .setSelection(newConversationSurfaceKey(currentEpicId), hostId);
-        }}
-      />
-    ) : null;
+  const ownerUnavailable = usePoolComputerUnavailable(model.ownerHostId);
   // Before the snapshot the pre-content body says the state line instead.
   if (!model.runtime.snapshotLoaded) {
     return null;
   }
+  const showPoolActions = poolActionsForChat(
+    model,
+    ownerUnavailable,
+    stateLine,
+  );
   if (stateLine !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -888,18 +887,19 @@ function ComposerSurface(props: {
           notice={stateLine.line}
           actions={stateLine.actions}
         />
-        {poolActions}
+        {showPoolActions ? <PoolChatActions model={model} /> : null}
+      </ComposerSlotShell>
+    );
+  }
+  if (showPoolActions) {
+    return (
+      <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
+        <PoolChatActions model={model} />
       </ComposerSlotShell>
     );
   }
   if (model.access.isViewer) {
-    return (
-      <ViewerComposerSurface
-        model={model}
-        layout={layout}
-        poolActions={poolActions}
-      />
-    );
+    return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
   // either: a stuck block can coexist with an answerable one, and the composer
@@ -978,11 +978,59 @@ function ComposerSurface(props: {
   );
 }
 
+function poolActionsForChat(
+  model: ComposerSurfaceModel,
+  ownerUnavailable: boolean,
+  stateLine: ChatStateLine | null,
+): boolean {
+  if (!ownerUnavailable || model.subagentView !== null) return false;
+  if (stateLine === null) {
+    // This composer can enqueue the message and wake its own sandbox.
+    return model.access.restingSandbox === undefined || model.access.isViewer;
+  }
+  switch (stateLine.kind) {
+    case "pending":
+    case "moving":
+    case "released":
+    case "resting":
+    case "failed":
+    case "destroyed":
+      return true;
+    case "none":
+    case "unreachable":
+      return false;
+  }
+}
+
+function PoolChatActions(props: {
+  readonly model: ComposerSurfaceModel;
+}): ReactNode {
+  const { viewTabId, ownerHostId, composer } = props.model;
+  const { currentEpicId, nodeId } = composer;
+  return (
+    <PoolComposerActions
+      epicId={currentEpicId}
+      surfaceKey={JSON.stringify([currentEpicId, ownerHostId, nodeId])}
+      watchPlacement={null}
+      place={(hostId) => {
+        const tabs = useEpicCanvasStore.getState();
+        if (
+          tabs.openTabOrder.includes(viewTabId) &&
+          tabs.tabsById[viewTabId]?.epicId === currentEpicId
+        ) {
+          useSurfaceHostSelectionStore
+            .getState()
+            .setSelection(newConversationSurfaceKey(currentEpicId), hostId);
+        }
+      }}
+    />
+  );
+}
+
 /** What stands in the composer's slot for someone who cannot send. */
 function ViewerComposerSurface(props: {
   readonly model: ComposerSurfaceModel;
   readonly layout: ComposerSurfaceLayout;
-  readonly poolActions: ReactNode;
 }): ReactNode {
   const { model, layout } = props;
   if (model.subagentView !== null) {
@@ -1010,7 +1058,6 @@ function ViewerComposerSurface(props: {
             </Button>
           }
         />
-        {props.poolActions}
         {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}

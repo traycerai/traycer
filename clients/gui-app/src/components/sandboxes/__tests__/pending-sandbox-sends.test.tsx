@@ -103,6 +103,9 @@ import {
 } from "vitest";
 
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
+import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -2596,6 +2599,58 @@ describe("a message for an existing chat whose sandbox rests", () => {
       environmentId: PERSONAL_ENVIRONMENT_ID,
     });
   }
+
+  it("sends from the known-resting chat through the pool and wakes its own sandbox host", async () => {
+    const target: RestingChatSandbox = {
+      kind: "resting",
+      sandbox: { ...rowIn("suspended"), guestConfigured: true },
+      configuration: { kind: "personal" },
+    };
+    mocks.sandboxCatalogue = {
+      providers: [],
+      offeredAgents: [PICKED_SETTINGS.harnessId],
+    };
+    answerSandboxRows([rowIn("suspended")], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+
+    const message: ChatComposerSubmitInput = {
+      content: MESSAGE_CONTENT,
+      contentText: "continue the review",
+      attachments: [],
+      settings: PICKED_SETTINGS,
+      deliveryPolicy: "auto",
+      restartConfirmed: false,
+      restore: { content: MESSAGE_CONTENT, browserAnnotations: [] },
+    };
+    const { result } = renderHook(() =>
+      useBoundSandboxSend({
+        epicId: "epic-1",
+        chatId: "existing-chat",
+        target,
+      }),
+    );
+
+    expect(result.current(message)).toBe(true);
+    const send = Object.values(usePendingSandboxSendStore.getState().sends)[0];
+    expect(send).toMatchObject({
+      request: {
+        kind: "message",
+        chatId: "existing-chat",
+        hostId: SANDBOX_HOST,
+      },
+      delivery: null,
+    });
+    expect(
+      Object.values(useStagedSandboxStore.getState().bySurface)[0]?.target,
+    ).toMatchObject({ kind: "existing", hostId: SANDBOX_HOST, verb: "resume" });
+
+    mountInChat();
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
+    });
+    expect(mocks.wake).toHaveBeenCalledTimes(1);
+    expect(createChatCalls()).toEqual([]);
+  });
 
   it.each([
     ["suspended", RESUME_TARGET],

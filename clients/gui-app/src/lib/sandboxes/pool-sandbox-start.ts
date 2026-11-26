@@ -10,6 +10,7 @@ import { toastWakeFailed, WAKE_TIMEOUT_MS } from "@/lib/sandboxes/sandbox-wake";
 import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface PoolSandboxStart {
   readonly accepted: SandboxCreateAccepted;
@@ -19,6 +20,7 @@ interface PoolSandboxStart {
   readonly activate: (
     option: HostScopeOption,
     report: (show: () => void) => void,
+    current: () => boolean,
   ) => Promise<ActivationOutcome>;
   readonly openTransport: (
     hostId: string,
@@ -51,6 +53,20 @@ function watch<T>(
   return { answer, stop };
 }
 
+function settleReadiness(
+  input: PoolSandboxStart,
+  outcome: "ready" | "expired" | "sign-in-ended" | (() => void),
+): void {
+  if (outcome === "sign-in-ended" || !input.current()) return;
+  if (outcome === "expired") {
+    toastWakeFailed();
+  } else if (outcome === "ready") {
+    if (!input.personal) input.place(input.accepted.hostId);
+  } else {
+    outcome();
+  }
+}
+
 export async function finishPoolSandboxStart(
   input: PoolSandboxStart,
 ): Promise<void> {
@@ -62,6 +78,10 @@ export async function finishPoolSandboxStart(
   const elapsed = new Promise<"expired">((resolve) => {
     timer = window.setTimeout(() => resolve("expired"), budgetMs);
   });
+  const signInEnded = watch<"sign-in-ended">(
+    () => (current() ? null : "sign-in-ended"),
+    useAuthStore.subscribe,
+  );
   const fail = (): void => {
     if (current()) toastWakeFailed();
   };
@@ -78,10 +98,12 @@ export async function finishPoolSandboxStart(
         return () => subscription.dispose();
       },
     );
-    const entry = await Promise.race([listed.answer, elapsed]).finally(
-      listed.stop,
-    );
-    if (!current()) return;
+    const entry = await Promise.race([
+      listed.answer,
+      elapsed,
+      signInEnded.answer,
+    ]).finally(listed.stop);
+    if (entry === "sign-in-ended" || !current()) return;
     if (entry === "expired") {
       fail();
       return;
@@ -109,7 +131,7 @@ export async function finishPoolSandboxStart(
         localHostTerminalRunNote: null,
         nowMs: Date.now(),
       });
-      const outcome = await input.activate(option, reportWakeFailure);
+      const outcome = await input.activate(option, reportWakeFailure, current);
       if (!current() || outcome === "reported") return;
       if (outcome === "declined") {
         fail();
@@ -131,15 +153,11 @@ export async function finishPoolSandboxStart(
       connected.answer,
       elapsed,
       wake,
+      signInEnded.answer,
     ]).finally(connected.stop);
-    if (!current()) return;
-    if (outcome === "expired") fail();
-    else if (outcome === "ready") {
-      if (!personal) input.place(hostId);
-    } else {
-      outcome();
-    }
+    settleReadiness(input, outcome);
   } finally {
+    signInEnded.stop();
     if (timer !== undefined) clearTimeout(timer);
     transport?.close();
   }

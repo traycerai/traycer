@@ -910,7 +910,28 @@ export function NewConversationModalBody(props: NewConversationModalBodyProps) {
         <NewConversationModalHeader switcher={null} />
         <PoolComposerActions
           epicId={epicId}
-          place={composerPlacement.pin.setSelection}
+          surfaceKey={newConversationSurfaceKey(epicId)}
+          place={(selectedHostId) => {
+            const tabs = useEpicCanvasStore.getState();
+            if (
+              tabs.openTabOrder.includes(props.tabId) &&
+              tabs.tabsById[props.tabId]?.epicId === epicId
+            ) {
+              composerPlacement.pin.setSelection(selectedHostId);
+            }
+          }}
+          watchPlacement={(onSuperseded) =>
+            useNewConversationModalOpenStore.subscribe(({ request }) => {
+              if (
+                request?.epicId === epicId &&
+                (request.tabId !== props.tabId ||
+                  request.parentId !== props.parentId ||
+                  request.hostId !== hostId)
+              ) {
+                onSuperseded();
+              }
+            })
+          }
         />
       </>
     );

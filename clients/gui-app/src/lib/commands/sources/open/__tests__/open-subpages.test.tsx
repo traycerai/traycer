@@ -13,9 +13,11 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { BrowserSessionsLifecycle } from "@traycer-clients/shared/platform/browser-view";
 import {
+  fakePrepareOpenTab,
   sessionInfo,
   tabInfo,
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/browser-view";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -41,7 +43,13 @@ const spies = vi.hoisted(() => ({
   toast: vi.fn(),
   toastError: vi.fn(),
   toastWarning: vi.fn(),
-  openBrowserTab: vi.fn(),
+  openBrowserTab:
+    vi.fn<
+      (
+        sessionId: string | null,
+        url: string,
+      ) => Promise<{ readonly sessionId: string; readonly tabId: string }>
+    >(),
   retryBrowserSessions: vi.fn(),
   retryTerminalBindings: vi.fn(),
   setBrowserPinSelection: vi.fn(),
@@ -114,6 +122,38 @@ const browserLifecycleMock = vi.hoisted<{
 const browserInventoryReadyMock = vi.hoisted<{ current: boolean }>(() => ({
   current: true,
 }));
+
+function browserSessionsStateFor(hostId: string | null): BrowserSessionsState {
+  const openTab: BrowserSessionsState["openTab"] = (sessionId, url) =>
+    spies.openBrowserTab(sessionId, url).then((opened) => ({
+      ...opened,
+      handoffToken: null,
+    }));
+  return {
+    viewports: {},
+    setViewport: () => Promise.resolve(),
+    reportViewport: () => undefined,
+    hostId,
+    lifecycle: browserLifecycleMock.current,
+    inventoryReady: browserInventoryReadyMock.current,
+    canMaterializeElectron: false,
+    connectionGeneration: 1,
+    items: browserItemsMock.current,
+    errorMessage: null,
+    retry: () => {
+      spies.retryBrowserSessions();
+    },
+    openTab,
+    prepareOpenTab: fakePrepareOpenTab({
+      hostId: () => hostId ?? "default-host",
+      scope: { kind: "epic", epicId: "epic-1" },
+      openTab,
+    }),
+    closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.resolve(),
+    moveTab: () => Promise.resolve(),
+  };
+}
 const ACTIVE_ROWS = vi.hoisted<WorktreeBindingSelectorRowV12[]>(() => [
   {
     hostId: "default-host",
@@ -285,6 +325,38 @@ function artifact(args: {
     status: args.status,
     createdManually: false,
   };
+}
+
+function teamComputerOption(hostId: string, name: string): HostScopeOption {
+  const item: HostListItem = {
+    hostId,
+    displayName: name,
+    platform: "linux",
+    kind: "machine",
+    publicKey: "pk",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: null,
+    },
+    owner: { kind: "team", id: "team-a", name: "Alpha" },
+  };
+  return hostScopeOptionFixture({
+    hostId,
+    name,
+    isLocalMachine: false,
+    isActive: false,
+    connectable: true,
+    registered: true,
+    kind: "machine",
+    item,
+    sandbox: null,
+  });
 }
 
 const FAKE_PROJECTION: EpicProjectedSlices = {
@@ -510,15 +582,14 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
   }),
 }));
 vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
-  useBrowserSessionsForHost: (args: { readonly hostId: string | null }) => ({
-    hostId: args.hostId,
-    lifecycle: browserLifecycleMock.current,
-    inventoryReady: browserInventoryReadyMock.current,
-    items: browserItemsMock.current,
-    errorMessage: null,
-    retry: spies.retryBrowserSessions,
-    openTab: spies.openBrowserTab,
-    closeTab: () => Promise.resolve(),
+  useBrowserSessionsForHost: (args: { readonly hostId: string | null }) =>
+    browserSessionsStateFor(args.hostId),
+  useBrowserSessionInventoryForHost: (args: {
+    readonly hostId: string | null;
+  }) => ({
+    state: browserSessionsStateFor(args.hostId),
+    coordinatorKey: "browser-session-inventory",
+    readState: () => browserSessionsStateFor(args.hostId),
   }),
 }));
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
@@ -777,6 +848,7 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   cleanup();
   vi.clearAllMocks();
+  spies.openBrowserTab.mockReset();
   cloudChatsMock.current = [];
   directoryRowsMock.current = {};
   activeHostIdMock.current = "default-host";
@@ -1084,6 +1156,45 @@ describe("Terminals opener sub-page", () => {
     }
     expect(isHostEpicTerminalRef(opened.ref)).toBe(true);
     expect(launchedTerminalCwd(opened.ref)).toBe("/work/active-repo");
+  });
+
+  it("opens and launches a terminal on a ready team computer while the pool serves", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [{ hostId: "terminal-host", status: "ready", dead: null }],
+    });
+    extraHostsMock.options = [
+      teamComputerOption("terminal-host", "Alpha terminal"),
+    ];
+
+    const newTerminal = renderItems(useTerminalsOpenerItems)[0];
+    expect(newTerminal.disabled).not.toBe(true);
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+
+    const hostChoices = renderItems(newTerminal.subpage.useItems);
+    const teamComputer = hostChoices.find(
+      (item) => item.label === "Alpha terminal",
+    );
+    if (teamComputer?.subpage === null || teamComputer?.subpage === undefined) {
+      throw new Error("expected the ready team computer's workspace page");
+    }
+    const workspaces = renderItems(teamComputer.subpage.useItems);
+    const workspace = workspaces.find(
+      (item) => item.label === "/remote/feature-worktree",
+    );
+    runById(workspaces, workspace?.id ?? "missing");
+
+    const opened = lastTileOpen();
+    expect(opened.ref.type).toBe("terminal");
+    expect(opened.ref.hostId).toBe("terminal-host");
+    if (opened.ref.type !== "terminal") {
+      throw new Error("expected terminal ref");
+    }
+    expect(isHostEpicTerminalRef(opened.ref)).toBe(true);
+    expect(launchedTerminalCwd(opened.ref)).toBe("/remote/feature-worktree");
   });
 
   it("offers other hosts as fuzzy subpages and launches through their transient client", () => {
@@ -1907,6 +2018,78 @@ describe("Browser opener sub-page", () => {
     runById(failed, "open:browser:retry");
     expect(spies.retryBrowserSessions).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    {
+      name: "New browser",
+      id: "open:browser:new",
+      lifecycle: "live" as const,
+      inventoryReady: true,
+      query: null,
+      kind: "open" as const,
+      dropsLease: true,
+    },
+    {
+      name: "pasted URL",
+      id: "open:browser:url",
+      lifecycle: "live" as const,
+      inventoryReady: true,
+      query: "https://example.com/pool-stale",
+      kind: "open" as const,
+      dropsLease: false,
+    },
+    {
+      name: "failed inventory Retry",
+      id: "open:browser:retry",
+      lifecycle: "failed" as const,
+      inventoryReady: false,
+      query: null,
+      kind: "retry" as const,
+      dropsLease: true,
+    },
+  ])(
+    "rechecks a retained $name callback after its host stops serving",
+    ({ id, lifecycle, inventoryReady, query, kind, dropsLease }) => {
+      browserPinSelectionMock.current = "browser-host";
+      browserLifecycleMock.current = lifecycle;
+      browserInventoryReadyMock.current = inventoryReady;
+      act(() => {
+        useSelectionAuthorityStore.setState({
+          attached: true,
+          servingPeer: { kind: "pool" },
+          effectiveHostId: null,
+          leases: [{ hostId: "browser-host", status: "ready", dead: null }],
+        });
+      });
+
+      const items =
+        query === null
+          ? renderBrowserItems([])
+          : renderBrowserItemsWithQuery([], query);
+      const action = items.find((item) => item.id === id);
+      if (action === undefined) throw new Error(`Expected ${id}`);
+      expect(action.disabled).not.toBe(true);
+      const retainedRun = action.run;
+      if (kind === "open") {
+        spies.openBrowserTab.mockReturnValueOnce(new Promise(() => undefined));
+      }
+
+      if (dropsLease) {
+        act(() => useSelectionAuthorityStore.setState({ leases: [] }));
+      }
+      browserLifecycleMock.current = "closed";
+      browserInventoryReadyMock.current = false;
+      act(() => {
+        void retainedRun(CTX);
+      });
+
+      if (kind === "open") {
+        expect(spies.openBrowserTab).not.toHaveBeenCalled();
+      } else {
+        expect(spies.retryBrowserSessions).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("names the host update, with nothing to retry, when the host has no browsers", () => {
     browserLifecycleMock.current = "unsupported";

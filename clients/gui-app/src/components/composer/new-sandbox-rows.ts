@@ -6,7 +6,6 @@ import type {
 import type { HostSwitcherNewRow } from "@/components/settings/host-scope/host-switcher-new-rows";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
-import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import {
   configurationStageShape,
@@ -61,8 +60,7 @@ export function useNewSandboxRowInputs(
 } {
   const user = useAuthUser().data ?? null;
   const query = useSandboxCatalogue(enabled);
-  const unavailable = useSandboxControlUnavailableReason() !== null;
-  const catalogue = unavailable ? null : (query.data ?? null);
+  const catalogue = query.data ?? null;
   const defaults = useSandboxDefaultsLookup(enabled);
   let catalogueState: "loading" | "error" | null = null;
   if (catalogue === null) {

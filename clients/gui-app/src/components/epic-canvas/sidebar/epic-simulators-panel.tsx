@@ -1,4 +1,7 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { useDraggable } from "@dnd-kit/core";
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { RotateCcw, Smartphone, TriangleAlert, X } from "lucide-react";
@@ -386,7 +389,10 @@ function SimulatorLiveRowItem(props: {
             ROW_ACTION_CLASS,
             rowClosing && "pointer-events-auto opacity-100",
           )}
-          onClick={() => closeRecords(row.hostId, row.records)}
+          onClick={() => {
+            if (!readPoolComputerUnavailable(row.hostId))
+              closeRecords(row.hostId, row.records);
+          }}
         >
           {rowClosing ? (
             <AgentSpinningDots
@@ -438,7 +444,10 @@ function SimulatorEndedRowItem(props: {
           aria-label={`Dismiss ${row.name}: ${notice}`}
           data-testid={`epic-simulator-row-dismiss-${row.record.sessionId}`}
           className="size-6 cursor-pointer justify-self-center"
-          onClick={() => closeRecords(row.hostId, [row.record])}
+          onClick={() => {
+            if (!readPoolComputerUnavailable(row.hostId))
+              closeRecords(row.hostId, [row.record]);
+          }}
         >
           {dismissing ? (
             <AgentSpinningDots

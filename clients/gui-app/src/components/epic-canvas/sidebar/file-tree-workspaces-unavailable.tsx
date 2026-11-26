@@ -1,4 +1,7 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useCallback, type ReactNode } from "react";
 import { AlertCircle, Unplug } from "lucide-react";
@@ -33,7 +36,8 @@ export function FileTreeWorkspacesUnavailable(props: {
   /** Must resolve when the re-read SETTLES, or the spinner lies. */
   readonly onRetry: () => Promise<void>;
 }): ReactNode {
-  const retryDisabled = usePoolComputerUnavailable(useEpicSessionHostId());
+  const hostId = useEpicSessionHostId();
+  const retryDisabled = usePoolComputerUnavailable(hostId);
   const onRetry = props.onRetry;
   const handleRefresh = useCallback((): Promise<void> => onRetry(), [onRetry]);
   const refresh = useRefreshSpinner({
@@ -78,7 +82,9 @@ export function FileTreeWorkspacesUnavailable(props: {
         variant="outline"
         size="sm"
         className="mt-2"
-        onClick={refresh.trigger}
+        onClick={() => {
+          if (!readPoolComputerUnavailable(hostId)) refresh.trigger();
+        }}
         disabled={refresh.refreshing || retryDisabled}
         data-testid="file-tree-workspaces-unavailable-retry"
       >

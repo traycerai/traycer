@@ -78,14 +78,14 @@ export function SwitcherNewChatAction(props: {
 export function SwitcherNewTerminalRow(props: SwitcherCreateProps) {
   const { epicId, tabId, onClose } = props;
   const [pickerOpen, setPickerOpen] = useState(false);
-  const disabled = useNewTerminalPickerDisabled(tabId);
+  const { disabled, readDisabled } = useNewTerminalPickerDisabled(tabId);
   return (
     <>
       <SwitcherNewItemRow
         label="New terminal"
         disabled={disabled}
         onSelect={() => {
-          if (!disabled) setPickerOpen(true);
+          if (!readDisabled()) setPickerOpen(true);
         }}
         testId="switcher-new-terminal"
       />

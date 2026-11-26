@@ -2,7 +2,10 @@ import {
   readPoolComputerUnavailable,
   usePoolComputerUnavailable,
 } from "@/hooks/host/use-pool-computer-unavailable";
-import { useTerminalAgentDocRename } from "@/hooks/epic/use-terminal-agent-doc-rename";
+import {
+  terminalAgentUsesDocRename,
+  useTerminalAgentDocRename,
+} from "@/hooks/epic/use-terminal-agent-doc-rename";
 import { usePoolSidebarReparentBlocked } from "@/components/epic-canvas/dnd/sidebar-agent-reparent-route";
 import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
@@ -1831,14 +1834,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // Read HERE rather than in the shell body because `startRename` needs it:
   // an unadopted chat's title must never become editable in the first place.
   const writeRoute = useChatWriteRoute(artifactType === "chat", nodeId);
-  const unavailableTerminalOwner =
-    usePoolComputerUnavailable(mutationHostId) &&
-    artifactType === "terminal-agent";
-  const docRename = useTerminalAgentDocRename(
-    artifactType === "terminal-agent" ? nodeId : null,
-    mutationHostId,
-  );
-
   const startRename = useCallback(() => {
     if (!canMutate) return;
     // The menu entry that calls this is already disabled, so this is the
@@ -1847,7 +1842,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     // refusal would silently discard what they wrote.
     if (
       writeRoute === "unavailable" ||
-      (unavailableTerminalOwner && !docRename)
+      (artifactType === "terminal-agent" &&
+        readPoolComputerUnavailable(mutationHostId) &&
+        !terminalAgentUsesDocRename(
+          epicHandle.store.getState(),
+          nodeId,
+          mutationHostId,
+        ))
     )
       return;
     setRenameValue(nodeName);
@@ -1857,12 +1858,14 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       renameInputRef.current?.select();
     }, 0);
   }, [
+    artifactType,
     canMutate,
-    docRename,
+    epicHandle,
+    mutationHostId,
+    nodeId,
     nodeName,
     setIsRenaming,
     setRenameValue,
-    unavailableTerminalOwner,
     writeRoute,
   ]);
 
@@ -2013,7 +2016,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   );
 
   const performDelete = () => {
-    if (!canMutate || unavailableTerminalOwner) return;
+    if (
+      !canMutate ||
+      (artifactType === "terminal-agent" &&
+        readPoolComputerUnavailable(mutationHostId))
+    )
+      return;
     setConfirmDeleteOpen(true);
   };
 
@@ -2323,6 +2331,7 @@ function ChatNodeShellBody(
       ? { ...props.decision, showButton: false }
       : props.decision;
   const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
+  const showRowMenu = !isRenaming && !selectionMode;
   const rowMenuEntries = chatRowMenuEntries({
     copyIdEntry,
     nodeId,
@@ -2355,7 +2364,7 @@ function ChatNodeShellBody(
         nodeId={nodeId}
         panelId="chats"
         contextMenu={
-          !isRenaming && !selectionMode ? (
+          showRowMenu ? (
             <ContextMenuContent>
               <SidebarContextMenuItems entries={rowMenuEntries} />
             </ContextMenuContent>
@@ -2411,7 +2420,7 @@ function ChatNodeShellBody(
           />
         ) : null}
 
-        {!isRenaming && !selectionMode ? (
+        {showRowMenu ? (
           <ChatMoreMenu
             nodeId={nodeId}
             nodeName={nodeName}
@@ -2436,7 +2445,7 @@ function ChatNodeShellBody(
       />
       <AgentDeleteConfirmDialog
         nodeId={nodeId}
-        blockedReason={null}
+        blockedReason={terminalOwnerUnavailable ? "" : null}
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
         title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}

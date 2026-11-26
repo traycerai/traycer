@@ -1,4 +1,7 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { useCallback } from "react";
 import { Smartphone, X } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -211,7 +214,10 @@ function SwitcherCloseAction(props: {
       aria-label={`Close ${row.name} in this task`}
       data-testid={`switcher-simulator-close-${row.instanceKey}`}
       className="shrink-0"
-      onClick={() => closeRecords(row.hostId, row.records)}
+      onClick={() => {
+        if (!readPoolComputerUnavailable(row.hostId))
+          closeRecords(row.hostId, row.records);
+      }}
     >
       {pending ? (
         <AgentSpinningDots
@@ -244,7 +250,10 @@ function SwitcherDismissAction(props: {
       aria-label={`Dismiss ${row.name}`}
       data-testid={`switcher-simulator-dismiss-${row.record.sessionId}`}
       className="shrink-0"
-      onClick={() => closeRecords(row.hostId, [row.record])}
+      onClick={() => {
+        if (!readPoolComputerUnavailable(row.hostId))
+          closeRecords(row.hostId, [row.record]);
+      }}
     >
       {pending ? (
         <AgentSpinningDots

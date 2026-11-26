@@ -1,10 +1,15 @@
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useServingPeerHostId } from "@/lib/host/serving-decision";
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { toast } from "sonner";
 import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
-import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
+import { useBrowserSessionInventoryForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
+import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   browserTabHostname,
   parseHttpUrl,
@@ -186,7 +191,7 @@ export function useBrowserOpenerItems(
     ctx.activeTabId !== null &&
     ctx.targetGroupId !== null;
   const targetHostId = hasTarget ? hostPin.resolvedHostId : null;
-  const sessions = useBrowserSessionsForHost({
+  const { state: sessions, readState } = useBrowserSessionInventoryForHost({
     hostId: targetHostId,
     scope: { kind: "epic", epicId: ctx.activeEpicId ?? "" },
   });
@@ -194,11 +199,26 @@ export function useBrowserOpenerItems(
   const query = usePaletteLiveQuery();
   const onPool = useServingPeerHostId() === POOL_HOST_ID;
   const noComputer = usePoolComputerUnavailable(targetHostId);
-  const createDisabled =
-    onPool &&
-    (noComputer ||
-      sessions.lifecycle !== "live" ||
-      sessions.hostId !== targetHostId);
+  const createBlocked = (
+    unavailable: boolean,
+    inventory: BrowserSessionsState | null,
+  ): boolean =>
+    unavailable ||
+    inventory?.lifecycle !== "live" ||
+    inventory.hostId !== targetHostId;
+  const createDisabled = onPool && createBlocked(noComputer, sessions);
+  const readInventoryForCreate = (): BrowserSessionsState | null => {
+    if (useSelectionAuthorityStore.getState().servingPeer?.kind !== "pool") {
+      return sessions;
+    }
+    const current = readState();
+    return createBlocked(readPoolComputerUnavailable(targetHostId), current)
+      ? null
+      : current;
+  };
+  const readCreateDisabled = (): boolean => readInventoryForCreate() === null;
+  const readRetryDisabled = (): boolean =>
+    readPoolComputerUnavailable(targetHostId);
 
   const directoryLabel = hostEntry?.label.trim() ?? "";
   const hostLabel =
@@ -215,9 +235,10 @@ export function useBrowserOpenerItems(
     statusBadge: hostLabel,
   };
   const openNewTab = (url: string): void => {
-    if (createDisabled) return;
-    if (sessions.lifecycle !== "live" || sessions.hostId === null) {
-      toast.error(browserSessionsRefusal(sessions));
+    const inventory = readInventoryForCreate();
+    if (inventory === null) return;
+    if (inventory.lifecycle !== "live" || inventory.hostId === null) {
+      toast.error(browserSessionsRefusal(inventory));
       return;
     }
     // A pasted URL reaches the host's browser here: a sandbox's is never sent
@@ -229,8 +250,8 @@ export function useBrowserOpenerItems(
       });
       return;
     }
-    const hostId = sessions.hostId;
-    void sessions
+    const hostId = inventory.hostId;
+    void inventory
       .openTab(null, url)
       .then((opened) => {
         openTileIntoTargetGroup({
@@ -259,10 +280,15 @@ export function useBrowserOpenerItems(
   });
   const actions = [
     changeHost,
-    { ...newBrowser, disabled: createDisabled },
+    {
+      ...newBrowser,
+      disabled: createDisabled,
+      readDisabled: readCreateDisabled,
+    },
     ...pastedUrlLeaves(query, hostLabel, openNewTab).map((item) => ({
       ...item,
       disabled: createDisabled,
+      readDisabled: readCreateDisabled,
     })),
   ];
   const openTabs = sessions.items.flatMap((session) =>
@@ -300,6 +326,7 @@ export function useBrowserOpenerItems(
             inventoryReady: sessions.inventoryReady,
             hostLabel,
             noComputer,
+            readRetryDisabled,
           }),
         ];
   return [...actions, ...rows];
@@ -312,9 +339,17 @@ function browserInventoryFeedback(input: {
   readonly inventoryReady: boolean;
   readonly hostLabel: string;
   readonly noComputer: boolean;
+  readonly readRetryDisabled: () => boolean;
 }): CommandItem {
-  const { lifecycle, refusal, retry, inventoryReady, hostLabel, noComputer } =
-    input;
+  const {
+    lifecycle,
+    refusal,
+    retry,
+    inventoryReady,
+    hostLabel,
+    noComputer,
+    readRetryDisabled,
+  } = input;
   if (lifecycle === "unsupported") {
     // No retry leaf: nothing this app can do changes the host's answer, and
     // the "Loading…" leaf below would otherwise sit there forever.
@@ -334,9 +369,12 @@ function browserInventoryFeedback(input: {
         id: "open:browser:retry",
         label: "Retry loading open tabs",
         keywords: ["browser", "retry", "reload", hostLabel],
-        run: retry,
+        run: () => {
+          if (!readRetryDisabled()) retry();
+        },
       }),
       disabled: noComputer,
+      readDisabled: readRetryDisabled,
       statusBadge: "Unavailable",
     };
   }

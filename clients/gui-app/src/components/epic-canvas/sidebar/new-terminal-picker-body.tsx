@@ -1,4 +1,7 @@
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 /**
  * Host+folder selection for terminal creation from the sidebar "+" popover:
@@ -238,6 +241,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
             fallback={folderlessCwdStatus}
             disabled={retryDisabled}
             onRetry={() => {
+              if (readPoolComputerUnavailable(pin.resolvedHostId)) return;
               if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
               void bindingsQuery.refetch({ cancelRefetch: false });
             }}

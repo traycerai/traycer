@@ -398,7 +398,24 @@ function useHostScopeWithOptions(
  * picks in one React batch still see it) and cleared when the write settles;
  * `requestActivate` never rejects, so it always does.
  */
-const pendingActivations = new WeakMap<SelectionAuthorityClient, string>();
+interface PendingActivation {
+  readonly hostId: string;
+  readonly notice: ActivationWakeNotice | null;
+}
+
+const pendingActivations = new WeakMap<
+  SelectionAuthorityClient,
+  PendingActivation
+>();
+
+function activeActivationHost(
+  authority: SelectionAuthorityClient,
+): string | null {
+  const pending = pendingActivations.get(authority);
+  return pending === undefined || pending.notice?.current() === false
+    ? null
+    : pending.hostId;
+}
 const pendingActivationListeners = new Set<() => void>();
 
 function notifyPendingActivation(): void {
@@ -421,11 +438,17 @@ function subscribePendingActivation(listener: () => void): () => void {
  */
 export type ActivationOutcome = "saved" | "declined" | "reported";
 
+interface ActivationWakeNotice {
+  readonly current: () => boolean;
+  readonly report: (show: () => void) => void;
+}
+
 export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
   readonly makeActive: (hostId: string) => Promise<boolean>;
   readonly makeActiveWithWakeNotice: (
     option: HostScopeOption,
     report: (show: () => void) => void,
+    current: () => boolean,
   ) => Promise<ActivationOutcome>;
   readonly isActivating: boolean;
   readonly activatingHostId: string | null;
@@ -449,15 +472,19 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
   });
   const activatingHostId = useSyncExternalStore(
     subscribePendingActivation,
-    () => pendingActivations.get(authority) ?? null,
+    () => activeActivationHost(authority),
   );
   const activate = useCallback(
     async (
       hostId: string,
       option: HostScopeOption | null,
-      report: ((show: () => void) => void) | null,
+      notice: ActivationWakeNotice | null,
     ): Promise<ActivationOutcome> => {
-      if (pendingActivations.has(authority)) return "declined";
+      if (
+        notice?.current() === false ||
+        activeActivationHost(authority) !== null
+      )
+        return "declined";
       // Defence for every caller, not only the Overview that hides the
       // button: a management-only row is never made the window's host.
       if (option !== null && !hostOptionCanActivate(option)) {
@@ -466,10 +493,15 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
         });
         return "declined";
       }
-      pendingActivations.set(authority, hostId);
+      const pending = { hostId, notice };
+      pendingActivations.set(authority, pending);
       notifyPendingActivation();
       try {
-        if (option?.connectable && option.entry?.kind === "local") {
+        if (
+          notice === null &&
+          option?.connectable &&
+          option.entry?.kind === "local"
+        ) {
           return await requestLocalHostActivation(
             authority,
             hostClient,
@@ -477,10 +509,12 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
             probeLocalHost,
           );
         }
-        return await requestActivation(authority, hostId, option, report);
+        return await requestActivation(authority, hostId, option, notice);
       } finally {
-        pendingActivations.delete(authority);
-        notifyPendingActivation();
+        if (pendingActivations.get(authority) === pending) {
+          pendingActivations.delete(authority);
+          notifyPendingActivation();
+        }
       }
     },
     [authority, hostClient, probeLocalHost],
@@ -491,8 +525,11 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
     [activate, hosts],
   );
   const makeActiveWithWakeNotice = useCallback(
-    (option: HostScopeOption, report: (show: () => void) => void) =>
-      activate(option.hostId, option, report),
+    (
+      option: HostScopeOption,
+      report: (show: () => void) => void,
+      current: () => boolean,
+    ) => activate(option.hostId, option, { current, report }),
     [activate],
   );
   return {
@@ -592,12 +629,15 @@ async function requestActivation(
   authority: SelectionAuthorityClient,
   hostId: string,
   option: HostScopeOption | null,
-  report: ((show: () => void) => void) | null,
+  notice: ActivationWakeNotice | null,
 ): Promise<ActivationOutcome> {
+  const current = notice === null ? () => true : notice.current;
+  if (!current()) return "declined";
   let result: ActivateResult;
   try {
     result = await authority.activate(hostId);
   } catch (error: unknown) {
+    if (!current()) return "declined";
     // Like an unreadable answer, a failed call leaves the outcome unknown.
     // `unrecognized` makes no claim about which machine is active.
     appLogger.warn("[host-scope] activate request failed", {
@@ -609,12 +649,13 @@ async function requestActivation(
     );
     return "reported";
   }
+  if (!current()) return "declined";
   if (result.ok) {
     // Preferred is intent, not liveness: a sleeping sandbox is now preferred,
     // so it is woken, and derivation serves a fallback until it is up.
     if (option !== null) {
-      if (report === null) wakeSandboxOnPick(option, null);
-      else wakeSandboxOnPickWithNotice(option, report);
+      if (notice === null) wakeSandboxOnPick(option, null);
+      else wakeSandboxOnPickWithNotice(option, notice.report, notice.current);
     }
     Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
       source: "direct_ui",

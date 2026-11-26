@@ -2188,6 +2188,38 @@ describe("<LandingTerminalPanel />", () => {
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
   });
 
+  it("keeps the landing terminal entry inert when only an unrelated computer is ready", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [
+        { hostId: "unrelated-team-computer", status: "ready", dead: null },
+      ],
+    });
+    mocks.activeHostId = "placement-computer";
+    mocks.placementHostId = "placement-computer";
+    mocks.clientActiveHostId = "placement-computer";
+    seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const plus = screen.getByTestId("landing-terminal-new-tab");
+    expect(plus.matches(":disabled")).toBe(true);
+    const terminalCard = screen.getByTestId("landing-new-tab-card-terminal");
+    expect(terminalCard.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(plus);
+    fireEvent.click(terminalCard);
+    fireEvent.keyDown(terminalCard, { key: "Enter" });
+    act(() => {
+      dispatchAction("app.terminal.new", fakeKeybindingRouter());
+    });
+
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+    expect(runStagedSandbox).not.toHaveBeenCalled();
+  });
+
   it("leaves the window's staged sandbox alone when the draft was opened for one host: Terminal never takes it", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";

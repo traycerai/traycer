@@ -1,9 +1,16 @@
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useServingPeerHostId } from "@/lib/host/serving-decision";
-import { useStagedSandbox } from "@/stores/composer/staged-sandbox-store";
+import {
+  readStagedSandbox,
+  useStagedSandbox,
+} from "@/stores/composer/staged-sandbox-store";
 import { stageTakingTerminal } from "@/lib/sandboxes/staged-terminal-target";
+import { terminalLaunchBlocked } from "@/lib/terminals/terminal-launch-availability";
 import { useLandingNewTabAvailability } from "./landing-new-tab-availability";
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useCallback,
@@ -629,6 +636,22 @@ function settleTerminalReveal(args: {
  * target, while chooser presentation reads the provider's workspace source for
  * that same captured draft. No consumer reads live host or draft focus.
  */
+function landingTerminalLaunchBlocked(
+  noResolvedComputer: boolean,
+  hasStage: boolean,
+): boolean {
+  return terminalLaunchBlocked(
+    {
+      noResolvedComputer,
+      hasStage,
+      canStageNew: false,
+      canWake: false,
+      offeredHosts: [],
+    },
+    readPoolComputerUnavailable,
+  );
+}
+
 export function LandingTerminalPanel(): ReactNode {
   const {
     focusedLandingPageId,
@@ -1022,7 +1045,10 @@ export function LandingTerminalPanel(): ReactNode {
   const noPoolComputer = usePoolComputerUnavailable(target.hostId);
   const hasTerminalStage =
     stageTakingTerminal(useStagedSandbox(composerSurfaceKey)) !== null;
-  const terminalDisabledOnPool = !hasTerminalStage && noPoolComputer;
+  const terminalDisabledOnPool = landingTerminalLaunchBlocked(
+    noPoolComputer,
+    hasTerminalStage,
+  );
   const revealAndCreateTerminal = useCallback(() => {
     // A sandbox staged on the composer is where this terminal is wanted, and
     // asking for one there is its first action: it is created or woken, and
@@ -1034,7 +1060,13 @@ export function LandingTerminalPanel(): ReactNode {
       dismissPlaceholder();
       return;
     }
-    if (noPoolComputer) return;
+    if (
+      landingTerminalLaunchBlocked(
+        readPoolComputerUnavailable(target.hostId),
+        false,
+      )
+    )
+      return;
     if (directoryRequestRef.current !== null) {
       if (panelOpen) return;
       replaceDirectoryRequest(null);
@@ -1087,7 +1119,6 @@ export function LandingTerminalPanel(): ReactNode {
     composerSurfaceKey,
     createTerminalTab,
     dismissPlaceholder,
-    noPoolComputer,
     panelOpen,
     pending,
     replaceDirectoryRequest,
@@ -1603,11 +1634,23 @@ export function LandingTerminalPanel(): ReactNode {
    * placeholder rather than adding a second - only one exists at a time.
    */
   const openNewTabPlaceholder = useCallback(() => {
-    if (terminalDisabledOnPool) return;
+    if (
+      landingTerminalLaunchBlocked(
+        readPoolComputerUnavailable(target.hostId),
+        stageTakingTerminal(readStagedSandbox(composerSurfaceKey)) !== null,
+      )
+    )
+      return;
     if (!panelOpen) setPanelOpen(true);
     const state = useLandingPanelStore.getState();
     openPlaceholder(`landing-placeholder-${uuidv4()}`, state.tabs.length);
-  }, [openPlaceholder, panelOpen, setPanelOpen, terminalDisabledOnPool]);
+  }, [
+    composerSurfaceKey,
+    openPlaceholder,
+    panelOpen,
+    setPanelOpen,
+    target.hostId,
+  ]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
@@ -1682,14 +1725,14 @@ export function LandingTerminalPanel(): ReactNode {
   // chooser on an empty panel, and this gesture has already answered the very
   // question the chooser asks.
   const revealAndOpenBrowserTab = useCallback(() => {
-    if (noPoolComputer) return;
+    if (readPoolComputerUnavailable(target.hostId)) return;
     if (!panelOpen) setPanelOpen(true);
     // The row this ask is for, read NOW like every other opener - a chooser
     // the reader opens while the device is answering is a later choice than
     // this one, and `fulfillPlaceholder` leaves a row this ask did not name
     // alone.
     openBrowserTab({ placeholderInstanceId: claimAskedRow() });
-  }, [claimAskedRow, noPoolComputer, openBrowserTab, panelOpen, setPanelOpen]);
+  }, [claimAskedRow, openBrowserTab, panelOpen, setPanelOpen, target.hostId]);
 
   // The TERMINAL card's gate, reading the effective target only: capability
   // from the captured host, fail-closed on an unpinned client, and the
@@ -1807,10 +1850,9 @@ export function LandingTerminalPanel(): ReactNode {
     landingTargetVerdictGoverns(tabs) &&
     placeholder?.automation === undefined;
 
-  // The panel body can be absent on the cold pool while a retained staged
-  // sandbox can still take the direct terminal shortcut.
+  // The pool can take the staged action before the computer panel mounts.
   useEffect(() => {
-    if (!surfaceActive || (panelUnavailable && !(onPool && hasTerminalStage)))
+    if (!surfaceActive || !onPool || (panelUnavailable && !hasTerminalStage))
       return;
     return registerDynamicActionHandler(
       "app.terminal.new",
@@ -1901,6 +1943,7 @@ export function LandingTerminalPanel(): ReactNode {
           onToggleMaximized={() => setMaximized(!layout.maximized)}
           onSetPanelWidthFraction={setPanelWidthFraction}
           onOpenNewTab={terminalDisabledOnPool ? null : openNewTabPlaceholder}
+          onRevealAndCreate={onPool ? null : revealAndCreateTerminal}
           onPickNewTabKind={pickNewTabKind}
           onDismissPlaceholder={dismissPlaceholder}
           browserDisabledReason={browserDisabledReason}
@@ -1952,6 +1995,7 @@ interface LandingTerminalPanelContentsProps {
   readonly onSetPanelWidthFraction: (fraction: number) => void;
   /** The "+", the empty-strip double-click and `tab.new`: open the chooser. */
   readonly onOpenNewTab: (() => void) | null;
+  readonly onRevealAndCreate: (() => void) | null;
   readonly onPickNewTabKind: (kind: LandingNewTabKind) => void;
   readonly onDismissPlaceholder: () => void;
   /** Why the chooser's Browser card cannot be picked, or `null`. */
@@ -2035,6 +2079,7 @@ function LandingTerminalPanelContents(
     maximized: props.maximized,
     onTogglePanel: props.onTogglePanel,
     onOpenPanel: props.onOpenPanel,
+    onRevealAndCreate: props.onRevealAndCreate,
     onRevealAndOpenBrowserTab: props.onRevealAndOpenBrowserTab,
     onOpenNewTab: openNewTab,
     onDismissPlaceholder: props.onDismissPlaceholder,
@@ -2363,6 +2408,7 @@ function useLandingTerminalShortcuts(args: {
   readonly maximized: boolean;
   readonly onTogglePanel: () => void;
   readonly onOpenPanel: () => void;
+  readonly onRevealAndCreate: (() => void) | null;
   readonly onToggleMaximized: () => void;
   readonly onActivateTab: (instanceId: string) => void;
   readonly onCloseTab: (tab: LandingPanelTabRef) => void;
@@ -2377,6 +2423,7 @@ function useLandingTerminalShortcuts(args: {
     maximized,
     onTogglePanel,
     onOpenPanel,
+    onRevealAndCreate,
     onRevealAndOpenBrowserTab,
     onOpenNewTab,
     onDismissPlaceholder,
@@ -2398,6 +2445,10 @@ function useLandingTerminalShortcuts(args: {
     if (!surfaceActive) return;
     return registerDynamicActionHandler("app.terminal.toggle", onTogglePanel);
   }, [onTogglePanel, surfaceActive]);
+  useEffect(() => {
+    if (!surfaceActive || onRevealAndCreate === null) return;
+    return registerDynamicActionHandler("app.terminal.new", onRevealAndCreate);
+  }, [onRevealAndCreate, surfaceActive]);
   // The browser twin of the chord above. It self-gates on the device's
   // coordinator being live, so it is safe to register while one is connecting.
   useEffect(() => {
