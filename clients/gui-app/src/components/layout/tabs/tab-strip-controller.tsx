@@ -24,6 +24,8 @@ import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
 import { openTracyEntry } from "@/lib/bots/open-bot-channel";
 import { useHostClient } from "@/lib/host";
+import { getEpicSessionHostId } from "@/lib/registries/epic-session-registry";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
 import type { StripItem } from "@/stores/tabs/layout";
@@ -396,13 +398,11 @@ function useTaskPinDispatch(
       // no verdict; everything else still needs one.
       const reading = taskPinnedStates.get(epicId);
       const isLocalHome = reading?.home === "local";
-      // The epic's host, from that SAME reading. A local-homed pin is served
-      // off the owning host's disk, so the write has to go there: sent to the
-      // window's host instead, `epicHomeVerdict` answers not-local and the
-      // request falls through to a cloud write for an epic the cloud has no row
-      // for. `null` for a cloud-homed row means "follow the window", which is
-      // right - any host proxies a cloud pin.
-      const hostId = reading?.hostId ?? null;
+      const hostId =
+        reading?.hostId ??
+        (readProcessHostRpcTierPlan().pool === null
+          ? null
+          : getEpicSessionHostId(epicId));
       const variables = { epicId, pinned, isLocalHome, hostId };
       // Fail closed on the CAPABILITY, not just in the menu. The Undo action
       // below is a second entry into this dispatch that no menu gate can

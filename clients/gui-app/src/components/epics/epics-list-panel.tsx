@@ -1,3 +1,10 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  servingPeerHostIdOf,
+  useServingPeerHostId,
+} from "@/lib/host/serving-decision";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
 import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { useOptionalHostClient } from "@/lib/host/runtime";
@@ -418,6 +425,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     nowMs: props.historyNowMs,
   });
 
+  const poolConfigured = readProcessHostRpcTierPlan().pool !== null;
+  const servingPeerId = useServingPeerHostId();
+  const deletePeerId = poolConfigured ? servingPeerId : null;
+
   // Read at gesture time so pull-to-refresh can install its listeners once,
   // rather than re-attaching a non-passive touch handler whenever the query
   // hands back a fresh `refetch`.
@@ -529,47 +540,42 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // a selection started with no account signed in is bound to
   // `{ userId: null }`, which no request matches, so signing in before the
   // dialog opens cannot hand that selection to the new account.
-  const selectionAccountRef = useRef<{ readonly userId: string | null } | null>(
-    null,
-  );
+  const selectionAccountRef = useRef<{
+    readonly userId: string | null;
+    readonly peerId: string | null;
+  } | null>(null);
+  const selectedHomesRef = useRef(new Map<string, "local" | "cloud">());
   // The account the open delete dialog is bound to.
-  const pendingDeleteUserIdRef = useRef<string | null>(null);
+  const pendingDeleteScopeRef = useRef<{
+    readonly userId: string | null;
+    readonly peerId: string | null;
+    readonly selectedHomes: ReadonlyMap<string, "local" | "cloud">;
+  } | null>(null);
   const setPinnedMutation = useEpicSetPinned();
   const setPinned = setPinnedMutation.mutate;
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const handleSetPinned = useCallback(
     (epicId: string, pinned: boolean) => {
-      // Resolved HERE rather than widened into `onSetPinned`, which is
-      // declared in seven places across the desktop rows, the mobile row and
-      // both list shells. The row that rendered the control came out of this
-      // same array, so this is the reading it decided availability from, not a
-      // second derivation - and a row missing from it (an id from a stale
-      // control) reads cloud-homed, which lands on the verdict gate.
-      const isLocalHome =
-        items.find((item) => item.epicId === epicId)?.isLocalHome === true;
-      // `hostId: null` - follow the window - and here that is CORRECT by
-      // construction rather than a shortfall. History takes `isLocalHome` from
-      // `useEpicGetTaskContexts`, which dispatches on a SINGLE client
-      // (`useHostClient()`, the window's host) and merges `localHomedTaskIds`
-      // only across that host's own request chunks. So every id in that set is
-      // local-homed ON THE WINDOW'S HOST, and following the window sends the
-      // write to exactly the host that reported the row local-homed.
-      //
-      // An epic local-homed on a DIFFERENT host cannot arrive here down this
-      // arm at all: the window's host does not own it, so it never enters
-      // `localHomedTaskIds`, `isLocalHome` is false, and the row takes the
-      // cloud path every host proxies. The tab strip needs an explicit host
-      // because its readings DO span hosts (one per open tab's session); this
-      // surface's do not.
-      setPinned({ epicId, pinned, isLocalHome, hostId: null });
+      const item = items.find((row) => row.epicId === epicId);
+      if (poolConfigured && item === undefined) return;
+      const isLocalHome = item?.isLocalHome === true;
+      const rowPeerId = isLocalHome ? servingPeerId : hostId;
+      setPinned({
+        epicId,
+        pinned,
+        isLocalHome,
+        hostId: poolConfigured ? rowPeerId : null,
+      });
     },
-    [items, setPinned],
+    [hostId, items, poolConfigured, servingPeerId, setPinned],
   );
 
   const {
     candidates: worktreeCandidates,
     isFetching: worktreeCandidatesFetching,
-  } = useTaskDeleteWorktreeCandidates(pendingDeleteIds);
+  } = useTaskDeleteWorktreeCandidates(
+    deletePeerId === POOL_HOST_ID ? null : pendingDeleteIds,
+  );
   const defaultCheckedByPath = useMemo(
     () =>
       new Map(
@@ -599,6 +605,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     [],
   );
   const closeDeleteDialog = useCallback(() => {
+    pendingDeleteScopeRef.current = null;
     setPendingDeleteIds(null);
     setWorktreeCheckOverrides(new Map());
   }, []);
@@ -622,15 +629,26 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // candidate.
   const [sweepEpicIds, setSweepEpicIds] =
     useState<ReadonlyArray<string> | null>(null);
-  const previousScope = useRef({ matchingSetKey, hostId, currentUserId });
+  const previousScope = useRef({
+    matchingSetKey,
+    hostId,
+    currentUserId,
+    deletePeerId,
+  });
   useEffect(() => {
     if (
       previousScope.current.matchingSetKey === matchingSetKey &&
       previousScope.current.hostId === hostId &&
-      previousScope.current.currentUserId === currentUserId
+      previousScope.current.currentUserId === currentUserId &&
+      previousScope.current.deletePeerId === deletePeerId
     )
       return;
-    previousScope.current = { matchingSetKey, hostId, currentUserId };
+    previousScope.current = {
+      matchingSetKey,
+      hostId,
+      currentUserId,
+      deletePeerId,
+    };
     abortSelectAll();
     setSelectedIds(new Set());
     setSelectionMode(false);
@@ -640,6 +658,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     abortSelectAll,
     closeDeleteDialog,
     currentUserId,
+    deletePeerId,
     hostId,
     matchingSetKey,
   ]);
@@ -735,17 +754,19 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     onSuccess: (loadedItems, controller) => {
       if (loadedItems === null || controller.signal.aborted) return;
       const currentPendingDeleteEpicIds = readPendingDeleteEpicIds(queryClient);
-      setSelectedIds(
-        new Set(
-          [...loadedItems, ...visibleItemsRef.current]
-            .filter(
-              (item) =>
-                canDeleteHistoryItem(item, cloudAuthorized) &&
-                !currentPendingDeleteEpicIds.has(item.epicId),
-            )
-            .map((item) => item.epicId),
-        ),
+      const eligible = [...loadedItems, ...visibleItemsRef.current].filter(
+        (item) =>
+          canDeleteHistoryItem(item, cloudAuthorized) &&
+          !currentPendingDeleteEpicIds.has(item.epicId),
       );
+      if (poolConfigured) {
+        for (const item of eligible)
+          selectedHomesRef.current.set(
+            item.epicId,
+            item.isLocalHome ? "local" : "cloud",
+          );
+      }
+      setSelectedIds(new Set(eligible.map((item) => item.epicId)));
     },
     onSettled: (_data, _error, controller) => {
       clearSelectAllController(selectAllController, controller);
@@ -760,21 +781,35 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // selection it lands was still chosen by whoever pressed Select all.
   const bindSelectionAccountIfStarting = useCallback(() => {
     if (selectedIds.size === 0) {
-      selectionAccountRef.current = { userId: readDeleteRequestUserId() };
+      selectionAccountRef.current = {
+        userId: readDeleteRequestUserId(),
+        peerId: deletePeerId,
+      };
+      selectedHomesRef.current.clear();
     }
-  }, [readDeleteRequestUserId, selectedIds]);
+  }, [deletePeerId, readDeleteRequestUserId, selectedIds]);
 
   const toggleSelection = useCallback(
     (id: string) => {
       if (!selectionEnabled || !selectableIdSet.has(id)) return;
       abortSelectAll();
       bindSelectionAccountIfStarting();
+      if (poolConfigured) {
+        const item = items.find((row) => row.epicId === id);
+        if (item !== undefined)
+          selectedHomesRef.current.set(
+            id,
+            item.isLocalHome ? "local" : "cloud",
+          );
+      }
       setSelectedIds((prev) => withMemberToggled(prev, id));
       setSelectionMode(true);
     },
     [
       abortSelectAll,
       bindSelectionAccountIfStarting,
+      items,
+      poolConfigured,
       selectableIdSet,
       selectionEnabled,
     ],
@@ -788,14 +823,42 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       // A delete of the selection keeps the selection's account; a row's own
       // delete is chosen now, under the account signed in now.
       const selectionAccount = selectionAccountRef.current;
-      pendingDeleteUserIdRef.current =
+      const fromSelection =
         selectionAccount !== null &&
-        deletableIds.every((id) => selectedIds.has(id))
+        deletableIds.every((id) => selectedIds.has(id));
+      const selectedHomes = new Map<string, "local" | "cloud">();
+      if (poolConfigured) {
+        const observedHomes = fromSelection
+          ? selectedHomesRef.current
+          : new Map<string, "local" | "cloud">(
+              items.map((row) => [
+                row.epicId,
+                row.isLocalHome ? "local" : "cloud",
+              ]),
+            );
+        for (const id of deletableIds) {
+          const home = observedHomes.get(id);
+          if (home !== undefined) selectedHomes.set(id, home);
+        }
+      }
+      pendingDeleteScopeRef.current = {
+        userId: fromSelection
           ? selectionAccount.userId
-          : readDeleteRequestUserId();
+          : readDeleteRequestUserId(),
+        peerId: fromSelection ? selectionAccount.peerId : deletePeerId,
+        selectedHomes,
+      };
       setPendingDeleteIds(deletableIds);
     },
-    [readDeleteRequestUserId, selectableIdSet, selectedIds, selectionEnabled],
+    [
+      deletePeerId,
+      items,
+      poolConfigured,
+      readDeleteRequestUserId,
+      selectableIdSet,
+      selectedIds,
+      selectionEnabled,
+    ],
   );
 
   const visibleSelectedIds = useMemo(() => {
@@ -848,6 +911,15 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     if (hasUnloadedItems && !hasNextPage) return;
     bindSelectionAccountIfStarting();
     if (!hasUnloadedItems) {
+      if (poolConfigured) {
+        for (const item of items) {
+          if (selectableIdSet.has(item.epicId))
+            selectedHomesRef.current.set(
+              item.epicId,
+              item.isLocalHome ? "local" : "cloud",
+            );
+        }
+      }
       setSelectedIds(new Set(selectableItemIds));
       return;
     }
@@ -864,6 +936,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     isCountPending,
     cloudPagePending,
     selectAllPending,
+    items,
+    poolConfigured,
+    selectableIdSet,
     selectableItemIds,
   ]);
   const deselectAllVisible = useCallback(() => {
@@ -879,7 +954,20 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   }, [abortSelectAll]);
 
   const handleConfirmDelete = () => {
-    if (pendingDeleteIds === null) return;
+    const scope = pendingDeleteScopeRef.current;
+    if (pendingDeleteIds === null || scope === null) return;
+    if (
+      poolConfigured &&
+      (scope.peerId === null ||
+        scope.peerId !==
+          servingPeerHostIdOf(
+            useSelectionAuthorityStore.getState().servingPeer,
+          ) ||
+        scope.userId !== readDeleteRequestUserId())
+    ) {
+      closeDeleteDialog();
+      return;
+    }
     // The host-wide census is asynchronous. Confirming before it settles lets
     // the Task deletion start with zero approved worktrees, silently skipping
     // rows that were about to be offered. Hold confirmation until the choices
@@ -932,7 +1020,15 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       // An account change also clears the selection and closes this dialog
       // (the scope reset above), but that reset follows History's own
       // identity, and the send is where the account it would act as is known.
-      boundUserId: pendingDeleteUserIdRef.current,
+      boundUserId: scope.userId,
+      ...(poolConfigured && scope.peerId !== null
+        ? {
+            history: {
+              acceptedPeerId: scope.peerId,
+              selectedHomes: scope.selectedHomes,
+            },
+          }
+        : {}),
       worktreeCleanup:
         approvedWorktrees.length > 0 ? { candidates: approvedWorktrees } : null,
     });

@@ -1,3 +1,4 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -62,10 +63,14 @@ export function useEpicGrantAccess() {
         }
         const hostId = ctx.hostId;
         if (hostId === null) return;
-        queryClient.setQueryData(
-          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
-          data,
+        const queryKey = epicCollaboratorsQueryKey(
+          hostId,
+          variables.epicId,
+          ctx.viewerUserId,
         );
+        queryClient.setQueryData(queryKey, data);
+        if (hostId === POOL_HOST_ID && !data.collaboratorsAvailable)
+          void queryClient.invalidateQueries({ queryKey });
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't invite collaborators.");
@@ -113,10 +118,14 @@ export function useEpicBatchUpdateRoles() {
         }
         const hostId = ctx.hostId;
         if (hostId === null) return;
-        queryClient.setQueryData(
-          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
-          data,
+        const queryKey = epicCollaboratorsQueryKey(
+          hostId,
+          variables.epicId,
+          ctx.viewerUserId,
         );
+        queryClient.setQueryData(queryKey, data);
+        if (hostId === POOL_HOST_ID && !data.collaboratorsAvailable)
+          void queryClient.invalidateQueries({ queryKey });
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't update role.");
@@ -156,12 +165,25 @@ export function useEpicRevokeCollaborator() {
         }
         const hostId = ctx.hostId;
         if (hostId === null) return;
-        queryClient.setQueryData(
-          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
-          data,
+        const queryKey = epicCollaboratorsQueryKey(
+          hostId,
+          variables.epicId,
+          ctx.viewerUserId,
         );
+        queryClient.setQueryData(queryKey, data);
+        if (hostId === POOL_HOST_ID && !data.collaboratorsAvailable)
+          void queryClient.invalidateQueries({ queryKey });
       },
-      onError: (error) => {
+      onError: (error, variables, ctx) => {
+        if (ctx?.hostId === POOL_HOST_ID) {
+          void queryClient.invalidateQueries({
+            queryKey: epicCollaboratorsQueryKey(
+              ctx.hostId,
+              variables.epicId,
+              ctx.viewerUserId,
+            ),
+          });
+        }
         toastFromHostError(error, "Couldn't remove collaborator.");
       },
     },
