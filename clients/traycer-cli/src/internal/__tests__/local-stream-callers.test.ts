@@ -18,8 +18,6 @@ const SRC = fileURLToPath(new URL("../..", import.meta.url));
 
 interface Guard {
   readonly name: string;
-  /** A source mentions the name when it contains any of these. */
-  readonly needles: readonly string[];
   /** Paths under `src`, with `/`, that may. */
   readonly allowed: readonly string[];
 }
@@ -27,12 +25,10 @@ interface Guard {
 const GUARDS: readonly Guard[] = [
   {
     name: "localStreamCredential",
-    needles: ["localStreamCredential("],
     allowed: ["internal/local-stream.ts", "internal/cli-host-tokens.ts"],
   },
   {
     name: "streamBearerForOwnRecovery",
-    needles: ["streamBearerForOwnRecovery(", "streamBearerForOwnRecovery:"],
     allowed: [
       "commands/monitor.ts",
       "host/credential-provisioning.ts",
@@ -52,22 +48,37 @@ interface Violation {
   readonly name: string;
 }
 
+/**
+ * Every identifier and string literal in a source: how code can name a member,
+ * whether it calls it, aliases it, destructures it under another name or reads
+ * it by a quoted key. A comment is neither.
+ */
+function namesIn(text: string): ReadonlySet<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) || ts.isStringLiteralLike(node))
+      names.add(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(ts.createSourceFile("source.ts", text, ts.ScriptTarget.Latest, false));
+  return names;
+}
+
 /** The guards each source breaks. */
 function violationsIn(sources: readonly Source[]): readonly Violation[] {
-  return sources.flatMap((source) =>
-    GUARDS.filter(
-      (guard) =>
-        !guard.allowed.includes(source.path) &&
-        guard.needles.some((needle) => source.text.includes(needle)),
-    ).map((guard) => ({ path: source.path, name: guard.name })),
-  );
+  return sources.flatMap((source) => {
+    const names = namesIn(source.text);
+    return GUARDS.filter(
+      (guard) => !guard.allowed.includes(source.path) && names.has(guard.name),
+    ).map((guard) => ({ path: source.path, name: guard.name }));
+  });
 }
 
 function isProductionSource(name: string): boolean {
   return name.endsWith(".ts") && !name.endsWith(".test.ts");
 }
 
-/** A fixture is real TypeScript: it parses, so only its call can fail it. */
+/** A fixture is real TypeScript: it parses, so only what it names can fail it. */
 function expectParses(text: string): void {
   const result = ts.transpileModule(text, {
     reportDiagnostics: true,
@@ -140,6 +151,30 @@ describe("who names the local stream's token surfaces", () => {
     );
     expect(violationsIn([source])).toEqual([
       { path: "commands/fixture.ts", name: "streamBearerForOwnRecovery" },
+    ]);
+  });
+
+  it.each(
+    GUARDS.flatMap(({ name }) => [
+      {
+        use: "destructures under another name",
+        name,
+        body: `const { ${name}: held } = tokens as Record<string, unknown>;\nvoid held;`,
+      },
+      {
+        use: "aliases without calling",
+        name,
+        body: `const held = (tokens as Record<string, unknown>).${name};\nvoid held;`,
+      },
+      {
+        use: "reads by a quoted key",
+        name,
+        body: `const held = (tokens as Record<string, unknown>)["${name}"];\nvoid held;`,
+      },
+    ]),
+  )("fails a file that $use $name", ({ name, body }) => {
+    expect(violationsIn([fixture(body)])).toEqual([
+      { path: "commands/fixture.ts", name },
     ]);
   });
 

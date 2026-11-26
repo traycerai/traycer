@@ -16,12 +16,12 @@ import {
 } from "./expired-host-token-members";
 
 /**
- * A named limit: a team computer, a held token past its end, the command
- * line's mint unavailable, and the computer refusing the held token
- * `token_expired` before admitting anything. The redial probes, and the team
- * host answers `not_admitted`: it invites no sign-in. Nothing then can be
- * presented, and the command ends at its own bound with that bound's line, not
- * with sign-in advice. The real limits are shortened to 2 s.
+ * A named limit: a held token past its end, the command line's mint
+ * unavailable, and the host refusing the held token `token_expired` before
+ * admitting anything. The redial probes, and the host answers `not_admitted`:
+ * it invites no sign-in. Nothing then can be presented, and the command ends at
+ * its own bound with that bound's line, not with sign-in advice. The real
+ * limits are shortened to 2 s.
  */
 const LIMIT_MS = vi.hoisted(() => 2_000);
 const home = vi.hoisted((): HomeRef => ({ path: null }));
@@ -76,7 +76,7 @@ afterEach(async () => {
 });
 
 describe.each([WORKTREE_DELETE_BATCH, BOT_CHECKINS] as readonly Member[])(
-  "$title: a team host that refuses the probe not_admitted",
+  "$title: a host that refuses the probe not_admitted",
   (member) => {
     it("writes no sign-in, prints no login line, and ends at its own bound", async () => {
       prepareHostFor(member, world);

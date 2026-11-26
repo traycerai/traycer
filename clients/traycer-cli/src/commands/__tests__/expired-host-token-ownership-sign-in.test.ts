@@ -165,6 +165,8 @@ describe("bot list: the sign-in as the host directory reads it", () => {
     const outcome = await settle(BOT_LIST.start(world));
     BOT_LIST.expectNormalResult(outcome);
     expect(authn.refreshes).toBe(1);
+    // The host directory is read with the refreshed sign-in, and no other.
+    expect(authn.directoryReads).toEqual([ROTATED]);
     expect(whatThePersonRead(world, outcome)).not.toContain("traycer login");
   }, 20_000);
 

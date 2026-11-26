@@ -63,7 +63,8 @@ const mocks = vi.hoisted(() => {
       ) {
         const { requestId, method, schemaVersion } = frame;
         setTimeout(() => {
-          void mocks.requestMock(method, null, {}).then(
+          // The second argument is the token this socket's OPEN carried.
+          void mocks.requestMock(method, this.openTokens.at(-1), {}).then(
             (result: unknown) =>
               this.deliver({
                 kind: "response",
@@ -95,6 +96,12 @@ const mocks = vi.hoisted(() => {
   return {
     HostSocket,
     sockets: [] as InstanceType<typeof HostSocket>[],
+    /** Every host RPC the CLI started, from before it prepares a token. */
+    hostRpcs: [] as {
+      readonly method: string;
+      readonly startedAtMs: number;
+      endedAtMs: number | null;
+    }[],
     requestMock: vi.fn(),
     resolveHostAuthMock: vi.fn(),
     readHostPidMetadataMock: vi.fn(),
@@ -149,6 +156,32 @@ vi.mock("../../internal/host-auth", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../internal/host-auth")>();
   return { ...actual, resolveHostAuth: mocks.resolveHostAuthMock };
+});
+
+// The real call, timed from its start to its own end.
+vi.mock("../../internal/host-rpc", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/host-rpc")>();
+  const timed: typeof actual.callHostRpcAtResolvedEndpoint = (
+    method,
+    params,
+    endpoint,
+    auth,
+    dispatch,
+  ) => {
+    const rpc: (typeof mocks.hostRpcs)[number] = {
+      method,
+      startedAtMs: Date.now(),
+      endedAtMs: null,
+    };
+    mocks.hostRpcs.push(rpc);
+    return actual
+      .callHostRpcAtResolvedEndpoint(method, params, endpoint, auth, dispatch)
+      .finally(() => {
+        rpc.endedAtMs = Date.now();
+      });
+  };
+  return { ...actual, callHostRpcAtResolvedEndpoint: timed };
 });
 
 vi.mock("../pid-metadata", async (importOriginal) => {
@@ -235,6 +268,8 @@ const TEAM_ID = "00000000-0000-4000-8000-000000000002";
 const ATTEMPT_ID = "00000000-0000-4000-8000-000000000004";
 const ACCEPTANCE_ID = "00000000-0000-4000-8000-000000000005";
 const USER_ID = "user-1";
+/** The token an answered mint buys. */
+const FRESH_HOST_TOKEN = "host-token-fresh";
 const GIVE_BUDGET_MS = 45_000;
 /** The first readiness ask comes this long after the give's budget starts: its dial hops through the scripted socket. */
 const BUDGET_STARTS_BEFORE_FIRST_ASK_MS = 3;
@@ -244,6 +279,8 @@ const GIVE_ENDS_MS = GIVE_BUDGET_MS - BUDGET_STARTS_BEFORE_FIRST_ASK_MS;
 const MINT_TIMEOUT_MS = 10_000;
 /** One readiness try's own budget: `min(2000, remaining)`. */
 const TRY_BUDGET_MS = 2_000;
+/** The scripted socket's own hops: its open, its openAck and its response, 1 ms each. */
+const SCRIPTED_SOCKET_HOPS_MS = 3;
 /** The good-side give's completion at 45829027 (mint answered 3 s after it is asked), measured with this fixture on that tree, from the first readiness ask. */
 const BASE_GOOD_COMPLETION_MS = 18_057;
 const TRANSFER_LINE =
@@ -390,8 +427,8 @@ let statusAskedAtMs: number[];
 let refuseStatusFromMs: number | null;
 /** When set, authn answers every host-only token mint `ok` after this many ms, instead of never. */
 let mintAnswersAfterMs: number | null;
-/** A mint was answered: the host then reports the team's binding. */
-let mintAnswered: boolean;
+/** The token on the socket of each binding read. */
+let bindingReadTokens: unknown[];
 let startedAtMs: number;
 let credentialsRoot: string;
 
@@ -448,10 +485,9 @@ function stubAuthn(tokenLifetimeSeconds: number): void {
       if (mintAnswersAfterMs !== null) {
         return new Promise<Response>((resolve) => {
           setTimeout(() => {
-            mintAnswered = true;
             resolve(
               jsonResponse(200, {
-                session_grant: "host-token-fresh",
+                session_grant: FRESH_HOST_TOKEN,
                 session_grant_expires_in: 3600,
               }),
             );
@@ -464,44 +500,48 @@ function stubAuthn(tokenLifetimeSeconds: number): void {
 }
 
 function answerHost(): void {
-  mocks.requestMock.mockImplementation(async (method: string) => {
-    switch (method) {
-      case "environment.move.plan":
-        return movePlan();
-      case "environment.move.stage":
-        return moveStage();
-      case "environment.move.start":
-        return moveOutcome("running");
-      case "environment.status":
-        statusAskedAtMs.push(Date.now());
-        if (
-          refuseStatusFromMs !== null &&
-          Date.now() - startedAtMs >= refuseStatusFromMs
-        ) {
-          throw tokenRefusal();
-        }
-        return environmentStatusResponseSchemaV13.parse({
-          principal: null,
-          reachability: "connected",
-          bindingGeneration: 1,
-          desiredRevision: null,
-          receivedRevision: null,
-          appliedRevision: null,
-          receiptAgeMs: 0,
-          items: [],
-          pendingUploads: [],
-          setup: null,
-          remoteAccess: "off",
-          move: null,
-        });
-      case "environment.host.read":
-        return mintAnswered ? teamBinding : personalBinding;
-      case "environment.previewLocalFacts":
-        return { activeTurns: 0, terminals: 0 };
-      default:
-        throw new Error(`unexpected host call ${method}`);
-    }
-  });
+  mocks.requestMock.mockImplementation(
+    async (method: string, openToken: unknown) => {
+      switch (method) {
+        case "environment.move.plan":
+          return movePlan();
+        case "environment.move.stage":
+          return moveStage();
+        case "environment.move.start":
+          return moveOutcome("running");
+        case "environment.status":
+          statusAskedAtMs.push(Date.now());
+          if (
+            refuseStatusFromMs !== null &&
+            Date.now() - startedAtMs >= refuseStatusFromMs
+          ) {
+            throw tokenRefusal();
+          }
+          return environmentStatusResponseSchemaV13.parse({
+            principal: null,
+            reachability: "connected",
+            bindingGeneration: 1,
+            desiredRevision: null,
+            receivedRevision: null,
+            appliedRevision: null,
+            receiptAgeMs: 0,
+            items: [],
+            pendingUploads: [],
+            setup: null,
+            remoteAccess: "off",
+            move: null,
+          });
+        case "environment.host.read":
+          bindingReadTokens.push(openToken);
+          // The team's binding is answered only to a read on the fresh token.
+          return openToken === FRESH_HOST_TOKEN ? teamBinding : personalBinding;
+        case "environment.previewLocalFacts":
+          return { activeTurns: 0, terminals: 0 };
+        default:
+          throw new Error(`unexpected host call ${method}`);
+      }
+    },
+  );
 }
 
 function tokenTableSnapshot(): string {
@@ -559,8 +599,27 @@ function expectNoTryAwaitedAMint(): void {
   expect(Math.max(...gaps)).toBeLessThan(10_000);
 }
 
-/** Each of a try's two calls (status, binding) waits at most its own budget: two tries are never more than the poll's 2 s plus both budgets apart. */
+/**
+ * Each of a try's two calls (status, binding) ends within its own budget, from
+ * its start, and the scripted socket's hops; and two tries are never more than
+ * the poll's 2 s plus both budgets apart.
+ */
 function expectNoTryWaitedPastItsBudget(): void {
+  const readiness = mocks.hostRpcs.filter(
+    ({ method }) =>
+      method === "environment.status" || method === "environment.host.read",
+  );
+  expect(new Set(readiness.map(({ method }) => method))).toEqual(
+    new Set(["environment.status", "environment.host.read"]),
+  );
+  // A call that never ended counts as endless.
+  expect(
+    readiness.filter(
+      ({ startedAtMs: from, endedAtMs }) =>
+        (endedAtMs ?? Number.POSITIVE_INFINITY) - from >
+        TRY_BUDGET_MS + SCRIPTED_SOCKET_HOPS_MS,
+    ),
+  ).toEqual([]);
   const gaps = statusAskedAtMs
     .slice(1)
     .map((at, index) => at - (statusAskedAtMs[index] ?? at));
@@ -610,7 +669,8 @@ beforeEach(async () => {
   statusAskedAtMs = [];
   refuseStatusFromMs = null;
   mintAnswersAfterMs = null;
-  mintAnswered = false;
+  bindingReadTokens = [];
+  mocks.hostRpcs.length = 0;
   credentialsRoot = mkdtempSync(join(tmpdir(), "team-give-deadline-"));
   mocks.credentialsPath = join(credentialsRoot, "cli", "credentials");
   mocks.hostTokenTable = new Map();
@@ -753,8 +813,11 @@ describe("the team give's readiness poll", () => {
 
     const run = await runGive();
 
+    // The last binding read went on the token the mint bought.
+    expect(bindingReadTokens.at(-1)).toBe(FRESH_HOST_TOKEN);
     expect(run.outcome).toEqual({ status: "resolved" });
     expectNoTryAwaitedAMint();
+    expectNoTryWaitedPastItsBudget();
     expect(held).toHaveLength(1);
     expect(run.endedAtMs - pollStartMs()).toBeLessThanOrEqual(
       BASE_GOOD_COMPLETION_MS + TRY_BUDGET_MS,

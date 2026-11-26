@@ -1792,12 +1792,15 @@ describe("the pre-work gate's budget", () => {
     readonly error: unknown;
     readonly requestsBeforeTheReadLanded: number;
   }> {
+    let readReached = (): void => undefined;
+    const gateRead = new Promise<void>((resolve) => {
+      readReached = resolve;
+    });
     let release = (): void => undefined;
     const released = new Promise<void>((resolve) => {
       release = resolve;
     });
-    if (held)
-      readHold.current = { reached: () => undefined, release: released };
+    if (held) readHold.current = { reached: readReached, release: released };
     requestMock.mockResolvedValue({ agents: [] });
     const settled = callHostRpcAtResolvedEndpoint(
       METHOD,
@@ -1820,8 +1823,20 @@ describe("the pre-work gate's budget", () => {
       (): { readonly error: unknown } => ({ error: null }),
       (error: unknown): { readonly error: unknown } => ({ error }),
     );
+    let callEnded = false;
+    void settled.then(() => {
+      callEnded = true;
+    });
+    if (held)
+      expect(
+        await Promise.race([
+          gateRead.then(() => "the gate made its adopting read"),
+          settled.then(() => "the call ended"),
+        ]),
+      ).toBe("the gate made its adopting read");
     // The read stays held until the budget has passed, then lands late.
     await new Promise((resolve) => setTimeout(resolve, BUDGET_MS + 200));
+    if (held) expect(callEnded).toBe(false);
     const requestsBeforeTheReadLanded = requestMock.mock.calls.length;
     release();
     return { ...(await settled), requestsBeforeTheReadLanded };
@@ -1874,7 +1889,7 @@ describe("the pre-work gate's budget", () => {
     },
   );
 
-  it("writes the request once and completes, with no login line, when the same mint's refresh succeeds and the gate read is held past the call's budget", async () => {
+  it("writes the request once and completes, with no login line, when the same mint's refresh succeeds: the gate is never asked", async () => {
     await holdRanOutHostToken();
     // The first mint is refused; the sign-in's refresh succeeds, and the mint
     // asked again with the refreshed sign-in is answered.
@@ -1901,9 +1916,10 @@ describe("the pre-work gate's budget", () => {
       diskPressure: "clear",
     });
 
-    const outcome = await callWithTheGateReadHeldPastTheBudget(true);
+    const outcome = await callWithTheGateReadHeldPastTheBudget(false);
 
     expect(outcome.error).toBeNull();
+    expect(gateHooks.refusalEnding.calls).toBe(0);
     expect(requestMock).toHaveBeenCalledTimes(1);
     expect(blockedCallsLogged()).toBe(0);
   });
@@ -1951,8 +1967,15 @@ describe("the pre-work gate's budget", () => {
       );
       // The verdict is held once the call asks for it. Waiting for that is a
       // yield to the real event loop (`setImmediate` is not faked), not a sleep.
-      while (gateHooks.refusalEnding.calls === 0)
+      // Bounded on the real clock: `performance` is not faked either.
+      const askBy = performance.now() + 2_000;
+      while (gateHooks.refusalEnding.calls === 0) {
+        if (performance.now() > askBy)
+          throw new Error(
+            "the call never asked for the refusal-ending verdict",
+          );
         await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       expect(requestMock).not.toHaveBeenCalled();
       // The clock passes the call's budget; its timer has not fired.
       expect(vi.getTimerCount()).toBeGreaterThan(0);
@@ -2117,6 +2140,7 @@ describe("a caller that has given up", () => {
     const outcome = await within(settled, 1_000);
 
     expect(outcome).not.toBeNull();
+    expect(outcome?.error).toBe(refusal);
     expect(outcome?.error).not.toMatchObject({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
     });
@@ -2125,6 +2149,7 @@ describe("a caller that has given up", () => {
     );
     release();
     await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(outcome?.error).toBe(refusal);
     expect(String((outcome?.error as Error).message)).not.toContain(
       "traycer login",
     );

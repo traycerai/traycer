@@ -552,7 +552,7 @@ describe.each([POST_FIRST_FOLLOW, REPLY_WAIT])(
 // ---- T5: the resolution is read, the reply's row is not -------------------- //
 
 /** `chatId` holds the request resolved by a reply, and not that reply's row. */
-function resolvedWithoutReplyRow(chatId: string): unknown {
+function requestResolvedByReplyBeforeItsRow(chatId: string): unknown {
   return chatSnapshotFrame({
     botId: BOT_ID_A,
     conversationId: chatId,
@@ -581,7 +581,7 @@ const UNREAD_REPLIES: readonly WaitCase[] = [
   {
     ...REPLY_WAIT,
     title: "bot reply --wait",
-    waitingFrames: [resolvedWithoutReplyRow(THREAD_ID)],
+    waitingFrames: [requestResolvedByReplyBeforeItsRow(THREAD_ID)],
     printed: `${REPLIED_IN_LINE}\nTracy replied (message ${REPLY_MESSAGE_ID}).`,
     details: { ...SENT, outcome: REPLIED_OUTCOME },
   },
@@ -589,7 +589,7 @@ const UNREAD_REPLIES: readonly WaitCase[] = [
     ...POST_FIRST_FOLLOW,
     title: "bot post --wait, answered in the channel",
     sendThreadId: null,
-    waitingFrames: [resolvedWithoutReplyRow(CONVERSATION_ID)],
+    waitingFrames: [requestResolvedByReplyBeforeItsRow(CONVERSATION_ID)],
     printed: `Posted to Tracy (request ${REQUEST_ID}, answered in the channel, delivered).\nTracy replied (message ${REPLY_MESSAGE_ID}).`,
     details: { ...SENT, threadId: null, outcome: REPLIED_OUTCOME },
   },
@@ -648,7 +648,7 @@ describe("T7 the sign-in gate ends a --wait while the follower waits for the one
         {
           ...waitCase,
           waitingFrames: [
-            resolvedWithoutReplyRow(chatId),
+            requestResolvedByReplyBeforeItsRow(chatId),
             skeletonWithoutReplyRow(chatId),
           ],
         },
@@ -711,11 +711,8 @@ describe("T6 bot post --wait: the first dial ends unadmitted on token_expired, a
     expectOneSuccess(result);
   }, 30_000);
 
-  it("reports only the redial's end when the gate had ended the first dial's read", async () => {
-    // The gate can end a dial that is then dialed again only while the client
-    // outlives the host's `token_expired`: here the host marks it retryable.
-    // The client's next open is never answered, and the gate ends that dial
-    // on the next mint's answer.
+  it("reads the wait's end only after the stream is done (a constructed ordering that no host produces today)", async () => {
+    // Constructed, and no host produces it today (every host's token_expired is retryable:false): it pins that the command reads the wait's end only after the stream is done.
     prepareSend(THREAD_ID);
     world.host.openAt.set(0, ANSWERS_AT_ONCE("token-expired-retryable"));
     world.host.openAt.set(1, { answer: "admit", after: deferred().promise });

@@ -130,9 +130,13 @@ export const BOT_CHECKINS = botMember(
   },
 );
 
-/** The channel resolves the post and names the reply; the thread holds it. */
+/**
+ * The channel resolves the post and names the reply; the post's thread holds
+ * it. No other chat is served anything.
+ */
 function chatServes(params: unknown): readonly unknown[] {
   const chatId = (params as { readonly chatId: string }).chatId;
+  if (chatId !== CONVERSATION_ID && chatId !== THREAD_ID) return [];
   const onChannel = chatId === CONVERSATION_ID;
   return [
     chatSnapshotFrame({

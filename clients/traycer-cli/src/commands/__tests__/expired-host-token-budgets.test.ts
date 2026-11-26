@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { BOT_ID_A } from "./bot-test-support";
 import {
+  FRESH_HOST_TOKEN,
   STORED_SIGN_IN,
+  WAIT,
   deferred,
   flush,
   openWorld,
@@ -78,6 +80,12 @@ vi.mock(
 );
 
 const MINT_SLOW_MS = LIMIT_MS + 1_000;
+/**
+ * How late the first dial's refusal comes where the two limits must differ:
+ * a limit counted again from the redial would end this much later, past the
+ * upper bound.
+ */
+const REFUSAL_MS = 1_200;
 
 let world: World;
 
@@ -183,6 +191,11 @@ describe("bot post --wait: a black-holed mint", () => {
     expect(elapsed).toBeLessThan(MINT_SLOW_MS - 300);
     if (outcome.kind !== "completed") expect.fail("the post failed");
     expect(outcome.result.human).toContain("Posted to");
+    // The mint's `ok` comes only now, after the command returned. Let it, and
+    // give whatever might be waiting on it time to act: nothing dials.
+    expect(world.mint.isOut()).toBe(true);
+    await vi.waitFor(() => expect(world.mint.isOut()).toBe(false), WAIT);
+    await flush(500);
     expect(world.host.opens).toHaveLength(0);
     expect(world.host.subscribes).toHaveLength(0);
     expect(
@@ -218,8 +231,12 @@ describe.each([...STREAM_READS, BOT_POST_WAITING])(
   (member) => {
     it("ends at the original limit, not a fresh allowance", async () => {
       prepareHostFor(member, world);
-      // The mint is unavailable at once. The redial's open is never
-      // answered: only the limit can end it.
+      // The mint is unavailable at once, and the first dial's refusal comes
+      // late. The redial's open is never answered: only the limit can end it.
+      world.host.openAt.set(member.faultedOpen, {
+        answer: "token-expired",
+        after: flush(REFUSAL_MS),
+      });
       world.host.openAt.set(member.faultedOpen + 1, {
         answer: "admit",
         after: deferred().promise,
@@ -230,9 +247,11 @@ describe.each([...STREAM_READS, BOT_POST_WAITING])(
       const elapsed = await run.elapsed();
       expectEndedAtItsLimit(member, outcome);
       // Ended near the limit counted from the first dial; a fresh allowance
-      // for the second dial would end near twice that.
+      // for the second dial would end no sooner than the refusal's delay
+      // past it.
       expect(elapsed).toBeGreaterThanOrEqual(LIMIT_MS - 150);
       expect(elapsed).toBeLessThan(LIMIT_MS + 900);
+      expect(world.host.opens.length).toBeGreaterThan(member.faultedOpen + 1);
       await flush(50);
     }, 20_000);
   },
@@ -248,6 +267,8 @@ describe("worktree delete, legacy flow: the first dial outlasts the limit", () =
     const late = deferred();
     world.host.openAt.set(0, { answer: "admit", after: late.promise });
     const run = timed(WORKTREE_DELETE_LEGACY);
+    // Counted from the first open, so a slow set-up cannot shorten the delay.
+    await world.host.whenOpenedAs([FRESH_HOST_TOKEN]);
     await flush(LIMIT_MS + 500);
     late.settle();
     const outcome = await run.run;

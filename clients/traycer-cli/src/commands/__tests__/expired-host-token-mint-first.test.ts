@@ -5,6 +5,7 @@ import {
   FRESH_HOST_TOKEN,
   STORED_SIGN_IN,
   deferred,
+  flush,
   heldEndingIn,
   holdPublication,
   openWorld,
@@ -113,6 +114,19 @@ const TIMEOUT = 20_000;
 
 // ---- T4: the outcomes of the mint ----------------------------------------- //
 
+/**
+ * The opens each command makes when no open is refused: the legacy delete asks
+ * for the batch method the host lacks, then for its own; `bot post --wait`
+ * follows the channel, then the thread.
+ */
+const OPENS_WHEN_ADMITTED: ReadonlyMap<Member, number> = new Map([
+  [WORKTREE_DELETE_BATCH, 1],
+  [WORKTREE_DELETE_LEGACY, 2],
+  [BOT_LIST, 1],
+  [BOT_CHECKINS, 1],
+  [BOT_POST_LISTENER, 2],
+]);
+
 describe.each(ALL)("$title: the mint answers ok", (member) => {
   useWorld(null);
 
@@ -127,10 +141,11 @@ describe.each(ALL)("$title: the mint answers ok", (member) => {
       const outcome = await run;
       member.expectNormalResult(outcome);
       expect(world.host.opens.map((open) => open.token)).toEqual(
-        world.host.opens.map(() => FRESH_HOST_TOKEN),
+        Array.from(
+          { length: OPENS_WHEN_ADMITTED.get(member) ?? 0 },
+          () => FRESH_HOST_TOKEN,
+        ),
       );
-      if (member === WORKTREE_DELETE_BATCH)
-        expect(world.host.opens).toHaveLength(1);
       expect(world.mint.requests).toHaveLength(1);
       expect(whatThePersonRead(world, outcome)).not.toContain("traycer login");
     },
@@ -229,12 +244,18 @@ describe.each([WORKTREE_DELETE_BATCH, BOT_LIST])(
         prepareHostFor(member, world);
         const run = settle(member.start(world));
         await whenMintAsked();
+        // Every open of this case comes after authn's answer.
+        expect(world.host.opens).toHaveLength(0);
         world.mint.respond("sign-in-rejected");
         const outcome = await run;
         // authn answered before the first dial: the held, expired token is
         // never presented; what is presented is the probe, as the gate has it.
         expect(world.host.opens.map((open) => open.token)).not.toContain(
           world.expiredHeld,
+        );
+        // No open, first or later, carries the rejected stored sign-in.
+        expect(world.host.opens.map((open) => open.token)).not.toContain(
+          STORED_SIGN_IN,
         );
         if (world.host.opens.length > 0)
           expect(world.host.opens[0]?.token).toBe(NO_HOST_TOKEN_PROBE);
@@ -500,7 +521,10 @@ describe.each([WORKTREE_DELETE_BATCH, BOT_CHECKINS])(
         prepareHostFor(member, world);
         const run = settle(member.start(world));
         await whenMintAsked();
-        world.mint.respondAfter(1_500, "unavailable");
+        // Nothing is dialed while the first mint is pending.
+        await flush(1_500);
+        expect(world.host.opens).toHaveLength(0);
+        world.mint.respond("unavailable");
         member.expectNormalResult(await run);
         expect(world.host.opens.slice(0, 2).map((open) => open.token)).toEqual([
           NO_HOST_TOKEN_PROBE,

@@ -632,6 +632,9 @@ export class MintEdge {
   }
 
   private mintRequest(init: RequestInit | undefined): Promise<Response> {
+    // As a real fetch: under a signal already aborted nothing is sent.
+    if (init?.signal?.aborted === true)
+      return Promise.reject(new DOMException("aborted", "AbortError"));
     const headers = new Headers(init?.headers);
     return new Promise<Response>((resolve, reject) => {
       const request: MintRequest = {

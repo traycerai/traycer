@@ -109,6 +109,11 @@ async function whenMintAsked(): Promise<void> {
   );
 }
 
+/** One turn of the event loop, which a faked clock does not hold back. */
+function oneTurn(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe("a unary call with a held token past its end", () => {
   it("waits for the mint within its budget and presents the fresh token: the host sees one request", async () => {
     const run = callHostRpc("bot.list", {});
@@ -126,12 +131,30 @@ describe("a unary call with a held token past its end", () => {
   it("goes with the held token when the mint outlasts its bound", async () => {
     // The host cannot reach authn either, so it admits the held token.
     unary.expired = ANSWERS_AT_ONCE("admit");
-    const startedAt = Date.now();
-    const run = callHostRpc("bot.list", {});
-    await unary.whenOpenedAs([world.expiredHeld]);
-    const wentAfterMs = Date.now() - startedAt;
-    expect(wentAfterMs).toBeGreaterThanOrEqual(9_500);
-    expect(wentAfterMs).toBeLessThanOrEqual(15_500);
+    // The clock is the test's: it moves only when the test moves it. File and
+    // socket work still runs, a turn of the event loop at a time.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let run: Promise<unknown>;
+    try {
+      const startedAt = Date.now();
+      run = callHostRpc("bot.list", {});
+      while (world.mint.requests.length === 0) await oneTurn();
+      let wentAfterMs: number | null = null;
+      void unary.whenOpenedAs([world.expiredHeld]).then(() => {
+        wentAfterMs = Date.now() - startedAt;
+      });
+      await vi.advanceTimersByTimeAsync(9_499);
+      for (let turn = 0; turn < 50; turn += 1) await oneTurn();
+      expect(unary.opens).toHaveLength(0);
+      while (wentAfterMs === null && Date.now() - startedAt < 15_500) {
+        await vi.advanceTimersByTimeAsync(100);
+        for (let turn = 0; turn < 10; turn += 1) await oneTurn();
+      }
+      expect(wentAfterMs).toBeGreaterThanOrEqual(9_500);
+      expect(wentAfterMs).toBeLessThanOrEqual(15_500);
+    } finally {
+      vi.useRealTimers();
+    }
     await run;
     expect(unary.opens.map((open) => open.token)).toEqual([world.expiredHeld]);
     expect(unary.requests).toHaveLength(1);

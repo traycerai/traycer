@@ -216,9 +216,11 @@ describe("the doctor's RPC probe, through runDoctor, ended by the gate", () => {
         terminalCommand: null,
         details: { websocketUrl: seams.endpoint.websocketUrl, rpcCode: kind },
       });
-      // No issue of the whole report restarts the host.
+      // No issue of the whole report restarts the host: the app runs a
+      // `host-start` fix as a restart too.
       for (const reported of issues) {
         expect(reported.fixAction).not.toBe("host-restart");
+        expect(reported.fixAction).not.toBe("host-start");
         expect(reported.terminalCommand ?? "").not.toContain("restart");
       }
     },
