@@ -38,6 +38,11 @@ import {
   MoveProgressLine,
   MoveRetryButton,
 } from "@/components/settings/move/move-progress-line";
+import { STOP_SHARING_TITLE } from "@/components/settings/move/stop-sharing-copy";
+import {
+  STOP_OWNERSHIP_CONFIRM_FLOOR,
+  STOP_OWNERSHIP_PREVIEW_FLOOR,
+} from "@/components/settings/move/stop-sharing-versions";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
 import {
   hostSettingsRowModel,
@@ -65,7 +70,14 @@ import {
   useEnvironmentStatusRead,
   type EnvironmentRead,
 } from "@/hooks/environment/use-environment-reads";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  negotiatedVersionMeetsRequirement,
+  type HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  matchesStopPersonalBinding,
+  type EnvironmentMoveStopPersonalBinding,
+} from "@traycer/protocol/host/environment/move-contracts";
 import {
   useHostNegotiatedMethodVersions,
   type NegotiatedMethodVersion,
@@ -119,6 +131,90 @@ interface HostOverviewSettingsCardProps {
 /** The named host's settings place, above the Overview's tabs. */
 export function HostOverviewSettingsCard(
   props: HostOverviewSettingsCardProps,
+): ReactNode {
+  const [openedBinding, setOpenedBinding] =
+    useState<EnvironmentMoveStopPersonalBinding | null>(null);
+  const previewVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    STOP_OWNERSHIP_PREVIEW_FLOOR.method,
+  );
+  const confirmVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    STOP_OWNERSHIP_CONFIRM_FLOOR.method,
+  );
+  const statusVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    "environment.status",
+  );
+  const supportsOwnershipStop =
+    negotiatedVersionMeetsRequirement(statusVersion ?? undefined, {
+      method: "environment.status",
+      version: { major: 1, minor: 4 },
+    }) &&
+    negotiatedVersionMeetsRequirement(
+      previewVersion ?? undefined,
+      STOP_OWNERSHIP_PREVIEW_FLOOR,
+    ) &&
+    negotiatedVersionMeetsRequirement(
+      confirmVersion ?? undefined,
+      STOP_OWNERSHIP_CONFIRM_FLOOR,
+    );
+  const status = props.status;
+  const ownership =
+    status !== null && "ownership" in status ? status.ownership : undefined;
+  const refusalBinding =
+    ownership?.unbound === false ? ownership.personalBinding : null;
+  const supported = props.owner?.kind !== "team" && supportsOwnershipStop;
+  const bindingToOpen = supported ? refusalBinding : null;
+  // A healthy Personal row is a candidate recovery. The sheet re-reads its
+  // own preview to verify the environment and sharing generation too.
+  const canStayOpen =
+    supported &&
+    openedBinding !== null &&
+    (matchesStopPersonalBinding(openedBinding, refusalBinding) ||
+      (ownership === null &&
+        status?.principal?.kind === "personal" &&
+        status.bindingGeneration === openedBinding.bindingGeneration &&
+        (status.planes.records === "moved" ||
+          status.planes.records === "shared_unrecorded")));
+  if (openedBinding !== null && !canStayOpen) setOpenedBinding(null);
+
+  return (
+    <>
+      <HostOverviewSettingsCardContents
+        {...props}
+        refusalStopAction={
+          bindingToOpen !== null ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setOpenedBinding(bindingToOpen)}
+            >
+              {STOP_SHARING_TITLE}
+            </Button>
+          ) : null
+        }
+      />
+      <StopSharingSession
+        client={props.client}
+        hostId={props.hostId}
+        hostName={props.hostName}
+        open={canStayOpen}
+        expectedPersonalBinding={openedBinding}
+        ownershipPreviewState={ownership === null ? "recovered" : "refused"}
+        onOpenChange={(open) => {
+          if (!open) setOpenedBinding(null);
+        }}
+      />
+    </>
+  );
+}
+
+function HostOverviewSettingsCardContents(
+  props: HostOverviewSettingsCardProps & {
+    readonly refusalStopAction: ReactNode;
+  },
 ): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
@@ -175,6 +271,7 @@ export function HostOverviewSettingsCard(
                 hostId={props.hostId}
                 variant="ghost"
               />
+              {props.refusalStopAction}
             </div>
           }
           control={

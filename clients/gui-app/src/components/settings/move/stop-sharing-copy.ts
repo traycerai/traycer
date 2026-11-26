@@ -9,6 +9,10 @@ export const STOP_SHARING_REMOVED_LINE =
   "These came from Personal. Stopping removes them from this computer only; they stay in Personal and come back if you move this computer to Personal again.";
 export const STOP_SHARING_MANAGED_EMPTY =
   "Nothing from Personal is on this computer.";
+export const STOP_SHARING_OWNERSHIP_UNREADABLE =
+  "Everything on this computer stays.";
+export const OWNERSHIP_SETTINGS_UNREADABLE =
+  "Couldn't read this computer's settings. Try again.";
 
 export const KEEP_ON_THIS_COMPUTER = "Keep on this computer";
 export const REMOVE_FROM_THIS_COMPUTER = "Remove from this computer";

@@ -18,11 +18,13 @@ import {
   type StopNeedsChoiceRow,
 } from "@/components/settings/move/stop-sharing-choices";
 import {
+  OWNERSHIP_SETTINGS_UNREADABLE,
   STOP_CHOICES,
   STOP_SHARING_CONFIRM,
   STOP_SHARING_KEEP,
   STOP_SHARING_MANAGED_EMPTY,
   STOP_SHARING_NEEDS_CHOICE,
+  STOP_SHARING_OWNERSHIP_UNREADABLE,
   STOP_SHARING_REMOVED,
   STOP_SHARING_REMOVED_LINE,
   STOP_SHARING_TITLE,
@@ -47,6 +49,8 @@ export type { StopChoice, StopChoiceEntry, StopManagedRow, StopNeedsChoiceRow };
 export type StopPreviewStatus = "loading" | "ready" | "failed";
 
 export function StopSharingSheet(props: {
+  readonly ownershipUnreadable?: boolean;
+  readonly retryOwnershipPreview?: (() => void) | undefined;
   readonly open: boolean;
   readonly hostName: string;
   readonly managed: readonly StopManagedRow[];
@@ -63,6 +67,8 @@ export function StopSharingSheet(props: {
       {props.open ? (
         <StopSharingBody
           hostName={props.hostName}
+          ownershipUnreadable={props.ownershipUnreadable === true}
+          retryOwnershipPreview={props.retryOwnershipPreview}
           managed={props.managed}
           needsChoice={props.needsChoice}
           changedRows={props.changedRows}
@@ -78,6 +84,8 @@ export function StopSharingSheet(props: {
 }
 
 function StopSharingBody(props: {
+  readonly ownershipUnreadable: boolean;
+  readonly retryOwnershipPreview: (() => void) | undefined;
   readonly hostName: string;
   readonly managed: readonly StopManagedRow[];
   readonly needsChoice: readonly StopNeedsChoiceRow[];
@@ -125,12 +133,26 @@ function StopSharingBody(props: {
           </p>
         ) : null}
         {props.previewStatus === "failed" ? (
-          <p
-            className="text-ui-sm text-muted-foreground"
+          <div
+            className="flex flex-wrap items-center gap-1"
             data-testid="stop-sharing-preview-failed"
           >
-            Couldn't load what Personal manages here.
-          </p>
+            <p className="text-ui-sm text-muted-foreground">
+              {props.retryOwnershipPreview === undefined
+                ? "Couldn't load what Personal manages here."
+                : OWNERSHIP_SETTINGS_UNREADABLE}
+            </p>
+            {props.retryOwnershipPreview === undefined ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={props.retryOwnershipPreview}
+              >
+                Retry
+              </Button>
+            )}
+          </div>
         ) : null}
         {previewReady ? (
           <>
@@ -151,7 +173,9 @@ function StopSharingBody(props: {
                 className="text-ui-sm text-muted-foreground"
                 data-testid="stop-sharing-managed-empty"
               >
-                {STOP_SHARING_MANAGED_EMPTY}
+                {props.ownershipUnreadable
+                  ? STOP_SHARING_OWNERSHIP_UNREADABLE
+                  : STOP_SHARING_MANAGED_EMPTY}
               </p>
             ) : null}
             {props.needsChoice.length > 0 ? (

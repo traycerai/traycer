@@ -70,18 +70,22 @@ import {
   environmentMoveStopPreviewUpgradeV11ToV12,
   environmentMoveStopPreviewUpgradeV12ToV13,
   environmentMoveStopPreviewUpgradeV13ToV14,
+  environmentMoveStopPreviewUpgradeV14ToV15,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
   environmentMoveStopPreviewV12,
   environmentMoveStopPreviewV13,
   environmentMoveStopPreviewV14,
+  environmentMoveStopPreviewV15,
   environmentMoveStopUpgradeV10ToV11,
   environmentMoveStopUpgradeV11ToV12,
   environmentMoveStopUpgradeV12ToV13,
+  environmentMoveStopUpgradeV13ToV14,
   environmentMoveStopV10,
   environmentMoveStopV11,
   environmentMoveStopV12,
   environmentMoveStopV13,
+  environmentMoveStopV14,
 } from "@traycer/protocol/host/environment/move-contracts";
 
 /**
@@ -217,7 +221,7 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.stopPreview": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: environmentMoveStopPreviewV10,
@@ -239,6 +243,10 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
           contract: environmentMoveStopPreviewV14,
           upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV13ToV14,
         },
+        5: {
+          contract: environmentMoveStopPreviewV15,
+          upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV14ToV15,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -246,7 +254,7 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: environmentMoveStopV10,
@@ -266,6 +274,10 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
           // Only a digest-bearing Confirm can receive sheet_changed. Older
           // Stop requests always upgrade with a null digest.
           responseGrowthProjectionGated: true,
+        },
+        4: {
+          contract: environmentMoveStopV14,
+          upgradeFromPreviousVersion: environmentMoveStopUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},

@@ -219,6 +219,8 @@ const { client } = buildEnvironmentClient({
         },
       ],
       sheetDigest: null,
+      ownershipUnreadable: false,
+      personalBinding: null,
     }),
   },
 });

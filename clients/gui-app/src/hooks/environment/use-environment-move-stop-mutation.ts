@@ -4,6 +4,7 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { STOP_OWNERSHIP_CONFIRM_FLOOR } from "@/components/settings/move/stop-sharing-versions";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import type { HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
@@ -16,6 +17,8 @@ export function useEnvironmentMoveStopMutation(
   return useHostScopedMutationForClient(client, {
     method: "environment.move.stop",
     requiredHostMethodVersion: (request) => {
+      if (request.expectedPersonalBinding !== null)
+        return STOP_OWNERSHIP_CONFIRM_FLOOR;
       if (request.sheetDigest !== null)
         return {
           method: "environment.move.stop",

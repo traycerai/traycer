@@ -883,8 +883,8 @@ const mixedSignIns = [
 ] as const;
 
 describe("environment.move stopPreview@1.3 marks a shared folder", () => {
-  it("keeps 1.3 installed and names 1.4 the latest preview", () => {
-    expect(previewRegistry[1].latestMinor).toBe(4);
+  it("keeps 1.3 installed and names 1.5 the latest preview", () => {
+    expect(previewRegistry[1].latestMinor).toBe(5);
     expect(previewRegistry[1].versions[3].contract.schemaVersion).toEqual(
       previewV13,
     );
@@ -985,8 +985,8 @@ describe("environment.move stopPreview@1.3 marks a shared folder", () => {
 });
 
 describe("environment.move stop@1.2 tells a pressed Skip from an untouched row", () => {
-  it("keeps 1.2 installed and names 1.3 the latest stop", () => {
-    expect(stopRegistry[1].latestMinor).toBe(3);
+  it("keeps 1.2 installed and names 1.4 the latest stop", () => {
+    expect(stopRegistry[1].latestMinor).toBe(4);
     expect(stopRegistry[1].versions[2].contract.schemaVersion).toEqual(stopV12);
     expect(stopRegistry[1].versions[3].contract.schemaVersion).toEqual(stopV13);
   });

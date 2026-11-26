@@ -1,10 +1,12 @@
 import type { ProvidersListResponse } from "@traycer/protocol/host/provider-schemas";
 import { toast } from "sonner";
-import type {
-  EnvironmentMovePersonalProfile,
-  EnvironmentMoveStopResponseV11,
-  EnvironmentMoveStopPreviewResponseV13,
-  EnvironmentMoveStopPreviewResponseV14,
+import {
+  matchesStopPersonalBinding,
+  type EnvironmentMovePersonalProfile,
+  type EnvironmentMoveStopResponseV11,
+  type EnvironmentMoveStopPersonalBinding,
+  type EnvironmentMoveStopPreviewResponseV13,
+  type EnvironmentMoveStopPreviewResponseV14,
 } from "@traycer/protocol/host/environment/move-contracts";
 import { PersonalLeaveAccounts } from "./personal-leave-accounts";
 import { PersonalLeaveSignIn } from "./personal-leave-sign-in";
@@ -25,7 +27,7 @@ import {
   usePersonalLeaveSupport,
 } from "./use-personal-leave";
 import { providerDisplayName } from "@/lib/provider-ordering";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   stopManagedFromPreview,
@@ -39,6 +41,7 @@ import {
   StopSharingSheet,
   type StopPreviewStatus,
 } from "@/components/settings/move/stop-sharing-sheet";
+import { STOP_OWNERSHIP_PREVIEW_FLOOR } from "./stop-sharing-versions";
 import { useEnvironmentMoveStopMutation } from "@/hooks/environment/use-environment-move-stop-mutation";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -50,6 +53,8 @@ interface StopSharingSessionProps {
   readonly hostName: string;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  readonly expectedPersonalBinding?: EnvironmentMoveStopPersonalBinding | null;
+  readonly ownershipPreviewState?: "refused" | "recovered";
 }
 
 export function StopSharingSession(props: StopSharingSessionProps): ReactNode {
@@ -61,7 +66,8 @@ export function StopSharingSession(props: StopSharingSessionProps): ReactNode {
 function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   const [signingIn, setSigningIn] =
     useState<EnvironmentMovePersonalProfile | null>(null);
-  const sheet = useStopSheetPreview(props.client, props.hostId);
+  const expected = props.expectedPersonalBinding ?? null;
+  const sheet = useStopSheetPreview(props, expected);
   const { shown, sheetDigest, personalProfiles, status: previewStatus } = sheet;
   const stop = useEnvironmentMoveStopMutation(props.client);
   const accounts = usePersonalLeaveAccounts(
@@ -102,11 +108,15 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   };
 
   const onStop = (choices: readonly StopChoiceEntry[]): void => {
+    if (previewStatus !== "ready") return;
     const answered = new Set(needsChoice.map(stopRowAddress));
     stop.mutate(
       {
         profileMode: personalProfiles === null ? null : "keep-personal",
         sheetDigest,
+        expectedPersonalBinding:
+          expected === null ? null : sheet.personalBinding,
+        requireUnreadableOwnership: sheet.ownershipUnreadable,
         profileSignIns: personalLeaveSignIns(
           personalProfiles ?? [],
           accounts.states,
@@ -121,7 +131,8 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
         onSuccess: (data) => {
           if (data.outcome === "sheet_changed") {
             setAnsweredBeforeChange(answered);
-            sheet.replace(data.preview);
+            if (expected === null) sheet.replace(data.preview);
+            else void sheet.refreshAfterRefusal();
             return;
           }
           if (data.outcome === "choices_missing") {
@@ -134,7 +145,12 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
           onOpenChange(false);
         },
         onError: () => {
-          if (personalProfiles === null && sheetDigest === null) return;
+          if (
+            personalProfiles === null &&
+            sheetDigest === null &&
+            expected === null
+          )
+            return;
           // Per-mutate callbacks precede the mutation observer's listeners:
           // raise the gate before the settled mutation can enable Stop.
           void sheet.refreshAfterRefusal();
@@ -153,6 +169,14 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
         needsChoice={needsChoice}
         changedRows={changedRows}
         previewStatus={previewStatus}
+        ownershipUnreadable={sheet.ownershipUnreadable}
+        retryOwnershipPreview={
+          expected === null
+            ? undefined
+            : () => {
+                void sheet.refreshAfterRefusal();
+              }
+        }
         confirmPending={stop.isPending}
         personalAccounts={personalAccountsSection({
           rows: personalProfiles,
@@ -181,9 +205,23 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
 }
 
 function useStopSheetPreview(
-  client: HostClient<HostRpcRegistry> | null,
-  hostId: string | null,
+  props: StopSharingSessionProps,
+  expected: EnvironmentMoveStopPersonalBinding | null,
 ) {
+  const { client, hostId, onOpenChange, ownershipPreviewState } = props;
+  const sessionId = useId();
+  const [observed, setObserved] = useState({
+    ownershipPreviewState,
+    revision: 0,
+  });
+  let revision = observed.revision;
+  if (
+    expected !== null &&
+    observed.ownershipPreviewState !== ownershipPreviewState
+  ) {
+    revision += 1;
+    setObserved({ ownershipPreviewState, revision });
+  }
   const offersLeave = usePersonalLeaveSupport(client);
   const supported = useHostMethodSupport(
     hostId,
@@ -191,22 +229,29 @@ function useStopSheetPreview(
   );
   const preview = useHostQuery<HostRpcRegistry, "environment.move.stopPreview">(
     {
-      cacheKeyIdentity: undefined,
+      // Each ownership transition and guarded retry needs its own read.
+      cacheKeyIdentity: expected === null ? undefined : [sessionId, revision],
       client,
       method: "environment.move.stopPreview",
-      params: { profileMode: offersLeave ? "keep-personal" : null },
+      params: {
+        profileMode: offersLeave ? "keep-personal" : null,
+        expectedPersonalBinding: expected,
+      },
       preflight: () => {
         if (offersLeave) requirePersonalLeaveSupport(client);
       },
-      requiredHostMethodVersion: () =>
-        offersLeave
+      requiredHostMethodVersion: () => {
+        if (expected !== null) return STOP_OWNERSHIP_PREVIEW_FLOOR;
+        return offersLeave
           ? {
               method: "environment.move.stopPreview",
               version: { major: 1, minor: 3 },
             }
-          : null,
+          : null;
+      },
       options: {
         enabled: hostId !== null && supported === true,
+        ...(expected === null ? {} : { refetchOnMount: "always" }),
       },
     },
   );
@@ -224,6 +269,13 @@ function useStopSheetPreview(
     }));
   };
   const refreshAfterRefusal = async (): Promise<void> => {
+    if (expected !== null) {
+      setObserved((current) => ({
+        ...current,
+        revision: current.revision + 1,
+      }));
+      return;
+    }
     setRefreshStatus("loading");
     const fresh = await preview.refetch();
     if (fresh.isSuccess) {
@@ -233,16 +285,43 @@ function useStopSheetPreview(
       setRefreshStatus("failed");
     }
   };
-  const shown = replacement?.preview ?? preview.data;
+  const data = preview.data;
+  const bindingChanged =
+    expected !== null &&
+    !preview.isError &&
+    !preview.isFetching &&
+    !preview.isPlaceholderData &&
+    data !== undefined &&
+    !matchesStopPersonalBinding(expected, data.personalBinding);
+  useEffect(() => {
+    if (bindingChanged) onOpenChange(false);
+  }, [bindingChanged, onOpenChange]);
+
+  const guardedPending =
+    expected !== null &&
+    !preview.isError &&
+    (preview.isFetching ||
+      preview.isPlaceholderData ||
+      bindingChanged ||
+      (data !== undefined &&
+        data.ownershipUnreadable !== (ownershipPreviewState === "refused")));
+  const guardedPreview =
+    expected === null || guardedPending || preview.isError ? undefined : data;
+  const shown =
+    expected === null ? (replacement?.preview ?? data) : guardedPreview;
+  let status = refreshStatus ?? stopPreviewStatus(supported, preview);
+  if (expected === null && refreshStatus === null && replacement !== null)
+    status = "ready";
+  if (guardedPending) status = "loading";
   return {
     shown,
     sheetDigest: shown?.sheetDigest ?? null,
+    personalBinding: guardedPreview?.personalBinding ?? null,
+    ownershipUnreadable: guardedPreview?.ownershipUnreadable === true,
     personalProfiles: offersLeave ? (shown?.personalProfiles ?? null) : null,
-    revision: replacement?.revision ?? 0,
-    status:
-      refreshStatus ??
-      (replacement === null ? stopPreviewStatus(supported, preview) : "ready"),
-    refreshing: refreshStatus === "loading",
+    revision: expected === null ? (replacement?.revision ?? 0) : revision,
+    status,
+    refreshing: refreshStatus === "loading" || guardedPending,
     replace,
     refreshAfterRefusal,
   };

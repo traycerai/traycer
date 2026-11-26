@@ -1776,13 +1776,19 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
         "environment.move.stopPreview"
       >(HOST_ID, "environment.move.stopPreview", {
         profileMode: "keep-personal",
+        expectedPersonalBinding: null,
       });
+      const projected = {
+        ...preview([]),
+        ownershipUnreadable: false,
+        personalBinding: null,
+      };
       expect(harness.queryClient.getQueryData(keepPreviewKey)).toEqual(
-        preview([]),
+        projected,
       );
       expect(harness.observedHostRequests).toContainEqual({
         method: "environment.move.stopPreview",
-        params: { profileMode: "keep-personal" },
+        params: { profileMode: "keep-personal", expectedPersonalBinding: null },
         requiredHostMethodVersion: {
           method: "environment.move.stopPreview",
           version: { major: 1, minor: 3 },
@@ -1808,7 +1814,7 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
       );
       expect(harness.observedHostRequests).toHaveLength(hostCallsBeforeRetry);
       expect(harness.queryClient.getQueryData(keepPreviewKey)).toEqual(
-        preview([]),
+        projected,
       );
     },
   );
@@ -1849,6 +1855,8 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
           profileMode: "keep-personal",
           profileSignIns: [],
           sheetDigest: null,
+          expectedPersonalBinding: null,
+          requireUnreadableOwnership: false,
         },
       },
     ]);
