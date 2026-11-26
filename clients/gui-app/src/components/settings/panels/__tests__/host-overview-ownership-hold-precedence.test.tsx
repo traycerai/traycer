@@ -245,7 +245,7 @@ describe("ownership before a current-owner Personal hold", () => {
         }
 
         const pick = useSettingsEnvironmentPickStore.getState().pick;
-        const changes: EnvironmentPick[] = [];
+        const changes: (EnvironmentPick | null)[] = [];
         const stopPick = useSettingsEnvironmentPickStore.subscribe(
           (state, previous) => {
             if (state.pick !== previous.pick) changes.push(state.pick);

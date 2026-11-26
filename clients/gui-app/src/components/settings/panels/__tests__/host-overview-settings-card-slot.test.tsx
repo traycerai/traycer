@@ -1106,39 +1106,39 @@ describe("a computer whose Personal settings are held", () => {
   it.each([
     [
       "a cached Personal binding",
-      () => {
+      (): void => {
         reads.binding.query.data = EXPLICIT_PERSONAL;
       },
     ],
     [
       "the implicit Personal fallback",
-      () => {
+      (): void => {
         reads.binding.query.data = BINDING;
       },
     ],
-    ["a pending binding read", () => undefined],
+    ["a pending binding read", (): void => undefined],
     [
       "an unknown binding method",
-      () => {
+      (): void => {
         reads.bindingSupport = null;
       },
     ],
     [
       "a failed binding read",
-      () => {
+      (): void => {
         reads.bindingFailed = true;
       },
     ],
     [
       "a failed binding read that kept its answer",
-      () => {
+      (): void => {
         reads.binding.query.data = BINDING;
         reads.binding.query.isError = true;
       },
     ],
     [
       "an unsupported binding method",
-      () => {
+      (): void => {
         reads.bindingSupport = false;
       },
     ],
