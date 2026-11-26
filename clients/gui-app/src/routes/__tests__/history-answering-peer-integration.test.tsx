@@ -290,7 +290,7 @@ function HistoryDeleteDispatch(props: {
       type="button"
       data-testid="history-delete-dispatch"
       onClick={() => {
-        void mutation.mutateAsync(props.variables).then(props.onResult);
+        mutation.mutate(props.variables, { onSuccess: props.onResult });
       }}
     >
       Delete
@@ -958,20 +958,28 @@ describe("History routes its loader, hook, and retained pages through one answer
         mutations: { retry: false },
       },
     });
-    const ids = ["personal-local-row", "personal-cloud-row"];
-    const variables = historyDeleteVariables({
-      ids,
-      acceptedPeerId: PERSONAL_HOST_ID,
-      listPeerId: PERSONAL_HOST_ID,
-      homes: [
-        ["personal-local-row", "local"],
-        ["personal-cloud-row", "cloud"],
-      ],
-    });
+    const ids = ["personal-local-row", "personal-page-cloud-row"];
     const messenger = new MockHostMessenger({
       registry: hostRpcRegistry,
       requestId: () => "history-personal-delete-request",
       handlers: {
+        "epic.listTasks": (): ListTasksResponse => ({
+          tasks: [historyTaskLight("personal-page-cloud-row", null, "cloud")],
+          hasMore: false,
+          completeness: {
+            cloudPage: "settled",
+            facets: "server",
+            localRows: "present",
+            sort: "server",
+          },
+        }),
+        "epic.localHistory.read": (): LocalHistoryReadResponse => ({
+          ...emptyLocalHistory,
+          localHomeRows: [
+            historyTaskLight("personal-local-row", null, "local"),
+          ],
+          localRows: "present",
+        }),
         "epic.batchDelete": ({ ids: requestedIds }) => ({
           results: requestedIds.map((taskId) => ({
             taskId,
@@ -987,18 +995,35 @@ describe("History routes its loader, hook, and retained pages through one answer
     const binding = await makeBinding(queryClient, messenger);
     const client = binding.hostClient;
     clientRef.current = client;
-    recordDeleteManifest(PERSONAL_HOST_ID);
+    recordNegotiatedHostManifest(PERSONAL_HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.localHistory.read": { major: 1, minor: 0 },
+      "epic.batchDelete": { major: 1, minor: 1 },
+    });
     setServingPeer({ kind: "computer", hostId: PERSONAL_HOST_ID });
-    const outcome = deferred<BatchDeleteResponse>();
-    renderHistoryDeleteDispatch(
-      queryClient,
-      binding,
-      variables,
-      outcome.resolve,
+    renderHistoryPanel(queryClient, binding);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("epics-list-row-card")).toHaveLength(2),
     );
-
-    fireEvent.click(await screen.findByTestId("history-delete-dispatch"));
-    const result = await outcome.promise;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+    for (const id of ids)
+      fireEvent.click(screen.getByRole("checkbox", { name: `Select ${id}` }));
+    fireEvent.click(screen.getByTestId("epics-list-delete-selected"));
+    fireEvent.click(await screen.findByTestId("delete-tasks-confirm"));
+    await waitFor(() => {
+      const mutation = queryClient
+        .getMutationCache()
+        .getAll()
+        .find((entry) => entry.options.mutationKey?.[0] === "epic.batchDelete");
+      expect(mutation?.state.data).toEqual({
+        results: [
+          { taskId: "personal-local-row", success: true, home: "local" },
+          { taskId: "personal-page-cloud-row", success: true, home: "cloud" },
+        ],
+      });
+    });
 
     expect(
       messenger.calls
@@ -1008,12 +1033,6 @@ describe("History routes its loader, hook, and retained pages through one answer
           ids: (call.params as { readonly ids: ReadonlyArray<string> }).ids,
         })),
     ).toEqual([{ hostId: PERSONAL_HOST_ID, ids }]);
-    expect(result).toEqual({
-      results: [
-        { taskId: "personal-local-row", success: true, home: "local" },
-        { taskId: "personal-cloud-row", success: true, home: "cloud" },
-      ],
-    });
   });
 
   it("sends accepted cloud homes to the pool and refuses computer-only homes after History switches to the pool", async () => {

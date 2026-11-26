@@ -740,12 +740,12 @@ export function useEpicBatchDelete(): UseMutationResult<
           epicTitlesById: ctx.epicTitlesById,
         });
         const poolIds = mixedHistoryPoolIds.get(variables);
-        if (poolIds !== undefined)
+        let cleanupIds = deletedIds;
+        if (poolIds !== undefined) {
           invalidateBatchDeleteHostScopes(queryClient, [POOL_HOST_ID]);
-        const cleanupIds =
-          poolIds === undefined
-            ? deletedIds
-            : deletedIds.filter((id) => !poolIds.includes(id));
+          const deletedThroughPool = new Set(poolIds);
+          cleanupIds = deletedIds.filter((id) => !deletedThroughPool.has(id));
+        }
         const epicToast = withSkippedWorktreeCleanup(
           epicDeleteToastParts({
             failures,
