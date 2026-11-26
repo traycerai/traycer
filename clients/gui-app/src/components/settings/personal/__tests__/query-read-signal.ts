@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 
 export interface QueryReadSignalTarget {
   readonly method: string;
@@ -14,10 +15,6 @@ interface QueryReadSignalEvent {
       readonly status: string;
     };
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function isUnknownArray(value: unknown): value is readonly unknown[] {
