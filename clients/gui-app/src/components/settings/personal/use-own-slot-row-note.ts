@@ -69,11 +69,26 @@ interface OwnSlotPressRef {
   >;
 }
 
+interface OwnSlotRowNoteResult {
+  readonly entries: readonly EnvironmentOwnSlot[];
+  readonly entry: EnvironmentOwnSlot | null;
+  readonly change: (
+    address: OwnSlotAddress,
+    action: "publish" | "usePersonal",
+  ) => Promise<EnvironmentOwnSlotChangeResponse | undefined>;
+  readonly changeCopy: (
+    address: OwnSlotAddress,
+    sourceSelector: string,
+  ) => Promise<EnvironmentOwnSlotChangeResponse | undefined>;
+  readonly disabled: boolean;
+  readonly hostName: string;
+}
+
 /** Reads one exact slot from the Personal page's bound host and owns its write. */
 export function useOwnSlotRowNote(
   target: OwnSlotAddressMatch,
   hostBinding: OwnSlotHostBinding | undefined,
-) {
+): OwnSlotRowNoteResult {
   const page = useContext(PersonalPageContext);
   const binding = resolveOwnSlotHostBinding(page, hostBinding);
   const canRead = useHostSupportsMethod(binding.hostId, OWN_SLOTS);
