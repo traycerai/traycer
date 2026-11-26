@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
@@ -52,6 +53,13 @@ export interface PersonAvatarHarness {
   readonly publishCollaborators: (
     response: ListEpicCollaboratorsResponse,
   ) => void;
+  readonly setCollaboratorAnswer: (
+    answer:
+      | ListEpicCollaboratorsResponse
+      | Promise<ListEpicCollaboratorsResponse>,
+  ) => void;
+  readonly setCollaboratorFailure: (error: HostRpcError | null) => void;
+  readonly setViewer: (userId: string) => void;
   readonly hostClient: HostClient<HostRpcRegistry>;
   readonly wrap: (children: ReactNode) => ReactNode;
   readonly dispose: () => void;
@@ -76,7 +84,10 @@ export function createPersonAvatarHarness(): PersonAvatarHarness {
   // What the mock host answers a list request with, so a surface that does
   // ask (the reply composer's mention picker) cannot overwrite what a test
   // published with an empty list.
-  let served = collaboratorsResponse([]);
+  let served:
+    | ListEpicCollaboratorsResponse
+    | Promise<ListEpicCollaboratorsResponse> = collaboratorsResponse([]);
+  let collaboratorFailure: HostRpcError | null = null;
   let requestCount = 0;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -89,13 +100,22 @@ export function createPersonAvatarHarness(): PersonAvatarHarness {
       handlers: {
         "epic.listCollaborators": () => {
           collaboratorRequests += 1;
+          if (collaboratorFailure !== null) throw collaboratorFailure;
           return served;
         },
       },
     }),
   });
   spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    createRequestContextFixture({
+      identity: {
+        userId: VIEWER_USER_ID,
+        username: VIEWER_USER_ID,
+        providerHandle: null,
+      },
+      origin: "renderer",
+      bearerToken: `tok-${VIEWER_USER_ID}`,
+    }),
   );
   const hostClient = spine.createRequester(mockLocalHostEntry);
   const epicHandle: OpenEpicStoreHandle = openStoreForTest({
@@ -108,6 +128,22 @@ export function createPersonAvatarHarness(): PersonAvatarHarness {
     writeCommand: null,
   });
   epicHandle.store.setState({ durabilityStatus: null });
+  const setViewer = (userId: string): void => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId, userName: userId, email: `${userId}@example.test` },
+        { userId, username: userId },
+        [],
+      );
+    spine.setRequestContext(
+      createRequestContextFixture({
+        identity: { userId, username: userId, providerHandle: null },
+        origin: "renderer",
+        bearerToken: `tok-${userId}`,
+      }),
+    );
+  };
   return {
     queryClient,
     hostClient,
@@ -118,11 +154,18 @@ export function createPersonAvatarHarness(): PersonAvatarHarness {
         epicCollaboratorsQueryKey(
           mockLocalHostEntry.hostId,
           EPIC_ID,
-          VIEWER_USER_ID,
+          useAuthStore.getState().contextMetadata?.userId ?? "",
         ),
         response,
       );
     },
+    setCollaboratorAnswer: (answer) => {
+      served = answer;
+    },
+    setCollaboratorFailure: (error) => {
+      collaboratorFailure = error;
+    },
+    setViewer,
     wrap: (children) => (
       <QueryClientProvider client={queryClient}>
         <EpicSessionContext.Provider value={epicHandle}>
