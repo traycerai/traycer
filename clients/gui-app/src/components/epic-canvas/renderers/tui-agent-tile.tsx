@@ -522,6 +522,7 @@ function TuiAgentTileLive(
       placement: null,
       parentId: null,
       hostId,
+      requiresNamedHost: true,
     });
   }, [epicId, hostId, props.viewTabId]);
   const killTerminal = useTerminalKillFor(

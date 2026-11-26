@@ -52,8 +52,14 @@ import {
 import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import { NewConversationModalBody } from "../new-conversation-modal";
+import {
+  NewConversationModalBody,
+  NewConversationModalHost,
+} from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
+import { appendTerminalQuoteToNewConversationDraft } from "@/components/chat/quote/append-terminal-quote-to-draft";
 
 /**
  * The in-Epic new-conversation modal shares the landing composer's
@@ -313,18 +319,27 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
     readonly sessionHostId: string | null;
   }) => {
     testState.placementInputs.push(input);
+    const target =
+      input.overrideHostId === null
+        ? testState.placement.current
+        : {
+            ...testState.placement.current,
+            resolvedHostId: input.overrideHostId,
+            client: { getActiveHostId: () => input.overrideHostId },
+            hostLabel: "Row computer",
+          };
     return {
       pin: {
         selection: null,
         honoredSelection: null,
         setSelection: testState.recordPlacement,
-        resolvedHostId: testState.placement.current.resolvedHostId,
+        resolvedHostId: target.resolvedHostId,
         isPinned: testState.pinIsPinned.current,
         latchOnFirstUse: () => undefined,
       },
-      target: testState.placement.current,
-      submitTarget: testState.placement.current,
-      hostLabelFor: () => testState.placement.current.hostLabel,
+      target,
+      submitTarget: target,
+      hostLabelFor: () => target.hostLabel,
       followsEffective: testState.followsEffective.current,
     };
   },
@@ -859,6 +874,14 @@ function Harness() {
   );
 }
 
+function ModalHostHarness() {
+  return (
+    <SurfacePresentationBoundary visible focused>
+      <NewConversationModalHost epicId="epic-1" tabId="tab-1" active />
+    </SurfacePresentationBoundary>
+  );
+}
+
 /**
  * The `hostScope` prop of the `<ActiveHostWorkspaceControls>` element the
  * body was handed. `null` when the element is not that component (the arm
@@ -893,6 +916,27 @@ function renderModal(): RenderResult {
   return view;
 }
 
+function renderModalHost(request: {
+  readonly hostId: string | null;
+  readonly parentId?: string | null;
+  readonly requiresNamedHost?: boolean;
+}): RenderResult {
+  const view = render(<ModalHostHarness />, { wrapper: QueryWrapper });
+  act(() => {
+    useNewConversationModalOpenStore.getState().open({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      placement: null,
+      parentId: request.parentId ?? null,
+      hostId: request.hostId,
+      ...(request.requiresNamedHost === undefined
+        ? {}
+        : { requiresNamedHost: request.requiresNamedHost }),
+    });
+  });
+  return view;
+}
+
 function noticeText(): string {
   return screen.getByTestId("composer-host-notice").textContent;
 }
@@ -905,6 +949,7 @@ function draftSurvived(): boolean {
 
 beforeEach(() => {
   testState.createChatClientHostIds.length = 0;
+  useNewConversationModalOpenStore.getState().close();
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode("epic-1", "chat");
@@ -956,6 +1001,8 @@ afterEach(() => {
   testState.poolDirectoryListeners.clear();
   useAuthStore.setState({ profile: null, contextMetadata: null });
   useNewConversationModalStore.getState().resetForTests();
+  useNewConversationModalOpenStore.getState().close();
+  useAddHostDialogStore.getState().closeDialog();
   toastMocks.toastRepointedStagingReset.mockReset();
 });
 
@@ -1184,49 +1231,339 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     ).toEqual(restored.workspace);
   });
 
-  it("keeps a row-scoped new-chat box on its named host while offline and after it becomes ready", () => {
-    testState.overrideHostId = "computer-row";
+  it("restores the named modal box when its computer becomes ready before a press", async () => {
+    const namedHostId = "computer-row";
+    testState.poolActionsEnabled = true;
+    testState.taskSessionHostId = POOL_HOST_ID;
     testState.placement.current = {
-      resolvedHostId: "computer-row",
-      client: { getActiveHostId: () => "computer-row" },
+      resolvedHostId: POOL_HOST_ID,
+      client: { getActiveHostId: () => POOL_HOST_ID },
+      hostLabel: "Traycer cloud",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: namedHostId, kind: "remote", teamOwned: false }],
+      pool: "ready",
+    });
+    authority.openPool();
+
+    const view = renderModalHost({
+      hostId: namedHostId,
+      parentId: "parent-chat",
+    });
+    expect(testState.placementInputs.at(-1)).toEqual({
+      epicId: "epic-1",
+      overrideHostId: namedHostId,
+      sessionHostId: POOL_HOST_ID,
+    });
+    act(() => {
+      authority.connectComputer(namedHostId);
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeTruthy(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      hostId: namedHostId,
+      parentId: "parent-chat",
+    });
+    expect(testState.bodySnapshots.at(-1)?.initialContent).toEqual(
+      DIRTY_CONTENT,
+    );
+    expect(testState.createChat).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("releases a cold named modal synchronously, starts once, and restores its quoted draft on the ready sandbox", async () => {
+    const namedHostId = "computer-row";
+    const sandboxHostId = "personal-sandbox";
+    testState.poolActionsEnabled = true;
+    testState.poolUser = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 100,
+      }),
+      [],
+    );
+    testState.poolCatalogue = readinessCatalogue({
+      warm: 0,
+      coldCreateMeasuredMs: 60_000,
+    });
+    testState.taskSessionHostId = POOL_HOST_ID;
+    testState.placement.current = {
+      resolvedHostId: POOL_HOST_ID,
+      client: { getActiveHostId: () => POOL_HOST_ID },
+      hostLabel: "Traycer cloud",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    useAuthStore.setState({
+      profile: {
+        userId: "fake-user",
+        userName: "Test User",
+        email: "test@example.invalid",
+      },
+    });
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: namedHostId, kind: "remote", teamOwned: false }],
+      pool: "ready",
+    });
+    authority.openPool();
+    testState.poolCreateSandbox.mockImplementation(() => {
+      testState.poolEntry = sandboxHostEntry(sandboxHostId, null);
+      return Promise.resolve({
+        kind: "ok",
+        accepted: {
+          sandboxId: "sandbox-personal",
+          hostId: sandboxHostId,
+          sandbox: sandboxSummaryFixture({
+            id: "sandbox-personal",
+            hostId: sandboxHostId,
+            state: "creating",
+            wakeBudgetMs: 60_000,
+            environmentId: null,
+          }),
+        },
+      });
+    });
+    testState.poolActivate.mockImplementation(async (option) => {
+      await act(async () => {
+        authority.publishFleet(
+          [
+            ...authority.fleetComputers(),
+            { hostId: sandboxHostId, kind: "sandbox", teamOwned: false },
+          ],
+          null,
+        );
+        authority.connectComputer(sandboxHostId);
+        await authority.activate(option.hostId);
+      });
+      return "saved";
+    });
+    testState.recordPlacement.mockImplementation((hostId) => {
+      testState.placement.current = {
+        resolvedHostId: hostId,
+        client: { getActiveHostId: () => hostId },
+        hostLabel: "Personal sandbox",
+        isPinned: true,
+        namedHostDead: false,
+      };
+    });
+    const folder: WorkspaceFolderInfo = {
+      path: "/parent-project",
+      name: "parent-project",
+      repoIdentifier: null,
+      hostId: namedHostId,
+    };
+    useNewConversationModalStore
+      .getState()
+      .addResolvedFolders("epic-1", emptyLandingDraftWorkspaceSnapshot(), [
+        folder,
+      ]);
+    appendTerminalQuoteToNewConversationDraft({
+      epicId: "epic-1",
+      terminalId: "terminal-1",
+      terminalTitle: "Test shell",
+      terminalCwd: "/repo",
+      text: "quoted output\nwith indentation",
+    });
+    const quotedContent =
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.content;
+    if (quotedContent === undefined || quotedContent === null) {
+      throw new Error("terminal quote was not added to the modal draft");
+    }
+    const restoredPatch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"];
+    if (restoredPatch === undefined || restoredPatch.workspace === null) {
+      throw new Error("new-chat folder was not kept in the modal draft");
+    }
+
+    const view = renderModalHost({
+      hostId: namedHostId,
+      parentId: "parent-chat",
+    });
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    expect(testState.bodySnapshots).toHaveLength(0);
+    expect(useNewConversationModalOpenStore.getState().request).toEqual({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      placement: null,
+      parentId: "parent-chat",
+      hostId: namedHostId,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start a sandbox" }));
+    expect(useNewConversationModalOpenStore.getState().request).toEqual({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      placement: null,
+      parentId: "parent-chat",
+      hostId: null,
+    });
+    expect(testState.poolCreateSandbox).toHaveBeenCalledTimes(1);
+    expect(testState.poolCreateSandbox.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ createdByHostId: null, createdByTaskId: null }),
+    );
+    await waitFor(() =>
+      expect(testState.poolActivate).toHaveBeenCalledTimes(1),
+    );
+    expect(testState.poolActivate.mock.calls[0]?.[0].hostId).toBe(
+      sandboxHostId,
+    );
+    await waitFor(() =>
+      expect(testState.recordPlacement).toHaveBeenCalledExactlyOnceWith(
+        sandboxHostId,
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeTruthy(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    expect(testState.bodySnapshots.at(-1)).toEqual({
+      composerMode: "chat",
+      initialContent: quotedContent,
+    });
+    expect(restoredPatch.workspace.folders).toEqual([folder.path]);
+    expect(
+      workspaceControlsSeed(testState.workspaceControlsElements.at(-1)),
+    ).toEqual(restoredPatch.workspace);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("releases a named modal before opening the usual computer chooser", () => {
+    const namedHostId = "computer-row";
+    testState.poolActionsEnabled = true;
+    testState.placement.current = {
+      resolvedHostId: POOL_HOST_ID,
+      client: { getActiveHostId: () => POOL_HOST_ID },
+      hostLabel: "Traycer cloud",
+      isPinned: false,
+      namedHostDead: false,
+    };
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: namedHostId, kind: "remote", teamOwned: false }],
+      pool: "ready",
+    });
+    authority.openPool();
+
+    renderModalHost({ hostId: namedHostId });
+    fireEvent.click(screen.getByRole("button", { name: "Connect a computer" }));
+
+    expect(useNewConversationModalOpenStore.getState().request).toEqual({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      placement: null,
+      parentId: null,
+      hostId: null,
+    });
+    expect(useAddHostDialogStore.getState()).toMatchObject({ open: true });
+    expect(testState.poolCreateSandbox).not.toHaveBeenCalled();
+    expect(draftSurvived()).toBe(true);
+  });
+
+  it("keeps a modal request that requires its named computer on the existing fixed-host refusal", async () => {
+    const namedHostId = "computer-row";
+    testState.poolActionsEnabled = true;
+    testState.taskSessionHostId = POOL_HOST_ID;
+    testState.placement.current = {
+      resolvedHostId: namedHostId,
+      client: { getActiveHostId: () => namedHostId },
       hostLabel: "Row computer",
       isPinned: false,
       namedHostDead: true,
     };
     const authority = mountTestSelectionAuthority({
-      hosts: [{ hostId: "computer-row", kind: "remote", teamOwned: false }],
-      savedPick: "computer-row",
-      readyComputers: ["computer-row"],
+      hosts: [{ hostId: namedHostId, kind: "remote", teamOwned: false }],
+      pool: "ready",
     });
-    authority.goCold("computer-row");
+    authority.openPool();
 
-    const view = renderModal();
-    expect(testState.placementInputs.at(-1)).toEqual({
-      epicId: "epic-1",
-      overrideHostId: "computer-row",
-      sessionHostId: "host-session",
-    });
-    expect(testState.bodySubmit).not.toBeNull();
+    renderModalHost({ hostId: namedHostId, requiresNamedHost: true });
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Connect a computer" }),
     ).toBeNull();
-    act(() => testState.bodySubmit?.());
-    expect(noticeText()).toContain("Row computer is offline.");
-    expect(testState.createChat).not.toHaveBeenCalled();
+    act(() => testState.installEditor?.());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    testState.placement.current = {
-      ...testState.placement.current,
-      namedHostDead: false,
-    };
-    act(() => {
-      authority.connectComputer("computer-row");
-      authority.finishReturnDamping();
-    });
-    view.rerender(<Harness />);
-    act(() => testState.bodySubmit?.());
-    expect(testState.createChat).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ hostId: "computer-row" }),
+    await waitFor(() =>
+      expect(noticeText()).toContain("Row computer is offline."),
     );
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      hostId: namedHostId,
+      requiresNamedHost: true,
+    });
+  });
+
+  it("keeps the fixed-host composer and its offline refusal when a computer serves the app", async () => {
+    const namedHostId = "computer-row";
+    const servingHostId = "serving-computer";
+    testState.poolActionsEnabled = true;
+    testState.placement.current = {
+      resolvedHostId: namedHostId,
+      client: { getActiveHostId: () => namedHostId },
+      hostLabel: "Row computer",
+      isPinned: false,
+      namedHostDead: true,
+    };
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: namedHostId, kind: "remote", teamOwned: false },
+        { hostId: servingHostId, kind: "remote", teamOwned: false },
+      ],
+      savedPick: servingHostId,
+      readyComputers: [servingHostId],
+      pool: "offline",
+    });
+    expect(authority.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: servingHostId,
+    });
+
+    const view = renderModalHost({ hostId: namedHostId });
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    act(() => testState.installEditor?.());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(noticeText()).toContain("Row computer is offline."),
+    );
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(useNewConversationModalOpenStore.getState().request?.hostId).toBe(
+      namedHostId,
+    );
+    view.unmount();
   });
 
   it.each(["connecting", "pool-session"] as const)(

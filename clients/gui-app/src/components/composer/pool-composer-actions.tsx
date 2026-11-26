@@ -63,6 +63,8 @@ interface PoolComposerActionsProps {
   readonly place: (hostId: string) => void;
   readonly watchPlacement: HandoffOwnerWatch | null;
   readonly originatingChatHostId?: string;
+  /** Release a caller-named placement only when this gesture can act. */
+  readonly releaseNamedHost?: () => boolean;
 }
 
 type PoolSandboxAuth = HostRuntimeBinding<HostRpcRegistry>["auth"];
@@ -107,10 +109,12 @@ function claimSandboxFlight(
   auth: PoolSandboxAuth,
   surfaceKey: string,
   current: () => boolean,
+  releaseNamedHost: (() => boolean) | undefined,
 ): (() => void) | null {
   if (!current()) return null;
   const active = flights.get(auth) ?? new Map<string, SandboxFlight>();
   if (active.get(surfaceKey)?.isCurrent()) return null;
+  if (releaseNamedHost?.() === false) return null;
   const flight = { isCurrent: current };
   flights.set(auth, active);
   active.set(surfaceKey, flight);
@@ -155,6 +159,7 @@ export function PoolComposerActions(
         type="button"
         variant="outline"
         onClick={() => {
+          if (props.releaseNamedHost?.() === false) return;
           const knownHostIds = binding?.directory.knownHostIds() ?? [];
           useAddHostDialogStore.getState().openDialog(knownHostIds);
           openSettings({
@@ -181,6 +186,7 @@ function StartSandbox(
     binding,
     epicId,
     originatingChatHostId,
+    releaseNamedHost,
     place,
     surfaceKey,
     watchPlacement,
@@ -229,10 +235,20 @@ function StartSandbox(
     if (shape === null) return;
     const operation = auth.environmentCloud();
     const current = operation.onOriginSignIn;
-    const release = claimSandboxFlight(auth, surfaceKey, current);
+    const release = claimSandboxFlight(
+      auth,
+      surfaceKey,
+      current,
+      releaseNamedHost,
+    );
     if (release === null) return;
     const personal = configuration.kind === "personal";
-    const placement = watchTeamPlacement(personal, place, watchPlacement);
+    const placePersonal = releaseNamedHost !== undefined;
+    const placement = watchTeamPlacement(
+      personal && !placePersonal,
+      place,
+      watchPlacement,
+    );
     try {
       const environmentId =
         configuration.kind === "team"
@@ -266,6 +282,7 @@ function StartSandbox(
               current,
               directory,
               personal,
+              placePersonal,
               activate: makeActiveWithWakeNotice,
               openTransport,
               place: placement.place,

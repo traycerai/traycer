@@ -108,6 +108,8 @@ export interface PerWindowLandingDraft {
    * Present only while the draft has one.
    */
   readonly namedHostId?: string;
+  /** Whether the draft's content requires the named host. */
+  readonly requiresNamedHost?: boolean;
 }
 
 export interface PerWindowSnapshot {

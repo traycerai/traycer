@@ -233,7 +233,8 @@ describe("useTerminalQuoteActions host routing", () => {
     // until the user sends - which is what stopped this control from leaving
     // an empty chat behind on every dismissed quote.
     expect(messengerRef.value?.calls).toHaveLength(0);
-    expect(useNewConversationModalOpenStore.getState().request).toEqual({
+    const openedRequest = useNewConversationModalOpenStore.getState().request;
+    expect(openedRequest).toEqual({
       epicId: EPIC_ID,
       tabId: TAB_ID,
       placement: null,
@@ -248,6 +249,23 @@ describe("useTerminalQuoteActions host routing", () => {
     expect(JSON.stringify(draft?.content)).toContain("sourcedQuote");
     // No remembered caret to drop the user above the quote they just took.
     expect(draft?.selection).toBeNull();
+
+    if (openedRequest === null) {
+      throw new Error("terminal quote did not open the new-conversation modal");
+    }
+    expect(
+      useNewConversationModalOpenStore
+        .getState()
+        .releaseNamedHost(openedRequest),
+    ).toBe(true);
+    expect(useNewConversationModalOpenStore.getState().request).toEqual({
+      ...openedRequest,
+      hostId: null,
+    });
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID],
+    ).toBe(draft);
+    expect(JSON.stringify(draft?.content)).toContain("drwxr-xr-x");
   });
 
   /**
