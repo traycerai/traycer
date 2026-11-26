@@ -56,6 +56,7 @@ import {
   createVerifiedTeamAuthService,
   resetTeamPageHarness,
   teamProviderKeyHttpBoundary,
+  TEAM_PROVIDER_KEY_ENVIRONMENT_ID,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import {
   installSignInRequestFetchHarness,
@@ -124,8 +125,10 @@ vi.mock("@/lib/analytics", async (importOriginal) => {
 });
 
 const API_KEY = "synthetic-provider-key";
-const ENVIRONMENT_ID = "env-a";
-const EXPECTED_ENVIRONMENT_ID = "env-expected";
+const ENVIRONMENT_ID = TEAM_PROVIDER_KEY_ENVIRONMENT_ID;
+const EXPECTED_ENVIRONMENT_ID = "env_00000000000000000000000001";
+const TEST_HOST_ID = "00000000-0000-4000-8000-000000000123";
+const TEST_HOST_ENTRY = { ...mockLocalHostEntry, hostId: TEST_HOST_ID };
 const STATE = providerMutationCliStateSchemaV21.parse({
   ...hostV115MutationV20Fixtures.minimalStatesByProviderId.codex,
   profiles: [],
@@ -137,6 +140,7 @@ const BEGIN_RESPONSE = providersBeginApiKeyChangeResponseSchema.parse({
 });
 
 interface Rig {
+  readonly setBeginError: (error: HostRpcError | null) => void;
   readonly client: HostClient<typeof hostRpcRegistry>;
   readonly context: RequestContext;
   readonly messenger: MockHostMessenger<typeof hostRpcRegistry>;
@@ -164,7 +168,9 @@ beforeEach(async () => {
   mocks.authService.mockReturnValue(authService);
   teamProviderKeyHttpBoundary.matchesKey = (key) => key === API_KEY;
   teamProviderKeyHttpBoundary.status = 200;
+  teamProviderKeyHttpBoundary.environmentId = TEAM_PROVIDER_KEY_ENVIRONMENT_ID;
   teamProviderKeyHttpBoundary.calls.length = 0;
+  teamProviderKeyHttpBoundary.committedSetCount = 0;
 });
 
 function makeRig(
@@ -178,9 +184,10 @@ function makeRig(
   beginError: HostRpcError | null,
   settleError: HostRpcError | null,
 ): Rig {
+  let currentBeginError = beginError;
   const handlers: MockHandlerMap<typeof hostRpcRegistry> = {
     "providers.beginApiKeyChange": () => {
-      if (beginError !== null) throw beginError;
+      if (currentBeginError !== null) throw currentBeginError;
       return BEGIN_RESPONSE;
     },
     "providers.settleApiKeyChange": () => {
@@ -200,7 +207,7 @@ function makeRig(
     handlers,
     requestId: () => "request-synthetic",
   });
-  const directory = new Map([[mockLocalHostEntry.hostId, mockLocalHostEntry]]);
+  const directory = new Map([[TEST_HOST_ENTRY.hostId, TEST_HOST_ENTRY]]);
   const invalidator: IHostQueryInvalidator = {
     invalidateHostScope: () => undefined,
   };
@@ -223,9 +230,16 @@ function makeRig(
     cloudAuthorized: true,
   });
   client.setRequestContext(context);
-  const requester = client.createRequesterForHostId(mockLocalHostEntry.hostId);
+  const requester = client.createRequesterForHostId(TEST_HOST_ENTRY.hostId);
   mocks.hostClient.mockReturnValue(requester);
-  const rig = { client, context, messenger };
+  const rig: Rig = {
+    setBeginError: (error) => {
+      currentBeginError = error;
+    },
+    client,
+    context,
+    messenger,
+  };
   rigs.push(rig);
   return rig;
 }
@@ -246,7 +260,7 @@ function hasProviderKeyRequest(
 }
 
 function retainedObjectContainsKey(value: unknown): boolean {
-  const seen = new WeakSet<object>();
+  const seen = new WeakSet();
   function contains(current: unknown): boolean {
     if (typeof current === "string") return current.includes(API_KEY);
     if (typeof current !== "object" || current === null) return false;
@@ -301,6 +315,18 @@ function mutationStatesContainKey(queryClient: QueryClient): boolean {
     .getMutationCache()
     .getAll()
     .some((mutation) => retainedObjectContainsKey(mutation.state));
+}
+
+function awaitTerminalMutation(queryClient: QueryClient): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+      if (event.type !== "updated") return;
+      if (event.action.type !== "error" && event.action.type !== "success")
+        return;
+      unsubscribe();
+      resolve();
+    });
+  });
 }
 
 function hostMethodCalls(rig: Rig, method: string): number {
@@ -383,7 +409,7 @@ function SettingsHarness(props: {
   const [draft, setDraft] = useState(props.stored ? "" : API_KEY);
   return (
     <ProviderApiKeySection
-      hostId={mockLocalHostEntry.hostId}
+      hostId={TEST_HOST_ENTRY.hostId}
       state={props.stored ? storedApiKeyState("cursor") : apiKeyState("cursor")}
       draft={draft}
       onDraftChange={setDraft}
@@ -465,6 +491,158 @@ afterEach(() => {
 });
 
 describe("provider API-key change Settings flow", () => {
+  it("keeps the masked draft editable when Account Save's Begin is rejected as offline", async () => {
+    const offline = new HostRpcError({
+      code: "RPC_ERROR",
+      message: "Connect to change this key.",
+      requestId: "request-synthetic",
+      method: "providers.beginApiKeyChange",
+      fatalDetails: null,
+    });
+    const rig = makeRig("unavailable", offline, null);
+    mocks.mobileApp = false;
+    const queryClient = renderSettings(false, null, null);
+    const committedSetsAtPress = teamProviderKeyHttpBoundary.committedSetCount;
+    const beforeBegin = hostMethodCalls(rig, "providers.beginApiKeyChange");
+    const beforePut = teamProviderKeyHttpBoundary.calls.length;
+    const terminal = awaitTerminalMutation(queryClient);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await terminal;
+    });
+
+    const hostCallsAfterTerminal = [...rig.messenger.calls];
+    const input = screen.getByLabelText("API key");
+    expect(
+      input instanceof HTMLInputElement &&
+        input.type === "password" &&
+        !input.disabled &&
+        !input.readOnly &&
+        input.value === API_KEY,
+    ).toBe(true);
+    expect(hostMethodCalls(rig, "providers.beginApiKeyChange")).toBe(
+      beforeBegin + 1,
+    );
+    expect(hostMethodCalls(rig, "providers.settleApiKeyChange")).toBe(0);
+    expect(hostMethodCalls(rig, "providers.setApiKey")).toBe(0);
+    expect(teamProviderKeyHttpBoundary.calls).toHaveLength(beforePut);
+    expect(
+      rig.messenger.calls.find(
+        (call) => call.method === "providers.beginApiKeyChange",
+      )?.params,
+    ).toMatchObject({ providerId: "cursor" });
+
+    vi.useFakeTimers();
+    act(() => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    rig.setBeginError(null);
+    teamProviderKeyHttpBoundary.status = 200;
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      await vi.runAllTimersAsync();
+    });
+    expect(hostMethodCalls(rig, "providers.beginApiKeyChange")).toBe(
+      beforeBegin + 1,
+    );
+    expect(teamProviderKeyHttpBoundary.calls).toHaveLength(beforePut);
+    expect(rig.messenger.calls).toEqual(hostCallsAfterTerminal);
+    expect(teamProviderKeyHttpBoundary.committedSetCount).toBe(
+      committedSetsAtPress,
+    );
+    const recoveredInput = screen.getByLabelText("API key");
+    expect(
+      recoveredInput instanceof HTMLInputElement &&
+        recoveredInput.type === "password" &&
+        !recoveredInput.disabled &&
+        !recoveredInput.readOnly &&
+        recoveredInput.value === API_KEY,
+    ).toBe(true);
+    fireEvent.change(recoveredInput, {
+      target: { value: "synthetic-edited-key" },
+    });
+    expect(apiKeyDraft()).toBe("synthetic-edited-key");
+    expect(rig.messenger.calls).toEqual(hostCallsAfterTerminal);
+    expect(teamProviderKeyHttpBoundary.calls).toHaveLength(beforePut);
+    expect(teamProviderKeyHttpBoundary.committedSetCount).toBe(
+      committedSetsAtPress,
+    );
+  });
+
+  it("keeps the masked draft editable when the cached broker PUT never commits", async () => {
+    const rig = makeRig("unavailable", null, null);
+    teamProviderKeyHttpBoundary.status = 503;
+    mocks.mobileApp = false;
+    const queryClient = renderSettings(false, null, null);
+    const committedSetsAtPress = teamProviderKeyHttpBoundary.committedSetCount;
+    const beforeBegin = hostMethodCalls(rig, "providers.beginApiKeyChange");
+    const terminal = awaitTerminalMutation(queryClient);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await terminal;
+    });
+
+    const input = screen.getByLabelText("API key");
+    expect(
+      input instanceof HTMLInputElement &&
+        input.type === "password" &&
+        !input.disabled &&
+        !input.readOnly &&
+        input.value === API_KEY,
+    ).toBe(true);
+    expect(hostMethodCalls(rig, "providers.beginApiKeyChange")).toBe(
+      beforeBegin + 1,
+    );
+    expect(teamProviderKeyHttpBoundary.calls).toHaveLength(1);
+    expect(hasProviderKeyRequest("set", true)).toBe(true);
+    expect(hostMethodCalls(rig, "providers.settleApiKeyChange")).toBe(0);
+    expect(hostMethodCalls(rig, "providers.setApiKey")).toBe(0);
+    expect(
+      rig.messenger.calls.find(
+        (call) => call.method === "providers.beginApiKeyChange",
+      )?.params,
+    ).toMatchObject({ providerId: "cursor" });
+
+    const hostCallsAtPress = [...rig.messenger.calls];
+    const beforeRecoveryCalls = teamProviderKeyHttpBoundary.calls.length;
+    vi.useFakeTimers();
+    act(() => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    teamProviderKeyHttpBoundary.status = 200;
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      await vi.runAllTimersAsync();
+    });
+    expect(hostMethodCalls(rig, "providers.beginApiKeyChange")).toBe(
+      beforeBegin + 1,
+    );
+    expect(teamProviderKeyHttpBoundary.calls).toHaveLength(beforeRecoveryCalls);
+    expect(rig.messenger.calls).toEqual(hostCallsAtPress);
+    expect(teamProviderKeyHttpBoundary.committedSetCount).toBe(
+      committedSetsAtPress,
+    );
+    const recoveredInput = screen.getByLabelText("API key");
+    expect(
+      recoveredInput instanceof HTMLInputElement &&
+        recoveredInput.type === "password" &&
+        !recoveredInput.disabled &&
+        !recoveredInput.readOnly &&
+        recoveredInput.value === API_KEY,
+    ).toBe(true);
+    fireEvent.change(recoveredInput, {
+      target: { value: "synthetic-edited-key" },
+    });
+    expect(apiKeyDraft()).toBe("synthetic-edited-key");
+    expect(rig.messenger.calls).toEqual(hostCallsAtPress);
+    expect(teamProviderKeyHttpBoundary.calls).toHaveLength(beforeRecoveryCalls);
+    expect(teamProviderKeyHttpBoundary.committedSetCount).toBe(
+      committedSetsAtPress,
+    );
+  });
+
   it.each([
     {
       name: "HTTP accepted and settlement installed",
@@ -714,7 +892,7 @@ describe("provider API-key change Settings flow", () => {
   it("keeps the draft on environment drift and invalidates the host list and status", async () => {
     const rig = makeRig("installed", null, null);
     const queryClient = renderSettings(false, EXPECTED_ENVIRONMENT_ID, "Team");
-    const hostId = mockLocalHostEntry.hostId;
+    const hostId = TEST_HOST_ENTRY.hostId;
     const plan = readProcessHostRpcTierPlan();
     const providersListKey = hostQueryKeys.methodScope(
       hostRpcServingTierHostId("providers.list", hostId, plan, null),
