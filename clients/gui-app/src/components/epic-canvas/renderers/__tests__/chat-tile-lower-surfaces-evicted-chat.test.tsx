@@ -29,7 +29,11 @@ import type { ActivationOutcome } from "@/components/settings/host-scope/use-hos
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { ChatStateLineContext } from "@/components/epic-canvas/renderers/chat-state-line";
+import {
+  ChatSandboxFooterBlocksComposerContext,
+  ChatStateLineContext,
+} from "@/components/epic-canvas/renderers/chat-state-line";
+import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sandbox-state-line";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -98,12 +102,26 @@ const poolActionHarness = vi.hoisted(() => {
     openSettings: vi.fn(),
   };
 });
-const chatSandboxStateHarness = vi.hoisted(() => ({
-  task: { kind: "other" } as TaskSandboxHost,
-  sandbox: null as SandboxSummary | null,
-  entry: null as HostDirectoryEntry | null,
-  reachable: false,
-}));
+const chatSandboxStateHarness = vi.hoisted(
+  (): {
+    task: TaskSandboxHost;
+    sandbox: SandboxSummary | null;
+    entry: HostDirectoryEntry | null;
+    reachable: boolean;
+    configurations: SandboxConfigurations;
+  } => ({
+    task: { kind: "other" },
+    sandbox: null,
+    entry: null,
+    reachable: false,
+    configurations: {
+      configurations: [],
+      teamEnvironmentIds: new Set(),
+      complete: false,
+      personalEnvironmentId: null,
+    },
+  }),
+);
 vi.mock("@/components/chat/composer/chat-composer", () => ({
   ChatComposer: (props: {
     readonly taskId: string;
@@ -244,12 +262,7 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-configurations")
     >()),
-    useSandboxConfigurations: (): SandboxConfigurations => ({
-      configurations: [],
-      teamEnvironmentIds: new Set(),
-      complete: true,
-      personalEnvironmentId: null,
-    }),
+    useSandboxConfigurations: () => chatSandboxStateHarness.configurations,
   }),
 );
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
@@ -513,45 +526,71 @@ const MOVING_STATE_CASES: ReadonlyArray<{
   readonly name: string;
   readonly state: Extract<ChatSandboxState, { kind: "moving" }>["state"];
   readonly displayName: string;
+  readonly stateWord: string;
   readonly expectedLine: string;
 }> = [
   {
     name: "creating",
     state: "creating",
     displayName: "moving sandbox",
+    stateWord: "Creating",
     expectedLine: "Creating moving sandbox · pending",
   },
   {
     name: "resuming",
     state: "resuming",
     displayName: "moving sandbox",
+    stateWord: "Resuming",
     expectedLine: "Resuming moving sandbox · pending",
   },
   {
     name: "starting",
     state: "starting",
     displayName: "moving sandbox",
+    stateWord: "Starting",
     expectedLine: "Starting moving sandbox · pending",
   },
   {
     name: "suspending",
     state: "suspending",
     displayName: "moving sandbox",
+    stateWord: "Suspending",
     expectedLine: "Suspending moving sandbox · pending",
   },
   {
     name: "stopping",
     state: "stopping",
     displayName: "moving sandbox",
+    stateWord: "Stopping",
     expectedLine: "Stopping moving sandbox · pending",
   },
   {
     name: "destroying",
     state: "destroying",
     displayName: "moving sandbox",
+    stateWord: "Destroying",
     expectedLine: "Destroying moving sandbox · pending",
   },
 ];
+
+const FROZEN_MOVING_STATE_CASES = MOVING_STATE_CASES.flatMap(
+  ({ name, state, stateWord }) => [
+    {
+      name: `${name} with unresolved billing configuration`,
+      state,
+      resolvedConfiguration: false,
+      expectedSlotLine: "frozen busy sandbox is suspended",
+      expectedFooterLine: null,
+    },
+    {
+      name: `${name} with resolved billing configuration`,
+      state,
+      resolvedConfiguration: true,
+      expectedSlotLine: null,
+      expectedFooterLine: `${stateWord} · Out of credits`,
+    },
+  ],
+);
 
 beforeEach(() => {
   window.localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
@@ -559,6 +598,12 @@ beforeEach(() => {
   chatSandboxStateHarness.sandbox = null;
   chatSandboxStateHarness.entry = null;
   chatSandboxStateHarness.reachable = false;
+  chatSandboxStateHarness.configurations = {
+    configurations: [],
+    teamEnvironmentIds: new Set(),
+    complete: false,
+    personalEnvironmentId: null,
+  };
   poolActionHarness.directoryEntry = null;
   poolActionHarness.directoryListeners.clear();
   poolActionHarness.auth.createSandbox.mockReset();
@@ -619,11 +664,20 @@ function ResolvedChatLowerSurface(props: {
     environmentOwned: false,
   });
   const stateLine = chatSandboxStateLine(view.line, null);
+  const footerBlocksComposer =
+    view.line?.place === "footer" && !view.line.allowsPoolActions;
 
   return (
-    <ChatStateLineContext.Provider value={stateLine}>
-      <ChatLowerInteractionSurfaces {...props.lower} />
-    </ChatStateLineContext.Provider>
+    <>
+      <ChatSandboxFooterBlocksComposerContext.Provider
+        value={footerBlocksComposer}
+      >
+        <ChatStateLineContext.Provider value={stateLine}>
+          <ChatLowerInteractionSurfaces {...props.lower} />
+        </ChatStateLineContext.Provider>
+      </ChatSandboxFooterBlocksComposerContext.Provider>
+      <ChatSandboxFooter line={view.line} />
+    </>
   );
 }
 
@@ -755,7 +809,7 @@ describe("the composer of an evicted chat the pool serves", () => {
   it.each(MOVING_STATE_CASES)(
     "shows the $name resolver line without pool controls or a create request",
     ({ state, displayName, expectedLine }) => {
-      mountColdChatOwner("remote");
+      mountColdChatOwner("sandbox");
       chatSandboxStateHarness.sandbox = sandboxSummaryFixture({
         hostId: "owner-computer",
         state,
@@ -779,6 +833,64 @@ describe("the composer of an evicted chat the pool serves", () => {
       ).toBeNull();
       expect(poolActionHarness.auth.createSandbox).not.toHaveBeenCalled();
       expect(screen.queryByTestId("composer-stub")).toBeNull();
+    },
+  );
+
+  it.each(FROZEN_MOVING_STATE_CASES)(
+    "keeps frozen busy-row copy and blocks the cold-pool composer for $name",
+    ({
+      state,
+      resolvedConfiguration,
+      expectedSlotLine,
+      expectedFooterLine,
+    }) => {
+      mountColdChatOwner("sandbox");
+      chatSandboxStateHarness.sandbox = sandboxSummaryFixture({
+        hostId: "owner-computer",
+        state,
+        frozen: true,
+        displayName: "frozen busy sandbox",
+        environmentId: "team-environment",
+      });
+      if (resolvedConfiguration) {
+        chatSandboxStateHarness.configurations = {
+          configurations: [
+            {
+              kind: "team",
+              teamId: "test-team",
+              teamName: "Acme",
+              environmentId: "team-environment",
+            },
+          ],
+          teamEnvironmentIds: new Set(["team-environment"]),
+          complete: true,
+          personalEnvironmentId: null,
+        };
+      }
+      const lower = props({
+        ...evictedAccess(false),
+        ownerHostId: "owner-computer",
+      });
+      render(<ResolvedChatLowerSurface lower={lower} />);
+
+      if (expectedSlotLine !== null) {
+        expect(screen.getByText(expectedSlotLine)).toBeTruthy();
+      }
+      if (expectedFooterLine !== null) {
+        expect(screen.getByText(expectedFooterLine)).toBeTruthy();
+        expect(screen.getByText("Acme's credits ran out.")).toBeTruthy();
+      }
+      expect(
+        screen.queryByRole("button", { name: "Start a sandbox" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Host: none selected" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Connect a computer" }),
+      ).toBeNull();
+      expect(screen.queryByTestId("composer-stub")).toBeNull();
+      expect(poolActionHarness.auth.createSandbox).not.toHaveBeenCalled();
     },
   );
 

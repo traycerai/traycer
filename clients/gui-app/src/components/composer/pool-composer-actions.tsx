@@ -7,6 +7,7 @@ import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-clie
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   type SandboxCatalogue,
+  type SandboxListResponse,
 } from "@traycer/protocol/host/sandbox-control";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +29,8 @@ import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environm
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useEpicAttachEnvironment } from "@/hooks/epic/use-epic-attach-environment-mutation";
 import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
+import { readPoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import { sandboxStateAllowsPoolActions } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   stageConfigurationCopy,
   stageProviderFor,
@@ -60,9 +63,35 @@ interface PoolComposerActionsProps {
   readonly surfaceKey: string;
   readonly place: (hostId: string) => void;
   readonly watchPlacement: HandoffOwnerWatch | null;
+  readonly chatOrigin?: PoolChatOrigin;
+}
+
+interface PoolChatOrigin {
+  readonly hostId: string;
+  readonly readPoolActionsAllowed: () => boolean;
 }
 
 type PoolSandboxAuth = HostRuntimeBinding<HostRpcRegistry>["auth"];
+
+function chatCreateAllowed(
+  origin: PoolChatOrigin | undefined,
+  queryClient: QueryClient,
+  auth: PoolSandboxAuth,
+): boolean {
+  if (origin === undefined) return true;
+  const { hostId, readPoolActionsAllowed } = origin;
+  // The list can publish before React commits the new composer slot.
+  const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
+  const sandbox = queryClient
+    .getQueryData<SandboxListResponse>(sandboxQueryKeys.list(auth, userId))
+    ?.sandboxes.find((row) => row.hostId === hostId);
+  return (
+    readPoolActionsAllowed() &&
+    readPoolComputerUnavailable(hostId) &&
+    sandboxStateAllowsPoolActions(sandbox?.state)
+  );
+}
+
 interface SandboxFlight {
   readonly isCurrent: () => boolean;
 }
@@ -159,7 +188,8 @@ function StartSandbox(
     readonly binding: HostRuntimeBinding<HostRpcRegistry>;
   },
 ): ReactNode {
-  const { binding, epicId, place, surfaceKey, watchPlacement } = props;
+  const { binding, chatOrigin, epicId, place, surfaceKey, watchPlacement } =
+    props;
   const { auth, directory } = binding;
   const queryClient = useQueryClient();
   const user = useAuthUser().data ?? null;
@@ -215,6 +245,7 @@ function StartSandbox(
           : null;
       if (environmentId === undefined) return;
       if (!current()) return;
+      if (!chatCreateAllowed(chatOrigin, queryClient, auth)) return;
       const result = await auth
         .createSandbox({
           ...shape,

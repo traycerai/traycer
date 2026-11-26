@@ -18,6 +18,7 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SandboxCatalogue,
   SandboxCreateRequest,
+  SandboxListResponse,
 } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -54,6 +55,7 @@ import type { SandboxConfigurationDefaults } from "@/lib/sandboxes/sandbox-stage
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { sandboxQueryKeys } from "@/lib/query-keys";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
@@ -102,6 +104,7 @@ const harness = vi.hoisted(() => {
     listEnvironments: vi.fn(),
     getTeamEnvironment:
       vi.fn<(teamId: string) => Promise<TeamEnvironmentFetchResult>>(),
+    authService: null as object | null,
     attachmentTransport:
       vi.fn<
         (
@@ -175,6 +178,7 @@ vi.mock("@/lib/host", () => {
       return { dispose: () => harness.directoryListeners.delete(listener) };
     },
   };
+  harness.authService = auth;
   return {
     useHostBinding: () => ({ auth, directory }),
     useHostClient: () => ({
@@ -255,9 +259,15 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
     pin: harness.placement?.pin,
   }),
 }));
-vi.mock("@/hooks/host/use-pool-computer-unavailable", () => ({
-  usePoolComputerUnavailable: () => true,
-}));
+vi.mock("@/hooks/host/use-pool-computer-unavailable", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/hooks/host/use-pool-computer-unavailable")
+  >("@/hooks/host/use-pool-computer-unavailable");
+  return {
+    ...actual,
+    usePoolComputerUnavailable: () => true,
+  };
+});
 vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", async () => {
   const actual = await vi.importActual<
     typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
@@ -302,9 +312,27 @@ function testUser(): AuthenticatedUser {
 }
 
 function renderActions(epicId: string | null) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  return renderActionsWithOrigin(epicId, {});
+}
+
+function renderActionsWithOrigin(
+  epicId: string | null,
+  options: {
+    readonly queryClient?: QueryClient;
+    readonly chatOrigin?: {
+      readonly hostId: string;
+      readonly readPoolActionsAllowed: () => boolean;
+    };
+  },
+) {
+  const queryClient =
+    options.queryClient ??
+    new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
   return render(
     <RunnerHostProvider runnerHost={requireRunnerHost()}>
       <QueryClientProvider client={queryClient}>
@@ -313,6 +341,7 @@ function renderActions(epicId: string | null) {
           surfaceKey={epicId === null ? "landing-test" : `task:${epicId}`}
           place={harness.place}
           watchPlacement={null}
+          chatOrigin={options.chatOrigin}
         />
       </QueryClientProvider>
     </RunnerHostProvider>,
@@ -1765,6 +1794,77 @@ describe("PoolComposerActions", () => {
       expect(connect).toBeTruthy();
     },
   );
+
+  it("drops an in-flight Team create after the source sandbox becomes busy, then releases the start for retry", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const auth = harness.authService;
+    if (auth === null) throw new Error("The test host binding is missing");
+    const listKey = sandboxQueryKeys.list(auth, null);
+    const attachment = Promise.withResolvers<{
+      readonly environmentId: string;
+    }>();
+    const attachTeam = vi.fn(() => attachment.promise);
+    harness.attachmentMutation = { mutateAsync: attachTeam };
+    const readPoolActionsAllowed = vi.fn(() => true);
+    const view = renderActionsWithOrigin("epic-team-busy-race", {
+      queryClient,
+      chatOrigin: {
+        hostId: "origin-computer",
+        readPoolActionsAllowed,
+      },
+    });
+
+    await pressTeam();
+    await waitFor(() => expect(attachTeam).toHaveBeenCalledTimes(1));
+    const start = screen.getByRole("button", { name: "Start a sandbox" });
+    expect(start.matches(":disabled")).toBe(true);
+
+    const getQueryData = vi.spyOn(queryClient, "getQueryData");
+
+    await act(async () => {
+      queryClient.setQueryData<SandboxListResponse>(listKey, {
+        sandboxes: [
+          sandboxSummaryFixture({
+            hostId: "origin-computer",
+            state: "resuming",
+            displayName: "busy sandbox",
+          }),
+        ],
+      });
+      expect(
+        queryClient.getQueryData<SandboxListResponse>(listKey)?.sandboxes[0]
+          ?.state,
+      ).toBe("resuming");
+      getQueryData.mockClear();
+      attachment.resolve({ environmentId: "team-env" });
+      await attachment.promise;
+    });
+
+    await waitFor(() => expect(start.matches(":disabled")).toBe(false));
+    expect(getQueryData).toHaveBeenCalledWith(listKey);
+    expect(readPoolActionsAllowed).toHaveReturnedWith(true);
+    expect(harness.createSandbox).not.toHaveBeenCalled();
+    expect(harness.toastError).not.toHaveBeenCalled();
+    expect(harness.toastWarning).not.toHaveBeenCalled();
+
+    act(() => {
+      queryClient.setQueryData<SandboxListResponse>(listKey, {
+        sandboxes: [],
+      });
+    });
+    await pressTeam();
+    await waitFor(() => expect(attachTeam).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(harness.createSandbox).toHaveBeenCalledTimes(1));
+    expect(harness.createInput).toMatchObject({ environmentId: "team-env" });
+
+    view.unmount();
+    queryClient.clear();
+  });
 
   it("does not use a landing environment read after the sign-in changes", async () => {
     const environmentRead = Promise.withResolvers<TeamEnvironmentFetchResult>();

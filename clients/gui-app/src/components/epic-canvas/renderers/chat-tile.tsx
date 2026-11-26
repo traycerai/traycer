@@ -8,6 +8,7 @@ import {
 } from "@/lib/sandboxes/chat-sandbox-state";
 import { chatSandboxStateLine } from "./chat-sandbox-state-line";
 import {
+  ChatSandboxFooterBlocksComposerContext,
   ChatSandboxLineContext,
   ChatStateLineContext,
 } from "./chat-state-line";
@@ -956,26 +957,33 @@ function ChatTileForChat(props: ChatTileProps) {
         hostId={tabHostId}
       >
         <ChatSandboxLineContext value={sandbox.line !== null}>
-          <ChatStateLineContext value={stateLine}>
-            <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
-              <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
-                <ChatTileSessionView
-                  handle={handle}
-                  node={node}
-                  viewTabId={viewTabId}
-                  tileId={props.tileId}
-                  isActive={isActive}
-                  currentEpicId={epicId}
-                  ownerHostId={tabHostId}
-                  restingSandbox={wakeOf(sandbox)}
-                  evictedSend={evictedSend}
-                  readOnlyNotice={readOnlyNotice}
-                  isLiveSession
-                  preContent={preContentFrame}
-                />
-              </ChatLoadAutofocusContext>
-            </PaneActivationFocusIntentContext>
-          </ChatStateLineContext>
+          <ChatSandboxFooterBlocksComposerContext
+            value={
+              sandbox.line?.place === "footer" &&
+              !sandbox.line.allowsPoolActions
+            }
+          >
+            <ChatStateLineContext value={stateLine}>
+              <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
+                <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
+                  <ChatTileSessionView
+                    handle={handle}
+                    node={node}
+                    viewTabId={viewTabId}
+                    tileId={props.tileId}
+                    isActive={isActive}
+                    currentEpicId={epicId}
+                    ownerHostId={tabHostId}
+                    restingSandbox={wakeOf(sandbox)}
+                    evictedSend={evictedSend}
+                    readOnlyNotice={readOnlyNotice}
+                    isLiveSession
+                    preContent={preContentFrame}
+                  />
+                </ChatLoadAutofocusContext>
+              </PaneActivationFocusIntentContext>
+            </ChatStateLineContext>
+          </ChatSandboxFooterBlocksComposerContext>
         </ChatSandboxLineContext>
       </TombstonedProfileProvider>
       <ChatSandboxFooter line={sandbox.line} />

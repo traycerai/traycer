@@ -14,5 +14,8 @@ export interface ChatStateLine {
  */
 export const ChatStateLineContext = createContext<ChatStateLine | null>(null);
 
+/** A blocked footer already supplies the line, so the cold pool needs no composer. */
+export const ChatSandboxFooterBlocksComposerContext = createContext(false);
+
 /** A sandbox's slot or footer already explains this chat's availability. */
 export const ChatSandboxLineContext = createContext(false);

@@ -11,12 +11,15 @@ import {
   memo,
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { Lock } from "lucide-react";
 import {
+  ChatSandboxFooterBlocksComposerContext,
   ChatSandboxLineContext,
   ChatStateLineContext,
   type ChatStateLine,
@@ -871,15 +874,30 @@ function ComposerSurface(props: {
   const tabHostId = useTabHostId();
   const stateLine = useContext(ChatStateLineContext);
   const ownerUnavailable = usePoolComputerUnavailable(model.ownerHostId);
+  const footerBlocksComposer = useContext(
+    ChatSandboxFooterBlocksComposerContext,
+  );
   // Before the snapshot the pre-content body says the state line instead.
-  if (!model.runtime.snapshotLoaded) {
-    return null;
-  }
+  const hideComposer = composerSlotHidden(
+    model,
+    ownerUnavailable,
+    footerBlocksComposer,
+  );
   const showPoolActions = poolActionsForChat(
     model,
     ownerUnavailable,
+    hideComposer,
     stateLine,
   );
+  const poolActionsAllowed = useRef(false);
+  useLayoutEffect(() => {
+    poolActionsAllowed.current = showPoolActions;
+  }, [showPoolActions]);
+  const readPoolActionsAllowed = useCallback(
+    () => poolActionsAllowed.current,
+    [],
+  );
+  if (hideComposer) return null;
   if (stateLine !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -887,14 +905,22 @@ function ComposerSurface(props: {
           notice={stateLine.line}
           actions={stateLine.actions}
         />
-        {showPoolActions ? <PoolChatActions model={model} /> : null}
+        {showPoolActions ? (
+          <PoolChatActions
+            model={model}
+            readPoolActionsAllowed={readPoolActionsAllowed}
+          />
+        ) : null}
       </ComposerSlotShell>
     );
   }
   if (showPoolActions) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
-        <PoolChatActions model={model} />
+        <PoolChatActions
+          model={model}
+          readPoolActionsAllowed={readPoolActionsAllowed}
+        />
       </ComposerSlotShell>
     );
   }
@@ -978,12 +1004,24 @@ function ComposerSurface(props: {
   );
 }
 
+function composerSlotHidden(
+  model: ComposerSurfaceModel,
+  ownerUnavailable: boolean,
+  footerBlocksComposer: boolean,
+): boolean {
+  return (
+    !model.runtime.snapshotLoaded || (ownerUnavailable && footerBlocksComposer)
+  );
+}
+
 function poolActionsForChat(
   model: ComposerSurfaceModel,
   ownerUnavailable: boolean,
+  hideComposer: boolean,
   stateLine: ChatStateLine | null,
 ): boolean {
-  if (!ownerUnavailable || model.subagentView !== null) return false;
+  if (hideComposer || !ownerUnavailable || model.subagentView !== null)
+    return false;
   if (stateLine === null) {
     // This composer can enqueue the message and wake its own sandbox.
     return model.access.restingSandbox === undefined || model.access.isViewer;
@@ -993,6 +1031,7 @@ function poolActionsForChat(
 
 function PoolChatActions(props: {
   readonly model: ComposerSurfaceModel;
+  readonly readPoolActionsAllowed: () => boolean;
 }): ReactNode {
   const { viewTabId, ownerHostId, composer } = props.model;
   const { currentEpicId, nodeId } = composer;
@@ -1001,6 +1040,10 @@ function PoolChatActions(props: {
       epicId={currentEpicId}
       surfaceKey={JSON.stringify([currentEpicId, ownerHostId, nodeId])}
       watchPlacement={null}
+      chatOrigin={{
+        hostId: ownerHostId,
+        readPoolActionsAllowed: props.readPoolActionsAllowed,
+      }}
       place={(hostId) => {
         const tabs = useEpicCanvasStore.getState();
         if (
