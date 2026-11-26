@@ -315,6 +315,27 @@ describe("<SwitcherSimulatorsList />", () => {
     expect(world.onClose).not.toHaveBeenCalled();
   });
 
+  it("disables Watch and ignores a stale Watch press when the pool loses the owner", async () => {
+    setCatalog([record("session-live", {})]);
+    useSelectionAuthorityStore.setState({
+      servingPeer: { kind: "pool" },
+      leases: [{ hostId: HOST, status: "ready", dead: null }],
+    });
+    renderList();
+    const row = await screen.findByTestId("switcher-simulator-row-udid-1");
+
+    act(() => {
+      useSelectionAuthorityStore.setState({ leases: [] });
+      expect(row.matches(":disabled")).toBe(false);
+      row.click();
+    });
+
+    expect(row.matches(":disabled")).toBe(true);
+    fireEvent.click(row);
+    expect(world.onClose).not.toHaveBeenCalled();
+    expect(host_.opens).toHaveLength(0);
+  });
+
   it("shows an ended row's notice and Dismiss action, with no open on a body tap", async () => {
     setCatalog([record("session-ended", { endedReason: "archived" })]);
     renderList();

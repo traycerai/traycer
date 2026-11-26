@@ -33,12 +33,10 @@ vi.mock("@/components/composer/new-sandbox-rows", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/components/composer/new-sandbox-rows")
   >()),
-  useNewSandboxRowInputs: () => ({
-    user: null,
-    catalogue: null,
-    catalogueState: "loading",
-    defaults: () => null,
-  }),
+  useSandboxCatalogueReader: () => () => null,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: null }),
 }));
 vi.mock(
   "@/components/composer/use-sandbox-staging",

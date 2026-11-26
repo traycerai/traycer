@@ -285,7 +285,7 @@ function StartSandbox(
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="start"
-          className="w-max max-w-[var(--radix-dropdown-menu-content-available-width)]"
+          className="w-max min-w-0 max-w-[var(--radix-dropdown-menu-content-available-width)]"
         >
           {rows.map((row) => {
             const presentation = newRowPresentation(row, null);

@@ -1961,6 +1961,50 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("confirm-action")).toBeTruthy();
   });
 
+  it.each(["toolbar", "Confirm"] as const)(
+    "ignores an enabled bulk Delete %s press before owner loss renders",
+    (control) => {
+      const agent = treeNode(
+        "agent-race",
+        null,
+        "Terminal agent",
+        "terminal-agent",
+      );
+      testState.tree = {
+        rootIds: [agent.id],
+        childrenByParent: {},
+        nodeById: { [agent.id]: agent },
+      };
+      testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "pool" },
+        leases: [{ hostId: "host-B", status: "ready", dead: null }],
+      });
+
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+      fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-race"));
+      const toolbar = screen.getByTestId("epic-sidebar-delete-selected-chats");
+      if (control === "Confirm") fireEvent.click(toolbar);
+      const target =
+        control === "Confirm" ? screen.getByTestId("confirm-action") : toolbar;
+
+      act(() => {
+        useSelectionAuthorityStore.setState({ leases: [] });
+        expect(target.matches(":disabled")).toBe(false);
+        target.click();
+      });
+
+      expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+      expect(target.matches(":disabled")).toBe(true);
+      if (control === "Confirm") {
+        expect(screen.getByTestId("confirm-action")).toBe(target);
+      } else {
+        expect(screen.queryByTestId("confirm-action")).toBeNull();
+      }
+    },
+  );
+
   it("disables an open bulk-delete confirmation if its terminal owner leaves while the pool serves", async () => {
     const agent = treeNode(
       "agent-ready",

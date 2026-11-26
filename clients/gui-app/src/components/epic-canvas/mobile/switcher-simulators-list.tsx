@@ -134,10 +134,14 @@ function SwitcherSimulatorRow(props: {
     row.hostId,
   );
   const { onWatch, offline } = props;
-  // The row has no disabled state, so a tap on an offline machine's row, a
-  // closed row or a pending one is simply not acted on.
+  const unavailable = usePoolComputerUnavailable(row.hostId);
   const onSelect = useCallback(() => {
-    if (row.kind !== "live" || offline) return;
+    if (
+      row.kind !== "live" ||
+      offline ||
+      readPoolComputerUnavailable(row.hostId)
+    )
+      return;
     onWatch(row);
   }, [offline, onWatch, row]);
   const icon = <Smartphone className="size-4" aria-hidden />;
@@ -179,7 +183,7 @@ function SwitcherSimulatorRow(props: {
   const countdown = simulatorIdleCountdownLabel(row.idleUntil, props.nowMs);
   return (
     <SwitcherListRow
-      disabled={false}
+      disabled={unavailable}
       icon={icon}
       label={row.name}
       secondaryLabel={

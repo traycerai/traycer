@@ -25,7 +25,10 @@ import type {
 } from "@traycer/protocol/host";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  hostOptionsFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
 import { NewTerminalPicker } from "../new-terminal-picker";
 import { NewTerminalStagedHandoff } from "../new-terminal-staged-handoff";
 import { subscribeStagedTerminalLaunch } from "../new-terminal-staged-launch";
@@ -222,19 +225,29 @@ function stubLoadedBindings(): void {
 // composes. The host section itself is now a collapsed `HostSwitcher`
 // trigger (one host here, so its nested popover renders no search box, just
 // the one option row).
-vi.mock("@/components/settings/host-scope/use-host-options", async () => {
-  const { hostOptionsFixture, hostScopeOptionFixture } =
-    await import("@/components/settings/host-scope/host-scope-fixture");
-  return {
-    useHostOptions: () =>
-      hostOptionsFixture({
-        hosts: hostOptionsInputs.hosts ?? [
-          hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
-        ],
-        activeHostId: "host-1",
-      }),
-  };
-});
+vi.mock("@/components/settings/host-scope/use-host-options", () => ({
+  useHostOptions: () =>
+    hostOptionsFixture({
+      hosts: offeredHostOptions(),
+      readHosts: offeredHostOptions,
+      activeHostId: "host-1",
+    }),
+}));
+
+function offeredHostOptions(): readonly HostScopeOption[] {
+  return (
+    hostOptionsInputs.hosts ?? [
+      hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
+    ]
+  );
+}
+
+vi.mock("@/components/composer/new-sandbox-rows", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/composer/new-sandbox-rows")
+  >()),
+  useSandboxCatalogueReader: () => () => sandboxInputs.catalogue,
+}));
 
 // `NewTerminalPickerBody` also reads this directly (the folderless-launch
 // target's host id), independent of `useHostOptions`.
@@ -589,6 +602,34 @@ describe("<NewTerminalPicker />", () => {
     const terminal = launched[0];
     expect(terminal.hostId).toBe(SANDBOX_HOST);
     expect(launchedTerminalCwd(terminal)).toBe("/home/sandbox");
+  });
+
+  it("does not open from an enabled trigger after the last offered host is removed before render", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    hostOptionsInputs.hosts = [
+      stoppedSandboxOption(SANDBOX_HOST, "Stopped sandbox"),
+    ];
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+    const renderPicker = () => (
+      <TooltipProvider>
+        <NewTerminalPicker epicId="epic-1" tabId={tabId} onLaunched={null} />
+      </TooltipProvider>
+    );
+    const mounted = renderWithClient(renderPicker());
+    const trigger = screen.getByRole("button", { name: "New terminal" });
+    expect(trigger.matches(":disabled")).toBe(false);
+
+    hostOptionsInputs.hosts = [];
+    fireEvent.click(trigger);
+
+    expect(screen.queryByTestId("new-terminal-picker-popover")).toBeNull();
+    expect(sandboxWake.pick).not.toHaveBeenCalled();
+    mounted.rerender(renderPicker());
+    expect(trigger.matches(":disabled")).toBe(true);
   });
 
   it("closes the tab's open picker, popover and phone dialog alike, when the staged sandbox's terminal launches", () => {

@@ -19,8 +19,11 @@ import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 interface TestState {
+  sessionHostId: string;
   role: PermissionRole | null;
   collaborators: EpicCollaboratorsView;
   shareableTeams: ReadonlyArray<{
@@ -67,6 +70,7 @@ interface TestState {
 }
 
 const testState = vi.hoisted<TestState>(() => ({
+  sessionHostId: "epic-host",
   role: "owner",
   collaborators: { directUsers: [], ownerTeam: null, teams: [], flatRows: [] },
   shareableTeams: [],
@@ -189,7 +193,9 @@ vi.mock("@/lib/host/runtime", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
-  useEpicSessionHostClient: () => ({ getActiveHostId: () => "epic-host" }),
+  useEpicSessionHostClient: () => ({
+    getActiveHostId: () => testState.sessionHostId,
+  }),
 }));
 
 vi.mock("@/lib/chats/chat-sharing-inflight", async (importOriginal) => {
@@ -286,6 +292,7 @@ const OWNER_TEAM: EpicTeamCollaboratorView = {
 };
 
 function resetTestState(): void {
+  testState.sessionHostId = "epic-host";
   testState.role = "owner";
   testState.collaborators = {
     directUsers: [],
@@ -381,6 +388,7 @@ describe("<SharingPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    useSelectionAuthorityStore.getState().reset();
     vi.unstubAllGlobals();
     // Zustand stores are module scope, so an auth status staged here outlives
     // this file inside the same worker.
@@ -476,6 +484,47 @@ describe("<SharingPanel />", () => {
     expect(new Set(collaboratorsQueryClientIds)).toEqual(
       new Set(["epic-host"]),
     );
+  });
+
+  it("keeps the task-session Sharing controls working on a cold pool", () => {
+    testState.sessionHostId = POOL_HOST_ID;
+    useSelectionAuthorityStore.setState({
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    const secondOwner = {
+      ...DIRECT_EDITOR,
+      role: "owner",
+    } satisfies EpicCollaboratorView;
+    testState.collaborators = {
+      directUsers: [DIRECT_USER, secondOwner],
+      ownerTeam: null,
+      teams: [SHARED_TEAM],
+      flatRows: [DIRECT_USER, secondOwner, ...SHARED_TEAM.members],
+    };
+    testState.shareableTeams = [
+      { teamId: "team-2", slug: "platform", avatarUrl: null },
+    ];
+    collaboratorsQueryClientIds.length = 0;
+    renderSharingPanel();
+
+    fireEvent.click(screen.getByTestId("epic-sharing-refresh-button"));
+    expect(new Set(collaboratorsQueryClientIds)).toEqual(
+      new Set([POOL_HOST_ID]),
+    );
+    expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledOnce();
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Change role for Editor User" }),
+      { button: 0 },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Editor" }));
+    expect(testState.batchUpdateRoles.mutate).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("team-share-button"));
+    expect(testState.grantAccess.mutate).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("team-revoke-button"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(testState.revokeCollaborator.mutate).toHaveBeenCalledOnce();
   });
 
   it("renders direct people separately from shared and unshared teams", () => {

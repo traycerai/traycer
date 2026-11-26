@@ -43,8 +43,16 @@ import {
   hostOptionsFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
-import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
+import {
+  useHostOptions,
+  type HostOptions,
+} from "@/components/settings/host-scope/use-host-options";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { LandingComposer } from "@/components/home/composer/landing-composer";
+import { NewTerminalPicker } from "@/components/epic-canvas/sidebar/new-terminal-picker";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { poolSessionPresence } from "@traycer-clients/shared/host-transport/remote/pool-session-presence";
+import { installAuthValidationFetch } from "../../../../__tests__/test-browser-apis";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   remoteEntry,
@@ -54,6 +62,7 @@ import {
 const hostOptionsRef = vi.hoisted((): { value: HostOptions } => ({
   value: {
     hosts: [],
+    readHosts: () => [],
     activeHostId: null,
     isLoading: false,
     directoryResolved: true,
@@ -77,7 +86,7 @@ const activatingHostRef = vi.hoisted((): { value: string | null } => ({
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
-  useHostOptions: () => hostOptionsRef.value,
+  useHostOptions: vi.fn(() => hostOptionsRef.value),
 }));
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useMakeActiveHost: () => ({
@@ -337,6 +346,7 @@ describe("<UserMenu /> host section", () => {
     useDesktopDialogStore.getState().close();
     restoreFetch();
     hostOptionsRef.value = hostOptionsFixture({ hosts: [] });
+    vi.mocked(useHostOptions).mockImplementation(() => hostOptionsRef.value);
     activatingHostRef.value = null;
     useSelectionAuthorityStore.getState().reset();
   });
@@ -461,35 +471,94 @@ describe("<UserMenu /> host section", () => {
     ).toBe("false");
   });
 
-  it("keeps the computer list when a computer serves in a no-address build", async () => {
-    const active = hostScopeOptionFixture({
-      hostId: "host-active",
-      name: "Active Computer",
-      isActive: true,
-      connectable: true,
-    });
-    hostOptionsRef.value = hostOptionsFixture({
-      hosts: [active],
-      activeHostId: active.hostId,
-    });
-
-    const host = buildHost();
-    expect(host.poolBaseUrl).toBe("");
-    await openMenuWithHost(host);
-    act(() => {
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: active.hostId },
-      });
-    });
-
-    expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
-    expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
-    expect(
-      screen
-        .getByTestId(`user-menu-host-option-${active.hostId}`)
-        .getAttribute("aria-checked"),
-    ).toBe("true");
-  });
+  it.each([false, true])(
+    "keeps the base menu, composer and terminal trigger with no pool address (computer: %s)",
+    async (hasComputer) => {
+      const actual = await vi.importActual<
+        typeof import("@/components/settings/host-scope/use-host-options")
+      >("@/components/settings/host-scope/use-host-options");
+      vi.mocked(useHostOptions).mockImplementation(actual.useHostOptions);
+      const host = buildHost();
+      const hostId = "host-local";
+      if (hasComputer) {
+        host.setLocalHost({
+          hostId,
+          websocketUrl: "ws://127.0.0.1:4917/rpc",
+          version: "1.2.3",
+          pid: 4242,
+          systemHostName: "Studio",
+          displayName: "Studio",
+          availability: "available",
+        });
+      }
+      const restoreValidation = installAuthValidationFetch();
+      await host.tokenStore.signIn(
+        { token: "menu-test-token", refreshToken: "menu-test-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      const poolSession = "unexpected-presence-in-no-address-build";
+      try {
+        expect(host.poolBaseUrl).toBe("");
+        poolSessionPresence.sessionEstablished(POOL_HOST_ID, poolSession);
+        mountMenu(
+          host,
+          <>
+            <UserMenu
+              userName="Test User"
+              email="test@example.com"
+              avatarUrl={null}
+              showAppSettings={false}
+              trigger={null}
+            />
+            <LandingComposer
+              draftId={null}
+              pendingCreateId={null}
+              initialSettings={null}
+              workspaceControls={() => null}
+            />
+            <NewTerminalPicker
+              epicId="epic-1"
+              tabId="tab-1"
+              onLaunched={null}
+            />
+          </>,
+        );
+        await waitFor(() => {
+          const selection = useSelectionAuthorityStore.getState();
+          expect(selection.attached).toBe(true);
+          expect(selection.servingPeer).toEqual(
+            hasComputer ? { kind: "computer", hostId } : null,
+          );
+        });
+        expect(
+          screen
+            .getByRole("button", { name: "New terminal" })
+            .matches(":disabled"),
+        ).toBe(false);
+        expect(
+          screen.queryByRole("button", { name: "Start a sandbox" }),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Connect a computer" }),
+        ).toBeNull();
+        fireEvent.click(screen.getByTestId("user-menu-trigger"));
+        expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
+        if (hasComputer) {
+          const row = await screen.findByTestId(
+            `user-menu-host-option-${hostId}`,
+          );
+          expect(row.getAttribute("aria-checked")).toBe("true");
+          expect(screen.getAllByRole("menuitemradio")).toEqual([row]);
+        } else {
+          expect(screen.queryByTestId("user-menu-host-section")).toBeNull();
+          expect(screen.queryAllByRole("menuitemradio")).toEqual([]);
+        }
+      } finally {
+        poolSessionPresence.sessionLost(POOL_HOST_ID, poolSession);
+        restoreValidation();
+      }
+    },
+  );
 
   it("lists every host, checks the active one, and disables an offline host", async () => {
     const active = hostScopeOptionFixture({

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   HostInstalledRecord,
   MutationKind,
@@ -30,6 +30,10 @@ import {
   sandboxSummariesUnread,
 } from "@/components/settings/host-scope/host-scope-status";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 
 /** The cadence relative-time labels in the host pickers refresh at. */
 const HOST_OPTION_LABEL_TICK_MS = 60_000;
@@ -52,6 +56,8 @@ const HOST_OPTION_LABEL_TICK_MS = 60_000;
 export interface HostOptions {
   /** Every host this account owns or this client can dial, merged and sorted. */
   readonly hosts: readonly HostScopeOption[];
+  /** Rebuild the offered rows from the current sources at a gesture edge. */
+  readonly readHosts: () => readonly HostScopeOption[];
   /** The app-wide active host — where new work lands and the bell reads from. */
   readonly activeHostId: string | null;
   /**
@@ -142,6 +148,7 @@ function mutationBringsHostUp(kind: MutationKind): boolean {
 
 export function useHostOptions(): HostOptions {
   const binding = useHostBinding();
+  const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
   // The SELECTION, not addressability. `useAddressableHostId()` answers
   // "is the derived host addressable yet" and goes `null` while its directory
@@ -332,6 +339,37 @@ export function useHostOptions(): HostOptions {
 
   return {
     hosts,
+    readHosts: () => {
+      if (binding === null) return [];
+      const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
+      const { attached, effectiveHostId, leases } =
+        useSelectionAuthorityStore.getState();
+      const directory = binding.directory.snapshot();
+      const registry = queryClient.getQueryData<typeof registryQuery.data>(
+        authQueryKeys.registeredHosts(binding.auth, userId),
+      );
+      const sandboxes = queryClient.getQueryData<typeof sandboxListQuery.data>(
+        sandboxQueryKeys.list(binding.auth, userId),
+      );
+      return buildHostScopeOptions({
+        directory,
+        registry: registry?.hosts ?? [],
+        localHostId:
+          directory.find((entry) => entry.kind === "local")?.hostId ??
+          binding.directory.getLocalEntry()?.hostId ??
+          null,
+        activeHostId: effectiveHostId,
+        localService,
+        localPlatform,
+        hasLiveSession: hasReadyRemoteSession,
+        leases,
+        authorityAttached: attached,
+        localHostSettingUp,
+        localHostTerminalRunNote,
+        sandboxes: sandboxes?.sandboxes ?? null,
+        nowMs,
+      });
+    },
     activeHostId,
     isLoading:
       directoryQuery.isLoading || registryQuery.isLoading || sandboxesPending,

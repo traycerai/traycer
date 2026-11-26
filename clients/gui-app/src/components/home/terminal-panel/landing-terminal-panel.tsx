@@ -1759,13 +1759,15 @@ export function LandingTerminalPanel(): ReactNode {
     // refused whatever the device says, and saying "connecting" there would be
     // a wait that resolves into a card the reader still cannot use.
     if (!canDriveBrowserTabs) return landingBrowserViewerMessage();
+    if (noPoolComputer) return "";
     if (count === null) return LANDING_PANEL_CONNECTING_MESSAGE;
     return count >= LANDING_BROWSER_TAB_CAP ? landingBrowserCapMessage() : null;
-  }, [browserOpenTab.tabCount, canDriveBrowserTabs]);
+  }, [browserOpenTab.tabCount, canDriveBrowserTabs, noPoolComputer]);
 
   const pickNewTabKind = useCallback(
     (kind: LandingNewTabKind): void => {
       if (kind === "browser") {
+        if (readPoolComputerUnavailable(target.hostId)) return;
         // The row the pick was made from, carried with the ask. A later pick -
         // the other card, or a chord - can take this row while the device is
         // answering, and that later choice is the one the reader is looking at.
@@ -1780,7 +1782,7 @@ export function LandingTerminalPanel(): ReactNode {
       // after a picker round trip.
       revealAndCreateTerminal();
     },
-    [openBrowserTab, revealAndCreateTerminal],
+    [openBrowserTab, revealAndCreateTerminal, target.hostId],
   );
 
   const visibleDirectoryRequest = useMemo(() => {

@@ -503,6 +503,8 @@ describe("PoolComposerActions", () => {
     expect(
       await screen.findByRole("menuitem", { name: /New Personal sandbox/ }),
     ).toBeTruthy();
+    expect(screen.getByRole("menu").classList.contains("min-w-0")).toBe(true);
+    expect(screen.getByRole("menu").classList.contains("min-w-32")).toBe(false);
   });
 
   it("keeps a pending create in progress when the same composer closes and reopens", async () => {

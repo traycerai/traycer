@@ -1,6 +1,6 @@
 import {
   hasStageableNewSandboxRow,
-  useNewSandboxRowInputs,
+  useSandboxCatalogueReader,
 } from "@/components/composer/new-sandbox-rows";
 import {
   readPoolComputerUnavailable,
@@ -13,6 +13,8 @@ import {
   isHostOptionSelectable,
   pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   useSurfaceHostPin,
   useTabSurfaceKey,
@@ -30,21 +32,30 @@ export function useNewTerminalPickerDisabled(tabId: string): {
   readonly readDisabled: () => boolean;
 } {
   const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
-  const { resolvedHostId } = useSurfaceHostPin(surfaceKey);
+  const { resolvedHostId, readResolvedHostId } = useSurfaceHostPin(surfaceKey);
   const noComputer = usePoolComputerUnavailable(resolvedHostId);
   const stage = stageTakingTerminal(useStagedSandbox(surfaceKey));
-  const inputs = useNewSandboxRowInputs(noComputer && stage === null);
+  const catalogue =
+    useSandboxCatalogue(noComputer && stage === null).data ?? null;
+  const readCatalogue = useSandboxCatalogueReader();
+  // The control-plane reason is immutable for the mounted runner/build.
   const canWake = useSandboxControlUnavailableReason() === null;
-  const hosts = useHostOptions().hosts;
-  const blocked = (noResolvedComputer: boolean, hasStage: boolean): boolean =>
+  const { hosts, readHosts } = useHostOptions();
+  const blocked = (
+    hostId: string | null,
+    paths: {
+      readonly noResolvedComputer: boolean;
+      readonly hasStage: boolean;
+      readonly canStageNew: boolean;
+    },
+    offeredHosts: readonly HostScopeOption[],
+  ): boolean =>
     terminalLaunchBlocked(
       {
-        noResolvedComputer,
-        hasStage,
-        canStageNew: canWake && hasStageableNewSandboxRow(inputs),
+        ...paths,
         canWake,
-        offeredHosts: noResolvedComputer
-          ? pickableHostOptions(hosts, resolvedHostId).filter((host) =>
+        offeredHosts: paths.noResolvedComputer
+          ? pickableHostOptions(offeredHosts, hostId).filter((host) =>
               isHostOptionSelectable(
                 host,
                 "pin",
@@ -56,11 +67,27 @@ export function useNewTerminalPickerDisabled(tabId: string): {
       readPoolComputerUnavailable,
     );
   return {
-    disabled: blocked(noComputer, stage !== null),
-    readDisabled: () =>
-      blocked(
-        readPoolComputerUnavailable(resolvedHostId),
-        stageTakingTerminal(readStagedSandbox(surfaceKey)) !== null,
-      ),
+    disabled: blocked(
+      resolvedHostId,
+      {
+        noResolvedComputer: noComputer,
+        hasStage: stage !== null,
+        canStageNew: canWake && hasStageableNewSandboxRow(catalogue),
+      },
+      hosts,
+    ),
+    readDisabled: () => {
+      const hostId = readResolvedHostId();
+      if (!readPoolComputerUnavailable(hostId)) return false;
+      return blocked(
+        hostId,
+        {
+          noResolvedComputer: true,
+          hasStage: stageTakingTerminal(readStagedSandbox(surfaceKey)) !== null,
+          canStageNew: canWake && hasStageableNewSandboxRow(readCatalogue()),
+        },
+        readHosts(),
+      );
+    },
   };
 }

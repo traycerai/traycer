@@ -2936,6 +2936,34 @@ describe("<LandingTerminalPanel />", () => {
   // The chooser's cap count and `app.browser.new` both read the TARGET host's
   // coordinator, which the panel pins unconditionally - so both must still
   // work while the panel itself is collapsed and showing nothing.
+  it("keeps the landing Browser card and new-browser shortcut inert on a cold pool", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    mocks.activeHostId = "host-a";
+    mocks.placementHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    const openTab = vi.fn();
+    mocks.browserSessionsByHost = {
+      "host-a": browserSessionsState({ openTab }),
+    };
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const card = screen.getByTestId("landing-new-tab-card-browser");
+    expect(card.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(card);
+    fireEvent.keyDown(card, { key: "Enter" });
+    act(() => {
+      dispatchAction("app.browser.new", fakeKeybindingRouter());
+    });
+
+    expect(openTab).not.toHaveBeenCalled();
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
   it("opens a browser tab via app.browser.new with the panel collapsed", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";

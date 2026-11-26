@@ -1510,7 +1510,8 @@ export class HostDirectoryService implements IHostDirectoryService {
     });
   }
 
-  private snapshot(): readonly HostDirectoryEntry[] {
+  /** The currently published entries, for synchronous action guards. */
+  snapshot(): readonly HostDirectoryEntry[] {
     const entries: HostDirectoryEntry[] = [];
     const seenHostIds = new Set<string>();
     const local = this.getLocalEntry();

@@ -759,7 +759,7 @@ describe("<SwitcherAgentsList />", () => {
     expect(holder.startNewChat).not.toHaveBeenCalled();
   });
 
-  it("gates registry agent row actions in the real phone Agents sheet", () => {
+  it("gates New child and registry agent actions in the cold phone Agents sheet", () => {
     const agentId = "agent-in-phone-sheet";
     const ownerHostId = "owner-computer";
     setPhoneLayoutOnly(true);
@@ -793,12 +793,18 @@ describe("<SwitcherAgentsList />", () => {
         },
       },
     });
+    holder.newChatUnavailable = true;
     useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
 
     render(<SwitcherAgentsList {...PROPS} />);
     fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
       button: 0,
     });
+    const child = screen.getByRole("menuitem", { name: "New child agent" });
+    expect(child.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(child);
+    fireEvent.keyDown(child, { key: "Enter" });
+    expect(holder.startNewChat).not.toHaveBeenCalled();
     const poolRename = screen.getByTestId(`epic-sidebar-rename-${agentId}`);
     const poolDelete = screen.getByTestId(`epic-sidebar-delete-${agentId}`);
     expect(poolRename.getAttribute("aria-disabled")).toBe("true");

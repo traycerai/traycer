@@ -482,6 +482,21 @@ describe("<MobileNewTerminalDialog />", () => {
     });
   });
 
+  it("keeps the phone New terminal row disabled and inert on a cold pool with no launch path", () => {
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    renderNewTerminalRowForLaunch();
+
+    const newTerminal = screen.getByRole("button", { name: "New terminal" });
+    expect(newTerminal.matches(":disabled")).toBe(true);
+    fireEvent.click(newTerminal);
+    fireEvent.keyDown(newTerminal, { key: "Enter" });
+    expect(screen.queryByTestId("mobile-epic-new-terminal-dialog")).toBeNull();
+  });
+
   it("opens New terminal, wakes an offered stopped sandbox, and launches after it is ready", () => {
     useSelectionAuthorityStore.setState({
       attached: true,

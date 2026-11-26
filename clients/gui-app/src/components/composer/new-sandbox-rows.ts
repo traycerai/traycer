@@ -1,4 +1,5 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   SandboxCatalogue,
   SandboxGrowth,
@@ -9,6 +10,7 @@ import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-que
 import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import {
   configurationStageShape,
+  defaultStageShape,
   stageBalanceMc,
   stageConfigurationCopy,
   stageConfigurationKey,
@@ -32,6 +34,9 @@ import {
   sandboxSizeLabel,
   usesCreditsClause,
 } from "@/lib/sandboxes/sandbox-strings";
+import { useHostBinding } from "@/lib/host";
+import { sandboxQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 export interface NewRowFacts {
   readonly configuration: StageConfiguration;
@@ -70,10 +75,26 @@ export function useNewSandboxRowInputs(
 }
 
 /** Whether the existing New rows can stage a usable shape. */
-export function hasStageableNewSandboxRow(input: NewSandboxRowInputs): boolean {
-  return stageConfigurations(input.user).some(
-    (configuration) => newRowShape(input, configuration) !== null,
-  );
+export function hasStageableNewSandboxRow(
+  catalogue: SandboxCatalogue | null,
+): boolean {
+  // Personal is always offered. Defaults can change its shape, but cannot
+  // create a shape without a provider or remove the catalogue fallback.
+  return catalogue !== null && defaultStageShape(catalogue) !== null;
+}
+
+export function useSandboxCatalogueReader(): () => SandboxCatalogue | null {
+  const queryClient = useQueryClient();
+  const auth = useHostBinding()?.auth ?? null;
+  return () => {
+    const { contextMetadata, status } = useAuthStore.getState();
+    if (auth === null || status !== "signed-in") return null;
+    return (
+      queryClient.getQueryData<SandboxCatalogue>(
+        sandboxQueryKeys.catalogue(auth, contextMetadata?.userId ?? null, null),
+      ) ?? null
+    );
+  };
 }
 
 function newRowShape(
