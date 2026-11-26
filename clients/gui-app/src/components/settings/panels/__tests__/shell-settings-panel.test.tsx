@@ -2547,7 +2547,9 @@ describe("<ShellSettingsPanel /> retained variable absence", () => {
         action: "usePersonal",
       });
       await applied.ready;
-      expect(screen.getByLabelText("Value for LOG_LEVEL")).toHaveValue("info");
+      expect(inputValue(screen.getByLabelText("Value for LOG_LEVEL"))).toBe(
+        "info",
+      );
     } finally {
       applied.stop();
     }

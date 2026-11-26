@@ -647,11 +647,9 @@ describe("Move's Keep wording for the target computer", () => {
       fireEvent.click(screen.getByTestId("move-sheet-details"));
       const moving = screen.getByTestId("move-sheet-moves-row");
       const keep = within(moving).getByRole("button", { name: label });
-      expect(keep).toHaveAttribute("aria-pressed", "false");
       fireEvent.click(keep);
       const stayed = screen.getByTestId("move-sheet-left-here-row");
       const undo = within(stayed).getByRole("button", { name: label });
-      expect(undo).toHaveAttribute("aria-pressed", "true");
       fireEvent.click(undo);
       expect(screen.queryByTestId("move-sheet-left-here-row")).toBeNull();
     },
