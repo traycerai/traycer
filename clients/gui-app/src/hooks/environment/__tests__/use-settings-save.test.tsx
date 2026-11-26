@@ -763,6 +763,7 @@ function setRequest(value: string) {
     providerId: PROVIDER_ID,
     key: "CODEX_API_KEY",
     value,
+    executableWriteGrant: null,
   } as const;
 }
 
@@ -780,6 +781,7 @@ function setTarget(value: string) {
   return {
     providerId: PROVIDER_ID,
     key: "CODEX_API_KEY",
+    executableWriteGrant: null,
   } as const;
 }
 
