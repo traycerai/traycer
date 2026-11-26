@@ -40,7 +40,11 @@ export function SessionImportDialog(props: {
     () => props.initialHostId ?? ambientStreamBinding?.hostId ?? null,
   );
   useRegisteredHostsPollLiveness();
-  const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
+  const scope = useHostScopeFor({
+    scopedHostId,
+    setScopedHostId,
+    defaultsToFirstHost: true,
+  });
   const scopedBinding = useScopedHostBinding(scope);
   const ambientBinding = useHostBinding();
   const scopedStreamBinding = useScopedStreamBinding(scope);

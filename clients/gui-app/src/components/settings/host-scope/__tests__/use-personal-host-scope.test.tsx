@@ -156,7 +156,11 @@ function renderBothScopes(initialHostId: string | null) {
   return renderHookWithQueryClient(() => {
     const [scopedHostId, setScopedHostId] = useState(initialHostId);
     return {
-      hostGroup: useHostScopeFor({ scopedHostId, setScopedHostId }),
+      hostGroup: useHostScopeFor({
+        scopedHostId,
+        setScopedHostId,
+        defaultsToFirstHost: true,
+      }),
       personal: usePersonalHostScope(),
     };
   });
@@ -241,6 +245,36 @@ describe("usePersonalHostScope", () => {
     expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
     expect(result.current.hostGroup.hostId).toBe(WINDOW_HOST_ID);
   });
+
+  it.each([
+    { active: "the window's host, unlisted", activeHostId: WINDOW_HOST_ID },
+    { active: "none", activeHostId: null },
+  ])(
+    "reads no other computer while the window's host is out of the settled lists (active: $active), and the window's host once it is back",
+    ({ activeHostId }) => {
+      installTwoHosts();
+      const { result, rerender } = renderHookWithQueryClient(() => ({
+        personal: usePersonalHostScope(),
+        account: useAccountHostScope(),
+      }));
+      expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
+
+      harness.hosts = [hostRow(PICKED_HOST_ID, false)];
+      harness.activeHostId = activeHostId;
+      rerender();
+      const during = {
+        personal: result.current.personal.hostId,
+        account: result.current.account.hostId,
+      };
+
+      installTwoHosts();
+      rerender();
+
+      expect(during).toEqual({ personal: null, account: null });
+      expect(result.current.personal.hostId).toBe(WINDOW_HOST_ID);
+      expect(result.current.account.hostId).toBe(WINDOW_HOST_ID);
+    },
+  );
 
   it("follows the window when the window's own host changes", () => {
     installTwoHosts();

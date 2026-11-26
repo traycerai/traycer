@@ -91,6 +91,7 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     vanishedHostId: null,
     vanishedSelection: null,
     returnToActive: () => undefined,
+    readOnly: false,
     activeHostId: host?.hostId ?? null,
     activeHost: host,
     isViewingActive: true,
@@ -181,6 +182,7 @@ export function noHostsScopeModule() {
     WINDOW_HOST_SELECTION: {
       scopedHostId: null,
       setScopedHostId: () => undefined,
+      defaultsToFirstHost: false,
     },
   };
 }

@@ -301,7 +301,7 @@ function UnreachableNotice(props: {
       // already null. There is nothing to return to, so nothing is offered:
       // the notice above already names the host and says why it is stuck.
       action={
-        scope.isViewingActive ? null : (
+        scope.isViewingActive || scope.readOnly ? null : (
           <Button
             type="button"
             variant="outline"
