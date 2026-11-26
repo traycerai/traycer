@@ -3731,7 +3731,7 @@ export type NotificationHooksSaveRequestV10 = z.infer<
 
 /**
  * Frozen @2 request: the inert carrier preserves its strict released shape
- * and major boundary. Current @3/@4 callers omit it; no host reads it.
+ * and major boundary. Current callers send `null`; no host reads it.
  */
 export const notificationHooksSaveRequestSchemaV20 = lazySchema(() =>
   z
@@ -3890,9 +3890,9 @@ export type NotificationHooksStatusResponse = z.infer<
   typeof notificationHooksStatusResponseSchema
 >;
 
+/** @3.0 as released: strict, so the inert grant field stays on it. */
 export const notificationHooksSaveRequestSchema = lazySchema(() =>
   notificationHooksSaveRequestSchemaV20
-    .omit({ executableWriteGrant: true })
     .extend({
       // Null represents a released caller's absent revision, never a fresh read.
       // The host rejects null from a direct @3 caller using ctx.schemaVersion.
@@ -3966,6 +3966,7 @@ export const hostNotificationHooksSaveUpgradeV2ToV3 = defineUpgradePath<
   to: { major: 3, minor: 0 },
   upgradeRequest: (request) => ({
     hooks: request.hooks,
+    executableWriteGrant: null,
     configurationRevision: null,
   }),
   upgradeResponse: upgradeHooksStatus,

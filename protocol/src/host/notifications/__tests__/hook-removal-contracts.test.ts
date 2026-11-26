@@ -101,6 +101,7 @@ describe("hook saves from released clients", () => {
 
     expect(upgraded).toEqual({
       hooks: [COMMAND_HOOK],
+      executableWriteGrant: null,
       configurationRevision: null,
     });
     expect(notificationHooksSaveRequestSchema.safeParse(upgraded).success).toBe(
@@ -131,12 +132,13 @@ describe("hook saves from released clients", () => {
 
     expect(upgraded).toEqual({
       hooks: [COMMAND_HOOK],
+      executableWriteGrant: null,
       configurationRevision: null,
     });
   });
 
   it("never lets a direct latest caller leave the revision out or send an empty one", () => {
-    const base = { hooks: [COMMAND_HOOK] };
+    const base = { hooks: [COMMAND_HOOK], executableWriteGrant: null };
 
     expect(notificationHooksSaveRequestSchema.safeParse(base).success).toBe(
       false,
@@ -158,6 +160,7 @@ describe("hook saves from released clients", () => {
   it("drops the revision when a current client saves to a released host", () => {
     const request = notificationHooksSaveRequestSchema.parse({
       hooks: [COMMAND_HOOK],
+      executableWriteGrant: null,
       configurationRevision: "rev-7",
     });
     const toV2 = required(saveLine[3].downgradePathsFromLatest[2]);
