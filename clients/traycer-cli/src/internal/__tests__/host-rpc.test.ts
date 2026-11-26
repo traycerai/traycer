@@ -2008,8 +2008,16 @@ describe("the pre-work gate's budget", () => {
     } finally {
       gate.release();
       caller.abort();
-      await settled;
       vi.useRealTimers();
+      // Bounded on the real clock: a call stuck in its sign-in load does not honour the abort.
+      let bound: NodeJS.Timeout | undefined;
+      await Promise.race([
+        settled,
+        new Promise<void>((resolve) => {
+          bound = setTimeout(resolve, 2_000);
+        }),
+      ]);
+      clearTimeout(bound);
     }
   });
 });
