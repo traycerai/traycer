@@ -645,6 +645,28 @@ export function mergeLocalPartitionIntoCloudIndicators(
   };
 }
 
+/**
+ * Whether this client's cloud feed is live through a host other than the one
+ * that answered. That host's lane then says nothing about this client's rows,
+ * which are current, while its answer is a cached read no stream refreshes
+ * and it learns a cloud read only at its next downward merge. Folding the
+ * answer's read state would keep a notification unread after the feed marked
+ * it read, so such an answer gives `pendingFork` alone
+ * (`mergeHostPendingForkIntoCloudIndicators`).
+ */
+export function cloudFeedLiveElsewhere(
+  cloudFresh: boolean,
+  servingHostId: string | null,
+  answeringHostId: string | null,
+): boolean {
+  return (
+    cloudFresh &&
+    servingHostId !== null &&
+    answeringHostId !== null &&
+    answeringHostId !== servingHostId
+  );
+}
+
 /** The ids an indicator answer was asked about. */
 export interface RequestedIndicatorIds {
   readonly epicIds: ReadonlyArray<string>;
@@ -760,8 +782,7 @@ function entityUnreadCount(
  * host's fork notice board owns `pendingFork`. Merge only that one host-local
  * bit so local SQLite read markers can never override the cloud feed view.
  *
- * Retained for the callers that hold a WHOLE-origin host response rather than
- * a `home: "local"` partition - it is the only safe fold for one of those.
+ * The fold for a host answer taken while `cloudFeedLiveElsewhere` holds.
  */
 export function mergeHostPendingForkIntoCloudIndicators(
   cloud: SurfaceNotificationIndicators,

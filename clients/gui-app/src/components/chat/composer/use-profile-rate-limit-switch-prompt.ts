@@ -341,9 +341,11 @@ function warningProjection(input: {
  * instead of losing the warning entirely.
  *
  * An alias such as `default` is matched per profile as the model it routes to
- * in `workingDirectory`, the folder the next run starts its CLI in, when the
- * host has that evidence (`useProfileRoutedModels`); without it the alias is
- * gated by every family.
+ * in `workingDirectory`, the folder the next run starts its CLI in or the
+ * checkout its new worktree is cut from, when the host has that evidence.
+ * Without it the selected profile's alias is matched as the model its catalog
+ * row resolves to, and any other profile's is gated by every family
+ * (`useProfileRoutedModels`).
  *
  * `client` is caller-resolved rather than looked up internally, so each
  * surface can scope the read to the host it actually cares about (e.g. the
@@ -378,6 +380,7 @@ export function useProfileRateLimitSwitchPrompt(input: {
     client,
     providerId,
     profiles,
+    profileId,
     selectedModel,
     workingDirectory: input.workingDirectory,
     active: enabled,

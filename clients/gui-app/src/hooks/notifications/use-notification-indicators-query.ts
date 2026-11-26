@@ -7,9 +7,12 @@ import {
   useHostNotificationIndicators,
   type IndicatorFreshnessMode,
 } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationsServingHostId } from "@/hooks/host/use-notifications-serving-host-entry";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
+  cloudFeedLiveElsewhere,
   EMPTY_INDICATOR_STATE_RESPONSE,
+  mergeHostPendingForkIntoCloudIndicators,
   mergeLocalPartitionIntoCloudIndicators,
   selectCloudNotificationIndicatorProjection,
   type SurfaceNotificationIndicators,
@@ -131,6 +134,7 @@ function useNotificationIndicatorsBase(
   // same-id tabs with them. Taking the id from the query instead of asking a
   // second hook is what makes the two unable to disagree.
   const readHostId = hostIndicators.hostId;
+  const servingHostId = useNotificationsServingHostId();
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
   const cloudFresh = useCloudNotificationsStore(
     (state) => state.hasSnapshot && state.connectionState === "connected",
@@ -147,13 +151,22 @@ function useNotificationIndicatorsBase(
       byOriginHostId: projection.byOriginHostId,
     };
   }, [isMixed, args.enabled, cloudRows, args.epicIds, args.chatIds]);
-  const indicators = isMixed
-    ? mergeLocalPartitionIntoCloudIndicators(
+  const hostForkOnly =
+    isMixed && cloudFeedLiveElsewhere(cloudFresh, servingHostId, readHostId);
+  const mixedIndicators = hostForkOnly
+    ? mergeHostPendingForkIntoCloudIndicators(
+        cloudIndicators,
+        hostIndicators.data,
+        readHostId,
+      )
+    : mergeLocalPartitionIntoCloudIndicators(
         cloudIndicators,
         hostIndicators.data,
         readHostId,
         { epicIds: args.epicIds, chatIds: args.chatIds },
-      )
+      );
+  const indicators = isMixed
+    ? mixedIndicators
     : scopeIndicatorsToOrigin(hostIndicators.data, readHostId);
   const positiveFresh =
     args.enabled &&
@@ -172,6 +185,7 @@ function useNotificationIndicatorsBase(
       hostFresh: positiveFresh,
       host: hostIndicators.data,
       hostId: readHostId,
+      hostForkOnly,
     }),
     fresh,
     positiveFresh,
@@ -186,12 +200,15 @@ function attestedPositivePartitions({
   hostFresh,
   host,
   hostId,
+  hostForkOnly,
 }: {
   cloudFresh: boolean;
   cloud: SurfaceNotificationIndicators;
   hostFresh: boolean;
   host: SurfaceNotificationIndicators;
   hostId: string | null;
+  /** The answer attests `pendingFork` alone (`cloudFeedLiveElsewhere`). */
+  hostForkOnly: boolean;
 }): {
   cloudPositiveIndicators: SurfaceNotificationIndicators;
   hostPositiveIndicators: SurfaceNotificationIndicators;
@@ -200,10 +217,30 @@ function attestedPositivePartitions({
     cloudPositiveIndicators: cloudFresh
       ? cloud
       : EMPTY_INDICATOR_STATE_RESPONSE,
-    hostPositiveIndicators: hostFresh
-      ? scopeIndicatorsToOrigin(host, hostId)
-      : EMPTY_INDICATOR_STATE_RESPONSE,
+    hostPositiveIndicators: hostPositivePartition(
+      hostFresh,
+      host,
+      hostId,
+      hostForkOnly,
+    ),
   };
+}
+
+function hostPositivePartition(
+  hostFresh: boolean,
+  host: SurfaceNotificationIndicators,
+  hostId: string | null,
+  forkOnly: boolean,
+): SurfaceNotificationIndicators {
+  if (!hostFresh) return EMPTY_INDICATOR_STATE_RESPONSE;
+  if (forkOnly) {
+    return mergeHostPendingForkIntoCloudIndicators(
+      { ...EMPTY_INDICATOR_STATE_RESPONSE, byOriginHostId: {} },
+      host,
+      hostId,
+    );
+  }
+  return scopeIndicatorsToOrigin(host, hostId);
 }
 
 function scopeIndicatorsToOrigin(

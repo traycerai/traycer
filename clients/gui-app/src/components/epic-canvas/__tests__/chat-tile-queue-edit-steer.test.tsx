@@ -740,6 +740,7 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
 
     act(() => {
       const accepted = onSideChat({
+        command: "side",
         content: SIDE_CHAT_CONTENT,
         settings: QUEUED_SETTINGS,
       });
@@ -787,6 +788,7 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
 
     act(() => {
       const accepted = onSideChat({
+        command: "side",
         content: SIDE_CHAT_CONTENT,
         settings: QUEUED_SETTINGS,
       });
@@ -833,6 +835,7 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
 
     act(() => {
       const accepted = onSideChat({
+        command: "side",
         content: SIDE_CHAT_CONTENT,
         settings: QUEUED_SETTINGS,
       });
@@ -886,6 +889,7 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
 
     act(() => {
       const accepted = onSideChatForA({
+        command: "side",
         content: SIDE_CHAT_CONTENT,
         settings: QUEUED_SETTINGS,
       });

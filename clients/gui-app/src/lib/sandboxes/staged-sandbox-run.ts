@@ -13,6 +13,8 @@ import type {
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_NOT_FOUND,
+  SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
   type SandboxCreateRequest,
@@ -57,7 +59,6 @@ import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   handoffOwnerLive,
   readStagedSandbox,
-  refusedBeforeCreate,
   useStagedSandboxStore,
   type StagedSandbox,
   type StagedSandboxFailure,
@@ -187,7 +188,7 @@ async function drivePreparedRun(
   const prepared = await prepareRun(run, stage, fresh, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return;
   if (prepared === null) {
-    fail(surfaceKey, { kind: "unavailable" });
+    fail(surfaceKey, { kind: "unavailable", freshCreateKey: false });
     return;
   }
   const started = await startStagedRun(
@@ -613,8 +614,18 @@ function createSandbox(
     .finally(unsubscribe);
 }
 
-/** A refused create, as the line or the inline refusal says it. */
+/** A create failure's line and the verdict to persist with it. */
 export function createFailure(
+  failure: SandboxControlFailure,
+  teamName: string | null,
+): StagedSandboxFailure {
+  return {
+    ...createFailureForLine(failure, teamName),
+    freshCreateKey: createAnswerNeedsFreshKey(failure),
+  };
+}
+
+function createFailureForLine(
   failure: SandboxControlFailure,
   teamName: string | null,
 ): StagedSandboxFailure {
@@ -642,17 +653,36 @@ export function createFailure(
   };
 }
 
+/** These create replies follow replay and report a refusal or a failed row. */
+function createAnswerNeedsFreshKey(failure: SandboxControlFailure): boolean {
+  if (failure.kind !== "refused") return false;
+  switch (failure.code) {
+    case SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT:
+      return failure.status === 402;
+    case SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED:
+      return failure.status === 400;
+    case SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE:
+      return failure.status === 503;
+    case SANDBOX_REFUSAL_CODE_NOT_FOUND:
+      // The GUI sends a person's create with no creating host. The route's
+      // earlier sandbox_not_found requires an inaccessible creating sandbox.
+      return failure.status === 404;
+    case SANDBOX_REFUSAL_CODE_PROVIDER_FAILED:
+      return failure.status === 502;
+    default:
+      return false;
+  }
+}
+
 /**
- * The stage's key rule for a create sent outside a stage (a row's Retry): a
- * fresh key only after a refusal answered before anything was created, or
- * when nothing was sent. Any other error may follow an accepted create, so
- * the next press reuses the key and the server joins that create.
+ * A failed row's Retry and team setup use the same create answer verdict as
+ * a stage. Any other error keeps the key available to rejoin an earlier create.
  */
 export function createErrorNeedsFreshKey(error: Error): boolean {
-  if (!(error instanceof SandboxCreateError)) return false;
   return (
-    error.failure === null ||
-    refusedBeforeCreate(createFailure(error.failure, null), null)
+    error instanceof SandboxCreateError &&
+    error.failure !== null &&
+    createAnswerNeedsFreshKey(error.failure)
   );
 }
 

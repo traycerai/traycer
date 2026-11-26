@@ -82,7 +82,15 @@ interface TestState {
   canvasActivePaneId: string | null;
   canvasRoot: TileLayoutNode | null;
   canvasTiles: Readonly<Record<string, EpicCanvasTileRef>>;
-  records: ReadonlyArray<{ readonly id: string; readonly type?: string }>;
+  records: ReadonlyArray<{
+    readonly id: string;
+    readonly type?: string;
+    readonly name?: string;
+    readonly parentId?: string | null;
+    readonly hostId?: string;
+  }>;
+  /** Choose the landing with the real resolver instead of `autoOpenTarget`. */
+  useRealResolver: boolean;
   /** Chat ids the `useCloudChatList` mock answers as present
    * (the same-host cloud-known reap exemption). */
   cloudChatIds: ReadonlySet<string>;
@@ -114,6 +122,7 @@ const testState = vi.hoisted<TestState>(() => ({
   autoOpenTarget: null,
   nestedFocusEnabled: false,
   useRealCanvasStore: false,
+  useRealResolver: false,
   routerPathname: "/epics/route-sync-epic/route-sync-tab",
   // `useNavigate()` returns a function returning a PROMISE; callers attach
   // rejection handlers to it. A bare `vi.fn()` answers `undefined` and makes
@@ -257,6 +266,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     testState.chatRecordListAuthoritative,
   useEpicTuiAgentRecordListAuthoritative: () =>
     testState.tuiAgentRecordListAuthoritative,
+  useEpicTuiAgentRecordListFailed: () => false,
   useEpicLastFocusedArtifactId: () => null,
   useEpicSnapshotLoaded: () => true,
   useEpicTitle: () => "",
@@ -273,9 +283,17 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
 
-vi.mock("@/lib/epic-auto-open", () => ({
-  resolveAutoOpenTarget: () => testState.autoOpenTarget,
-}));
+vi.mock("@/lib/epic-auto-open", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/epic-auto-open")>();
+  return {
+    resolveAutoOpenTarget: (
+      ...args: Parameters<typeof actual.resolveAutoOpenTarget>
+    ) =>
+      testState.useRealResolver
+        ? actual.resolveAutoOpenTarget(...args)
+        : testState.autoOpenTarget,
+  };
+});
 
 // The reap effect's same-host cloud-known exemption reads these two -
 // stubbed at the hook boundary, same reason as every
@@ -439,6 +457,7 @@ function resetStores(): void {
   testState.sessionHostId = "host-1";
   testState.nestedFocusEnabled = false;
   testState.useRealCanvasStore = false;
+  testState.useRealResolver = false;
   testState.navigate.mockClear();
   testState.canvasActivePaneId = null;
   testState.autoOpenTarget = {
@@ -583,6 +602,17 @@ function routeIntent(
     focusPaneId,
     focusTileInstanceId,
   };
+}
+
+function landingRecord(id: string, type: "chat" | "html" | "spec") {
+  return { id, type, name: id, parentId: null, hostId: "host-1" };
+}
+
+function openedTileIds(): ReadonlyArray<string> {
+  return tileNavigationMocks.openTile.mock.calls.map(([intent]) => {
+    const { node } = intent as { readonly node: EpicCanvasTileRef };
+    return node.id;
+  });
 }
 
 function activePaneIdOf(store: RealCanvasStore, tabId: string): string {
@@ -1647,6 +1677,62 @@ describe("useEpicRouteSynchronization", () => {
         );
       });
       expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("waits for the agent records instead of landing on an artifact that synced first", async () => {
+    await withRealCanvas("Artifacts first", async ({ tabId, mount }) => {
+      testState.useRealResolver = true;
+      testState.chatRecordListAuthoritative = false;
+      testState.records = [landingRecord("spec-1", "spec")];
+      const hook = mount(routeIntent(tabId, undefined, undefined));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+
+      testState.chatRecordListAuthoritative = true;
+      testState.records = [
+        landingRecord("chat-1", "chat"),
+        landingRecord("spec-1", "spec"),
+      ];
+      hook.rerender(routeIntent(tabId, undefined, undefined));
+
+      expect(openedTileIds()).toEqual(["chat-1"]);
+    });
+  });
+
+  it("opens the chat that follows a first batch of html on a canvas with no layout", async () => {
+    await withRealCanvas("No layout", async ({ store, tabId, mount }) => {
+      testState.useRealResolver = true;
+      testState.records = [landingRecord("html-1", "html")];
+      expect(store.getState().canvasByTabId[tabId]?.root).toBeNull();
+      const hook = mount(routeIntent(tabId, undefined, undefined));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+
+      testState.records = [
+        landingRecord("chat-1", "chat"),
+        landingRecord("html-1", "html"),
+      ];
+      hook.rerender(routeIntent(tabId, undefined, undefined));
+
+      expect(openedTileIds()).toEqual(["chat-1"]);
+    });
+  });
+
+  it("lands on a canvas with no layout when the route names a pane that is gone", async () => {
+    await withRealCanvas("Stale route", async ({ tabId, mount }) => {
+      testState.useRealResolver = true;
+      testState.records = [landingRecord("chat-1", "chat")];
+      mount(routeIntent(tabId, "pane-gone", "tile-gone"));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(openedTileIds()).toEqual(["chat-1"]);
     });
   });
 

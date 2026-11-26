@@ -80,7 +80,6 @@ const CANVAS_TARGET_KINDS: ReadonlyArray<EpicRootDropTargetKind> = [
   "artifact-tab",
   "artifact-tab-strip-end",
   "artifact-tab-group-body",
-  "empty-shell",
 ];
 
 // Only a `sidebar-node` drag may resolve a reparent target. It keeps every
@@ -117,10 +116,9 @@ function targetKindsForSourceKind(
 /**
  * Priority rank per target kind for overlapping hits (lower wins): tab chips
  * beat their strip's trailing zone, rail icons beat the rail background, and
- * small chrome targets beat the large body/empty-shell surfaces (which share
- * one rank). `satisfies` keeps the ladder exhaustive over every root drop
- * target kind, so a renamed or newly added kind fails compile here instead
- * of silently dead-zoning its drops.
+ * small chrome targets beat the large body surface. `satisfies` keeps the
+ * ladder exhaustive over every root drop target kind, so a renamed or newly
+ * added kind fails compile here instead of silently dead-zoning its drops.
  */
 const TARGET_KIND_PRIORITY = {
   [COMPOSER_ATTACHMENT_DROP_TARGET_TYPE]: 0,
@@ -132,7 +130,6 @@ const TARGET_KIND_PRIORITY = {
   "left-panel-rail-list": 4,
   "left-panel-body": 5,
   "artifact-tab-group-body": 6,
-  "empty-shell": 6,
   // Sidebar reparent targets: the row beats the panel so hovering a row picks
   // the row and only true empty space picks the panel (root drop). Sidebar and
   // canvas occupy disjoint regions, so ranking below the canvas chrome is moot

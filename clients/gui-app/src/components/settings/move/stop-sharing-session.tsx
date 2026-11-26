@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import type {
   EnvironmentMovePersonalProfile,
   EnvironmentMoveStopResponseV11,
-  EnvironmentMoveStopPreviewResponseV12,
+  EnvironmentMoveStopPreviewResponseV13,
 } from "@traycer/protocol/host/environment/move-contracts";
 import { PersonalLeaveAccounts } from "./personal-leave-accounts";
 import { PersonalLeaveSignIn } from "./personal-leave-sign-in";
@@ -13,7 +13,7 @@ import {
   type PersonalLeaveAccountState,
 } from "./personal-leave-model";
 import {
-  personalLeaveGuidance,
+  PERSONAL_LEAVE_GUIDANCE,
   personalLeaveSignInNotKept,
 } from "./personal-leave-copy";
 import {
@@ -79,7 +79,7 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
         offersLeave
           ? {
               method: "environment.move.stopPreview",
-              version: { major: 1, minor: 2 },
+              version: { major: 1, minor: 3 },
             }
           : null,
       options: {
@@ -221,18 +221,11 @@ function stopPreviewStatus(
 function PersonalLeaveGuidance(props: {
   readonly rows: readonly EnvironmentMovePersonalProfile[];
 }): ReactNode {
-  const providers = [
-    ...new Set(
-      props.rows
-        .filter((row) => row.signIn === "offered")
-        .map((row) => row.providerId),
-    ),
-  ];
-  return providers.map((provider) => (
-    <p key={provider} className="mb-2 text-ui-xs text-muted-foreground">
-      {personalLeaveGuidance(providerDisplayName(provider))}
+  return props.rows.some((row) => row.signIn === "offered") ? (
+    <p className="mb-2 text-ui-xs text-muted-foreground">
+      {PERSONAL_LEAVE_GUIDANCE}
     </p>
-  ));
+  ) : null;
 }
 
 function announceUnkeptSignIns(
@@ -256,13 +249,14 @@ function announceUnkeptSignIns(
         personalLeaveSignInNotKept(
           row.label,
           providerDisplayName(row.providerId),
+          row.shared,
         ),
       );
   }
 }
 
 function stopRowsForMode(
-  data: EnvironmentMoveStopPreviewResponseV12 | undefined,
+  data: EnvironmentMoveStopPreviewResponseV13 | undefined,
   keepPersonal: boolean,
 ) {
   if (data === undefined) return { managed: [], needsChoice: [] };
