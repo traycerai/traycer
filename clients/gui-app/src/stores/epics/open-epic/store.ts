@@ -428,6 +428,7 @@ export interface OpenEpicState {
   readonly tuiAgentRecordListFailed: boolean;
   /** Projected adapter arm - see `EpicControlProjection`. */
   readonly installedArm: EpicAdapterArm | null;
+  readonly poolTaskStatus: EpicRuntimeProjection["poolTaskStatus"];
   /**
    * Every attachment hash the root replica holds, projected.
    *
@@ -2076,6 +2077,7 @@ export function createOpenEpicStore(
           // Same: its own key, so its own seed. `null` is "no arm selected
           // yet", which is what every reader already treats it as.
           installedArm: null,
+          poolTaskStatus: null,
           // Not part of the worker's records projection at all - see the
           // field's own note on why the head is a main-thread plane. Empty
           // until a list answer or a delta carries one.
