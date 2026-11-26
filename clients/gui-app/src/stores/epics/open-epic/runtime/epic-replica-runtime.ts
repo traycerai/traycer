@@ -1048,7 +1048,7 @@ export function createEpicReplicaRuntime(
                 (event.ownsControlCycle ||
                   event.reason.details.code !== "EPIC_ACCESS_DENIED")
               ) {
-                failPoolTask();
+                fencePoolTask("failed");
               }
             });
           },
@@ -1112,10 +1112,6 @@ export function createEpicReplicaRuntime(
 
   let installedArm: EpicAdapterArm | null = null;
   let unsubscribeLaneSupport: (() => void) | null = null;
-
-  function failPoolTask(): void {
-    fencePoolTask("failed");
-  }
 
   function notePoolTaskReady(): void {
     if (
@@ -1449,7 +1445,7 @@ export function createEpicReplicaRuntime(
         ? "legacy"
         : readEpicAdapterVerdict(laneSelection.support);
     if (onPool) {
-      if (verdict === "legacy") failPoolTask();
+      if (verdict === "legacy") fencePoolTask("failed");
       if (verdict === "lanes") executeTransition(verdict);
       return;
     }
@@ -1487,7 +1483,7 @@ export function createEpicReplicaRuntime(
     if (disposed) return;
     if (installedArm !== "lanes") return;
     if (onPool) {
-      failPoolTask();
+      fencePoolTask("failed");
       return;
     }
     executeTransition("legacy");
