@@ -85,7 +85,7 @@ import {
   buildQuoteBlockquote,
   type QuoteTextSnapshot,
 } from "@/components/chat/quote/append-quote-to-draft";
-import { appendBelow } from "@/components/chat/quote/append-comment-text-to-draft";
+import { appendBelow } from "@/components/chat/quote/append-quote-to-draft";
 import {
   botBoxAttachments,
   botBoxText,

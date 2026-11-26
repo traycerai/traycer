@@ -790,6 +790,7 @@ function createXtermEntry(
   containerEl.className = "h-full w-full overflow-hidden";
   containerEl.dataset.testid = "terminal-xterm-host";
   containerEl.setAttribute("data-terminal-host", "");
+  if (isMobileApp()) containerEl.setAttribute("data-history-gesture-owner", "");
 
   const term = new Terminal(initialOptions);
   // Measure cells as grapheme clusters with the Unicode 15 width tables, not

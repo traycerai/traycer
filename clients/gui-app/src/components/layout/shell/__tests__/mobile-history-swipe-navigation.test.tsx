@@ -40,6 +40,9 @@ import {
 } from "@/lib/history-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -380,12 +383,153 @@ describe("useMobileHistorySwipes", () => {
 
   beforeEach(() => {
     setMobileApp(true);
+    useSettingsStore.setState({ mobileSwipeHistory: true });
   });
 
   afterEach(() => {
     setMobileApp(false);
+    useSettingsStore.setState({ mobileSwipeHistory: false });
     useMobileNavStore.setState({ open: false });
     for (const unmount of activeUnmounts.splice(0)) unmount();
+  });
+
+  it("opens the task sidebar by default instead of going back", () => {
+    useSettingsStore.setState({ mobileSwipeHistory: false });
+    const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+    const backSpy = vi.spyOn(history, "back");
+    mountSwipes(history);
+    swipeFromEdge("leading");
+    expect(useMobileNavStore.getState().open).toBe(true);
+    expect(backSpy).not.toHaveBeenCalled();
+  });
+
+  it("opens only the focused task's registered tile selector", () => {
+    useSettingsStore.setState({ mobileSwipeHistory: false });
+    const ref = { kind: "epic" as const, id: "task-tab" };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: "item", ref }],
+      activeItemId: "item",
+      stripOrder: [ref],
+    });
+    const open = vi.fn();
+    const unregister = useMobileSwitcherStore
+      .getState()
+      .registerSwipeOpen(ref.id, open);
+    mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
+    swipeFromEdge("trailing");
+    expect(open).toHaveBeenCalledTimes(1);
+    unregister();
+    swipeFromEdge("trailing");
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the selector target from the start of a split-pane swipe", () => {
+    useSettingsStore.setState({ mobileSwipeHistory: false });
+    const ref = { kind: "epic" as const, id: "task-tab" };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: "item", ref }],
+      activeItemId: "item",
+      stripOrder: [ref],
+    });
+    const first = vi.fn();
+    const second = vi.fn();
+    const unregisterFirst = useMobileSwitcherStore
+      .getState()
+      .registerSwipeOpen(ref.id, first);
+    mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
+    act(() => {
+      dispatchPointer("pointerdown", {
+        clientX: window.innerWidth - 8,
+        timeStamp: 0,
+      });
+      useMobileSwitcherStore.getState().registerSwipeOpen(ref.id, second);
+      dispatchPointer("pointermove", {
+        clientX: window.innerWidth - 80,
+        timeStamp: 100,
+      });
+    });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    unregisterFirst();
+    useMobileSwitcherStore.setState({ swipeOpenByTabId: {} });
+  });
+
+  describe("with the Tracy surface focused", () => {
+    beforeEach(() => {
+      useSettingsStore.setState({ mobileSwipeHistory: false });
+      useTabsStore.setState({
+        items: [{ kind: "tab", id: "item", ref: TRACY_TAB_REF }],
+        activeItemId: "item",
+        stripOrder: [TRACY_TAB_REF],
+      });
+    });
+
+    afterEach(() => {
+      useMobileSwitcherStore.setState({ swipeOpenByTabId: {} });
+    });
+
+    it("opens the registered picker on a trailing-edge swipe", () => {
+      const open = vi.fn();
+      useMobileSwitcherStore
+        .getState()
+        .registerSwipeOpen(TRACY_TAB_REF.id, open);
+      mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
+
+      swipeFromEdge("trailing");
+
+      expect(open).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the newer registration when an older one is cleaned up", () => {
+      const older = vi.fn();
+      const newer = vi.fn();
+      const switcher = useMobileSwitcherStore.getState();
+      const unregisterOlder = switcher.registerSwipeOpen(
+        TRACY_TAB_REF.id,
+        older,
+      );
+      const unregisterNewer = switcher.registerSwipeOpen(
+        TRACY_TAB_REF.id,
+        newer,
+      );
+      mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
+
+      unregisterOlder();
+      swipeFromEdge("trailing");
+
+      expect(newer).toHaveBeenCalledTimes(1);
+      expect(older).not.toHaveBeenCalled();
+      unregisterNewer();
+      swipeFromEdge("trailing");
+      expect(newer).toHaveBeenCalledTimes(1);
+    });
+
+    it("declines a trailing-edge swipe when no picker is registered", () => {
+      const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+      const forwardSpy = vi.spyOn(history, "forward");
+      mountSwipes(history);
+
+      swipeFromEdge("trailing");
+
+      expect(forwardSpy).not.toHaveBeenCalled();
+      expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("goes forward in history, and opens no picker, with swipe history on", () => {
+      useSettingsStore.setState({ mobileSwipeHistory: true });
+      const open = vi.fn();
+      useMobileSwitcherStore
+        .getState()
+        .registerSwipeOpen(TRACY_TAB_REF.id, open);
+      const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+      const forwardSpy = vi.spyOn(history, "forward");
+      mountSwipes(history);
+
+      swipeFromEdge("trailing");
+
+      expect(forwardSpy).toHaveBeenCalledTimes(1);
+      expect(open).not.toHaveBeenCalled();
+    });
   });
 
   it("sends a leading-edge swipe to the shared back action", () => {

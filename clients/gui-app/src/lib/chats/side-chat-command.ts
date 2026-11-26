@@ -182,20 +182,24 @@ const SIDE_CHAT_TITLE_MAX_LENGTH = 60;
  * side chat from the next, so it is the title; a bare `/btw` (nothing asked
  * yet) falls back to the source's name, and an untitled source stays `""` so
  * the fork remains eligible for AI titling like a fresh chat.
+ * The prefix names the command that was typed, so a `/btw` chat and a `/side`
+ * chat are told apart in a list.
  */
 export function sideChatTitle(
+  command: SideChatCommandName,
   questionText: string,
   sourceTitle: string,
 ): string {
+  const prefix = command === "btw" ? "BTW" : "Side";
   const firstLine = questionText
     .trim()
     .split(/\r\n?|\n/)[0]
     .trim();
   if (firstLine.length > 0) {
-    return `Side - ${truncateTitle(firstLine)}`;
+    return `${prefix} - ${truncateTitle(firstLine)}`;
   }
   const source = sourceTitle.trim();
-  return source.length === 0 ? "" : `Side - ${source}`;
+  return source.length === 0 ? "" : `${prefix} - ${source}`;
 }
 
 /**

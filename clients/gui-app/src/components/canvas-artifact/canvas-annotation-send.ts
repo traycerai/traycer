@@ -21,6 +21,7 @@ export function canvasSelectionAnnotationRecord(
   scope: CanvasAnnotationScope,
   selection: CanvasSelection,
   source: EpicReadArtifactObjectResponse | undefined,
+  comment: string,
 ): CanvasAnnotationRecord {
   if (!selection.element.generated && source?.kind !== "text")
     throw new Error("The artboard source is still loading. Try again.");
@@ -35,7 +36,7 @@ export function canvasSelectionAnnotationRecord(
       canvasPage: selection.page,
     },
     capturedAt: Date.now(),
-    comment: "",
+    comment,
     counts: { elements: 1, regions: 0, strokes: 0 },
     elements: [
       canvasAnnotationElement(

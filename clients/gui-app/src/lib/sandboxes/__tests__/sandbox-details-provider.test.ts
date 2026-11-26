@@ -18,6 +18,7 @@ import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { beginEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
+import { AUTO_SIZING_GROWING_SUMMARY_OVERRIDES } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 
 const NOW = 1_791_100_000_000;
 
@@ -128,6 +129,23 @@ describe("sandboxDetailsEntry", () => {
       now: NOW,
     });
     expect(entry.export().status.Region).toBe("United States (West)");
+  });
+
+  it("shows a growing size in the Details Shape row", () => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        ...AUTO_SIZING_GROWING_SUMMARY_OVERRIDES,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: true,
+      now: NOW,
+    });
+
+    expect(entry.status.find((row) => row.label === "Shape")?.value).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB",
+    );
   });
 
   it("reads a segment's cost below a cent as under $0.01, and a cent or more in dollars", () => {
@@ -525,20 +543,32 @@ describe("the Settings Details drawer's sandbox provider", () => {
     expect(exported).not.toContain("/home/dev");
   });
 
-  it("names the region by the server's label in the status summary, never its id", async () => {
+  it("shows the state, growing size and server region label in the status summary", async () => {
+    const distractor = sandboxSummaryFixture({
+      id: "sbx-other",
+      state: "stopped",
+      cpus: 8,
+      memoryMb: 16_384,
+      diskMb: 51_200,
+      regionLabel: "Elsewhere",
+      priceMcPerHour: { awakeMc: 900, suspendedMc: 20, stoppedMc: 20 },
+    });
     const summary = sandboxSummaryFixture({
+      ...AUTO_SIZING_GROWING_SUMMARY_OVERRIDES,
       id: "sbx-1",
       region: "us-west-3",
       regionLabel: "United States (West)",
     });
-    const queryClient = await listedOnce([{ sandboxes: [summary] }], "u-me");
+    const queryClient = await listedOnce(
+      [{ sandboxes: [distractor, summary] }],
+      "u-me",
+    );
 
     const entry = await loadSandboxDetails(queryClient, "sbx-1");
 
-    expect(entry.status().summary.endsWith("· United States (West)")).toBe(
-      true,
+    expect(entry.status().summary).toBe(
+      "Awake · Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · United States (West)",
     );
-    expect(entry.status().summary).not.toContain("us-west-3");
   });
 
   it("omits the Region summary part for a row the server sends no label for", async () => {
