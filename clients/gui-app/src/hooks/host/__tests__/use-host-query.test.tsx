@@ -21,6 +21,7 @@ import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import {
   HostRpcError,
   type HostRequestOptions,
@@ -105,7 +106,7 @@ describe("useHostQuery auth readiness", () => {
     expect(fixture.requestCount.value).toBe(1);
   });
 
-  it("silently cancels a pool locate superseded at the query-fetch boundary", async () => {
+  it("silently cancels a pool locate after its subscription is withdrawn at the query-fetch boundary", async () => {
     const fixture = createHostQueryFixture([poolEntry]);
     fixture.client.setRequestContext(
       createRequestContextFixture({
@@ -113,13 +114,9 @@ describe("useHostQuery auth readiness", () => {
         bearerToken: "tok-locate-supersession",
       }),
     );
-    let servingHostId = POOL_HOST_ID;
     let currentSubscriptionId: string | null = "pool-subscription-old";
     let locateFetchActions = 0;
-    const postFetchServingReads: {
-      readonly hostId: string;
-      readonly subscriptionId: string | null;
-    }[] = [];
+    const postFetchSubscriptionReads: (string | null)[] = [];
     const unsubscribeCache = fixture.queryClient
       .getQueryCache()
       .subscribe((event) => {
@@ -129,7 +126,6 @@ describe("useHostQuery auth readiness", () => {
           queryKeyHasMethod(event.query.queryKey, "chat.locateRow")
         ) {
           locateFetchActions += 1;
-          servingHostId = mockLocalHostEntry.hostId;
           currentSubscriptionId = null;
         }
       });
@@ -147,10 +143,7 @@ describe("useHostQuery auth readiness", () => {
             subscriptionId: "pool-subscription-old",
             readCurrent: () => {
               if (locateFetchActions > 0) {
-                postFetchServingReads.push({
-                  hostId: servingHostId,
-                  subscriptionId: currentSubscriptionId,
-                });
+                postFetchSubscriptionReads.push(currentSubscriptionId);
               }
               return currentSubscriptionId;
             },
@@ -161,10 +154,7 @@ describe("useHostQuery auth readiness", () => {
 
     try {
       await waitFor(() => {
-        expect(postFetchServingReads).toContainEqual({
-          hostId: mockLocalHostEntry.hostId,
-          subscriptionId: null,
-        });
+        expect(postFetchSubscriptionReads).toContain(null);
         expect(
           queryForMethod(fixture.queryClient, "chat.locateRow").state
             .fetchStatus,
@@ -187,6 +177,104 @@ describe("useHostQuery auth readiness", () => {
       });
     } finally {
       unsubscribeCache();
+      rendered.unmount();
+      fixture.client.dispose();
+      fixture.queryClient.clear();
+    }
+  });
+
+  it("keeps a same-key replacement fetch when its predecessor is superseded in preflight", async () => {
+    const fixture = createHostQueryFixture(undefined);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-query-reentry",
+      }),
+    );
+    const replacementResponse = { ...STATUS_RESPONSE, hostVersion: "1.2.4" };
+    let hostStatusCalls = 0;
+    let resolveReplacement:
+      | ((response: ResponseOfMethod<HostRpcRegistry, "host.status">) => void)
+      | undefined;
+    fixture.messenger.setHandlers({
+      "host.status": () => {
+        hostStatusCalls += 1;
+        if (hostStatusCalls === 1) return STATUS_RESPONSE;
+        if (hostStatusCalls === 2) {
+          return new Promise((resolve) => {
+            resolveReplacement = resolve;
+          });
+        }
+        return replacementResponse;
+      },
+    });
+    let preflightCalls = 0;
+    let refetchSameKey: (() => void) | null = null;
+    const preflight = (): void => {
+      preflightCalls += 1;
+      if (preflightCalls === 2) {
+        refetchSameKey?.();
+        throw new HostRequestControlFlowError("request-superseded");
+      }
+    };
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    const rendered = renderHook(
+      () => {
+        const first = useHostQuery({
+          cacheKeyIdentity: undefined,
+          client,
+          method: "host.status",
+          params: {},
+          options: { retry: false, staleTime: Infinity },
+          preflight,
+        });
+        const second = useHostQuery({
+          cacheKeyIdentity: undefined,
+          client,
+          method: "host.status",
+          params: {},
+          options: { retry: false, staleTime: Infinity },
+          preflight,
+        });
+        refetchSameKey = () => {
+          void first.refetch({ cancelRefetch: true });
+        };
+        return { first, second };
+      },
+      { wrapper: fixture.Wrapper },
+    );
+
+    try {
+      await waitFor(() => {
+        expect(rendered.result.current.first.data).toEqual(STATUS_RESPONSE);
+        expect(rendered.result.current.second.data).toEqual(STATUS_RESPONSE);
+      });
+      expect(hostStatusCalls).toBe(1);
+
+      act(() => {
+        void rendered.result.current.first.refetch({ cancelRefetch: true });
+      });
+      await waitFor(() => {
+        expect(resolveReplacement).toBeTypeOf("function");
+        expect(hostStatusCalls).toBe(2);
+      });
+      act(() => {
+        resolveReplacement?.(replacementResponse);
+      });
+
+      await waitFor(() => {
+        expect(rendered.result.current.first.data).toEqual(replacementResponse);
+        expect(rendered.result.current.second.data).toEqual(
+          replacementResponse,
+        );
+      });
+      expect(rendered.result.current.first.error).toBeNull();
+      expect(rendered.result.current.second.error).toBeNull();
+      expect(hostStatusCalls).toBe(2);
+      expect(
+        fixture.messenger.calls.filter((call) => call.method === "host.status"),
+      ).toHaveLength(2);
+    } finally {
       rendered.unmount();
       fixture.client.dispose();
       fixture.queryClient.clear();

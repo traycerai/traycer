@@ -209,13 +209,20 @@ export type UseHostQueryOptions<
 
 function runHostQueryPreflight(
   preflight: (() => void) | undefined,
+  signal: AbortSignal,
   cancelCurrentFetch: () => void,
 ): void {
   try {
     preflight?.();
   } catch (error) {
     // A thrown silent CancelledError alone leaves the fetch active.
-    if (error instanceof HostRequestControlFlowError) cancelCurrentFetch();
+    if (
+      error instanceof HostRequestControlFlowError &&
+      error.reason === "request-superseded" &&
+      !signal.aborted
+    ) {
+      cancelCurrentFetch();
+    }
     throw error;
   }
 }
@@ -423,7 +430,7 @@ export function useHostQueryWithResponseMap<
         if (client === null) {
           throw hostClientUnavailableError(method);
         }
-        runHostQueryPreflight(args.preflight, cancelCurrentFetch);
+        runHostQueryPreflight(args.preflight, signal, cancelCurrentFetch);
         // The payload, which is `params` unless a caller derives one per
         // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
         // that fence remains the last thing captured before the request leaves.
